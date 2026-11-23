@@ -30,7 +30,7 @@ A **Box** is a hardware-isolated micro-VM that runs any OCI image — and it per
 - **Real isolation**: its own kernel — stronger than a container, lighter than a full VM. Small footprint, async-first for fleets.
 - **Daemonless**: embed as a library — no root, no background service. *(optional server mode)*
 - **OCI-native**: run any Docker image unchanged (`python:slim`, `node:alpine`, …).
-- **Controlled networking**: restrict egress with `allow_net`; inject real secrets via placeholders.
+- **Controlled networking**: restrict egress with `allow_net`; inject real secrets into configured request headers at the host proxy.
 - **Embed → cloud**: one engine, from your laptop to a multi-tenant cloud.
 
 ## Get started
@@ -171,9 +171,19 @@ Neither cloud is preferred; the stage declaration selects the provider.
 
 Agent frameworks run on BoxLite:
 
+- **[Pydantic AI](https://pydantic.dev/docs/ai/harness/boxlite-sandbox/)** — `BoxLiteSandbox` runs agent commands and file edits in a local micro-VM
 - **[Databricks Omnigent](https://github.com/omnigent-ai/omnigent)** — sandbox option in their agent meta-harness
 - **[Alibaba AgentScope Runtime](https://runtime.agentscope.io/en/sandbox/sandbox.html)** — sandbox backend (`CONTAINER_DEPLOYMENT=boxlite`)
 - **[ByteDance deer-flow](https://github.com/bytedance/deer-flow/tree/main/backend/packages/harness/deerflow/community/boxlite)** — sandbox provider in their research agent
+- **[Qoder better-harness](https://github.com/QoderAI/better-harness/tree/main/packages/better-harness-desktop/rust/box-service)** — micro-VM box service in the desktop app, built on the Rust crate
+- **[AstrBot](https://github.com/AstrBotDevs/AstrBot/blob/master/astrbot/core/astr_agent_runtime/computer/booters/boxlite.py)** — per-session computer-use sandbox for its agent assistant
+- **[HKUDS ClawWork](https://github.com/HKUDS/ClawWork)** — optional code-execution sandbox (`CODE_SANDBOX_PROVIDER=boxlite`)
+
+Official examples and guides:
+
+- **[Moonshot AI Kimi Agent SDK](https://github.com/MoonshotAI/kimi-agent-sdk/tree/main/examples/python/kaos/boxlite)** — example KAOS backend that runs the agent inside a Box
+- **[Rivet Sandbox Agent](https://github.com/rivet-dev/agents/blob/main/sandbox-agent/docs/content/docs/deploy/boxlite.mdx)** — guide and examples for deploying Sandbox Agent in a BoxLite micro-VM
+- **[planning-with-files](https://github.com/OthmanAdi/planning-with-files/blob/master/docs/boxlite.md)** — guide and example for running Claude Code with this skill inside a BoxLite micro-VM
 
 ## Architecture
 
@@ -228,7 +238,6 @@ How BoxLite embeds a runtime and runs OCI containers inside micro-VMs. Details �
 | Linux          | x86_64                | ✅ Supported     |
 | Linux          | ARM64                 | ✅ Supported     |
 | Windows (WSL2) | x86_64                | ✅ Supported     |
-| macOS          | Intel (x86_64)        | 🚀 Coming soon |
 
 ## System Requirements
 

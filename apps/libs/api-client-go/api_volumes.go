@@ -61,19 +61,6 @@ type VolumesAPI interface {
 	GetVolumeExecute(r VolumesAPIGetVolumeRequest) (*VolumeDto, *http.Response, error)
 
 	/*
-	GetVolumeByName Get volume details by name
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param name Name of the volume
-	@return VolumesAPIGetVolumeByNameRequest
-	*/
-	GetVolumeByName(ctx context.Context, name string) VolumesAPIGetVolumeByNameRequest
-
-	// GetVolumeByNameExecute executes the request
-	//  @return VolumeDto
-	GetVolumeByNameExecute(r VolumesAPIGetVolumeByNameRequest) (*VolumeDto, *http.Response, error)
-
-	/*
 	ListVolumes List all volumes
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -356,117 +343,6 @@ func (a *VolumesAPIService) GetVolumeExecute(r VolumesAPIGetVolumeRequest) (*Vol
 
 	localVarPath := localBasePath + "/volumes/{volumeId}"
 	localVarPath = strings.Replace(localVarPath, "{"+"volumeId"+"}", url.PathEscape(parameterValueToString(r.volumeId, "volumeId")), -1)
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	if r.xBoxLiteOrganizationID != nil {
-		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
-}
-
-type VolumesAPIGetVolumeByNameRequest struct {
-	ctx context.Context
-	ApiService VolumesAPI
-	name string
-	xBoxLiteOrganizationID *string
-}
-
-// Use with JWT to specify the organization ID
-func (r VolumesAPIGetVolumeByNameRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) VolumesAPIGetVolumeByNameRequest {
-	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
-	return r
-}
-
-func (r VolumesAPIGetVolumeByNameRequest) Execute() (*VolumeDto, *http.Response, error) {
-	return r.ApiService.GetVolumeByNameExecute(r)
-}
-
-/*
-GetVolumeByName Get volume details by name
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param name Name of the volume
- @return VolumesAPIGetVolumeByNameRequest
-*/
-func (a *VolumesAPIService) GetVolumeByName(ctx context.Context, name string) VolumesAPIGetVolumeByNameRequest {
-	return VolumesAPIGetVolumeByNameRequest{
-		ApiService: a,
-		ctx: ctx,
-		name: name,
-	}
-}
-
-// Execute executes the request
-//  @return VolumeDto
-func (a *VolumesAPIService) GetVolumeByNameExecute(r VolumesAPIGetVolumeByNameRequest) (*VolumeDto, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodGet
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  *VolumeDto
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "VolumesAPIService.GetVolumeByName")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/volumes/by-name/{name}"
-	localVarPath = strings.Replace(localVarPath, "{"+"name"+"}", url.PathEscape(parameterValueToString(r.name, "name")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

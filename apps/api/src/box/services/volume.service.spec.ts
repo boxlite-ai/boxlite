@@ -1,3 +1,4 @@
+import { Context } from '../../common/context/context'
 import { NotFoundException, RequestTimeoutException } from '@nestjs/common'
 import { VolumeState } from '../enums/volume-state.enum'
 import { VolumeService } from './volume.service'
@@ -15,13 +16,13 @@ describe('VolumeService delete', () => {
   it('rejects a missing volume without force', async () => {
     const { service } = createService(null)
 
-    await expect(service.delete('volume-1')).rejects.toBeInstanceOf(NotFoundException)
+    await expect(service.delete('volume-1', Context.user())).rejects.toBeInstanceOf(NotFoundException)
   })
 
   it('treats a missing volume as deleted with force', async () => {
     const { service } = createService(null)
 
-    await expect(service.delete('volume-1', true)).resolves.toBeUndefined()
+    await expect(service.delete('volume-1', Context.user(), true)).resolves.toBeUndefined()
   })
 
   it.each([VolumeState.PENDING_DELETE, VolumeState.DELETING, VolumeState.DELETED])(
@@ -29,14 +30,16 @@ describe('VolumeService delete', () => {
     async (state) => {
       const { service } = createService({ id: 'volume-1', state })
 
-      await expect(service.delete('volume-1', true)).resolves.toBeUndefined()
+      await expect(service.delete('volume-1', Context.user(), true)).resolves.toBeUndefined()
     },
   )
 
   it('does not ignore a deleted volume without force', async () => {
     const { service } = createService({ id: 'volume-1', state: VolumeState.DELETED })
 
-    await expect(service.delete('volume-1')).rejects.toThrow("Volume must be in 'ready' or 'error' state")
+    await expect(service.delete('volume-1', Context.user())).rejects.toThrow(
+      "Volume must be in 'ready' or 'error' state",
+    )
   })
 })
 

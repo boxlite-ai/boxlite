@@ -7,22 +7,34 @@ import { Logger } from '@nestjs/common'
 import { UserService } from './user.service'
 import { Context } from '../common/context/context'
 import { PlatformReason } from '../common/context/platform-reason.enum'
+import { Organization } from '../organization/entities/organization.entity'
+import { QueryFailedError } from 'typeorm'
+import { User } from './user.entity'
 
 describe('UserService registration events', () => {
   // Every [message, attributes] the service logged, at info or error level, in order.
   let logged: [string, Record<string, string>][]
 
-  function makeService(transaction: jest.Mock) {
-    const eventEmitter = { emitAsync: jest.fn().mockResolvedValue([]) }
+  // What the user-created listeners return; the default organization's listener returns it.
+  function makeService(transaction: jest.Mock, listenerResults: unknown[] = [], eventFailure?: Error) {
+    const eventEmitter = { emitAsync: jest.fn().mockResolvedValue(listenerResults) }
+    if (eventFailure) eventEmitter.emitAsync.mockRejectedValue(eventFailure)
     const service = new UserService({} as never, eventEmitter as never, { transaction } as never)
-    jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
-      privateKey: 'private-key',
-      publicKey: 'public-key',
-    } as never)
     return service
   }
 
-  const committingTransaction = () => jest.fn(async (callback) => callback({ save: jest.fn(async (entity) => entity) }))
+  function committingTransaction(insertFailure?: Error) {
+    let insertedUser: User
+    return jest.fn(async (callback) =>
+      callback({
+        insert: jest.fn(async (_entity, user: User) => {
+          if (insertFailure) throw insertFailure
+          insertedUser = user
+        }),
+        findOneByOrFail: jest.fn(async () => insertedUser),
+      }),
+    )
+  }
 
   beforeEach(() => {
     logged = []
@@ -33,26 +45,86 @@ describe('UserService registration events', () => {
 
   afterEach(() => jest.restoreAllMocks())
 
-  it('records requested then success with the context actor and no organization', async () => {
-    const service = makeService(committingTransaction())
+  it('records requested then success with the context actor, and the default organization on success', async () => {
+    const organization = Object.assign(new Organization(), { id: 'org-1' })
+    const service = makeService(committingTransaction(), [undefined, organization])
 
     await service.create({ id: 'user-1', name: 'User One' } as never, Context.user())
 
     expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration success'])
     for (const [, attributes] of logged) {
       expect(attributes).toEqual(expect.objectContaining({ 'correlation.id': 'user-1', 'actor.kind': 'user' }))
-      expect(attributes).not.toHaveProperty('org.id')
     }
+    // The organization is created inside the registration, so only its success can name it.
+    expect(logged[0][1]).not.toHaveProperty('organization.id')
+    expect(logged[1][1]['organization.id']).toBe('org-1')
   })
 
-  it('records a conflict as user_conflict instead of success, and rethrows', async () => {
-    const conflict = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' })
-    const service = makeService(jest.fn().mockRejectedValue(conflict))
+  it('records success without an organization when no default organization was created', async () => {
+    const service = makeService(committingTransaction())
 
-    await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.admin())).rejects.toBe(conflict)
+    await service.create({ id: 'user-1', name: 'User One' } as never, Context.user())
+
+    expect(logged[1][0]).toBe('user.registration success')
+    expect(logged[1][1]).not.toHaveProperty('organization.id')
+  })
+
+  it.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
+    'records primary-key conflict %s as user_conflict instead of success, and rethrows',
+    async (constraint) => {
+      const conflict = new QueryFailedError(
+        'INSERT INTO "user"',
+        [],
+        Object.assign(new Error('duplicate key value violates unique constraint'), {
+          code: '23505',
+          constraint,
+        }),
+      )
+      const service = makeService(committingTransaction(conflict))
+
+      await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.admin())).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'user_already_exists' },
+        cause: conflict,
+      })
+
+      expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration exception'])
+      expect(logged[1][1]).toEqual(
+        expect.objectContaining({ 'actor.kind': 'admin', 'exception.type': 'user_conflict' }),
+      )
+    },
+  )
+
+  it('preserves an organization uniqueness failure and records it as internal', async () => {
+    const failure = new QueryFailedError(
+      'INSERT INTO "organization_user"',
+      [],
+      Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+        constraint: 'organization_user_default_user_unique',
+      }),
+    )
+    const service = makeService(committingTransaction(), [], failure)
+
+    await expect(service.create({ id: 'user-1', name: 'User One' }, Context.user())).rejects.toBe(failure)
+
+    expect(logged[1][1]).toEqual(expect.objectContaining({ 'exception.type': 'internal' }))
+  })
+
+  it.each([
+    new Error('Connection closed'),
+    new QueryFailedError(
+      'INSERT INTO "user"',
+      [],
+      Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }),
+    ),
+  ])('preserves an unrelated insert failure as internal: %s', async (failure) => {
+    const service = makeService(committingTransaction(failure))
+
+    await expect(service.create({ id: 'user-1', name: 'User One' }, Context.user())).rejects.toBe(failure)
 
     expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration exception'])
-    expect(logged[1][1]).toEqual(expect.objectContaining({ 'actor.kind': 'admin', 'exception.type': 'user_conflict' }))
+    expect(logged[1][1]).toEqual(expect.objectContaining({ 'exception.type': 'internal' }))
   })
 
   it('records any other failure as internal', async () => {

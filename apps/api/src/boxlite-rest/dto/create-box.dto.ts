@@ -8,6 +8,8 @@ import { BadRequestException, Logger } from '@nestjs/common'
 import { Transform, Type, plainToInstance } from 'class-transformer'
 import {
   ArrayMaxSize,
+  ArrayNotEmpty,
+  IsDefined,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -16,9 +18,10 @@ import {
   IsBoolean,
   IsObject,
   IsArray,
-  Max,
   Min,
   IsIn,
+  MaxLength,
+  MinLength,
   Validate,
   ValidateIf,
   ValidateNested,
@@ -26,7 +29,7 @@ import {
   ValidatorConstraintInterface,
   ValidationArguments,
 } from 'class-validator'
-import { MAX_CPU_PER_BOX } from '../../box/services/per-box-limits'
+import { CpuAllocation } from '../../box/utils/cpu-allocation'
 import {
   DISABLED_OUTBOUND_RULES_ERROR,
   hasDisabledOutboundRules,
@@ -220,14 +223,20 @@ export class SecretSpecDto {
   @IsNotEmpty()
   value: string
 
-  @IsOptional()
+  @IsDefined()
   @IsArray()
+  @ArrayNotEmpty()
   @IsString({ each: true })
-  hosts?: string[]
+  @IsNotEmpty({ each: true })
+  hosts: string[]
 
   @IsOptional()
   @IsString()
   placeholder?: string
+
+  @IsDefined()
+  @IsObject()
+  headers: Record<string, string>
 }
 
 export class CreateBoxDto {
@@ -239,20 +248,23 @@ export class CreateBoxDto {
   @IsString()
   image?: string
 
-  // A box with 0 vCPUs can never boot (libkrun set_vm_config(0, ...) → EINVAL),
-  // and the guest kernel ignores vCPUs past MAX_CPU_PER_BOX, so reject both at
-  // the request boundary instead of accepting a box that fails or under-runs.
+  // Selects a managed checkpoint, by id or name, as the source of the box
+  // instead of an image. The box inherits the checkpoint's saved settings, so
+  // the controller refuses every other field except `name`.
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(128)
+  checkpoint_id?: string
+
   @IsOptional()
-  @IsNumber()
-  @IsInt()
-  @Min(1)
-  @Max(MAX_CPU_PER_BOX)
+  @CpuAllocation()
   cpus?: number
 
   @IsOptional()
   @IsNumber()
   @IsInt()
-  @Min(256)
+  @Min(128)
   memory_mib?: number
 
   @IsOptional()

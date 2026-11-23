@@ -1,7 +1,7 @@
 {
   "name": "boxlite",
-  "version": "0.1.0",
-  "description": "Skills for building, deploying and updating apps on BoxLite cloud.",
+  "version": "0.2.0",
+  "description": "Run BoxLite with Cloud OAuth, Cloud API key, or an independent local runtime.",
   "author": {
     "name": "BoxLite",
     "url": "https://boxlite.ai"
@@ -9,11 +9,13 @@
   "homepage": "https://docs.boxlite.ai",
   "repository": "https://github.com/boxlite-ai/boxlite",
   "license": "Apache-2.0",
+  "icon": "./assets/boxlite-icon.png",
+  "privacyPolicyUrl": "https://boxlite.ai/legal/privacy",
   "keywords": [
     "boxlite",
     "cloud",
-    "deployment",
-    "cli",
+    "local",
+    "mcp",
     "skills"
   ]
 }

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: AGPL-3.0 */
 
 import { BoxService } from './box.service'
+import { SecretServerClient } from './secret-server-client'
 import { RunnerState } from '../enums/runner-state.enum'
 import { Context } from '../../common/context/context'
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
@@ -22,9 +23,13 @@ describe('subscription Box resource limits', () => {
     resolve.mockResolvedValue(subscribed)
     service = Object.create(BoxService.prototype) as BoxService
     Object.assign(service, {
+      secretServerClient: new SecretServerClient({ get: () => false } as any),
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
-      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      organizationService: {
+        assertOrganizationIsNotSuspended: jest.fn(),
+        isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+      },
       organizationBoxLimits: { resolve },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
       runnerService: {
@@ -42,6 +47,8 @@ describe('subscription Box resource limits', () => {
     createBoxToCreateBox({ image: 'example/app:latest', cpus, memory_mib, disk_size_gb })
 
   it.each([
+    [0.125, 4096, 20],
+    [1.001, 4096, 20],
     [2, 4096, 20],
     [4, 8192, 50],
     [16, 32768, 100],

@@ -4,11 +4,47 @@ Embeddable VM runtime for secure, isolated code execution environments.
 
 Access the [agent API](../../docs/reference/agents.md) through `JsBox.agents`
 and `SimpleBox.agents` for agent and turn methods, grouped options and error handling.
+On a local runtime, retain the stream with `const events = agent.events()` and
+await `events.opened()` before sending work when the first live event matters.
+Read from that same `events` stream, use `read({ signal })` to cancel one read,
+and call `events.return()` to close it.
 
 **Think "SQLite for sandboxing"** - a lightweight library embedded directly in your application without requiring a daemon or root privileges.
 
 [![npm version](https://badge.fury.io/js/%40boxlite%2Fcore.svg)](https://badge.fury.io/js/boxlite)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+**Upgrade notice:** existing local boxes with secrets must be recreated with explicit
+`headers`, including boxes managed by `boxlite serve`. See the
+[required-headers migration notes](../../docs/reference/configuration.md#secrets).
+
+## Managed checkpoints
+
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
+
+The source must be stopped before `create`; stop it and wait for `stopped` first.
+Checkpoint creation rejects other states and never stops the source automatically.
+
+The REST runtime's `checkpoints` handle exposes `create`, `list`,
+`get` and `remove` as promises. Checkpoints survive their source box.
+
+```typescript
+const checkpoint = await runtime.checkpoints.create("source", "dev-base");
+const worker = await runtime.create({ checkpoint: checkpoint.id }, "worker");
+```
+
+A box created from a checkpoint inherits its saved execution settings. Setting any
+other option, including `image` or `rootfsPath`, rejects with an invalid-argument
+error before a request is sent.
+This includes explicit defaults such as `detach: false` or
+`advanced: { privileged: false }`, and empty lists such as `env: []`.
+Cloud capture may initially report `creating`; query until `ready` before use.
+`remove(key, true)` ignores absence only. Storage belongs to the server.
+Local runtime checkpoint operations, including `create` with a checkpoint, reject
+with an unsupported-operation error.
 
 ## Features
 
@@ -214,9 +250,14 @@ const box = new SimpleBox({
       name: 'openai',
       value: process.env.OPENAI_API_KEY!,
       hosts: ['api.openai.com'],
+      headers: { Authorization: 'Bearer {value}' },
     }
   ]
 });
+
+// Use `headers: { 'x-goog-api-key': '{value}' }` for a custom target.
+// Use `headers: { Authorization: 'Bot {value}' }` for a custom format.
+// headers is required; omitted, null and empty maps are rejected.
 
 // Execute command
 const result = await box.exec('ls', '-la', '/');
@@ -545,28 +586,47 @@ other error. See [the Node.js reference](../../docs/reference/nodejs/README.md#e
 
 ## Building from Source
 
+Use Node.js 22 or later for development tooling, as installed by
+`make setup:build`. The built SDK supports Node.js 18 or later.
+
 ```bash
 # Clone repository
 git clone https://github.com/boxlite-ai/boxlite.git
-cd boxlite/sdks/node
+cd boxlite
 
-# Initialize submodules (critical!)
-git submodule update --init --recursive
+# Install build tools and initialize submodules
+make setup:build
 
-# Install dependencies
-npm install
+# Build the native bindings and TypeScript, and link examples
+make dev:node
 
-# Build (Rust + TypeScript)
-npm run build
+# Check the SDK
+make lint:node fmt:check:node test:unit:node
 
-# Link to examples
-npm link
-cd ../../examples/node
-npm link @boxlite-ai/boxlite
-
-# Run examples
+# Run an example
+cd examples/node
 node simplebox.js
 ```
+
+### Maintaining the native bindings
+
+Rust sources in `sdks/node/src/` use the workspace formatter. From the
+repository root, run `make fmt:rust` before committing binding changes and
+`make fmt:check:rust` to reproduce the CI formatting check.
+
+The Rust bindings require `napi` 3.16.1+, `napi-derive` 3.7.0+, and
+`napi-build` 2.6.0+. Update the runtime and macro generator together:
+`napi-derive` selects `napi-derive-backend`, whose generated reference
+conversions call the runtime's class identity and native borrow checks.
+The npm `@napi-rs/cli` builds and packages the addon; its version does not
+select the Rust macro backend.
+
+Keep the `napi8` feature for Node.js 18 compatibility, and commit the Cargo
+lockfile with dependency changes. After rebuilding, run `make test:unit:node`
+and `make test:integration:node` on a VM-capable host to exercise native
+class conversion and asynchronous calls. TypeScript checks alone do not
+exercise the generated Rust bindings. Assess CodeQL findings with a fresh
+scan; a successful build or a dismissed alert does not prove a finding is fixed.
 
 ## TypeScript Support
 
@@ -646,7 +706,12 @@ The SDK uses a dual-layer architecture:
 
 See [../../CONTRIBUTING.md](../../CONTRIBUTING.md) for development guidelines.
 
-### Agent binding tests
+### Native binding tests
+
+Checkpoint native REST tests run with
+`make test:integration:node FILTER='checkpoint native'`. They use loopback HTTP
+without a VM and are included in native binding coverage. Ordinary unit jobs
+do not build the native module and exclude these integration tests.
 
 From the repository root, run
 `make test:integration:node FILTER='agent namespace'`. The native Box getter test
@@ -654,11 +719,22 @@ obtains a handle from a loopback REST server and checks namespace access without
 starting a VM or sending agent requests. Separate tests reject plain-object and
 prototype-only method receivers before the agent operation runs.
 
+To compare Node and Python agent results with Rust in real OpenCode VMs, set
+`BOXLITE_TEST_OPENCODE_BINARY` to the OpenCode 2.2.2 Linux binary and run
+`make test:integration:agent-sdk-parity` from the repository root.
+
 These receiver tests exercise napi-rs callback unwrapping. They do not exercise
 the generated `FromNapiRef` and `FromNapiMutRef` conversions flagged by CodeQL,
 so passing them does not establish that those pointer alerts are false positives.
-The conversions are generated in the locked
-[napi-rs backend](https://github.com/napi-rs/napi-rs/blob/5ed87dd7e930961e9273f95cd0ed77c2da967bc1/crates/backend/src/codegen/struct.rs#L112-L146).
+The locked
+[napi-rs backend 7.0.0](https://github.com/napi-rs/napi-rs/blob/f89400d99b136c5c8a27818654b91256832b5bd6/crates/backend/src/codegen/struct.rs#L168-L242)
+checks `napi_unwrap`, validates the napi8 class tag, and registers a native borrow
+before constructing either reference. The matching
+[napi 3.16.1 runtime](https://github.com/napi-rs/napi-rs/blob/417375ad5ef1d8cb4c49edf13d2cc6c0204bb5b1/crates/napi/src/bindgen_runtime/native_borrow.rs#L688-L696)
+rejects a null native pointer during borrow acquisition; its error propagates
+before dereference. When reviewing an alert, compare its expanded conversion
+path against these exact locked sources, including the guards between pointer
+initialization and dereference.
 
 ## License
 
@@ -669,6 +745,16 @@ Apache 2.0 - See [../../LICENSE](../../LICENSE)
 - [Python SDK](../python/) - Python bindings (Python 3.10+)
 - [C SDK](../c/) - C FFI bindings (early stage)
 - [Core Runtime](../../boxlite/) - Rust runtime implementation
+
+## Testing secret headers
+
+Run `make coverage:node` from the repository root for the JavaScript unit suite.
+Secret-header boundary tests require the native addon and skip when it is absent,
+so they import the native SDK inside each test rather than during discovery.
+To exercise those checks, first run `make dev:node`, then
+`make test:unit:node FILTER=headers`. All three missing/null/empty-header cases
+must execute and reject creation in this native run; an import failure is not a
+successful validation result.
 
 ## Support
 

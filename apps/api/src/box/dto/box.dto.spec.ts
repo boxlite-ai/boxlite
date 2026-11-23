@@ -14,7 +14,7 @@ describe('BoxDto public identity', () => {
     box.organizationId = '057963b2-60ca-4356-81fc-11503e15f249'
     box.osUser = 'boxlite'
 
-    const dto = BoxDto.fromBox(box, 'https://proxy.boxlite.dev/toolbox')
+    const dto = BoxDto.fromBox(box)
 
     expect(dto.id).toBe(box.id)
     expect((dto as any).boxId).toBeUndefined()
@@ -35,7 +35,7 @@ describe('BoxDto main command exit code', () => {
     ['a main command ended by a signal', 137, 137],
     ['a main command that succeeded', 0, 0],
   ])('reports the exit code of %s', (_case, read, expected) => {
-    expect(BoxDto.fromBox(box(), 'https://proxy.invalid', { exitCode: read }).exitCode).toBe(expected)
+    expect(BoxDto.fromBox(box(), { exitCode: read }).exitCode).toBe(expected)
   })
 
   // Absence is the only way to say "not recorded", and it has to survive
@@ -43,7 +43,7 @@ describe('BoxDto main command exit code', () => {
   // against. A runtime that recorded none and a runner that could not be read
   // both arrive here the same way, as nothing.
   it('omits the exit code when there is none', () => {
-    const dto = BoxDto.fromBox(box(), 'https://proxy.invalid', { exitCode: undefined })
+    const dto = BoxDto.fromBox(box(), { exitCode: undefined })
 
     expect(dto.exitCode).toBeUndefined()
     expect(JSON.parse(JSON.stringify(dto))).not.toHaveProperty('exitCode')
@@ -65,7 +65,7 @@ describe('BoxDto image', () => {
     const box = new Box('us', 'private')
     box.image = `${PROXY}/0aaa0000-0000-4000-8000-000000000001/ghcr.io/acme/app@sha256:${'a'.repeat(64)}`
 
-    expect(BoxDto.fromBox(box, 'https://proxy.invalid').image).toBe(`ghcr.io/acme/app@sha256:${'a'.repeat(64)}`)
+    expect(BoxDto.fromBox(box).image).toBe(`ghcr.io/acme/app@sha256:${'a'.repeat(64)}`)
   })
 
   it('reads back any other image as it was recorded', () => {
@@ -73,7 +73,7 @@ describe('BoxDto image', () => {
     const box = new Box('us', 'public')
     box.image = 'quay.io/acme/app:v1'
 
-    expect(BoxDto.fromBox(box, 'https://proxy.invalid').image).toBe('quay.io/acme/app:v1')
+    expect(BoxDto.fromBox(box).image).toBe('quay.io/acme/app:v1')
   })
 })
 
@@ -94,7 +94,7 @@ describe('BoxDto network policy', () => {
   ])(
     'reports inbound %s and outbound %s only under network',
     (inboundEnabled, outboundEnabled, allowNet, inbound, outbound) => {
-      const dto = BoxDto.fromBox(box(inboundEnabled, outboundEnabled, allowNet), 'https://proxy.invalid')
+      const dto = BoxDto.fromBox(box(inboundEnabled, outboundEnabled, allowNet))
 
       expect(dto.network).toEqual({
         outbound: { mode: outbound, allow_net: allowNet ?? [] },

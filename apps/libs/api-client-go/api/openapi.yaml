@@ -1553,30 +1553,6 @@ paths:
       summary: Create user
       tags:
       - users
-  /users/{id}/regenerate-key-pair:
-    post:
-      deprecated: true
-      operationId: regenerateKeyPair
-      parameters:
-      - explode: false
-        in: path
-        name: id
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "201":
-          description: ""
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Regenerate user key pair
-      tags:
-      - users
   /users/account-providers:
     get:
       operationId: getAvailableAccountProviders
@@ -1649,26 +1625,6 @@ paths:
         - profile
         - email
       summary: Unlink account
-      tags:
-      - users
-  /users/mfa/sms/enroll:
-    post:
-      operationId: enrollInSmsMfa
-      parameters: []
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: string
-          description: SMS MFA enrollment URL
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Enroll in SMS MFA
       tags:
       - users
   /users/{id}:
@@ -1757,61 +1713,6 @@ paths:
       summary: OIDC RP-initiated logout endpoint
       tags:
       - auth
-  /box:
-    get:
-      operationId: listBoxes
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Include verbose output
-        explode: true
-        in: query
-        name: verbose
-        required: false
-        schema:
-          type: boolean
-        style: form
-      - description: JSON encoded labels to filter by
-        explode: true
-        in: query
-        name: labels
-        required: false
-        schema:
-          example: "{\"label1\": \"value1\", \"label2\": \"value2\"}"
-          type: string
-        style: form
-      - description: Include errored and deleted boxes
-        explode: true
-        in: query
-        name: includeErroredDeleted
-        required: false
-        schema:
-          type: boolean
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/Box"
-                type: array
-          description: List of all boxes
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: List all boxes
-      tags:
-      - box
   /box/paginated:
     get:
       operationId: listBoxesPaginated
@@ -1920,7 +1821,7 @@ paths:
         name: minCpu
         required: false
         schema:
-          minimum: 1
+          minimum: 0.01
           type: number
         style: form
       - description: Maximum CPU
@@ -1929,7 +1830,7 @@ paths:
         name: maxCpu
         required: false
         schema:
-          minimum: 1
+          minimum: 0.01
           type: number
         style: form
       - description: Minimum memory in GiB
@@ -1938,7 +1839,7 @@ paths:
         name: minMemoryGiB
         required: false
         schema:
-          minimum: 1
+          minimum: 0.125
           type: number
         style: form
       - description: Maximum memory in GiB
@@ -1947,7 +1848,7 @@ paths:
         name: maxMemoryGiB
         required: false
         schema:
-          minimum: 1
+          minimum: 0.125
           type: number
         style: form
       - description: Minimum disk space in GiB
@@ -2158,48 +2059,6 @@ paths:
       summary: Recover box from error state
       tags:
       - box
-  /box/{boxIdOrName}/labels:
-    put:
-      operationId: replaceLabels
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/BoxLabels"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BoxLabels"
-          description: Labels have been successfully replaced
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Replace box labels
-      tags:
-      - box
   /box/{boxId}/state:
     put:
       operationId: updateBoxState
@@ -2268,132 +2127,6 @@ paths:
         - profile
         - email
       summary: Update box last activity
-      tags:
-      - box
-  /box/{boxIdOrName}/autostop/{interval}:
-    post:
-      operationId: setAutostopInterval
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Auto-stop interval in minutes (0 to disable). Converted to seconds
-          and stored as auto-stop interval.
-        explode: false
-        in: path
-        name: interval
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: Auto-stop interval has been set
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Set box auto-stop interval
-      tags:
-      - box
-  /box/{boxIdOrName}/autodelete/{interval}:
-    post:
-      operationId: setAutoDeleteInterval
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID or name of the box
-        explode: false
-        in: path
-        name: boxIdOrName
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Auto-delete interval in minutes (negative value or 0 disables).
-          Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.
-        explode: false
-        in: path
-        name: interval
-        required: true
-        schema:
-          type: number
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Box"
-          description: Auto-delete interval has been set
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Set box auto-delete interval
-      tags:
-      - box
-  /box/{boxId}/toolbox-proxy-url:
-    get:
-      operationId: getToolboxProxyUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the box
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ToolboxProxyUrl"
-          description: Toolbox proxy URL for the specified box
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get toolbox proxy URL for a box
       tags:
       - box
   /box/{boxIdOrName}/attach-tickets:
@@ -2930,42 +2663,6 @@ paths:
         - profile
         - email
       summary: Get volume details
-      tags:
-      - volumes
-  /volumes/by-name/{name}:
-    get:
-      operationId: getVolumeByName
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: Name of the volume
-        explode: false
-        in: path
-        name: name
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/VolumeDto"
-          description: Volume details
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get volume details by name
       tags:
       - volumes
   /jobs:
@@ -3635,6 +3332,150 @@ paths:
       summary: Delete an image alias
       tags:
       - images
+  /audit:
+    get:
+      operationId: getAllAuditLogs
+      parameters:
+      - description: Page number of the results
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          minimum: 1
+          type: number
+        style: form
+      - description: Number of results per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - description: From date (ISO 8601 format)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: To date (ISO 8601 format)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Token for cursor-based pagination. When provided, takes precedence\
+          \ over page parameter."
+        explode: true
+        in: query
+        name: nextToken
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditLogs"
+          description: Paginated list of all audit logs
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get all audit logs
+      tags:
+      - audit
+  /audit/organizations/{organizationId}:
+    get:
+      operationId: getOrganizationAuditLogs
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Page number of the results
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          minimum: 1
+          type: number
+        style: form
+      - description: Number of results per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - description: From date (ISO 8601 format)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: To date (ISO 8601 format)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Token for cursor-based pagination. When provided, takes precedence\
+          \ over page parameter."
+        explode: true
+        in: query
+        name: nextToken
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditLogs"
+          description: Paginated list of organization audit logs
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get audit logs for organization
+      tags:
+      - audit
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -4110,6 +3951,17 @@ paths:
         schema:
           type: string
         style: form
+      - description: Add up to 200 member emails to each organization; omit to keep
+          the existing fields.
+        explode: true
+        in: query
+        name: include
+        required: false
+        schema:
+          enum:
+          - memberEmails
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -4330,6 +4182,59 @@ paths:
       summary: Query recorded resource usage with fixed snapshot pagination
       tags:
       - admin
+  /admin/organizations/{organizationId}/nested-virtualization:
+    get:
+      operationId: adminGetOrganizationNestedVirtualization
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+          description: ""
+      security:
+      - bearer: []
+      summary: Read organization nesting allowlist
+      tags:
+      - admin
+    put:
+      operationId: adminSetOrganizationNestedVirtualization
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/adminSetOrganizationNestedVirtualization_request"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+          description: ""
+      security:
+      - bearer: []
+      summary: Set organization nesting allowlist
+      tags:
+      - admin
   /webhooks/organizations/{organizationId}/app-portal-access:
     post:
       operationId: WebhookController_getAppPortalAccess
@@ -4522,178 +4427,6 @@ paths:
       summary: Initialize webhooks for an organization
       tags:
       - webhooks
-  /object-storage/push-access:
-    get:
-      operationId: getPushAccess
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StorageAccessDto"
-          description: Temporary storage access has been generated
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get temporary storage access for pushing objects
-      tags:
-      - object-storage
-  /audit:
-    get:
-      operationId: getAllAuditLogs
-      parameters:
-      - description: Page number of the results
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          minimum: 1
-          type: number
-        style: form
-      - description: Number of results per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: From date (ISO 8601 format)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: To date (ISO 8601 format)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: "Token for cursor-based pagination. When provided, takes precedence\
-          \ over page parameter."
-        explode: true
-        in: query
-        name: nextToken
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedAuditLogs"
-          description: Paginated list of all audit logs
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get all audit logs
-      tags:
-      - audit
-  /audit/organizations/{organizationId}:
-    get:
-      operationId: getOrganizationAuditLogs
-      parameters:
-      - description: Organization ID
-        explode: false
-        in: path
-        name: organizationId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Page number of the results
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          minimum: 1
-          type: number
-        style: form
-      - description: Number of results per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: From date (ISO 8601 format)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: To date (ISO 8601 format)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: "Token for cursor-based pagination. When provided, takes precedence\
-          \ over page parameter."
-        explode: true
-        in: query
-        name: nextToken
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedAuditLogs"
-          description: Paginated list of organization audit logs
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get audit logs for organization
-      tags:
-      - audit
   /health:
     get:
       operationId: HealthController_live
@@ -4722,282 +4455,6 @@ paths:
           description: The Health Check is not successful
       tags:
       - Health
-  /box/{boxId}/telemetry/logs:
-    get:
-      description: Retrieve OTEL logs for a box within a time range
-      operationId: getBoxLogs
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the box
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Start of time range (ISO 8601)
-        explode: true
-        in: query
-        name: from
-        required: true
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: End of time range (ISO 8601)
-        explode: true
-        in: query
-        name: to
-        required: true
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: Page number (1-indexed)
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          type: number
-        style: form
-      - description: Number of items per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          type: number
-        style: form
-      - description: "Filter by severity levels (DEBUG, INFO, WARN, ERROR)"
-        explode: true
-        in: query
-        name: severities
-        required: false
-        schema:
-          items:
-            type: string
-          type: array
-        style: form
-      - description: Search in log body
-        explode: true
-        in: query
-        name: search
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedLogs"
-          description: Paginated list of log entries
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get box logs
-      tags:
-      - box
-  /box/{boxId}/telemetry/traces:
-    get:
-      description: Retrieve OTEL traces for a box within a time range
-      operationId: getBoxTraces
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the box
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Start of time range (ISO 8601)
-        explode: true
-        in: query
-        name: from
-        required: true
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: End of time range (ISO 8601)
-        explode: true
-        in: query
-        name: to
-        required: true
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: Page number (1-indexed)
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          type: number
-        style: form
-      - description: Number of items per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          type: number
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedTraces"
-          description: Paginated list of trace summaries
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get box traces
-      tags:
-      - box
-  /box/{boxId}/telemetry/traces/{traceId}:
-    get:
-      description: Retrieve all spans for a specific trace
-      operationId: getBoxTraceSpans
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the box
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: ID of the trace
-        explode: false
-        in: path
-        name: traceId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/TraceSpan"
-                type: array
-          description: List of spans in the trace
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get trace spans
-      tags:
-      - box
-  /box/{boxId}/telemetry/metrics:
-    get:
-      description: Retrieve OTEL metrics for a box within a time range
-      operationId: getBoxMetrics
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the box
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Start of time range (ISO 8601)
-        explode: true
-        in: query
-        name: from
-        required: true
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: End of time range (ISO 8601)
-        explode: true
-        in: query
-        name: to
-        required: true
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: Filter by metric names
-        explode: true
-        in: query
-        name: metricNames
-        required: false
-        schema:
-          items:
-            type: string
-          type: array
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MetricsResponse"
-          description: Metrics time series data
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get box metrics
-      tags:
-      - box
 components:
   schemas:
     Announcement:
@@ -5012,6 +4469,23 @@ components:
           type: string
       required:
       - text
+      type: object
+    TurnstileConfig:
+      example:
+        sitekey: sitekey
+        action: signup
+      properties:
+        sitekey:
+          description: Public Turnstile widget sitekey
+          type: string
+        action:
+          description: Turnstile challenge action
+          enum:
+          - signup
+          type: string
+      required:
+      - action
+      - sitekey
       type: object
     PosthogConfig:
       properties:
@@ -5083,6 +4557,9 @@ components:
       type: object
     BoxliteConfiguration:
       example:
+        turnstile:
+          sitekey: sitekey
+          action: signup
         version: 0.0.1
         posthog: ""
         oidc: ""
@@ -5093,7 +4570,6 @@ components:
             learnMoreUrl: https://example.com
         pylonAppId: pylon-app-123
         proxyTemplateUrl: "https://{{PORT}}-{{boxId}}.proxy.example.com"
-        proxyToolboxUrl: https://proxy.example.com/toolbox
         dashboardUrl: https://dashboard.example.com
         maintananceMode: false
         environment: production
@@ -5101,6 +4577,8 @@ components:
         analyticsApiUrl: https://analytics.example.com
         rateLimit: ""
       properties:
+        turnstile:
+          $ref: "#/components/schemas/TurnstileConfig"
         version:
           description: BoxLite version
           example: 0.0.1
@@ -5134,10 +4612,6 @@ components:
           description: Proxy template URL
           example: "https://{{PORT}}-{{boxId}}.proxy.example.com"
           type: string
-        proxyToolboxUrl:
-          description: Toolbox template URL
-          example: https://proxy.example.com/toolbox
-          type: string
         dashboardUrl:
           description: Dashboard URL
           example: https://dashboard.example.com
@@ -5170,7 +4644,6 @@ components:
       - maintananceMode
       - oidc
       - proxyTemplateUrl
-      - proxyToolboxUrl
       - version
       type: object
     CreateApiKey:
@@ -6613,7 +6086,6 @@ components:
         class: small
         daemonVersion: 1.0.0
         runnerId: runner123
-        toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
         progress: ""
       properties:
         id:
@@ -6753,10 +6225,6 @@ components:
           description: The runner ID of the box
           example: runner123
           type: string
-        toolboxProxyUrl:
-          description: The toolbox proxy URL for the box
-          example: https://proxy.app.boxlite.io/toolbox
-          type: string
         progress:
           allOf:
           - $ref: "#/components/schemas/BoxProgress"
@@ -6774,7 +6242,6 @@ components:
       - name
       - organizationId
       - target
-      - toolboxProxyUrl
       - user
       type: object
     PaginatedBoxes:
@@ -6817,7 +6284,6 @@ components:
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123
-          toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
           progress: ""
         - id: aB3cD4eF5gH6
           organizationId: organization123
@@ -6856,7 +6322,6 @@ components:
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123
-          toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
           progress: ""
         total: 0.8008281904610115
         page: 6.027456183070403
@@ -6877,23 +6342,6 @@ components:
       - page
       - total
       - totalPages
-      type: object
-    BoxLabels:
-      example:
-        labels:
-          environment: dev
-          team: backend
-      properties:
-        labels:
-          additionalProperties:
-            type: string
-          description: Key-value pairs of labels
-          example:
-            environment: dev
-            team: backend
-          type: object
-      required:
-      - labels
       type: object
     UpdateBoxStateDto:
       example:
@@ -6940,17 +6388,6 @@ components:
           type: integer
       required:
       - state
-      type: object
-    ToolboxProxyUrl:
-      example:
-        url: https://proxy.app.boxlite.io/toolbox
-      properties:
-        url:
-          description: The toolbox proxy URL for the box
-          example: https://proxy.app.boxlite.io/toolbox
-          type: string
-      required:
-      - url
       type: object
     CreateAttachTicket:
       example:
@@ -7442,9 +6879,46 @@ components:
       - healthy
       - serviceName
       type: object
+    RunnerDataDiskRef:
+      description: "Cloud identity of the runner data disk. diskType names the backend\
+        \ so the API can tell expandable block disks from backends with a different\
+        \ resize path (e.g. Filestore); runners predating the field are treated as\
+        \ hyperdisk_balanced, the only type infra provisions today."
+      properties:
+        provider:
+          description: Cloud provider of the data disk
+          example: gcp
+          type: string
+        project:
+          description: Cloud project the data disk lives in
+          example: boxlite-prod-project
+          type: string
+        zone:
+          description: Cloud zone the data disk lives in
+          example: us-central1-a
+          type: string
+        diskName:
+          description: "Name of the data disk, as the cloud API addresses it"
+          example: boxlite-runner-data-host-1
+          type: string
+        diskType:
+          description: "Backend behind the identity (hyperdisk_balanced, filestore,\
+            \ ...). Omitted by runner binaries predating the field; the API then assumes\
+            \ hyperdisk_balanced, the only data disk infra provisions today."
+          example: hyperdisk_balanced
+          type: string
+      required:
+      - diskName
+      - project
+      - provider
+      - zone
+      type: object
     RunnerHealthcheck:
       example:
+        nestedVirtualizationEnabled: true
         supportsPrivileged: true
+        capabilities:
+        - filestore
         metrics: ""
         serviceHealth:
         - serviceName: runner
@@ -7453,14 +6927,27 @@ components:
         - serviceName: runner
           healthy: false
           errorReason: Cannot connect to the runner
+        dataDiskRef: ""
         domain: runner-123.boxlite.example.com
         proxyUrl: http://proxy.boxlite.example.com:8080
         apiUrl: http://api.boxlite.example.com:8080
         appVersion: v0.0.0-dev
       properties:
+        nestedVirtualizationEnabled:
+          description: Runner runtime authorizes nested virtualization
+          type: boolean
         supportsPrivileged:
           description: Runner preserves the guest privileged creation option
           type: boolean
+        capabilities:
+          description: "Capabilities the runner binary supports (e.g. \"filestore\"\
+            ). Absent from runners predating capability reporting, which the API treats\
+            \ as supporting none of them"
+          example:
+          - filestore
+          items:
+            type: string
+          type: array
         metrics:
           allOf:
           - $ref: "#/components/schemas/RunnerHealthMetrics"
@@ -7470,6 +6957,11 @@ components:
           items:
             $ref: "#/components/schemas/RunnerServiceHealth"
           type: array
+        dataDiskRef:
+          allOf:
+          - $ref: "#/components/schemas/RunnerDataDiskRef"
+          description: Cloud identity of the runner data disk; absent when the runner
+            has none (AWS or local)
         domain:
           description: Runner domain
           example: runner-123.boxlite.example.com
@@ -7582,6 +7074,9 @@ components:
       - ROLLBACK_EXPORT_BOX
       - ROLLBACK_IMPORT_BOX
       - DISCARD_EXPORTED_BOX
+      - EXPORT_CHECKPOINT
+      - UPLOAD_CHECKPOINT
+      - IMPORT_CHECKPOINT
       type: string
     Job:
       example:
@@ -7617,6 +7112,7 @@ components:
           - BOX
           - ARTIFACT
           - BACKUP
+          - CHECKPOINT
           example: BOX
           type: string
         resourceId:
@@ -8451,6 +7947,118 @@ components:
       - alias
       - versionId
       type: object
+    AuditLog:
+      example:
+        id: id
+        actorId: actorId
+        actorEmail: actorEmail
+        organizationId: organizationId
+        action: action
+        targetType: targetType
+        targetId: targetId
+        statusCode: 0.8008281904610115
+        errorMessage: errorMessage
+        ipAddress: ipAddress
+        userAgent: userAgent
+        source: source
+        metadata:
+          key: ""
+        createdAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          type: string
+        actorId:
+          type: string
+        actorEmail:
+          type: string
+        organizationId:
+          type: string
+        action:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+        statusCode:
+          type: number
+        errorMessage:
+          type: string
+        ipAddress:
+          type: string
+        userAgent:
+          type: string
+        source:
+          type: string
+        metadata:
+          additionalProperties: true
+          type: object
+        createdAt:
+          format: date-time
+          type: string
+      required:
+      - action
+      - actorEmail
+      - actorId
+      - createdAt
+      - id
+      type: object
+    PaginatedAuditLogs:
+      example:
+        items:
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 0.8008281904610115
+          errorMessage: errorMessage
+          ipAddress: ipAddress
+          userAgent: userAgent
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 0.8008281904610115
+          errorMessage: errorMessage
+          ipAddress: ipAddress
+          userAgent: userAgent
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        total: 6.027456183070403
+        page: 1.4658129805029452
+        totalPages: 5.962133916683182
+        nextToken: nextToken
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/AuditLog"
+          type: array
+        total:
+          type: number
+        page:
+          type: number
+        totalPages:
+          type: number
+        nextToken:
+          description: Token for next page in cursor-based pagination
+          type: string
+      required:
+      - items
+      - page
+      - total
+      - totalPages
+      type: object
     AdminCreateRunner:
       example:
         regionId: regionId
@@ -9186,6 +8794,9 @@ components:
         memberCount: 6.027456183070403
         boxCount: 1.4658129805029452
         impactState: impacted
+        memberEmails:
+        - memberEmails
+        - memberEmails
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:
         createdAt:
@@ -9215,6 +8826,12 @@ components:
           - impacted
           - not_impacted
           type: string
+        memberEmails:
+          description: Up to 200 non-empty member emails ordered by user ID; present
+            only with include=memberEmails.
+          items:
+            type: string
+          type: array
         observedAt:
           format: date-time
           type: string
@@ -9242,6 +8859,9 @@ components:
           memberCount: 6.027456183070403
           boxCount: 1.4658129805029452
           impactState: impacted
+          memberEmails:
+          - memberEmails
+          - memberEmails
           observedAt: 2000-01-23T04:56:07.000+00:00
         - createdAt: 2000-01-23T04:56:07.000+00:00
           createdBy: createdBy
@@ -9251,6 +8871,9 @@ components:
           memberCount: 6.027456183070403
           boxCount: 1.4658129805029452
           impactState: impacted
+          memberEmails:
+          - memberEmails
+          - memberEmails
           observedAt: 2000-01-23T04:56:07.000+00:00
         observedAt: 2000-01-23T04:56:07.000+00:00
       properties:
@@ -9871,6 +9494,17 @@ components:
       - message
       - statusCode
       type: object
+    AdminOrganizationNestedVirtualization:
+      example:
+        enabled: true
+      properties:
+        enabled:
+          description: Allow new boxes to use nesting when their selected Runner supports
+            it.
+          type: boolean
+      required:
+      - enabled
+      type: object
     WebhookAppPortalAccess:
       example:
         token: appsk_...
@@ -9969,458 +9603,15 @@ components:
       - svixApplicationId
       - updatedAt
       type: object
-    StorageAccessDto:
-      example:
-        accessKey: temp-user-123
-        secret: abchbGciOiJIUzI1NiIs...
-        sessionToken: eyJhbGciOiJIUzI1NiIs...
-        storageUrl: storage.example.com
-        organizationId: 123e4567-e89b-12d3-a456-426614174000
-        bucket: boxlite
+    adminSetOrganizationNestedVirtualization_request:
+      additionalProperties: false
       properties:
-        accessKey:
-          description: Access key for storage authentication
-          example: temp-user-123
-          type: string
-        secret:
-          description: Secret key for storage authentication
-          example: abchbGciOiJIUzI1NiIs...
-          type: string
-        sessionToken:
-          description: Session token for storage authentication
-          example: eyJhbGciOiJIUzI1NiIs...
-          type: string
-        storageUrl:
-          description: Storage URL
-          example: storage.example.com
-          type: string
-        organizationId:
-          description: Organization ID
-          example: 123e4567-e89b-12d3-a456-426614174000
-          type: string
-        bucket:
-          description: S3 bucket name
-          example: boxlite
-          type: string
+        enabled:
+          description: Allow new boxes to use nesting when their selected Runner supports
+            it.
+          type: boolean
       required:
-      - accessKey
-      - bucket
-      - organizationId
-      - secret
-      - sessionToken
-      - storageUrl
-      type: object
-    AuditLog:
-      example:
-        id: id
-        actorId: actorId
-        actorEmail: actorEmail
-        organizationId: organizationId
-        action: action
-        targetType: targetType
-        targetId: targetId
-        statusCode: 0.8008281904610115
-        errorMessage: errorMessage
-        ipAddress: ipAddress
-        userAgent: userAgent
-        source: source
-        metadata:
-          key: ""
-        createdAt: 2000-01-23T04:56:07.000+00:00
-      properties:
-        id:
-          type: string
-        actorId:
-          type: string
-        actorEmail:
-          type: string
-        organizationId:
-          type: string
-        action:
-          type: string
-        targetType:
-          type: string
-        targetId:
-          type: string
-        statusCode:
-          type: number
-        errorMessage:
-          type: string
-        ipAddress:
-          type: string
-        userAgent:
-          type: string
-        source:
-          type: string
-        metadata:
-          additionalProperties: true
-          type: object
-        createdAt:
-          format: date-time
-          type: string
-      required:
-      - action
-      - actorEmail
-      - actorId
-      - createdAt
-      - id
-      type: object
-    PaginatedAuditLogs:
-      example:
-        items:
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 0.8008281904610115
-          errorMessage: errorMessage
-          ipAddress: ipAddress
-          userAgent: userAgent
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 0.8008281904610115
-          errorMessage: errorMessage
-          ipAddress: ipAddress
-          userAgent: userAgent
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        total: 6.027456183070403
-        page: 1.4658129805029452
-        totalPages: 5.962133916683182
-        nextToken: nextToken
-      properties:
-        items:
-          items:
-            $ref: "#/components/schemas/AuditLog"
-          type: array
-        total:
-          type: number
-        page:
-          type: number
-        totalPages:
-          type: number
-        nextToken:
-          description: Token for next page in cursor-based pagination
-          type: string
-      required:
-      - items
-      - page
-      - total
-      - totalPages
-      type: object
-    LogEntry:
-      example:
-        timestamp: timestamp
-        body: body
-        severityText: severityText
-        severityNumber: 0.8008281904610115
-        serviceName: serviceName
-        resourceAttributes:
-          key: resourceAttributes
-        logAttributes:
-          key: logAttributes
-        traceId: traceId
-        spanId: spanId
-      properties:
-        timestamp:
-          description: Timestamp of the log entry
-          type: string
-        body:
-          description: Log message body
-          type: string
-        severityText:
-          description: "Severity level text (e.g., INFO, WARN, ERROR)"
-          type: string
-        severityNumber:
-          description: Severity level number
-          type: number
-        serviceName:
-          description: Service name that generated the log
-          type: string
-        resourceAttributes:
-          additionalProperties:
-            type: string
-          description: Resource attributes from OTEL
-          type: object
-        logAttributes:
-          additionalProperties:
-            type: string
-          description: Log-specific attributes
-          type: object
-        traceId:
-          description: Associated trace ID if available
-          type: string
-        spanId:
-          description: Associated span ID if available
-          type: string
-      required:
-      - body
-      - logAttributes
-      - resourceAttributes
-      - serviceName
-      - severityText
-      - timestamp
-      type: object
-    PaginatedLogs:
-      example:
-        items:
-        - timestamp: timestamp
-          body: body
-          severityText: severityText
-          severityNumber: 0.8008281904610115
-          serviceName: serviceName
-          resourceAttributes:
-            key: resourceAttributes
-          logAttributes:
-            key: logAttributes
-          traceId: traceId
-          spanId: spanId
-        - timestamp: timestamp
-          body: body
-          severityText: severityText
-          severityNumber: 0.8008281904610115
-          serviceName: serviceName
-          resourceAttributes:
-            key: resourceAttributes
-          logAttributes:
-            key: logAttributes
-          traceId: traceId
-          spanId: spanId
-        total: 6.027456183070403
-        page: 1.4658129805029452
-        totalPages: 5.962133916683182
-      properties:
-        items:
-          description: List of log entries
-          items:
-            $ref: "#/components/schemas/LogEntry"
-          type: array
-        total:
-          description: Total number of log entries matching the query
-          type: number
-        page:
-          description: Current page number
-          type: number
-        totalPages:
-          description: Total number of pages
-          type: number
-      required:
-      - items
-      - page
-      - total
-      - totalPages
-      type: object
-    TraceSummary:
-      example:
-        traceId: traceId
-        rootSpanName: rootSpanName
-        startTime: startTime
-        endTime: endTime
-        durationMs: 0.8008281904610115
-        spanCount: 6.027456183070403
-        statusCode: statusCode
-      properties:
-        traceId:
-          description: Unique trace identifier
-          type: string
-        rootSpanName:
-          description: Name of the root span
-          type: string
-        startTime:
-          description: Trace start time
-          type: string
-        endTime:
-          description: Trace end time
-          type: string
-        durationMs:
-          description: Total duration in milliseconds
-          type: number
-        spanCount:
-          description: Number of spans in this trace
-          type: number
-        statusCode:
-          description: Status code of the trace
-          type: string
-      required:
-      - durationMs
-      - endTime
-      - rootSpanName
-      - spanCount
-      - startTime
-      - traceId
-      type: object
-    PaginatedTraces:
-      example:
-        items:
-        - traceId: traceId
-          rootSpanName: rootSpanName
-          startTime: startTime
-          endTime: endTime
-          durationMs: 0.8008281904610115
-          spanCount: 6.027456183070403
-          statusCode: statusCode
-        - traceId: traceId
-          rootSpanName: rootSpanName
-          startTime: startTime
-          endTime: endTime
-          durationMs: 0.8008281904610115
-          spanCount: 6.027456183070403
-          statusCode: statusCode
-        total: 1.4658129805029452
-        page: 5.962133916683182
-        totalPages: 5.637376656633329
-      properties:
-        items:
-          description: List of trace summaries
-          items:
-            $ref: "#/components/schemas/TraceSummary"
-          type: array
-        total:
-          description: Total number of traces matching the query
-          type: number
-        page:
-          description: Current page number
-          type: number
-        totalPages:
-          description: Total number of pages
-          type: number
-      required:
-      - items
-      - page
-      - total
-      - totalPages
-      type: object
-    TraceSpan:
-      example:
-        traceId: traceId
-        spanId: spanId
-        parentSpanId: parentSpanId
-        spanName: spanName
-        serviceName: serviceName
-        layer: layer
-        timestamp: timestamp
-        durationNs: 0.8008281904610115
-        spanAttributes:
-          key: spanAttributes
-        statusCode: statusCode
-        statusMessage: statusMessage
-      properties:
-        traceId:
-          description: Trace identifier
-          type: string
-        spanId:
-          description: Span identifier
-          type: string
-        parentSpanId:
-          description: Parent span identifier
-          type: string
-        spanName:
-          description: Span name
-          type: string
-        serviceName:
-          description: "Emitting service name (e.g. boxlite-api, boxlite-runner, box-<id>)"
-          type: string
-        layer:
-          description: "Resolved emitting layer: api | runner | ec2_host | box"
-          type: string
-        timestamp:
-          description: Span start timestamp
-          type: string
-        durationNs:
-          description: Span duration in nanoseconds
-          type: number
-        spanAttributes:
-          additionalProperties:
-            type: string
-          description: Span attributes
-          type: object
-        statusCode:
-          description: Status code of the span
-          type: string
-        statusMessage:
-          description: Status message
-          type: string
-      required:
-      - durationNs
-      - spanAttributes
-      - spanId
-      - spanName
-      - timestamp
-      - traceId
-      type: object
-    MetricDataPoint:
-      example:
-        timestamp: timestamp
-        value: 0.8008281904610115
-      properties:
-        timestamp:
-          description: Timestamp of the data point
-          type: string
-        value:
-          description: Value at this timestamp
-          type: number
-      required:
-      - timestamp
-      - value
-      type: object
-    MetricSeries:
-      example:
-        metricName: metricName
-        dataPoints:
-        - timestamp: timestamp
-          value: 0.8008281904610115
-        - timestamp: timestamp
-          value: 0.8008281904610115
-      properties:
-        metricName:
-          description: Name of the metric
-          type: string
-        dataPoints:
-          description: Data points for this metric
-          items:
-            $ref: "#/components/schemas/MetricDataPoint"
-          type: array
-      required:
-      - dataPoints
-      - metricName
-      type: object
-    MetricsResponse:
-      example:
-        series:
-        - metricName: metricName
-          dataPoints:
-          - timestamp: timestamp
-            value: 0.8008281904610115
-          - timestamp: timestamp
-            value: 0.8008281904610115
-        - metricName: metricName
-          dataPoints:
-          - timestamp: timestamp
-            value: 0.8008281904610115
-          - timestamp: timestamp
-            value: 0.8008281904610115
-      properties:
-        series:
-          description: List of metric series
-          items:
-            $ref: "#/components/schemas/MetricSeries"
-          type: array
-      required:
-      - series
+      - enabled
       type: object
     WebhookController_getStatus_200_response:
       example:

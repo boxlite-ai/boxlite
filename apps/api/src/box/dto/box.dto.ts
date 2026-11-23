@@ -9,6 +9,7 @@ import { BoxState } from '../enums/box-state.enum'
 import { IsEnum, IsOptional } from 'class-validator'
 import { IMAGE_PREPARATION_RETRY_AFTER_MS } from '../constants/box-progress.constant'
 import { Box } from '../entities/box.entity'
+import { memoryGiBOf } from '../utils/memory-allocation'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { NetworkInfoResponseDto } from './network-info.dto'
@@ -68,21 +69,32 @@ export class BoxSecret {
     description: 'Real secret value. Never enters the guest VM.',
     example: 'sk-...',
   })
-  value: string
+  value?: string
 
-  @ApiPropertyOptional({
-    description: 'Matching hosts for this secret. Empty means no host restriction.',
+  /** Internal reference; present instead of value after Secret Server transfer. */
+  secretId?: string
+
+  @ApiProperty({
+    description: 'Hosts where this secret is injected. Required for new boxes, at least one host.',
     example: ['api.openai.com'],
     isArray: true,
     type: String,
   })
-  hosts?: string[]
+  hosts: string[]
 
   @ApiPropertyOptional({
-    description: 'Placeholder visible inside the guest. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
+    description:
+      'Dummy value for the guest environment; the proxy never parses it. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
     example: '<BOXLITE_SECRET:openai>',
   })
   placeholder?: string
+
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: { type: 'string' },
+    description: 'Required non-empty header templates containing exactly one {value}.',
+  })
+  headers: Record<string, string>
 }
 
 /** What a conversion reads from outside the box row. See {@link BoxDto.fromBox}. */
@@ -325,12 +337,6 @@ export class BoxDto {
   @IsOptional()
   runnerId?: string
 
-  @ApiProperty({
-    description: 'The toolbox proxy URL for the box',
-    example: 'https://proxy.app.boxlite.io/toolbox',
-  })
-  toolboxProxyUrl: string
-
   @ApiPropertyOptional({
     description:
       'What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled',
@@ -357,7 +363,7 @@ export class BoxDto {
   // The three arrive as one object because each is optional: as trailing
   // positional arguments, a caller wanting only the last spells the others as
   // `undefined`, and two of them are one slip from trading places.
-  static fromBox(box: Box, toolboxProxyUrl: string, reads: BoxDtoReads = {}): BoxDto {
+  static fromBox(box: Box, reads: BoxDtoReads = {}): BoxDto {
     const { lastActivityAt, exitCode, preparingImage = false } = reads
     // Read once: the state this payload reports and the state the progress
     // field is gated on are the same claim, and deriving it twice is what
@@ -377,7 +383,7 @@ export class BoxDto {
       env: box.env,
       cpu: box.cpu,
       gpu: box.gpu,
-      memory: box.mem,
+      memory: memoryGiBOf(box),
       disk: box.disk,
       privileged: box.privileged,
       network: NetworkInfoResponseDto.fromBox(box),
@@ -400,7 +406,6 @@ export class BoxDto {
       lastActivityAt: lastActivityAt ? new Date(lastActivityAt).toISOString() : undefined,
       daemonVersion: box.daemonVersion,
       runnerId: box.runnerId,
-      toolboxProxyUrl,
       // Only while the box reads as being created. A started box is not
       // waiting on anything, so reporting what it once waited on would be a
       // field that never clears.
@@ -414,15 +419,4 @@ export class BoxDto {
         : {}),
     }
   }
-}
-
-@ApiSchema({ name: 'BoxLabels' })
-export class BoxLabelsDto {
-  @ApiProperty({
-    description: 'Key-value pairs of labels',
-    example: { environment: 'dev', team: 'backend' },
-    type: 'object',
-    additionalProperties: { type: 'string' },
-  })
-  labels: { [key: string]: string }
 }

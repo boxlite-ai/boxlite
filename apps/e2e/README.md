@@ -6,6 +6,33 @@ These tests exercise the **full production path**:
 Python SDK (boxlite.Boxlite.rest) → HTTP → NestJS API → HTTP → boxlite-runner → libkrun VM
 ```
 
+Cloud runs accept an optional `tag` in the **E2E cloud** workflow, including
+reusable calls. For example, `tag=v0.13.1` downloads that release's Python wheel,
+Node SDK/native addon and CLI instead of compiling them. Leave `tag` blank to
+build clients from the selected checkout, as before. Only stable `vX.Y.Z` tags
+are accepted; unavailable artifacts fail the run without falling back to source.
+
+```bash
+gh workflow run e2e-cloud.yml -f stage=dev -f tag=v0.13.1
+```
+
+Tests still come from the selected checkout and target the selected deployed
+stage. On dev, C/Go domain drivers link the released C library; Go SDK source
+comes from the release tag. The Rust domain driver compiles against that tag's
+Rust SDK, so dev still has some Rust compilation. All driver source programs
+come from the test checkout, preserving current acceptance coverage. A release
+that lacks APIs required by current tests fails those tests or driver builds.
+Prod retains its Python-only smoke selection. This input changes client versions;
+it does not deploy or change the cloud stack.
+
+The Node release installer removes SDK development/workspace metadata before
+adding the test tools, while retaining runtime dependencies. npm resolves peer
+dependencies before applying `--omit=dev`; resolving the published SDK's build
+metadata can otherwise abort installation with an `edgesOut` error.
+To exercise the real npm resolver and TypeScript tools in a temporary checkout,
+run `E2E_RELEASE_REAL_NPM=1 make test:unit:scripts` with the workflow's Node/npm
+versions. This opt-in check downloads test tools from the npm registry.
+
 Existing `make test:integration:*` tests use the local PyO3 / FFI path
 (`Boxlite.default()`) and bypass both the API and the runner — so a bug that
 only surfaces on the REST → API → runner chain (e.g. #563's exec-stdout drop,
@@ -15,15 +42,62 @@ exists to catch those.
 It sits under `apps/` because the stack it drives — `apps/api`, `apps/runner`,
 `apps/proxy` — does. It is **not** an Nx project: there is no `project.json` or
 Jest config for Nx to infer, and pytest invokes its polyglot SDK drivers. It is
-also **not** what `npm run e2e:local` starts — that command brings up the local
-Dex environment for the dashboard. Drive this suite through the
-`make test:e2e*` targets.
+**not** driven by npm scripts: it runs through the `make test:e2e*` targets.
 
 The wider REST API test flow, from the contract inventory and this suite to the
 CLI matrix and both authentication modes, is in
 [REST API testing](../../docs/contributing/development/rest-api-testing.md).
 
 ## What the suite verifies
+
+### Managed checkpoints
+
+`cases/test_checkpoints.py` exercises stopped-source export and upload, source deletion and
+creating a Box from the checkpoint through the SDK and actual guests.
+Guest reads verify immutable disk contents and inherited environment values.
+Deleting the checkpoint must leave the created Box usable.
+
+Stop requests are asynchronous: the case waits for the source to report `stopped`
+before capture. Source deletion and teardown wait for absence by stable Box ID,
+since deletion admission renames a Box before destruction finishes. Cleanup retries
+only the state-change conflict, bounds each Box removal to 30 seconds, and reports
+other errors while continuing the remaining cleanup.
+
+Checkpoint creates leave lifecycle options unset instead of receiving the harness
+defaults again. The source receives the suite's 300-second `auto_stop` and
+600-second `auto_delete` policy before capture; the restored Box must inherit both,
+which the case verifies through the API-backed SDK metadata.
+
+Run against an API/runner built from this branch with checkpoint storage enabled:
+
+```bash
+make test:e2e E2E_ARGS=cases/test_checkpoints.py
+```
+
+Use the existing environment/profile authentication described below. The case
+requires `capabilities.checkpoints_enabled=true`; absence fails before creating
+a Box. It uses unique `e2e-` resource names, retains the suite's bounded Box
+lifetimes, and reports cleanup failures. It is outside the production smoke
+selection because it uses checkpoint storage and multiple guest lifecycles. Loopback, mock-storage and
+native stub checks do not satisfy this real VM/storage acceptance case.
+
+### Existing coverage
+
+CLI cases invoke detached workloads as `boxlite run -d IMAGE sleep 300`.
+The image begins the CLI's trailing argument vector, so an extra `--` after
+IMAGE becomes the guest executable; it is not a command separator. Keep
+`boxlite exec BOX -- COMMAND` for exec, which uses a separate command argument.
+
+The CLI cases share `lib/cli_process.py` to include stdout, stderr and exit
+status in checked-command failures. Exit-code tests use `check=False` and
+inspect the returned result. Named-box creation failures fail the test; a
+unique suite name allows cleanup even when creation returns no Box ID.
+
+`tests/scripts/test_e2e_cli.py` drives these callers through the actual CLI and
+a loopback HTTP endpoint. Run it via `make test:unit:scripts` with the E2E
+Python dependencies installed and `BOXLITE_E2E_CLI` pointing to the built CLI.
+These checks verify request arguments and diagnostics; real cloud E2E remains
+necessary to verify the API, Runner and VM path together.
 
 Product acceptance cases use the REST-mode runtime built by `conftest.py::rt`.
 `test_network_harness.py` separately checks probe failures and framing without
@@ -37,6 +111,88 @@ one exec, and asserts that **both** `:3000` (API) and `:8080` (runner)
 received the corresponding HTTP requests by tailing `/var/log/boxlite-api.log`
 and `journalctl -u boxlite-runner`. If that meta-test passes, every other
 case in this suite is using the same fixtures and the same path.
+
+## Managed local E2E (preferred)
+
+`make test:e2e:setup` starts the dependency services with Docker Compose and runs the current-source API/Runner/proxies as host processes; fixtures and a real guest smoke follow. State lives in `target/e2e/`; no sudo or system services are used.
+
+Initialize submodules once (`git submodule update --init --recursive`, or `make setup`), then:
+
+```bash
+nix develop -c make test:e2e:doctor
+nix develop -c make test:e2e:setup
+make test:e2e FILTER=exec_working_dir
+make test:e2e:down
+```
+
+`make test:e2e:down` also terminates `bwrap`/`boxlite-shim` processes left in this checkout's runtime home by an interrupted run, removes their box directories, and fails if any process survives. The jailer starts every shim with `setsid()`, so signalling the runner's process group never reaches them.
+
+The fixed host ports support one managed stack at a time on a host, including across users; coordinate shared hosts and run stacks sequentially. `status` takes the lifecycle lock without reserving an unused stack. Lifecycle commands share a user-wide lock and persist the owning checkout and state directory until a successful `down`. Another checkout or `E2E_STATE_DIR` fails before changing resources; stop the owner using its original checkout and state directory first. Compose projects and runtime homes include the user, checkout and state identity and cannot be overridden by inherited Compose settings. Switching state after teardown therefore does not reuse volumes encrypted with another state's keys. PID records are published atomically.
+
+Runtime roots and the coordination directory are opened without following symlinks,
+checked for the current user's ownership, and made private. Foreign-owned or
+group/other-writable runtime parents are refused rather than repaired. Safe owned
+0755 parents from older launchers are tightened to 0700. Inside that private root,
+owned Runner-created box directories are tightened to 0700, including directories
+from earlier runs with umask 002; foreign owners and symlinks remain rejected.
+Host services inherit umask 077. Teardown also verifies
+the `boxes` directory and its children before recursively removing anything.
+
+Before replacing the Runner, startup reaps owned box process trees only when
+their `shim.pid` cannot identify a live process. PID/start-time verification and
+legacy PID handling follow runtime recovery; recoverable guests are preserved.
+This does not replace the runtime's database reconciliation or VM adoption.
+
+`E2E_PYTHON` accepts absolute paths, bare interpreter names found on `PATH`, or paths relative to the repository root. An existing interpreter must belong to a virtual environment; a bare system `python3` is not accepted. The same resolved interpreter is used for dependency sync, SDK installation, fixtures and pytest, including recursive Make invocations. A command-line `E2E_STATE_DIR` overrides an inherited `BOXLITE_E2E_STATE_DIR`; relative state paths are anchored at the repository root.
+
+An existing virtual environment created with `--without-pip` is supported:
+dependency setup bootstraps pip through that interpreter's bundled `ensurepip`
+before installing the pinned uv version. To select another Python version, create
+its virtual environment first and point `E2E_PYTHON` at its existing interpreter;
+unsupported executable names are rejected before creating a new environment.
+
+The source-run API reads the repository's `openapi/` through `BOXLITE_OPENAPI_DIR`; packaged deployments retain the bundled-assets default. This avoids requiring generated copies beneath `apps/api/src/assets` for local startup.
+
+Host API, Runner and proxy listeners bind to loopback through `BOXLITE_LISTEN_HOST=127.0.0.1`. Other deployments retain their existing all-interface default when this variable is unset. Credentials and encryption keys are generated once in `target/e2e/credentials.json` (mode 0600); preserve this file with the stack's data. Initial `POSTGRES_PASSWORD` and `RUSTFS_PASSWORD` overrides are persisted and later environment changes do not rotate existing credentials. Generated Compose `.env` files contain no passwords.
+
+`setup`, `up` and `test:e2e` reuse an unchanged healthy stack. The launcher hashes tracked and non-ignored untracked working-tree inputs, including submodule sources, and the launch environment/interpreter. Test directories and Markdown documentation are excluded; changing pytest cases, `FILTER` or `E2E_ARGS` therefore does not reinstall dependencies or restart services. Product or configuration changes conservatively rebuild components and restart all host services. Dependency manifests have a separate fingerprint, so source-only changes skip dependency installation when the Python environment and package directories still exist.
+
+Reuse also requires the expected build artifacts, matching host PID/start-time records, responsive dependency and HTTP health checks, and a ready registered Runner. Missing records, artifacts or unhealthy services trigger preparation. Successful startup and fixture setup publish the reuse record; a failed preparation invalidates it. Delete `target/e2e/stack-inputs.json` to force preparation, or also delete `dependencies-inputs.json` to force dependency sync after manually altering installed packages. This cache assumes installed packages and generated artifacts have not been manually replaced; it does not fingerprint toolchain installations or external data.
+
+The Runner build fingerprints `target/debug/libboxlite.a` and forces Go recompilation when its content changes, because Go's cache does not track external CGO archives. A failed build never advances that fingerprint.
+
+This invalidation follows [Go's documented external C-library cache limitation](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching). Compose isolation follows its [project-name boundary](https://docs.docker.com/compose/how-tos/project-name/); a separate user-wide owner reservation is still needed because project names do not isolate host ports.
+
+Startup failure or interruption stops newly started host services and box processes, preserves pre-existing guest process identities, removes newly created dependency containers, and preserves existing dependency containers, volumes and logs. Build failures occur before stopping existing services. A restart intentionally replaces the old host processes; failed replacements are stopped rather than left half-running. Failed startup retains ownership so recovery or teardown uses the same checkout/state.
+
+Each dependency-readiness subprocess shares its check's remaining deadline, so
+a connected but unresponsive Redis or PostgreSQL cannot block startup forever.
+`status` fails if any required API/Runner/proxy PID record is missing or stale,
+including before startup and after teardown.
+
+Explicit paths supplied through `E2E_ARGS` suppress default whole-suite selection,
+just like paths passed directly to `run.sh`:
+
+```bash
+make test:e2e E2E_ARGS='cases/test_lifecycle.py -x'
+```
+
+Stacks created before checkout-specific Compose projects used the shared `boxlite-e2e` project and fixed encryption keys. Stop those stacks with the old launcher before upgrading. Their volumes are not adopted or deleted automatically; keep their original state and keys if data must be migrated. The new launcher creates a separate project and must not be used to clean up an old project's resources.
+
+Compose uses the configured Docker connection; Podman users must explicitly set
+`DOCKER_HOST=unix:///path/to/podman.sock`. Only one engine is needed: a `docker`
+command supplied by Podman does not imply a Docker daemon at `/var/run/docker.sock`.
+For rootless Podman, use `DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock`
+with its API socket running. The launcher saves Docker connection environment
+variables in `target/e2e/compose-engine.json` after the first successful Compose
+command and reuses them for all lifecycle commands. Failed initial connections
+leave no selection, so correcting `DOCKER_HOST` and retrying works. Keep the
+selected Docker context unchanged until teardown;
+a newly available Podman socket never changes the selected engine automatically.
+
+The launcher script tests keep real `/proc` process checks Linux-only and mock process discovery in platform-independent lifecycle tests. Runtime process tests resolve `sleep` through `PATH`, preserving its executable name for multicall coreutils on NixOS; neither `/bin/sleep` nor a renamed sleep applet is required.
+
+Nix is optional: install the same tools with the distro and run the same commands. Host prerequisites remain Docker with Compose v2, `/dev/kvm`, and (for volumes) `/dev/fuse`, `mount-s3` and `user_allow_other` in `/etc/fuse.conf`. The devshell includes `docker-compose`; Ubuntu can use `docker-compose-v2`. The bootstrap instructions below are the legacy Ubuntu system-service path and are no longer used by `make test:e2e:setup`.
 
 ## Prereqs
 
@@ -94,7 +250,7 @@ No bootstrap or fixture_setup needed — just set environment variables:
 
 ```bash
 # Required:
-export BOXLITE_E2E_API_URL=https://dev.boxlite.ai/api
+export BOXLITE_E2E_API_URL=https://api.dev.boxlite.ai
 export BOXLITE_E2E_API_KEY=blk_live_...        # your API key for the remote env
 export BOXLITE_E2E_AUTH=api-key
 
@@ -128,6 +284,18 @@ export BOXLITE_E2E_TAG_IMAGE_NEW=docker.io/library/alpine:3.20
 # failing. Without it a 404 on /images is treated as the regression it is:
 export BOXLITE_E2E_ALLOW_MISSING_CATALOG=1
 
+# The live disk-expansion case (test_disk_expansion.py) runs only with both
+# set, after an operator has already grown the runner's data disk in GCP —
+# the test polls admin REST until the healthcheck-reported filesystem size
+# catches up (0.975 × target: the API's confirm tolerance, since ext4 keeps
+# the filesystem ~2% below the device), and never calls the GCP API itself.
+# Needs an admin-role API key. Set TARGET to the post-resize device size,
+# meaningfully larger than the pre-resize one. Mind the per-test pytest
+# timeout: propagation takes minutes (hyperdisk allows 2 resizes per
+# disk per 4h window):
+export BOXLITE_E2E_EXPANDED_DISK_RUNNER_ID=<runner-id>
+export BOXLITE_E2E_EXPANDED_DISK_TARGET_GIB=<new-size-in-gib>
+
 # The private image case runs only with a real private image and its login,
 # written with its host and a tag or digest. The prefix defaults to the
 # image's namespace. It adds its own login and refuses to start while the
@@ -153,7 +321,7 @@ picks it up (one-time per machine):
 mkdir -p ~/.boxlite
 cat > ~/.boxlite/credentials.toml << 'EOF'
 [profiles.p1]
-url = "https://dev.boxlite.ai/api"
+url = "https://api.dev.boxlite.ai"
 api_key = "blk_live_..."
 auth_method = "api_key"
 path_prefix = ""
@@ -231,8 +399,8 @@ stage. It is dispatch-only, plus one call from `deploy-infra.yml`:
 
 | Stage | Target | Selection | Sweep |
 | --- | --- | --- | --- |
-| `dev` | `api.dev.boxlite.ai/api` | everything | yes |
-| `prod` | `api.boxlite.ai/api` | `-m smoke` | no |
+| `dev` | `api.dev.boxlite.ai` | everything | yes |
+| `prod` | `api.boxlite.ai` | `-m smoke` | no |
 
 The workflow writes the selected stage's credentials to
 `~/.boxlite/credentials.toml` with mode `0600`. Each key's organization is
@@ -242,11 +410,12 @@ not the placeholder scopes in `/v1/me`.
 | Stage | Repository secret | Profile | Role |
 | --- | --- | --- | --- |
 | dev | `BOXLITE_DEV_API_KEY` | `p1` | Existing main suite and sweep; foreign identity for p2 boxes |
-| dev | `BOXLITE_DEV_P2_API_KEY` | `p2` | Owns identity-test boxes in a different organization from p1 |
+| dev | `BOXLITE_DEV_P2_API_KEY` | `p2` | Owns identity and catalog boxes in a different organization from p1 |
 | dev | `BOXLITE_DEV_P2_READONLY_API_KEY` | `p2_readonly` | Reads p2's private previews; cannot manage their network |
 | prod | `BOXLITE_PROD_API_KEY` | `p1` | Smoke suite only |
 
-Both dev owner keys need `write:boxes` and `delete:boxes`; the readonly key
+Both dev owner keys need `write:boxes` and `delete:boxes`; p2 also needs
+`read:images` and `delete:images` for catalog inspection and cleanup. The readonly key
 may carry only `read:*` permissions or none. Configuration fails before box
 creation if any required key is missing/invalid, if p1 and p2 share an
 organization, or if p2_readonly belongs to a different organization from p2.
@@ -260,6 +429,32 @@ as same-org reader, and p1 as foreign identity. It sets
 The p1 main suite deselects this case; the identity result is uploaded alongside
 the main result as `pytest-identities.xml`. These cases exercise API-key scopes,
 not different users, member removal, or OIDC roles.
+
+The dev and stage catalog lane runs `test_images_catalog.py` in a separate
+pytest process using p2, reusing the SDK builds. The p1 main suite excludes
+this module so its image usage cannot exhaust the catalog lane's quota.
+Its result is uploaded as `pytest-catalog.xml` alongside the other reports.
+
+Before the nonexistent-image case, the module removes only its successful
+test image and checks `usage.count < usage.limit`. For example, 20 used slots
+including that image become 19 before the registry pull; 20 unrelated entries
+fail the capacity precondition without deleting them or attempting a create.
+Removal retries for up to 25 seconds while earlier Boxes finish destruction.
+The failed create has a unique `e2e-catalog-failed-` name, so teardown finds
+and removes its Box even if create raises before returning a handle, then waits
+up to 60 seconds for it to disappear. The full report-window assertion still
+rejects any catalog entry for the failed pull. Module cleanup attempts both
+owned image entries and reports failures. `make test:unit:scripts` exercises
+this orchestration with stateful fakes; it does not verify the cloud API,
+Runner or VM path, which still requires a real cloud E2E run.
+
+Run the catalog lane with an independently provisioned p2 profile:
+
+```bash
+unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX
+BOXLITE_E2E_PROFILE=p2 BOXLITE_E2E_SKIP_PATH_VERIFY=1 \
+make test:rest:e2e AUTH=api-key FILTER=images_catalog
+```
 
 Run the same identity pair locally with three profiles targeting one API:
 
@@ -367,6 +562,24 @@ Two things keep that from recurring:
   Clearing anything left behind means `--any-name`, by a human who has read
   the report first — which is why CI never passes it.
 
+### A removed box stays listed until the runner destroys it
+
+A cloud `rt.remove(...)` returns once the destroy is queued. The runner
+destroys the box afterwards, and `list_info()` keeps listing it until then:
+1–4 seconds on dev, longer on a loaded stage.
+
+A case that checks a removed box is gone must not read the list once. Use
+`conftest.wait_until_unlisted(rt, ids)` instead. It polls `list_info()` for up
+to 60 seconds and returns the IDs still listed, so a real leak still fails:
+
+```python
+leaked = await wait_until_unlisted(rt, created_ids)
+assert not leaked, f"leaked boxes: {leaked}"
+```
+
+A `list_info()` error fails the case; it is never read as "unlisted". The
+design is in [#2663](https://github.com/boxlite-ai/boxlite/issues/2663).
+
 ## Running against local stack
 
 ```bash
@@ -451,3 +664,29 @@ apps/e2e/
 2. Take fixtures from `conftest.py` — at minimum `rt` (already REST-bound)
 3. Reference the issue / PR in the docstring so it survives the regression
 4. Run `pytest cases/test_yours.py -v` locally first
+
+## Fractional CPU acceptance
+
+`make test:e2e E2E_ARGS=cases/fractional_cpus_acceptance.py` exercises SDK → Cloud API → Runner → VM creation and restart with `0.125`, `0.5`, and `1.5` CPUs.
+It reads the managed local Runner's SQLite metadata and the running process's cgroup to verify the actual `cpu.max`, as well as guest CPU topology and API query values.
+The suite also calls the Runner v0 create/recover endpoints and verifies that rejected CPU values leave the running VM intact.
+Run this file explicitly against the managed local stack; remote-stage suites do not collect it by default.
+These tests require `BOXLITE_HOME_DIR` and the managed Runner URL/token; a missing or unreadable cgroup fails acceptance rather than silently skipping enforcement.
+Use `make test:fractional-cpus:acceptance` for local Runtime quota/lifecycle tests and `BOXLITE_REST_PATH_PREFIX= make test:integration:cli FILTER=fractional_cpus` for the real serve HTTP path and server restart.
+The membership policy remains best-effort in the product; the acceptance environment must successfully join the Box cgroup.
+
+## Stage cloud acceptance
+
+Run the existing `e2e-cloud` workflow with `stage=stage`. The API defaults to
+`https://api.stage.boxlite.ai`; the optional `BOXLITE_STAGE_API_URL` variable or
+`api_url` dispatch input overrides it, with the same precedence as dev. Provide independent
+`BOXLITE_STAGE_API_KEY`, `BOXLITE_STAGE_P2_API_KEY`, and
+`BOXLITE_STAGE_P2_READONLY_API_KEY` secrets. The p1 and p2 keys must belong to
+different organizations; p2_readonly must share p2's organization and have only
+read permissions. The p2 key also needs `read:images` and `delete:images`.
+Missing stage settings never fall back to dev credentials.
+
+The existing profile helper checks HTTPS, organization membership and key permissions
+before writing the test profiles. Stage runs the main suite, identity lane and
+isolated catalog lane, without dev's automatic sweep or
+shared-subdomain fixture. Production still runs the single-profile smoke suite.

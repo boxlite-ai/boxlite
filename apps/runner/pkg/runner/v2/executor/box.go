@@ -11,6 +11,7 @@ import (
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/backend"
 	"github.com/boxlite-ai/runner/pkg/common"
 )
 
@@ -66,7 +67,12 @@ func (e *Executor) stopBox(ctx context.Context, job *apiclient.Job) (any, error)
 }
 
 func (e *Executor) destroyBox(ctx context.Context, job *apiclient.Job) (any, error) {
-	err := e.backend.Destroy(ctx, job.ResourceId)
+	if restorer, ok := e.backend.(backend.CheckpointRestorer); ok {
+		if err := restorer.RetireCheckpointTarget(ctx, job.ResourceId); err != nil {
+			return nil, err
+		}
+	}
+	err := e.destroyIfPresent(ctx, job.ResourceId)
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("destroy", string(common.PrometheusOperationStatusFailure)).Inc()
 		return nil, common.FormatRecoverableError(err)

@@ -8,10 +8,14 @@
 //! [`worker`] runtime calls [`VirtioDevice::on_event`]. The transport and the
 //! workers share the device through `Arc<Mutex<dyn VirtioDevice>>`. Every
 //! device's events run on the workers' single thread under the device lock, so
-//! `on_event` must not block: a blocking call stalls every other device.
+//! callbacks should return promptly: a blocking call stalls every other device.
+//! The initial virtio-fs backend performs synchronous host filesystem calls;
+//! those calls can delay every device and cause stop/shutdown to time out.
+//! Its lifecycle tests qualify that limitation; the runtime cannot cancel a
+//! host syscall already in progress.
 //!
-//! A device processes the descriptors available in its queues; the virtqueue
-//! size bounds one event call. The [`VirtQueues`] facade prepares and validates
+//! A device processes the descriptors available in its queues. A producer can
+//! replenish a queue while it drains, so queue size alone does not bound a call. The [`VirtQueues`] facade prepares and validates
 //! the queue set, tracks deferred chains and runs the notification drain;
 //! `save` and `restore` return [`SnapshotError::Unsupported`] until M8. Through
 //! [`WorkerControl`] the transport prepares a worker generation before
@@ -22,9 +26,11 @@
 use std::{fmt, io, sync::Arc};
 
 use self::{queue::VirtQueues, worker::VirtioWorkers};
-use crate::{events::EventSender, memory::GuestMemoryMmap};
+use crate::{events::EventSender, memory::GuestMemoryView};
 
 pub(crate) mod blk;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) mod fs;
 pub(crate) mod interrupt;
 pub(crate) mod mmio;
 pub(crate) mod queue;
@@ -82,10 +88,12 @@ pub(crate) enum SnapshotSupport {
     )
 )]
 pub(crate) struct DeviceContext<'a> {
-    /// The guest RAM every host-side user shares.
-    pub(crate) memory: &'a Arc<GuestMemoryMmap>,
+    /// The guest memory view every host-side user shares.
+    pub(crate) memory: &'a GuestMemoryView,
     /// The VM's virtio workers.
     pub(crate) workers: &'a VirtioWorkers,
+    /// Device control channels registered during VM construction.
+    pub(crate) controls: &'a mut crate::control::ControlRegistry,
 }
 
 /// What the workers ask a device to do.
@@ -193,8 +201,9 @@ pub(crate) trait VirtioInterrupt: Send + Sync {
 
 /// The resources a transport gives a device when the driver activates it.
 pub(crate) struct ActivationContext {
-    /// The guest memory the queues address.
-    pub(crate) memory: Arc<GuestMemoryMmap>,
+    /// The guest memory view the queues address. Load one snapshot per unit
+    /// of work, drop it before returning, and never keep one across events.
+    pub(crate) memory: GuestMemoryView,
     /// The prepared queues, one slot per `DeviceSpec::queue_max` entry, in
     /// queue-number order.
     ///
@@ -329,12 +338,18 @@ pub(crate) trait VirtioDevice: Send {
     /// Handles one worker event. `Ok(())` means this call finished; it does
     /// not mean every submitted request completed. The device uses the event
     /// registrar and waker stored from [`ActivationContext`]. The call runs on
-    /// the workers' shared thread and must not block.
+    /// the workers' shared thread. Keep callbacks bounded where possible;
+    /// synchronous filesystem operations currently delay this thread and may
+    /// exceed the worker's stop timeout.
     fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError>;
 
-    /// Stops accepting new work and drains requests the device already took.
+    /// Performs device-specific cleanup after vCPUs and event dispatch stop,
+    /// while guest RAM is still registered. The default succeeds without
+    /// draining queues or flushing backends. Repeated calls must be harmless;
+    /// activation stays available for [`Self::resume`] until reset or drop.
+    /// Success does not establish snapshot support.
     fn quiesce(&mut self) -> Result<(), DeviceError> {
-        Err(DeviceError::Unsupported("quiesce"))
+        Ok(())
     }
 
     /// Returns a stable state; only valid after [`Self::quiesce`].

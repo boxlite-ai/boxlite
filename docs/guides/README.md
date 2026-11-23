@@ -36,3 +36,4 @@ guarantees.
 - [Custom kernel](custom-kernel.md): boot a box with your own kernel and initramfs.
 - [Nested virtualization](nested-virtualization.md): let a workload inside a box start its own
   hardware-accelerated VMs.
+- [Native VMM engine](native-vmm.md): run a box on BoxLite's own VMM while it is being built up.

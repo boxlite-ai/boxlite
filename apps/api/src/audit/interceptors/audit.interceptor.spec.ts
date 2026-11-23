@@ -6,16 +6,62 @@
 
 import { CallHandler, ExecutionContext } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
-import { firstValueFrom, of } from 'rxjs'
+import { firstValueFrom, of, throwError } from 'rxjs'
 import { AuditContext } from '../decorators/audit.decorator'
 import { AuditAction } from '../enums/audit-action.enum'
 import { AuditTarget } from '../enums/audit-target.enum'
 import { AuditInterceptor } from './audit.interceptor'
 import { CustomHeaders } from '../../common/constants/header.constants'
+import { AdminOrganizationNestedVirtualizationController } from '../../admin/controllers/organization-nested-virtualization.controller'
 
 jest.mock('uuid', () => ({ v4: () => 'uuid-test' }))
 
 describe('AuditInterceptor', () => {
+  it.each([false, true])(
+    'attributes the Admin allowlist audit to the target organization (failure=%s)',
+    async (fails) => {
+      const auditService = {
+        createLog: jest.fn().mockResolvedValue({ id: 'allowlist-audit' }),
+        updateLog: jest.fn().mockResolvedValue(undefined),
+      }
+      const interceptor = new AuditInterceptor(new Reflector(), auditService as any)
+      const request = {
+        url: '/admin/organizations/target-org/nested-virtualization',
+        params: { organizationId: 'target-org' },
+        body: { enabled: false },
+        user: { userId: 'admin-user', email: 'admin@example.com', organizationId: 'admin-org' },
+        get: jest.fn(),
+      }
+      const context = {
+        getHandler: () => AdminOrganizationNestedVirtualizationController.prototype.put,
+        switchToHttp: () => ({ getRequest: () => request, getResponse: () => ({ statusCode: 200 }) }),
+      } as unknown as ExecutionContext
+      const error = new Error('write failed')
+      const result = firstValueFrom(
+        interceptor.intercept(context, {
+          handle: () => (fails ? throwError(() => error) : of({ enabled: false })),
+        }),
+      )
+      if (fails) await expect(result).rejects.toBe(error)
+      else await expect(result).resolves.toEqual({ enabled: false })
+      expect(auditService.createLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: 'admin-user',
+          organizationId: 'target-org',
+          targetId: 'target-org',
+          metadata: { body: { enabled: false } },
+        }),
+        expect.any(Number),
+      )
+      if (!fails)
+        expect(auditService.updateLog).toHaveBeenCalledWith(
+          'allowlist-audit',
+          expect.objectContaining({ organizationId: 'target-org' }),
+          5000,
+        )
+    },
+  )
+
   // The context below is synthetic on purpose: since the admin observability
   // controller was deleted, no route emits AuditAction.READ. Metadata keys are
   // resolved generically (resolveRequestMetadata iterates the extractors), so
@@ -38,8 +84,7 @@ describe('AuditInterceptor', () => {
       createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
       updateLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
     }
-    const configService = { get: jest.fn() }
-    const interceptor = new AuditInterceptor(reflector, auditService as any, configService as any)
+    const interceptor = new AuditInterceptor(reflector, auditService as any)
     const request = {
       url: '/admin/runners?regionId=region-1',
       ip: '127.0.0.1',
@@ -82,12 +127,17 @@ describe('AuditInterceptor', () => {
           query: { regionId: 'region-1' },
         },
       }),
+      expect.any(Number),
     )
-    expect(auditService.updateLog).toHaveBeenCalledWith('audit-1', {
-      organizationId: 'org-1',
-      targetId: 'regionId:region-1',
-      statusCode: 200,
-    })
+    expect(auditService.updateLog).toHaveBeenCalledWith(
+      'audit-1',
+      {
+        organizationId: 'org-1',
+        targetId: 'regionId:region-1',
+        statusCode: 200,
+      },
+      5000,
+    )
   })
 
   // A caller authenticated through a system API key (billing, proxy, ...) has
@@ -105,8 +155,7 @@ describe('AuditInterceptor', () => {
       createLog: jest.fn().mockResolvedValue({ id: 'audit-2' }),
       updateLog: jest.fn().mockResolvedValue({ id: 'audit-2' }),
     }
-    const configService = { get: jest.fn() }
-    const interceptor = new AuditInterceptor(reflector, auditService as any, configService as any)
+    const interceptor = new AuditInterceptor(reflector, auditService as any)
     const request = {
       url: '/organizations/org-1/suspend',
       ip: '127.0.0.1',
@@ -132,6 +181,7 @@ describe('AuditInterceptor', () => {
         actorEmail: '',
         organizationId: undefined,
       }),
+      expect.any(Number),
     )
   })
 })

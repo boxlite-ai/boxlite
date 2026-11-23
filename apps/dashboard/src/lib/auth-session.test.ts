@@ -1,54 +1,61 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { consumeJustLoggedOut, markJustLoggedOut } from './auth-session'
+// @vitest-environment jsdom
+/* Copyright BoxLite AI, 2026 · SPDX-License-Identifier: AGPL-3.0 */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  accountSwitchPath,
+  completeSignIn,
+  getSignInIntent,
+  markJustLoggedOut,
+  prepareSignIn,
+  safeReturnTo,
+} from './auth-session'
+import { ORGANIZATION_SESSION_KEY } from './organization-session'
 
-// Minimal in-memory Storage so the test exercises the real set/get/remove
-// branching of auth-session against an actual sessionStorage-shaped object.
-function memoryStorage(): Storage {
-  const store = new Map<string, string>()
-  return {
-    getItem: (k) => (store.has(k) ? (store.get(k) as string) : null),
-    setItem: (k, v) => {
-      store.set(k, String(v))
-    },
-    removeItem: (k) => {
-      store.delete(k)
-    },
-    clear: () => store.clear(),
-    key: (i) => [...store.keys()][i] ?? null,
-    get length() {
-      return store.size
-    },
-  } as Storage
-}
-
-describe('auth-session logout flag', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('consumes a marked logout exactly once', () => {
-    vi.stubGlobal('sessionStorage', memoryStorage())
-    markJustLoggedOut()
-    expect(consumeJustLoggedOut()).toBe(true) // first read sees the mark
-    expect(consumeJustLoggedOut()).toBe(false) // and clears it, so the next read is false
+describe('account session intent', () => {
+  beforeEach(() => sessionStorage.clear())
+  afterEach(() => vi.restoreAllMocks())
+  it('persists logout until an interactive sign-in completes', () => {
+    sessionStorage.setItem(ORGANIZATION_SESSION_KEY, 'old organization')
+    markJustLoggedOut('/dashboard/boxes')
+    expect(getSignInIntent()?.signedOut).toBe(true)
+    expect(getSignInIntent()?.signedOut).toBe(true)
+    expect(sessionStorage.getItem(ORGANIZATION_SESSION_KEY)).toBeNull()
+    completeSignIn()
+    expect(getSignInIntent()).toBeNull()
   })
-
-  it('returns false when no logout was marked', () => {
-    vi.stubGlobal('sessionStorage', memoryStorage())
-    expect(consumeJustLoggedOut()).toBe(false)
+  it('preserves organization during renewal, clears it for interactive authentication', () => {
+    sessionStorage.setItem(ORGANIZATION_SESSION_KEY, 'selected')
+    completeSignIn()
+    expect(sessionStorage.getItem(ORGANIZATION_SESSION_KEY)).toBe('selected')
+    prepareSignIn('/dashboard/keys')
+    expect(getSignInIntent()).toEqual({ signedOut: false, returnTo: '/dashboard/keys' })
+    completeSignIn()
+    expect(sessionStorage.getItem(ORGANIZATION_SESSION_KEY)).toBeNull()
   })
-
-  it('degrades to false (and does not throw) when sessionStorage is unavailable', () => {
-    vi.stubGlobal('sessionStorage', {
-      getItem: () => {
-        throw new Error('sessionStorage unavailable')
-      },
-      setItem: () => {
-        throw new Error('sessionStorage unavailable')
-      },
-      removeItem: () => {
-        throw new Error('sessionStorage unavailable')
-      },
-    } as unknown as Storage)
-    expect(() => markJustLoggedOut()).not.toThrow()
-    expect(consumeJustLoggedOut()).toBe(false)
+  it('reports blocked storage instead of claiming persistent logout', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked')
+    })
+    expect(() => markJustLoggedOut()).toThrow('blocked')
+  })
+  it.each([
+    'https://evil.test/dashboard',
+    '//evil.test/dashboard',
+    '/\\evil.test/dashboard',
+    '/logout',
+    '/dashboard/../logout',
+    '/',
+    '/dashboard\n/boxes',
+  ])('rejects unsafe/action return destination %s', (value) => {
+    expect(safeReturnTo(value)).toBe('/dashboard')
+  })
+  it('retains the GitHub recovery route without replaying callback credentials', () => {
+    expect(safeReturnTo('/settings/ci/callback?code=secret&state=state#token')).toBe('/settings/ci/callback')
+  })
+  it('preserves a local deep link and encodes it in the switch entry', () => {
+    const target = '/dashboard/boxes/box-1?tab=terminal#output'
+    expect(safeReturnTo(target)).toBe(target)
+    expect(safeReturnTo(window.location.origin + target)).toBe(target)
+    expect(new URL(accountSwitchPath(target), window.location.origin).searchParams.get('returnTo')).toBe(target)
   })
 })

@@ -125,6 +125,53 @@ permissive (accepts any/no bearer) — the zero-config local-dev default. A
 permissive server only binds to loopback: `serve` refuses to start on any
 other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 
+**Browser guard.** Before auth, every route, WebSocket upgrades included,
+passes `BrowserGuard` (`browser_guard.rs`), which answers `403` to:
+
+| Request | Refused when | Attack it stops |
+|---------|--------------|-----------------|
+| `Host` header | The server is bound to loopback and the name is not `localhost`, `127.0.0.1`, `[::1]` or an `--allowed-host` value | DNS rebinding: a web page re-resolves its own domain to 127.0.0.1 |
+| `Origin` header | Present and its `host:port` differs from `Host` | Cross-site POSTs and WebSocket upgrades, which browsers send without a CORS preflight |
+
+SDK, CLI and curl requests send a loopback `Host` and no `Origin`, so they
+pass. A reverse proxy that forwards its own name to a loopback-bound server
+needs `--allowed-host <name>`.
+
+### Web Console
+
+`GET /` serves a browser console over the same `/v1` routes the SDKs call
+(`web_console.rs`). Its files live in `src/cli/web/` and are compiled into the
+binary with `include_bytes!`, so the console needs no build step or network.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/`, `/ui/{file}` | The page, script, styles, logo and vendored xterm.js; public, with a same-origin `Content-Security-Policy` |
+| GET | `/ui/session` | `{key_required, signed_in}`, so the page knows whether to show sign-in |
+| POST | `/ui/session` | `{"token": "<api key>"}` returns `Set-Cookie: boxlite_session=…; HttpOnly; SameSite=Strict` |
+| DELETE | `/ui/session` | Sign out |
+
+A browser cannot attach a Bearer header to a WebSocket upgrade or a file
+download. So with `--api-key` it signs in once, and the auth middleware
+accepts the session cookie in place of the header.
+
+Sessions live in memory, so restarting `serve` signs every browser out.
+Without a key the console opens directly, like the API itself.
+
+| Page | Routes it calls |
+|------|-----------------|
+| Boxes | `GET /v1/boxes`, `POST …/start`, `POST …/stop` |
+| New box | `GET /v1/images`, `POST /v1/boxes`, then `POST …/start` |
+| Box overview | `GET /v1/boxes/{id}`, `GET …/metrics` |
+| Box logs | WebSocket `…/attach?stdin=0`, opened only while the box runs |
+| Box shell | `POST …/exec` with `tty`, WebSocket `…/executions/{id}/attach`, `DELETE …/executions/{id}` on leave |
+| Box files | `GET …/files?path=` (tar download), `PUT …/files?path=` (one-file tar upload) |
+| Box snapshots | `GET`/`POST …/snapshots`, `POST …/snapshots/{name}/restore`, `DELETE …/snapshots/{name}` |
+| Box network | `PUT …/network/outbound`, `PUT …/network/inbound` |
+| Box actions | `POST …/clone`, `DELETE /v1/boxes/{id}` |
+| Images | `GET /v1/images`, `DELETE /v1/images/{name}`; boxes per image are counted from `GET /v1/boxes` |
+| Volumes | `GET`/`POST /v1/volumes`, `DELETE /v1/volumes/{id}` |
+| Access | `GET /ui/session`, `DELETE /ui/session` |
+
 ### Box CRUD & Lifecycle
 
 | Method | Path                                  | Handler             | Description                    |
@@ -144,7 +191,7 @@ other `--host` (e.g. `0.0.0.0`) unless an API key is set.
 | POST   | `/v1/boxes/{box_id}/ssh`   | `ssh::configure_ssh` | Replace SSH configuration; returns status    |
 | POST   | `/v1/boxes/{box_id}/ssh/enable` | `ssh::enable_ssh` | Enable saved configuration on a running box |
 | GET    | `/v1/boxes/{box_id}/ssh`   | `ssh::status_ssh`    | Read SSH status without starting the box     |
-| DELETE | `/v1/boxes/{box_id}/ssh`   | `ssh::disable_ssh`   | Disable SSH idempotently without starting it |
+| DELETE | `/v1/boxes/{box_id}/ssh`   | `ssh::disable_ssh`   | Disable SSH idempotently on a running box; otherwise `409 invalid_state`; never starts it |
 
 `POST /ssh` takes the direct `SshConfig` JSON body (not a wrapper) with
 `Content-Type: application/json` and answers with `SshStatus`; every accepted
@@ -186,6 +233,36 @@ client on an attached main session gets 409, same as for an exec.
 |--------|--------------------------------------|------------------------|-----------------------------------|
 | PUT    | `/v1/boxes/{box_id}/files`   | `files::upload_files`  | Upload tar, extract into box      |
 | GET    | `/v1/boxes/{box_id}/files`   | `files::download_files`| Download path as tar              |
+
+Both directions stream tar chunks between HTTP and the box backend, with
+backpressure and no intermediate archive or extraction directory on the server:
+
+```text
+PUT body -> copy_in_stream -> guest extraction
+GET body <- copy_out_stream <- guest packing
+```
+
+The archive's first entry determines upload landing, matching the runner.
+For example, `tree/a.txt` with a leading `tree/` directory entry becomes
+`/dst/a.txt` when `/dst` is missing, or `/dst/tree/a.txt` when `/dst` is a directory.
+A `./` root places the contents directly inside the destination; an empty tar
+does not change existing files or their ownership.
+
+Missing sources and refused paths return an HTTP error before response headers.
+A failure after headers terminates the body, so clients must read to
+EOF and check transport errors even after receiving a valid tar end marker.
+Dropping a transfer releases its source; blocking extraction exits when its
+bounded input channel closes.
+
+Copies are not transactional: files written before a failure remain. Guest
+ownership adjustment happens after successful extraction, so a failed upload
+can leave files owned by root. Payload buffering is bounded by chunks; extraction
+metadata still grows with the number of entries, and older peers may buffer.
+
+Downloads preserve symbolic links as link entries rather than reading their
+targets. A guest chooses the target, so dereferencing it on the host could read
+host files into the response; clients extracting the downloaded tar must apply
+the usual safeguards for untrusted archives.
 
 ### Metrics
 
@@ -434,6 +511,7 @@ sets `reaping_kill` under one lock acquisition.
 |----------|-----------|--------------------------|
 | `--port` | `8100`    | TCP port to listen on    |
 | `--host` | `127.0.0.1` | Address to bind; non-loopback requires `--api-key` |
+| `--allowed-host` | none | Extra `Host` name accepted on a loopback bind (repeatable); see the browser guard |
 
 ### Internal Constants
 

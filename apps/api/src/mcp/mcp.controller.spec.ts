@@ -211,6 +211,37 @@ async function rpc(app: INestApplication, body: object, headers: Record<string, 
   return { status: response.status, json: await response.json().catch(() => undefined) }
 }
 
+const read = { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
+/** The hints hosts use to decide which box tools need approval (design #2427). */
+const BOX_TOOL_HINTS = {
+  listBoxes: { ...read, openWorldHint: false },
+  getBox: { ...read, openWorldHint: false },
+  getExecution: { ...read, openWorldHint: false },
+  downloadFiles: { ...read, openWorldHint: true },
+  createBox: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  startBox: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  stopBox: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  removeBox: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  startExecution: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  uploadFiles: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+}
+
+function expectBoxToolHints(tools: { name: string; title?: string; annotations?: Record<string, unknown> }[]) {
+  for (const tool of tools) expect(tool.title).toEqual(expect.any(String))
+  const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool.annotations]))
+  for (const [name, hints] of Object.entries(BOX_TOOL_HINTS)) {
+    expect({ name, annotations: byName[name] }).toEqual({ name, annotations: hints })
+  }
+  expect(byName.read_api_endpoint).toEqual({ ...read, openWorldHint: true })
+  expect(byName.write_api_endpoint).toEqual({
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true,
+  })
+  expect(byName.invoke_api_endpoint).toBeUndefined()
+}
+
 /** POSTs a raw body with the given headers. */
 async function post(app: INestApplication, path: string, body: string, headers: Record<string, string>) {
   const server = app.getHttpServer()
@@ -288,7 +319,8 @@ describe('/mcp', () => {
       { jsonrpc: '2.0', id: 2, method: 'tools/list' },
       { 'mcp-protocol-version': '2025-06-18' },
     )
-    expect(list.json.result.tools).toHaveLength(13)
+    expect(list.json.result.tools).toHaveLength(14)
+    expectBoxToolHints(list.json.result.tools)
   })
 
   it('serves a 2026-07-28 client without a handshake', async () => {
@@ -303,7 +335,8 @@ describe('/mcp', () => {
     )
 
     expect(list.status).toBe(200)
-    expect(list.json.result.tools).toHaveLength(13)
+    expect(list.json.result.tools).toHaveLength(14)
+    expectBoxToolHints(list.json.result.tools)
   })
 
   it('runs a tool call through the REST route as the MCP caller', async () => {
@@ -369,9 +402,9 @@ describe('/mcp', () => {
     expect(ok.json.result.structuredContent).toEqual({ removed: 'my-box' })
   })
 
-  it('applies the step-up check to invoke_api_endpoint too', async () => {
+  it('applies the step-up check to write_api_endpoint too', async () => {
     const denied = await call(
-      'invoke_api_endpoint',
+      'write_api_endpoint',
       { operationId: 'removeBox', arguments: { box_id: 'b' } },
       'Bearer oauth:',
     )
@@ -379,10 +412,29 @@ describe('/mcp', () => {
     expect(denied.status).toBe(403)
   })
 
+  it.each([
+    ['read_api_endpoint', 'removeBox'],
+    ['write_api_endpoint', 'getBox'],
+  ])('rejects %s calling %s at the MCP boundary', async (tool, operationId) => {
+    const result = await call(tool, { operationId, arguments: { box_id: 'my-box' } }, 'Bearer good')
+    expect(result.status).toBe(200)
+    expect(result.json.result.isError).toBe(true)
+  })
+
+  it('serves a catalog read through the OAuth connection', async () => {
+    const result = await call(
+      'read_api_endpoint',
+      { operationId: 'getBox', arguments: { box_id: 'my-box' } },
+      'Bearer oauth:write:boxes',
+    )
+    expect(result.status).toBe(200)
+    expect(result.json.result.isError).not.toBe(true)
+  })
+
   it.each(['configureSsh', 'createRegistry', 'createInvite', 'prepareTunnel'])(
     'refuses %s to an OAuth caller whatever its scopes',
     async (operationId) => {
-      const denied = await call('invoke_api_endpoint', { operationId, arguments: {} }, 'Bearer oauth:write:boxes')
+      const denied = await call('write_api_endpoint', { operationId, arguments: {} }, 'Bearer oauth:write:boxes')
 
       expect(denied.status).toBe(403)
     },
@@ -390,7 +442,7 @@ describe('/mcp', () => {
 
   it('leaves operations off the OAuth allowlist to API-key callers', async () => {
     const allowed = await call(
-      'invoke_api_endpoint',
+      'write_api_endpoint',
       { operationId: 'configureSsh', arguments: { box_id: 'my-box', body: {} } },
       'Bearer good',
     )

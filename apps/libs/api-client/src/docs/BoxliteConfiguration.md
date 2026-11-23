@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**turnstile** | [**TurnstileConfig**](TurnstileConfig.md) |  | [optional] [default to undefined]
 **version** | **string** | BoxLite version | [default to undefined]
 **posthog** | [**PosthogConfig**](PosthogConfig.md) | PostHog configuration | [optional] [default to undefined]
 **oidc** | [**OidcConfig**](OidcConfig.md) | OIDC configuration | [default to undefined]
@@ -12,7 +13,6 @@ Name | Type | Description | Notes
 **announcements** | [**{ [key: string]: Announcement; }**](Announcement.md) | System announcements | [default to undefined]
 **pylonAppId** | **string** | Pylon application ID | [optional] [default to undefined]
 **proxyTemplateUrl** | **string** | Proxy template URL | [default to undefined]
-**proxyToolboxUrl** | **string** | Toolbox template URL | [default to undefined]
 **dashboardUrl** | **string** | Dashboard URL | [default to undefined]
 **maintananceMode** | **boolean** | Whether maintenance mode is enabled | [default to undefined]
 **environment** | **string** | Current environment | [default to undefined]
@@ -26,6 +26,7 @@ Name | Type | Description | Notes
 import { BoxliteConfiguration } from './api';
 
 const instance: BoxliteConfiguration = {
+    turnstile,
     version,
     posthog,
     oidc,
@@ -33,7 +34,6 @@ const instance: BoxliteConfiguration = {
     announcements,
     pylonAppId,
     proxyTemplateUrl,
-    proxyToolboxUrl,
     dashboardUrl,
     maintananceMode,
     environment,

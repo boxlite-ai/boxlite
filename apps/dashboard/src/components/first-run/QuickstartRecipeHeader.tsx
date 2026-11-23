@@ -3,7 +3,8 @@
 import { DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import type { QuickstartRecipe } from '@/lib/quickstart/recipes'
 import { CODING_AGENT_MARKS } from '@/assets/AgentLogos'
-import { cn } from '@/lib/utils'
+import { UNDERLINE_LIST, UNDERLINE_TRIGGER } from '@/components/ui/tabs'
+import { TabIcon } from '@/components/ui/TabIcon'
 
 export interface QuickstartPreview {
   recipe: QuickstartRecipe
@@ -26,7 +27,7 @@ export function QuickstartRecipeHeader({
   const publishing = !recipe.command
   if (preview.inline)
     return publishing ? (
-      <div className="mb-6 flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
+      <div className="mb-6 flex flex-wrap gap-x-5 gap-y-2 text-meta text-muted-foreground">
         {CODING_AGENT_MARKS.map(({ label, Mark }) => (
           <span key={label} className="inline-flex items-center gap-2">
             <Mark className="size-4" />
@@ -37,14 +38,10 @@ export function QuickstartRecipeHeader({
     ) : null
   return (
     <div className="shrink-0 px-6 pt-6 sm:px-8">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-2 pr-6 font-mono text-label text-muted-foreground">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-2 pr-6 font-sans text-label text-muted-foreground">
         <span className="uppercase tracking-[1.5px]">Quickstart</span>
       </div>
-      <div
-        role="group"
-        aria-label="Quickstart action"
-        className="grid grid-cols-2 border-b border-border font-display text-sm"
-      >
+      <div role="group" aria-label="Quickstart action" className={UNDERLINE_LIST}>
         {[
           { id: 'code-execution', label: 'Run code', selected: !publishing },
           { id: 'application-deployments', label: 'Build an app', selected: publishing },
@@ -56,26 +53,25 @@ export function QuickstartRecipeHeader({
             onClick={() => {
               if (!selected) preview.onRecipeChange(id)
             }}
-            className={cn(
-              'border-b-2 px-3 py-3 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand',
-              selected
-                ? 'border-foreground text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground',
-            )}
+            data-state={selected ? 'active' : 'inactive'}
+            className={UNDERLINE_TRIGGER}
           >
+            <TabIcon name={id === 'code-execution' ? 'code' : 'browser'} />
             {label}
           </button>
         ))}
       </div>
-      <DialogTitle className={compact ? 'sr-only' : 'mt-5 text-left font-display text-xl font-semibold tracking-tight'}>
+      <DialogTitle
+        className={compact ? 'sr-only' : 'mt-5 text-left font-display text-section font-semibold tracking-tight'}
+      >
         {publishing ? recipe.title : 'Run your first command.'}
       </DialogTitle>
-      <DialogDescription className={compact ? 'sr-only' : 'mt-2 text-left font-display text-sm leading-relaxed'}>
+      <DialogDescription className={compact ? 'sr-only' : 'mt-2 text-left font-display text-body leading-relaxed'}>
         {publishing
           ? recipe.description
           : 'Create a Box, run a command, and read its output. Start with a simple Hello World.'}
       </DialogDescription>
-      <p className="mt-4 border-l-2 border-brand/60 pl-3 font-display text-xs leading-relaxed text-muted-foreground">
+      <p className="mt-4 border-l-2 border-brand/60 pl-3 font-display text-meta leading-relaxed text-muted-foreground">
         <span className="text-foreground">You’ll get: </span>
         {statusOnly
           ? 'Execution status and exit code. Choose an SDK or CLI to read this task’s output.'

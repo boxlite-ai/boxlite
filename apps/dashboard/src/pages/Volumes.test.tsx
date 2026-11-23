@@ -9,6 +9,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Volumes from './Volumes'
+import { toast } from 'sonner'
 
 const READY_VOLUME = {
   id: 'f0f2f2b6-0b1e-4a1a-9c0a-1c2f3a4b5c6d',
@@ -27,7 +28,17 @@ vi.mock('@/components/Box/CreateBoxDialog', () => ({
 }))
 
 // Each test sets the permissions its member holds.
-const state = vi.hoisted(() => ({ permissions: [] as string[] }))
+const state = vi.hoisted(() => ({
+  permissions: [] as string[],
+  empty: false,
+  loading: false,
+  hasData: true,
+  fetching: false,
+  error: undefined as Error | undefined,
+  refetch: vi.fn(),
+  volumeState: 'ready',
+  errorReason: undefined as string | undefined,
+}))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
@@ -36,7 +47,18 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
   }),
 }))
 vi.mock('@/hooks/queries/useVolumesQuery', () => ({
-  useVolumesQuery: () => ({ data: [READY_VOLUME], isLoading: false, error: undefined }),
+  useVolumesQuery: () => ({
+    data:
+      !state.hasData || state.loading
+        ? undefined
+        : state.empty
+          ? []
+          : [{ ...READY_VOLUME, state: state.volumeState, errorReason: state.errorReason }],
+    isLoading: state.loading,
+    error: state.error,
+    refetch: state.refetch,
+    isFetching: state.loading || state.fetching,
+  }),
 }))
 vi.mock('@/hooks/mutations/useCreateVolumeMutation', () => ({
   useCreateVolumeMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -52,7 +74,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 /**
  * Finds a row action by its text label, matching both buttons and links.
- * Searches both element types because the "+ Box" action was previously a link.
+ * Searches both element types because the "New Box" action was previously a link.
  */
 function rowAction(label: string): HTMLElement | undefined {
   return Array.from(document.querySelectorAll<HTMLElement>('button, a')).find(
@@ -60,7 +82,7 @@ function rowAction(label: string): HTMLElement | undefined {
   )
 }
 
-describe('Volumes row action "+ Box"', () => {
+describe('Volumes row action "New Box"', () => {
   let root: Root | null = null
 
   beforeAll(() => {
@@ -68,6 +90,14 @@ describe('Volumes row action "+ Box"', () => {
   })
 
   beforeEach(() => {
+    vi.clearAllMocks()
+    state.hasData = true
+    state.fetching = false
+    state.loading = false
+    state.error = undefined
+    state.empty = false
+    state.volumeState = 'ready'
+    state.errorReason = undefined
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES, OrganizationRolePermissionsEnum.WRITE_BOXES]
   })
 
@@ -75,6 +105,31 @@ describe('Volumes row action "+ Box"', () => {
     act(() => root?.unmount())
     root = null
     document.body.innerHTML = ''
+    vi.unstubAllGlobals()
+  })
+
+  it('offers an in-place retry after the volume request fails', async () => {
+    state.hasData = false
+    state.error = new Error('unavailable')
+    renderPage()
+    const retry = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Retry')
+    expect(retry).toBeDefined()
+    await act(async () => retry?.click())
+    expect(state.refetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains cached volumes and disables retry only while refreshing', () => {
+    renderPage()
+    state.error = new Error('refresh failed')
+    act(() => root!.render(<Volumes />))
+    expect(document.body.textContent).toContain(READY_VOLUME.name)
+    const retry = rowAction('Retry') as HTMLButtonElement
+    expect(retry).toBeDefined()
+    expect(retry.disabled).toBe(false)
+    state.fetching = true
+    act(() => root!.render(<Volumes />))
+    expect(document.body.textContent).toContain(READY_VOLUME.name)
+    expect(retry.disabled).toBe(true)
   })
 
   function renderPage() {
@@ -85,6 +140,45 @@ describe('Volumes row action "+ Box"', () => {
       root.render(<Volumes />)
     })
   }
+
+  it.each(['pending_delete', 'deleting', 'error', 'future_state'])(
+    'keeps %s volume status and action safety visible',
+    (volumeState) => {
+      state.permissions.push(OrganizationRolePermissionsEnum.DELETE_VOLUMES)
+      state.volumeState = volumeState
+      state.errorReason = volumeState === 'error' ? 'Storage unavailable' : undefined
+      renderPage()
+      const deletion = document.querySelector<HTMLButtonElement>('[aria-label="Delete subtitle-models"]')!
+      expect(deletion.disabled).toBe(volumeState !== 'error')
+      expect(rowAction('New Box')).toBeUndefined()
+      if (volumeState === 'error') expect(document.querySelector('[title="Storage unavailable"]')).not.toBeNull()
+      if (volumeState.includes('delet')) expect(document.querySelector('[title^="Reclaiming"]')).not.toBeNull()
+      expect(document.querySelector('.resource-status')?.textContent).toBe(
+        volumeState.replaceAll('_', ' ').replace(/^./, (c) => c.toUpperCase()),
+      )
+    },
+  )
+
+  it('distinguishes volume loading and failure from successful empty data', () => {
+    state.empty = true
+    state.hasData = false
+    state.error = new Error('unavailable')
+    renderPage()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not load volumes')
+    expect(document.body.textContent).not.toContain('No volumes yet')
+    state.error = undefined
+    state.loading = true
+    act(() => root!.render(<Volumes />))
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('Loading volumes')
+    expect(document.body.textContent).not.toContain('No volume matches')
+  })
+
+  it('keeps the filter and creation toolbar when no volumes exist', () => {
+    state.empty = true
+    renderPage()
+    expect(document.querySelector('input[placeholder="Filter volumes…"]')).not.toBeNull()
+    expect(rowAction('New Volume')).toBeDefined()
+  })
 
   it('opens and cancels volume creation through the shared buttons', async () => {
     renderPage()
@@ -122,7 +216,7 @@ describe('Volumes row action "+ Box"', () => {
     // user was reading and started a second copy of the app.
     expect(document.querySelector('a[target="_blank"]')).toBeNull()
 
-    const action = rowAction('+ Box')
+    const action = rowAction('New Box')
     expect(action).toBeDefined()
 
     act(() => {
@@ -134,11 +228,65 @@ describe('Volumes row action "+ Box"', () => {
     expect(dialog?.getAttribute('data-open')).toBe('true')
   })
 
+  it.each([false, true])('copies the volume id and reports clipboard failure (%s)', async (fails) => {
+    const writeText = fails ? vi.fn().mockRejectedValue(new Error('denied')) : vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    renderPage()
+    await act(async () => document.querySelector<HTMLButtonElement>('button[title="Copy volume ID"]')!.click())
+    expect(writeText).toHaveBeenCalledWith(READY_VOLUME.id)
+    expect(fails ? toast.error : toast.success).toHaveBeenCalledWith(
+      fails ? 'Could not copy to clipboard' : 'Volume ID copied',
+    )
+    expect(fails ? toast.success : toast.error).not.toHaveBeenCalled()
+  })
+
+  it('requires the exact volume name before allowing deletion', () => {
+    state.permissions.push(OrganizationRolePermissionsEnum.DELETE_VOLUMES)
+    renderPage()
+    act(() => document.querySelector<HTMLButtonElement>(`button[aria-label="Delete ${READY_VOLUME.name}"]`)!.click())
+    const dialog = document.querySelector('[role="alertdialog"]')!
+    const confirm = [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Delete')!
+    expect(confirm.disabled).toBe(true)
+    const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Confirm volume name"]')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, READY_VOLUME.name)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(confirm.disabled).toBe(false)
+    act(() => [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Cancel')!.click())
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+  })
+
+  it('clears a filter miss without treating the organization as empty', () => {
+    renderPage()
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="Filter volumes…"]')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'missing')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(document.body.textContent).toContain('No volume matches “missing”')
+    expect(document.body.textContent).not.toContain('No volumes yet')
+    act(() => rowAction('Clear filter')?.click())
+    expect(input.value).toBe('')
+    expect(document.body.textContent).toContain(READY_VOLUME.name)
+    expect(rowAction('Clear filter')).toBeUndefined()
+  })
+
+  it('opens and cancels volume creation from the empty toolbar', () => {
+    state.empty = true
+    renderPage()
+    act(() => rowAction('New Volume')?.click())
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Storage that outlives a box')
+    expect(document.querySelector('input[aria-label="Volume name"]')).not.toBeNull()
+    act(() => rowAction('Cancel')?.click())
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
   it('hands the form the volume id, never the display name', () => {
     renderPage()
 
     act(() => {
-      rowAction('+ Box')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      rowAction('New Box')?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
     // A name is only unique inside one organization; the id is the selector
@@ -156,7 +304,7 @@ describe('Volumes row action "+ Box"', () => {
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES]
     renderPage()
 
-    expect(rowAction('+ Box')).toBeUndefined()
+    expect(rowAction('New Box')).toBeUndefined()
     expect(document.querySelector('[data-testid="create-box-dialog"]')).toBeNull()
     // The volume-scoped controls are still there — the row was not hidden
     // wholesale.

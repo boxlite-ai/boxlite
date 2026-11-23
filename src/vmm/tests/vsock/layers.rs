@@ -24,14 +24,14 @@ use std::{
 use virtio_queue::{Queue, QueueT};
 use vm_memory::{Bytes, GuestAddress};
 
-struct Registrar {
+pub(super) struct Registrar {
     poll: Mutex<Poll>,
-    sources: Mutex<HashMap<SourceId, Box<dyn EventSource>>>,
+    pub(super) sources: Mutex<HashMap<SourceId, Box<dyn EventSource>>>,
     next: AtomicU32,
 }
 
 impl Registrar {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             poll: Mutex::new(Poll::new().unwrap()),
             sources: Mutex::new(HashMap::new()),
@@ -64,7 +64,7 @@ impl EventRegistrar for Registrar {
     }
 }
 
-fn header(op: u16) -> Header {
+pub(super) fn header(op: u16) -> Header {
     Header {
         src_cid: 3,
         dst_cid: HOST_CID,
@@ -162,7 +162,7 @@ fn captured(memory: &GuestMemoryMmap, capacity: usize) -> Buffer {
 }
 
 #[test]
-fn captured_buffers_write_fragment_headers_and_checked_scatter_payloads() {
+fn captured_buffers_write_checked_scatter_payloads() {
     let memory = GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x6000)]).unwrap();
     let packet = Packet {
         header: Header {
@@ -171,13 +171,14 @@ fn captured_buffers_write_fragment_headers_and_checked_scatter_payloads() {
         },
         payload: b"abcdef".to_vec(),
     };
-    let buffer = captured(&memory, HEADER_LEN + 3);
+    let mut bytes = packet.header.encode().to_vec();
+    bytes.extend_from_slice(&packet.payload);
+    let buffer = captured(&memory, bytes.len());
     assert_eq!(buffer.head, 0);
     // Changing the descriptor table after capture must not redirect the write.
     memory.write_obj(0xffffu64, GuestAddress(0x1000)).unwrap();
-    let length = buffer.write_packet(&memory, &packet).unwrap();
-    assert_eq!(length, HEADER_LEN + 3);
-    let mut encoded = vec![0; length];
+    buffer.write(&memory, &bytes).unwrap();
+    let mut encoded = vec![0; bytes.len()];
     memory
         .read_slice(&mut encoded[..20], GuestAddress(0x4000))
         .unwrap();
@@ -185,23 +186,9 @@ fn captured_buffers_write_fragment_headers_and_checked_scatter_payloads() {
         .read_slice(&mut encoded[20..], GuestAddress(0x5000))
         .unwrap();
     let received = Packet::read(&mut encoded.as_slice()).unwrap();
-    assert_eq!(received.header.len, 3);
-    assert_eq!(received.payload, b"abc");
-    assert_eq!(packet.payload, b"abcdef", "the caller owns the unsent tail");
-
-    let header_only = captured(&memory, HEADER_LEN);
-    assert_eq!(header_only.write_packet(&memory, &packet).unwrap(), 0);
-    assert_eq!(
-        header_only
-            .write_packet(&memory, &header(RST).reply(RST))
-            .unwrap(),
-        HEADER_LEN
-    );
+    assert_eq!(received.header, packet.header);
+    assert_eq!(received.payload, packet.payload);
     let short = captured(&memory, HEADER_LEN - 1);
-    assert!(matches!(
-        short.write_packet(&memory, &packet),
-        Err(DeviceError::NeedsReset(_))
-    ));
     assert!(matches!(
         short.write(&memory, &[0; HEADER_LEN]),
         Err(DeviceError::NeedsReset(_))
@@ -242,7 +229,7 @@ fn socket_pair() -> (UnixStream, UnixStream) {
     (device, host)
 }
 
-fn poll(registrar: &Registrar) -> Events {
+pub(super) fn poll(registrar: &Registrar) -> Events {
     let mut events = Events::with_capacity(8);
     registrar
         .poll

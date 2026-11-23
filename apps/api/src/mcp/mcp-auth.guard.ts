@@ -63,10 +63,10 @@ export class McpAuthGuard implements CanActivate {
     }
     let payload: JWTPayload
     try {
-      payload = await this.jwtStrategy.verifyToken(token, audience)
+      payload = await this.jwtStrategy.verifyMcpToken(token, audience)
     } catch (error) {
-      // A bad signature, issuer, audience or expiry is a 401; anything else, such
-      // as the unverified-email 403, keeps its own status.
+      // A bad signature, issuer, audience or expiry is a 401; anything else keeps
+      // its own status.
       if (error instanceof errors.JOSEError) {
         throw new UnauthorizedException()
       }

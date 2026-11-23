@@ -15,11 +15,12 @@ import { RedisModule } from '@nestjs-modules/ioredis'
 import { AuthModule } from '../auth/auth.module'
 import { RegionModule } from '../region/region.module'
 import { isApiEnabled } from '../common/utils/app-mode'
+import { UserModule } from '../user/user.module'
 
 const gatewayEnabled = isApiEnabled() && process.env.NOTIFICATION_GATEWAY_DISABLED !== 'true'
 
 @Module({
-  imports: [OrganizationModule, BoxModule, RedisModule, AuthModule, RegionModule],
+  imports: [OrganizationModule, BoxModule, RedisModule, AuthModule, RegionModule, UserModule],
   providers: [
     NotificationService,
     ...(gatewayEnabled

@@ -35,6 +35,10 @@ export interface AdminOrganizationOverview {
     'memberCount': number;
     'boxCount': number;
     'impactState': AdminOrganizationOverviewImpactStateEnum;
+    /**
+     * Up to 200 non-empty member emails ordered by user ID; present only with include=memberEmails.
+     */
+    'memberEmails'?: Array<string>;
     'observedAt': Date;
 }
 

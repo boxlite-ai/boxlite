@@ -17,18 +17,15 @@ import {
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { RoutePath } from '@/enums/RoutePath'
-import { useImagesQuery } from '@/hooks/queries/useImagesQuery'
-import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { useDeleteBoxMutation } from '@/hooks/mutations/useDeleteBoxMutation'
 import { useRecoverBoxMutation } from '@/hooks/mutations/useRecoverBoxMutation'
 import { useStartBoxMutation } from '@/hooks/mutations/useStartBoxMutation'
 import { useStopBoxMutation } from '@/hooks/mutations/useStopBoxMutation'
 import { useBoxQuery } from '@/hooks/queries/useBoxQuery'
 import { useConfig } from '@/hooks/useConfig'
-import { useRegions } from '@/hooks/useRegions'
 import { useBoxWsSync } from '@/hooks/useBoxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { getBoxDisplayName, getBoxPublicId, getBoxPublicIdLabel } from '@/lib/box-identity'
+import { getBoxDisplayName } from '@/lib/box-identity'
 import { handleApiError } from '@/lib/error-handling'
 import {
   mergeOnboardingProgress,
@@ -36,78 +33,43 @@ import {
   readOnboardingProgress,
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
-import { catalogNameOf, registryHostOf } from '@/lib/image-ref'
-import { getRelativeTimeString } from '@/lib/utils'
 import { isRecoverable, isStartable, isStoppable, isTransitioning } from '@/lib/utils/box'
-import { Box, BoxState, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
+import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
-import { Check, Container, Copy, MoreVertical, Pause, Play, RefreshCw, RotateCcw, Trash2 } from '@/components/ui/icon'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  ArrowLeft,
+  Check,
+  Container,
+  Copy,
+  MoreVertical,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Square,
+  Trash2,
+} from '@/components/ui/icon'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { generatePath, Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
+import { copyToClipboard } from '@/lib/copy-text'
 import { toast } from 'sonner'
-import { BoxNetworkSection } from './BoxNetworkSection'
-import { BoxCube } from '@/components/BoxCube'
-import { boxCubeState } from '@/lib/box-shape'
-import { BoxTerminalTab } from './BoxTerminalTab'
+import { BoxOverview } from './BoxOverview'
+import { BoxTerminalSession } from './BoxTerminalSession'
+import { cn } from '@/lib/utils'
+import { BoxPageNavigation } from './BoxPageNavigation'
 import { BoxSshTab } from './BoxSshTab'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { BoxStatusIndicator } from './box-presentation'
+import { BoxResourceIcon } from '@/components/ResourceStateIcon'
 
-const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
-
-function statusOf(box: Box): { label: string; color: string } {
-  switch (box.state) {
-    case BoxState.STARTED:
-      return { label: 'Running', color: STATUS.running }
-    case BoxState.STOPPED:
-      return { label: 'Stopped', color: STATUS.dim }
-    case BoxState.ERROR:
-      return { label: 'Error', color: STATUS.error }
-    case BoxState.CREATING:
-    case BoxState.STARTING:
-    case BoxState.RESTORING:
-      return { label: 'Starting', color: STATUS.idle }
-    case BoxState.STOPPING:
-      return { label: 'Stopping', color: STATUS.idle }
-    case BoxState.DESTROYING:
-      return { label: 'Deleting', color: STATUS.idle }
-    default:
-      return { label: (box.state ?? 'Unknown').replace(/^\w/, (c) => c.toUpperCase()), color: STATUS.dim }
-  }
+/** Keep one Box's header and SSH controls mounted across its two views. */
+export default function BoxDetails({ page = 'overview' }: { page?: 'overview' | 'terminal' }) {
+  const { boxId } = useParams<{ boxId: string }>()
+  const { selectedOrganization } = useSelectedOrganization()
+  return <BoxDetailsPage key={`${selectedOrganization?.id}:${boxId}`} page={page} />
 }
 
-function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
-  return (
-    <div className="mb-[10px] mt-[34px] flex items-center gap-[9px] first:mt-0">
-      <span className="text-label leading-none text-brand">▸</span>
-      <span className="text-[11px] uppercase tracking-[2px]">{title}</span>
-      <span className="flex-1 border-t border-dashed border-border" />
-      {right}
-    </div>
-  )
-}
-
-function SpecRow({ label, children, title }: { label: string; children: ReactNode; title?: string }) {
-  return (
-    <div className="mb-[6px] flex items-baseline gap-2">
-      <span className="whitespace-nowrap text-muted-foreground">{label}</span>
-      <span className="-translate-y-1 flex-1 border-b border-dotted border-border" />
-      {title ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="min-w-0 max-w-[66%] cursor-default truncate text-right">{children}</span>
-          </TooltipTrigger>
-          <TooltipContent className="max-w-[min(90vw,480px)] break-all font-mono">{title}</TooltipContent>
-        </Tooltip>
-      ) : (
-        <span className="min-w-0 max-w-[66%] truncate text-right">{children}</span>
-      )}
-    </div>
-  )
-}
-
-export default function BoxDetails() {
+function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
   const { boxId } = useParams<{ boxId: string }>()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -116,14 +78,12 @@ export default function BoxDetails() {
   const userId = user?.profile.sub
   const { authenticatedUserOrganizationMember, selectedOrganization, authenticatedUserHasPermission } =
     useSelectedOrganization()
-  const { getRegionName } = useRegions()
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
-  const [copied, setCopied] = useState(false)
   const [copiedName, setCopiedName] = useState(false)
-  const [terminalRefreshSignal, setTerminalRefreshSignal] = useState(0)
-  const [sshVisited, setSshVisited] = useState(false)
+  const [sshRefreshSignal, setSshRefreshSignal] = useState(0)
+  const [sshStatusContainer, setSshStatusContainer] = useState<HTMLDivElement | null>(null)
   const refreshRef = useRef<HTMLSpanElement>(null)
 
   const updateOnboardingProgress = useCallback(
@@ -151,27 +111,10 @@ export default function BoxDetails() {
     if (searchParams.get('onboarding') === '1') navigate(RoutePath.QUICKSTART, { replace: true })
   }, [navigate, searchParams, selectedOrganization, user?.profile.sub])
 
-  const { data: box, isLoading, isError, error, refetch } = useBoxQuery(boxId ?? '')
+  const { data: box, isLoading, isError, isFetching, error, refetch } = useBoxQuery(boxId ?? '')
+  usePageTitle(box ? `${getBoxDisplayName(box)}${page === 'terminal' ? ' · Terminal' : ''}` : 'Box')
 
-  // Volumes this box mounts, with the stored handle resolved back to a name.
-  const { data: allVolumes = [] } = useVolumesQuery()
-  // The image the box names is linked once it is in the catalog, which a
-  // first start puts it in; a built-in one is matched on its full reference.
-  const { data: images = [] } = useImagesQuery()
-  const catalogImage = box?.image
-    ? images.find((image) =>
-        image.curated ? image.curatedRef === box.image : image.name === catalogNameOf(box.image ?? ''),
-      )
-    : undefined
-  const mountedVolumes = useMemo(() => {
-    const mounts = (box?.volumes ?? []) as { volumeId: string; mountPath: string; subpath?: string }[]
-    return mounts.map((mount) => {
-      const match = allVolumes.find((v) => v.id === mount.volumeId || v.name === mount.volumeId)
-      return { ...mount, displayName: match?.name ?? mount.volumeId }
-    })
-  }, [box?.volumes, allVolumes])
-
-  const isNotFound = isError && isAxiosError(error.cause) && error.cause?.status === 404
+  const isNotFound = isError && isAxiosError(error?.cause) && error.cause?.status === 404
   useBoxWsSync({ boxId })
 
   useEffect(() => {
@@ -245,7 +188,7 @@ export default function BoxDetails() {
 
   const handleRefresh = () => {
     refetch()
-    setTerminalRefreshSignal((signal) => signal + 1)
+    setSshRefreshSignal((signal) => signal + 1)
     const el = refreshRef.current
     if (el) {
       el.style.animation = 'none'
@@ -254,49 +197,42 @@ export default function BoxDetails() {
     }
   }
 
-  const copyId = () => {
-    const id = box ? getBoxPublicId(box) : null
-    if (!id) return
-    try {
-      navigator.clipboard?.writeText(id)
-    } catch {
-      /* clipboard may be unavailable */
-    }
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1300)
-  }
-
-  const copyName = () => {
+  const copyName = async () => {
     if (!box) return
-    try {
-      navigator.clipboard?.writeText(getBoxDisplayName(box))
-    } catch {
-      /* clipboard may be unavailable */
+    if (!(await copyToClipboard(getBoxDisplayName(box)))) {
+      toast.error('Could not copy to clipboard')
+      return
     }
     setCopiedName(true)
     setTimeout(() => setCopiedName(false), 1300)
   }
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-[13px]">
-      {/* breadcrumb */}
-      <div className="flex flex-none items-center gap-[9px] text-[12px] text-muted-foreground">
-        <button type="button" onClick={() => navigate(RoutePath.BOXES)} className="hover:text-foreground">
-          boxes
-        </button>
-        <span className="text-border">/</span>
-        <span className="text-foreground">{box ? getBoxDisplayName(box) : boxId?.toLowerCase()}</span>
-      </div>
+    <div
+      className={cn(
+        'page-container flex max-w-[1232px] min-w-0 flex-col gap-3 pb-6 pt-4 font-sans text-body',
+        page === 'terminal'
+          ? 'h-[var(--app-content-height,calc(100svh_-_60px))] min-h-[640px]'
+          : 'min-h-[var(--app-content-height,calc(100svh_-_60px))]',
+      )}
+    >
+      <Link
+        to={RoutePath.BOXES}
+        className="inline-flex min-h-6 w-fit flex-none items-center gap-2 text-meta text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-3.5" aria-hidden="true" />
+        Boxes
+      </Link>
 
       {isNotFound ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground">
           <Container className="size-8" strokeWidth={1.3} />
           <div className="text-foreground">Box not found</div>
-          <div className="text-[12px]">Are you sure you&apos;re in the right organization?</div>
+          <div className="text-meta">Are you sure you&apos;re in the right organization?</div>
           <button
             type="button"
             onClick={() => navigate(RoutePath.BOXES)}
-            className="mt-2 border border-border px-4 py-2 text-[13px] transition-colors hover:bg-card"
+            className="mt-2 border border-border px-4 py-2 text-body transition-colors hover:bg-card"
           >
             Back to Boxes
           </button>
@@ -320,89 +256,61 @@ export default function BoxDetails() {
       ) : (
         <>
           {/* identity strip */}
-          <div className="flex flex-none flex-col gap-4 border-b border-dashed border-border pb-[14px] lg:flex-row lg:items-center lg:gap-[18px]">
+          <div className="flex flex-none flex-col gap-4 lg:flex-row lg:items-center lg:gap-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-[14px]">
-              <span className="flex min-w-0 items-center gap-[12px]">
-                <BoxCube state={boxCubeState(box)} size={28} className="text-foreground" />
-                <span
-                  className="max-w-full truncate font-display text-section font-semibold sm:max-w-[360px]"
-                  title={getBoxDisplayName(box)}
-                >
+              <div className="flex min-w-0 items-center gap-3">
+                <BoxResourceIcon box={box} className="size-7 shrink-0" />
+                <h1 className="min-w-0 break-all font-mono text-page font-semibold" title={getBoxDisplayName(box)}>
                   {getBoxDisplayName(box)}
-                </span>
+                </h1>
                 <button
                   type="button"
                   onClick={copyName}
-                  title="copy name"
-                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                  title="Copy name"
+                  aria-label="Copy name"
+                  className="inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
                 >
-                  {copiedName ? (
-                    <Check className="size-[15px]" style={{ color: STATUS.running }} />
-                  ) : (
-                    <Copy className="size-[15px]" />
-                  )}
+                  {copiedName ? <Check className="size-[15px] text-success" /> : <Copy className="size-[15px]" />}
                 </button>
-              </span>
-              <span className="flex flex-none items-center gap-2 text-[13px]">
-                <span
-                  className="size-[8px] rounded-[2px]"
-                  style={{ background: statusOf(box).color, boxShadow: `0 0 6px ${statusOf(box).color}` }}
-                />
-                <span className="font-medium">{statusOf(box).label}</span>
+              </div>
+              <span className="shrink-0">
+                <BoxStatusIndicator box={box} />
               </span>
             </div>
 
             <div className="flex flex-none flex-wrap items-center gap-2 sm:gap-[10px]">
+              {/* SSH comes first in every state, then the state action, then the menu and refresh. */}
+              <BoxSshTab box={box} refreshSignal={sshRefreshSignal} statusContainer={sshStatusContainer} />
               {writePermitted && isRecoverable(box) && (
-                <button
-                  type="button"
-                  onClick={handleRecover}
-                  disabled={actionsDisabled}
-                  className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
-                >
-                  <RotateCcw className="size-[14px]" /> recover
-                </button>
+                <Button variant="outline" type="button" onClick={handleRecover} disabled={actionsDisabled}>
+                  <RotateCcw className="size-[14px]" /> Recover
+                </Button>
               )}
               {writePermitted && isStartable(box) && (
-                <button
-                  type="button"
-                  onClick={handleStart}
-                  disabled={actionsDisabled}
-                  className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
-                >
-                  <Play className="size-[14px]" fill="currentColor" /> start
-                </button>
+                <Button variant="outline" type="button" onClick={handleStart} disabled={actionsDisabled}>
+                  <Play className="size-[14px]" /> Start
+                </Button>
               )}
               {writePermitted && isStoppable(box) && (
-                <button
-                  type="button"
-                  onClick={handleStop}
-                  disabled={actionsDisabled}
-                  className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:opacity-50"
-                >
-                  <Pause className="size-[13px]" fill="currentColor" /> stop
-                </button>
+                <Button variant="outline" type="button" onClick={handleStop} disabled={actionsDisabled}>
+                  <Square className="size-[12px]" /> Stop
+                </Button>
               )}
               {writePermitted &&
                 isTransitioning(box) &&
                 !isRecoverable(box) &&
                 !isStartable(box) &&
                 !isStoppable(box) && (
-                  <button
-                    type="button"
-                    disabled
-                    className="flex min-h-10 items-center gap-2 border border-border px-[15px] py-2 text-[13px] font-medium text-muted-foreground"
-                  >
-                    <RefreshCw className="size-[14px] animate-spin" /> working…
-                  </button>
+                  <Button variant="outline" disabled>
+                    <RefreshCw className="size-[14px] animate-spin" /> Working…
+                  </Button>
                 )}
               {deletePermitted && (
                 <DropdownMenu>
-                  <DropdownMenuTrigger
-                    aria-label="Open box actions"
-                    className="flex size-10 items-center justify-center border border-border outline-none transition-colors hover:bg-background focus-visible:border-brand focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:bg-background sm:size-[34px]"
-                  >
-                    <MoreVertical className="size-[18px]" />
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="quiet" size="icon" aria-label="Open box actions">
+                      <MoreVertical className="size-4" />
+                    </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="min-w-[12rem]">
                     <DropdownMenuItem
@@ -414,136 +322,44 @@ export default function BoxDetails() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
-              <button
+              <Button
+                variant="quiet"
+                size="icon"
                 type="button"
                 onClick={handleRefresh}
-                title="refresh"
-                className="flex size-10 items-center justify-center border border-border transition-colors hover:bg-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:size-[34px]"
+                title="Refresh"
+                aria-label="Refresh"
+                disabled={isFetching}
+                aria-busy={isFetching}
               >
                 <span ref={refreshRef} className="inline-flex">
                   <RefreshCw className="size-4" />
                 </span>
-              </button>
+              </Button>
             </div>
           </div>
 
-          {/* body */}
-          <div className="flex min-h-0 flex-1 flex-col gap-[14px] overflow-y-auto pb-2 lg:flex-row lg:overflow-hidden lg:pb-0">
-            {/* spec readout */}
-            <div className="w-full lg:w-[340px] lg:flex-none lg:overflow-y-auto lg:pr-6">
-              <SectionHeader title="general" />
-              <SpecRow label="box id">
-                <span className="flex items-center gap-[7px]">
-                  {getBoxPublicIdLabel(box)}
-                  <button
-                    type="button"
-                    onClick={copyId}
-                    title="copy"
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    {copied ? (
-                      <Check className="size-[14px]" style={{ color: STATUS.running }} />
-                    ) : (
-                      <Copy className="size-[14px]" />
-                    )}
-                  </button>
-                </span>
-              </SpecRow>
-              <SpecRow label="image" title={box.image ?? undefined}>
-                {box.image ? (
-                  catalogImage ? (
-                    <Link
-                      to={generatePath(RoutePath.IMAGE_DETAILS, { idOrRef: catalogImage.id ?? catalogImage.name })}
-                      className="underline-offset-4 hover:underline"
-                    >
-                      {box.image}
-                    </Link>
-                  ) : (
-                    box.image
-                  )
-                ) : (
-                  '—'
-                )}
-              </SpecRow>
-              <SpecRow label="region">{(getRegionName(box.target) ?? box.target ?? '—').toUpperCase()}</SpecRow>
-
-              <SpecRow label="cpu">{box.cpu} vcpu</SpecRow>
-              <SpecRow label="memory">{box.memory} gib</SpecRow>
-              <SpecRow label="disk">{box.disk} gib</SpecRow>
-
-              {/* Read-only by construction: mounts are fixed when the box is
-                  created and there is no attach/detach endpoint, so this
-                  answers "where is my data" and nothing more. Stored volumeId
-                  may be a name or an id — the API accepts either — so resolve
-                  it back to the readable name when we know it. */}
-              {mountedVolumes.length > 0 && (
-                <>
-                  <SectionHeader title="volumes" />
-                  {mountedVolumes.map((mount) => (
-                    <SpecRow key={`${mount.volumeId}:${mount.mountPath}`} label={mount.displayName}>
-                      <button
-                        type="button"
-                        onClick={() => navigate(RoutePath.VOLUMES)}
-                        className="transition-colors hover:text-brand"
-                        title="Go to volumes"
-                      >
-                        {mount.mountPath}
-                        {mount.subpath ? ` (${mount.subpath})` : ''}
-                      </button>
-                    </SpecRow>
-                  ))}
-                </>
-              )}
-
-              <BoxNetworkSection box={box} canManage={writePermitted} />
-
-              {/* `activity` names the subject, not the value type — and it is
-                  the platform's own term for it (POST /:boxId/last-activity),
-                  which is also what auto-stop is measured against. */}
-              <SectionHeader title="activity" />
-              <SpecRow label="created">{getRelativeTimeString(box.createdAt).relativeTimeString}</SpecRow>
-              <SpecRow label="last event">{getRelativeTimeString(box.updatedAt).relativeTimeString}</SpecRow>
-
-              {box.errorReason && (
-                <>
-                  <SectionHeader title="error" />
-                  <p className="text-[12px] leading-relaxed" style={{ color: STATUS.error }}>
-                    {box.errorReason}
-                  </p>
-                  {/* The API's wording for a private pull with no credential.
-                      The fix is on the registries page, so the error carries the way there. */}
-                  {box.image && /no registry login/.test(box.errorReason) && (
-                    <Link
-                      to={`${RoutePath.IMAGE_REGISTRIES}?connect=${encodeURIComponent(registryHostOf(box.image))}`}
-                      className="mt-2 inline-block border border-border px-3 py-[6px] text-label uppercase text-foreground transition-colors hover:border-brand"
-                    >
-                      Connect a registry for {registryHostOf(box.image)} →
-                    </Link>
-                  )}
-                </>
-              )}
-            </div>
-
-            {/* shell / terminal */}
-            <Tabs
-              defaultValue="shell"
-              onValueChange={(value) => {
-                if (value === 'ssh') setSshVisited(true)
-              }}
-              className="h-[60vh] flex-none gap-0 border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1"
+          {isError && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-3 border border-border/50 px-4 py-2 text-body"
             >
-              <TabsList variant="underline" aria-label="Box connection">
-                <TabsTrigger value="shell">Shell</TabsTrigger>
-                <TabsTrigger value="ssh">SSH</TabsTrigger>
-              </TabsList>
-              <TabsContent value="shell" forceMount className="flex min-h-0 flex-col data-[state=inactive]:hidden">
-                <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />
-              </TabsContent>
-              <TabsContent value="ssh" forceMount className="flex min-h-0 flex-col data-[state=inactive]:hidden">
-                {sshVisited && <BoxSshTab box={box} refreshSignal={terminalRefreshSignal} />}
-              </TabsContent>
-            </Tabs>
-          </div>
+              <span>Couldn’t refresh Box details. Showing last known values.</span>
+              <Button variant="quiet" size="sm" disabled={isFetching} onClick={() => refetch()}>
+                Retry
+              </Button>
+            </div>
+          )}
+
+          <BoxPageNavigation boxId={boxId ?? box.id} current={page} />
+
+          {page === 'terminal' ? (
+            <div className="flex min-h-[360px] min-w-0 flex-1 flex-col overflow-hidden border border-border/60">
+              <BoxTerminalSession box={box} />
+            </div>
+          ) : (
+            <BoxOverview box={box} canManage={writePermitted} sshStatusRef={setSshStatusContainer} />
+          )}
         </>
       )}
 

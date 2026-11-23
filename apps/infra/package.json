@@ -7,7 +7,7 @@
     "deploy": "tsx deployment/sst.ts deploy",
     "remove": "tsx deployment/sst.ts remove",
     "test": "npm run test:infra && npm run test:naming && npm run test:mstage && npm run test:mbuild && npm run test:mdeploy",
-    "test:infra": "tsx --test artifacts/*.test.ts auth0/*.test.ts bootstrap/*.test.ts deployment/*.test.ts policies/runner/*.test.ts runner/*.test.ts runner/model/*.test.ts scripts/*.test.mjs shared/*.test.ts stack/*.test.ts",
+    "test:infra": "tsx --conditions=development --test artifacts/*.test.ts auth0/*.test.ts bootstrap/*.test.ts deployment/*.test.ts policies/runner/*.test.ts runner/*.test.ts runner/model/*.test.ts scripts/*.test.mjs shared/*.test.ts stack/*.test.ts",
     "test:naming": "tsx --conditions=development --test naming/test/*.test.ts",
     "test:mstage": "tsx --conditions=development --test mstage/test/*.test.ts",
     "test:mbuild": "tsx --conditions=development --test mbuild/test/*.test.ts",
@@ -30,6 +30,7 @@
     "secrets": "tsx deployment/secret-names.ts",
     "runner:update:legacy": "tsx runner/update.ts",
     "auth0:universal-login": "tsx auth0/universal-login-command.ts",
+    "auth0:bot-detection": "tsx auth0/bot-detection-command.ts",
     "login": "tsx bootstrap/login.ts",
     "auth0:login-policy-login": "auth0 login --scopes read:clients,read:client_credentials,create:clients,delete:clients,read:client_grants,create:client_grants,update:client_grants,delete:client_grants,read:connections,create:connections,update:connections,delete:connections,read:connections_options,update:connections_options,read:users,read:email_provider,create:email_provider,delete:email_provider,read:email_templates,create:email_templates,update:email_templates,read:prompts,update:prompts,read:actions,create:actions,update:actions,delete:actions,read:forms,create:forms,update:forms,delete:forms,read:flows,create:flows,update:flows,delete:flows,read:flows_vault_connections,create:flows_vault_connections,update:flows_vault_connections,delete:flows_vault_connections",
     "bootstrap": "tsx --conditions=development bootstrap/bootstrap.ts",
@@ -40,6 +41,7 @@
     "runner:build-artifact:legacy": "tsx artifacts/runner-build.ts"
   },
   "devDependencies": {
+    "@actions/expressions": "0.3.61",
     "@google-cloud/secret-manager": "^7.0.0",
     "@google-cloud/storage": "^8.0.1",
     "@pulumi/aws": "^7.24.0",

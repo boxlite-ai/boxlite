@@ -7,7 +7,7 @@ function makeInterceptor() {
   const posthog = { capture: jest.fn() }
   const interceptor = Object.create(MetricsInterceptor.prototype) as MetricsInterceptor
   Object.assign(interceptor as any, {
-    posthog,
+    analytics: { ...posthog, enabled: true },
     configService: { get: jest.fn().mockReturnValue('test') },
     logger: { error: jest.fn() },
   })

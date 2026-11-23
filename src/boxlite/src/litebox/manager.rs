@@ -35,6 +35,11 @@ impl BoxManager {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn store(&self) -> &BoxStore {
+        &self.store
+    }
+
     /// Get a reference to the underlying database.
     #[allow(dead_code)] // Used by snapshots (temporarily disabled)
     pub(crate) fn db(&self) -> crate::db::Database {
@@ -47,6 +52,24 @@ impl BoxManager {
 
     /// Add a new box to the database.
     pub fn add_box(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+        self.add_box_impl(config, state, None)
+    }
+
+    pub(crate) fn add_clone_box(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: &crate::BaseDiskID,
+    ) -> BoxliteResult<()> {
+        self.add_box_impl(config, state, Some(base_disk_id))
+    }
+
+    fn add_box_impl(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: Option<&crate::BaseDiskID>,
+    ) -> BoxliteResult<()> {
         // Check name uniqueness if name is set
         if let Some(ref name) = config.name
             && self.lookup_box_id(name)?.is_some()
@@ -65,7 +88,11 @@ impl BoxManager {
             )));
         }
 
-        self.store.save(config, state)?;
+        if let Some(base_disk_id) = base_disk_id {
+            self.store.save_clone(config, state, base_disk_id)?;
+        } else {
+            self.store.save(config, state)?;
+        }
 
         tracing::debug!(
             box_id = %config.id,
@@ -149,6 +176,11 @@ impl BoxManager {
     /// Get all boxes.
     pub fn all_boxes(&self, _load_state: bool) -> BoxliteResult<Vec<(BoxConfig, BoxState)>> {
         self.store.list_all()
+    }
+
+    /// Get every persisted configuration, including records with no state row.
+    pub fn all_box_configs(&self) -> BoxliteResult<Vec<BoxConfig>> {
+        self.store.list_configs()
     }
 
     /// Save box state to the database.
@@ -235,7 +267,7 @@ mod tests {
             },
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("test:latest".to_string()),
-                cpus: Some(2),
+                cpus: Some(2.0),
                 memory_mib: Some(512),
                 ..Default::default()
             },

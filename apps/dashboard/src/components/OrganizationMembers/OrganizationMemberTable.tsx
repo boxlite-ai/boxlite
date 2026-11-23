@@ -4,8 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceIdentity, ResourceLoadingState, StatusIndicator } from '@/components/ResourceLayout'
 import { useMemo, useState } from 'react'
-import { MoreHorizontal } from '@/components/ui/icon'
+import { MoreHorizontal, UserRound, Users } from '@/components/ui/icon'
 import {
   ColumnDef,
   flexRender,
@@ -40,6 +41,7 @@ interface DataTableProps {
 
 type MemberRow = (OrganizationUser & { kind: 'member' }) | (OrganizationInvitation & { kind: 'invitation' })
 
+/** Combines members and pending invitations while preserving permission-gated role and invitation actions. */
 export function OrganizationMemberTable({
   data,
   invitations,
@@ -99,9 +101,27 @@ export function OrganizationMemberTable({
   return (
     <>
       <div>
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
+        <div>
+          <Table
+            className={
+              ownerMode
+                ? 'resource-table w-full min-w-[640px] table-fixed'
+                : 'resource-table w-full min-w-[400px] table-fixed'
+            }
+          >
+            <colgroup>
+              <col className={ownerMode ? 'w-[28%]' : 'w-[60%]'} />
+              <col className={ownerMode ? 'w-[12%]' : 'w-[20%]'} />
+              <col className={ownerMode ? 'w-[12%]' : 'w-[20%]'} />
+              {ownerMode && (
+                <>
+                  <col className="w-[20%]" />
+                  <col className="w-[22%]" />
+                  <col className="w-[6%]" />
+                </>
+              )}
+            </colgroup>
+            <TableHeader className={loadingData || table.getRowModel().rows.length === 0 ? 'hidden' : undefined}>
               {table.getHeaderGroups().map((headerGroup) => (
                 <TableRow key={headerGroup.id}>
                   {headerGroup.headers.map((header) => {
@@ -117,8 +137,8 @@ export function OrganizationMemberTable({
             <TableBody>
               {loadingData ? (
                 <TableRow>
-                  <TableCell colSpan={columns.length} className="h-24 text-center">
-                    Loading...
+                  <TableCell colSpan={columns.length}>
+                    <ResourceLoadingState title="Loading members…" />
                   </TableCell>
                 </TableRow>
               ) : table.getRowModel().rows?.length ? (
@@ -126,7 +146,7 @@ export function OrganizationMemberTable({
                   <TableRow
                     key={row.id}
                     data-state={row.getIsSelected() && 'selected'}
-                    className={`h-14 ${isLoading(row.original) ? 'opacity-50 pointer-events-none' : ''}`}
+                    className={isLoading(row.original) ? 'opacity-50 pointer-events-none' : undefined}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
@@ -134,12 +154,17 @@ export function OrganizationMemberTable({
                   </TableRow>
                 ))
               ) : (
-                <TableEmptyState colSpan={columns.length} message="No members or invitations found." />
+                <TableEmptyState
+                  colSpan={columns.length}
+                  message="No members or invitations found."
+                  icon={<Users className="size-6" />}
+                  description="Organization members and pending invitations appear here."
+                />
               )}
             </TableBody>
           </Table>
         </div>
-        <Pagination table={table} className="mt-4" entityName="Members" />
+        <Pagination table={table} entityName="Members" />
       </div>
 
       {action?.kind === 'member' && (
@@ -183,14 +208,11 @@ const getColumns = ({
       accessorKey: 'email',
       header: 'Email',
       cell: ({ row }) => (
-        <div>
-          <div>{row.original.email}</div>
-          {row.original.kind === 'invitation' && (
-            <div className="mt-1 text-xs text-muted-foreground">
-              Invited by {row.original.invitedBy} · Expires {new Date(row.original.expiresAt).toLocaleString()}
-            </div>
-          )}
-        </div>
+        <ResourceIdentity icon={<UserRound />}>
+          <span className="resource-name" title={row.original.email}>
+            {row.original.email}
+          </span>
+        </ResourceIdentity>
       ),
     },
     {
@@ -198,18 +220,42 @@ const getColumns = ({
       header: 'Status',
       accessorFn: (row) =>
         row.kind === 'member' ? 'Member' : new Date(row.expiresAt) < new Date() ? 'Expired' : 'Invited',
-      cell: ({ getValue }) => <span className="border border-border px-2 py-1 text-xs">{getValue<string>()}</span>,
+      cell: ({ getValue }) => <StatusIndicator label={getValue<string>()} color="hsl(var(--muted-foreground))" />,
     },
     {
       accessorKey: 'role',
-      header: () => {
-        return <div className="px-3 w-24">Role</div>
-      },
-      cell: ({ row }) => <div className="px-3 text-sm">{capitalize(row.original.role)}</div>,
+      header: 'Role',
+      cell: ({ row }) => <span className="text-meta text-muted-foreground">{capitalize(row.original.role)}</span>,
     },
   ]
 
   if (ownerMode) {
+    columns.push(
+      {
+        id: 'invitedBy',
+        header: 'Invited by',
+        cell: ({ row }) => (
+          <span
+            className="block truncate text-meta text-muted-foreground"
+            title={row.original.kind === 'invitation' ? row.original.invitedBy : undefined}
+          >
+            {row.original.kind === 'invitation' ? row.original.invitedBy : '—'}
+          </span>
+        ),
+      },
+      {
+        id: 'expiresAt',
+        header: 'Expires',
+        cell: ({ row }) => {
+          const expires = row.original.kind === 'invitation' ? new Date(row.original.expiresAt).toLocaleString() : '—'
+          return (
+            <span className="block truncate font-mono text-meta text-muted-foreground" title={expires}>
+              {expires}
+            </span>
+          )
+        },
+      },
+    )
     columns.push({
       id: 'actions',
       cell: ({ row }) => {
@@ -224,7 +270,7 @@ const getColumns = ({
           <div className="text-right">
             <DropdownMenu>
               <DropdownMenuTrigger asChild disabled={isLoading(item)}>
-                <Button variant="ghost" className="h-8 w-8 p-0">
+                <Button variant="quiet" size="icon-sm">
                   <span className="sr-only">Open menu</span>
                   <MoreHorizontal className="h-4 w-4" />
                 </Button>

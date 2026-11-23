@@ -68,10 +68,28 @@ export type StorageBinding =
       credentialVending: { serviceAccount: $util.Output<string> }
     }
 
+/**
+ * Dedicated checkpoint archive storage, on a cloud that implements it.
+ *
+ * Its own bucket rather than a prefix of the control plane's: runners and the
+ * API both write and delete in it, and the control plane's bucket is the one
+ * this module keeps them from writing to. GCP has it; AWS is reserved and says
+ * so. This capability describes storage availability, not REST API readiness.
+ */
+export type CheckpointArchives =
+  | {
+      active: true
+      bucket: $util.Output<string>
+      /** The URI prefix the API writes each archive under: `gs://<bucket>/<prefix>/`. */
+      archivePrefix: $util.Output<string>
+    }
+  | { active: false }
+
 export type Storage = {
   /** The bucket's own name, which the API reads as its default bucket. */
   name: $util.Output<string>
   binding: StorageBinding
+  checkpoints: CheckpointArchives
   ready: any[]
 }
 

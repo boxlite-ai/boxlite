@@ -33,7 +33,7 @@ import type { AlarmRequest, AlarmThreshold } from '../stack/alarms.ts'
 import type { CacheRequest, CacheSize } from '../stack/cache.ts'
 import type { ClickHouseMode, ClickHouseRequest } from '../stack/clickhouse.ts'
 import type { DatabaseRequest, DatabaseSize } from '../stack/database.ts'
-import type { RunnerRequest, RunnerSize } from '../stack/runners.ts'
+import { RUNNER_SIZES, type RunnerRequest } from '../stack/runners.ts'
 import type { StorageRequest } from '../stack/storage.ts'
 
 export class DeployConfigError extends Error {
@@ -44,7 +44,7 @@ export class DeployConfigError extends Error {
 }
 
 /** The runner settings a config file decides. The fleet and the binary do not. */
-export type RunnerSettings = Pick<RunnerRequest, 'size' | 'rootDiskGb' | 'dataDiskGb'>
+export type RunnerSettings = Pick<RunnerRequest, 'size' | 'rootDiskGb' | 'dataDiskGb' | 'machineTypes'>
 
 export type DeployConfig = {
   /** The stage file the block was read out of. */
@@ -93,7 +93,6 @@ const VOLUME_PREFIX = 'boxlite-volume'
 
 const DATABASE_SIZES: DatabaseSize[] = ['small', 'standard', 'medium']
 const CACHE_SIZES: CacheSize[] = ['small', 'medium']
-const RUNNER_SIZES: RunnerSize[] = ['small', 'medium', 'large']
 const CLICKHOUSE_MODES: ClickHouseMode[] = ['self-hosted', 'managed', 'disabled']
 
 /** RDS keeps at most 35 days of automated backups; below one means none. */
@@ -102,7 +101,13 @@ const MAX_BACKUP_RETENTION_DAYS = 35
 /** A root disk small enough to hold no box image is not worth deploying. */
 const DISK_BOUNDS = { min: 20, max: 4_000 }
 
-const ALARM_NAMES: (keyof AlarmRequest)[] = ['apiServerErrors', 'proxyUnhealthyTargets', 'runnersUnreachable']
+const ALARM_NAMES: (keyof AlarmRequest)[] = [
+  'apiServerErrors',
+  'proxyUnhealthyTargets',
+  'runnersUnreachable',
+  'runnersDiskExpansionFailing',
+  'runnersDiskPressureCritical',
+]
 
 const assertObject = (value: unknown, where: string): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -243,13 +248,22 @@ const parseClickHouse = (
 
 const parseRunners = (raw: unknown, where: string, { partial }: { partial: boolean }): Partial<RunnerSettings> => {
   const block = assertObject(raw, where)
-  assertKeys(block, ['size', 'rootDiskGb', 'dataDiskGb'], where, { partial: true })
+  assertKeys(block, ['size', 'rootDiskGb', 'dataDiskGb', 'machineTypes'], where, { partial: true })
   const missing = ['size', 'rootDiskGb'].filter((key) => !(key in block))
   if (!partial && missing.length) throw new DeployConfigError(`${where} must set ${missing.join(', ')}`)
   const parsed: Partial<RunnerSettings> = {}
   if ('size' in block) parsed.size = assertOneOf(block.size, RUNNER_SIZES, `${where}.size`)
   if ('rootDiskGb' in block) parsed.rootDiskGb = assertWholeNumber(block.rootDiskGb, `${where}.rootDiskGb`, DISK_BOUNDS)
   if ('dataDiskGb' in block) parsed.dataDiskGb = assertWholeNumber(block.dataDiskGb, `${where}.dataDiskGb`, DISK_BOUNDS)
+  if ('machineTypes' in block) {
+    const path = `${where}.machineTypes`
+    const types = assertObject(block.machineTypes, path)
+    assertKeys(types, RUNNER_SIZES, path, { partial: true })
+    parsed.machineTypes = {}
+    for (const size of RUNNER_SIZES) {
+      if (size in types) parsed.machineTypes[size] = assertPattern(types[size], /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, `${path}.${size}`)
+    }
+  }
   return parsed
 }
 

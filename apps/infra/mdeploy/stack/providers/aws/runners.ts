@@ -32,8 +32,7 @@
  */
 
 import type { Placement } from '../../network.ts'
-import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
-import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE } from '../../runners.ts'
+import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE, type RunnerProvider, type RunnerRequest, type Runners } from '../../runners.ts'
 import { renderRunnerBoot, type BootPlatform } from '../../runner-boot.ts'
 import {
   REGISTER_RUNNERS_COMMAND,
@@ -50,7 +49,13 @@ import {
 } from '../../runner-upgrade.ts'
 
 /** What each requested size answers to. Every one of these can nest. */
-const INSTANCE = { small: 'c8i.large', medium: 'c8i.xlarge', large: 'c8i.2xlarge' } as const
+const INSTANCE = {
+  small: 'c8i.large',
+  medium: 'c8i.xlarge',
+  large: 'c8i.2xlarge',
+  xlarge: 'c8i.4xlarge',
+  '2xlarge': 'c8i.8xlarge',
+} as const
 
 const UBUNTU_OWNER = '099720109477'
 const UBUNTU_NAME = 'ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*'
@@ -230,7 +235,7 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
           slot.resourceName,
           {
             ami: ami.id,
-            instanceType: INSTANCE[request.size],
+            instanceType: request.machineTypes?.[request.size] ?? INSTANCE[request.size],
             // Public subnet, and the security group the network arranged is
             // what makes the address egress-only.
             subnetId: placement.subnets[0],
@@ -329,17 +334,19 @@ rm -rf /tmp/awscliv2.zip /tmp/aws`,
        * rather than cast, because an unresolved one renders as Pulumi's
        * `[toString]` refusal text and the fleet is converged onto that.
        */
-      const payload = $resolve([request.apiUrl, request.otlpUrl]).apply(([apiUrl, otlpUrl]) =>
-        encodeUpgradePayload({
-          identity: request.binary.identity,
-          binary: request.binary,
-          port: RUNNER_PORT,
-          // Only a build-mode binary needs it, and only because it is read from
-          // S3 with the host's own role rather than fetched publicly.
-          region,
-          apiUrl: apiUrl as string,
-          otlpUrl: otlpUrl as string,
-        }),
+      const payload = $resolve([request.apiUrl, request.otlpUrl, request.environment.BOXLITE_RUNNER_ENV ?? '']).apply(
+        ([apiUrl, otlpUrl, runnerEnv]) =>
+          encodeUpgradePayload({
+            identity: request.binary.identity,
+            binary: request.binary,
+            port: RUNNER_PORT,
+            // Only a build-mode binary needs it, and only because it is read from
+            // S3 with the host's own role rather than fetched publicly.
+            region,
+            apiUrl: apiUrl as string,
+            otlpUrl: otlpUrl as string,
+            runnerEnv: runnerEnv as string,
+          }),
       )
       previousUpgrade = new command.local.Command(
         upgradeResourceName(slot),

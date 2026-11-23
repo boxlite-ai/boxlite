@@ -69,7 +69,7 @@ func decideTCPRoute(destIP net.IP, destPort uint16, filter *AllowNetFilter, secr
 		return tcpRouteStandardForward
 	}
 
-	// Secret substitution needs SNI even if the destination IP is broadly allowed.
+	// Secret injection needs SNI even if the destination IP is broadly allowed.
 	if secretMatcher != nil && destPort == 443 {
 		return tcpRouteInspect
 	}
@@ -270,7 +270,7 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, 
 		logrus.WithFields(logrus.Fields{
 			"hostname":    hostname,
 			"num_secrets": len(secrets),
-		}).Debug("MITM: intercepting for secret substitution")
+		}).Debug("MITM: intercepting for secret injection")
 		mitmAndForward(bufferedGuest, hostname, dial, ca, secrets)
 		return
 	case tcpInspectForward:

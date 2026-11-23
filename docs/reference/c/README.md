@@ -300,7 +300,7 @@ Create and auto-start a box with sensible defaults.
 ```c
 BoxliteErrorCode boxlite_simple_new(
     const char* image,
-    int cpus,
+    double cpus,
     int memory_mib,
     CBoxliteSimple** out_box,
     CBoxliteError* out_error
@@ -312,7 +312,7 @@ BoxliteErrorCode boxlite_simple_new(
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `image` | `const char*` | OCI image reference (e.g., `"python:slim"`, `"alpine:3.19"`) |
-| `cpus` | `int` | Number of CPUs (0 = default: 2) |
+| `cpus` | `double` | CPU allocation; fractional values require a Linux execution host, 0 selects the default in the Simple API |
 | `memory_mib` | `int` | Memory in MiB (0 = default: 512) |
 | `out_box` | `CBoxliteSimple**` | Output: created box handle |
 | `out_error` | `CBoxliteError*` | Output: error information |
@@ -579,7 +579,8 @@ CBoxliteOptions* opts = NULL;
 if (boxlite_options_new("alpine:3.19", &opts, &error) != Ok) {
     // Handle error
 }
-boxlite_options_set_cpus(opts, 2);
+// Half a CPU of aggregate time on Linux, with one guest vCPU.
+boxlite_options_set_cpus(opts, 0.5);
 boxlite_options_set_memory(opts, 512);
 boxlite_options_set_network_enabled(opts);
 CAdvancedBoxOptions* advanced = NULL;
@@ -1261,8 +1262,11 @@ callback convention.
 | `boxlite_box_ssh_status` | None | `CBoxSshStatusCb` |
 | `boxlite_box_ssh_disable` | None | `CBoxSshDisableCb` |
 
-Enable requires a running box and saved configuration, preserves healthy
-connections, and never starts the box. It works locally and over REST.
+Enable requires saved configuration and preserves healthy connections. Enable
+and disable work locally and over REST, require a running box, and never start
+it. A valid handle to a configured or stopped box fails the callback with
+`InvalidState` (HTTP 409 over REST), without changing saved SSH intent. Disable is
+safe to repeat while running; call it while running to persist the disabled switch.
 
 All four callbacks receive `CSshStatus*`. Its corresponding release function
 is `boxlite_free_ssh_status()`; the existing [memory management rules](#memory-management)
@@ -1676,3 +1680,9 @@ export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 - **[C Quick Start](../../getting-started/quickstart-c.md)** - 5-minute guide
 - **[C Examples](../../../examples/c/)** - Working examples
 - **[Concepts](../../concepts/README.md)** - How BoxLite works
+
+### CPU ABI compatibility
+
+CPU arguments and `CBoxInfo.cpus` use `double`; rebuild callers with the matching header and library.
+Integer allocations preserve existing behavior; fractional allocations require a Linux execution host and round guest vCPUs upward.
+See [fractional CPUs](../../guides/resource-limits.md#fractional-cpus-linux) for enforcement and error semantics.

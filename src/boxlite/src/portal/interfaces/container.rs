@@ -1,12 +1,12 @@
 //! Container service interface.
 
 use boxlite_shared::{
-    BindMount, BoxliteError, BoxliteResult, CaCert,
+    BindMount, BindMountKind, BoxliteError, BoxliteResult, CaCert,
     ContainerAdvancedOptions as ProtoContainerAdvancedOptions,
     ContainerCapabilities as ProtoContainerCapabilities, ContainerClient,
     ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind,
-    ContainerInitRequest, DiskRootfs, LinuxOptions, MergedRootfs, MountOptions, OverlayRootfs,
-    RootfsInit, container_init_response,
+    ContainerInitRequest, ContainerResources, DiskRootfs, LinuxOptions, MergedRootfs, MountOptions,
+    OverlayRootfs, RootfsInit, container_init_response,
 };
 use tonic::transport::Channel;
 
@@ -90,6 +90,8 @@ pub struct ContainerInitConfig {
     pub tty: bool,
     /// Guest device nodes to reproduce inside the OCI workload.
     pub devices: Vec<ContainerDevice>,
+    /// Box limits the guest writes to the container cgroup.
+    pub resources: ContainerResources,
     pub advanced: ContainerAdvancedConfig,
 }
 
@@ -136,6 +138,7 @@ impl ContainerInterface {
             ca_certs,
             tty,
             devices,
+            resources,
             advanced,
         } = config;
 
@@ -154,6 +157,7 @@ impl ContainerInterface {
                 }),
                 linux: Some(LinuxOptions {
                     readonly_paths: advanced.linux.readonly_paths,
+                    cgroup_namespace: advanced.linux.cgroup_namespace,
                 }),
                 mount: Some(MountOptions {
                     // The only guest-side mount host policy ever overrides
@@ -169,13 +173,27 @@ impl ContainerInterface {
         // Uses convention-based paths - guest will construct full path from volume_name
         let proto_mounts: Vec<BindMount> = mounts
             .into_iter()
-            .map(|m| BindMount {
-                volume_name: m.volume_name,
-                destination: m.destination,
-                read_only: m.read_only,
-                owner_uid: m.owner_uid,
-                owner_gid: m.owner_gid,
-                subpath: m.subpath.unwrap_or_default(),
+            .map(|m| {
+                let (kind, subpath) = match m.payload {
+                    crate::volumes::ContainerMountPayload::WholeDirectory => {
+                        (BindMountKind::WholeDirectory, String::new())
+                    }
+                    crate::volumes::ContainerMountPayload::SingleFile { file_name } => {
+                        (BindMountKind::SingleFile, file_name)
+                    }
+                    crate::volumes::ContainerMountPayload::ManagedSubDirectory { sub_path } => {
+                        (BindMountKind::ManagedSubDirectory, sub_path)
+                    }
+                };
+                BindMount {
+                    volume_name: m.volume_name,
+                    destination: m.destination,
+                    read_only: m.read_only,
+                    owner_uid: m.owner_uid,
+                    owner_gid: m.owner_gid,
+                    kind: kind as i32,
+                    subpath,
+                }
             })
             .collect();
 
@@ -205,6 +223,7 @@ impl ContainerInterface {
             // it sent, instead of both sides separately hard-coding it.
             execution_id: container_id.clone(),
             devices,
+            resources: Some(resources),
         };
 
         let response = self
@@ -226,6 +245,10 @@ impl ContainerInterface {
                     Ok(ContainerInitErrorKind::Unsupported) => {
                         Err(BoxliteError::Unsupported(reason))
                     }
+                    Ok(ContainerInitErrorKind::InvalidArgument) => {
+                        Err(BoxliteError::InvalidArgument(reason))
+                    }
+                    Ok(ContainerInitErrorKind::NotFound) => Err(BoxliteError::NotFound(reason)),
                     _ => Err(BoxliteError::Internal(reason)),
                 }
             }
@@ -286,6 +309,25 @@ impl ContainerInterface {
             )),
         }
     }
+
+    /// Mount the share folder `source` read-only at `destination` in the
+    /// running container. The guest refuses a destination that has entries.
+    pub async fn mount(
+        &mut self,
+        container_id: &str,
+        source: &str,
+        destination: &str,
+    ) -> BoxliteResult<()> {
+        self.client
+            .mount(boxlite_shared::ContainerMountRequest {
+                container_id: container_id.to_string(),
+                source: source.to_string(),
+                destination: destination.to_string(),
+                read_only: true,
+            })
+            .await?;
+        Ok(())
+    }
 }
 
 fn map_container_init_status(status: tonic::Status) -> BoxliteError {
@@ -299,9 +341,10 @@ fn map_container_init_status(status: tonic::Status) -> BoxliteError {
 mod tests {
     use super::*;
     use boxlite_shared::{
-        Container as ContainerService, ContainerInitRequest, ContainerInitResponse,
-        ContainerInitSuccess, ContainerServer, ContainerStartRequest, ContainerStartResponse,
-        ContainerStartSuccess, container_init_response, container_start_response,
+        Container as ContainerService, ContainerInitError, ContainerInitRequest,
+        ContainerInitResponse, ContainerInitSuccess, ContainerServer, ContainerStartRequest,
+        ContainerStartResponse, ContainerStartSuccess, container_init_response,
+        container_start_response,
     };
     use std::sync::{Arc, Mutex};
     use tonic::transport::{Endpoint, Server};
@@ -331,6 +374,7 @@ mod tests {
 
     struct StubGuest {
         start_reply: StartReply,
+        init_error: Option<ContainerInitErrorKind>,
         /// Last `Container.Init` request the stub saw, for wire assertions.
         seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
     }
@@ -344,6 +388,14 @@ mod tests {
             let request = request.into_inner();
             let container_id = request.container_id.clone();
             *self.seen_init.lock().unwrap() = Some(request);
+            if let Some(kind) = self.init_error {
+                return Ok(Response::new(ContainerInitResponse {
+                    result: Some(container_init_response::Result::Error(ContainerInitError {
+                        reason: format!("injected {kind:?}"),
+                        kind: kind.into(),
+                    })),
+                }));
+            }
             Ok(Response::new(ContainerInitResponse {
                 result: Some(container_init_response::Result::Success(
                     ContainerInitSuccess { container_id },
@@ -378,11 +430,12 @@ mod tests {
     /// Serve `StubGuest` on an ephemeral loopback port and return a
     /// `ContainerInterface` wired to it.
     async fn interface_for(start_reply: StartReply) -> ContainerInterface {
-        interface_recording(start_reply, Arc::new(Mutex::new(None))).await
+        interface_recording(start_reply, None, Arc::new(Mutex::new(None))).await
     }
 
     async fn interface_recording(
         start_reply: StartReply,
+        init_error: Option<ContainerInitErrorKind>,
         seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
     ) -> ContainerInterface {
         // Bind with std to learn a free port, then hand the address to tonic.
@@ -394,6 +447,7 @@ mod tests {
             Server::builder()
                 .add_service(ContainerServer::new(StubGuest {
                     start_reply,
+                    init_error,
                     seen_init,
                 }))
                 .serve(addr)
@@ -453,6 +507,58 @@ mod tests {
         assert!(iface.start("box-ok").await.is_ok());
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_init_sends_explicit_mount_kinds() {
+        let seen = Arc::new(Mutex::new(None));
+        let mut iface = interface_recording(StartReply::Success, None, Arc::clone(&seen)).await;
+        let mount = |payload| ContainerMount {
+            volume_name: "uservol0".to_string(),
+            destination: "/data".to_string(),
+            read_only: false,
+            owner_uid: 0,
+            owner_gid: 0,
+            payload,
+        };
+
+        iface
+            .init(ContainerInitConfig {
+                container_id: "container-1".to_string(),
+                image: crate::images::ContainerImageConfig::default(),
+                rootfs: ContainerRootfsInitConfig::Merged,
+                mounts: vec![
+                    mount(crate::volumes::ContainerMountPayload::WholeDirectory),
+                    mount(crate::volumes::ContainerMountPayload::SingleFile {
+                        file_name: "app.conf".to_string(),
+                    }),
+                    mount(crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+                        sub_path: "team/backend".to_string(),
+                    }),
+                ],
+                ca_certs: Vec::new(),
+                tty: false,
+                devices: Vec::new(),
+                resources: ContainerResources::default(),
+                advanced: ContainerAdvancedConfig::default(),
+            })
+            .await
+            .unwrap();
+
+        let request = seen.lock().unwrap().take().expect("guest saw Init");
+        let expected = [
+            (boxlite_shared::BindMountKind::WholeDirectory, ""),
+            (boxlite_shared::BindMountKind::SingleFile, "app.conf"),
+            (
+                boxlite_shared::BindMountKind::ManagedSubDirectory,
+                "team/backend",
+            ),
+        ];
+        assert_eq!(request.mounts.len(), expected.len());
+        for (mount, (kind, subpath)) in request.mounts.iter().zip(expected) {
+            assert_eq!(mount.kind, kind as i32);
+            assert_eq!(mount.subpath, subpath);
+        }
+    }
+
     /// Devices are container-scoped, so they must reach the guest on the
     /// request itself rather than inside the process config — and init's
     /// session id must equal the container id, the rule `LiteBox::attach()`
@@ -460,7 +566,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn container_init_sends_devices_and_session_id() {
         let seen = Arc::new(Mutex::new(None));
-        let mut iface = interface_recording(StartReply::Success, Arc::clone(&seen)).await;
+        let mut iface = interface_recording(StartReply::Success, None, Arc::clone(&seen)).await;
 
         iface
             .init(ContainerInitConfig {
@@ -475,6 +581,12 @@ mod tests {
                     destination: "/dev/kvm".to_string(),
                     file_mode: Some(0o666),
                 }],
+                resources: ContainerResources {
+                    cpu_quota_us: 200_000,
+                    cpu_period_us: 100_000,
+                    memory_limit_bytes: 3 << 30,
+                    pids_limit: 0,
+                },
                 advanced: ContainerAdvancedConfig {
                     capabilities: crate::runtime::advanced_options::ContainerCapabilities {
                         add: vec!["ALL".into()],
@@ -482,6 +594,7 @@ mod tests {
                     },
                     linux: ResolvedLinuxSecurity {
                         readonly_paths: Vec::new(),
+                        cgroup_namespace: false,
                     },
                     mount: ResolvedMountSecurity {
                         options: vec![
@@ -502,6 +615,15 @@ mod tests {
         assert_eq!(request.devices[0].file_mode, Some(0o666));
         assert_eq!(request.container_id, "container-1");
         assert_eq!(request.execution_id, "container-1");
+        let resources = request.resources.expect("box limits on the wire");
+        assert_eq!(
+            (
+                resources.cpu_quota_us,
+                resources.cpu_period_us,
+                resources.memory_limit_bytes
+            ),
+            (200_000, 100_000, 3_221_225_472)
+        );
         let container_config = request.container_config.expect("process config");
         // Non-default, so it proves the field is threaded rather than defaulted.
         assert!(container_config.tty);
@@ -515,16 +637,52 @@ mod tests {
             advanced.capabilities.expect("capabilities").add,
             vec!["ALL".to_string()]
         );
-        assert!(
-            advanced
-                .linux
-                .expect("linux options")
-                .readonly_paths
-                .is_empty()
-        );
+        let linux = advanced.linux.expect("linux options");
+        assert!(linux.readonly_paths.is_empty());
+        // Privileged-shaped request: the resolved `false` reaches the wire.
+        assert!(!linux.cgroup_namespace);
         let mount = advanced.mount.expect("mount options");
         assert_eq!(mount.source, "/sys");
         assert_eq!(mount.destination, "/sys");
         assert!(!mount.options.contains(&"rro".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_init_maps_guest_error_kinds() {
+        for kind in [
+            ContainerInitErrorKind::InvalidArgument,
+            ContainerInitErrorKind::NotFound,
+            ContainerInitErrorKind::Unsupported,
+        ] {
+            let mut iface =
+                interface_recording(StartReply::Success, Some(kind), Arc::new(Mutex::new(None)))
+                    .await;
+            let error = iface
+                .init(ContainerInitConfig {
+                    container_id: "container-1".to_string(),
+                    image: crate::images::ContainerImageConfig::default(),
+                    rootfs: ContainerRootfsInitConfig::Merged,
+                    mounts: Vec::new(),
+                    ca_certs: Vec::new(),
+                    tty: false,
+                    devices: Vec::new(),
+                    resources: ContainerResources::default(),
+                    advanced: ContainerAdvancedConfig::default(),
+                })
+                .await
+                .expect_err("injected guest error must reach the caller");
+            match kind {
+                ContainerInitErrorKind::InvalidArgument => {
+                    assert!(matches!(error, BoxliteError::InvalidArgument(_)))
+                }
+                ContainerInitErrorKind::NotFound => {
+                    assert!(matches!(error, BoxliteError::NotFound(_)))
+                }
+                ContainerInitErrorKind::Unsupported => {
+                    assert!(matches!(error, BoxliteError::Unsupported(_)))
+                }
+                _ => panic!("unexpected test kind"),
+            }
+        }
     }
 }

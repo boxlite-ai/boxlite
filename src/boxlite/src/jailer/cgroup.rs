@@ -274,6 +274,25 @@ fn enable_controllers(cgroup_path: &Path) -> Result<(), JailerError> {
     Ok(())
 }
 
+use crate::runtime::cpu_count::CPU_PERIOD_US;
+
+/// Apply the explicit aggregate Box CPU bandwidth, preserving stricter legacy limits.
+pub(crate) fn set_cpu_max(
+    box_id: &str,
+    cpus: crate::runtime::cpu_count::CpuCount,
+    limits: &ResourceLimits,
+) -> Result<(), JailerError> {
+    let quota = cpu_quota_us(cpus, limits);
+    write_file(
+        &cgroup_path(box_id).join("cpu.max"),
+        &format!("{quota} {CPU_PERIOD_US}"),
+    )
+}
+
+fn cpu_quota_us(cpus: crate::runtime::cpu_count::CpuCount, limits: &ResourceLimits) -> u64 {
+    cpus.cfs_quota_us(limits.max_cpu_time)
+}
+
 /// Apply resource limits to a cgroup.
 fn apply_limits(cgroup_path: &Path, config: &CgroupConfig) -> Result<(), JailerError> {
     // Memory limit
@@ -468,6 +487,37 @@ pub fn build_cgroup_procs_path(box_id: &str) -> Option<std::ffi::CString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fractional_cpus_quota_respects_precision_and_legacy_budget() {
+        let mut limits = ResourceLimits::default();
+        for (cores, quota) in [(0.125, 12_500), (0.126, 12_600), (2.0, 200_000)] {
+            assert_eq!(
+                cpu_quota_us(
+                    crate::runtime::cpu_count::CpuCount::new(cores).unwrap(),
+                    &limits
+                ),
+                quota
+            );
+        }
+        limits.max_cpu_time = Some(1);
+        let legacy = CgroupConfig::from(&limits).cpu_max.unwrap();
+        assert_eq!(legacy, (1_000_000, 1_000_000));
+        assert_eq!(
+            cpu_quota_us(
+                crate::runtime::cpu_count::CpuCount::new(2.0).unwrap(),
+                &limits
+            ),
+            100_000
+        );
+        assert_eq!(
+            cpu_quota_us(
+                crate::runtime::cpu_count::CpuCount::new(0.5).unwrap(),
+                &limits
+            ),
+            50_000
+        );
+    }
 
     #[test]
     fn test_cgroup_path() {

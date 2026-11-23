@@ -53,17 +53,21 @@ class OrganizationController {
 
 const spec = (name: string) => parse(readFileSync(resolve(__dirname, '../../../../openapi', name), 'utf8'))
 
-type Tool = { name: string; handler: (args: Record<string, unknown>) => Promise<unknown> | unknown }
+type Tool = {
+  name: string
+  handler: (args: Record<string, unknown>, ctx?: unknown, request?: unknown) => Promise<unknown> | unknown
+}
 
 async function registered(served: Parameters<McpTools['register']>[0]['served'] = () => true) {
   const tools: Tool[] = []
+  const dispatcher = { call: jest.fn().mockResolvedValue({ status: 200, json: { accepted: true } }) }
   const moduleRef = await Test.createTestingModule({
     imports: [DiscoveryModule],
     controllers: [DashboardBoxController, RunnerJobController, OrganizationController],
     providers: [
       McpTools,
       { provide: MCP_STRATEGY, useValue: { registerTool: (tool: Tool) => tools.push(tool) } },
-      { provide: McpDispatcher, useValue: {} },
+      { provide: McpDispatcher, useValue: dispatcher },
     ],
   }).compile()
   const app = moduleRef.createNestApplication()
@@ -74,11 +78,29 @@ async function registered(served: Parameters<McpTools['register']>[0]['served'] 
     .get(McpTools)
     .register({ box: spec('box.openapi.yaml'), admin: spec('admin.openapi.yaml'), dashboard, served })
   await app.close()
-  return { tools, catalog }
+  return { tools, catalog, dispatcher }
 }
 
 describe('McpTools.register', () => {
-  it('lists the direct box tools and the three meta-tools, not one tool per operation', async () => {
+  it('provides a display title and complete behavior hints on every registered tool', async () => {
+    const { tools } = await registered()
+
+    for (const tool of tools) {
+      expect(tool).toEqual(
+        expect.objectContaining({
+          title: expect.any(String),
+          annotations: expect.objectContaining({
+            readOnlyHint: expect.any(Boolean),
+            destructiveHint: expect.any(Boolean),
+            idempotentHint: expect.any(Boolean),
+            openWorldHint: expect.any(Boolean),
+          }),
+        }),
+      )
+    }
+  })
+
+  it('lists the direct box tools and four meta-tools, not one tool per operation', async () => {
     const { tools, catalog } = await registered()
 
     expect(tools.map((tool) => tool.name).sort()).toEqual(
@@ -88,7 +110,8 @@ describe('McpTools.register', () => {
         'getBox',
         'getExecution',
         'get_api_endpoint_schema',
-        'invoke_api_endpoint',
+        'read_api_endpoint',
+        'write_api_endpoint',
         'listBoxes',
         'list_api_endpoints',
         'removeBox',
@@ -99,6 +122,33 @@ describe('McpTools.register', () => {
       ].sort(),
     )
     expect(catalog.all().length).toBeGreaterThan(tools.length)
+  })
+
+  it.each([
+    ['read_api_endpoint', 'getBox', 'removeBox'],
+    ['write_api_endpoint', 'removeBox', 'getBox'],
+  ])('%s dispatches only its operation class', async (name, allowed, denied) => {
+    const { tools, dispatcher } = await registered()
+    const tool = tools.find((candidate) => candidate.name === name) as Tool
+
+    await tool.handler({ operationId: allowed, arguments: { box_id: 'b' } }, undefined, {})
+    expect(dispatcher.call).toHaveBeenCalledTimes(1)
+    dispatcher.call.mockClear()
+
+    expect(tool.handler({ operationId: denied }, undefined, {})).toMatchObject({ isError: true })
+    expect(dispatcher.call).not.toHaveBeenCalled()
+    expect(tool.handler({ operationId: 'missing' })).toMatchObject({ isError: true })
+  })
+
+  it('identifies the invocation tool in discovered endpoint schemas', async () => {
+    const { tools } = await registered()
+    const schema = tools.find((tool) => tool.name === 'get_api_endpoint_schema') as Tool
+    expect(schema.handler({ operationId: 'getBox' })).toMatchObject({
+      structuredContent: { invocationTool: 'read_api_endpoint' },
+    })
+    expect(schema.handler({ operationId: 'removeBox' })).toMatchObject({
+      structuredContent: { invocationTool: 'write_api_endpoint' },
+    })
   })
 
   it('reaches delegable dashboard routes and leaves runner and JWT-only routes out', async () => {
@@ -148,10 +198,23 @@ describe('McpTools.register', () => {
  * someone decides whether OAuth callers may reach it.
  */
 const API_KEY_ONLY = [
+  'createAgent',
+  'getAgent',
+  'getAgentTurn',
+  'closeAgent',
+  'sendAgentTurn',
+  'getAgentEvents',
+  'respondAgentRequest',
+  'steerAgentTurn',
+  'interruptAgentTurn',
   'enableSsh',
   'configureSsh',
   'exportBox',
   'importBox',
+  'createCheckpoint',
+  'listCheckpoints',
+  'getCheckpoint',
+  'removeCheckpoint',
   'attachBox',
   'prepareTunnel',
   'revokeTunnel',

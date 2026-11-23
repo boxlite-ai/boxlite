@@ -14,6 +14,7 @@ use super::write_boot_params;
 use crate::{
     config::{MAX_CMDLINE_BYTES, VmConfig},
     memory::{GuestMemoryMmap, ram_ranges},
+    x86_boot_layout::{PageSize, plan_boot_tables},
 };
 
 const CMDLINE: &str = "console=ttyS0 panic=-1";
@@ -42,7 +43,7 @@ fn e820(params: &boot_params) -> Vec<(u64, u64, u32)> {
 fn fills_the_setup_header_and_writes_the_command_line() {
     let ram = ram(16 << 20);
     assert_eq!(
-        write_boot_params(&ram, CMDLINE, &ram_ranges(16), None).unwrap(),
+        write_boot_params(&ram, CMDLINE, &ram_ranges(16), None, &[]).unwrap(),
         ZERO_PAGE
     );
 
@@ -79,7 +80,7 @@ fn fills_the_setup_header_and_writes_the_command_line() {
 fn records_the_initramfs_in_the_setup_header() {
     let ram = ram(16 << 20);
     let initramfs = (GuestAddress(0xff_f000), 372);
-    write_boot_params(&ram, CMDLINE, &ram_ranges(16), Some(initramfs)).unwrap();
+    write_boot_params(&ram, CMDLINE, &ram_ranges(16), Some(initramfs), &[]).unwrap();
     let hdr = zero_page(&ram).hdr;
     assert_eq!((hdr.ramdisk_image, hdr.ramdisk_size), (0xff_f000, 372));
 }
@@ -88,7 +89,8 @@ fn records_the_initramfs_in_the_setup_header() {
 fn refuses_an_initramfs_beyond_the_32_bit_fields_before_writing() {
     let ram = ram(1 << 20);
     let above_4_gib = (GuestAddress(1 << 32), 1);
-    let error = write_boot_params(&ram, CMDLINE, &ram_ranges(1), Some(above_4_gib)).unwrap_err();
+    let error =
+        write_boot_params(&ram, CMDLINE, &ram_ranges(1), Some(above_4_gib), &[]).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     let byte: u8 = ram.read_obj(GuestAddress(ZERO_PAGE)).unwrap();
     assert_eq!(byte, 0xff, "nothing written at the zero page");
@@ -106,9 +108,33 @@ fn lists_ram_as_usable_e820_entries_outside_the_low_memory_hole() {
         (1, vec![(0, 0x9_fc00, E820_RAM)]),
     ] {
         let ram = ram((memory_mib as usize) << 20);
-        write_boot_params(&ram, CMDLINE, &ram_ranges(memory_mib), None).unwrap();
+        write_boot_params(&ram, CMDLINE, &ram_ranges(memory_mib), None, &[]).unwrap();
         assert_eq!(e820(&zero_page(&ram)), expected, "{memory_mib} MiB");
     }
+}
+
+#[test]
+fn reserves_the_large_layout_tables_and_splits_usable_e820_ram() {
+    let ram = ram(1 << 20);
+    let ranges = ram_ranges(6144);
+    let leaf = PageSize::Kib;
+    let plan = plan_boot_tables(&ranges, (0x10_0000, 0x20_0000), None, leaf).unwrap();
+    let reserved = plan.reserved(false);
+    assert_eq!(reserved, [(0x20_0000, 0xe0_8000)]);
+    write_boot_params(&ram, CMDLINE, &ranges, None, &reserved).unwrap();
+
+    let params = zero_page(&ram);
+    assert_eq!(params.e820_entries, 5);
+    assert_eq!(
+        e820(&params),
+        [
+            (0, 0x9_fc00, E820_RAM),
+            (0x10_0000, 0x10_0000, E820_RAM),
+            (0x20_0000, 0xc0_8000, 2),
+            (0xe0_8000, 0xc000_0000 - 0xe0_8000, E820_RAM),
+            (0x1_0000_0000, 0xc000_0000, E820_RAM),
+        ]
+    );
 }
 
 #[test]
@@ -119,14 +145,14 @@ fn refuses_more_e820_entries_than_the_zero_page_holds_before_writing() {
         .collect();
     let ram = ram(1 << 20);
 
-    let error = write_boot_params(&ram, CMDLINE, &ranges, None).unwrap_err();
+    let error = write_boot_params(&ram, CMDLINE, &ranges, None, &[]).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     for address in [ZERO_PAGE, 0x2_0000] {
         let byte: u8 = ram.read_obj(GuestAddress(address)).unwrap();
         assert_eq!(byte, 0xff, "nothing written at {address:#x}");
     }
 
-    write_boot_params(&ram, CMDLINE, &ranges[..128], None).unwrap();
+    write_boot_params(&ram, CMDLINE, &ranges[..128], None, &[]).unwrap();
     assert_eq!(e820(&zero_page(&ram)).len(), 128);
 }
 
@@ -139,7 +165,7 @@ fn agrees_with_validate_on_command_line_limits() {
         ("console=ttyS0\nquiet".into(), false),
         ("init=/caf\u{e9}".into(), false),
     ] {
-        let written = write_boot_params(&ram(1 << 20), &cmdline, &ram_ranges(1), None);
+        let written = write_boot_params(&ram(1 << 20), &cmdline, &ram_ranges(1), None, &[]);
         assert_eq!(
             written.map_err(|error| error.kind()).err(),
             (!accepted).then_some(io::ErrorKind::InvalidInput),
@@ -152,6 +178,10 @@ fn agrees_with_validate_on_command_line_limits() {
             cmdline,
             initramfs: None,
             disks: Vec::new(),
+            filesystem: None,
+            vsock: None,
+            network: None,
+            virtio_console: false,
         };
         assert_eq!(config.validate().is_ok(), accepted, "{config:?}");
     }

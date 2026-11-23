@@ -11,9 +11,12 @@ use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::{ContainerInitConfig, GuestInitConfig, NetworkInitConfig};
+use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
+use crate::runtime::cpu_count::{CPU_PERIOD_US, CpuCount};
+use crate::runtime::options::BoxOptions;
 use async_trait::async_trait;
-use boxlite_shared::ContainerDevice;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use boxlite_shared::{ContainerDevice, ContainerResources};
 
 /// Oldest guest release that honors `advanced.capabilities` on
 /// `Container.Init`. An earlier guest drops the field and starts the container
@@ -82,7 +85,15 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             let advanced = ctx.config.options.advanced.resolve_container_security()?;
             let bootstrap = GuestBootstrapConfig {
                 guest: GuestInitConfig {
-                    volumes: volume_mgr.build_guest_mounts(),
+                    volumes: if ctx.config.engine_kind == crate::vmm::VmmKind::Native {
+                        volume_mgr
+                            .build_aggregate_mounts(
+                                boxlite_shared::constants::mount_tags::AGGREGATE,
+                            )?
+                            .guest_mounts
+                    } else {
+                        volume_mgr.build_guest_mounts()
+                    },
                     network,
                 },
                 container: ContainerInitConfig {
@@ -97,6 +108,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     } else {
                         Vec::new()
                     },
+                    resources: container_resources(&ctx.config.options)?,
                     advanced: advanced.into(),
                 },
             };
@@ -128,6 +140,15 @@ impl PipelineTask<InitCtx> for GuestInitTask {
     }
 }
 
+fn requires_safe_volume_sub_path(mounts: &[crate::volumes::ContainerMount]) -> bool {
+    mounts.iter().any(|mount| {
+        matches!(
+            mount.payload,
+            crate::volumes::ContainerMountPayload::ManagedSubDirectory { .. }
+        )
+    })
+}
+
 /// Initialize the guest and create the container (init is *not* run here).
 async fn run_guest_init(
     guest_session: GuestSession,
@@ -157,6 +178,9 @@ async fn run_guest_init(
             .require_min_version(MIN_DEVICE_GUEST_VERSION)
             .await?;
     }
+    if requires_safe_volume_sub_path(&bootstrap.container.mounts) {
+        guest_interface.require_safe_volume_sub_path().await?;
+    }
     guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");
 
@@ -174,6 +198,25 @@ async fn run_guest_init(
     Ok(())
 }
 
+/// The box limits the container reads in its cgroup, from the values the VM
+/// really gets: unset options fall back to the VM defaults, and the CPU quota
+/// is the host jailer's, legacy `max_cpu_time` cap included. No guest pids
+/// limit is exposed yet, so `pids.max` stays `max`.
+fn container_resources(options: &BoxOptions) -> BoxliteResult<ContainerResources> {
+    let cpus = match options.cpu_count()? {
+        Some(cpus) => cpus,
+        None => CpuCount::new(f64::from(DEFAULT_CPUS))?,
+    };
+    let max_cpu_time = options.advanced.security.resource_limits.max_cpu_time;
+    let memory_mib = options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB);
+    Ok(ContainerResources {
+        cpu_quota_us: i64::try_from(cpus.cfs_quota_us(max_cpu_time)).unwrap_or(i64::MAX),
+        cpu_period_us: CPU_PERIOD_US,
+        memory_limit_bytes: i64::from(memory_mib) << 20,
+        pids_limit: 0,
+    })
+}
+
 /// The guest VM's own `/dev/kvm`, republished into the OCI workload so a nested
 /// hypervisor can open it. The host's `/dev/kvm` is never passed through.
 fn kvm_device() -> ContainerDevice {
@@ -187,6 +230,40 @@ fn kvm_device() -> ContainerDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    fn limits_for(cpus: Option<f64>, memory_mib: Option<u32>, cap: Option<u64>) -> (i64, u64, i64) {
+        let mut options = BoxOptions {
+            cpus,
+            memory_mib,
+            ..Default::default()
+        };
+        options.advanced.security.resource_limits.max_cpu_time = cap;
+        let resources = container_resources(&options).expect("valid options");
+        assert_eq!(resources.pids_limit, 0, "no guest pids limit is exposed");
+        (
+            resources.cpu_quota_us,
+            resources.cpu_period_us,
+            resources.memory_limit_bytes,
+        )
+    }
+
+    /// The container reads the same budget the VM and the host jailer enforce,
+    /// including the defaults applied when the caller leaves them unset.
+    #[test]
+    fn container_resources_mirror_the_box_size() {
+        assert_eq!(
+            limits_for(Some(2.0), Some(3072), None),
+            (200_000, 100_000, 3_221_225_472)
+        );
+        assert_eq!(
+            limits_for(None, None, None),
+            (100_000, 100_000, 1_073_741_824)
+        );
+        assert_eq!(limits_for(Some(0.5), Some(512), None).0, 50_000);
+        // The legacy cap lowers the guest quota exactly as it lowers the host's.
+        assert_eq!(limits_for(Some(2.0), None, Some(1)).0, 100_000);
+    }
     /// A privileged request always carries the capability policy it expands to,
     /// so any guest that satisfies the privileged floor must already satisfy
     /// the capability floor. Pinning the constants to literals only restates
@@ -199,5 +276,206 @@ mod tests {
             MIN_PRIVILEGED_CONTAINER_GUEST_VERSION <= MIN_CAPABILITY_GUEST_VERSION,
             "privileged floor {MIN_PRIVILEGED_CONTAINER_GUEST_VERSION:?} is newer than the capability floor {MIN_CAPABILITY_GUEST_VERSION:?}"
         );
+    }
+
+    #[test]
+    fn managed_sub_directories_require_a_safe_guest_before_init() {
+        let mount = |payload| crate::volumes::ContainerMount {
+            volume_name: "uservol0".to_string(),
+            destination: "/data".to_string(),
+            read_only: true,
+            owner_uid: 0,
+            owner_gid: 0,
+            payload,
+        };
+        let managed = mount(crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+            sub_path: "team/backend".to_string(),
+        });
+        assert!(requires_safe_volume_sub_path(&[managed]));
+        assert!(!requires_safe_volume_sub_path(&[
+            mount(crate::volumes::ContainerMountPayload::WholeDirectory),
+            mount(crate::volumes::ContainerMountPayload::SingleFile {
+                file_name: "app.conf".to_string(),
+            }),
+        ]));
+    }
+
+    #[derive(Clone)]
+    struct VersionedGuest {
+        version: &'static str,
+        safe_managed_volume_sub_path: bool,
+        guest_init_calls: Arc<std::sync::Mutex<usize>>,
+        container_init_calls: Arc<std::sync::Mutex<usize>>,
+    }
+
+    #[tonic::async_trait]
+    impl boxlite_shared::Guest for VersionedGuest {
+        async fn init(
+            &self,
+            _: tonic::Request<boxlite_shared::GuestInitRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::GuestInitResponse>, tonic::Status> {
+            *self.guest_init_calls.lock().unwrap() += 1;
+            Ok(tonic::Response::new(boxlite_shared::GuestInitResponse {
+                result: Some(boxlite_shared::guest_init_response::Result::Success(
+                    boxlite_shared::GuestInitSuccess {},
+                )),
+            }))
+        }
+
+        async fn ping(
+            &self,
+            _: tonic::Request<boxlite_shared::PingRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::PingResponse>, tonic::Status> {
+            Ok(tonic::Response::new(boxlite_shared::PingResponse {
+                version: self.version.to_string(),
+                safe_managed_volume_sub_path: self.safe_managed_volume_sub_path,
+            }))
+        }
+
+        async fn sync_clock(
+            &self,
+            _: tonic::Request<boxlite_shared::SyncClockRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::SyncClockResponse>, tonic::Status> {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
+
+        async fn shutdown(
+            &self,
+            _: tonic::Request<boxlite_shared::ShutdownRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ShutdownResponse>, tonic::Status> {
+            Ok(tonic::Response::new(boxlite_shared::ShutdownResponse {}))
+        }
+
+        async fn quiesce(
+            &self,
+            _: tonic::Request<boxlite_shared::QuiesceRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::QuiesceResponse>, tonic::Status> {
+            Ok(tonic::Response::new(boxlite_shared::QuiesceResponse {
+                frozen_count: 0,
+            }))
+        }
+
+        async fn thaw(
+            &self,
+            _: tonic::Request<boxlite_shared::ThawRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ThawResponse>, tonic::Status> {
+            Ok(tonic::Response::new(boxlite_shared::ThawResponse {
+                thawed_count: 0,
+            }))
+        }
+    }
+
+    #[tonic::async_trait]
+    impl boxlite_shared::Container for VersionedGuest {
+        async fn init(
+            &self,
+            request: tonic::Request<boxlite_shared::ContainerInitRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ContainerInitResponse>, tonic::Status> {
+            *self.container_init_calls.lock().unwrap() += 1;
+            let container_id = request.into_inner().container_id;
+            Ok(tonic::Response::new(
+                boxlite_shared::ContainerInitResponse {
+                    result: Some(boxlite_shared::container_init_response::Result::Success(
+                        boxlite_shared::ContainerInitSuccess { container_id },
+                    )),
+                },
+            ))
+        }
+
+        async fn start(
+            &self,
+            _: tonic::Request<boxlite_shared::ContainerStartRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ContainerStartResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
+
+        async fn mount(
+            &self,
+            _: tonic::Request<boxlite_shared::ContainerMountRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ContainerMountResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
+    }
+
+    fn bootstrap_for_version_gate() -> GuestBootstrapConfig {
+        GuestBootstrapConfig {
+            guest: GuestInitConfig {
+                volumes: vec![],
+                network: None,
+            },
+            container: crate::portal::interfaces::ContainerInitConfig {
+                container_id: "container-1".to_string(),
+                image: crate::images::ContainerImageConfig::default(),
+                rootfs: crate::portal::interfaces::ContainerRootfsInitConfig::Merged,
+                mounts: vec![crate::volumes::ContainerMount {
+                    volume_name: "uservol0".to_string(),
+                    destination: "/data".to_string(),
+                    read_only: true,
+                    owner_uid: 0,
+                    owner_gid: 0,
+                    payload: crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+                        sub_path: "team/backend".to_string(),
+                    },
+                }],
+                ca_certs: vec![],
+                tty: false,
+                devices: vec![],
+                resources: ContainerResources::default(),
+                advanced: Default::default(),
+            },
+        }
+    }
+
+    async fn run_with_guest_version(
+        version: &'static str,
+        safe_managed_volume_sub_path: bool,
+    ) -> (BoxliteResult<()>, usize, usize) {
+        let guest_init_calls = Arc::new(std::sync::Mutex::new(0));
+        let container_init_calls = Arc::new(std::sync::Mutex::new(0));
+        let guest = VersionedGuest {
+            version,
+            safe_managed_volume_sub_path,
+            guest_init_calls: Arc::clone(&guest_init_calls),
+            container_init_calls: Arc::clone(&container_init_calls),
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(boxlite_shared::GuestServer::new(guest.clone()))
+                .add_service(boxlite_shared::ContainerServer::new(guest))
+                .serve(addr)
+                .await
+                .unwrap();
+        });
+        for _ in 0..100 {
+            if tokio::net::TcpStream::connect(addr).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let result = run_guest_init(
+            crate::portal::GuestSession::new(boxlite_shared::BoxTransport::tcp(addr.port())),
+            bootstrap_for_version_gate(),
+        )
+        .await;
+        let guest_calls = *guest_init_calls.lock().unwrap();
+        let container_calls = *container_init_calls.lock().unwrap();
+        (result, guest_calls, container_calls)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_guest_init_requires_safe_subpath_capability_before_any_init() {
+        let (result, guest_calls, container_calls) = run_with_guest_version("0.14.0", false).await;
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        assert_eq!((guest_calls, container_calls), (0, 0));
+
+        let (result, guest_calls, container_calls) = run_with_guest_version("0.14.0", true).await;
+        result.unwrap();
+        assert_eq!((guest_calls, container_calls), (1, 1));
     }
 }

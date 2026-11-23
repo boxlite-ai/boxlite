@@ -14,12 +14,14 @@ import { PlatformReason } from '../../common/context/platform-reason.enum'
 jest.mock('../utils/box-business-event.util', () => ({ recordBoxRequested: jest.fn() }))
 
 const BOX_ID = 'box-1'
+const ORGANIZATION_ID = 'org-1'
 const RUNNER_ID = 'runner-1'
 const AUTO_STOP_SECONDS = 900
 
 function makeCandidate(): Box {
   const box = new Box('us-east')
   box.id = BOX_ID
+  box.organizationId = ORGANIZATION_ID
   box.runnerId = RUNNER_ID
   box.state = BoxState.STARTED
   box.desiredState = BoxDesiredState.STARTED
@@ -96,7 +98,11 @@ describe('BoxManager.autostopCheck', () => {
         }),
       }),
     )
-    expect(recordBoxRequested).toHaveBeenCalledWith('box.stop', BOX_ID, Context.platform(PlatformReason.AUTO_STOP))
+    expect(recordBoxRequested).toHaveBeenCalledWith(
+      'box.stop',
+      expect.objectContaining({ id: BOX_ID, organizationId: ORGANIZATION_ID }),
+      Context.platform(PlatformReason.AUTO_STOP),
+    )
   })
 
   it('leaves a box running while its activity is fresh', async () => {
@@ -115,6 +121,10 @@ describe('BoxManager.autoDeleteCheck', () => {
 
     await manager.autoDeleteCheck()
 
-    expect(recordBoxRequested).toHaveBeenCalledWith('box.delete', BOX_ID, Context.platform(PlatformReason.AUTO_DELETE))
+    expect(recordBoxRequested).toHaveBeenCalledWith(
+      'box.delete',
+      expect.objectContaining({ id: BOX_ID, organizationId: ORGANIZATION_ID }),
+      Context.platform(PlatformReason.AUTO_DELETE),
+    )
   })
 })

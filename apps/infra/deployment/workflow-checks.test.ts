@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -52,8 +52,12 @@ test('script test documentation selects only the infra suite: tests/scripts/READ
 })
 
 for (const [path, expected] of [
-  ['sdks/go/options.go', ['go']],
+  ['sdks/go/options.go', ['rust', 'go']],
+  ['sdks/go/integration/archive/checkpoint_test.go', ['rust', 'go']],
   ['apps/runner/cmd/runner/main.go', ['go']],
+  ['apps/secret-server/internal/encryption/cipher.go', ['go']],
+  ['apps/secret-server/internal/encryption/cipher_test.go', ['go']],
+  ['apps/secret-server/go.mod', ['go']],
   ['sdks/python/boxlite/options.py', ['rust', 'python']],
   ['sdks/python/boxlite/sync_api/_ssh.py', ['rust', 'python']],
   ['sdks/python/tests/test_ssh_native_rest.py', ['rust', 'python']],
@@ -63,7 +67,7 @@ for (const [path, expected] of [
   ['src/cli/src/main.rs', ['rust']],
   ['src/vmm/src/vm.rs', ['rust', 'vmm']],
   ['src/vmm/boot/kernel.lock', ['rust', 'vmm']],
-  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go', 'infra']],
+  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go', 'api', 'infra']],
   ['make/quality.mk', ['go']],
   ['.github/workflows/lint.yml', ['go', 'infra']],
   ['openapi/box.openapi.yaml', ['rust', 'api']],
@@ -76,11 +80,16 @@ for (const [path, expected] of [
 
 // Anything a suite filter selects on must also reach the workflow that runs
 // the filter, or a push to main changes the suite's inputs and tests nothing.
-for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum', 'openapi/box.openapi.yaml', 'openapi/admin.openapi.yaml']) {
+for (const path of ['apps/runner/cmd/runner/main.go', 'apps/secret-server/internal/encryption/cipher.go', 'apps/secret-server/internal/encryption/cipher_test.go', 'apps/secret-server/go.mod', 'apps/go.work', 'apps/go.work.sum', 'openapi/box.openapi.yaml', 'openapi/admin.openapi.yaml']) {
   test(`a push that selects a suite reaches the Test workflow: ${path}`, () => {
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }
+
+test('Go coverage uploads the Secret Server report', () => {
+  const upload = workflow('test.yml').jobs.go.steps.find((step: any) => step.uses?.startsWith('codecov/codecov-action'))
+  assert.ok(upload.with.files.split(',').includes('target/coverage/secret-server.out'))
+})
 
 // The rust job runs the external coverage collector; its inputs must also
 // reach the workflow on push, or a main-branch change tests nothing.
@@ -309,6 +318,21 @@ test('patch coverage requires 90 percent and a report while total stays informat
   assert.equal(config.coverage.status.project.default.informational, true)
 })
 
+test('Linux x64 native SDK coverage installs Go and uploads its archive profile', () => {
+  const steps = workflow('test.yml').jobs.rust.steps
+  const goAt = steps.findIndex((step: any) => step.uses === './.github/actions/setup-go')
+  const nativeAt = steps.findIndex((step: any) => step.run === 'make coverage:bindings:external')
+  const uploadAt = steps.findIndex((step: any) => step.with?.files?.split(',').includes('target/coverage/go-checkpoint-native.out'))
+  assert.ok(goAt >= 0 && goAt < nativeAt && nativeAt < uploadAt)
+  for (const at of [goAt, nativeAt, uploadAt]) {
+    for (const target of ['linux-x64-gnu', 'linux-arm64-gnu', 'darwin-arm64']) {
+      const expression = steps[at].if.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+      assert.equal(runInNewContext(expression, { matrix: { platform: { target } } }), target === 'linux-x64-gnu')
+    }
+    assert.equal(steps[at]['continue-on-error'], undefined)
+  }
+})
+
 test('Linux x64 KVM hardware coverage joins unit profiles before upload', () => {
   const steps = workflow('test.yml').jobs.rust.steps
   const hardwareAt = steps.findIndex((step: any) => step.run === 'make coverage:vmm:kvm')
@@ -397,7 +421,22 @@ function cliUnitTests(runner: 'cargo' | 'nextest', exitCode = 0) {
   const directory = mkdtempSync(join(tmpdir(), 'boxlite-cli-unit-'))
   try {
     const log = join(directory, 'cargo.log')
+    const binary = join(directory, 'boxlite')
+    writeFileSync(binary, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    for (const tool of ['bash', 'jq', 'mktemp', 'rm']) {
+      const found = spawnSync('/bin/sh', ['-c', 'command -v "$1"', 'sh', tool], { encoding: 'utf8' })
+      assert.equal(found.status, 0, `${tool} is required for the real CLI build wrapper`)
+      symlinkSync(found.stdout.trim(), join(directory, tool))
+    }
     writeFileSync(join(directory, 'cargo'), `#!/bin/sh
+if [ "$1" = build ]; then
+  printf '%s\\n' "$CARGO_ARTIFACT"
+  exit 0
+fi
+if [ "$CARGO_BIN_EXE_boxlite" != "$CARGO_TEST_BIN" ] || [ ! -x "$CARGO_BIN_EXE_boxlite" ]; then
+  echo 'test runner did not receive the built CLI executable' >&2
+  exit 98
+fi
 if [ "$1" = nextest ] && ! command -v cargo-nextest >/dev/null 2>&1; then
   echo 'error: no such command: nextest' >&2
   exit 101
@@ -409,9 +448,19 @@ exit "$CARGO_STATUS"
       writeFileSync(join(directory, 'cargo-nextest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     }
     // Isolate tool discovery so an installed nextest cannot hide the fallback.
-    const result = spawnSync('/usr/bin/make', ['-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli', 'NEXTEST_PROFILE=ci'], {
+    const result = spawnSync('/usr/bin/make', [
+      '-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli',
+      'NEXTEST_PROFILE=ci', `SCRIPT_DIR=${join(REPO_ROOT, 'scripts')}`,
+    ], {
       cwd: REPO_ROOT,
-      env: { ...process.env, PATH: directory, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode) },
+      env: {
+        ...process.env, PATH: directory, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode),
+        CARGO_BIN_EXE_boxlite: '', CARGO_TEST_BIN: binary,
+        CARGO_ARTIFACT: JSON.stringify({
+          reason: 'compiler-artifact', target: { name: 'boxlite', kind: ['bin'] },
+          profile: { test: false }, executable: binary,
+        }),
+      },
       encoding: 'utf8',
       timeout: 10_000,
     })

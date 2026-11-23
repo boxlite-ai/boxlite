@@ -12,6 +12,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -67,6 +68,9 @@ type Proxy struct {
 	boxInboundCache            common_cache.ICache[bool]
 	boxAuthKeyValidCache       common_cache.ICache[bool]
 	boxLastActivityUpdateCache common_cache.ICache[bool]
+	previewOpenCache           common_cache.ICache[bool]
+	previewOpenOnce            sync.Once
+	previewOpenGroup           singleflight.Group
 	guestPortTransport         *http.Transport
 	wakeGroup                  singleflight.Group
 	guestPortGroup             singleflight.Group
@@ -175,7 +179,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	router.Any("/*path", proxy.handleHTTP)
 
 	httpServer := &http.Server{
-		Addr:              fmt.Sprintf(":%d", config.ProxyPort),
+		Addr:              net.JoinHostPort(os.Getenv("BOXLITE_LISTEN_HOST"), fmt.Sprint(config.ProxyPort)),
 		Handler:           sanitizeTunnelRequests(connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -247,6 +251,14 @@ func (p *Proxy) handleHTTP(ctx *gin.Context) {
 		_, _, _, err := p.parseHost(ctx.Request.Host)
 		// if the host is not valid, we don't proxy the request
 		if err != nil {
+			// GKE and load-balancer probes use IP hosts. Only their read-only
+			// health path is a utility route; customer /health still resolves above.
+			hostname := bareHost(ctx.Request.Host)
+			healthProbe := ctx.Request.Method == http.MethodGet && ctx.Request.URL.Path == "/health" && net.ParseIP(hostname) != nil
+			if hostname != bareHost(p.config.ProxyDomain) && !healthProbe {
+				ctx.Error(common_errors.NewNotFoundError(errors.New("not found")))
+				return
+			}
 			switch ctx.Request.Method {
 			case "GET":
 				{

@@ -154,6 +154,9 @@ func (p *Proxy) forwardToGuest(ctx *gin.Context, boxId string, targetPort uint16
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse guest target URL: %w", err)
 	}
+	if ctx.Request.Method == http.MethodGet && ctx.Request.Header.Get("Sec-Fetch-Mode") == "navigate" && ctx.Request.Header.Get("Sec-Fetch-Dest") == "document" {
+		go p.recordPreviewOpen(activityCtx, boxId)
+	}
 	return &common_proxy.RequestTarget{
 		URL:       target,
 		Host:      forwardedHost,
@@ -337,6 +340,9 @@ func (p *Proxy) validateAndCache(
 // parseHost returns the target port as a number, so every caller compares one
 // canonical form: a label like "03000" is port 3000.
 func (p *Proxy) parseHost(host string) (targetPort uint16, boxId string, baseHost string, err error) {
+	if !p.generatedDomainHost(host) {
+		return 0, "", "", errors.New("host is outside the generated tunnel namespace")
+	}
 	// Extract port and box ID from the host header
 	// Expected format: 1234-some-id-uuid.proxy.domain
 	if host == "" {

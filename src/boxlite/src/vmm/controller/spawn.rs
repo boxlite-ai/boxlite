@@ -46,6 +46,7 @@ pub struct ShimSpawner<'a> {
     box_id: &'a str,
     options: &'a BoxOptions,
     nested_virtualization: bool,
+    volume_access: Vec<PathAccess>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -61,7 +62,32 @@ impl<'a> ShimSpawner<'a> {
             box_id,
             options,
             nested_virtualization: false,
+            volume_access: Vec::new(),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn apply_cpu_quota(&self) -> BoxliteResult<()> {
+        let Some(limit) = self.options.cpu_count()?.filter(|cpu| cpu.is_fractional()) else {
+            return Ok(());
+        };
+        let security = &self.options.advanced.security;
+        if !security.jailer_enabled {
+            return Err(BoxliteError::Engine("CPU limit requires the jailer".into()));
+        }
+        // Best-effort, like cgroup setup and membership: a host without a
+        // delegated CPU controller must still be able to start the Box.
+        if let Err(error) =
+            crate::jailer::cgroup::set_cpu_max(self.box_id, limit, &security.resource_limits)
+        {
+            tracing::error!(
+                box_id = %self.box_id,
+                cpus = limit.cores(),
+                error = %error,
+                "Cannot apply CPU limit; starting the Box without a CPU bandwidth limit"
+            );
+        }
+        Ok(())
     }
 
     /// Grant the confined shim the host files libkrun probes before enabling
@@ -69,6 +95,11 @@ impl<'a> ShimSpawner<'a> {
     /// it is about to serialize, which is the authority on what the shim runs.
     pub fn with_nested_virtualization(mut self, enabled: bool) -> Self {
         self.nested_virtualization = enabled;
+        self
+    }
+
+    pub fn with_volume_access(mut self, paths: Vec<PathAccess>) -> Self {
+        self.volume_access = paths;
         self
     }
 
@@ -93,6 +124,7 @@ impl<'a> ShimSpawner<'a> {
                 path,
                 writable: false,
             })
+            .chain(self.volume_access.clone())
             .collect()
     }
 
@@ -136,6 +168,8 @@ impl<'a> ShimSpawner<'a> {
 
         // 3. Setup pre-spawn isolation (cgroups on Linux, no-op on macOS)
         jail.prepare()?;
+        #[cfg(target_os = "linux")]
+        self.apply_cpu_quota()?;
 
         // 4. Build isolated command — no CLI args, config sent via stdin pipe
         let no_args: &[String] = &[];
@@ -228,6 +262,10 @@ impl<'a> ShimSpawner<'a> {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "tests/fractional_cpus_membership.rs"]
+mod fractional_cpus_membership_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +278,36 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fractional_cpus_quota_write_failure_does_not_block_start() {
+        let layout = test_layout();
+        let mut options = BoxOptions::default();
+        options.advanced.security.jailer_enabled = false;
+        let unlimited = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
+        assert!(unlimited.apply_cpu_quota().is_ok());
+        options.cpus = Some(2.0);
+        let integer = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
+        assert!(integer.apply_cpu_quota().is_ok());
+        options.cpus = Some(0.125);
+        let limited = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
+        assert!(
+            limited.apply_cpu_quota().is_err(),
+            "disabled jailer still rejects a fractional allocation"
+        );
+        options.advanced.security.jailer_enabled = true;
+        let limited = ShimSpawner::new(
+            Path::new("/unused"),
+            &layout,
+            "missing-fractional-cpus-test",
+            &options,
+        );
+        assert!(
+            limited.apply_cpu_quota().is_ok(),
+            "a failed cpu.max write must not block start"
+        );
     }
 
     #[test]
@@ -317,6 +385,27 @@ mod tests {
                 "must not grant anything outside the probe set: {grant:?}"
             );
         }
+    }
+
+    #[test]
+    fn managed_volume_grants_include_only_the_payload() {
+        let layout = test_layout();
+        let options = BoxOptions::default();
+        let volume_root = PathBuf::from("/home/test/volumes/volume-id");
+        let payload = volume_root.join("_data");
+        let spawner = ShimSpawner::new(Path::new("/bin/true"), &layout, "box", &options)
+            .with_volume_access(vec![PathAccess {
+                path: payload.clone(),
+                writable: false,
+            }]);
+
+        let paths = spawner.additional_path_access();
+        assert!(
+            paths
+                .iter()
+                .any(|entry| entry.path == payload && !entry.writable)
+        );
+        assert!(!paths.iter().any(|entry| entry.path == volume_root));
     }
 
     #[test]

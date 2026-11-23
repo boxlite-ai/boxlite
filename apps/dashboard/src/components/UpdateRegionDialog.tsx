@@ -93,7 +93,7 @@ export const UpdateRegionDialog: React.FC<UpdateRegionDialogProps> = ({
               }}
               placeholder="https://proxy.example.com"
             />
-            <p className="text-sm text-muted-foreground mt-1 pl-1">
+            <p className="text-body text-muted-foreground mt-1 pl-1">
               (Optional) URL of the custom proxy for this region
             </p>
           </div>

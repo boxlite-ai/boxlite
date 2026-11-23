@@ -14,6 +14,14 @@ vi.mock("../lib/native.js", () => ({
 }));
 
 describe("SimpleBoxOptions", () => {
+  test("forwards fractional cpus to native options", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    for (const cpus of [0.125, 1.5, 2]) {
+      const box = new SimpleBox({ cpus });
+      expect((box as any)._boxOpts.cpus).toBe(cpus);
+    }
+  });
+
   test("cmd defaults to undefined", () => {
     const opts: SimpleBoxOptions = {};
     expect(opts.cmd).toBeUndefined();
@@ -322,11 +330,12 @@ describe("SimpleBoxOptions", () => {
     ]);
   });
 
-  test("accepts secrets", () => {
+  test("accepts secrets with explicit header templates", () => {
     const secret: Secret = {
       name: "openai",
       value: "sk-test",
       hosts: ["api.openai.com"],
+      headers: { Authorization: "Bearer {value}" },
     };
     const opts: SimpleBoxOptions = {
       secrets: [secret],
@@ -341,6 +350,7 @@ describe("SimpleBoxOptions", () => {
         {
           name: "anthropic",
           value: "test-value",
+          headers: { "X-Api-Key": "{value}" },
           placeholder: "<CUSTOM_SECRET>",
         },
       ],

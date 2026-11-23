@@ -321,7 +321,7 @@ async def test_dev_cloud_tunnel_uri_and_one_shot_connects():
 
     api_key = _required_env("BOXLITE_API_KEY")
     box_id = _required_env("BOXLITE_E2E_BOX_ID")
-    rest_url = os.getenv("BOXLITE_REST_URL", "https://dev.boxlite.ai/api")
+    rest_url = os.getenv("BOXLITE_REST_URL", "https://api.dev.boxlite.ai")
     path_prefix = os.getenv("BOXLITE_REST_PATH_PREFIX")
     port = int(os.getenv("BOXLITE_E2E_PORT", "18080"))
 
@@ -349,7 +349,7 @@ async def test_dev_cloud_tunnel_binary_integrity():
 
     api_key = _required_env("BOXLITE_API_KEY")
     box_id = _required_env("BOXLITE_E2E_BOX_ID")
-    rest_url = os.getenv("BOXLITE_REST_URL", "https://dev.boxlite.ai/api")
+    rest_url = os.getenv("BOXLITE_REST_URL", "https://api.dev.boxlite.ai")
     path_prefix = os.getenv("BOXLITE_REST_PATH_PREFIX")
     port = int(os.getenv("BOXLITE_E2E_BINARY_PORT", str(BINARY_PORT)))
     runtime = Boxlite.rest(

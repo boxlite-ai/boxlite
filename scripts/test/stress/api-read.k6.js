@@ -1,7 +1,7 @@
 import http from 'k6/http'
 import { check, sleep } from 'k6'
 
-const BASE_URL = (__ENV.BOXLITE_API_URL || 'https://api.dev.boxlite.ai/api').replace(/\/$/, '')
+const BASE_URL = (__ENV.BOXLITE_API_URL || 'https://api.dev.boxlite.ai').replace(/\/$/, '')
 const TOKEN = __ENV.BOXLITE_TOKEN || __ENV.BOXLITE_API_KEY || ''
 const PREFIX = __ENV.BOXLITE_PREFIX || ''
 const BOX_ID = __ENV.BOXLITE_BOX_ID || ''

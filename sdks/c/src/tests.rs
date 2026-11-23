@@ -10,7 +10,9 @@ use std::ptr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod checkpoint_options;
 mod kernel;
+mod nested_virtualization;
 
 extern "C" fn noop_shutdown_cb(_err: *mut FFIError, _ud: *mut c_void) {}
 extern "C" fn noop_image_pull_cb(
@@ -56,6 +58,10 @@ unsafe fn new_test_runtime_handle(prefix: &str) -> (*mut crate::runtime::Runtime
         panic!("runtime_new failed with {code:?}: {err_msg}");
     }
 
+    assert!(
+        !runtime.is_null(),
+        "boxlite_runtime_new returned null runtime pointer"
+    );
     (runtime, home_dir)
 }
 
@@ -445,25 +451,15 @@ fn create_box_rejects_null_callback() {
     let _ = std::fs::remove_dir_all(home_dir);
 }
 
-/// `cpus` arrives as a C int but the runtime takes a u8. Truncating would turn
-/// 272 into 16 and slip past the runtime's vCPU ceiling; an out-of-range value
-/// must stay out of range so create rejects it.
+/// The C boundary preserves fractions and invalid inputs for runtime validation.
 #[test]
-fn set_cpus_saturates_instead_of_wrapping() {
-    let image = CString::new("alpine:latest").unwrap();
-    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
-    let mut error = FFIError::default();
-    assert_eq!(
-        unsafe { boxlite_options_new(image.as_ptr(), &mut opts, &mut error) },
-        BoxliteErrorCode::Ok
-    );
+fn fractional_cpus_setter_preserves_input() {
+    let opts = unsafe { new_test_options() };
     unsafe {
-        boxlite_options_set_cpus(opts, 16);
-        assert_eq!((*opts).options.cpus, Some(16));
-
-        boxlite_options_set_cpus(opts, 272);
-        assert_eq!((*opts).options.cpus, Some(u8::MAX));
-
+        for cores in [0.125, 1.5, 2.0, 0.0, -0.5, 272.0, f64::NAN, f64::INFINITY] {
+            boxlite_options_set_cpus(opts, cores);
+            assert_eq!((*opts).options.cpus.unwrap().to_bits(), cores.to_bits());
+        }
         boxlite_options_free(opts);
     }
 }

@@ -90,7 +90,7 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-dvw sm:w-[800px] p-0 flex flex-col gap-0 [&>button]:hidden">
         <SheetHeader className="space-y-0 flex flex-row justify-between items-center p-6">
-          <SheetTitle className="text-2xl font-medium">Runner Details</SheetTitle>
+          <SheetTitle className="text-page font-medium">Runner Details</SheetTitle>
           <div className="flex gap-2 items-center">
             {deletePermitted && (
               <Button
@@ -118,9 +118,9 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
             {/* Basic Info */}
             <div className="grid grid-cols-2 gap-6">
               <div>
-                <h3 className="text-sm text-muted-foreground">Name</h3>
+                <h3 className="text-body text-muted-foreground">Name</h3>
                 <div className="mt-1 flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{runner.name}</p>
+                  <p className="text-body font-medium truncate">{runner.name}</p>
                   <button
                     onClick={() => copyToClipboard(runner.name)}
                     className="text-muted-foreground hover:text-foreground transition-colors"
@@ -131,9 +131,9 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
                 </div>
               </div>
               <div>
-                <h3 className="text-sm text-muted-foreground">UUID</h3>
+                <h3 className="text-body text-muted-foreground">UUID</h3>
                 <div className="mt-1 flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{runner.id}</p>
+                  <p className="text-body font-medium truncate">{runner.id}</p>
                   <button
                     onClick={() => copyToClipboard(runner.id)}
                     className="text-muted-foreground hover:text-foreground transition-colors"
@@ -148,20 +148,20 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
             {/* Status */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
               <div>
-                <h3 className="text-sm text-muted-foreground">State</h3>
+                <h3 className="text-body text-muted-foreground">State</h3>
                 <div className={`mt-1 flex items-center gap-2 ${getStateColor(runner.state)}`}>
                   {getStateIcon(runner.state)}
-                  <span className="text-sm font-medium">{getStateLabel(runner.state)}</span>
+                  <span className="text-body font-medium">{getStateLabel(runner.state)}</span>
                 </div>
               </div>
               <div>
-                <h3 className="text-sm text-muted-foreground">Schedulable</h3>
-                <p className="mt-1 text-sm font-medium">{runner.unschedulable ? 'No' : 'Yes'}</p>
+                <h3 className="text-body text-muted-foreground">Schedulable</h3>
+                <p className="mt-1 text-body font-medium">{runner.unschedulable ? 'No' : 'Yes'}</p>
               </div>
               <div>
-                <h3 className="text-sm text-muted-foreground">Region</h3>
+                <h3 className="text-body text-muted-foreground">Region</h3>
                 <div className="mt-1 flex items-center gap-2">
-                  <p className="text-sm font-medium truncate">{getRegionName(runner.region) ?? runner.region}</p>
+                  <p className="text-body font-medium truncate">{getRegionName(runner.region) ?? runner.region}</p>
                   <button
                     onClick={() => copyToClipboard(runner.region)}
                     className="text-muted-foreground hover:text-foreground transition-colors"
@@ -172,19 +172,19 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
                 </div>
               </div>
               <div>
-                <h3 className="text-sm text-muted-foreground">Version</h3>
-                <p className="mt-1 text-sm font-medium">{runner.appVersion ?? 'N/A'}</p>
+                <h3 className="text-body text-muted-foreground">Version</h3>
+                <p className="mt-1 text-body font-medium">{runner.appVersion ?? 'N/A'}</p>
               </div>
             </div>
 
             {/* Health Metrics */}
             <div>
-              <h3 className="text-lg font-medium mb-4">Health Metrics</h3>
+              <h3 className="text-section font-medium mb-4">Health Metrics</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="flex flex-col gap-1">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground text-xs">Availability Score</span>
-                    <span className="text-xs">
+                    <span className="text-muted-foreground text-meta">Availability Score</span>
+                    <span className="text-meta">
                       {runner.availabilityScore != null ? runner.availabilityScore.toFixed(2) : 'N/A'}%
                     </span>
                   </div>
@@ -192,8 +192,8 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
                 </div>
                 <div className="flex flex-col gap-1">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground text-xs">CPU Usage</span>
-                    <span className="text-xs">
+                    <span className="text-muted-foreground text-meta">CPU Usage</span>
+                    <span className="text-meta">
                       {runner.currentCpuUsagePercentage != null ? runner.currentCpuUsagePercentage.toFixed(2) : 'N/A'}%
                     </span>
                   </div>
@@ -201,8 +201,8 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
                 </div>
                 <div className="flex flex-col gap-1">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground text-xs">Memory Usage</span>
-                    <span className="text-xs">
+                    <span className="text-muted-foreground text-meta">Memory Usage</span>
+                    <span className="text-meta">
                       {runner.currentMemoryUsagePercentage != null
                         ? runner.currentMemoryUsagePercentage.toFixed(2)
                         : 'N/A'}
@@ -213,8 +213,8 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
                 </div>
                 <div className="flex flex-col gap-1">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground text-xs">Disk Usage</span>
-                    <span className="text-xs">
+                    <span className="text-muted-foreground text-meta">Disk Usage</span>
+                    <span className="text-meta">
                       {runner.currentDiskUsagePercentage != null ? runner.currentDiskUsagePercentage.toFixed(2) : 'N/A'}
                       %
                     </span>
@@ -222,8 +222,8 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
                   <QuotaLine current={runner.currentDiskUsagePercentage ?? 0} total={100} />
                 </div>
                 <div>
-                  <h4 className="text-muted-foreground text-xs">Active Boxes</h4>
-                  <p className="mt-1 text-2xl font-semibold">{runner.currentStartedBoxes ?? 0}</p>
+                  <h4 className="text-muted-foreground text-meta">Active Boxes</h4>
+                  <p className="mt-1 text-page font-semibold">{runner.currentStartedBoxes ?? 0}</p>
                 </div>
               </div>
             </div>
@@ -231,13 +231,13 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
             {/* Total Resources */}
             <div className="grid grid-cols-1">
               <div>
-                <h3 className="text-sm text-muted-foreground">Total Resources</h3>
-                <div className="mt-1 text-sm font-medium flex items-center gap-1 flex-wrap">
+                <h3 className="text-body text-muted-foreground">Total Resources</h3>
+                <div className="mt-1 text-body font-medium flex items-center gap-1 flex-wrap">
                   <ResourceChip resource="cpu" value={Number(runner.cpu.toFixed(2))} />
                   <ResourceChip resource="memory" value={Number(runner.memory.toFixed(2))} />
                   <ResourceChip resource="disk" value={Number(runner.disk.toFixed(2))} />
                   {runner.gpu !== undefined && runner.gpu > 0 && (
-                    <div className="flex items-center gap-1 bg-purple-100 text-purple-600 dark:bg-purple-950 dark:text-purple-200 rounded-full px-2 py-[2px] text-sm whitespace-nowrap">
+                    <div className="flex items-center gap-1 bg-purple-100 text-purple-600 dark:bg-purple-950 dark:text-purple-200 rounded-full px-2 py-[2px] text-body whitespace-nowrap">
                       {runner.gpu} GPU{runner.gpuType ? ` (${runner.gpuType})` : ''}
                     </div>
                   )}
@@ -249,17 +249,17 @@ const RunnerDetailsSheet: React.FC<RunnerDetailsSheetProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {runner.lastChecked && (
                 <div>
-                  <h3 className="text-sm text-muted-foreground">Last Checked</h3>
-                  <p className="mt-1 text-sm font-medium">{formatTimestamp(runner.lastChecked)}</p>
+                  <h3 className="text-body text-muted-foreground">Last Checked</h3>
+                  <p className="mt-1 text-body font-medium">{formatTimestamp(runner.lastChecked)}</p>
                 </div>
               )}
               <div>
-                <h3 className="text-sm text-muted-foreground">Created At</h3>
-                <p className="mt-1 text-sm font-medium">{formatTimestamp(runner.createdAt)}</p>
+                <h3 className="text-body text-muted-foreground">Created At</h3>
+                <p className="mt-1 text-body font-medium">{formatTimestamp(runner.createdAt)}</p>
               </div>
               <div>
-                <h3 className="text-sm text-muted-foreground">Last Updated</h3>
-                <p className="mt-1 text-sm font-medium">{getLastEvent(runner).relativeTimeString}</p>
+                <h3 className="text-body text-muted-foreground">Last Updated</h3>
+                <p className="mt-1 text-body font-medium">{getLastEvent(runner).relativeTimeString}</p>
               </div>
             </div>
           </TabsContent>

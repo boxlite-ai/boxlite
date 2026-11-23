@@ -69,6 +69,24 @@ the portable contract above.
 
 ## API changelog
 
+### Unreleased: fractional CPU allocation (breaking change)
+
+`Box.cpus` responses now use `number` instead of `integer` and may
+contain fractional values such as `0.5`.
+Older clients expecting integers can fail to decode individual Boxes
+or an entire list containing a fractional allocation.
+
+Before creating fractional Boxes, upgrade affected SDKs and regenerate
+clients from the updated OpenAPI schema.
+This also applies to clients that only create integer allocations but
+list Boxes created by other clients.
+Until affected clients are upgraded, keep shared environments on
+integer CPU allocations.
+
+The C ABI now uses `double` for CPU allocation fields and parameters.
+Rebuild C and Go consumers against matching headers and libraries.
+Existing integer Boxes retain their saved CPU allocations.
+
 ### Unreleased: exec command rejections
 
 For `exec`, missing executables now complete with exit status `127`;

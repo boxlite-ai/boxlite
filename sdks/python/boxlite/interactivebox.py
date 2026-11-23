@@ -46,7 +46,7 @@ class InteractiveBox(SimpleBox):
         shell: str = "/bin/sh",
         tty: bool | None = None,
         memory_mib: int | None = None,
-        cpus: int | None = None,
+        cpus: float | None = None,
         runtime: Optional["Boxlite"] = None,
         name: str | None = None,
         auto_remove: bool = True,

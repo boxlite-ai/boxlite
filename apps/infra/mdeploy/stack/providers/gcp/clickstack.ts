@@ -188,7 +188,7 @@ export const publishClickStack = ({
     network,
     loadBalancingScheme: 'INTERNAL',
     protocol: 'TCP',
-    healthChecks: [health.id],
+    healthChecks: health.id,
     // Stated, because the provider's default is the one an `INTERNAL` service
     // refuses: `UTILIZATION` is answered with a 400 naming the field, and a
     // passthrough balancer has no requests to rate-limit — it counts

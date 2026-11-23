@@ -25,8 +25,11 @@ const state = vi.hoisted(() => ({
   listError: null as unknown,
   byId: new Map<string, unknown>(),
   canWrite: true,
+  loading: false,
+  cached: false,
 }))
 const mocks = vi.hoisted(() => ({
+  refetch: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   resetUpdate: vi.fn(),
@@ -40,7 +43,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/error-handling', () => ({ handleApiError: mocks.handleApiError }))
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }))
 vi.mock('@/hooks/queries/useRegistriesQuery', () => ({
-  useRegistriesQuery: () => ({ data: state.credentials, error: state.listError, isLoading: false }),
+  useRegistriesQuery: () => ({
+    data: state.loading || (state.listError && !state.cached) ? undefined : state.credentials,
+    error: state.listError,
+    isLoading: state.loading,
+    isFetching: state.loading,
+    refetch: mocks.refetch,
+  }),
 }))
 vi.mock('@/hooks/queries/useBoxesByImageQuery', () => ({
   useBoxesByImageQuery: () => ({ byId: state.byId }),
@@ -86,6 +95,8 @@ beforeEach(() => {
   state.listError = null
   state.byId = new Map()
   state.canWrite = true
+  state.cached = false
+  state.loading = false
   vi.resetAllMocks()
   mocks.create.mockResolvedValue({})
   mocks.update.mockResolvedValue({})
@@ -112,6 +123,57 @@ async function fillAndSubmit(values: { prefix?: string; username?: string; passw
 }
 
 describe('the credential list', () => {
+  it.each([
+    ['', 'every repository'],
+    ['acme/', 'acme/*'],
+  ])('matches the displayed Covers label for %s', async (repositoryPrefix, query) => {
+    state.credentials = [{ ...CREDENTIAL, repositoryPrefix }]
+    await renderPanel()
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Filter registries"]')!
+    act(() => typeInto(input, query))
+    expect(document.querySelectorAll('.resource-list-row')).toHaveLength(1)
+    expect(document.body.textContent).not.toContain('No registries match')
+  })
+
+  it('shows pending credentials as loading with an unknown count', async () => {
+    state.credentials = []
+    state.loading = true
+    await renderPanel()
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('Loading registries')
+    expect(document.querySelector('.resource-filter')?.textContent).toBe('—')
+    expect(document.body.textContent).not.toContain('No private registries connected')
+  })
+
+  it.each(['GHCR', 'acme/', 'acme-bot'])(
+    'filters visible credentials by %s and recovers from no matches',
+    async (query) => {
+      await renderPanel()
+      const input = document.querySelector<HTMLInputElement>('[aria-label="Filter registries"]')
+      expect(input).not.toBeNull()
+      act(() => typeInto(input!, query))
+      expect(document.querySelectorAll('.resource-list-row')).toHaveLength(1)
+      act(() => typeInto(input!, 'no-such-registry'))
+      expect(document.querySelectorAll('.resource-list-row')).toHaveLength(0)
+      expect(document.body.textContent).toContain('No registries match')
+      expect(document.body.textContent).not.toContain('No private registries connected')
+      await act(async () => button('Clear filter')?.click())
+      expect(input!.value).toBe('')
+      expect(document.querySelectorAll('.resource-list-row')).toHaveLength(1)
+      expect(mocks.create).not.toHaveBeenCalled()
+      expect(mocks.update).not.toHaveBeenCalled()
+      expect(mocks.remove).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps one connection action in an empty credential list', async () => {
+    state.credentials = []
+    await renderPanel()
+    const actions = [...host.querySelectorAll('button')].filter((button) => button.textContent === 'Connect a registry')
+    expect(actions).toHaveLength(1)
+    await act(async () => actions[0].click())
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
   it('lists a credential by what it covers, who it pulls as, and who added it', async () => {
     await renderPanel()
 
@@ -127,8 +189,9 @@ describe('the credential list', () => {
     state.listError = failure
     await renderPanel()
 
-    expect(mocks.handleApiError).toHaveBeenCalledWith(failure, 'Failed to fetch registry credentials')
-    expect(host.textContent).toContain('could not be loaded')
+    expect(mocks.handleApiError).not.toHaveBeenCalled()
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Filter registries"]')?.disabled).toBe(true)
+    expect(document.querySelector('[role="alert"] h2')?.textContent).toBe('Could not load private registries')
     expect(host.textContent).not.toContain('No private registry connected')
   })
 
@@ -361,4 +424,27 @@ describe('removing a credential', () => {
       expect.objectContaining({ description: expect.stringContaining('agile-otter') }),
     )
   })
+})
+
+it('retries an initial registry failure without displaying transport details or an empty inventory', async () => {
+  state.listError = new Error('Cannot GET /private-internal-route')
+  await renderPanel()
+  expect(button('Retry')).toBeDefined()
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not load private registries')
+  expect(document.body.textContent).not.toContain('/private-internal-route')
+  expect(document.body.textContent).not.toContain('No private registries connected')
+  await act(async () => button('Retry')?.click())
+  expect(mocks.refetch).toHaveBeenCalledTimes(1)
+})
+
+it('preserves cached registry records and offers recovery after a refresh fails', async () => {
+  state.cached = true
+  state.listError = new Error('Connection lost')
+  await renderPanel()
+  expect(document.querySelectorAll('.resource-list-row')).toHaveLength(1)
+  expect(button('Retry')).toBeDefined()
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Showing previously loaded data')
+  expect(document.body.textContent).toContain('acme-bot')
+  await act(async () => button('Retry')?.click())
+  expect(mocks.refetch).toHaveBeenCalledTimes(1)
 })

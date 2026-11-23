@@ -13,10 +13,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { ChevronDown } from '@/components/ui/icon'
 import { NetworkMode, type NetworkInfo } from '@boxlite-ai/api-client'
 import { useState, type ReactNode } from 'react'
+import { BoxDetailField, BoxDetailHeading } from './BoxDetailFields'
 
 /**
  * Mirrors the palette in BoxDetails so the network section reads as part of the
@@ -24,178 +26,110 @@ import { useState, type ReactNode } from 'react'
  */
 const STATUS = { idle: '#e0b341' } as const
 
-/**
- * Local copy of the section header from BoxDetails. It is module private there,
- * so duplicating this one small helper is cheaper than reaching into it. Worth
- * extracting to a shared module the next time either file is touched.
- */
-function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
-  return (
-    <div className="mb-[10px] mt-[34px] flex items-center gap-[9px] first:mt-0">
-      <span className="text-label leading-none text-brand">▸</span>
-      <span className="text-[11px] uppercase tracking-[2px]">{title}</span>
-      <span className="flex-1 border-t border-dashed border-border" />
-      {right}
-    </div>
-  )
-}
-
-/**
- * A secondary text action. Underlined because bare muted text read as a static
- * annotation rather than a control. Stays muted on purpose: exposing a box to
- * the internet should not be the brightest thing on the sheet.
- *
- * Labels here stay short. This column is ~40px wide after the value takes its
- * share of 340px, so a label that spelled out the consequence
- * (`open to anyone`) wrapped onto a second line and squeezed the leader dots
- * to nothing. The consequence belongs in the confirmation dialog, which has
- * room for a paragraph.
- */
-function InlineAction({
-  children,
-  onClick,
-  disabled,
-  title,
-}: {
-  children: ReactNode
-  onClick: () => void
-  disabled?: boolean
-  title?: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      // The two actions on this sheet are the ones that make a box reachable
-      // from outside; they get a button's weight, not a footnote's.
-      className={cn(
-        'border border-border px-[9px] py-[3px] font-mono text-[10px] uppercase tracking-[1px] text-foreground',
-        'transition-colors hover:border-brand',
-        'disabled:pointer-events-none disabled:opacity-40',
-      )}
-    >
-      {children}
-    </button>
-  )
-}
-
 export type BoxNetworkPanelProps = {
+  /** Additional network fields (for example SSH), before tunnel actions. */
+  children?: ReactNode
   /** The box's policy in both directions; absent when the API did not report it. */
   network?: NetworkInfo
   inboundPending?: boolean
   /** False for viewers, who see the state but cannot change exposure. */
   canManage: boolean
   onToggleInbound: (next: NetworkMode) => void
-  /** Opens the port prompt that resolves a public URL; needs inbound access. */
-  onGetUrl: () => void
+  onCreateTunnel: () => void
 }
 
-/** `enabled · 2 hosts allowed`: an allowlist narrows egress, so it is part of the value. */
-function outboundLabel(outbound: NetworkInfo['outbound']): string {
-  if (outbound.mode !== NetworkMode.ENABLED) return 'disabled'
-  const allowed = outbound.allow_net.length
-  if (allowed === 0) return 'enabled'
-  return `enabled · ${allowed} ${allowed === 1 ? 'host' : 'hosts'} allowed`
+/** Display the effective policy without treating CIDRs as hostnames. */
+function OutboundPolicy({ outbound }: { outbound?: NetworkInfo['outbound'] }) {
+  if (outbound?.mode === NetworkMode.DISABLED) return <>disabled</>
+  if (outbound?.mode !== NetworkMode.ENABLED) return <>unknown</>
+  if (outbound.allow_net.length === 0) return <>Unrestricted</>
+  return (
+    <details className="group min-w-0">
+      <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden hover:text-foreground focus-visible:outline focus-visible:outline-1 focus-visible:outline-ring">
+        <span>
+          Restricted · {outbound.allow_net.length} {outbound.allow_net.length === 1 ? 'rule' : 'rules'}
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+        />
+      </summary>
+      <ul
+        aria-label="Allowed outbound destinations"
+        className="mt-2 space-y-1 border-l border-border pl-3 font-mono text-meta text-muted-foreground [overflow-wrap:anywhere]"
+      >
+        {outbound.allow_net.map((rule, index) => (
+          <li key={`${index}:${rule}`}>{rule}</li>
+        ))}
+      </ul>
+    </details>
+  )
 }
 
-/** Why "get url" is unavailable: the tunnel route needs inbound access and WRITE_BOXES. */
-function getUrlHint(inboundEnabled: boolean, canManage: boolean): string | undefined {
-  if (!canManage) return 'Getting a url needs permission to manage this box'
-  if (!inboundEnabled) return 'Enable inbound access to get a url'
-  return undefined
-}
-
-/**
- * Both directions of the box's network policy, and a way to get a URL for one
- * of its ports.
- *
- * The section does not list ports, because the console cannot enumerate what is
- * listening inside a guest — see `BoxPreviewUrlDialog` for why. Rather than
- * showing a list of guesses, the URL is fetched on demand for a port the user
- * names, which is something the REST surface answers reliably.
- */
+/** Box-wide network policy, with explicit per-port tunnel actions. */
 export function BoxNetworkPanel({
   network,
   inboundPending = false,
   canManage,
   onToggleInbound,
-  onGetUrl,
+  onCreateTunnel,
+  children,
 }: BoxNetworkPanelProps) {
   const [confirmingInbound, setConfirmingInbound] = useState(false)
-  const inboundEnabled = network?.inbound.mode === NetworkMode.ENABLED
+  const inboundEnabled = network?.inbound?.mode === NetworkMode.ENABLED
+  const inboundDisabled = network?.inbound?.mode === NetworkMode.DISABLED
+  const inboundKnown = inboundEnabled || inboundDisabled
 
   return (
     <>
-      {/* A URL is a tunnel: the API grants it only with inbound access, to members who can manage the box. */}
-      <SectionHeader
-        title="network"
-        right={
-          <InlineAction
-            onClick={onGetUrl}
-            disabled={!inboundEnabled || !canManage}
-            title={getUrlHint(inboundEnabled, canManage)}
-          >
-            get url
-          </InlineAction>
-        }
-      />
+      <BoxDetailHeading title="Network" />
 
       {/* Sheet convention: grey key, foreground value; hue carries the risk
           signal (amber when inbound is enabled). Outbound is read-only: no
           route changes it after create. */}
-      <div className="mb-[6px] flex items-baseline gap-2">
-        <span className="whitespace-nowrap text-muted-foreground">outbound</span>
-        <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
-        <span className="whitespace-nowrap">{network ? outboundLabel(network.outbound) : 'unknown'}</span>
-      </div>
+      <dl>
+        <BoxDetailField label="Outbound" className="font-sans">
+          <OutboundPolicy outbound={network?.outbound} />
+        </BoxDetailField>
 
-      {/* Inbound access only lets the proxy skip sign-in for the services the
-          box exposes; with it disabled a non-member is bounced through OIDC and
-          refused by the org-membership check in preview.controller.ts. Access
-          is credential-based, not network-based: no layer enforces an inbound
-          allowlist yet. */}
-      <div className="mb-[6px] flex items-baseline gap-2">
-        <span className="whitespace-nowrap text-muted-foreground">inbound</span>
-        <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
-        <span className="whitespace-nowrap" style={inboundEnabled ? { color: STATUS.idle } : undefined}>
-          {network ? (inboundEnabled ? 'enabled · anyone' : 'disabled · your organization') : 'unknown'}
-        </span>
-        {canManage && network ? (
-          <Switch
-            aria-label="Inbound access"
-            checked={inboundEnabled}
-            disabled={inboundPending}
-            onCheckedChange={(next) => (next ? setConfirmingInbound(true) : onToggleInbound(NetworkMode.DISABLED))}
-            // A text-less button's baseline is its bottom edge, so the row's
-            // baseline alignment would lift it above the text; center it.
-            className="ml-1 scale-90 self-center"
-          />
-        ) : null}
+        {/* Disabled is a proxy-level block; enabled tunnels retain their own access policy. */}
+        <BoxDetailField label="Inbound" className="font-sans">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+            <span className="whitespace-nowrap" style={inboundEnabled ? { color: STATUS.idle } : undefined}>
+              {inboundEnabled ? 'enabled' : inboundDisabled ? 'disabled' : 'unknown'}
+            </span>
+            {canManage && inboundKnown ? (
+              <Switch
+                aria-label="Inbound access"
+                checked={inboundEnabled}
+                disabled={inboundPending}
+                onCheckedChange={(next) => (next ? setConfirmingInbound(true) : onToggleInbound(NetworkMode.DISABLED))}
+                className="shrink-0"
+              />
+            ) : null}
+          </div>
+        </BoxDetailField>
+      </dl>
+
+      {children}
+      <div className="mt-4 flex items-center gap-1">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onCreateTunnel}
+          disabled={!canManage}
+          title={!canManage ? 'Managing tunnels requires permission to manage this Box' : undefined}
+        >
+          Create tunnel
+        </Button>
       </div>
 
       <AlertDialog open={confirmingInbound} onOpenChange={setConfirmingInbound}>
-        <AlertDialogContent className="font-mono">
+        <AlertDialogContent className="font-sans">
           <AlertDialogHeader>
             <AlertDialogTitle>Enable inbound access for this box?</AlertDialogTitle>
-            {/* Scoped deliberately. Inbound access only lets the proxy serve
-                ports opened as tunnels, under each tunnel's access policy. The web
-                terminal does not go through the proxy: it attaches over `/v1`
-                with the member's own credentials, and the management API is
-                untouched. An earlier "Make this box public?" read as handing
-                over the whole box. */}
             <AlertDialogDescription>
-              Anyone with the URL of a <strong>port opened as a public tunnel</strong> reaches it without signing in.
-              The URL is not a secret — it ends up in browser history, proxy logs and Referer headers. A private tunnel
-              also needs its access token or a sign-in to your organization.
-              <br />
-              <br />
-              The web terminal and the box&apos;s files, commands and settings are not affected; those still require
-              signing in to your organization.
-              <br />
-              <br />
-              If a port serves API keys or customer data, leave this restricted.
+              This restores access to previously configured tunnels, using each tunnel’s public or private policy.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

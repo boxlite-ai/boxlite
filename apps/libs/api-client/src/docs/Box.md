@@ -34,7 +34,6 @@ Name | Type | Description | Notes
 **_class** | **string** | The class of the box | [optional] [default to undefined]
 **daemonVersion** | **string** | The version of the daemon running in the box | [optional] [default to undefined]
 **runnerId** | **string** | The runner ID of the box | [optional] [default to undefined]
-**toolboxProxyUrl** | **string** | The toolbox proxy URL for the box | [default to undefined]
 **progress** | [**BoxProgress**](BoxProgress.md) | What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled | [optional] [default to undefined]
 
 ## Example
@@ -72,7 +71,6 @@ const instance: Box = {
     _class,
     daemonVersion,
     runnerId,
-    toolboxProxyUrl,
     progress,
 };
 ```

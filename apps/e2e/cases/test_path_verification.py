@@ -2,9 +2,10 @@
 
 The check is two-part:
 
-  (1) The SDK's configured runtime URL points at the API (has /api base
-      path, is NOT the runner's :8080). Works for both local (:3000) and
-      remote (dev.boxlite.ai) deployments.
+  (1) The SDK's configured runtime URL is NOT the runner's :8080. Local
+      stacks use `http://localhost:3000/api`; hosted stages use the API host
+      alone (`https://api.dev.boxlite.ai`), whose load balancer adds `/api`.
+      Which layer answered is proven by (2), not by the URL's shape.
 
   (2) After one round-trip create+exec, the API response carries the
       X-BoxLite-Api-Version header, proving the request went through the
@@ -33,10 +34,6 @@ async def test_sdk_runtime_is_rest_against_local_api(rt):
     from e2e_auth import auth_context
 
     url = auth_context().url
-    assert "/api" in url, (
-        f"profile p1.url={url!r} missing /api base path; SDK would route to "
-        f"runner endpoints (/v1/boxes...) and skip the NestJS proxy controller."
-    )
     assert ":8080" not in url, (
         f"profile p1.url={url!r} points at the runner (:8080) instead of "
         f"the API. E2E tests must go through the API layer."

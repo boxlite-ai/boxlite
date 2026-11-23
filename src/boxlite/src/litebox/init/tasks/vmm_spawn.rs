@@ -38,6 +38,7 @@ struct VmmSpawnInputs {
     prepared_kernel: Option<PreparedKernel>,
     container_disk_path: PathBuf,
     container_id: ContainerID,
+    engine_kind: VmmKind,
     runtime: SharedRuntimeImpl,
     reuse_rootfs: bool,
 }
@@ -73,6 +74,7 @@ impl VmmSpawnInputs {
             prepared_kernel,
             container_disk_path,
             container_id: ctx.config.container.id.clone(),
+            engine_kind: ctx.config.engine_kind,
             runtime: ctx.runtime.clone(),
             reuse_rootfs: ctx.reuse_rootfs,
         })
@@ -98,7 +100,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
                 .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
-        let handler = spawn_vm(&box_id, &instance_spec, &inputs.options, &inputs.layout)
+        let handler = spawn_vm(&box_id, &instance_spec, &inputs)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
@@ -141,6 +143,7 @@ async fn build_config(
         prepared_kernel,
         container_disk_path,
         container_id,
+        engine_kind,
         runtime,
         reuse_rootfs,
     } = inputs;
@@ -149,7 +152,19 @@ async fn build_config(
     let transport = BoxTransport::unix(layout.socket_path());
     let ready_transport = BoxTransport::unix(layout.ready_socket_path());
 
-    let user_volumes = resolve_user_volumes(&options.volumes)?;
+    let local_volume_store = runtime.local_volume_store.clone();
+    let volume_options = options.clone();
+    // Volume resolution does file IO and takes filesystem locks, so keep it
+    // off Tokio's async worker threads.
+    let user_volumes = tokio::task::spawn_blocking(move || {
+        resolve_user_volumes(
+            &volume_options.volumes,
+            &volume_options.mounts,
+            &local_volume_store,
+        )
+    })
+    .await
+    .map_err(|error| BoxliteError::Internal(format!("volume resolution task failed: {error}")))??;
 
     // Prepare container directories (image/, rw/, rootfs/)
     let container_layout = layout.shared_layout().container(container_id.as_str());
@@ -189,16 +204,34 @@ async fn build_config(
     // Add user volumes via ContainerVolumeManager
     let mut container_mgr = ContainerVolumeManager::new(&mut volume_mgr);
     for vol in &user_volumes {
-        // Single-file volume: stage the file into a dedicated dir under the box's
-        // shared tree (already granted to the VMM sandbox) and share that dir, so
-        // virtio-fs never exposes the file's host siblings. Directories share as-is.
-        let share_dir = match &vol.subpath {
-            None => vol.host_path.clone(),
-            Some(file_name) => {
+        // The share directory and payload describe one resolved mount kind.
+        // Single files get an isolated staged directory; managed subdirectories
+        // stay inside the volume payload and are pinned by the guest.
+        let (share_dir, payload) = match &vol.kind {
+            crate::litebox::init::types::ResolvedShareKind::Directory => (
+                vol.host_path.clone(),
+                crate::volumes::ContainerMountPayload::WholeDirectory,
+            ),
+            crate::litebox::init::types::ResolvedShareKind::SingleFile { file_name } => {
                 let staging_dir = layout.shared_dir().join("user-volumes").join(&vol.tag);
                 stage_single_file(&staging_dir, &vol.host_path, file_name, vol.read_only)?;
-                staging_dir
+                (
+                    staging_dir,
+                    crate::volumes::ContainerMountPayload::SingleFile {
+                        file_name: file_name.clone(),
+                    },
+                )
             }
+            crate::litebox::init::types::ResolvedShareKind::ManagedDirectory => (
+                vol.host_path.clone(),
+                crate::volumes::ContainerMountPayload::WholeDirectory,
+            ),
+            crate::litebox::init::types::ResolvedShareKind::ManagedSubDirectory { sub_path } => (
+                vol.host_path.clone(),
+                crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+                    sub_path: sub_path.clone(),
+                },
+            ),
         };
         container_mgr.add_volume(
             container_id.as_str(),
@@ -209,7 +242,7 @@ async fn build_config(
             vol.read_only,
             vol.owner_uid,
             vol.owner_gid,
-            vol.subpath.clone(),
+            payload,
         );
     }
     let container_mounts = container_mgr.build_container_mounts();
@@ -238,19 +271,35 @@ async fn build_config(
         build_network_backend(options, layout, runtime, outbound_policy.as_ref())?;
     let network_backend_spec = network_backend.as_ref().map(|backend| backend.spec());
 
+    let volume_access = user_volumes
+        .iter()
+        .filter(|volume| {
+            matches!(
+                volume.kind,
+                crate::litebox::init::types::ResolvedShareKind::ManagedDirectory
+                    | crate::litebox::init::types::ResolvedShareKind::ManagedSubDirectory { .. }
+            )
+        })
+        .map(|volume| crate::jailer::PathAccess {
+            path: volume.host_path.clone(),
+            writable: !volume.read_only,
+        })
+        .collect();
+
     // Assemble VMM instance spec
     let instance_spec = InstanceSpec {
-        engine: VmmKind::Libkrun, // only engine — will be dynamic when others are added
+        engine: *engine_kind,
         // Box identification and security
         box_id: box_id.to_string(),
         security: options.advanced.security.clone(),
         nested_virtualization: options.advanced.nested_virtualization,
         // VM resources
-        cpus: options.cpus,
+        cpus: options.cpu_count()?.map(|cpu| cpu.vcpus()),
         memory_mib: options.memory_mib,
         kernel: prepared_kernel.clone(),
         // Filesystem and devices
         fs_shares: vmm_config.fs_shares,
+        volume_access,
         block_devices: vmm_config.block_devices,
         guest_entrypoint,
         transport: transport.clone(),
@@ -425,15 +474,14 @@ fn warn_cpus_beyond_guest_kernel(options: &BoxOptions) {
 async fn spawn_vm(
     box_id: &BoxID,
     config: &InstanceSpec,
-    options: &BoxOptions,
-    layout: &BoxFilesystemLayout,
+    inputs: &VmmSpawnInputs,
 ) -> BoxliteResult<Box<dyn VmmHandler>> {
     let mut controller = ShimController::new(
         find_binary("boxlite-shim")?,
-        VmmKind::Libkrun,
+        inputs.engine_kind,
         box_id.clone(),
-        options.clone(),
-        layout.clone(),
+        inputs.options.clone(),
+        inputs.layout.clone(),
     )?;
 
     controller.start(config).await

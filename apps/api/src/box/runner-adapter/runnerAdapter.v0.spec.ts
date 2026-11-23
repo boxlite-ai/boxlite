@@ -6,6 +6,19 @@
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
 
 describe('RunnerAdapterV0 createBox', () => {
+  it.each([0.125, 0.126, 1.001, 1.5, 16])('preserves %s CPUs in create and recover requests', async (cpu) => {
+    const adapter = new RunnerAdapterV0()
+    const create = jest.fn().mockResolvedValue({ data: {} })
+    const recover = jest.fn().mockResolvedValue(undefined)
+    ;(adapter as any).boxApiClient = { create, recover }
+    const box = { id: 'box-cpu', cpu } as any
+
+    await adapter.createBox(box, 'base')
+    await adapter.recoverBox(box)
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ cpuQuota: cpu }))
+    expect(recover).toHaveBeenCalledWith('box-cpu', expect.objectContaining({ cpuQuota: cpu }))
+  })
   it.each([false, true])('forwards persisted guest privilege %s to the runner', async (privileged) => {
     const adapter = new RunnerAdapterV0()
     await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
@@ -57,7 +70,13 @@ describe('RunnerAdapterV0 createBox', () => {
       disk: 3,
       env: {},
       secrets: [
-        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+        {
+          name: 'openai',
+          value: 'sk-test',
+          hosts: ['api.openai.com'],
+          placeholder: '<BOXLITE_SECRET:openai>',
+          headers: { 'x-api-key': '{value}' },
+        },
       ],
       outboundEnabled: true,
       outboundAllowNet: undefined,
@@ -71,7 +90,13 @@ describe('RunnerAdapterV0 createBox', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         secrets: [
-          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+          {
+            name: 'openai',
+            value: 'sk-test',
+            hosts: ['api.openai.com'],
+            placeholder: '<BOXLITE_SECRET:openai>',
+            headers: { 'x-api-key': '{value}' },
+          },
         ],
       }),
     )
@@ -103,7 +128,7 @@ describe('RunnerAdapterV0 createBox', () => {
       disk: 3,
       env: {},
       volumes: [],
-      secrets: [{ name: 'openai', value: 'sk-test' }],
+      secrets: [{ name: 'openai', value: 'sk-test', headers: { 'x-api-key': '{value}' } }],
       outboundEnabled: true,
       outboundAllowNet: undefined,
       errorReason: 'crashed',
@@ -114,7 +139,7 @@ describe('RunnerAdapterV0 createBox', () => {
     expect(recover).toHaveBeenCalledWith(
       'box-1',
       expect.objectContaining({
-        secrets: [{ name: 'openai', value: 'sk-test' }],
+        secrets: [{ name: 'openai', value: 'sk-test', headers: { 'x-api-key': '{value}' } }],
       }),
     )
   })

@@ -230,7 +230,7 @@ mod tests {
         // process inheriting FDs (like Electron/VS Code in the real bug).
         // FD_CLOEXEC closes the write-end during exec(); without it,
         // the child keeps the write-end open.
-        let mut child = std::process::Command::new("/bin/sleep")
+        let mut child = std::process::Command::new("sleep")
             .arg("10")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

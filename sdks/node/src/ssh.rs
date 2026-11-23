@@ -185,6 +185,9 @@ impl JsSshHandle {
     }
 
     /// Enable saved configuration on a running box; preserve healthy connections.
+    /// A valid handle to a configured or stopped box rejects with an Error
+    /// describing the invalid state (HTTP 409 over REST), without changing saved
+    /// SSH intent.
     #[napi]
     pub async fn enable(&self) -> Result<JsSshStatus> {
         self.handle
@@ -204,7 +207,11 @@ impl JsSshHandle {
             .map(JsSshStatus::from)
     }
 
-    /// Stop SSH and disconnect clients; repeated calls are supported.
+    /// Stop SSH and disconnect clients on a running box; repeatable while running.
+    /// A valid handle to a configured or stopped box rejects with an Error
+    /// describing the invalid state (HTTP 409 over REST), without changing saved
+    /// SSH intent.
+    /// Never starts the VM; disable while running to persist the disabled switch.
     #[napi]
     pub async fn disable(&self) -> Result<JsSshStatus> {
         self.handle

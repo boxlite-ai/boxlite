@@ -4,9 +4,24 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { assertCpuAllocation } from '../utils/cpu-allocation'
+import { requestedMemoryMib } from '../utils/memory-allocation'
 import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
+import {
+  Not,
+  Repository,
+  LessThan,
+  MoreThan,
+  In,
+  JsonContains,
+  FindOptionsWhere,
+  ILike,
+  EntityManager,
+  Raw,
+} from 'typeorm'
+import { BoxPublicStatus, publicBoxStatus } from '../utils/box-public-status'
+import { reportedBoxState } from '../utils/box-state.util'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
@@ -14,6 +29,7 @@ import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
 import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxExitCodeService } from './box-exit-code.service'
 import { BoxError } from '../../exceptions/box-error.exception'
@@ -42,7 +58,7 @@ import { OrganizationEvents } from '../../organization/constants/organization-ev
 import { OrganizationSuspendedBoxStoppedEvent } from '../../organization/events/organization-suspended-box-stopped.event'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
-import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
+import { BoxDto, BoxDtoReads, BoxSecret, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import {
   DISABLED_OUTBOUND_RULES_ERROR,
@@ -61,6 +77,7 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { recordBoxRequested, recordWarmPoolClaim } from '../utils/box-business-event.util'
+import { mutationFailureType, recordBusinessEvent } from '../../common/utils/business-event.util'
 import { Context } from '../../common/context/context'
 import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -78,12 +95,10 @@ import { Redis } from 'ioredis'
 import {
   BOX_LOOKUP_CACHE_TTL_MS,
   BOX_ORG_ID_CACHE_TTL_MS,
-  TOOLBOX_PROXY_URL_CACHE_TTL_S,
   boxLookupCacheKeyById,
   boxLookupCacheKeyByName,
   boxOrgIdCacheKeyById,
   boxOrgIdCacheKeyByName,
-  toolboxProxyUrlCacheKey,
 } from '../utils/box-lookup-cache.util'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { Region } from '../../region/entities/region.entity'
@@ -91,6 +106,7 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { SecretServerClient } from './secret-server-client'
 import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
 import {
@@ -111,11 +127,75 @@ const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
 
+// Leave room inside the proxy's two-second delivery timeout.
+const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
+
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  /** Authenticated creator, supplied by the caller rather than the request DTO. */
+  createdBy?: string
+  /** Internal transactional admission/ownership; never accepted from a public DTO. */
+  onPersist?: (manager: EntityManager, box: Box) => Promise<void>
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
+
+function validateSecrets(secrets: BoxSecret[] | undefined): void {
+  const forbidden = new Set([
+    'host',
+    'connection',
+    'proxy-connection',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'keep-alive',
+    'te',
+    'trailer',
+    'upgrade',
+    'content-length',
+    'transfer-encoding',
+  ])
+  // RFC 9110 token syntax; the denied names are Go httputil hopHeaders
+  // plus Host and Content-Length, matching the Rust create check.
+  const token = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+  // HTTP field values deliberately reject these control bytes, except HTAB.
+  // eslint-disable-next-line no-control-regex
+  const controls = /[\x00-\x08\x0a-\x1f\x7f]/
+  const seen = new Set<string>()
+
+  for (const secret of secrets ?? []) {
+    if (!secret.hosts?.length || secret.hosts.some((host) => !host)) {
+      throw new BadRequestError(`Secret ${secret.name} must list non-empty hosts`)
+    }
+    const headers = secret.headers
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers) || Object.keys(headers).length === 0) {
+      throw new BadRequestError(`secret ${JSON.stringify(secret.name)} has no headers; recreate the box with headers`)
+    }
+    if (typeof secret.value !== 'string' || controls.test(secret.value)) {
+      throw new BadRequestError(`Secret ${secret.name} has an invalid header value`)
+    }
+    const ownHeaders = new Set<string>()
+    const hosts = new Set(secret.hosts.map((value) => value.toLowerCase()))
+    for (const [header, template] of Object.entries(headers)) {
+      const normalizedHeader = header.toLowerCase()
+      if (!token.test(header) || forbidden.has(normalizedHeader) || ownHeaders.has(normalizedHeader)) {
+        throw new BadRequestError(`Secret ${secret.name} has an invalid or duplicate header name`)
+      }
+      ownHeaders.add(normalizedHeader)
+      // Check template and value separately: braces in the value are literal,
+      // and rendering cannot introduce a control byte absent from both inputs.
+      if (typeof template !== 'string' || !/^[^{}]*\{value\}[^{}]*$/.test(template) || controls.test(template)) {
+        throw new BadRequestError(`Secret ${secret.name} has an invalid header template`)
+      }
+      for (const host of hosts) {
+        const key = `${host}\0${normalizedHeader}`
+        if (seen.has(key)) {
+          throw new BadRequestError(`Conflicting secrets on host ${host} for header ${header}`)
+        }
+        seen.add(key)
+      }
+    }
+  }
+}
 
 @Injectable()
 export class BoxService {
@@ -146,6 +226,7 @@ export class BoxService {
     private readonly imagePreparationService: ImagePreparationService,
     private readonly imagePullFailureService: ImagePullFailureService,
     private readonly organizationBoxLimits: OrganizationBoxLimitsService,
+    private readonly secretServerClient: SecretServerClient,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -177,13 +258,13 @@ export class BoxService {
   private async persistOnAvailableRunner(
     box: Box,
     runnerParams: GetRunnerParams,
-    persist: () => Promise<Box>,
+    persist: (runner: Runner) => Promise<Box>,
   ): Promise<Box> {
     const runner = await this.runnerService.getRandomAvailableRunner(
       box.privileged ? { ...runnerParams, requiresPrivileged: true } : runnerParams,
     )
     box.runnerId = runner.id
-    return persist()
+    return persist(runner)
   }
 
   private assertBoxNotErrored(box: Box): void {
@@ -193,6 +274,7 @@ export class BoxService {
   }
 
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Box> {
+    assertCpuAllocation(warmPoolItem.cpu)
     // The far side of `requiresFreshBox`'s image rule. A warm box is created
     // with no organization and handed to whichever one claims it, so a pool row
     // naming a tenant's image would put that image's contents in front of
@@ -221,6 +303,7 @@ export class BoxService {
     box.cpu = warmPoolItem.cpu
     box.gpu = warmPoolItem.gpu
     box.mem = warmPoolItem.mem
+    box.memoryMib = warmPoolItem.mem * 1024
     box.disk = warmPoolItem.disk
 
     box.pending = true
@@ -236,6 +319,12 @@ export class BoxService {
     ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
+    // Authentication caches organizations; admission must use the current policy.
+    const nestedVirtualizationEnabled = await this.organizationService.isNestedVirtualizationEnabled(organization.id)
+    organization = Object.assign(Object.create(Object.getPrototypeOf(organization)) as Organization, organization, {
+      nestedVirtualizationEnabled,
+    })
+    validateSecrets(createBoxDto.secrets)
     const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
@@ -247,6 +336,7 @@ export class BoxService {
 
       const cpu = createBoxDto.cpu ?? DEFAULT_BOX_CPU
       const mem = createBoxDto.memory ?? DEFAULT_BOX_MEM
+      const memoryMib = requestedMemoryMib(mem)
       const disk = createBoxDto.disk ?? DEFAULT_BOX_DISK
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
       // Reject over-limit requests at the boundary (the "security option"
@@ -270,7 +360,7 @@ export class BoxService {
       // `box.image` records for a private image.
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
-      const needsFreshBox = requiresFreshBox(createBoxDto, organization, resolvedImage)
+      const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -332,7 +422,6 @@ export class BoxService {
       box.entrypoint = createBoxDto.entrypoint
       box.cmd = createBoxDto.cmd
       box.env = createBoxDto.env || {}
-      box.secrets = createBoxDto.secrets || []
       box.labels = createBoxDto.labels || {}
 
       box.image = image
@@ -341,7 +430,8 @@ export class BoxService {
       box.imageIsOrgOwned = resolvedImage.isOrgOwned
       box.cpu = cpu
       box.gpu = gpu
-      box.mem = mem
+      box.mem = Math.ceil(mem)
+      box.memoryMib = memoryMib
       box.disk = disk
 
       // POL-205: unset inbound access on the internal create DTO defaults disabled.
@@ -370,6 +460,15 @@ export class BoxService {
 
       box.pending = true
 
+      // Complete local validation before transferring values. Only references
+      // may reach insertion, transactional callbacks, or creation events.
+      box.secrets = await this.secretServerClient.storeBoxSecrets(
+        box.id,
+        organization.id,
+        options.createdBy,
+        createBoxDto.secrets || [],
+      )
+
       // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
       // @Unique(['organizationId', 'name']) constraint. Only the insert retries:
@@ -381,15 +480,19 @@ export class BoxService {
       // and a name collision, which the insert itself settles, come after it.
       const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
         await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+        const insert = () =>
+          options.onPersist
+            ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
+            : this.boxRepository.insert(box, options.maxCreatedBoxes)
         return createBoxDto.name
-          ? this.boxRepository.insert(box, options.maxCreatedBoxes)
+          ? insert()
           : persistWithGeneratedBoxName(box.id, (name) => {
               box.name = name
-              return this.boxRepository.insert(box, options.maxCreatedBoxes)
+              return insert()
             })
       })
 
-      recordBoxRequested('box.create', insertedBox.id, ctx)
+      recordBoxRequested('box.create', insertedBox, ctx)
 
       this.eventEmitter
         .emitAsync(BoxEvents.CREATED, new BoxCreatedEvent(insertedBox))
@@ -472,7 +575,7 @@ export class BoxService {
       previousOrganizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
     })
 
-    recordWarmPoolClaim(updatedBox.id, ctx)
+    recordWarmPoolClaim(updatedBox, ctx)
 
     // Treat this as a newly started box
     this.eventEmitter.emit(
@@ -480,6 +583,26 @@ export class BoxService {
       new BoxStateUpdatedEvent(updatedBox, BoxState.STARTED, BoxState.STARTED),
     )
     return this.toBoxDto(updatedBox)
+  }
+
+  /** Return at most pageSize + 1 visible matches after an immutable ID, before enrichment. */
+  async findInventory(
+    organizationId: string,
+    query: { pageSize: number; status?: BoxPublicStatus; after?: string },
+  ): Promise<Box[]> {
+    // Enumerate the persisted enum domains through the same projection the response uses.
+    // An empty match (paused/failed today) must never become TypeORM's unfiltered where: [].
+    const where: FindOptionsWhere<Box>[] = []
+    for (const state of Object.values(BoxState)) {
+      for (const desiredState of Object.values(BoxDesiredState)) {
+        if (state === BoxState.DESTROYED || (state === BoxState.ERROR && desiredState === BoxDesiredState.DESTROYED))
+          continue
+        if (query.status && publicBoxStatus(reportedBoxState({ state, desiredState })) !== query.status) continue
+        where.push({ organizationId, state, desiredState, ...(query.after ? { id: MoreThan(query.after) } : {}) })
+      }
+    }
+    if (!where.length) return []
+    return this.boxRepository.find({ where, order: { id: 'ASC' }, take: query.pageSize + 1 })
   }
 
   async findAllDeprecated(
@@ -562,7 +685,21 @@ export class BoxService {
     }
 
     baseFindOptions.cpu = createRangeFilter(minCpu, maxCpu)
-    baseFindOptions.mem = createRangeFilter(minMemoryGiB, maxMemoryGiB)
+    if (minMemoryGiB !== undefined || maxMemoryGiB !== undefined) {
+      baseFindOptions.memoryMib = Raw(
+        (alias) => {
+          const legacy = `${alias.slice(0, alias.lastIndexOf('.') + 1)}mem`
+          const gib = `COALESCE(${alias}, ${legacy} * 1024) / 1024.0`
+          return [
+            minMemoryGiB !== undefined && `${gib} >= :minMemoryGiB`,
+            maxMemoryGiB !== undefined && `${gib} <= :maxMemoryGiB`,
+          ]
+            .filter(Boolean)
+            .join(' AND ')
+        },
+        { minMemoryGiB, maxMemoryGiB },
+      )
+    }
     baseFindOptions.disk = createRangeFilter(minDiskGiB, maxDiskGiB)
     baseFindOptions.updatedAt = createRangeFilter(lastEventAfter, lastEventBefore)
 
@@ -735,12 +872,18 @@ export class BoxService {
     return boxes
   }
 
-  async findOneByIdOrName(boxIdOrName: string, organizationId?: string, returnDestroyed?: boolean): Promise<Box> {
+  async findOneByIdOrName(
+    boxIdOrName: string,
+    organizationId?: string,
+    returnDestroyed?: boolean,
+    lockTimeoutMs?: number,
+  ): Promise<Box> {
     const stateFilter = returnDestroyed ? {} : { state: Not(BoxState.DESTROYED) }
     const organizationFilter = organizationId ? { organizationId } : {}
 
     // Public Box ID is the primary key. Name remains a user-facing fallback within an organization.
     let box = await this.boxRepository.findOne({
+      lockTimeoutMs,
       where: {
         id: boxIdOrName,
         ...organizationFilter,
@@ -754,6 +897,7 @@ export class BoxService {
 
     if (!box) {
       box = await this.boxRepository.findOne({
+        lockTimeoutMs,
         where: {
           name: boxIdOrName,
           ...organizationFilter,
@@ -870,28 +1014,60 @@ export class BoxService {
     return url
   }
 
-  async destroy(boxIdOrName: string, organizationId: string | undefined, ctx: Context): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+  private async lifecycleBox(
+    id: string,
+    organizationId: string | undefined,
+    lookup: 'id' | 'id-or-name',
+    lockTimeoutMs?: number,
+  ) {
+    if (lookup === 'id-or-name') return this.findOneByIdOrName(id, organizationId, undefined, lockTimeoutMs)
+    const box = await this.findOne(id, true)
+    if (!organizationId || box.organizationId !== organizationId || box.state === BoxState.DESTROYED)
+      throw new NotFoundException(`Box with ID ${id} not found`)
+    return box
+  }
 
-    if (box.pending) {
+  async destroy(
+    boxIdOrName: string,
+    organizationId: string | undefined,
+    ctx: Context,
+    lookup: 'id' | 'id-or-name' = 'id-or-name',
+  ): Promise<Box> {
+    const selected = await this.lifecycleBox(boxIdOrName, organizationId, lookup)
+    const { box, checkpointState } = await this.boxRepository.findWithCheckpointState(
+      selected.id,
+      selected.organizationId,
+    )
+
+    if (box.pending && !checkpointState?.activeJobId) {
       throw new BoxError('Box state change in progress')
     }
 
     const updateData = Box.getSoftDeleteUpdate(box)
 
-    const updatedBox = await this.boxRepository.updateWhere(box.id, {
-      updateData,
-      whereCondition: { pending: box.pending, state: box.state },
-    })
+    const updatedBox = checkpointState?.activeJobId
+      ? await this.boxRepository.deleteCheckpointTarget(box, checkpointState)
+      : await this.boxRepository.updateWhere(box.id, {
+          updateData,
+          whereCondition: { pending: box.pending, state: box.state },
+        })
 
-    recordBoxRequested('box.delete', updatedBox.id, ctx)
+    recordBoxRequested('box.delete', updatedBox, ctx)
 
     this.eventEmitter.emit(BoxEvents.DESTROYED, new BoxDestroyedEvent(updatedBox))
     return updatedBox
   }
 
-  async start(boxIdOrName: string, organization: Organization): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
+  async start(
+    boxIdOrName: string,
+    organization: Organization,
+    ctx: Context,
+    options?: { idOnly?: boolean },
+  ): Promise<Box> {
+    const box = options?.idOnly
+      ? await this.findOne(boxIdOrName)
+      : await this.findOneByIdOrName(boxIdOrName, organization.id)
+    if (box.organizationId !== organization.id) throw new NotFoundException('Box not found')
 
     const region = await this.regionService.findOne(box.region)
     if (!region) {
@@ -929,6 +1105,8 @@ export class BoxService {
       whereCondition: { pending: false, state: box.state },
     })
 
+    recordBoxRequested('box.start', updatedBox, ctx)
+
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updatedBox))
 
     return updatedBox
@@ -957,6 +1135,8 @@ export class BoxService {
       return this.findOneByIdOrName(box.id, organization.id)
     }
 
+    recordBoxRequested('box.start', updated, Context.platform(PlatformReason.AUTO_RESUME))
+
     this.eventEmitter.emit(BoxEvents.STARTED, new BoxStartedEvent(updated))
     this.eventEmitter.emit(
       BoxEvents.DESIRED_STATE_UPDATED,
@@ -965,8 +1145,14 @@ export class BoxService {
     return updated
   }
 
-  async stop(boxIdOrName: string, organizationId: string | undefined, ctx: Context, force?: boolean): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
+  async stop(
+    boxIdOrName: string,
+    organizationId: string | undefined,
+    ctx: Context,
+    force?: boolean,
+    lookup: 'id' | 'id-or-name' = 'id-or-name',
+  ): Promise<Box> {
+    const box = await this.lifecycleBox(boxIdOrName, organizationId, lookup, ctx.lockTimeoutMs)
 
     this.assertBoxNotErrored(box)
 
@@ -989,17 +1175,18 @@ export class BoxService {
 
     const updatedBox = await this.boxRepository.updateWhere(box.id, {
       updateData,
-      whereCondition: { pending: false, state: box.state },
+      whereCondition: { pending: false, state: box.state, organizationId: box.organizationId },
+      lockTimeoutMs: ctx.lockTimeoutMs,
     })
 
-    recordBoxRequested('box.stop', updatedBox.id, ctx)
+    recordBoxRequested('box.stop', updatedBox, ctx)
 
     this.eventEmitter.emit(BoxEvents.STOPPED, new BoxStoppedEvent(updatedBox, force))
 
     return updatedBox
   }
 
-  async recover(boxIdOrName: string, organization: Organization): Promise<Box> {
+  async recover(boxIdOrName: string, organization: Organization, ctx: Context): Promise<Box> {
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     if (box.state !== BoxState.ERROR) {
@@ -1048,7 +1235,7 @@ export class BoxService {
 
     // Now that box is in STOPPED state, use the normal start flow
     // This handles state validation and event emission.
-    return await this.start(box.id, organization)
+    return await this.start(box.id, organization, ctx)
   }
 
   async updateInboundEnabled(boxIdOrName: string, inboundEnabled: boolean, organizationId?: string): Promise<Box> {
@@ -1064,13 +1251,52 @@ export class BoxService {
     })
   }
 
-  async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
-    await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
-  }
-
-  async getToolboxProxyUrl(boxId: string): Promise<string> {
-    const box = await this.findOne(boxId)
-    return this.resolveToolboxProxyUrl(box.region)
+  async updateLastActivityAt(boxId: string, lastActivityAt: Date, previewOpen = false): Promise<void> {
+    if (!previewOpen) return this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
+    const controller = new AbortController()
+    const { signal } = controller
+    let operation = 'update_activity'
+    let timeout: ReturnType<typeof setTimeout>
+    const observe = async () => {
+      await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt, signal)
+      signal.throwIfAborted()
+      operation = 'deduplicate'
+      const first = await this.redis.set(`box:preview-open:${boxId}`, '1', 'EX', 60, 'NX')
+      signal.throwIfAborted()
+      if (first !== 'OK') return
+      operation = 'load_box'
+      const box = await this.findOne(boxId)
+      signal.throwIfAborted()
+      operation = 'record_event'
+      recordBusinessEvent({
+        name: 'box.open',
+        outcome: 'success',
+        correlationId: box.id,
+        organizationId: box.organizationId,
+      })
+    }
+    try {
+      await Promise.race([
+        observe(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            const error = new Error('Preview activity deadline exceeded')
+            controller.abort(error)
+            reject(error)
+          }, PREVIEW_ACTIVITY_TIMEOUT_MS)
+        }),
+      ])
+    } catch (error) {
+      // Preserve activity-buffer failures; only preview observation/timeouts fail closed.
+      if (operation === 'update_activity' && !signal.aborted) throw error
+      this.logger.warn('Preview activity observation could not be recorded', {
+        boxId,
+        operation,
+        errorType: signal.aborted ? 'timeout' : mutationFailureType(error),
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   /**
@@ -1082,8 +1308,8 @@ export class BoxService {
    * between "unknown" and "idle" decides whether a box is stopped.
    */
   async toBoxDto(box: Box): Promise<BoxDto> {
-    const [toolboxProxyUrl, reads] = await this.resolveDtoMetadata(box)
-    return BoxDto.fromBox(box, toolboxProxyUrl, reads)
+    const reads = await this.resolveDtoMetadata(box)
+    return BoxDto.fromBox(box, reads)
   }
 
   /**
@@ -1092,9 +1318,8 @@ export class BoxService {
    * a caller polling a creating box reads it through
    * {@link toBoxDtoWithExitCode}, and that is the caller progress is for.
    */
-  private async resolveDtoMetadata(box: Box): Promise<[string, BoxDtoReads]> {
-    const [toolboxProxyUrl, lastActivityAt, preparing] = await Promise.all([
-      this.resolveToolboxProxyUrl(box.region),
+  private async resolveDtoMetadata(box: Box): Promise<BoxDtoReads> {
+    const [lastActivityAt, preparing] = await Promise.all([
       this.boxActivityService.getLastActivityAt(box.id).catch((err) => {
         this.logger.warn(`Failed to read last activity for box ${box.id}: ${err}`)
         return null
@@ -1107,7 +1332,7 @@ export class BoxService {
         return new Set<string>()
       }),
     ])
-    return [toolboxProxyUrl, { lastActivityAt, preparingImage: preparing.has(box.id) }]
+    return { lastActivityAt, preparingImage: preparing.has(box.id) }
   }
 
   /**
@@ -1125,11 +1350,11 @@ export class BoxService {
    * Only the two endpoints that answer a tenant's read use this.
    */
   async toBoxDtoWithExitCode(box: Box): Promise<BoxDto> {
-    const [[toolboxProxyUrl, reads], exitCode] = await Promise.all([
+    const [reads, exitCode] = await Promise.all([
       this.resolveDtoMetadata(box),
       this.boxExitCodeService.getExitCode(box),
     ])
-    return BoxDto.fromBox(box, toolboxProxyUrl, { ...reads, exitCode })
+    return BoxDto.fromBox(box, { ...reads, exitCode })
   }
 
   /**
@@ -1141,8 +1366,7 @@ export class BoxService {
    * client that needs it reads the box itself.
    */
   async toBoxDtos(boxes: Box[]): Promise<BoxDto[]> {
-    const [urlMap, activityMap, preparing] = await Promise.all([
-      this.resolveToolboxProxyUrls(boxes.map((s) => s.region)),
+    const [activityMap, preparing] = await Promise.all([
       this.boxActivityService.getLastActivityAtMany(boxes.map((s) => s.id)).catch((err) => {
         this.logger.warn(`Failed to read last activity for ${boxes.length} boxes: ${err}`)
         return new Map<string, Date>()
@@ -1153,76 +1377,8 @@ export class BoxService {
       }),
     ])
     return boxes.map((s) => {
-      const url = urlMap.get(s.region)
-      if (!url) {
-        throw new NotFoundException(`Toolbox proxy URL not resolved for region ${s.region}`)
-      }
-      return BoxDto.fromBox(s, url, { lastActivityAt: activityMap.get(s.id), preparingImage: preparing.has(s.id) })
+      return BoxDto.fromBox(s, { lastActivityAt: activityMap.get(s.id), preparingImage: preparing.has(s.id) })
     })
-  }
-
-  async resolveToolboxProxyUrl(regionId: string): Promise<string> {
-    const cacheKey = toolboxProxyUrlCacheKey(regionId)
-    const cached = await this.redis.get(cacheKey)
-    if (cached) {
-      return cached
-    }
-
-    const region = await this.regionService.findOne(regionId)
-    const url = region?.toolboxProxyUrl
-      ? region.toolboxProxyUrl.replace(/\/+$/, '') + '/toolbox'
-      : this.configService.getOrThrow('proxy.toolboxUrl')
-
-    this.redis.setex(cacheKey, TOOLBOX_PROXY_URL_CACHE_TTL_S, url).catch((err) => {
-      this.logger.warn(`Failed to cache toolbox proxy URL for region ${regionId}: ${err.message}`)
-    })
-    return url
-  }
-
-  async resolveToolboxProxyUrls(regionIds: string[]): Promise<Map<string, string>> {
-    const unique = [...new Set(regionIds)]
-    const result = new Map<string, string>()
-
-    const pipeline = this.redis.pipeline()
-    for (const id of unique) {
-      pipeline.get(toolboxProxyUrlCacheKey(id))
-    }
-    const cached = await pipeline.exec()
-
-    const uncached: string[] = []
-    for (let i = 0; i < unique.length; i++) {
-      const err = cached?.[i]?.[0]
-      if (err) {
-        this.logger.warn(`Failed to get cached toolbox proxy URL for region ${unique[i]}: ${err.message}`)
-      }
-      const val = cached?.[i]?.[1] as string | null
-      if (val) {
-        result.set(unique[i], val)
-      } else {
-        uncached.push(unique[i])
-      }
-    }
-
-    if (uncached.length > 0) {
-      const regions = await this.regionService.findByIds(uncached)
-      const regionMap = new Map(regions.map((r) => [r.id, r]))
-      const fallback = this.configService.getOrThrow('proxy.toolboxUrl')
-      const setPipeline = this.redis.pipeline()
-      for (const id of uncached) {
-        const region = regionMap.get(id)
-        const url = region?.toolboxProxyUrl ? region.toolboxProxyUrl.replace(/\/+$/, '') + '/toolbox' : fallback
-        result.set(id, url)
-        setPipeline.setex(toolboxProxyUrlCacheKey(id), TOOLBOX_PROXY_URL_CACHE_TTL_S, url)
-      }
-      const setResults = await setPipeline.exec()
-      setResults?.forEach(([err], i) => {
-        if (err) {
-          this.logger.warn(`Failed to cache toolbox proxy URL for region ${uncached[i]}: ${err.message}`)
-        }
-      })
-    }
-
-    return result
   }
 
   private async getValidatedOrDefaultRegion(organization: Organization, regionIdOrName?: string): Promise<Region> {
@@ -1261,17 +1417,6 @@ export class BoxService {
     }
   }
 
-  async replaceLabels(boxIdOrName: string, labels: { [key: string]: string }, organizationId?: string): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    // Replace all labels
-    const updateData: Partial<Box> = {
-      labels,
-    }
-
-    return await this.boxRepository.update(box.id, { updateData, entity: box })
-  }
-
   @Cron(CronExpression.EVERY_SECOND, { name: 'cleanup-destroyed-boxes' })
   @LogExecution('cleanup-destroyed-boxes')
   @WithInstrumentation()
@@ -1296,35 +1441,16 @@ export class BoxService {
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
-    const result = await this.boxRepository.delete({
-      state: BoxState.ERROR,
-      desiredState: BoxDesiredState.DESTROYED,
-      updatedAt: LessThan(sevenDaysAgo),
-    })
+    const result = await this.boxRepository
+      .createQueryBuilder()
+      .delete()
+      .where({ state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED, updatedAt: LessThan(sevenDaysAgo) })
+      .andWhere(`NOT ${CANCELLED_CHECKPOINT_TARGET_SQL}`)
+      .execute()
 
     if (result.affected > 0) {
       this.logger.debug(`Cleaned up ${result.affected} stale error boxes`)
     }
-  }
-
-  async setAutostopInterval(boxIdOrName: string, interval: number, organizationId?: string): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    const updateData: Partial<Box> = {
-      autoStop: this.minutesToSeconds(interval),
-    }
-
-    return await this.boxRepository.update(box.id, { updateData, entity: box })
-  }
-
-  async setAutoDeleteInterval(boxIdOrName: string, interval: number, organizationId?: string): Promise<Box> {
-    const box = await this.findOneByIdOrName(boxIdOrName, organizationId)
-
-    const updateData: Partial<Box> = {
-      autoDelete: interval <= 0 ? 0 : this.minutesToSeconds(interval),
-    }
-
-    return await this.boxRepository.update(box.id, { updateData, entity: box })
   }
 
   async updateNetworkSettings(
@@ -1545,14 +1671,6 @@ export class BoxService {
       //  log the error for now, but don't throw it as it will be retried
       this.logger.error(`Error stopping box from suspended organization. BoxId: ${event.boxId}: `, error)
     })
-  }
-
-  private minutesToSeconds(interval: number): number {
-    if (!Number.isInteger(interval) || interval < 0) {
-      throw new BadRequestError('Interval must be a non-negative integer number of minutes')
-    }
-
-    return interval * 60
   }
 
   private resolveLifecyclePolicy(input: { autoStop?: number; autoDelete?: number; autoResume?: boolean }): {

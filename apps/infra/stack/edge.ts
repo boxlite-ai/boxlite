@@ -60,6 +60,7 @@ new sst.aws.Service('Proxy', {
   environment: {
     PROXY_PORT: String(PORTS.PROXY),
     PROXY_PROTOCOL: proxyProtocol,
+    PROXY_DOMAIN: proxyDomain,
     PROXY_API_KEY: envOr('PROXY_API_KEY', proxyApiKey.result),
     // api-client-go appends paths like "/config" directly → include /api suffix
     BOXLITE_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,

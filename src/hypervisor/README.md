@@ -22,6 +22,7 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `error` | `Error`: the failed operation, its resource, and the host cause |
 | `arm64` | `Arm64Vcpu`, `Arm64BootRegisters` and `CpuOnResult`: the arm64 boot registers and the VMM's answer to `CPU_ON` |
 | `hvf` | macOS arm64: the VM and its in-kernel GICv3, memory, vCPU execution and kicks, with `syndrome` decoding exceptions and emulating trapped system registers, and `psci` serving PSCI 0.2 |
+| `x86` | Boot configuration and Linux x86_64 VM/vCPU state images with Serde encoding |
 | `kvm` | x86_64 VM creation, memory slots, registers, CPUID/MSRs, execution, kicks and pending-I/O completion; arm64 follows |
 | `whp` / `whp::emulator` | WHP operations and x86 instruction decoding for memory-access exits (reserved for M10) |
 
@@ -54,7 +55,13 @@ retain reset state until INIT/SIPI.
 
 `KvmVm::supported_cpuid` exposes host-supported CPU features. A VMM can remove
 features or adjust topology, then pass the result to `KvmVcpu::set_cpu_features`
-before entry. `X86CpuidEntry` preserves subleaf matching without leaking the
+before `set_boot_registers` and first entry.
+
+The initialization order is vCPU creation → CPU features → boot registers →
+guest entry. KVM validates register state against the guest CPUID, including
+long-mode support when EFER.LME/LMA are set.
+
+`X86CpuidEntry` preserves subleaf matching without leaking the
 KVM ABI. Legacy stateful CPUID entries are omitted because this type cannot
 preserve their read sequence; other unsupported KVM flags are rejected.
 MSRs are explicit index/value writes. A short KVM write is an error identifying
@@ -66,6 +73,29 @@ These three methods form the x86_64 extension traits `X86Vm`
 which `KvmVm` and `KvmVcpu` implement, so the VMM's vCPU workers and its mock
 backend use one interface. On arm64, `Arm64Vcpu` sets MPIDR_EL1 (`set_mpidr`) and
 the entry PC, X0 and PSTATE (`set_boot_registers`).
+
+## Linux x86_64 snapshot state
+
+`X86VmState` and `X86VcpuState` are owned KVM state images for the same host
+and KVM environment. Their wire format is unstable. Both implement Serde for
+`postcard::to_allocvec` and `postcard::from_bytes`. Callers own the snapshot
+container, RAM, device state and persistence.
+
+| Image | State |
+| --- | --- |
+| `X86VmState` | PIC master/slave and IOAPIC as `X86IrqchipState`, optional PIT, and KVM clock |
+| `X86VcpuState` | General and special registers, FPU, XSAVE, CPUID, MSRs, XCRs, debug registers, events, MP state, LAPIC, and TSC frequency |
+
+The vCPU decoder rejects truncated input and FPU payloads with a length other
+than the KVM ABI size. It checks the declared sequence lengths before reading
+elements and accepts up to 65,536 XSAVE words (256 KiB), 256 CPUID entries,
+and 4,096 MSR entries. These limits apply to decoding. The caller handles
+host compatibility and validation of register values.
+
+On Linux x86_64, `make test:unit:vmm` checks Postcard round trips, truncated
+input, and decode limits without `/dev/kvm`.
+
+## Host execution
 
 macOS arm64 exports `HvfVm` and thread-bound `HvfVcpu`, which implement `Vm`,
 `Vcpu` and `Arm64Vcpu` on Hypervisor.framework with the in-kernel GICv3 of

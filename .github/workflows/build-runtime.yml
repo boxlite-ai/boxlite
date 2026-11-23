@@ -77,30 +77,22 @@ jobs:
         with:
           show-sccache-stats: ${{ github.event_name == 'schedule' }}
 
-      - name: Build runtime (Linux)
+      - name: Build and package runtime (Linux)
         if: runner.os == 'Linux'
         uses: ./.github/actions/run-in-manylinux
         with:
           target: ${{ matrix.target }}
           script: |
-            # Build CLI binary (reuses compiled boxlite crate artifacts)
-            cargo build -p boxlite-cli --release
+            bash scripts/build/package-runtime.sh "$BOXLITE_CI_TARGET"
 
-      - name: Build runtime (macOS)
+      - name: Build and package runtime (macOS)
         if: runner.os == 'macOS'
+        env:
+          BOXLITE_CI_TARGET: ${{ matrix.target }}
         run: |
           make setup:build runtime
-          cargo build -p boxlite-cli --release
+          bash scripts/build/package-runtime.sh "$BOXLITE_CI_TARGET"
           command -v sccache &>/dev/null && sccache --show-stats || true
-
-      - name: Package runtime
-        run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          RUNTIME_DIR=$(ls -dt target/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
-          [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under target/"; exit 1; }
-          cp -a "$RUNTIME_DIR" boxlite-runtime
-          tar czf "boxlite-runtime-v${VERSION}-${{ matrix.target }}.tar.gz" boxlite-runtime/
-          rm -rf boxlite-runtime
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v4
@@ -241,7 +233,8 @@ jobs:
   # Runtime tarballs must exist first because crates.io consumers download them
   # via boxlite/build.rs (auto_detect_registry -> download_prebuilt_runtime).
   #
-  # Publish order matters: leaf crates (Tier 1) before boxlite (Tier 2).
+  # Publish order matters: leaf crates (Tier 1: boxlite-shared, the -sys crates
+  # and the VMM crates) before boxlite (Tier 2).
   # BOXLITE_DEPS_STUB=1 skips native builds during cargo publish verification.
   publish_crates:
     name: Publish to crates.io
@@ -292,6 +285,12 @@ jobs:
           publish_crate e2fsprogs-sys --no-verify
           publish_crate libgvproxy-sys --no-verify
           publish_crate bubblewrap-sys --no-verify
+
+          # boxlite-vmm resolves boxlite-hypervisor from crates.io. Give the
+          # index time before publishing the dependent crate.
+          publish_crate boxlite-hypervisor
+          sleep 60
+          publish_crate boxlite-vmm
 
       - name: Wait for crates.io indexing
         run: sleep 60

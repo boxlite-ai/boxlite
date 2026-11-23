@@ -11,11 +11,13 @@ import { join } from 'node:path'
 import { DataSource, EntityManager } from 'typeorm'
 import { IsolationLevel } from 'typeorm/driver/types/IsolationLevel'
 import { Box } from '../../box/entities/box.entity'
+import { Checkpoint } from '../../box/entities/checkpoint.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxMigration } from '../../box/entities/box-migration.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { BoxService } from '../../box/services/box.service'
+import { SecretServerClient } from '../../box/services/secret-server-client'
 import { Context } from '../../common/context/context'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Image } from '../../image/entities/image.entity'
@@ -95,7 +97,7 @@ describeIfDatabase('Registry credential mutations (integration, real Postgres)',
     const options = {
       ...connection,
       database: databaseName,
-      entities: [Box, BoxLastActivity, BoxMigration, RegistryCredential, Image, ImageAlias, ImageVersion],
+      entities: [Box, BoxLastActivity, BoxMigration, RegistryCredential, Image, ImageAlias, ImageVersion, Checkpoint],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
     }
@@ -136,9 +138,13 @@ describeIfDatabase('Registry credential mutations (integration, real Postgres)',
     runner = { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: randomUUID() }) }
     createService = Object.create(BoxService.prototype) as BoxService
     Object.assign(createService, {
+      secretServerClient: new SecretServerClient({ get: () => false } as any),
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'us' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
-      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      organizationService: {
+        assertOrganizationIsNotSuspended: jest.fn(),
+        isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+      },
       organizationBoxLimits: { resolve: jest.fn(async (organization) => organization) },
       redis: { exists: jest.fn().mockResolvedValue(1) },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },

@@ -24,10 +24,13 @@
  * testable without a registry, a daemon or credentials.
  */
 
-import { join, resolve } from 'node:path'
+import { join, resolve, isAbsolute } from 'node:path'
+import { createHash } from 'node:crypto'
+import { mkdir, rm } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { AuditConfig, BuildConfig, ScanPolicy, ScanSeverity } from './config.ts'
 import { addressFor, assertTag, type Registry } from './address.ts'
+import { ghcrRegistrar } from './ghcr.ts'
 
 export class PublishError extends Error {
   constructor(message: string) {
@@ -128,11 +131,18 @@ type ScanReport =
   | { state: 'complete'; counts: Record<string, number> }
   | { state: 'failed'; detail: string }
 
-type Registrar = {
+export type Registrar = {
   ensureRepository: () => Promise<void>
   isPublished: (artifact: string, tag: string) => Promise<boolean>
   login: () => Promise<void>
   scanReport: (artifact: string, tag: string) => Promise<ScanReport>
+  digestOf: (artifact: string, tag: string) => Promise<string | null>
+}
+
+const checkedDigest = (value: string, address: string): string => {
+  const digest = value.trim().match(/(?:^|[@/])(sha256:[0-9a-f]{64})$/)?.[1]
+  if (!digest) throw new PublishError(`Invalid manifest digest for ${address}`)
+  return digest
 }
 
 /*
@@ -195,6 +205,14 @@ const ecrRegistrar = ({
       if (found.code === 0) return true
       if (ECR_IMAGE_ABSENT.test(found.stderr)) return false
       throw unreadable({ result: found, address: addressFor({ config, registry, artifact, tag }) })
+    },
+    async digestOf(artifact, tag) {
+      const address = addressFor({ config, registry, artifact, tag })
+      const found = await aws(['ecr', 'describe-images', '--repository-name', registry.repository, '--image-ids',
+        `imageTag=${tag}-${artifact}`, '--query', 'imageDetails[0].imageDigest', '--output', 'text'])
+      if (found.code === 0) return checkedDigest(found.stdout, address)
+      if (ECR_IMAGE_ABSENT.test(found.stderr)) return null
+      throw unreadable({ result: found, address })
     },
     async login() {
       const password = await aws(['ecr', 'get-login-password'])
@@ -259,15 +277,9 @@ const ecrRegistrar = ({
  * One repository per artifact, so the address carries the artifact in the path
  * and the tag is just the commit (`address.ts` writes both shapes).
  *
- * Scanning is not part of a push: Artifact Analysis scans continuously and
- * answers per occurrence, so the gate reads occurrences and never reports
- * pending. With analysis disabled the query returns nothing, which reads as no
- * findings — and a stage's `scanOnPush` does not turn it on, because nothing
- * here can: it is a project-wide service (`bootstrap/gcp.ts`'s `SERVICES`)
- * rather than a property of the repository. So on a project where it is off
- * this gate passes everything, and the declaration is the record of the intent
- * rather than the thing enforcing it. ECR instead reads a missing scan as
- * pending and fails on a spent budget.
+ * Artifact Analysis reports discovery separately from vulnerability occurrences.
+ * An empty findings page is safe only after discovery confirms completion;
+ * absent or pending discovery uses the same deadline as ECR.
  */
 const artifactRegistryRegistrar = ({
   run,
@@ -285,6 +297,23 @@ const artifactRegistryRegistrar = ({
   const gcloud = async (args: string[]): Promise<RunResult> =>
     run('gcloud', [...args, '--project', registry.project, '--quiet'])
   const path = `${registry.host}/${registry.project}/${registry.repository}`
+  const digestOf = async (artifact: string, tag: string): Promise<string | null> => {
+    const address = addressFor({ config, registry, artifact, tag })
+    const found = await gcloud(['artifacts', 'docker', 'images', 'list', `${path}/${artifact}`,
+      '--include-tags', `--filter=tags:${tag}`, '--format=json(version,tags)'])
+    if (found.code !== 0) throw unreadable({ result: found, address })
+    let rows: { version: string; tags: string[] }[]
+    try {
+      rows = JSON.parse(found.stdout)
+      if (!Array.isArray(rows) || rows.some((row) => !row || typeof row.version !== 'string' || !Array.isArray(row.tags))) throw new Error()
+    } catch { throw new PublishError(`Invalid Artifact Registry tag response for ${address}`) }
+    // gcloud's ':' filter also returns longer tags; identity is checked here.
+    const matching = rows.filter((row) => row.tags.includes(tag))
+    if (!matching.length) return null
+    const digests = new Set(matching.map((row) => checkedDigest(row.version, address)))
+    if (digests.size !== 1) throw new PublishError(`Ambiguous Artifact Registry tag ${address}`)
+    return [...digests][0]!
+  }
   return {
     async ensureRepository() {
       // Answers both questions at once: is it there, and does it match what
@@ -335,21 +364,7 @@ const artifactRegistryRegistrar = ({
      * "not there" from "could not tell" without matching on message text.
      */
     async isPublished(artifact, tag) {
-      const found = await gcloud([
-        'artifacts',
-        'docker',
-        'images',
-        'list',
-        `${path}/${artifact}`,
-        '--include-tags',
-        `--filter=tags:${tag}`,
-        '--format=value(version)',
-      ])
-      if (found.code !== 0) {
-        throw unreadable({ result: found, address: addressFor({ config, registry, artifact, tag }) })
-      }
-      // Banner and warnings go to stderr, so an empty page is empty here.
-      return found.stdout.trim() !== ''
+      return (await digestOf(artifact, tag)) !== null
     },
     async login() {
       // No password to fetch: the credential helper reads ambient ADC each
@@ -359,6 +374,7 @@ const artifactRegistryRegistrar = ({
         throw new PublishError(`Could not log in to ${registry.host}: ${configured.stderr.trim()}`)
       }
     },
+    digestOf,
     async scanReport(artifact, tag) {
       const answer = await gcloud([
         'artifacts',
@@ -371,15 +387,26 @@ const artifactRegistryRegistrar = ({
         'json',
       ])
       if (answer.code !== 0) throw new PublishError(`Could not read scan findings: ${answer.stderr.trim()}`)
-      let described: { package_vulnerability_summary?: { vulnerabilities?: Record<string, unknown[]> } }
+      let described: {
+        discovery_summary?: { discovery?: { discovery?: { analysisStatus?: string } }[] }
+        package_vulnerability_summary?: { vulnerabilities?: Record<string, unknown[]> }
+      }
       try {
         described = JSON.parse(answer.stdout || '{}') ?? {}
       } catch {
         throw new PublishError('Scan findings were not valid JSON')
       }
+      const discoveries = described.discovery_summary?.discovery ?? []
+      if (!Array.isArray(discoveries)) throw new PublishError('Scan discovery metadata was not an array')
+      const statuses = discoveries.map((occurrence) => occurrence?.discovery?.analysisStatus)
+      if (statuses.some((status) => status === 'FINISHED_FAILED' || status === 'FINISHED_UNSUPPORTED')) {
+        return { state: 'failed', detail: 'Artifact Analysis discovery failed or is unsupported' }
+      }
+      if (!statuses.length || statuses.some((status) => status !== 'FINISHED_SUCCESS' && status !== 'COMPLETE')) {
+        return { state: 'pending', detail: 'Artifact Analysis discovery has not completed' }
+      }
       // One entry per occurrence; the gate counts by severity, so tally here.
       const vulnerabilities = described.package_vulnerability_summary?.vulnerabilities ?? {}
-      // Never pending: these are the occurrences that exist now.
       return {
         state: 'complete',
         counts: Object.fromEntries(
@@ -402,6 +429,8 @@ const registrarFor = ({
   registry: Registry
 }): Registrar => {
   switch (registry.kind) {
+    case 'ghcr':
+      return ghcrRegistrar({ run, config, registry })
     case 'ecr':
       return ecrRegistrar({ run, config, stage, registry })
     case 'artifact-registry':
@@ -516,11 +545,8 @@ const assertNoBlockingFindings = async ({
       clock,
       log,
     })
-    // What the gate read, said out loud on the way past. An empty answer is how
-    // a clean image reads and equally how a registry whose scanner is switched
-    // off reads — on Artifact Registry that is the ordinary case, because
-    // scanning is a project-wide service nothing here turns on. Silence would
-    // make a gate that blocks nothing indistinguishable from one that passed.
+    // Completion was confirmed above; distinguish a clean scan from a policy
+    // that explicitly skipped scanning, and report the counts actually weighed.
     const reported = Object.entries(counts)
       .map(([severity, count]) => `${count} ${severity}`)
       .join(', ')
@@ -591,15 +617,7 @@ const assertNoHighSeverityAdvisories = async ({
   throw new AuditFailedError(`${config.audit.manager} audit did not pass, so no image was built.\n${said}`)
 }
 
-export const publish = async ({
-  config,
-  stage,
-  registry,
-  tag,
-  run,
-  log = console.log,
-  clock = systemClock,
-}: {
+type PublishOptions = {
   config: BuildConfig
   stage: string
   registry: Registry
@@ -607,7 +625,17 @@ export const publish = async ({
   run: Run
   log?: (line: string) => void
   clock?: Clock
-}): Promise<PublishOutcome[]> => {
+}
+
+const publishImages = async ({
+  config,
+  stage,
+  registry,
+  tag,
+  run,
+  log = console.log,
+  clock = systemClock,
+}: PublishOptions): Promise<PublishOutcome[]> => {
   assertTag(tag)
   /*
    * Audited once, the first time a build is actually going to happen. Not up
@@ -643,20 +671,63 @@ export const publish = async ({
     log(`Building ${artifact} from ${dockerfile} as ${address}`)
     const built = await run(
       'docker',
-      ['build', '--platform', RUNTIME_PLATFORM, '--build-arg', `REVISION=${tag}`, '-f', dockerfile, '-t', address, context],
+      ['build', '--platform', RUNTIME_PLATFORM, '--build-arg', `REVISION=${tag}`,
+        ...(registry.kind === 'ghcr' ? ['--label', `org.opencontainers.image.source=https://github.com/${registry.repository}`] : []),
+        '-f', dockerfile, '-t', address, context],
       { echo: true },
     )
     // The exit code, not the output: docker already wrote the reason above.
     if (built.code !== 0) throw new PublishError(`Could not build ${artifact}: docker build exited ${built.code}`)
     log(`Pushing ${address}`)
-    const pushed = await run('docker', ['push', address], { echo: true })
+    const pushed = await run('docker', ['push', ...(registry.kind === 'ghcr' ? ['--platform', RUNTIME_PLATFORM] : []), address], { echo: true })
     if (pushed.code !== 0) throw new PublishError(`Could not push ${address}: docker push exited ${pushed.code}`)
     log(`Pushed ${address}`)
     outcomes.push({ artifact, address, built: true })
   }
 
-  await assertNoBlockingFindings({ registrar, scan: config.stages[stage]!.scan, outcomes, tag, clock, log })
+  if (registry.kind === 'ghcr') {
+    for (const outcome of outcomes) {
+      const digest = await registrar.digestOf(outcome.artifact, tag)
+      if (!digest) throw new NotPublishedError(`GHCR did not retain ${outcome.address}`)
+      log(`${outcome.address}@${digest}; image scanning runs after cloud import`)
+    }
+  } else {
+    await assertNoBlockingFindings({ registrar, scan: config.stages[stage]!.scan, outcomes, tag, clock, log })
+  }
   return outcomes
+}
+
+/** Workflow concurrency owns cross-run exclusion; atomic directories cover CLI processes inside one job. */
+export const publish = async (options: PublishOptions): Promise<PublishOutcome[]> => {
+  if (options.registry.kind !== 'ghcr') return publishImages(options)
+  for (const artifact of Object.keys(options.config.artifacts)) addressFor({ config: options.config, registry: options.registry, artifact, tag: options.tag })
+  const repository = process.env.GITHUB_REPOSITORY
+  const temporary = process.env.RUNNER_TEMP
+  const runId = process.env.GITHUB_RUN_ID ?? ''
+  const attempt = process.env.GITHUB_RUN_ATTEMPT ?? ''
+  if (process.env.GITHUB_ACTIONS !== 'true' || repository?.toLowerCase() !== options.registry.repository ||
+    process.env.GITHUB_WORKFLOW_REF !== `${repository}/.github/workflows/mbuild-release.yml@refs/heads/main` ||
+    process.env.GITHUB_JOB !== 'publish' || !/^[1-9][0-9]{0,19}$/.test(runId) || !/^[1-9][0-9]{0,19}$/.test(attempt) ||
+    !temporary || !isAbsolute(temporary)) {
+    throw new PublishError(`GHCR publication requires mbuild-release on main; run gh workflow run mbuild-release.yml --repo ${options.registry.repository} --ref main -f command=publish -f tag=${options.tag.slice(0, -41)}`)
+  }
+  const directory = join(temporary, 'mbuild-ghcr-publish', `${runId}-${attempt}`)
+  await mkdir(directory, { recursive: true })
+  const held: string[] = []
+  try {
+    for (const artifact of Object.keys(options.config.artifacts).sort()) {
+      const identity = createHash('sha256').update(JSON.stringify([options.registry.repository, options.tag, artifact])).digest('hex')
+      const lock = join(directory, identity)
+      try { await mkdir(lock) } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new PublishError(`GHCR ${artifact}:${options.tag} is already publishing in this job`)
+        throw error
+      }
+      held.push(lock)
+    }
+    return await publishImages(options)
+  } finally {
+    await Promise.all(held.map((lock) => rm(lock, { recursive: true })))
+  }
 }
 
 /** Where one artifact sits, for a commit the registry already holds. */
@@ -699,6 +770,24 @@ export const verifyPublished = async ({
 
 export type PromoteOutcome = PublishOutcome & { from: string }
 
+/** Preserve the runtime platform when copying bytes between repositories. */
+const copyImage = async ({ sourceAddress, address, run, log }: {
+  sourceAddress: string
+  address: string
+  run: Run
+  log: (line: string) => void
+}): Promise<void> => {
+  log(`Pulling ${sourceAddress}`)
+  const pulled = await run('docker', ['pull', '--platform', RUNTIME_PLATFORM, sourceAddress], { echo: true })
+  if (pulled.code !== 0) throw new PublishError(`Could not pull ${sourceAddress}: docker pull exited ${pulled.code}`)
+  const tagged = await run('docker', ['tag', sourceAddress, address])
+  if (tagged.code !== 0) throw new PublishError(`Could not tag ${address}: ${tagged.stderr.trim()}`)
+  log(`Pushing ${address}`)
+  const pushed = await run('docker', ['push', address], { echo: true })
+  if (pushed.code !== 0) throw new PublishError(`Could not push ${address}: docker push exited ${pushed.code}`)
+  log(`Promoted ${sourceAddress} to ${address}`)
+}
+
 /**
  * Move a commit from one stage's registry to another's.
  *
@@ -722,6 +811,7 @@ export const promote = async ({
   log?: (line: string) => void
   clock?: Clock
 }): Promise<PromoteOutcome[]> => {
+  if (to.registry.kind === 'ghcr') throw new PublishError('GHCR is not an import destination')
   assertTag(tag)
   if (from.stage === to.stage) throw new PublishError(`Promoting "${from.stage}" to itself would do nothing`)
 
@@ -729,6 +819,39 @@ export const promote = async ({
   const destination = registrarFor({ run, config, stage: to.stage, registry: to.registry })
 
   const artifacts = Object.keys(config.artifacts)
+  if (from.registry.kind === 'ghcr') {
+    const sources = new Map<string, string>()
+    for (const artifact of artifacts) {
+      const digest = await source.digestOf(artifact, tag)
+      if (!digest) throw new NotPublishedError(`GHCR is missing ${artifact}:${tag}; run mbuild-release.yml command=publish first`)
+      sources.set(artifact, digest)
+    }
+    await destination.ensureRepository()
+    await source.login()
+    await destination.login()
+    // Refuse every existing mismatch before writing any image.
+    const existing = new Set<string>()
+    for (const artifact of artifacts) {
+      const digest = await destination.digestOf(artifact, tag)
+      if (digest && digest !== sources.get(artifact)) throw new PublishError(`${artifact}:${tag} in ${to.stage} differs from GHCR; refusing to overwrite`)
+      if (digest) existing.add(artifact)
+    }
+    const outcomes: PromoteOutcome[] = []
+    for (const artifact of artifacts) {
+      const address = addressFor({ config, registry: to.registry, artifact, tag })
+      const sourceAddress = addressFor({ config, registry: from.registry, artifact, tag })
+      const pinned = `${sourceAddress.slice(0, sourceAddress.lastIndexOf(':'))}@${sources.get(artifact)}`
+      if (!existing.has(artifact)) {
+        // Copy raw registry content, without converting it through Docker's local image store.
+        const copied = await run('docker', ['buildx', 'imagetools', 'create', '--prefer-index=false', '--tag', address, pinned], { echo: true })
+        if (copied.code !== 0) throw new PublishError(`Could not import ${address}: docker buildx exited ${copied.code}`)
+        if (await destination.digestOf(artifact, tag) !== sources.get(artifact)) throw new PublishError(`Imported ${address} differs from GHCR`)
+      }
+      outcomes.push({ artifact, address, from: pinned, built: !existing.has(artifact) })
+    }
+    await assertNoBlockingFindings({ registrar: destination, scan: config.stages[to.stage]!.scan, outcomes, tag, clock, log })
+    return outcomes
+  }
   const missing = await missingFrom({ registrar: source, artifacts, tag })
   if (missing.length > 0) {
     throw new PublishError(`${from.stage} does not hold ${missing.join(', ')} at ${tag}; nothing was promoted`)
@@ -747,25 +870,7 @@ export const promote = async ({
       outcomes.push({ artifact, address, from: sourceAddress, built: false })
       continue
     }
-    /*
-     * Pull, re-tag, push: ECR shares no layers between repositories, so there
-     * is no manifest-only copy. Echoed, because they move whole images.
-     *
-     * The pull names the architecture for the reason the build does, and this
-     * is the worse place to miss it: `docker pull` of a multi-arch address
-     * resolves to the *host's* variant, so a promotion from an arm64
-     * workstation would carry that variant into the receiving stage — which is
-     * the one thing promoting rather than rebuilding exists to prevent.
-     */
-    log(`Pulling ${sourceAddress}`)
-    const pulled = await run('docker', ['pull', '--platform', RUNTIME_PLATFORM, sourceAddress], { echo: true })
-    if (pulled.code !== 0) throw new PublishError(`Could not pull ${sourceAddress}: docker pull exited ${pulled.code}`)
-    const tagged = await run('docker', ['tag', sourceAddress, address])
-    if (tagged.code !== 0) throw new PublishError(`Could not tag ${address}: ${tagged.stderr.trim()}`)
-    log(`Pushing ${address}`)
-    const pushed = await run('docker', ['push', address], { echo: true })
-    if (pushed.code !== 0) throw new PublishError(`Could not push ${address}: docker push exited ${pushed.code}`)
-    log(`Promoted ${sourceAddress} to ${address}`)
+    await copyImage({ sourceAddress, address, run, log })
     outcomes.push({ artifact, address, from: sourceAddress, built: true })
   }
 

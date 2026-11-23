@@ -4,10 +4,8 @@
  */
 
 export { default as BoxDetails } from './BoxDetails'
-export { default as BoxTerminalFullscreen } from './BoxTerminalFullscreen'
 export { BoxLogsTab } from './BoxLogsTab'
 export { BoxTracesTab } from './BoxTracesTab'
 export { BoxMetricsTab } from './BoxMetricsTab'
-export { BoxTerminalTab } from './BoxTerminalTab'
 export { BoxHeader } from './BoxHeader'
 export { BoxInfoPanel, InfoPanelSkeleton } from './BoxInfoPanel'

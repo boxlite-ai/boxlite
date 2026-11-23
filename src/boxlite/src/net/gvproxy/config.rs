@@ -170,6 +170,7 @@ pub struct GvproxySecretConfig {
     pub hosts: Vec<String>,
     pub placeholder: String,
     pub value: String,
+    pub headers: std::collections::BTreeMap<String, String>,
 }
 
 impl std::fmt::Debug for GvproxyConfig {
@@ -212,6 +213,7 @@ impl std::fmt::Debug for GvproxySecretConfig {
             .field("name", &self.name)
             .field("hosts", &self.hosts)
             .field("placeholder", &self.placeholder)
+            .field("headers", &self.headers)
             .field("value", &"[REDACTED]")
             .finish()
     }
@@ -224,6 +226,8 @@ impl From<&crate::runtime::options::Secret> for GvproxySecretConfig {
             hosts: s.hosts.clone(),
             placeholder: s.placeholder.clone(),
             value: s.value.clone(),
+            // Activation rejects absent maps before constructing a proxy.
+            headers: s.headers.clone().unwrap_or_default(),
         }
     }
 }
@@ -497,12 +501,30 @@ mod tests {
     // Secret config tests
     // ========================================================================
 
+    #[test]
+    fn secret_headers_are_transported_with_templates() {
+        let secret = serde_json::from_value(serde_json::json!({
+            "name": "bot", "hosts": ["api.example.com"],
+            "placeholder": "dummy", "value": "token",
+            "headers": {"Authorization": "Bot {value}", "X-Key": "{value}"}
+        }))
+        .unwrap();
+        let config = GvproxySecretConfig::from(&secret);
+        let wire = serde_json::to_value(config).unwrap();
+        assert_eq!(wire["headers"]["Authorization"], "Bot {value}");
+        assert_eq!(wire["headers"]["X-Key"], "{value}");
+    }
+
     fn test_secret() -> crate::runtime::options::Secret {
         crate::runtime::options::Secret {
             name: "openai".to_string(),
             hosts: vec!["api.openai.com".to_string()],
             placeholder: "<BOXLITE_SECRET:openai>".to_string(),
             value: "sk-test-super-secret-key-12345".to_string(),
+            headers: Some(std::collections::BTreeMap::from([(
+                "Authorization".into(),
+                "Bearer {value}".into(),
+            )])),
         }
     }
 
@@ -514,6 +536,7 @@ mod tests {
         assert_eq!(config.hosts, vec!["api.openai.com"]);
         assert_eq!(config.placeholder, "<BOXLITE_SECRET:openai>");
         assert_eq!(config.value, "sk-test-super-secret-key-12345");
+        assert_eq!(config.headers["Authorization"], "Bearer {value}");
     }
 
     #[test]
@@ -566,6 +589,7 @@ mod tests {
         assert_eq!(deserialized.hosts, gvproxy_secret.hosts);
         assert_eq!(deserialized.placeholder, gvproxy_secret.placeholder);
         assert_eq!(deserialized.value, gvproxy_secret.value);
+        assert_eq!(deserialized.headers, gvproxy_secret.headers);
     }
 
     #[test]

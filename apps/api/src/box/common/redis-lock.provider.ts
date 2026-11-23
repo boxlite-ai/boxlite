@@ -42,6 +42,22 @@ export class RedisLockLease {
     return this.abortController.signal
   }
 
+  async readCheckpoint(): Promise<string | null> {
+    return this.withTimeout(
+      this.provider.readCheckpoint(this.key),
+      this.operationTimeoutMs,
+      `Redis checkpoint read timed out for ${this.key}`,
+    )
+  }
+
+  async saveCheckpoint(value: string): Promise<void> {
+    await this.withTimeout(
+      this.provider.saveCheckpoint(this.key, this.owner, value),
+      this.operationTimeoutMs,
+      `Redis checkpoint save timed out for ${this.key}`,
+    )
+  }
+
   async release(): Promise<void> {
     if (this.isReleased) {
       return
@@ -115,14 +131,14 @@ export class RedisLockLease {
     )
   }
 
-  private async withTimeout(operation: Promise<void>, timeoutMs: number, timeoutMessage: string): Promise<void> {
+  private async withTimeout<T>(operation: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
     let timeout: ReturnType<typeof setTimeout>
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeout = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs)
     })
 
     try {
-      await Promise.race([operation, timeoutPromise])
+      return await Promise.race([operation, timeoutPromise])
     } finally {
       clearTimeout(timeout)
     }
@@ -164,12 +180,58 @@ export class RedisLockProvider {
     return !!acquired
   }
 
-  async acquireLease(key: string, ttl: number): Promise<RedisLockLease | null> {
+  async acquireLease(key: string, ttl: number, signal?: AbortSignal): Promise<RedisLockLease | null> {
+    signal?.throwIfAborted()
     const owner = new LockCode(randomUUID())
-    if (!(await this.lock(key, ttl, owner))) {
-      return null
+    const acquisition = this.lock(key, ttl, owner).then((acquired) =>
+      acquired ? new RedisLockLease(this, key, ttl, owner) : null,
+    )
+    if (!signal) return acquisition
+
+    let onAbort!: () => void
+    const cancelled = new Promise<never>((_, reject) => {
+      onAbort = () => reject(signal.reason)
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+    try {
+      const lease = await Promise.race([acquisition, cancelled])
+      signal.throwIfAborted()
+      return lease
+    } catch (error) {
+      if (signal.aborted) {
+        void acquisition
+          .then((lease) => lease?.release())
+          .catch((releaseError) =>
+            this.logger.error(`Error cleaning up cancelled Redis lock acquisition for ${key}`, releaseError),
+          )
+      }
+      throw error
+    } finally {
+      signal.removeEventListener('abort', onAbort)
     }
-    return new RedisLockLease(this, key, ttl, owner)
+  }
+
+  async readCheckpoint(key: string): Promise<string | null> {
+    return this.redis.get(`{${key}}:checkpoint`)
+  }
+
+  async saveCheckpoint(key: string, owner: LockCode, value: string): Promise<void> {
+    // Progress outlives the lease; an expired owner must not overwrite its successor.
+    const saved = (await this.redis.eval(
+      `if redis.call('get', KEYS[1]) == ARGV[1] then
+        redis.call('set', KEYS[2], ARGV[2])
+        return 1
+      end
+      return 0`,
+      2,
+      key,
+      `{${key}}:checkpoint`,
+      owner.getCode(),
+      value,
+    )) as number
+    if (saved !== 1) {
+      throw new LockOwnershipLostError(`Cannot save Redis checkpoint for ${key}: ownership was lost`)
+    }
   }
 
   async renewLease(key: string, ttl: number, owner: LockCode): Promise<void> {

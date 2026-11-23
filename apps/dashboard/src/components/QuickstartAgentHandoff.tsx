@@ -420,8 +420,8 @@ Verify that the credentials are valid and authorized for this task before execut
             </span>
           ))}
         </div>
-        <h2 className="text-xl font-semibold tracking-tight">What would you like to build?</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <h2 className="text-section font-semibold tracking-tight">What would you like to build?</h2>
+        <p className="mt-2 text-body text-muted-foreground">
           Describe your app. Your coding agent will build and deploy it in a Box, with a public URL you can share.
         </p>
         <div className="mt-5 rounded-none bg-card p-4 focus-within:ring-1 focus-within:ring-brand/50 sm:p-5">
@@ -443,10 +443,10 @@ Verify that the credentials are valid and authorized for this task before execut
               if (draft.ready) void draft.flush().catch(() => {})
             }}
             rows={3}
-            className="w-full resize-y bg-transparent text-base leading-relaxed outline-none placeholder:text-muted-foreground/60"
+            className="w-full resize-y bg-transparent text-em leading-relaxed outline-none placeholder:text-muted-foreground/60"
           />
           <div className="mt-3 flex flex-wrap items-center justify-between gap-4">
-            <span className="text-xs text-muted-foreground" role="status">
+            <span className="text-meta text-muted-foreground" role="status">
               {draft.error ? (
                 <>
                   {draft.error}{' '}
@@ -466,7 +466,7 @@ Verify that the credentials are valid and authorized for this task before execut
               type="button"
               disabled={!handoff || !draft.ready || !request.trim() || copying}
               onClick={() => void (preparedRequest === request ? copy() : prepare())}
-              className="rounded-none bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-35"
+              className="rounded-none bg-foreground px-5 py-2.5 text-body font-medium text-background transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-35"
             >
               {copying
                 ? preparedRequest === request
@@ -480,7 +480,7 @@ Verify that the credentials are valid and authorized for this task before execut
             </button>
           </div>
         </div>
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-meta text-muted-foreground">
           <span>Try an idea</span>
           {[
             ['Internal dashboard', 'Build an internal dashboard to track projects, owners, and deadlines.'],
@@ -505,7 +505,7 @@ Verify that the credentials are valid and authorized for this task before execut
           ))}
         </div>
         {(failed || permissionsTimedOut) && (
-          <p className="mt-4 text-sm text-destructive">
+          <p className="mt-4 text-body text-destructive">
             Could not prepare your key.{' '}
             <button type="button" onClick={retry} className="underline">
               Try again
@@ -513,17 +513,17 @@ Verify that the credentials are valid and authorized for this task before execut
           </p>
         )}
         {!handoff && !failed && !permissionsTimedOut && (
-          <p className="mt-4 text-xs text-muted-foreground" role="status">
+          <p className="mt-4 text-meta text-muted-foreground" role="status">
             Preparing your key…
           </p>
         )}
         {copied === 'failed' && (
-          <p role="alert" className="mt-4 text-sm text-destructive">
+          <p role="alert" className="mt-4 text-body text-destructive">
             Could not save or copy the prompt. Your text is still here. Try again.
           </p>
         )}
         {confirmationFailed && (
-          <p role="status" className="mt-4 text-sm text-muted-foreground">
+          <p role="status" className="mt-4 text-body text-muted-foreground">
             Prompt copied, but confirmation could not be saved.{' '}
             <button type="button" className="underline" onClick={() => void confirmCopy()}>
               Retry confirmation
@@ -532,15 +532,15 @@ Verify that the credentials are valid and authorized for this task before execut
         )}
         {handedOff && (
           <div role="status" className="mt-6 bg-brand/[0.06] px-5 py-4">
-            <p className="text-sm font-medium">Prompt copied. Continue in your coding agent.</p>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="text-body font-medium">Prompt copied. Continue in your coding agent.</p>
+            <p className="mt-1 text-body text-muted-foreground">
               Paste the prompt into your local coding agent’s chat and review the proposed actions.
             </p>
           </div>
         )}
-        <details className="mt-6 text-sm text-muted-foreground">
+        <details className="mt-6 text-body text-muted-foreground">
           <summary className="w-fit cursor-pointer hover:text-foreground">View prompt</summary>
-          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-none bg-[hsl(var(--code-background))] p-4 font-mono text-xs leading-relaxed text-foreground">
+          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-none quickstart-code-surface p-4 font-mono text-meta leading-relaxed text-foreground">
             {handoff ? shownPrompt : 'Preparing your key…'}
           </pre>
         </details>
@@ -557,14 +557,14 @@ Verify that the credentials are valid and authorized for this task before execut
             credential the reader never asked for, at the moment they are
             trying to copy something. The key itself is visible in the prompt
             below; its scope and lifetime belong on the API Keys page. */}
-        <div className="min-w-0 truncate font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">
+        <div className="min-w-0 truncate font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
           <span className="text-brand">▸</span> Copy this prompt to your agent
         </div>
       </div>
 
       <div
         className={cn(
-          'flex items-start gap-3 bg-[hsl(var(--code-background))] px-[14px] py-3',
+          'quickstart-code-surface flex items-start gap-3 px-[14px] py-3',
           composeRequest ? 'rounded-none' : 'border border-border',
         )}
       >
@@ -592,7 +592,7 @@ Verify that the credentials are valid and authorized for this task before execut
       {/* The outcome, drawn before it exists. A ghost row says "a box will
           appear here" more plainly than a sentence about waiting does, and the
           same row then fills in, so nothing jumps when the agent delivers. */}
-      <div className="mt-6 font-mono text-label uppercase tracking-[1.5px] text-muted-foreground">
+      <div className="mt-6 font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
         <span className="text-brand">▸</span> Your app
       </div>
       <div
@@ -616,7 +616,7 @@ Verify that the credentials are valid and authorized for this task before execut
               : { animation: `${stage === 'waiting' ? 'qs-pulse' : 'live-pulse'} 2s infinite` }
           }
         />
-        <div className="min-w-0 flex-1 font-mono text-meta leading-none">
+        <div className="min-w-0 flex-1 font-sans text-meta leading-none">
           {stage === 'waiting' ? (
             <span className="halftone-brand block h-[10px] w-[220px] max-w-full" aria-hidden />
           ) : (

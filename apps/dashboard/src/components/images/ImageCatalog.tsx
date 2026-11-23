@@ -3,8 +3,18 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { QuotaTicks } from '@/components/QuotaTicks'
+import { TechnicalText, FormattedBytes } from '@/components/TechnicalText'
+import {
+  ResourceFilterEmptyState,
+  ResourceEmptyState,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+  ResourceFilter,
+  ResourceIdentity,
+} from '@/components/ResourceLayout'
 import { AsciiButton } from '@/components/ascii'
-import { Panel, SegmentedBar } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import {
   AlertDialog,
@@ -16,17 +26,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Plus, Search, Trash } from '@/components/ui/icon'
+import { Layers, Trash } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
 import { useDeleteImageMutation } from '@/hooks/mutations/useDeleteImageMutation'
 import { useBoxesByImageQuery } from '@/hooks/queries/useBoxesByImageQuery'
 import { useImageUsageQuery, useImagesQuery } from '@/hooks/queries/useImagesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
-import { formatBytes, timeAgo } from '@/lib/format'
+import { timeAgo } from '@/lib/format'
 import { conflictBoxIds, imageRouteKey, imageStartRef } from '@/lib/image-ref'
 import { BOX_TEMPLATES } from '@/lib/quickstart/box-templates'
-import { TemplateIcon } from '@/components/first-run/TemplateIcon'
 import { cn } from '@/lib/utils'
 import { BoxliteError } from '@/api/errors'
 import { Box, Image, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
@@ -37,7 +46,8 @@ import { toast } from 'sonner'
 // One definition for the header and every row, for the reason spelled out in
 // Volumes: two grid containers solving independently drift apart column by
 // column.
-const ROW_GRID = 'grid grid-cols-[1.8fr_1.2fr_0.6fr_0.5fr_0.8fr_110px] items-center gap-3 px-2'
+const ROW_GRID =
+  'grid min-w-[760px] grid-cols-[minmax(0,2.6fr)_minmax(0,1.2fr)_72px_48px_100px_110px] items-center gap-4'
 
 function BoxLinks({ boxes }: { boxes: Box[] }) {
   return (
@@ -62,7 +72,8 @@ export function ImageCatalog() {
   const navigate = useNavigate()
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
 
-  const { data: images = [], error: imagesError } = useImagesQuery()
+  const { data: inventory, error: imagesError, isFetching, refetch } = useImagesQuery()
+  const images = inventory ?? []
   const { data: usage, error: usageError } = useImageUsageQuery()
   const { byImage, byId, truncated } = useBoxesByImageQuery()
   const deleteImage = useDeleteImageMutation()
@@ -75,12 +86,8 @@ export function ImageCatalog() {
   const [newBoxImage, setNewBoxImage] = useState<string | null>(null)
 
   useEffect(() => {
-    if (imagesError) handleApiError(imagesError, 'Failed to fetch images')
-  }, [imagesError])
-
-  useEffect(() => {
-    if (usageError) handleApiError(usageError, 'Failed to fetch image usage')
-  }, [usageError])
+    if (usageError && !imagesError) handleApiError(usageError, 'Failed to fetch image usage')
+  }, [usageError, imagesError])
 
   const catalog = useMemo(
     () =>
@@ -138,50 +145,55 @@ export function ImageCatalog() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {usage && (
-        <Panel className={cn('mb-[14px] px-[14px] py-[12px]', atLimit && 'border-destructive')}>
-          <div className="flex flex-wrap items-center gap-4">
-            <SegmentedBar used={usage.count} limit={usage.limit} segments={usage.limit} />
-            <span
-              className={cn(
-                'whitespace-nowrap font-mono text-meta tabular-nums',
-                atLimit ? 'text-destructive' : nearLimit ? 'text-yellow-600 dark:text-yellow-400' : 'text-foreground',
-              )}
-            >
-              {usage.count} of {usage.limit} images · {formatBytes(usage.knownBytes)}
-            </span>
-            {atLimit && (
-              <span className="font-mono text-meta text-muted-foreground">
-                At the limit. Remove an image, or contact us to raise it.
+      <div className="resource-toolbar">
+        <ResourceFilter
+          label="Filter images"
+          disabled={inventory === undefined}
+          value={filter}
+          onChange={(value) => setFilter(value)}
+          count={inventory === undefined ? '—' : rows.length}
+        />
+        {usage && (
+          <div>
+            <div className="flex flex-wrap items-center gap-4">
+              <span
+                className={cn(
+                  'inline-flex items-center gap-2 whitespace-nowrap font-mono text-meta tabular-nums',
+                  atLimit
+                    ? 'text-destructive'
+                    : nearLimit
+                      ? 'text-yellow-600 dark:text-yellow-400'
+                      : 'text-muted-foreground',
+                )}
+              >
+                Custom images {usage.count} / {usage.limit}
+                <QuotaTicks used={usage.count} limit={usage.limit} />
               </span>
-            )}
+              <span aria-hidden="true" className="text-meta text-muted-foreground">
+                ·
+              </span>
+              <span className="whitespace-nowrap font-mono text-meta tabular-nums text-muted-foreground">
+                Total image size <FormattedBytes bytes={usage.knownBytes} />
+              </span>
+              {atLimit && (
+                <span className="font-sans text-meta text-muted-foreground">
+                  At the limit. Remove an image, or contact us to raise it.
+                </span>
+              )}
+            </div>
           </div>
-        </Panel>
-      )}
-
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px]">
-          <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
-          <input
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder="Filter images…"
-            className="w-full border-0 bg-transparent p-0 text-body text-foreground outline-none placeholder:text-muted-foreground"
-          />
-          <span className="whitespace-nowrap font-mono text-label uppercase text-muted-foreground">{rows.length}</span>
-        </div>
-        {canCreateBox && (
-          <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" onClick={() => setNewBoxImage('')}>
-            <Plus className="size-3.5" strokeWidth={2.4} />
-            New box
-          </AsciiButton>
         )}
       </div>
 
-      <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div
-          className={cn(ROW_GRID, 'border-b border-border py-2 font-mono text-label uppercase text-muted-foreground')}
-        >
+      <div className="resource-content scroll-edge mt-[14px]">
+        {imagesError && inventory !== undefined && (
+          <ResourceErrorNotice
+            title="Could not refresh images. Showing previously loaded data."
+            retrying={isFetching}
+            onRetry={() => void refetch()}
+          />
+        )}
+        <div className={cn(ROW_GRID, 'resource-list-head', rows.length === 0 && 'hidden')}>
           <span>Image</span>
           <span>Tags</span>
           <span>Size</span>
@@ -196,7 +208,7 @@ export function ImageCatalog() {
           const key = image.id ?? image.curatedRef ?? image.name
           const boxes = byImage.get(image.name) ?? []
           return (
-            <div key={key} className={cn(ROW_GRID, 'border-b border-border/60 py-[13px] text-body')}>
+            <div key={key} className={cn(ROW_GRID, 'resource-list-row')}>
               <button
                 type="button"
                 onClick={() =>
@@ -204,13 +216,13 @@ export function ImageCatalog() {
                     ? openTemplate(image.templateId)
                     : navigate(generatePath(RoutePath.IMAGE_DETAILS, { idOrRef: imageRouteKey(image) }))
                 }
-                className="flex min-w-0 items-center gap-3 text-left"
+                className="min-w-0 text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
                 title={image.curatedRef ?? image.name}
+                aria-label={image.name}
               >
-                <TemplateIcon id={image.templateId ?? image.name} />
-                <span className="block truncate font-mono font-medium text-foreground hover:underline">
-                  {image.name}
-                </span>
+                <ResourceIdentity icon={<Layers />}>
+                  <TechnicalText value={image.curatedRef ?? image.name} className="resource-name hover:underline" />
+                </ResourceIdentity>
               </button>
               <span className="truncate font-mono text-meta text-muted-foreground" title={image.aliases.join(', ')}>
                 {image.aliases.length === 0
@@ -220,7 +232,7 @@ export function ImageCatalog() {
                     : `${image.aliases[0]} +${image.aliases.length - 1}`}
               </span>
               <span className="font-mono text-meta tabular-nums text-muted-foreground">
-                {formatBytes(image.sizeBytes)}
+                <FormattedBytes bytes={image.sizeBytes} />
               </span>
               <span className="font-mono text-meta tabular-nums text-muted-foreground">
                 {boxes.length > 0 ? boxes.length : '—'}
@@ -229,19 +241,20 @@ export function ImageCatalog() {
               <div className="flex items-center justify-end gap-1">
                 {canCreateBox && (
                   <AsciiButton
+                    variant="quiet"
                     size="sm"
                     type="button"
                     onClick={() =>
                       image.templateId ? openTemplate(image.templateId) : setNewBoxImage(imageStartRef(image))
                     }
-                    title={`New box from ${imageStartRef(image)}`}
+                    title={`New Box from ${imageStartRef(image)}`}
                   >
-                    New box
+                    New Box
                   </AsciiButton>
                 )}
                 {canDelete && !image.curated && image.id && (
                   <AsciiButton
-                    variant="danger"
+                    variant="quiet-danger"
                     size="icon"
                     aria-label={`Remove ${image.name}`}
                     type="button"
@@ -260,14 +273,23 @@ export function ImageCatalog() {
           )
         })}
 
-        {rows.length === 0 && filter.trim() && (
-          <div className="flex flex-col items-center gap-3 py-10 text-center font-mono text-meta text-muted-foreground">
-            <span>No image matches “{filter.trim()}”</span>
-            <AsciiButton size="sm" type="button" onClick={() => setFilter('')}>
-              Clear filter
-            </AsciiButton>
-          </div>
-        )}
+        {inventory === undefined ? (
+          imagesError ? (
+            <ResourceErrorState title="Could not load images" retrying={isFetching} onRetry={() => void refetch()} />
+          ) : (
+            <ResourceLoadingState title="Loading images…" />
+          )
+        ) : rows.length === 0 ? (
+          !filter.trim() ? (
+            <ResourceEmptyState
+              title="No images yet"
+              icon={<Layers />}
+              description="Create a Box from the Boxes page to add an image. Images appear here after a Box starts successfully."
+            />
+          ) : (
+            <ResourceFilterEmptyState title={`No image matches “${filter.trim()}”`} onClear={() => setFilter('')} />
+          )
+        ) : null}
       </div>
 
       <CreateBoxDialog
@@ -283,7 +305,7 @@ export function ImageCatalog() {
             {/* What a reader would otherwise get wrong: that this frees
                 storage, and that it is final. It is neither. */}
             <AlertDialogDescription asChild>
-              <div className="space-y-2 font-mono text-meta">
+              <div className="space-y-2 font-sans text-meta">
                 <p>This frees one of your {usage?.limit ?? ''} image slots. Nothing is deleted from any box.</p>
                 <p>
                   It is refused while any box, running or stopped, still references the image. Starting a box from it

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parseBase } from 'mstage/config'
+import { valuesOfGroup } from 'mstage/select-group'
+import { EnvError } from 'mstage/env'
 import { ApiEnvironmentError, BILLING_KEYS, STATUS_SYNC_KEYS, apiEnvironmentFrom } from '../src/api-environment.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
@@ -15,6 +17,288 @@ const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://au
 const assemble = (environment: Record<string, string | undefined>, declaration = groups([])) =>
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
 
+for (const home of ['aws', 'gcp'] as const) {
+  for (const enabled of [undefined, 'false', 'true']) {
+    test(`${home} delivers checkpoint admission ${enabled ?? '(unset)'} through the stage API group`, () => {
+      const path = new URL('../../mstage.env.json', import.meta.url)
+      const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+      const required = Object.fromEntries(
+        declared.envSelectGroup
+          .api!.filter((name) => !declared.envOptional.api!.includes(name))
+          .map((name) => [name, 'fixture']),
+      )
+      const selected = valuesOfGroup({
+        group: 'api',
+        groups: declared.envSelectGroup,
+        optional: declared.envOptional.api,
+        where: path.pathname,
+        values: { ...required, ...(enabled === undefined ? {} : { CHECKPOINTS_ENABLED: enabled }) },
+      })
+      const { environment, secrets } = apiEnvironmentFrom({
+        environment: { ...base, ...selected },
+        declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+        region: home === 'aws' ? 'us-east-1' : 'us-east1',
+        stage: 'dev',
+        home,
+      })
+      assert.equal(environment.CHECKPOINTS_ENABLED, enabled)
+      assert.equal(Object.hasOwn(environment, 'CHECKPOINTS_ENABLED'), enabled !== undefined)
+      assert.equal(Object.hasOwn(secrets, 'CHECKPOINTS_ENABLED'), false)
+    })
+  }
+}
+
+for (const home of ['aws', 'gcp'] as const) {
+  test(`${home} sets Filestore support by cloud`, () => {
+    // The runner reads the resolved server/export from its dispatch, so this
+    // value is the deployment's own placement record for Filestore instances
+    // (PR boxlite-ai/boxlite#2608): absent on stages without the feature, a
+    // JSON array when an operator provisions one.
+    const path = new URL('../../mstage.env.json', import.meta.url)
+    const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+    const required = Object.fromEntries(
+      declared.envSelectGroup
+        .api!.filter((name) => !declared.envOptional.api!.includes(name))
+        .map((name) => [name, 'fixture']),
+    )
+    const instances = JSON.stringify([
+      { instance: 'example-shared', project_id: 'example-project', zone: 'asia-southeast1-b' },
+    ])
+    const selected = valuesOfGroup({
+      group: 'api',
+      groups: declared.envSelectGroup,
+      optional: declared.envOptional.api,
+      where: path.pathname,
+      values: { ...required, FILESTORE_INSTANCES: instances },
+    })
+    const { environment, secrets } = apiEnvironmentFrom({
+      environment: { ...base, ...selected },
+      declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+      region: home === 'aws' ? 'us-east-1' : 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(environment.FILESTORE_SUPPORTED, home === 'gcp' ? 'true' : 'false')
+    assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), home === 'gcp')
+    if (home === 'gcp') assert.equal(environment.FILESTORE_INSTANCES, instances)
+    assert.equal(Object.hasOwn(secrets, 'FILESTORE_INSTANCES'), false)
+  })
+
+  test(`${home} handles an unset FILESTORE_INSTANCES`, () => {
+    const path = new URL('../../mstage.env.json', import.meta.url)
+    const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+    const required = Object.fromEntries(
+      declared.envSelectGroup
+        .api!.filter((name) => !declared.envOptional.api!.includes(name))
+        .map((name) => [name, 'fixture']),
+    )
+    const selected = valuesOfGroup({
+      group: 'api',
+      groups: declared.envSelectGroup,
+      optional: declared.envOptional.api,
+      where: path.pathname,
+      values: { ...required },
+    })
+    const { environment } = apiEnvironmentFrom({
+      environment: { ...base, ...selected },
+      declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+      region: home === 'aws' ? 'us-east-1' : 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(environment.FILESTORE_SUPPORTED, home === 'gcp' ? 'true' : 'false')
+    assert.equal(Object.hasOwn(environment, 'FILESTORE_INSTANCES'), home === 'gcp')
+    if (home === 'gcp') {
+      assert.deepEqual(JSON.parse(environment.FILESTORE_INSTANCES), [])
+    }
+  })
+}
+
+for (const home of ['aws', 'gcp'] as const) {
+  for (const minimum of [undefined, '1', '3', '63']) {
+    test(`${home} delivers the platform subdomain minimum ${minimum ?? '(unset)'} from the stage group`, () => {
+      const path = new URL('../../mstage.env.json', import.meta.url)
+      const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+      const key = 'PLATFORM_SUBDOMAIN_MIN_LENGTH'
+      const required = Object.fromEntries(
+        declared.envSelectGroup
+          .api!.filter((name) => name !== key && !declared.envOptional.api!.includes(name))
+          .map((name) => [name, 'fixture']),
+      )
+      const selected = valuesOfGroup({
+        group: 'api',
+        groups: declared.envSelectGroup,
+        optional: declared.envOptional.api,
+        where: path.pathname,
+        values: { ...required, ...(minimum === undefined ? {} : { [key]: minimum }) },
+      })
+      const { environment, secrets } = apiEnvironmentFrom({
+        environment: { ...base, ...selected },
+        declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+        region: home === 'aws' ? 'us-east-1' : 'us-east1',
+        stage: 'dev',
+        home,
+      })
+      assert.equal(environment[key], minimum)
+      assert.equal(Object.hasOwn(environment, key), minimum !== undefined)
+      assert.equal(Object.hasOwn(secrets, key), false)
+    })
+  }
+}
+
+test('PostHog events use the deployed stage on both clouds', () => {
+  for (const home of ['aws', 'gcp'] as const) {
+    const { environment } = apiEnvironmentFrom({
+      environment: base,
+      declaration: groups([]),
+      region: 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(environment.POSTHOG_ENVIRONMENT, 'dev', home)
+  }
+})
+
+const ciSecrets = ['CI_GITHUB_APP_PRIVATE_KEY', 'CI_GITHUB_WEBHOOK_SECRET', 'CI_SECRET_ENCRYPTION_KEY']
+const ciKeys = ['CI_GITHUB_APP_CLIENT_ID', 'CI_GITHUB_APP_SLUG', ...ciSecrets]
+const ciValues = (home: 'aws' | 'gcp'): Record<string, string> => ({
+  CI_GITHUB_APP_CLIENT_ID: 'test-client',
+  CI_GITHUB_APP_SLUG: 'example-app',
+  ...Object.fromEntries(
+    ciSecrets.map((key, index) => [
+      key,
+      JSON.stringify({
+        address:
+          home === 'gcp'
+            ? `projects/test-project/secrets/ci-${index}/versions/1`
+            : `arn:aws:secretsmanager:us-east-1:123456789012:secret:ci-${index}`,
+      }),
+    ]),
+  ),
+})
+
+test('browser connect is optional and carries its client secret only through a secret reference', () => {
+  const key = 'CI_GITHUB_APP_CLIENT_SECRET'
+  const input = {
+    ...base,
+    ...ciValues('gcp'),
+    [key]: JSON.stringify({ address: 'projects/test-project/secrets/ci-oauth/versions/1' }),
+  }
+  const result = apiEnvironmentFrom({
+    environment: input,
+    declaration: groups([...ciKeys, key], [...ciSecrets, key]),
+    region: 'us-east1',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  assert.equal(result.environment[key], undefined)
+  assert.equal(result.secrets[key], 'projects/test-project/secrets/ci-oauth/versions/1')
+  assert.throws(
+    () =>
+      apiEnvironmentFrom({
+        environment: { ...input, [key]: 'CONFIDENTIAL-DO-NOT-ECHO' },
+        declaration: groups([...ciKeys, key], ciSecrets),
+        region: 'us-east1',
+        stage: 'dev',
+        home: 'gcp',
+      }),
+    (error) => {
+      assert.ok(error instanceof ApiEnvironmentError)
+      assert.ok(!error.message.includes('CONFIDENTIAL-DO-NOT-ECHO'))
+      return true
+    },
+  )
+  const declared = parseBase(
+    new URL('../../mstage.env.json', import.meta.url).pathname,
+    readFileSync(new URL('../../mstage.env.json', import.meta.url), 'utf8'),
+  )
+  assert.ok(declared.envSelectGroup.api.includes(key))
+  assert.ok(declared.envSelectGroup.secret.includes(key))
+  assert.ok(declared.envOptional.api.includes(key))
+})
+
+test('the committed catalog carries optional CI fields and marks only its credentials as references', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  for (const key of ciKeys) {
+    assert.ok(declared.envSelectGroup.api.includes(key))
+    assert.ok(declared.envOptional.api.includes(key))
+    assert.equal(declared.envSelectGroup.secret.includes(key), ciSecrets.includes(key))
+  }
+})
+
+for (const home of ['aws', 'gcp'] as const) {
+  test(`${home} delivers CI credentials only as secret references`, () => {
+    const input = ciValues(home)
+    const result = apiEnvironmentFrom({
+      environment: { ...base, ...input },
+      declaration: groups(ciKeys, ciSecrets),
+      region: 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(result.environment.CI_GITHUB_APP_CLIENT_ID, input.CI_GITHUB_APP_CLIENT_ID)
+    assert.equal(result.environment.CI_GITHUB_APP_SLUG, input.CI_GITHUB_APP_SLUG)
+    for (const key of ciSecrets) {
+      assert.equal(result.environment[key], undefined)
+      assert.equal(result.secrets[key], JSON.parse(input[key]).address)
+    }
+  })
+}
+
+for (const key of ciSecrets) {
+  test(`hosted CI rejects plaintext ${key} without echoing it`, () => {
+    const input = { ...ciValues('aws'), [key]: 'CONFIDENTIAL-DO-NOT-ECHO' }
+    assert.throws(
+      () =>
+        assemble(
+          { ...base, ...input },
+          groups(
+            ciKeys,
+            ciSecrets.filter((k) => k !== key),
+          ),
+        ),
+      (error) => {
+        assert.ok(error instanceof ApiEnvironmentError)
+        assert.match(error.message, new RegExp(key))
+        assert.ok(!error.message.includes(input[key]))
+        return true
+      },
+    )
+  })
+}
+
+for (const key of ciKeys) {
+  test(`hosted CI refuses a partial configuration missing ${key}`, () => {
+    const input = ciValues('aws')
+    delete input[key]
+    assert.throws(
+      () =>
+        assemble(
+          { ...base, ...input },
+          groups(
+            ciKeys.filter((k) => k !== key),
+            ciSecrets.filter((k) => k !== key),
+          ),
+        ),
+      new RegExp(key),
+    )
+  })
+}
+
+test('a secret-reference client ID cannot silently leave the scheduler without background CPU', () => {
+  const key = 'CI_GITHUB_APP_CLIENT_ID'
+  assert.throws(
+    () => assemble({ ...base, [key]: ciValues('aws').CI_GITHUB_APP_PRIVATE_KEY }, groups([key], [key])),
+    /CI_GITHUB_APP_CLIENT_ID/,
+  )
+})
+
+test('hosted CI refuses standalone file inputs', () => {
+  const key = 'CI_GITHUB_APP_PRIVATE_KEY_FILE'
+  assert.throws(() => assemble({ ...base, [key]: '/private/key.pem' }, groups([key])), /self-hosted file input/)
+})
+
 test('the declared API group delivers the organization invitation lifetime on both clouds', () => {
   const path = new URL('../../mstage.env.json', import.meta.url)
   const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
@@ -27,7 +311,11 @@ test('the declared API group delivers the organization invitation lifetime on bo
   )
   for (const home of ['aws', 'gcp'] as const) {
     const { environment } = apiEnvironmentFrom({
-      environment: { ...base, ...required, ORGANIZATION_INVITATION_TTL_SECONDS: '3600' },
+      environment: {
+        ...base,
+        ...required,
+        ORGANIZATION_INVITATION_TTL_SECONDS: '3600',
+      },
       declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
       region: 'us-east1',
       stage: 'dev',
@@ -35,6 +323,168 @@ test('the declared API group delivers the organization invitation lifetime on bo
     })
     assert.equal(environment.ORGANIZATION_INVITATION_TTL_SECONDS, '3600', home)
   }
+})
+
+test('AWS never deploys Filestore instances from stage configuration', () => {
+  const configured = assemble({ ...base, FILESTORE_INSTANCES: '   ' })
+  assert.equal(configured.environment.FILESTORE_SUPPORTED, 'false')
+  assert.equal(Object.hasOwn(configured.environment, 'FILESTORE_INSTANCES'), false)
+})
+
+test('GCP leaves Filestore instances empty when not configured', () => {
+  const unset = apiEnvironmentFrom({
+    environment: { ...base, FILESTORE_INSTANCES: undefined },
+    declaration: groups([]),
+    region: 'us-east5',
+    stage: 'dev',
+    home: 'gcp',
+  })
+
+  assert.equal(unset.environment.FILESTORE_SUPPORTED, 'true')
+  assert.deepEqual(unset.filestoreProjects, [])
+  assert.equal(unset.environment.FILESTORE_INSTANCES, '[]')
+
+  const production = apiEnvironmentFrom({
+    environment: { ...base, FILESTORE_INSTANCES: undefined },
+    declaration: groups([]),
+    region: 'us-east5',
+    stage: 'production',
+    home: 'gcp',
+  })
+  assert.equal(production.environment.FILESTORE_INSTANCES, '[]')
+  assert.deepEqual(production.filestoreProjects, [])
+
+  const disabled = apiEnvironmentFrom({
+    environment: { ...base, FILESTORE_INSTANCES: '   ' },
+    declaration: groups([]),
+    region: 'us-east5',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  assert.equal(disabled.environment.FILESTORE_SUPPORTED, 'true')
+  assert.deepEqual(disabled.filestoreProjects, [])
+  assert.equal(disabled.environment.FILESTORE_INSTANCES, '')
+})
+
+test('GCP deduplicates Filestore projects and rejects malformed placement', () => {
+  const configured = apiEnvironmentFrom({
+    environment: {
+      ...base,
+      FILESTORE_INSTANCES: JSON.stringify([
+        { instance: 'zeta', project_id: 'zeta-project', zone: 'asia-southeast1-b' },
+        { instance: 'alpha', project_id: 'alpha-project', zone: 'asia-southeast1-c' },
+        { instance: 'backup', project_id: 'zeta-project', zone: 'asia-southeast1-a' },
+      ]),
+    },
+    declaration: groups([]),
+    region: 'us-east5',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  assert.deepEqual(configured.filestoreProjects, ['alpha-project', 'zeta-project'])
+
+  assert.throws(
+    () =>
+      apiEnvironmentFrom({
+        environment: { ...base, FILESTORE_INSTANCES: 'not-json' },
+        declaration: groups([]),
+        region: 'us-east5',
+        stage: 'dev',
+        home: 'gcp',
+      }),
+    /FILESTORE_INSTANCES/,
+  )
+
+  for (const [label, entry] of [
+    ['missing instance', { project_id: 'valid-project', zone: 'asia-southeast1-b' }],
+    ['missing project_id', { instance: 'shared', zone: 'asia-southeast1-b' }],
+    ['missing zone', { instance: 'shared', project_id: 'valid-project' }],
+  ] as const) {
+    assert.throws(
+      () =>
+        apiEnvironmentFrom({
+          environment: { ...base, FILESTORE_INSTANCES: JSON.stringify([entry]) },
+          declaration: groups([]),
+          region: 'us-east5',
+          stage: 'dev',
+          home: 'gcp',
+        }),
+      /FILESTORE_INSTANCES/,
+      label,
+    )
+  }
+})
+
+test('GCP validates complete Filestore placement before deriving IAM projects', () => {
+  const invalidFormats = [
+    { instance: 'alpha', project_id: 'valid-project', zone: 'invalid' },
+    { instance: '', project_id: 'valid-project', zone: 'asia-southeast1-b' },
+    { instance: 'alpha', project_id: '', zone: 'asia-southeast1-b' },
+    { instance: 'alpha', project_id: 'valid-project', zone: '' },
+    { instance: 'alpha', project_id: 'VALID', zone: 'asia-southeast1-b' },
+    { instance: 'Alpha', project_id: 'valid-project', zone: 'asia-southeast1-b' },
+  ]
+
+  for (const [label, entry] of invalidFormats.map((entry, index) => [`invalid format ${index}`, entry] as const)) {
+    assert.throws(
+      () =>
+        apiEnvironmentFrom({
+          environment: { ...base, FILESTORE_INSTANCES: JSON.stringify([entry]) },
+          declaration: groups([]),
+          region: 'us-east1',
+          stage: 'dev',
+          home: 'gcp',
+        }),
+      (error) => {
+        assert.ok(error instanceof ApiEnvironmentError)
+        assert.match(error.message, /FILESTORE_INSTANCES/)
+        return true
+      },
+      label,
+    )
+  }
+})
+
+test('GCP rejects Filestore instance names duplicated after trimming', () => {
+  assert.throws(
+    () =>
+      apiEnvironmentFrom({
+        environment: {
+          ...base,
+          FILESTORE_INSTANCES: JSON.stringify([
+            { instance: ' shared ', project_id: 'project-a', zone: 'asia-southeast1-b' },
+            { instance: 'shared', project_id: 'project-b', zone: 'asia-southeast1-c' },
+          ]),
+        },
+        declaration: groups([]),
+        region: 'us-east1',
+        stage: 'dev',
+        home: 'gcp',
+      }),
+    (error) => {
+      assert.ok(error instanceof ApiEnvironmentError)
+      assert.match(error.message, /instance more than once/)
+      return true
+    },
+  )
+})
+
+test('GCP produces one IAM project grant for distinct instances in one project', () => {
+  const configured = apiEnvironmentFrom({
+    environment: {
+      ...base,
+      FILESTORE_INSTANCES: JSON.stringify([
+        { instance: 'alpha', project_id: 'example-project', zone: 'asia-southeast1-b' },
+        { instance: 'beta', project_id: ' example-project ', zone: 'asia-southeast1-c' },
+      ]),
+    },
+    declaration: groups([]),
+    region: 'us-east1',
+    stage: 'dev',
+    home: 'gcp',
+  })
+
+  assert.deepEqual(configured.filestoreProjects, ['example-project'])
 })
 
 test('the two dashboard origins are different on purpose, and both have a default', () => {
@@ -292,4 +742,167 @@ test('the deploy group demands only what a deploy cannot run without', () => {
       'STACK_DOMAIN',
     ],
   )
+})
+
+test('Organization App secrets use the workload channel with a distinct identity and the shared anchor', () => {
+  const orgSecrets = [
+    'CI_GITHUB_ORG_APP_PRIVATE_KEY',
+    'CI_GITHUB_ORG_WEBHOOK_SECRET',
+    'CI_GITHUB_ORG_APP_CLIENT_SECRET',
+  ]
+  const orgKeys = ['CI_GITHUB_ORG_APP_CLIENT_ID', 'CI_GITHUB_ORG_APP_SLUG', ...orgSecrets]
+  const values: Record<string, string> = {
+    ...ciValues('gcp'),
+    CI_GITHUB_ORG_APP_CLIENT_ID: 'org-client',
+    CI_GITHUB_ORG_APP_SLUG: 'org-app',
+    ...Object.fromEntries(
+      orgSecrets.map((key, i) => [
+        key,
+        JSON.stringify({ address: `projects/test-project/secrets/org-${i}/versions/1` }),
+      ]),
+    ),
+  }
+  const declaration = groups([...ciKeys, ...orgKeys], [...ciSecrets, ...orgSecrets])
+  const make = (input: Record<string, string>) =>
+    apiEnvironmentFrom({
+      environment: { ...base, ...input },
+      declaration,
+      home: 'gcp',
+      region: 'us-east1',
+      stage: 'dev',
+    })
+  const result = make(values)
+  for (const key of orgSecrets) {
+    assert.equal(result.environment[key], undefined)
+    assert.ok(result.secrets[key])
+  }
+  assert.throws(() => make({ ...values, CI_GITHUB_ORG_APP_CLIENT_ID: values.CI_GITHUB_APP_CLIENT_ID }), /distinct/)
+  assert.throws(
+    () => make({ ...values, CI_GITHUB_ORG_WEBHOOK_SECRET: 'do-not-echo-secret' }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /CI_GITHUB_ORG_WEBHOOK_SECRET.*does not hold JSON/)
+      assert.ok(!error.message.includes('do-not-echo-secret'))
+      return true
+    },
+  )
+  const declared = parseBase(
+    new URL('../../mstage.env.json', import.meta.url).pathname,
+    readFileSync(new URL('../../mstage.env.json', import.meta.url), 'utf8'),
+  )
+  for (const key of orgKeys) assert.ok(declared.envSelectGroup.api.includes(key))
+  for (const key of orgSecrets) assert.ok(declared.envSelectGroup.secret.includes(key))
+})
+
+for (const [scenario, message] of [
+  ['anchor', /Personal App identity is required/],
+  ['client', /Organization App requires a distinct client ID/],
+  ['slug', /Organization App slug is required/],
+  ['private-key', /CI_GITHUB_ORG_APP_PRIVATE_KEY requires a mstage secret ref/],
+  ['webhook', /CI_GITHUB_ORG_WEBHOOK_SECRET requires a mstage secret ref/],
+  ['oauth-secret', /CI_GITHUB_OAUTH_CLIENT_SECRET requires a mstage secret ref/],
+  ['oauth-anchor', /Identity OAuth requires the hosted CI storage anchor/],
+  ['web-anchor', /CI_GITHUB_APP_CLIENT_ID is required for browser connect/],
+] as const) {
+  test(`optional CI App configuration fails closed for a missing or invalid ${scenario}`, () => {
+    const ref = (name: string) => JSON.stringify({ address: `projects/test-project/secrets/${name}/versions/1` })
+    const input: Record<string, string> = {
+      ...ciValues('gcp'),
+      CI_GITHUB_ORG_APP_CLIENT_ID: 'org-client',
+      CI_GITHUB_ORG_APP_SLUG: 'org-app',
+      CI_GITHUB_ORG_APP_PRIVATE_KEY: ref('org-key'),
+      CI_GITHUB_ORG_WEBHOOK_SECRET: ref('org-hook'),
+    }
+    if (['anchor', 'oauth-anchor', 'web-anchor'].includes(scenario)) delete input.CI_GITHUB_APP_CLIENT_ID
+    if (scenario === 'client') input.CI_GITHUB_ORG_APP_CLIENT_ID = 'org/invalid'
+    if (scenario === 'slug') delete input.CI_GITHUB_ORG_APP_SLUG
+    if (scenario === 'private-key') delete input.CI_GITHUB_ORG_APP_PRIVATE_KEY
+    if (scenario === 'webhook') delete input.CI_GITHUB_ORG_WEBHOOK_SECRET
+    if (scenario === 'oauth-secret') input.CI_GITHUB_OAUTH_CLIENT_ID = 'identity-client'
+    if (scenario === 'oauth-anchor' || scenario === 'web-anchor') {
+      for (const key of Object.keys(input)) if (key.startsWith('CI_GITHUB_ORG_')) delete input[key]
+      if (scenario === 'oauth-anchor') {
+        input.CI_GITHUB_OAUTH_CLIENT_ID = 'identity-client'
+        input.CI_GITHUB_OAUTH_CLIENT_SECRET = ref('identity')
+      } else input.CI_GITHUB_APP_CLIENT_SECRET = ref('personal-web')
+    }
+    const keys = Object.keys(input)
+    const secrets = keys.filter((key) => input[key].startsWith('{'))
+    assert.throws(
+      () =>
+        apiEnvironmentFrom({
+          environment: { ...base, ...input },
+          declaration: groups(keys, secrets),
+          region: 'us-east1',
+          stage: 'dev',
+          home: 'gcp',
+        }),
+      message,
+    )
+  })
+}
+
+test('identity OAuth uses a distinct optional client and a secret reference without changing CI credentials', () => {
+  const identity = 'CI_GITHUB_OAUTH_CLIENT_ID',
+    secret = 'CI_GITHUB_OAUTH_CLIENT_SECRET'
+  const declaration = groups([...ciKeys, identity, secret], [...ciSecrets, secret])
+  const values = {
+    ...base,
+    ...ciValues('gcp'),
+    [identity]: 'identity-client',
+    [secret]: JSON.stringify({ address: 'projects/test-project/secrets/identity/versions/1' }),
+  }
+  const make = (environment: Record<string, string>) =>
+    apiEnvironmentFrom({ environment, declaration, region: 'us-east1', stage: 'dev', home: 'gcp' })
+  const result = make(values)
+  assert.equal(result.environment[identity], 'identity-client')
+  assert.equal(result.environment[secret], undefined)
+  assert.equal(result.secrets[secret], 'projects/test-project/secrets/identity/versions/1')
+  assert.equal(result.environment.CI_GITHUB_APP_CLIENT_ID, 'test-client')
+  for (const invalid of [
+    { ...values, [identity]: 'test-client' },
+    { ...values, [identity]: '' },
+  ])
+    assert.throws(
+      () => make(invalid),
+      (error) => error instanceof ApiEnvironmentError && !error.message.includes('private-do-not-echo'),
+    )
+  for (const invalidSecret of ['', 'private-do-not-echo'])
+    assert.throws(
+      () => make({ ...values, [secret]: invalidSecret }),
+      (error) => error instanceof EnvError && !error.message.includes('private-do-not-echo'),
+    )
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const catalog = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  assert.ok(catalog.envOptional.api.includes(identity))
+  assert.ok(catalog.envOptional.api.includes(secret))
+  assert.ok(catalog.envSelectGroup.secret.includes(secret))
+  assert.equal(catalog.envSelectGroup.secret.includes(identity), false)
+})
+
+/*
+ * The expansion switch and its cap are the API's to interpret; the deploy's
+ * whole job is to carry them or not carry them. An absent key is the API's
+ * own default — switch off, cap unset — which is what keeps a stage that
+ * never heard of the feature behaving exactly as it did before it existed.
+ */
+test('the disk-expansion switch travels only where the stage set it', () => {
+  const { environment } = assemble(base)
+  assert.equal('RUNNER_DISK_EXPANSION_ENABLED' in environment, false)
+  assert.equal('RUNNER_DISK_EXPANSION_CAP_GIB' in environment, false)
+
+  const on = assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'true', RUNNER_DISK_EXPANSION_CAP_GIB: '4096' })
+  assert.equal(on.environment.RUNNER_DISK_EXPANSION_ENABLED, 'true')
+  assert.equal(on.environment.RUNNER_DISK_EXPANSION_CAP_GIB, '4096')
+
+  const off = assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'false', RUNNER_DISK_EXPANSION_CAP_GIB: '512' })
+  assert.equal(off.environment.RUNNER_DISK_EXPANSION_ENABLED, 'false')
+  assert.equal(off.environment.RUNNER_DISK_EXPANSION_CAP_GIB, '512')
+})
+
+test('a disk-expansion switch that is neither true nor false is refused at the deploy', () => {
+  // 'True' would pass through and be read as off forever: the API compares
+  // strict equality, so a typo'd switch stays closed with nothing saying why.
+  // Refused here, where the stage can still be told.
+  assert.throws(() => assemble({ ...base, RUNNER_DISK_EXPANSION_ENABLED: 'True' }), /must be true or false/)
 })

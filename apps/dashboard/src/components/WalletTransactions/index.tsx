@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState, ResourceLoadingState, StatusIndicator } from '@/components/ResourceLayout'
+import { CreditCardIcon } from '@/components/ui/icon'
 import type { WalletTransaction } from '@/billing-api'
 import type { WalletTransactionsTableProps } from './types'
 import { walletTransactionLabel } from './columns'
@@ -61,8 +63,17 @@ function transactionAmount(transaction: WalletTransaction): string {
  */
 export function WalletTransactionsTable({ data, loading }: WalletTransactionsTableProps) {
   if (loading) {
-    return <div className="border-b border-border/40 py-[13px] font-mono text-[13px]">Loading...</div>
+    return <ResourceLoadingState title="Loading credit activity…" />
   }
+
+  if (!data.length)
+    return (
+      <ResourceEmptyState
+        title="No credit activity yet"
+        icon={<CreditCardIcon className="size-6" />}
+        description="Credit purchases, grants and usage appear here after they are recorded."
+      />
+    )
 
   return (
     // Bounded like its sibling in Billing history, and for the same reason: a
@@ -70,9 +81,7 @@ export function WalletTransactionsTable({ data, loading }: WalletTransactionsTab
     // the screen. Header inside the scroller and stuck to its top, so it cannot
     // drift out of alignment by the scrollbar's width.
     <div className="scrollbar-elevated max-h-[420px] overflow-y-auto">
-      <div
-        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
-      >
+      <div className={`${ROW} sticky top-0 z-10 resource-list-head bg-background`}>
         <span data-transaction-header>Date</span>
         <span data-transaction-header>Type</span>
         <span data-transaction-header />
@@ -86,33 +95,22 @@ export function WalletTransactionsTable({ data, loading }: WalletTransactionsTab
       {data.map((transaction) => {
         const status = statusMark(transaction.status)
         return (
-          <div
-            key={transaction.id}
-            className={`${ROW} border-b border-border/40 py-[13px] font-mono text-[13px] transition-colors hover:bg-muted/30`}
-          >
-            <span data-transaction-date className="text-foreground">
+          <div key={transaction.id} className={`${ROW} resource-list-row font-sans`}>
+            <span data-transaction-date className="font-mono text-foreground">
               {transactionDate(transaction)}
             </span>
-            <span data-transaction-type className="uppercase tracking-[0.5px] text-muted-foreground">
-              {walletTransactionLabel(transaction).toLowerCase()}
+            <span data-transaction-type className="text-muted-foreground">
+              {walletTransactionLabel(transaction)}
             </span>
             <span />
             <span
               data-transaction-amount
-              className={`text-right tabular-nums ${transaction.direction === 'inbound' ? 'text-success' : 'text-foreground'}`}
+              className={`text-right font-mono tabular-nums ${transaction.direction === 'inbound' ? 'text-success' : 'text-foreground'}`}
             >
               {transactionAmount(transaction)}
             </span>
             <span className="text-right">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-[9px]" style={{ background: status.color }} />
-                <span
-                  data-transaction-status
-                  className={transaction.status === 'failed' ? 'text-destructive' : 'text-foreground'}
-                >
-                  {status.label}
-                </span>
-              </span>
+              <StatusIndicator data-transaction-status {...status} normalizeLabel={false} />
             </span>
           </div>
         )

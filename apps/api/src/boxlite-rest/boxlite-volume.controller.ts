@@ -1,9 +1,15 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common'
+import { Audit, AUDIT_TARGET_ID } from '../audit/decorators/audit.decorator'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, Req, UseGuards } from '@nestjs/common'
+import { Request } from 'express'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
+import { UserContext } from '../common/decorators/user-context.decorator'
+import { Context } from '../common/context/context'
 import { VolumeService } from '../box/services/volume.service'
 import { CreateVolumeDto } from '../box/dto/create-volume.dto'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
@@ -32,12 +38,16 @@ export class BoxliteVolumeController {
 
   @Post()
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
+  @Audit({ action: AuditAction.CREATE, targetType: AuditTarget.VOLUME, targetIdFromResult: (result) => result.id })
   async create(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Body() dto?: CreateVolumeDto,
+    @Body() dto: CreateVolumeDto | undefined,
+    @UserContext() ctx: Context,
+    @Req() request?: Request,
   ): Promise<RestVolumeResponse> {
     // An absent body is an unnamed volume; VolumeService falls back to the id.
-    const volume = await this.volumeService.create(authContext.organization, dto ?? {})
+    const volume = await this.volumeService.create(authContext.organization, dto ?? {}, ctx)
+    if (request) request[AUDIT_TARGET_ID] = volume.id
     return this.toResponse(await this.volumeService.waitForReady(volume.id, 30))
   }
 
@@ -59,8 +69,17 @@ export class BoxliteVolumeController {
   @HttpCode(204)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_VOLUMES])
   @UseGuards(VolumeAccessGuard)
-  async remove(@Param('volumeId') volumeId: string, @Query('force') force?: string): Promise<void> {
-    await this.volumeService.delete(volumeId, force === 'true')
+  @Audit({
+    action: AuditAction.DELETE,
+    targetType: AuditTarget.VOLUME,
+    targetIdFromRequest: (req) => req.params.volumeId,
+  })
+  async remove(
+    @Param('volumeId') volumeId: string,
+    @Query('force') force: string | undefined,
+    @UserContext() ctx: Context,
+  ): Promise<void> {
+    await this.volumeService.delete(volumeId, ctx, force === 'true')
   }
 
   private toResponse(volume: Awaited<ReturnType<VolumeService['findOne']>>): RestVolumeResponse {

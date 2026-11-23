@@ -55,7 +55,13 @@ import { volumeConditionFor } from './storage.ts'
  * AMD-based ones other than N4D, and a host on one of those accepts work and
  * fails every box.
  */
-export const MACHINE = { small: 'n4-standard-4', medium: 'n4-standard-8', large: 'n4-standard-16' } as const
+export const MACHINE = {
+  small: 'n4-standard-4',
+  medium: 'n4-standard-8',
+  large: 'n4-standard-16',
+  xlarge: 'n4-standard-32',
+  '2xlarge': 'n4-standard-64',
+} as const
 
 /**
  * The only disk type N4 takes.
@@ -80,10 +86,13 @@ export const DISK_TYPE = 'hyperdisk-balanced'
  * because a default is computed once at create and a disk grown later keeps it.
  * Overriding capacity does not change these performance presets.
  */
+const standardDataDisk = { sizeGb: 200, iops: 3_600, throughputMiBps: 290 } as const
 export const DATA_DISK = {
   small: { sizeGb: 200, iops: 3_600, throughputMiBps: 240 },
-  medium: { sizeGb: 200, iops: 3_600, throughputMiBps: 290 },
-  large: { sizeGb: 200, iops: 3_600, throughputMiBps: 290 },
+  medium: standardDataDisk,
+  large: standardDataDisk,
+  xlarge: standardDataDisk,
+  '2xlarge': standardDataDisk,
 } as const
 
 /** What the data disk is attached as, so a host finds it at `/dev/disk/by-id/google-<this>`. */
@@ -143,7 +152,7 @@ const IMAGE = 'ubuntu-os-cloud/ubuntu-2404-lts-amd64'
  * fleet that silently never upgrades.
  */
 const RUNNER_LABEL = 'boxlite-runner'
-const runnerLabelValue = (controlPlaneRunnerName: string): string =>
+export const runnerLabelValue = (controlPlaneRunnerName: string): string =>
   controlPlaneRunnerName.toLowerCase().replace(/[^a-z0-9_-]/g, '-')
 
 /**
@@ -290,6 +299,16 @@ udevadm trigger --name-match=kvm || true`,
          * grants below are for.
          */
         VOLUME_STORAGE_BACKEND: VOLUME_BACKEND,
+        /*
+         * The identity of the disks the control plane grows online, written at
+         * boot beside the rest of the unit environment. The stage-level pair
+         * travels here; the per-host disk name joins in the instance loop
+         * below, because only the instance knows which host it is. The OS
+         * policy below converges the same three onto the hosts whose boot
+         * script predates them.
+         */
+        GCP_PROJECT_ID: project,
+        GCP_ZONE: zone,
       },
     }
 
@@ -388,6 +407,21 @@ udevadm trigger --name-match=kvm || true`,
       condition: volumeConditionFor(volumePrefix),
     })
 
+    /*
+     * Checkpoint archives: a host uploads one on export and downloads one on
+     * restore, resolving Application Default Credentials as gcsfuse does. A
+     * binding on the one bucket, so it needs no condition, and object access
+     * only — `objectUser`, not admin. It includes delete, which a redelivered
+     * export needs to overwrite the archive it wrote before.
+     */
+    if (request.checkpointBucket) {
+      new gcp.storage.BucketIAMMember('RunnerCheckpointObjects', {
+        bucket: request.checkpointBucket,
+        role: 'roles/storage.objectUser',
+        member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+      })
+    }
+
     const assignments = request.fleet
 
     const instances = assignments.map(({ slot, token }) => {
@@ -420,6 +454,18 @@ udevadm trigger --name-match=kvm || true`,
               Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),
             ),
             BOXLITE_RUNNER_NAME: slot.controlPlaneRunnerName,
+            /*
+             * This host's own data disk, by the same rule the disk resource
+             * above creates it under. The control plane grows the disk the
+             * environment names; a host reading another row would hand it a
+             * different host's identity, which is why the name is derived
+             * here rather than spelled.
+             */
+            RUNNER_DATA_DISK_NAME: runnerDataDiskNameFor({ app: $app.name, stage: $app.stage, host: slot.nameTag }),
+            // Derived from the disk the stack provisions, never spelled: the
+            // API's expandable-type set keys on this exact value, so a rename
+            // here flows through instead of silently mismatching.
+            RUNNER_DATA_DISK_TYPE: DISK_TYPE.replace(/-/g, '_'),
             // Where this host presents its own key to pull a private image.
             // Converged below as well, for the hosts booted before it existed.
             ...(proxyHost ? { [REGISTRY_PROXY_HOST_VARIABLE]: proxyHost as string } : {}),
@@ -458,7 +504,7 @@ udevadm trigger --name-match=kvm || true`,
           name: slot.nameTag,
           project,
           zone,
-          machineType: MACHINE[request.size],
+          machineType: request.machineTypes?.[request.size] ?? MACHINE[request.size],
           // Explicitly, or the device is absent on a machine that can host it.
           advancedMachineFeatures: { enableNestedVirtualization: request.nestedVirtualization },
           bootDisk: {
@@ -519,7 +565,7 @@ udevadm trigger --name-match=kvm || true`,
           metadataStartupScript: userData.apply((encoded: string) =>
             Buffer.from(encoded, 'base64').toString('utf8'),
           ),
-          labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName) },
+          labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName), 'boxlite-stage': $app.stage },
           // A host holds boxes. A teardown that took one with it would take
           // every box running on it.
           deletionProtection: true,
@@ -563,14 +609,30 @@ udevadm trigger --name-match=kvm || true`,
     // slot. Resolved together and not cast, for the reason the boot script above
     // records: an unresolved Output renders as Pulumi's `[toString]` refusal
     // text, and this one would converge the whole fleet onto it.
-    const unitEnvPolicy = $resolve([request.apiUrl, request.otlpUrl, request.registryProxyHost ?? '']).apply(
-      ([apiUrl, otlpUrl, proxyHost]) =>
-        renderUnitEnvironmentPolicyScripts({
-          apiUrl: apiUrl as string,
-          otlpUrl: otlpUrl as string,
-          volumeBackend: VOLUME_BACKEND,
-          registryProxyHost: (proxyHost as string) || null,
-        }),
+    const unitEnvPolicy = $resolve([
+      request.apiUrl,
+      request.otlpUrl,
+      request.registryProxyHost ?? '',
+      request.environment.BOXLITE_RUNNER_ENV ?? '',
+    ]).apply(([apiUrl, otlpUrl, proxyHost, runnerEnv]) =>
+      renderUnitEnvironmentPolicyScripts({
+        apiUrl: apiUrl as string,
+        otlpUrl: otlpUrl as string,
+        volumeBackend: VOLUME_BACKEND,
+        registryProxyHost: (proxyHost as string) || null,
+        runnerEnv: runnerEnv as string,
+        // The disks the control plane grows online are named here and
+        // nowhere else: the policy derives each host's from the same
+        // function the disk resource below creates under, so a grant or a
+        // report spelling the name a second time cannot drift from it.
+        dataDiskIdentity: {
+          app: $app.name,
+          stage: $app.stage,
+          project,
+          zone,
+          hosts: assignments.map(({ slot }) => slot.nameTag),
+        },
+      }),
     )
     const unitEnvScripts = {
       validate: unitEnvPolicy.apply((rendered: { validate: string }) => rendered.validate),
@@ -592,9 +654,10 @@ udevadm trigger --name-match=kvm || true`,
           location: zone,
           description: `BoxLite runner binary ${request.binary.identity}`,
           instanceFilter: {
-            // OR the existing per-host labels; no instance relabeling is needed.
+            // AND stage and runner within each entry; entries themselves are ORed.
+            // Dev and stage may share a project and logical runner names.
             inclusionLabels: batch.hosts.map(({ slot }) => ({
-              labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName) },
+              labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName), 'boxlite-stage': $app.stage },
             })),
           },
           osPolicies: [
@@ -615,7 +678,22 @@ udevadm trigger --name-match=kvm || true`,
                 },
               ],
             },
-            // Keep both policies in the same assignment: each can restart its host.
+            {
+              id: 'runner-nfs-client',
+              mode: 'ENFORCEMENT',
+              resourceGroups: [
+                {
+                  resources: [
+                    {
+                      id: 'install-nfs-common',
+                      pkg: { desiredState: 'INSTALLED', apt: { name: 'nfs-common' } },
+                    },
+                  ],
+                },
+              ],
+            },
+            // The binary and environment policies can restart the runner; the NFS package
+            // is independent so a current binary cannot skip installation on an older host.
             {
               id: 'runner-unit-env',
               mode: 'ENFORCEMENT',
@@ -638,7 +716,8 @@ udevadm trigger --name-match=kvm || true`,
           skipAwaitRollout: false,
         },
         {
-          dependsOn: [...instances, ...dependsOn, ...(previousBatch ? [previousBatch] : [])],
+          // Scoped updates skip the VM resources, so artifact access is also a direct prerequisite.
+          dependsOn: [...instances, ...dependsOn, ...staged, ...(previousBatch ? [previousBatch] : [])],
           customTimeouts: { create: '40m', update: '40m' },
         },
       )

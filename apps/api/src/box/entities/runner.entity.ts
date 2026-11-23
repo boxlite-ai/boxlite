@@ -7,7 +7,9 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm'
 import { BoxClass } from '../enums/box-class.enum'
 import { RunnerState } from '../enums/runner-state.enum'
+import { RunnerUnschedulableReason } from '../enums/runner-unschedulable-reason.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 
 @Entity()
 @Unique(['region', 'name'])
@@ -148,6 +150,26 @@ export class Runner {
   @Column({ default: false })
   supportsPrivileged: boolean
 
+  @Column({ default: false })
+  nestedVirtualizationEnabled: boolean
+
+  /**
+   * Capabilities the runner binary declared in its latest healthcheck, e.g.
+   * `['filestore']`. This exists primarily for backward compatibility during
+   * rolling upgrades: null when the binary predates capability reporting, and
+   * dispatch then treats the runner as supporting nothing beyond the base
+   * protocol, so a pre-filestore v2 runner cannot be handed a filestore
+   * volume by mistake. Kept as a jsonb array rather than per-capability
+   * boolean columns so new capabilities can be added without a schema
+   * migration.
+   */
+  @Column({
+    type: 'jsonb',
+    nullable: true,
+    default: null,
+  })
+  capabilities: string[] | null
+
   @Column({
     nullable: true,
     type: 'timestamp with time zone',
@@ -160,6 +182,13 @@ export class Runner {
   unschedulable: boolean
 
   @Column({
+    type: 'enum',
+    enum: RunnerUnschedulableReason,
+    nullable: true,
+  })
+  unschedulableReason: RunnerUnschedulableReason | null
+
+  @Column({
     default: false,
   })
   draining: boolean
@@ -170,6 +199,19 @@ export class Runner {
     default: null,
   })
   serviceHealth: RunnerServiceInfo[] | null
+
+  /**
+   * The cloud data disk behind this runner's `BOXLITE_HOME`, reported by the
+   * runner in each healthcheck. Refreshed whenever a heartbeat carries it and
+   * never written to null: an older runner binary reporting no disk must not
+   * erase the identity a newer one reported.
+   */
+  @Column({
+    type: 'jsonb',
+    nullable: true,
+    default: null,
+  })
+  dataDiskRef: RunnerDataDiskRef | null
 
   @CreateDateColumn({
     type: 'timestamp with time zone',

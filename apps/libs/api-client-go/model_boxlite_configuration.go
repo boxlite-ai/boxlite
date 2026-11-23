@@ -21,6 +21,7 @@ var _ MappedNullable = &BoxliteConfiguration{}
 
 // BoxliteConfiguration struct for BoxliteConfiguration
 type BoxliteConfiguration struct {
+	Turnstile *TurnstileConfig `json:"turnstile,omitempty"`
 	// BoxLite version
 	Version string `json:"version"`
 	// PostHog configuration
@@ -35,8 +36,6 @@ type BoxliteConfiguration struct {
 	PylonAppId *string `json:"pylonAppId,omitempty"`
 	// Proxy template URL
 	ProxyTemplateUrl string `json:"proxyTemplateUrl"`
-	// Toolbox template URL
-	ProxyToolboxUrl string `json:"proxyToolboxUrl"`
 	// Dashboard URL
 	DashboardUrl string `json:"dashboardUrl"`
 	// Whether maintenance mode is enabled
@@ -58,14 +57,13 @@ type _BoxliteConfiguration BoxliteConfiguration
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, proxyToolboxUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
+func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
 	this := BoxliteConfiguration{}
 	this.Version = version
 	this.Oidc = oidc
 	this.LinkedAccountsEnabled = linkedAccountsEnabled
 	this.Announcements = announcements
 	this.ProxyTemplateUrl = proxyTemplateUrl
-	this.ProxyToolboxUrl = proxyToolboxUrl
 	this.DashboardUrl = dashboardUrl
 	this.MaintananceMode = maintananceMode
 	this.Environment = environment
@@ -78,6 +76,38 @@ func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnab
 func NewBoxliteConfigurationWithDefaults() *BoxliteConfiguration {
 	this := BoxliteConfiguration{}
 	return &this
+}
+
+// GetTurnstile returns the Turnstile field value if set, zero value otherwise.
+func (o *BoxliteConfiguration) GetTurnstile() TurnstileConfig {
+	if o == nil || IsNil(o.Turnstile) {
+		var ret TurnstileConfig
+		return ret
+	}
+	return *o.Turnstile
+}
+
+// GetTurnstileOk returns a tuple with the Turnstile field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *BoxliteConfiguration) GetTurnstileOk() (*TurnstileConfig, bool) {
+	if o == nil || IsNil(o.Turnstile) {
+		return nil, false
+	}
+	return o.Turnstile, true
+}
+
+// HasTurnstile returns a boolean if a field has been set.
+func (o *BoxliteConfiguration) HasTurnstile() bool {
+	if o != nil && !IsNil(o.Turnstile) {
+		return true
+	}
+
+	return false
+}
+
+// SetTurnstile gets a reference to the given TurnstileConfig and assigns it to the Turnstile field.
+func (o *BoxliteConfiguration) SetTurnstile(v TurnstileConfig) {
+	o.Turnstile = &v
 }
 
 // GetVersion returns the Version field value
@@ -264,30 +294,6 @@ func (o *BoxliteConfiguration) SetProxyTemplateUrl(v string) {
 	o.ProxyTemplateUrl = v
 }
 
-// GetProxyToolboxUrl returns the ProxyToolboxUrl field value
-func (o *BoxliteConfiguration) GetProxyToolboxUrl() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.ProxyToolboxUrl
-}
-
-// GetProxyToolboxUrlOk returns a tuple with the ProxyToolboxUrl field value
-// and a boolean to check if the value has been set.
-func (o *BoxliteConfiguration) GetProxyToolboxUrlOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.ProxyToolboxUrl, true
-}
-
-// SetProxyToolboxUrl sets field value
-func (o *BoxliteConfiguration) SetProxyToolboxUrl(v string) {
-	o.ProxyToolboxUrl = v
-}
-
 // GetDashboardUrl returns the DashboardUrl field value
 func (o *BoxliteConfiguration) GetDashboardUrl() string {
 	if o == nil {
@@ -466,6 +472,9 @@ func (o BoxliteConfiguration) MarshalJSON() ([]byte, error) {
 
 func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.Turnstile) {
+		toSerialize["turnstile"] = o.Turnstile
+	}
 	toSerialize["version"] = o.Version
 	if !IsNil(o.Posthog) {
 		toSerialize["posthog"] = o.Posthog
@@ -477,7 +486,6 @@ func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 		toSerialize["pylonAppId"] = o.PylonAppId
 	}
 	toSerialize["proxyTemplateUrl"] = o.ProxyTemplateUrl
-	toSerialize["proxyToolboxUrl"] = o.ProxyToolboxUrl
 	toSerialize["dashboardUrl"] = o.DashboardUrl
 	toSerialize["maintananceMode"] = o.MaintananceMode
 	toSerialize["environment"] = o.Environment
@@ -508,7 +516,6 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		"linkedAccountsEnabled",
 		"announcements",
 		"proxyTemplateUrl",
-		"proxyToolboxUrl",
 		"dashboardUrl",
 		"maintananceMode",
 		"environment",
@@ -541,6 +548,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "turnstile")
 		delete(additionalProperties, "version")
 		delete(additionalProperties, "posthog")
 		delete(additionalProperties, "oidc")
@@ -548,7 +556,6 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "announcements")
 		delete(additionalProperties, "pylonAppId")
 		delete(additionalProperties, "proxyTemplateUrl")
-		delete(additionalProperties, "proxyToolboxUrl")
 		delete(additionalProperties, "dashboardUrl")
 		delete(additionalProperties, "maintananceMode")
 		delete(additionalProperties, "environment")

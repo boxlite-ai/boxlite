@@ -21,3 +21,5 @@ data model they share are documented in
   an image whose registry credentials only the platform holds.
 - [`infra/README.md`](./infra/README.md) — deployment, configuration, runner operations,
   networking, security, observability, and costs for each cloud.
+- [`secret-server/README.md`](./secret-server/README.md) — the versioned-secret encryption
+  package; HTTP service and deployment are not implemented yet.

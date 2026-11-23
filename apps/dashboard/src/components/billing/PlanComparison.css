@@ -1,0 +1,32 @@
+/* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+.plans-section {
+  container-type: inline-size;
+}
+
+.plan-comparison-scroll {
+  /* Keep absolute screen-reader labels inside this scroll boundary. */
+  position: relative;
+  overflow: auto;
+  max-height: max(320px, calc(100svh - 340px));
+}
+
+.plan-comparison-table {
+  min-width: var(--plan-table-width);
+}
+
+/* Use the page's vertical scroll when the comparison fits the available content
+   width. Narrow layouts retain local scrolling and a pinned feature column. */
+@container (min-width: 1000px) {
+  .plan-comparison-scroll {
+    overflow: visible;
+    max-height: none;
+  }
+
+  .plan-comparison-table {
+    min-width: 0;
+  }
+
+  .plan-comparison-table thead {
+    top: calc(var(--app-header-height, 64px) + var(--app-banner-height, 0px));
+  }
+}

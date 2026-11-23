@@ -1,0 +1,28 @@
+.tab-icon-face {
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+
+.choice-trigger[data-state='active'] .tab-icon-face {
+  opacity: 1;
+}
+
+.tab-icon-cutout {
+  fill: none;
+  stroke: var(--tab-icon-surface, hsl(var(--background)));
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-icon-face {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .tab-icon-cutout {
+    stroke: Canvas;
+  }
+}

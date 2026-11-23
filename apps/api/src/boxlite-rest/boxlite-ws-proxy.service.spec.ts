@@ -6,6 +6,7 @@
 
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import type { IncomingMessage } from 'http'
+import { EventEmitter } from 'node:events'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AttachTicketService } from '../box/services/attach-ticket.service'
@@ -73,6 +74,10 @@ describe('BoxliteWsProxyService', () => {
       verifyToken: jest.fn(),
     }
     const attachTickets = new AttachTicketService(fakeRedis() as never)
+    const audit = {
+      createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+      updateLog: jest.fn().mockResolvedValue({}),
+    }
     const service = new BoxliteWsProxyService(
       apiKeyService as never,
       organizationUserService as never,
@@ -83,6 +88,7 @@ describe('BoxliteWsProxyService', () => {
       userService as never,
       jwtStrategy as never,
       attachTickets,
+      audit as never,
     ) as unknown as {
       authenticate: (req: IncomingMessage, urlTenant?: string) => Promise<{ organization: { id: string } } | null>
     }
@@ -98,11 +104,13 @@ describe('BoxliteWsProxyService', () => {
       userService,
       jwtStrategy,
       attachTickets,
+      audit,
     }
   }
 
   it('rewrites public box ids to internal box ids before proxying attach upgrades to the runner', () => {
     new BoxliteWsProxyService(
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -168,6 +176,7 @@ describe('BoxliteWsProxyService', () => {
 
     await expect(service.authenticate(authRequest('blk_live_test'))).resolves.toEqual({
       organization: { id: 'org-1', suspended: false },
+      user: { id: 'user-1', role: 'user', email: 'dev@acme.test' },
     })
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
     expect(jwtStrategy.verifyToken).not.toHaveBeenCalled()
@@ -186,6 +195,7 @@ describe('BoxliteWsProxyService', () => {
 
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toEqual({
       organization: { id: 'org-1', suspended: false },
+      user: { id: 'user-1', role: 'user', email: 'dev@acme.test' },
     })
     expect(jwtStrategy.verifyToken).toHaveBeenCalledWith(jwt)
     expect(organizationUserService.findOne).toHaveBeenCalledWith('org-1', 'user-1')
@@ -240,6 +250,7 @@ describe('BoxliteWsProxyService', () => {
 
     await expect(service.authenticate(authRequest('blk_live_test'))).resolves.toEqual({
       organization: { id: 'org-1', suspended: false },
+      user: { id: 'user-1', role: 'admin', email: 'admin@acme.test' },
     })
     // Admin is not org-scoped — mirrors OrganizationAccessGuard, which skips membership.
     expect(organizationUserService.findOne).not.toHaveBeenCalled()
@@ -272,6 +283,7 @@ describe('BoxliteWsProxyService', () => {
 
     await expect(service.authenticate(authRequest(jwt), 'org-1')).resolves.toEqual({
       organization: { id: 'org-1', suspended: false },
+      user: { id: 'user-1', role: 'user', email: 'dev@acme.test' },
     })
   })
 
@@ -307,7 +319,7 @@ describe('BoxliteWsProxyService', () => {
       `/api/v1/org-1/boxes/public-box/executions/${execId}/attach?ticket=${ticket}&stdin=1`
 
     async function upgradeWithTicket(harness: ReturnType<typeof buildAuthHarness>, url: string) {
-      const socket = { write: jest.fn(), destroy: jest.fn() }
+      const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn() })
       const req = { url, headers: {} } as IncomingMessage
       await (harness.service as unknown as BoxliteWsProxyService).upgrade(req, socket as never, Buffer.alloc(0))
       return { req, socket }

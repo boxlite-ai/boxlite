@@ -232,7 +232,7 @@ impl ExitStatus {
 }
 
 /// PTY configuration
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyConfig {
     pub rows: u16,
     pub cols: u16,
@@ -242,7 +242,7 @@ pub struct PtyConfig {
 }
 
 /// One RFC 4254 terminal-mode opcode and value.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyMode {
     pub opcode: u8,
     pub value: u32,

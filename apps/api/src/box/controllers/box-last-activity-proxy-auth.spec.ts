@@ -7,6 +7,7 @@ import { EventEmitter } from 'events'
 import type { ExecutionContext, INestApplication } from '@nestjs/common'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { Test } from '@nestjs/testing'
+import { SwaggerModule } from '@nestjs/swagger'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
@@ -19,6 +20,7 @@ import { RunnerService } from '../services/runner.service'
 import { BoxService } from '../services/box.service'
 import { AttachTicketService } from '../services/attach-ticket.service'
 import { BoxController } from './box.controller'
+import { getOpenApiConfig } from '../../openapi.config'
 
 // The real OrganizationResourceActionGuard runs here: it is the class-level
 // guard the activity renewal has to get past, so overriding it would test
@@ -30,6 +32,7 @@ describe('BoxController reached by the preview proxy', () => {
     updateLastActivityAt: jest.Mock
     findOneByIdOrName: jest.Mock
     getRegionId: jest.Mock
+    getOrganizationId: jest.Mock
     toBoxDto: jest.Mock
   }
 
@@ -43,6 +46,7 @@ describe('BoxController reached by the preview proxy', () => {
       // RegionBoxAccessGuard admits a region proxy only for a box in its own
       // region, so the box under test has to live in the region the context names.
       getRegionId: jest.fn().mockResolvedValue('region-1'),
+      getOrganizationId: jest.fn().mockResolvedValue('org-1'),
       toBoxDto: jest.fn().mockResolvedValue({ id: 'box-1' }),
     }
 
@@ -55,8 +59,17 @@ describe('BoxController reached by the preview proxy', () => {
         { provide: RunnerService, useValue: {} },
         { provide: AttachTicketService, useValue: {} },
         { provide: BoxService, useValue: boxService },
-        { provide: OrganizationService, useValue: { findOne: jest.fn().mockResolvedValue(null) } },
-        { provide: OrganizationUserService, useValue: { findOne: jest.fn().mockResolvedValue(null) } },
+        { provide: OrganizationService, useValue: { findOne: jest.fn().mockResolvedValue({ id: 'org-1' }) } },
+        {
+          provide: OrganizationUserService,
+          useValue: {
+            findOne: jest.fn().mockResolvedValue({
+              userId: 'user-1',
+              organizationId: 'org-1',
+              role: 'owner',
+            }),
+          },
+        },
         {
           provide: getRedisConnectionToken(),
           useValue: {
@@ -88,9 +101,9 @@ describe('BoxController reached by the preview proxy', () => {
     app = undefined
   })
 
-  function request(path: string, method: string): Promise<Response> {
+  function request(path: string, method: string, headers?: Record<string, string>): Promise<Response> {
     const address = app!.getHttpServer().address() as AddressInfo
-    return fetch(`http://127.0.0.1:${address.port}/api${path}`, { method })
+    return fetch(`http://127.0.0.1:${address.port}/api${path}`, { method, headers })
   }
 
   // The proxy authenticates with PROXY_API_KEY, which ApiKeyStrategy maps to a
@@ -111,6 +124,33 @@ describe('BoxController reached by the preview proxy', () => {
 
     expect(response.status).toBe(201)
     expect(boxService.updateLastActivityAt).toHaveBeenCalledWith('box-1', expect.any(Date))
+  })
+
+  it.each(['proxy', 'region-proxy'])('only accepts the browser marker from the preview proxy: %s', async (role) => {
+    await startApp({ role, regionId: 'region-1' })
+    const response = await request('/box/box-1/last-activity', 'POST', { 'X-BoxLite-Preview-Open': '1' })
+    expect(response.status).toBe(201)
+    expect(boxService.updateLastActivityAt.mock.calls[0]).toEqual(
+      role === 'proxy' ? ['box-1', expect.any(Date), true] : ['box-1', expect.any(Date)],
+    )
+  })
+
+  it('accepts a member heartbeat but ignores its forged preview marker', async () => {
+    await startApp({ role: 'user', userId: 'user-1', organizationId: 'org-1' })
+    const response = await request('/box/box-1/last-activity', 'POST', { 'X-BoxLite-Preview-Open': '1' })
+    expect(response.status).toBe(201)
+    expect(boxService.getOrganizationId).toHaveBeenCalled()
+    expect(boxService.updateLastActivityAt.mock.calls).toEqual([['box-1', expect.any(Date)]])
+  })
+
+  it('keeps the internal browser marker out of the public heartbeat contract', async () => {
+    await startApp({ role: 'proxy' })
+    const document = SwaggerModule.createDocument(app!, getOpenApiConfig('http://localhost'))
+    const parameters = document.paths['/api/box/{boxId}/last-activity']?.post?.parameters
+    expect(parameters).toEqual([
+      expect.objectContaining({ in: 'header', name: 'X-BoxLite-Organization-ID', required: false }),
+      expect.objectContaining({ in: 'path', name: 'boxId', required: true }),
+    ])
   })
 
   // The exemption is opt-in per route. `getBox` declares only BoxAccessGuard,

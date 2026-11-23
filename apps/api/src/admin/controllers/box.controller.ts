@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, HttpCode, NotFoundException, Param, Post, UseGuards } from '@nestjs/common'
+import { Controller, HttpCode, NotFoundException, Param, Post, Req, UseGuards } from '@nestjs/common'
+import { Request } from 'express'
+import { requestActor } from '../../common/decorators/user-context.decorator'
 import { ApiBearerAuth, ApiOAuth2, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger'
 import { Audit } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
@@ -15,6 +17,7 @@ import { OrganizationService } from '../../organization/services/organization.se
 import { BoxDto } from '../../box/dto/box.dto'
 import { BoxService } from '../../box/services/box.service'
 import { SystemRole } from '../../user/enums/system-role.enum'
+import { Context } from '../../common/context/context'
 
 @ApiTags('admin')
 @Controller('admin/box')
@@ -50,12 +53,12 @@ export class AdminBoxController {
     targetIdFromRequest: (req) => req.params.boxId,
     targetIdFromResult: (result: BoxDto) => result?.id,
   })
-  async recoverBox(@Param('boxId') boxId: string): Promise<BoxDto> {
+  async recoverBox(@Param('boxId') boxId: string, @Req() req: Request): Promise<BoxDto> {
     const organization = await this.organizationService.findByBoxId(boxId)
     if (!organization) {
       throw new NotFoundException('Box not found')
     }
-    const recoveredBox = await this.boxService.recover(boxId, organization)
+    const recoveredBox = await this.boxService.recover(boxId, organization, Context.admin(requestActor(req)))
     return this.boxService.toBoxDto(recoveredBox)
   }
 }

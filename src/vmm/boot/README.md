@@ -26,7 +26,8 @@ Linux host that has the packages below. Both take `BOOT_OUTPUT` and
 tarball is cached under `target/vmm/boot/.cache`, verified on every run, and
 downloaded into that directory first so the cache never holds a partial file.
 Every run extracts and compiles in a fresh temporary directory. `kernel.config`
-is applied over `allnoconfig`; any fragment line Kconfig changed or dropped fails
+includes built-in virtio-mmio command-line discovery, virtio-blk for disks, and
+FUSE and virtio-fs for aggregate host sharing. It is applied over `allnoconfig`; any fragment line Kconfig changed or dropped fails
 the build. Address randomization is off, so the ELF entry must equal
 `CONFIG_PHYSICAL_START=0x1000000`. The outputs are `vmlinux` (ELF64 x86-64),
 `kernel.config` (effective configuration), `build-info.txt` (source, input and
@@ -51,6 +52,16 @@ guest needs a capability the shipped kernel lacks. Reporting is deliberately
 disabled by the pinned driver under `init_on_free=1` without PAGE_POISON
 negotiation; tests preserve that security policy rather than forcing reporting
 on.
+
+The fragment also provides the [guest agent's PID 1 bootstrap](../../guest/README.md):
+tmpfs and PTYs, Unix and IP sockets, container namespaces, cgroup v2 controllers,
+seccomp, overlayfs, script execution, and built-in virtio-fs, virtio-net,
+virtio-vsock and virtio-console drivers.
+Netlink and Unix sockets are needed even with external networking disabled, for
+loopback setup and zygote IPC respectively.
+The native adapter attaches the requested devices and uses hvc0 for its default
+console; raw kernel boot tests can still select ttyS0.
+`make test:integration:vmm:native` verifies the actual agent with this kernel.
 
 ## Default: building inside a BoxLite box
 

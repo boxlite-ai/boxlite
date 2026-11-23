@@ -10,7 +10,12 @@
 //! Each implementation is one module whose agent type implements
 //! [`AgentBackend`]; `Agents::create` maps the implementation name to it.
 
+mod install;
 mod opencode;
+/// Shared JSON conversion for agent API consumers.
+pub mod records;
+#[cfg(feature = "test-support")]
+mod test_support;
 mod types;
 pub use types::*;
 
@@ -39,6 +44,9 @@ const TURN_POLL_INTERVAL: Duration = Duration::from_millis(500);
 trait AgentBackend: Send + Sync + std::fmt::Debug {
     /// Implementation and version named in errors, such as `OpenCode 2.2`.
     fn adapter(&self) -> &str;
+
+    /// The native agent ID that `Agents::get` accepts.
+    fn id(&self) -> &str;
 
     /// The configuration the agent reported when this handle was obtained.
     fn config(&self) -> &AgentConfig;
@@ -99,6 +107,8 @@ trait AgentBackend: Send + Sync + std::fmt::Debug {
 pub struct Agents {
     box_backend: Arc<dyn BoxBackend>,
     network_backend: Arc<dyn BoxNetworkBackend>,
+    #[cfg(feature = "test-support")]
+    test_backend: bool,
 }
 
 impl std::fmt::Debug for Agents {
@@ -131,7 +141,16 @@ impl Agents {
         Self {
             box_backend,
             network_backend,
+            #[cfg(feature = "test-support")]
+            test_backend: false,
         }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn with_test_backend(mut self) -> Self {
+        self.test_backend = true;
+        self
     }
 
     /// Create an agent with initial configuration.
@@ -140,6 +159,10 @@ impl Agents {
     /// 2.2.2 already installed in the Box. Starts the Box and OpenCode's
     /// managed service on first use.
     pub async fn create(&self, agent: &str, options: AgentCreateOptions) -> BoxliteResult<Agent> {
+        #[cfg(feature = "test-support")]
+        if self.test_backend {
+            return Ok(Agent::for_test());
+        }
         match agent {
             opencode::IMPLEMENTATION => {
                 self.require_local_runtime()?;
@@ -156,6 +179,10 @@ impl Agents {
 
     /// Look up an agent without replaying work.
     pub async fn get(&self, agent_id: &str) -> BoxliteResult<Agent> {
+        #[cfg(feature = "test-support")]
+        if self.test_backend {
+            return Ok(Agent::for_test());
+        }
         self.require_local_runtime()?;
         if !opencode::is_session_id(agent_id) {
             return Err(BoxliteError::NotFound(format!(
@@ -166,35 +193,63 @@ impl Agents {
         Ok(Agent::new(server.get_session(agent_id).await?))
     }
 
-    /// Checked before any validation, so remote runtimes always see `Unsupported`.
-    /// A cloud tunnel can publish the agent's server; a local one stays on this host.
-    fn require_local_runtime(&self) -> BoxliteResult<()> {
-        let is_local = Arc::clone(&self.box_backend)
-            .as_any_arc()
-            .downcast::<BoxImpl>()
-            .is_ok();
-        if is_local {
-            return Ok(());
-        }
-        Err(BoxliteError::Unsupported(
-            "agents require a local runtime".into(),
-        ))
+    /// Copy the agent binary at `host_file` into the Box and mount it, as the
+    /// agent catalog will (design #2322). For tests until that catalog lands.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub async fn install_from_host(
+        &self,
+        agent: &str,
+        host_file: &std::path::Path,
+    ) -> BoxliteResult<()> {
+        let local = self.require_local_runtime()?;
+        install::AgentInstaller::new(local)
+            .install(agent, host_file)
+            .await?;
+        Ok(())
     }
 
+    /// Checked before any validation, so remote runtimes always see `Unsupported`.
+    /// A cloud tunnel can publish the agent's server; a local one stays on this host.
+    fn require_local_runtime(&self) -> BoxliteResult<Arc<BoxImpl>> {
+        Arc::clone(&self.box_backend)
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .map_err(|_| BoxliteError::Unsupported("agents require a local runtime".into()))
+    }
+
+    /// Reach OpenCode, using the installed copy when one is recorded and the
+    /// image's `opencode` otherwise.
     async fn opencode_server(&self) -> BoxliteResult<Arc<opencode::Server>> {
+        let local = self.require_local_runtime()?;
+        let bin_dir = install::AgentInstaller::new(local)
+            .installed(opencode::IMPLEMENTATION)
+            .await?;
         opencode::Server::attach(
             Arc::clone(&self.box_backend),
             Arc::clone(&self.network_backend),
+            bin_dir.as_deref(),
         )
         .await
     }
 }
 
 impl Agent {
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn for_test() -> Self {
+        Self::new(test_support::TestBackend::default())
+    }
+
     fn new(backend: impl AgentBackend + 'static) -> Self {
         Self {
             backend: Arc::new(backend),
         }
+    }
+
+    /// The agent ID to pass to [`Agents::get`], such as from another process.
+    pub fn id(&self) -> &str {
+        self.backend.id()
     }
 
     /// Stop admissions and close the agent loop.

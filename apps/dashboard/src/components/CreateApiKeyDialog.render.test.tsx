@@ -36,7 +36,7 @@ async function renderDialog(permissions = [CreateApiKeyPermissionsEnum.WRITE_BOX
       />,
     )
   })
-  await act(async () => button('Create Key').click())
+  await act(async () => button('New API key').click())
 }
 
 async function enterName() {
@@ -49,7 +49,9 @@ async function enterName() {
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
-  mocks.create.mockReset().mockResolvedValue({ value: 'boxlite_test_key' })
+  mocks.create
+    .mockReset()
+    .mockResolvedValue({ value: 'boxlite_test_key', permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES] })
   mocks.writeText.mockReset().mockResolvedValue(undefined)
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: mocks.writeText } })
   const host = document.createElement('div')
@@ -65,7 +67,7 @@ afterEach(() => {
 describe('CreateApiKeyDialog shared button interactions', () => {
   it('submits the external form once, copies the returned key, and closes with Done', async () => {
     await renderDialog()
-    expect(button('Create').disabled).toBe(true)
+    expect(button('Create API key').disabled).toBe(true)
     await enterName()
 
     let finishCreate!: (result: { value: string }) => void
@@ -75,21 +77,21 @@ describe('CreateApiKeyDialog shared button interactions', () => {
           finishCreate = resolve
         }),
     )
-    await act(async () => button('Create').click())
+    await act(async () => button('Create API key').click())
     expect(mocks.create).toHaveBeenCalledExactlyOnceWith({
       organizationId: 'org-1',
       name: 'agent-key',
       permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES],
-      expiresAt: null,
+      expiresAt: expect.any(Date),
     })
     expect(button('Creating…').disabled).toBe(true)
     await act(async () => button('Creating…').click())
     expect(mocks.create).toHaveBeenCalledTimes(1)
 
     await act(async () => finishCreate({ value: 'boxlite_test_key' }))
-    await act(async () => button('Copy').click())
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="Copy API key"]')!.click())
     expect(mocks.writeText).toHaveBeenCalledExactlyOnceWith('boxlite_test_key')
-    expect(button('Copied')).toBeDefined()
+    expect(document.querySelector('button[aria-label="Copied"]')).not.toBeNull()
 
     await act(async () => button('Done').click())
     expect(document.querySelector('[role="dialog"]')).toBeNull()
@@ -107,8 +109,30 @@ describe('CreateApiKeyDialog shared button interactions', () => {
   it('keeps creation disabled when no permissions are available', async () => {
     await renderDialog([])
     await enterName()
-    expect(button('Create').disabled).toBe(true)
-    await act(async () => button('Create').click())
+    expect(button('Create API key').disabled).toBe(true)
+    await act(async () => button('Create API key').click())
     expect(mocks.create).not.toHaveBeenCalled()
   })
+})
+
+it('retains a selectable full key after copy failure and allows retry', async () => {
+  await renderDialog()
+  await enterName()
+  await act(async () => button('Create API key').click())
+  const secret = document.querySelector<HTMLElement>('[role="region"][aria-label="API key"]')
+  expect(secret).not.toBeNull()
+  expect(secret?.tabIndex).toBe(0)
+  expect(secret?.textContent).toBe('boxlite_test_key')
+  mocks.writeText.mockRejectedValueOnce(new Error('Clipboard denied'))
+  const copy = document.querySelector<HTMLButtonElement>('button[aria-label="Copy API key"]')
+  expect(copy).not.toBeNull()
+  await act(async () => copy!.click())
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('Select the key above')
+  expect(document.querySelector('.ph-mask')?.textContent).toBe('boxlite_test_key')
+  expect(document.querySelector('.ph-mask')?.classList.contains('select-all')).toBe(true)
+  await act(async () => copy!.click())
+  expect(mocks.writeText).toHaveBeenLastCalledWith('boxlite_test_key')
+  expect(document.querySelector('[role="alert"]')).toBeNull()
+  expect(document.querySelector('button[aria-label="Copied"]')).not.toBeNull()
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull()
 })

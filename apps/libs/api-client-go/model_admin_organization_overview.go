@@ -33,6 +33,8 @@ type AdminOrganizationOverview struct {
 	MemberCount float32 `json:"memberCount"`
 	BoxCount float32 `json:"boxCount"`
 	ImpactState string `json:"impactState"`
+	// Up to 200 non-empty member emails ordered by user ID; present only with include=memberEmails.
+	MemberEmails []string `json:"memberEmails,omitempty"`
 	ObservedAt time.Time `json:"observedAt"`
 	AdditionalProperties map[string]interface{}
 }
@@ -259,6 +261,38 @@ func (o *AdminOrganizationOverview) SetImpactState(v string) {
 	o.ImpactState = v
 }
 
+// GetMemberEmails returns the MemberEmails field value if set, zero value otherwise.
+func (o *AdminOrganizationOverview) GetMemberEmails() []string {
+	if o == nil || IsNil(o.MemberEmails) {
+		var ret []string
+		return ret
+	}
+	return o.MemberEmails
+}
+
+// GetMemberEmailsOk returns a tuple with the MemberEmails field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *AdminOrganizationOverview) GetMemberEmailsOk() ([]string, bool) {
+	if o == nil || IsNil(o.MemberEmails) {
+		return nil, false
+	}
+	return o.MemberEmails, true
+}
+
+// HasMemberEmails returns a boolean if a field has been set.
+func (o *AdminOrganizationOverview) HasMemberEmails() bool {
+	if o != nil && !IsNil(o.MemberEmails) {
+		return true
+	}
+
+	return false
+}
+
+// SetMemberEmails gets a reference to the given []string and assigns it to the MemberEmails field.
+func (o *AdminOrganizationOverview) SetMemberEmails(v []string) {
+	o.MemberEmails = v
+}
+
 // GetObservedAt returns the ObservedAt field value
 func (o *AdminOrganizationOverview) GetObservedAt() time.Time {
 	if o == nil {
@@ -301,6 +335,9 @@ func (o AdminOrganizationOverview) ToMap() (map[string]interface{}, error) {
 	toSerialize["memberCount"] = o.MemberCount
 	toSerialize["boxCount"] = o.BoxCount
 	toSerialize["impactState"] = o.ImpactState
+	if !IsNil(o.MemberEmails) {
+		toSerialize["memberEmails"] = o.MemberEmails
+	}
 	toSerialize["observedAt"] = o.ObservedAt
 
 	for key, value := range o.AdditionalProperties {
@@ -361,6 +398,7 @@ func (o *AdminOrganizationOverview) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "memberCount")
 		delete(additionalProperties, "boxCount")
 		delete(additionalProperties, "impactState")
+		delete(additionalProperties, "memberEmails")
 		delete(additionalProperties, "observedAt")
 		o.AdditionalProperties = additionalProperties
 	}

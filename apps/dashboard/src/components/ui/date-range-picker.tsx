@@ -203,11 +203,11 @@ export const DateRangePicker = forwardRef<DateRangePickerRef, DateRangePickerPro
             {/* Quick ranges panel */}
             {quickRangesEnabled && (
               <div className="w-64 p-4 border-r">
-                <div className="text-sm font-medium mb-3 text-center">Quick ranges</div>
+                <div className="text-body font-medium mb-3 text-center">Quick ranges</div>
                 <div className="space-y-1 max-h-[400px] overflow-y-auto overflow-x-hidden [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-muted-foreground/20 [&::-webkit-scrollbar-thumb]:rounded-full">
                   <button
                     className={cn(
-                      'w-full text-left px-3 py-2 text-sm rounded-md transition-colors',
+                      'w-full text-left px-3 py-2 text-body rounded-md transition-colors',
                       selectedQuickRange === 'All time' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',
                     )}
                     onClick={() => handleQuickRangeSelect({ from: undefined, to: undefined }, 'All time')}
@@ -218,7 +218,7 @@ export const DateRangePicker = forwardRef<DateRangePickerRef, DateRangePickerPro
                     <button
                       key={timeRange.label}
                       className={cn(
-                        'w-full text-left px-3 py-2 text-sm rounded-md transition-colors',
+                        'w-full text-left px-3 py-2 text-body rounded-md transition-colors',
                         selectedQuickRange === timeRange.label
                           ? 'bg-primary text-primary-foreground'
                           : 'hover:bg-muted',
@@ -234,8 +234,8 @@ export const DateRangePicker = forwardRef<DateRangePickerRef, DateRangePickerPro
 
             {/* Custom range panel */}
             <div className="w-auto p-4">
-              <h3 className="font-semibold text-sm mb-3 text-center">Custom range</h3>
-              {/* <p className="text-xs text-muted-foreground mb-4">
+              <h3 className="font-semibold text-body mb-3 text-center">Custom range</h3>
+              {/* <p className="text-meta text-muted-foreground mb-4">
               Click and drag to select a date range, or click two dates
             </p> */}
 
@@ -254,7 +254,7 @@ export const DateRangePicker = forwardRef<DateRangePickerRef, DateRangePickerPro
                 <div className="mt-3">
                   <div className="space-y-3">
                     <div className="flex items-center gap-3">
-                      <label className="w-8 text-sm font-medium text-foreground text-left">From</label>
+                      <label className="w-8 text-body font-medium text-foreground text-left">From</label>
                       <Input
                         type="time"
                         value={fromTime}
@@ -264,7 +264,7 @@ export const DateRangePicker = forwardRef<DateRangePickerRef, DateRangePickerPro
                       />
                     </div>
                     <div className="flex items-center gap-3">
-                      <label className="w-8 text-sm font-medium text-foreground text-left">To</label>
+                      <label className="w-8 text-body font-medium text-foreground text-left">To</label>
                       <Input
                         type="time"
                         value={toTime}

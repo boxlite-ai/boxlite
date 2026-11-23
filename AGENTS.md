@@ -42,7 +42,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=d6868e436379 sha256=81e96b54b5f9 -->
+<!-- agent-tooling:guidance:begin rev=3a37a46d3737 sha256=73aba8416848 -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -51,6 +51,28 @@
 Every change goes: understand → research → design → implement → test → verify.
 
 Apply the `boxlite-clean-code` skill for design, implementation, refactoring, and maintainability review.
+
+MANDATORY: File all agent-tooling issues from any consumer in [upstream GitHub Issues](https://github.com/boxlite-ai/agent-tooling/issues).
+
+### Progression
+
+A passed stage starts the next one; never ask whether to continue.
+
+| When | Next, without asking |
+| --- | --- |
+| The edit gate requires a design | Research, write, register and audit it |
+| The design audit records PASS and advice is recorded | Start implementing |
+| Implementation is finished and its checks pass | Commit and push |
+| The commit and push audits record PASS and the push succeeds | Open a draft PR |
+
+Pause only when:
+
+- A gate asks for a human choice: PR size above 400, a stopped audit loop, an API compatibility decision, or a disclosure approval.
+- A recorded advice item would change the design's approach or scope.
+- The next action is destructive or cannot be undone.
+- The request cannot answer a requirement that changes the result.
+
+Report design advisories and advice in the final reply and the PR; adopt an item only after the human accepts it.
 
 ### Understand
 
@@ -135,12 +157,16 @@ For each test added with a fix, run these steps manually, in order:
 ### Cross-cutting (apply at every phase)
 
 - Verify external findings against the working tree with `git grep` and `git diff` before acting; reviews, lint, and PR comments may reference stale code.
-- Stay inside the ask: do and discuss only what the request needs; "drop X" means drop X.
-- File adjacent bugs, cleanup, or topics in a GitHub/Linear issue or docs note; mention them in one closing line, never a change or section.
 - Fix every evidenced site of the same defect in one pass; do not speculate.
 - Different nearby defects are adjacent work; one site does not resolve a systemic bug.
-- When behavior changes, remove superseded code, comments, prose, old-contract tests, and broken references in the same change.
+- When behavior changes, remove superseded code, comments, prose, old-contract tests, and broken references in the same change. Comments describe the current contract for a reader at HEAD: no legacy comments or removal narration ("no longer", "was removed", "now requires"). "Deprecated", "legacy" or a compatibility reason may explain a current API, state or behavior.
 - Search all replaced terms, not just edited files; contradictory prose misleads readers.
+
+Scope:
+
+- Stay inside the ask: do and discuss only what the request needs; "drop X" means drop X.
+- File adjacent bugs, cleanup, or topics in a GitHub/Linear issue or docs note; mention them in one closing line, never a change or section.
+- If SessionStart supplies a follow-up queue, record verified unresolved findings there. Acknowledge the exact pending revisions before Stop, including an empty list.
 
 ### Disclosure
 
@@ -148,6 +174,7 @@ For each test added with a fix, run these steps manually, in order:
 - This covers private messages, memory citations, local paths, internal context, and paraphrases.
 - Omit uncertain material.
 - Edits invalidate approval; task authorization and hook passes grant none.
+- Exception: ledger issues the post-push hook files in the audited repository need no per-post approval; the hook posts only privacy-scanned text linking pushed code.
 
 ### Communication
 

@@ -15,6 +15,7 @@ support subdirectories under `.github/workflows/`, so composite actions are wher
 ```text
 PULL REQUEST / PUSH                     lint · test · codeql · api-client-drift
                                         e2e-local · build-box-images
+RELEASE VERSION PULL REQUEST            release-dependency-audit (title-selected)
 
 BUILD + CACHE (weekly)                  build-runtime
 
@@ -25,15 +26,18 @@ SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go 
                                         build-runner-binary ──▶ build-c ──▶ Runner link
 
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
-                                        mbuild-release-on-release ──▶ mbuild-release (images, dev)
+                                        mbuild-release-on-release ──▶ mbuild-release
+                                          GHCR images + required release assets ready
+                                            ──▶ mdeploy-all (dev) ──▶ e2e-cloud (dev, release tag)
+                                            ──▶ mdeploy-all (prod, awaiting approval) ──▶ Slack report
                                         apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
                                                       ├─▶ build-c ──▶ build-runner-binary
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
-DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (a commit or #<n> ──▶ <sha> images, dev)
-                                                     └─▶ mbuild-release (v<X.Y.Z> ──▶ v<X.Y.Z>-<sha>, dev then prod)
+DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ parallel plan/build legs (SHA/PR ──▶ dev/stage; stable tag as commit ──▶ stage)
+                                                     └─▶ GHCR import    (release tag ──▶ dev/prod AR/ECR, no build)
 
 CONFIG                                  ci-config action ◀── lint, test, config workflow
                                         config workflow ◀── build workflows
@@ -50,33 +54,47 @@ own.
 | `config.yml` | `workflow_call` | call-only | Loads `.github/ci-config.json` before build matrices expand |
 | `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the installer smoke test. `Lint (conclusion)` is the required check |
 | `test.yml` | push, PR, merge_group, weekly, dispatch | — | Lightweight draft checks; SDK tests and combined Rust/CLI coverage on ready PRs. Compact routine matrices and full weekly/manual matrices. Codecov requires 90% patch coverage |
+| `release-dependency-audit.yml` | PR, merge_group | — | Audits production application dependencies on release version PRs selected by title; other PRs and merge groups skip the job |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs. It regenerates through the `generate:api-client` targets, `apps/hack` post-steps included, so regenerate with those targets rather than the bare generator |
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `build-runtime.yml` | weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
-| `build-go.yml` | `workflow_run`, dispatch | — | Tests the released C archive and tags the Go module on release; manual tests build a matching C archive first |
+| `build-go.yml` | `workflow_run`, dispatch | — | Pins release tests and the Go tag to the C build commit. Compares public archives with that run before testing. Manual tests build their own C archive. |
 | `build-node.yml` | release, dispatch | — | Node.js SDK, napi-rs addon and platform packages |
 | `build-wheels.yml` | release, dispatch | — | Builds Python wheels and verifies their native extension in cibuildwheel before publishing |
 | `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; manual builds first produce the selected commit's C archive |
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
-| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the whole suite on `dev`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
-| `mdeploy-all.yml` | dispatch | — | Current mdeploy orchestration for prepared GCP/AWS stages. A commit SHA builds for dev, and so does `#<number>` — a pull request, by the commit it would merge to; a release tag publishes into dev or promotes to prod, and is all prod accepts. Applies the stack itself |
-| `mbuild.yml` | `workflow_call` | call-only | The commit line's images, for a dev rollout. Callee only: nobody publishes a commit by hand |
-| `mbuild-release.yml` | dispatch, `workflow_call` | yes | The release line's images, tagged `v<X.Y.Z>-<sha>`: publish a version into dev, or promote it to prod. One job per artifact, and a version the target already holds is refused rather than skipped |
-| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images into dev |
+| `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: main suite, identity and isolated catalog lanes on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
+| `mdeploy-all.yml` | dispatch | — | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
+| `mbuild.yml` | `workflow_call` | call-only | Reusable wrapper for the shared stage-image action; mdeploy-all invokes it in its image preparation leg |
+| `mbuild-release.yml` | dispatch | — | Publishes GHCR images, waits for required release assets, dispatches dev deployment/E2E, creates a prod approval request, and reports to Slack; `build-only=true` selects publication only |
+| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` using its default full pipeline |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
-| `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
+| `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | Publishes the curated box image flavors to GHCR |
 
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
+The [release runbook](../../apps/infra/docs/release.md) documents fixed child inputs, timeouts, and recovery.
+
+Full releases require reviewers on the `prod` Environment. A full release can send #release a dev approval link before polling, then the E2E result and prod approval link.
+
+Deployment applies can also notify #dev_deployment for dev or #release for prod before each approval batch. Each button opens the corresponding GitHub run.
+
+Release deployments need one target Environment approval; commit deployments use two batches: parallel artifact preparation, then deploy.
+Wait until both preparation legs are awaiting review before approving their shared Environment; queued or later jobs can require another review.
+
+Cloud E2E accepts an optional release-client `tag`; see the
+[suite guide](../../apps/e2e/README.md) for downloaded clients and remaining dev driver builds.
 Cloud dev E2E also requires the three-profile [identity configuration](../../apps/e2e/README.md#the-cloud-legs-ci).
 Its separate identity step verifies cross-organization isolation and same-organization
-read-only access; missing or mis-scoped credentials fail setup. Prod keeps its single-key smoke suite.
+read-only access; missing or mis-scoped credentials fail setup. The catalog lane uses
+p2's independent image quota and requires image read/delete scopes on its key.
+Prod keeps its single-key smoke suite.
 The p1 dev suite reads `BOXLITE_E2E_DOMAIN` from repository Actions Variables
 for [subdomain acceptance](../../apps/e2e/README.md#subdomain-acceptance).
 
@@ -85,6 +103,12 @@ for [subdomain acceptance](../../apps/e2e/README.md#subdomain-acceptance).
 `lint` and `test` always report their required conclusion on PRs and merge groups. A newer PR
 commit cancels its superseded lint, test and client-drift runs. Release and deployment jobs keep
 their existing sequencing.
+
+Joining a [native GitHub stack](https://docs.github.com/en/pull-requests/tutorials/roll-out-stacked-prs#5-update-your-programmatic-tooling)
+emits `pull_request.stacked`, which starts Test with the existing suite and draft filters.
+GitHub evaluates native stack PRs against the stack's trunk, so `branches: [main]`
+covers upper layers when the trunk is `main`; every layer needs `Test (conclusion)`.
+Adding the trigger does not retroactively start missing runs for PRs already in a stack.
 
 Draft PRs defer the Rust, Python, Node and Go SDK coverage matrices, including Go
 vet and golangci-lint, which reuse the Go job's native build. The Lint and Format
@@ -137,6 +161,13 @@ build and its Make recipes), and on the weekly and manual runs, the job also run
 the VMM's real-kernel boot tests with `make coverage:vmm:boot`. It restores the
 pinned `vmlinux` from the Actions cache, keyed on the kernel pins and build
 script, or builds it with `make vmm:boot:host` on a miss.
+The boot coverage target also builds the static production guest mount test
+init with `make vmm:guest-mount-init` and exports `VMM_GUEST_MOUNT_INIT` to
+the tests. This keeps the guest mount test in the boot coverage suite rather
+than skipping it. The selected Linux x64 job installs the musl Rust target,
+musl compiler and gperf, and uses the musl compiler for Rust linking and C
+dependencies. The boot step's five-minute budget includes the release build
+of this init; its guest execution remains bounded by the test watchdog.
 
 `Dashboard Tests` runs the dashboard's vitest suite on one Linux runner and
 uploads v8 coverage under the `dashboard` flag. `@nx/vite` infers the project's
@@ -145,6 +176,15 @@ that block the target does not exist, nothing runs the suite, and a
 dashboard-only change reaches Codecov with no report — which the patch status
 rejects as a missing report rather than as low coverage. Specs choose their own
 environment with a `// @vitest-environment jsdom` pragma.
+
+`API Tests` also runs the shared CI Listener and standalone host suites, using
+the job's disposable PostgreSQL service through the same `DB_HOST`, `DB_PORT`,
+`DB_USERNAME`, `DB_PASSWORD` and `DB_DATABASE` settings as other API tests.
+Changes to either CI project select this job on drafts and ready PRs. Their
+LCOV reports are uploaded with the API report under the `api` flag; local checks
+use `make coverage:ci-listener` and `make coverage:github-ci-runner`. Leaving the
+database URL unset skips the PostgreSQL contracts locally, so that run cannot
+certify hosted persistence or rollback behavior.
 
 When none of the coverage suites is selected on a PR or merge group, the
 `Codecov (no coverage changes)` job runs a validated `empty-upload`. Codecov
@@ -193,6 +233,26 @@ tests run in hosted CI for infrastructure, workflow and relevant Make changes, i
 and remain available through `make test:apps:infra` and the local pre-push check;
 `make test:apps:infra-config` explicitly installs and type-checks the SST configuration.
 
+## Release dependency preflight
+
+`Release dependency audit` runs on PRs targeting `main` whose title starts with
+`chore(release): bump version to `, such as `chore(release): bump version to 0.11.2`.
+It includes drafts and reruns on new commits, reopening, or metadata edits, so renaming
+a PR re-evaluates selection. Renaming outside that convention excludes the PR.
+The separate workflow leaves the existing Test workflow's triggers unchanged.
+
+The job runs `make audit:apps` with Node 22, using the pinned Yarn version without
+installing dependencies. It applies the same production, high/critical audit as
+[mbuild publication](../../apps/infra/mbuild/README.md#dependency-audit-failures).
+Findings and registry/service failures fail the check and retain their diagnostics.
+Other PRs skip the job before runner allocation; merge groups also skip because
+release PRs complete their preflight before queue admission. Publication retains its
+own audit because advisory data can change after the PR check.
+
+After the workflow lands and produces a check run, require `Release dependency audit`
+from GitHub Actions in the `main` ruleset. Until enabled, a failure is visible but does
+not itself block merging; `Test (conclusion)` does not aggregate this separate workflow.
+
 ## Author review gate rollout
 
 Require the commit status `Author reviewed the PR` from GitHub Actions on the target
@@ -222,8 +282,21 @@ state. A new commit or editing/deleting the only acknowledgment returns the PR t
 In [`.github/actions/`](../actions). Each replaces a step bundle that was previously copied into
 every consumer.
 
+Deployment composites receive stage configuration and cloud identity settings through explicit inputs.
+The calling job binds the target Environment, reads its `vars`, and supplies those values with `with`;
+for example, `gcp-deployer: ${{ vars.GCP_DEPLOYER }}` becomes `${{ inputs.gcp-deployer }}` inside the action.
+Composite action manifests have a narrower context set than workflows and cannot reference `vars` directly.
+
+The reusable image workflow carries the promotion source declaration separately through `stage-config-from`.
+
+The mdeploy tests parse composite-step input expressions against the Runner's supported contexts and check every caller's configuration bindings.
+Run them with `make test:apps:mdeploy`; workflow lint alone does not exercise loading a local action manifest.
+
 | Action | Sites | Used by |
 | --- | --- | --- |
+| `mbuild` | 2 | mdeploy-all image preparation and the reusable mbuild workflow |
+| `build-staged-runner` | 1 | mdeploy-all Runner preparation |
+| `mdeploy` | 2 | mdeploy-all release apply and commit deploy |
 | `ci-config` | 3 | config, lint, test |
 | `setup-rust` | 10 | build-c, build-node, build-runtime ×2, build-wheels, lint ×2, test ×3 |
 | `sccache` | 7 | build-c, build-node, build-runtime, build-wheels, lint, test ×2 |
@@ -231,8 +304,14 @@ every consumer.
 | `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
 | `run-in-manylinux` | 3 | build-c, build-node, build-runtime |
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
-| `setup-python` | 3 | lint, test ×2 |
+| `setup-python` | 5 | lint ×2, test ×3 |
 | `setup-buildx` | 2 | build-box-images, release-box-images |
+
+`setup-infra` saves an exact dependency-cache miss immediately after `npm ci`,
+using the key recorded by its restore step. Callers may then change their checkout.
+The deployment action saves a generated SST platform after use, before returning to its caller.
+
+Both caches use `v2` namespaces and exact keys; stage state and configuration stay outside their paths.
 
 Two ordering rules, stated in each action's own header: `sccache` runs after `setup-rust`, and
 `build-guest` and `run-in-manylinux` run after both. They are separate actions rather than one
@@ -318,6 +397,14 @@ The release chain still downloads the published C archives. Reusable Runner call
 `libboxlite_source` selection: `deploy-infra.yml` supplies its existing C artifact without a
 second C build. A C build failure stops its consumers; manual runs publish no releases or tags.
 
+Runner release uploads and Go module tagging run only after successful release-origin C SDK
+builds, followed by a successful Runner build or Go test matrix respectively.
+The manual `build-c` job is intentionally skipped on that path, so each publication job uses
+`!cancelled()` and explicit prerequisite-result checks to override the implicit `success()`
+check inherited through the dependency chain. Failed or skipped prerequisites and workflow
+cancellation still prevent publication; manual builds, reusable deployment builds, and
+non-release upstream runs do not publish through these jobs.
+
 ## Do not rename these
 
 Two workflows chain off another's **display name**, not its filename. Changing the `name:` below
@@ -327,12 +414,16 @@ silently stops the chain — no error, the downstream workflow simply never fire
 | --- | --- |
 | `Build C SDK` | `build-go.yml`, `build-runner-binary.yml` |
 
+Go release tests require the canonical C workflow and read the platform matrix and toolchain
+at that run's commit. A missing or different C run archive stops testing. Before creating
+the Go module tag, the workflow checks that the remote product tag still points to the tested commit.
+
 ## Adding a stage
 
 Define the stage in `.mstage.config.json`, bootstrap its intended cloud/path, and publish its declaration
 with `npm run mstage config put -- --stage <stage>`. The GitHub Environment name must match the stage.
 
-Manual workflow choices are allowlists: mdeploy-all currently exposes `dev` and `prod`, with distinct
+Manual workflow choices are allowlists: mdeploy-all currently exposes `dev`, `stage` and `prod`, with distinct
 commit/release policies. A new stage requires reviewing dispatch choices, ref-resolution/promotion
 policy and the associated workflow tests, including `apps/infra/deployment/release-safety.test.ts`.
 Declaring a stage locally does not make every workflow accept it.
@@ -370,3 +461,18 @@ Repository secrets, in Settings → Secrets and variables → Actions:
 - `PYPI_API_TOKEN` — PyPI, for the wheels
 - `NPM_TOKEN` — npm, for the Node packages
 - `GH_APP_PRIVATE_KEY` — GitHub App key that registers the self-hosted E2E runner
+- `SLACK_WEBHOOK_URL` — optional #release webhook for release dev approvals, final reports and prod apply approvals
+- `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` — optional #dev_deployment webhook for dev apply approvals. An empty secret skips that channel.
+
+## Plugin release artifacts
+
+The build workflow validates the Codex and Claude packages and saves five files for previews and publication. [Build workflow](build-plugins.yml)
+
+The publishing workflow verifies the tag from `main` and publishes one versioned GHCR artifact. [Publishing workflow](publish-plugins.yml)
+
+The publisher downloads the exact artifact ID for the validated build attempt. A main-only environment supplies the registry credential.
+
+Same-version runs serialize. An identical digest can resume attestation, and a conflicting digest stops publication.
+
+The [plugin publishing guide](../../scripts/plugins/README.md#publish-versioned-packages-to-ghcr) covers migration, registry access, retries, and downloads.
+Run `make test:apps:infra` to exercise the workflow guards with real plugin packages.

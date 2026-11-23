@@ -147,14 +147,23 @@ class SimpleBox:
     @property
     def agents(self) -> Agents:
         """Get the agent namespace without starting the Box."""
-        return Agents()
+
+        def resolve():
+            if not self._started:
+                raise RuntimeError(
+                    "Box not started. Use 'async with SimpleBox(...) as box:' "
+                    "or call 'await box.start()' first."
+                )
+            return self._box.agents
+
+        return Agents(resolve=resolve)
 
     def __init__(
         self,
         image: str | None = None,
         rootfs_path: str | None = None,
         memory_mib: int | None = None,
-        cpus: int | None = None,
+        cpus: float | None = None,
         runtime: Optional["Boxlite"] = None,
         name: str | None = None,
         auto_remove: bool = True,
@@ -271,7 +280,9 @@ class SimpleBox:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit - delegates to Box.__aexit__ (returns awaitable)."""
-        return await self._box.__aexit__(exc_type, exc_val, exc_tb)
+        result = await self._box.__aexit__(exc_type, exc_val, exc_tb)
+        self._started = False
+        return result
 
     @property
     def id(self) -> str:
@@ -517,13 +528,14 @@ class SimpleBox:
 
                 await box.copy_in("/local/config.json", "/app/config.json")
 
-            Copy a directory::
+            Copy a directory, landing it as ``docker cp`` does: it becomes
+            ``/app/data`` if that does not exist, else ``/app/data/data``::
 
-                await box.copy_in("/local/data/", "/app/data/")
+                await box.copy_in("/local/data", "/app/data")
 
-            Copy a directory's contents rather than the directory — end the
-            source with ``/.`` as ``docker cp`` does (build it as a string;
-            ``pathlib.Path`` drops the trailing ``.``)::
+            Copy a directory's contents either way — end the source with
+            ``/.`` (build it as a string; ``pathlib.Path`` drops the trailing
+            ``.``)::
 
                 await box.copy_in("/local/data/.", "/app/data")
         """
@@ -574,11 +586,13 @@ class SimpleBox:
 
                 await box.copy_out("/app/output.log", "/local/output.log")
 
-            Copy a directory::
+            Copy a directory, landing it as ``docker cp`` does: it becomes
+            ``/local/results`` if that does not exist, else
+            ``/local/results/results``::
 
-                await box.copy_out("/app/results/", "/local/results/")
+                await box.copy_out("/app/results", "/local/results")
 
-            Copy a directory's contents rather than the directory::
+            Copy a directory's contents either way::
 
                 await box.copy_out("/app/results/.", "/local/results")
         """

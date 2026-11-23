@@ -297,6 +297,25 @@ const VOLUME_SCOPES: &[CommandScope] = &[
     },
 ];
 const COMMAND_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "ci",
+        globals: VOLUME_GLOBALS,
+        children: &[CommandScope {
+            name: "connect",
+            globals: VOLUME_GLOBALS,
+            children: &[],
+        }],
+    },
+    box_command_scope(
+        "checkpoint",
+        &[
+            box_command_scope("create", &[]),
+            box_command_scope("list", &[]),
+            box_command_scope("get", &[]),
+            box_command_scope("delete", &[]),
+        ],
+    ),
+    box_command_scope("import", &[]),
     box_command_scope("agent", AGENT_SCOPES),
     CommandScope {
         name: "run",
@@ -533,6 +552,33 @@ where
     let command_path = selected_command_path(&matches);
     let scope = command_scope(&command_path).expect("parsed command must have a declared scope");
 
+    // Check presence before FromArgMatches or option normalization can erase
+    // explicit defaults. Global connection flags are independent of settings.
+    if let Some(("create", create)) = matches.subcommand()
+        && create.get_one::<String>("checkpoint").is_some()
+        && create.ids().any(|id| {
+            parser.find_subcommand("create").is_some_and(|command| {
+                command
+                    .get_arguments()
+                    .any(|argument| argument.get_id() == id)
+            }) && !matches!(id.as_str(), "checkpoint" | "name")
+                && !GlobalOption::ALL
+                    .iter()
+                    .any(|option| option.id() == id.as_str())
+                && create.value_source(id.as_str()) == Some(ValueSource::CommandLine)
+        })
+    {
+        let message = if ["image", "rootfs"]
+            .iter()
+            .any(|id| create.value_source(id) == Some(ValueSource::CommandLine))
+        {
+            "provide only one of IMAGE, --rootfs PATH or --checkpoint CHECKPOINT"
+        } else {
+            "a box created from --checkpoint inherits its saved settings; only --name may accompany it"
+        };
+        return Err(parser.error(ErrorKind::ArgumentConflict, message));
+    }
+
     if let Some(option) = GlobalOption::ALL.iter().copied().find(|option| {
         !scope.allows(*option)
             && matches.value_source(option.id()) == Some(ValueSource::CommandLine)
@@ -718,6 +764,8 @@ fn normalize_empty_urls(cli: &mut Cli) {
 #[derive(Subcommand, Debug)]
 #[non_exhaustive]
 pub enum Commands {
+    /// Connect GitHub Actions to BoxLite.
+    Ci(crate::commands::ci::CiArgs),
     /// Manage the current local or remote target.
     Context(crate::contexts::ContextArgs),
     /// Run a command in a new box
@@ -734,6 +782,10 @@ pub enum Commands {
     Signal(crate::commands::signal::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
+    /// Manage disk checkpoints on the selected REST server.
+    Checkpoint(crate::commands::checkpoint::CheckpointArgs),
+    /// Import a .boxlite archive into a new box.
+    Import(crate::commands::import::ImportArgs),
 
     /// List boxes
     #[command(visible_alias = "ls", visible_alias = "ps")]
@@ -775,13 +827,13 @@ pub enum Commands {
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
 
-    /// Set up guest SSH and print a connection command
+    /// Connect to guest SSH using system OpenSSH
     ///
-    /// With no operation option, generate or reuse client and host keys,
-    /// enable box on guest port 22, and print the server fingerprint and SSH command.
-    /// Setup replaces the complete configuration and disconnects existing clients.
+    /// With no operation option, generate or reuse CLI-managed client and host keys,
+    /// prepare guest SSH, and log in as box. Healthy managed services are not reconfigured.
+    /// Use --install-ssh-config to install an alias for plain `ssh BOX`.
     /// Use --configure, --status, --enable, --disable, --tunnel, or --proxy
-    /// for another operation. All operations support local and cloud contexts.
+    /// for another operation. All operations support local and remote boxes.
     Ssh(crate::commands::ssh::SshArgs),
 
     /// Agent instances and turns
@@ -1087,6 +1139,13 @@ impl GlobalFlags {
         }
     }
 
+    pub(crate) fn selected_rest_options(&self) -> anyhow::Result<Option<BoxliteRestOptions>> {
+        Ok(self.resolve_rest_options(
+            self.load_selected_profile()?,
+            std::env::var("BOXLITE_API_KEY").ok(),
+        ))
+    }
+
     fn load_selected_profile(&self) -> anyhow::Result<Option<crate::credentials::Profile>> {
         if let Some(selected) = &self.selected_context {
             return Ok(selected.profile.clone());
@@ -1270,9 +1329,9 @@ impl CapabilityFlags {
 
 #[derive(Args, Debug, Clone)]
 pub struct ResourceFlags {
-    /// Number of CPUs (1-16 with the bundled guest kernel)
-    #[arg(long, value_parser = clap::value_parser!(u8).range(1..))]
-    pub cpus: Option<u8>,
+    /// CPU allocation (0.125-16); fractional values require a Linux execution host
+    #[arg(long, value_parser = clap::value_parser!(f64))]
+    pub cpus: Option<f64>,
 
     /// Memory limit (in MiB)
     #[arg(long)]
@@ -1556,6 +1615,10 @@ pub struct VolumeFlags {
     /// BOX_PATH[:options] for an anonymous volume
     #[arg(short = 'v', long = "volume", value_name = "VOLUME")]
     pub volume: Vec<String>,
+
+    /// Mount a managed volume by explicit type, optionally read-only or below a sub_path
+    #[arg(long = "mount", value_name = "MOUNT", conflicts_with = "volume")]
+    pub mount: Vec<String>,
 }
 
 /// Resolve base directory for anonymous volumes: explicit home, or BOXLITE_HOME, or ~/.boxlite, or temp dir.
@@ -1609,14 +1672,6 @@ impl VolumeFlags {
             let spec = match mount.origin {
                 // Held as written; the server resolves an id or a name.
                 crate::volumespec::MountOrigin::ManagedVolume(volume) => {
-                    // Neither the server nor the REST client accepts one yet;
-                    // saying so here beats a downgrade the caller never sees.
-                    if mount.read_only {
-                        anyhow::bail!(
-                            "read-only managed volumes are not supported yet; \
-                             mount {volume:?} read-write"
-                        );
-                    }
                     VolumeSpec::managed_volume(volume, mount.guest_path)
                 }
 
@@ -1640,6 +1695,9 @@ impl VolumeFlags {
                 read_only: mount.read_only,
                 ..spec
             });
+        }
+        for value in &self.mount {
+            opts.mounts.push(crate::mountspec::parse(value)?);
         }
         Ok(())
     }
@@ -2315,26 +2373,19 @@ mod tests {
         assert!(opts.path_prefix.is_none());
     }
 
-    /// `--cpus` must reach the runtime unchanged: it owns the vCPU ceiling, and
-    /// clamping here used to turn `--cpus 1000` into a silent 255.
+    /// Numeric values reach the runtime unchanged; it owns CPU validation.
     #[test]
-    fn test_resource_flags_cpus_passed_through_unclamped() {
-        for bad in ["0", "1000"] {
-            assert!(
-                Cli::try_parse_from(["boxlite", "run", "--cpus", bad, "alpine"]).is_err(),
-                "--cpus {bad} must be rejected while parsing"
-            );
+    fn fractional_cpus_resource_flags_preserve_numbers() {
+        for cpus in ["0.125", "1.5", "2", "2.0", "0", "1000"] {
+            let cli = Cli::try_parse_from(["boxlite", "run", "--cpus", cpus, "alpine"]).unwrap();
+            let Commands::Run(run) = cli.command else {
+                panic!("expected run");
+            };
+            let mut opts = BoxOptions::default();
+            run.resource.apply_to(&mut opts);
+            assert_eq!(opts.cpus, Some(cpus.parse().unwrap()));
         }
-
-        let cli = Cli::try_parse_from(["boxlite", "run", "--cpus", "24", "alpine"])
-            .expect("--cpus 24 parses; the runtime decides whether it fits");
-        let Commands::Run(run) = cli.command else {
-            panic!("expected run");
-        };
-        let mut opts = BoxOptions::default();
-        run.resource.apply_to(&mut opts);
-
-        assert_eq!(opts.cpus, Some(24));
+        assert!(Cli::try_parse_from(["boxlite", "run", "--cpus", "invalid", "alpine"]).is_err());
     }
 
     #[test]
@@ -2772,6 +2823,7 @@ mod tests {
                 "/host/data:/guest/data".to_string(),
                 "/readonly:/ro:ro".to_string(),
             ],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2791,6 +2843,7 @@ mod tests {
                 r"C:\host\data:/guest/data".to_string(),
                 r"D:\readonly:/ro:ro".to_string(),
             ],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2813,6 +2866,7 @@ mod tests {
                 "my-data:/data".to_string(),
                 "vol_01K2EXAMPLE:/cache".to_string(),
             ],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2829,24 +2883,37 @@ mod tests {
         assert_eq!(opts.volumes[1].guest_path, "/cache");
     }
 
-    /// `:ro` on a managed volume is refused, not quietly downgraded. Neither
-    /// the server nor the REST client accepts one, and a caller who believes a
-    /// mount is protected when it is writable is the failure worth preventing.
     #[test]
-    fn test_volume_flags_reject_read_only_managed_volume() {
+    fn test_typed_mount_flags_apply_to() {
         let flags = VolumeFlags {
-            volume: vec!["my-data:/data:ro".to_string()],
+            volume: Vec::new(),
+            mount: vec![
+                "type=volume,source=workspace,target=/workspace,readonly,sub_path=team/backend"
+                    .to_string(),
+            ],
         };
         let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
 
-        let error = flags
-            .apply_to(&mut opts, None)
-            .expect_err("read-only managed volumes must be refused")
-            .to_string();
-
-        assert!(error.contains("read-only"), "{error}");
-        assert!(error.contains("my-data"), "{error}");
         assert!(opts.volumes.is_empty());
+        assert_eq!(opts.mounts.len(), 1);
+        assert_eq!(opts.mounts[0].source.as_deref(), Some("workspace"));
+        assert!(opts.mounts[0].read_only);
+        assert_eq!(opts.mounts[0].sub_path.as_deref(), Some("team/backend"));
+    }
+
+    #[test]
+    fn test_volume_flags_allow_read_only_managed_volume() {
+        let flags = VolumeFlags {
+            volume: vec!["my-data:/data:ro".to_string()],
+            mount: Vec::new(),
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
+
+        assert_eq!(opts.volumes.len(), 1);
+        assert_eq!(opts.volumes[0].managed_volume.as_deref(), Some("my-data"));
+        assert!(opts.volumes[0].read_only);
     }
 
     /// A host bind may still be read-only — the restriction is specific to
@@ -2855,6 +2922,7 @@ mod tests {
     fn test_volume_flags_still_allow_read_only_host_binds() {
         let flags = VolumeFlags {
             volume: vec!["/host/data:/data:ro".to_string()],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2869,6 +2937,7 @@ mod tests {
     fn test_volume_flags_apply_to_leaves_host_binds_unmanaged() {
         let flags = VolumeFlags {
             volume: vec!["/host/data:/guest/data".to_string()],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2882,6 +2951,7 @@ mod tests {
         let base = std::env::temp_dir();
         let flags = VolumeFlags {
             volume: vec!["/data".to_string(), "/cache:ro".to_string()],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, Some(&base)).unwrap();

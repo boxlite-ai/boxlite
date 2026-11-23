@@ -94,24 +94,25 @@ fn run_reporting_guest(init_on_free: bool) -> (Evidence, String) {
     };
     let initramfs = TempFile::new(name, &newc_archive("init", &init));
     let log = SerialLog::default();
-    let (writer, mut console) =
-        ConsoleWorker::spawn(Box::new(log.clone()), DEFAULT_QUEUE_BYTES).unwrap();
     let evidence = Arc::new(Mutex::new(Evidence::default()));
     let mut cmdline = CONSOLE_CMDLINE.to_owned();
     if init_on_free {
         cmdline.push_str(" init_on_free=1");
     }
     let config = linux_config(1, &cmdline, Some(initramfs.0.clone()));
+    let (prepared, leaf) = probe_boot(&config);
+    let (writer, mut console) =
+        ConsoleWorker::spawn(Box::new(log.clone()), DEFAULT_QUEUE_BYTES).unwrap();
     // The frame goes through the production composition: `devices::add_all`
     // places the reporting device on the first slot, exactly as `Vm::new` does.
     let mut sampler_memory = None;
     let mut vm = crate::Vm::with_devices(
         config,
-        boxlite_hypervisor::KvmVm::new,
-        |ram, config| prepare(ram, config).map(|setup| setup.boot_regs),
+        move || boxlite_hypervisor::KvmVm::from_prepared(prepared),
+        move |ram, config| prepare(ram, config, leaf).map(|setup| setup.boot_regs),
         |chipset, ctx, config| {
-            sampler_memory = Some(Arc::clone(ctx.memory));
-            crate::devices::add_all(chipset, ctx, config, writer)
+            sampler_memory = Some(ctx.memory.memory().into_inner());
+            crate::devices::add_all(chipset, ctx, config, writer).map(|_| ())
         },
     )
     .unwrap();

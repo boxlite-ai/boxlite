@@ -4,7 +4,8 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { Auth0CliManagementClient } from './auth0-login-policy.js'
+import { loadDeploymentEnvironment } from '../deployment/environment.js'
+import { Auth0CliManagementClient, assertStageApiAudience } from './auth0-login-policy.js'
 import { Auth0McpConfigurator, loadMcpSources, parseAuth0McpOptions } from './auth0-mcp.js'
 
 const bootstrapRoot = dirname(fileURLToPath(import.meta.url))
@@ -19,6 +20,9 @@ try {
     console.log(JSON.stringify(result, null, 2))
   } else {
     const options = parseAuth0McpOptions(process.argv.slice(2))
+    // The stage's .env names the audience its API validates; an exported value wins.
+    loadDeploymentEnvironment()
+    assertStageApiAudience(options.apiAudience)
     const configurator = new Auth0McpConfigurator(options, new Auth0CliManagementClient(options.tenant), {
       ...loadMcpSources(bootstrapRoot),
       journalDirectory: join(bootstrapRoot, '..', '.sst', 'auth0-backups'),

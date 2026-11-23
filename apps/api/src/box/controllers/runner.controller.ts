@@ -338,6 +338,11 @@ export class RunnerController {
       healthcheck.metrics,
       healthcheck.appVersion,
       healthcheck.supportsPrivileged,
+      {
+        nestedVirtualizationEnabled: healthcheck.nestedVirtualizationEnabled,
+        capabilities: healthcheck.capabilities,
+      },
+      healthcheck.dataDiskRef,
     )
   }
 }

@@ -28,6 +28,16 @@ type HealthcheckServiceConfig struct {
 	ProxyPort  int
 	TlsEnabled bool
 	Boxlite    *blclient.Client
+	// Data disk identity from the infra-injected env keys (hyperdisk LLD §4.2).
+	// Any part missing leaves the healthcheck without a dataDiskRef: only a
+	// complete ref is useful to the API's disk-expansion controller.
+	GCPProjectID       string
+	GCPZone            string
+	RunnerDataDiskName string
+	// RunnerDataDiskType names the backend behind the identity (optional; the
+	// API assumes hyperdisk_balanced when absent). Empty on hosts whose infra
+	// predates the field.
+	RunnerDataDiskType string
 }
 
 type Service struct {
@@ -41,6 +51,9 @@ type Service struct {
 	proxyPort  int
 	tlsEnabled bool
 	boxlite    *blclient.Client
+	// dataDiskRef is nil unless project, zone and disk name are all set, so a
+	// runner without the infra-injected env never sends a partial identity.
+	dataDiskRef *apiclient.RunnerDataDiskRef
 }
 
 func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
@@ -58,17 +71,24 @@ func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
 		logger = cfg.Logger
 	}
 
+	var dataDiskRef *apiclient.RunnerDataDiskRef
+	if cfg.GCPProjectID != "" && cfg.GCPZone != "" && cfg.RunnerDataDiskName != "" {
+		dataDiskRef = apiclient.NewRunnerDataDiskRef("gcp", cfg.GCPProjectID, cfg.GCPZone, cfg.RunnerDataDiskName)
+		dataDiskRef.SetDiskType(cfg.RunnerDataDiskType)
+	}
+
 	return &Service{
-		log:        logger.With(slog.String("component", "healthcheck")),
-		client:     apiClient,
-		interval:   cfg.Interval,
-		timeout:    cfg.Timeout,
-		collector:  cfg.Collector,
-		domain:     cfg.Domain,
-		apiPort:    cfg.ApiPort,
-		proxyPort:  cfg.ProxyPort,
-		tlsEnabled: cfg.TlsEnabled,
-		boxlite:    cfg.Boxlite,
+		log:         logger.With(slog.String("component", "healthcheck")),
+		client:      apiClient,
+		interval:    cfg.Interval,
+		timeout:     cfg.Timeout,
+		collector:   cfg.Collector,
+		domain:      cfg.Domain,
+		apiPort:     cfg.ApiPort,
+		proxyPort:   cfg.ProxyPort,
+		tlsEnabled:  cfg.TlsEnabled,
+		boxlite:     cfg.Boxlite,
+		dataDiskRef: dataDiskRef,
 	}, nil
 }
 
@@ -93,10 +113,14 @@ func (s *Service) Start(ctx context.Context) {
 	}
 }
 
-func (s *Service) newHealthcheck() *apiclient.RunnerHealthcheck {
+func (s *Service) newHealthcheck(nestedVirtualizationEnabled bool) *apiclient.RunnerHealthcheck {
 	healthcheck := apiclient.NewRunnerHealthcheck(internal.Version)
 	healthcheck.SetDomain(s.domain)
 	healthcheck.SetSupportsPrivileged(true)
+	// The binary's filestore mount support is compiled in, so it is declared
+	// unconditionally: an API sees it from the first heartbeat after the upgrade.
+	healthcheck.SetCapabilities([]string{"filestore"})
+	healthcheck.SetNestedVirtualizationEnabled(nestedVirtualizationEnabled)
 
 	proxyUrl := fmt.Sprintf("http://%s:%d", s.domain, s.proxyPort)
 	apiUrl := fmt.Sprintf("http://%s:%d", s.domain, s.apiPort)
@@ -108,6 +132,11 @@ func (s *Service) newHealthcheck() *apiclient.RunnerHealthcheck {
 
 	healthcheck.SetProxyUrl(proxyUrl)
 	healthcheck.SetApiUrl(apiUrl)
+
+	if s.dataDiskRef != nil {
+		healthcheck.SetDataDiskRef(*s.dataDiskRef)
+	}
+
 	return healthcheck
 }
 
@@ -115,7 +144,7 @@ func (s *Service) sendHealthcheck(ctx context.Context) error {
 	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	healthcheck := s.newHealthcheck()
+	healthcheck := s.newHealthcheck(s.boxlite.NestedVirtualizationEnabled())
 
 	runtimeHealth := apiclient.RunnerServiceHealth{
 		ServiceName: "boxlite",

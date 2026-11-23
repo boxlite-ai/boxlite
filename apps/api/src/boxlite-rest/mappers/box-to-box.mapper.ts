@@ -5,7 +5,7 @@
  */
 
 import { BoxDto } from '../../box/dto/box.dto'
-import { BoxState } from '../../box/enums/box-state.enum'
+import { publicBoxStatus } from '../../box/utils/box-public-status'
 import {
   AUTO_DELETE_DISABLED,
   DEFAULT_AUTO_STOP_SECONDS,
@@ -19,7 +19,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
   return {
     box_id: box.id,
     name: box.name,
-    status: mapState(box.state),
+    status: publicBoxStatus(box.state),
     created_at: box.createdAt || new Date().toISOString(),
     updated_at: box.updatedAt || new Date().toISOString(),
     last_activity_at: box.lastActivityAt,
@@ -56,7 +56,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.cmd = dto.cmd
   createDto.env = dto.env
   createDto.cpu = dto.cpus
-  createDto.memory = dto.memory_mib ? Math.ceil(dto.memory_mib / 1024) : undefined
+  createDto.memory = dto.memory_mib == null ? undefined : dto.memory_mib / 1024
   createDto.disk = dto.disk_size_gb
   createDto.target = target
   createDto.autoStop = dto.auto_stop
@@ -73,6 +73,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     value: secret.value,
     hosts: secret.hosts,
     placeholder: secret.placeholder,
+    headers: secret.headers,
   }))
   // Only an explicit inbound.mode=enabled enables inbound access. Omitting
   // inbound (including the legacy flat network shape) leaves it disabled.
@@ -83,26 +84,4 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
     createDto.outboundAllowNet = allowNet?.length ? allowNet : undefined
   }
   return createDto
-}
-
-function mapState(state: string | BoxState | undefined): string {
-  switch (state) {
-    case BoxState.STARTED:
-      return 'running'
-    case BoxState.STOPPED:
-    case BoxState.ARCHIVED:
-      return 'stopped'
-    case BoxState.CREATING:
-    case BoxState.STARTING:
-    case BoxState.RESTORING:
-      return 'configured'
-    case BoxState.STOPPING:
-    case BoxState.DESTROYING:
-    case BoxState.ARCHIVING:
-      return 'stopping'
-    case BoxState.ERROR:
-    case BoxState.UNKNOWN:
-    default:
-      return 'unknown'
-  }
 }

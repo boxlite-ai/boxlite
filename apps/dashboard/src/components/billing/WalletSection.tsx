@@ -1,3 +1,5 @@
+import { TabIcon } from '@/components/ui/TabIcon'
+import { ResourceErrorState, ResourceErrorNotice } from '@/components/ResourceLayout'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -15,6 +17,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useRedeemCouponMutation } from '@/hooks/mutations/useRedeemCouponMutation'
+import { useRemovePaymentMethodMutation } from '@/hooks/mutations/useRemovePaymentMethodMutation'
+import { useSetDefaultPaymentMethodMutation } from '@/hooks/mutations/useSetDefaultPaymentMethodMutation'
 import { useSetAutomaticTopUpMutation } from '@/hooks/mutations/useSetAutomaticTopUpMutation'
 import { useTopUpWalletMutation } from '@/hooks/mutations/useTopUpWalletMutation'
 import { useConnectCard } from '@/hooks/useConnectCard'
@@ -26,14 +30,17 @@ import {
   useOwnerWalletTransactionsQuery,
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
+import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, formatAmount } from '@/lib/utils'
 import { ArrowUpRight } from '@/components/ui/icon'
+import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 import { PaymentMethodsPanel } from './PaymentMethodsPanel'
+import { WalletCouponClaim } from './WalletCouponClaim'
 
 /** Commerce rejects anything smaller, so the form says so before the round trip. */
 export const MIN_TOP_UP_DOLLARS = 10
@@ -103,7 +110,8 @@ function useClampPage(page: number, totalPages: number, setPage: (page: number) 
 
 /**
  * Renders pagination controls for navigating between pages.
- * Hidden when there's only one page or no pages.
+ * Hidden on the first page when no further pages are known. Later pages retain
+ * Previous during failed requests, when the total is temporarily unknown.
  *
  * @param props - Component props
  * @param props.page - Current page number
@@ -120,14 +128,15 @@ function Pager({
   totalPages: number
   onPage: (next: (current: number) => number) => void
 }) {
-  if (totalPages <= 1) {
+  if (totalPages <= 1 && page <= 1) {
     return null
   }
 
   return (
-    <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-mono text-[11px] text-muted-foreground">
+    <div className="flex items-center justify-end gap-3 border-b border-border/40 py-3 font-sans text-meta text-muted-foreground">
       <span>
-        Page {page} of {totalPages}
+        Page {page}
+        {totalPages > 0 && ` of ${totalPages}`}
       </span>
       <AsciiButton onClick={() => onPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
         ← Previous
@@ -169,31 +178,64 @@ function MoneyHistorySection() {
   return (
     <section>
       <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
-        <TabsList variant="segmented">
+        <TabsList variant="underline" aria-label="Payment history">
           <TabsTrigger value="invoices">
+            <TabIcon name="document" />
             Billing history
             <Count value={invoicesQuery.data?.totalItems} />
           </TabsTrigger>
           <TabsTrigger value="credits">
+            <TabIcon name="credits" />
             Credit activity
             <Count value={transactionsQuery.data?.totalItems} />
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="invoices" className="mt-5">
-          <InvoicesTable
-            data={invoicesQuery.data?.items ?? []}
-            loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
-          />
+          {invoicesQuery.isError && invoicesQuery.data === undefined ? (
+            <ResourceErrorState
+              title="Could not load billing history"
+              retrying={invoicesQuery.isFetching}
+              onRetry={() => void invoicesQuery.refetch()}
+            />
+          ) : (
+            <>
+              {invoicesQuery.isError && (
+                <ResourceErrorNotice
+                  title="Could not refresh billing history. Showing previously loaded data."
+                  retrying={invoicesQuery.isFetching}
+                  onRetry={() => void invoicesQuery.refetch()}
+                />
+              )}
+              <InvoicesTable data={invoicesQuery.data?.items ?? []} loading={invoicesQuery.isLoading} />
+            </>
+          )}
           <Pager page={invoicePage} totalPages={invoiceTotalPages} onPage={setInvoicePage} />
           <PanelNote>Amounts charged to your payment method.</PanelNote>
         </TabsContent>
 
         <TabsContent value="credits" className="mt-5">
-          <WalletTransactionsTable
-            data={transactionsQuery.data?.items ?? []}
-            loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
-          />
+          {transactionsQuery.isError && transactionsQuery.data === undefined ? (
+            <ResourceErrorState
+              title="Could not load credit activity"
+              retrying={transactionsQuery.isFetching}
+              onRetry={() => void transactionsQuery.refetch()}
+            />
+          ) : (
+            <>
+              {transactionsQuery.isError && (
+                <ResourceErrorNotice
+                  title="Could not refresh credit activity. Showing previously loaded data."
+                  retrying={transactionsQuery.isFetching}
+                  onRetry={() => void transactionsQuery.refetch()}
+                />
+              )}
+              <WalletTransactionsTable
+                data={transactionsQuery.data?.items ?? []}
+                loading={transactionsQuery.isLoading}
+              />
+            </>
+          )}
           <Pager page={creditPage} totalPages={creditTotalPages} onPage={setCreditPage} />
           {/* Says what these are, which is the job the fold used to do badly:
               quota granted, not money taken. */}
@@ -216,13 +258,24 @@ function Count({ value }: { value?: number }) {
  * Main wallet section component displaying balance, payment methods, billing history, and credit activity.
  * Manages state for top-ups, auto-reload settings, and coupon redemption.
  *
+ * @param linkCouponCode - Reward code provided by the shareable coupon link.
+ * @param onCouponClaimAccepted - Removes the accepted reward code from the URL.
  * @returns The complete wallet section component
  */
-export function WalletSection() {
-  const { selectedOrganization } = useSelectedOrganization()
+export function WalletSection({
+  linkCouponCode,
+  onCouponClaimAccepted,
+}: { linkCouponCode?: string; onCouponClaimAccepted?: () => void } = {}) {
+  const {
+    selectedOrganization,
+    authenticatedUserOrganizationMember,
+    organizationMembersStatus,
+    refreshOrganizationMembers,
+  } = useSelectedOrganization()
+  const { organizations } = useOrganizations()
   const { user } = useAuth()
   const [automaticTopUp, setAutomaticTopUp] = useState<AutomaticTopUp | undefined>(undefined)
-  const [couponCode, setCouponCode] = useState<string>('')
+  const [couponCode, setCouponCode] = useState('')
   const [redeemCouponError, setRedeemCouponError] = useState<string | null>(null)
   const [redeemCouponSuccess, setRedeemCouponSuccess] = useState<string | null>(null)
   const [oneTimeTopUpAmount, setOneTimeTopUpAmount] = useState<number | undefined>(undefined)
@@ -242,6 +295,8 @@ export function WalletSection() {
   const setAutomaticTopUpMutation = useSetAutomaticTopUpMutation()
   const redeemCouponMutation = useRedeemCouponMutation()
   const topUpWalletMutation = useTopUpWalletMutation()
+  const setDefaultPaymentMethodMutation = useSetDefaultPaymentMethodMutation()
+  const removePaymentMethodMutation = useRemovePaymentMethodMutation()
 
   useEffect(() => {
     if (!wallet) {
@@ -268,6 +323,36 @@ export function WalletSection() {
     }
   }, [selectedOrganization, automaticTopUp, setAutomaticTopUpMutation])
 
+  const handleSetDefaultPaymentMethod = useCallback(
+    async (paymentMethodId: string) => {
+      if (!selectedOrganization) {
+        return
+      }
+
+      try {
+        await setDefaultPaymentMethodMutation.mutateAsync({ organizationId: selectedOrganization.id, paymentMethodId })
+      } catch (error) {
+        toast.error('Failed to set the default card', { description: String(error) })
+      }
+    },
+    [selectedOrganization, setDefaultPaymentMethodMutation],
+  )
+
+  const handleRemovePaymentMethod = useCallback(
+    async (paymentMethodId: string) => {
+      if (!selectedOrganization) {
+        return
+      }
+
+      try {
+        await removePaymentMethodMutation.mutateAsync({ organizationId: selectedOrganization.id, paymentMethodId })
+      } catch (error) {
+        toast.error('Failed to remove the card', { description: String(error) })
+      }
+    },
+    [selectedOrganization, removePaymentMethodMutation],
+  )
+
   const handleRedeemCoupon = useCallback(async () => {
     if (!selectedOrganization || !couponCode) {
       return
@@ -285,9 +370,11 @@ export function WalletSection() {
       setTimeout(() => {
         setRedeemCouponSuccess(null)
       }, 3000)
+      toast.success(message)
       setCouponCode('')
     } catch (error) {
       setRedeemCouponError(String(error))
+      toast.error(`Coupon ${couponCode} was not redeemed`, { description: String(error) })
       console.error('Failed to redeem coupon:', error)
     }
   }, [selectedOrganization, couponCode, redeemCouponMutation])
@@ -357,6 +444,37 @@ export function WalletSection() {
 
   return (
     <div className="flex flex-col gap-8">
+      {linkCouponCode && !user?.profile.email_verified && (
+        <Panel className="px-[22px] py-4">Verify your email to claim coupon code {linkCouponCode}.</Panel>
+      )}
+      {linkCouponCode && user?.profile.email_verified && organizationMembersStatus === 'error' && (
+        <Panel className="flex flex-wrap items-center justify-between gap-3 px-[22px] py-4">
+          <p role="alert">Couldn’t verify your organization role.</p>
+          <AsciiButton onClick={() => void refreshOrganizationMembers().catch(() => undefined)}>
+            Retry verification
+          </AsciiButton>
+        </Panel>
+      )}
+      {user?.profile.email_verified &&
+        organizationMembersStatus === 'ready' &&
+        (selectedOrganization &&
+        user.profile.sub &&
+        authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER ? (
+          <WalletCouponClaim
+            key={JSON.stringify([user.profile.sub, selectedOrganization.id])}
+            accountId={user.profile.sub}
+            organizationId={selectedOrganization.id}
+            organizationName={selectedOrganization.name}
+            code={linkCouponCode}
+            automatic={organizations.length === 1 && organizations[0].id === selectedOrganization.id}
+            cardConnected={walletQuery.isPlaceholderData ? undefined : wallet?.creditCardConnected}
+            connectCard={connectCard}
+            connectingCard={isCheckoutUrlLoading}
+            onAccepted={onCouponClaimAccepted}
+          />
+        ) : (
+          linkCouponCode && <Panel className="px-[22px] py-4">Only an organization owner can claim this reward.</Panel>
+        ))}
       {isBillingLoading && (
         <div className="flex flex-col gap-8">
           <div className="flex flex-col gap-4 border border-border bg-card p-[22px]">
@@ -381,24 +499,24 @@ export function WalletSection() {
 
       {wallet && (
         <div className="flex flex-col gap-8">
-          {/* Card enumeration is its own read model; checkout remains the one action. */}
           <PaymentMethodsPanel
             paymentMethods={paymentMethodsQuery.data ?? []}
             isLoading={paymentMethodsQuery.isLoading}
             isError={paymentMethodsQuery.isError}
-            hasConnectedCard={cardConnected}
-            isActionLoading={isCheckoutUrlLoading}
-            onAction={connectCard}
+            isAddLoading={isCheckoutUrlLoading}
+            onAdd={connectCard}
+            onSetDefault={handleSetDefaultPaymentMethod}
+            onRemove={handleRemovePaymentMethod}
           />
 
           <section>
             <SectionTitle title="Wallet Balance" />
             <Panel className="px-[22px] py-5">
               <div className="flex items-baseline gap-3">
-                <span className="font-mono text-[30px] font-semibold leading-none tracking-tight tabular-nums text-foreground">
+                <span className="font-mono text-page font-semibold leading-none tracking-tight tabular-nums text-foreground">
                   {formatAmount(wallet.ongoingBalanceCents)}
                 </span>
-                <span className="font-mono text-[11px] text-muted-foreground">available</span>
+                <span className="font-sans text-meta text-muted-foreground">available</span>
               </div>
 
               <div className="mt-4">
@@ -406,9 +524,9 @@ export function WalletSection() {
                     about promotional credit, it is the absence of one. */}
                 {(wallet.creditGrantedCents ?? 0) > 0 && (
                   <>
-                    <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+                    <div className="mb-1.5 flex items-center justify-between font-sans text-label uppercase tracking-[1px] text-muted-foreground">
                       <span>Promotional credit remaining</span>
-                      <span className="tabular-nums">
+                      <span className="font-mono tabular-nums">
                         {formatAmount(wallet.creditRemainingCents ?? 0)} /{' '}
                         {formatAmount(wallet.creditGrantedCents ?? 0)}
                       </span>
@@ -429,7 +547,7 @@ export function WalletSection() {
                     href={`${billingPortalUrl}/customer-edit-information`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="mt-2 inline-flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                    className="mt-2 inline-flex items-center gap-1.5 font-sans text-meta text-muted-foreground transition-colors hover:text-foreground"
                   >
                     Payment history &amp; billing info
                     <ArrowUpRight className="size-3.5" />
@@ -440,7 +558,7 @@ export function WalletSection() {
               <div className="my-5 h-px bg-border" />
 
               {/* Add funds — presets, custom amount and the action all on one row */}
-              <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">Add funds</span>
+              <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">Add funds</span>
               <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                 <div className="grid grid-cols-2 gap-2 sm:contents">
                   {[25, 100, 500, 1000].map((amount) => (
@@ -456,7 +574,7 @@ export function WalletSection() {
                     </AsciiChip>
                   ))}
                 </div>
-                <span className="inline-flex items-center border border-border px-3 py-2 font-mono text-[13px] transition-colors focus-within:border-brand hover:border-brand">
+                <span className="inline-flex items-center border border-border px-3 py-2 font-mono text-body transition-colors focus-within:border-brand hover:border-brand">
                   <span className="text-muted-foreground">$</span>
                   <NumericFormat
                     id="customTopUpAmount"
@@ -503,7 +621,7 @@ export function WalletSection() {
                       <span
                         role="img"
                         aria-label={`${topUpDiscount} off`}
-                        className="absolute right-[-12px] top-1/2 w-[80px] -translate-y-1/2 rotate-[35deg] whitespace-nowrap bg-brand py-[2px] text-center font-mono text-label font-bold leading-none tracking-normal text-[hsl(218_17%_9%)]"
+                        className="absolute right-[-12px] top-1/2 w-[80px] -translate-y-1/2 rotate-[35deg] whitespace-nowrap bg-brand py-[2px] text-center font-sans text-label font-bold leading-none tracking-normal text-[hsl(218_17%_9%)]"
                       >
                         {topUpDiscount} OFF
                       </span>
@@ -511,9 +629,7 @@ export function WalletSection() {
                   )}
                 </div>
               </div>
-              {topUp.reason && (
-                <p className="mt-3 font-mono text-[11px] leading-relaxed text-warning">{topUp.reason}</p>
-              )}
+              {topUp.reason && <p className="mt-3 font-sans text-meta leading-relaxed text-warning">{topUp.reason}</p>}
               <PanelNote>
                 Minimum ${MIN_TOP_UP_DOLLARS} · you will be redirected to Stripe to complete the payment.
               </PanelNote>
@@ -529,7 +645,7 @@ export function WalletSection() {
                   aria-expanded={autoReloadOpen}
                   aria-controls="auto-reload-settings"
                   onClick={() => setAutoReloadOpen((wasOpen) => !wasOpen)}
-                  className="flex w-full items-center gap-2 font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground transition-colors hover:text-foreground"
+                  className="flex w-full items-center gap-2 font-sans text-label uppercase tracking-[1.5px] text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <span style={{ color: BRAND }}>{autoReloadOpen ? '▾' : '▸'}</span>
                   Auto-reload
@@ -549,8 +665,8 @@ export function WalletSection() {
                 {autoReloadOpen && (
                   <div id="auto-reload-settings" className="mt-3 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-col gap-1.5">
-                      <div className="flex flex-wrap items-center gap-2 font-mono text-[13px] text-foreground">
-                        <span>when balance &lt;</span>
+                      <div className="flex flex-wrap items-center gap-2 font-mono text-body text-foreground">
+                        <span className="font-sans">when balance &lt;</span>
                         <span className="inline-flex items-center border border-border px-2 py-1 transition-colors focus-within:border-brand">
                           <span className="text-muted-foreground">$</span>
                           <NumericFormat
@@ -577,7 +693,7 @@ export function WalletSection() {
                             className="w-[72px] bg-transparent pl-1 text-right tabular-nums text-foreground outline-none"
                           />
                         </span>
-                        <span className="text-muted-foreground">→ bring to</span>
+                        <span className="font-sans text-muted-foreground">→ bring to</span>
                         <span className="inline-flex items-center border border-border px-2 py-1 transition-colors focus-within:border-brand">
                           <span className="text-muted-foreground">$</span>
                           <NumericFormat
@@ -624,7 +740,7 @@ export function WalletSection() {
                   (cardConnected ? (
                     <PanelNote>Target must be at least $10 above the threshold · set both to 0 to disable</PanelNote>
                   ) : (
-                    <p className="mt-3 font-mono text-[11px] leading-relaxed text-warning">
+                    <p className="mt-3 font-sans text-meta leading-relaxed text-warning">
                       Connect a payment method above to turn auto-reload on. Until it is set, nothing warns you before
                       the balance runs out.
                     </p>
@@ -643,23 +759,23 @@ export function WalletSection() {
                     <button
                       type="button"
                       onClick={() => setCouponOpen(true)}
-                      className="font-mono text-[11px] text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
+                      className="font-sans text-meta text-muted-foreground underline underline-offset-2 transition-colors hover:text-foreground"
                     >
                       Have a coupon code?
                     </button>
                   ) : (
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex flex-col gap-1.5">
-                        <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+                        <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
                           Redeem coupon
                         </span>
                         {redeemCouponError ? (
-                          <span className="font-mono text-[12px] text-destructive">{redeemCouponError}</span>
+                          <span className="font-sans text-meta text-destructive">{redeemCouponError}</span>
                         ) : redeemCouponSuccess ? (
-                          <span className="font-mono text-[12px] text-success">{redeemCouponSuccess}</span>
+                          <span className="font-sans text-meta text-success">{redeemCouponSuccess}</span>
                         ) : (
-                          <span className="font-mono text-[12px] text-muted-foreground">
-                            Enter a coupon code to redeem your credits.
+                          <span className="font-sans text-meta text-muted-foreground">
+                            Credits go to {selectedOrganization?.name ?? 'this organization'}.
                           </span>
                         )}
                       </div>
@@ -668,7 +784,7 @@ export function WalletSection() {
                           placeholder="Enter coupon code"
                           value={couponCode}
                           onChange={(e) => setCouponCode(e.target.value)}
-                          className="h-9 w-full font-mono text-[13px] sm:w-[200px]"
+                          className="h-9 w-full font-mono text-body sm:w-[200px]"
                         />
                         <AsciiButton
                           onClick={handleRedeemCoupon}

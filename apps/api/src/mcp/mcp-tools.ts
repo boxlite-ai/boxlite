@@ -34,24 +34,73 @@ const API_OPERATION_METADATA = 'swagger/apiOperation'
 const WAIT_DEFAULT_SECONDS = 60
 const WAIT_MAX_SECONDS = 300
 
-/** The box operations exposed as their own tools, with descriptions written for agents. */
-const DIRECT_TOOLS: Record<string, string> = {
-  createBox:
-    'Create a box: an isolated Linux micro-VM started from a container image. Returns its id and state. startExecution starts it automatically.',
-  listBoxes: 'List the boxes in your organization with their id, name, image and state.',
-  getBox: 'Get one box by id or name: state, image, resources and network settings.',
-  startBox: 'Start a stopped box.',
-  stopBox: 'Stop a running box. Its disk is kept, and startBox resumes it.',
-  removeBox: 'Delete a box and its disk. This cannot be undone.',
-  startExecution:
-    'Run a command in a box, starting the box if needed. With wait (the default) it returns stdout, stderr and exit_code; with wait=false it returns the execution_id to poll with getExecution.',
-  getExecution: 'Get the status and exit code of an execution. Output comes from startExecution with wait.',
-  uploadFiles: 'Upload files into a box as a base64-encoded tar archive in body_base64.',
-  downloadFiles: 'Download a path from a box as a base64-encoded tar archive.',
+/**
+ * MCP `ToolAnnotations`, all required: an omitted hint falls back to the schema's
+ * destructive, non-idempotent, open-world default, so hosts would prompt on reads.
+ */
+type ToolHints = { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean }
+
+const READ: Omit<ToolHints, 'openWorldHint'> = { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
+const WRITE = { readOnlyHint: false, openWorldHint: true } as const
+
+/** The box operations exposed as their own tools, with descriptions and hints written for agents. */
+const DIRECT_TOOLS: Record<string, { title: string; description: string; annotations: ToolHints }> = {
+  createBox: {
+    title: 'Create a Box',
+    description:
+      'Create a box: an isolated Linux micro-VM started from a container image. Returns its id and state. startExecution starts it automatically.',
+    annotations: { ...WRITE, destructiveHint: false, idempotentHint: false },
+  },
+  listBoxes: {
+    title: 'List Boxes',
+    description: 'List the boxes in your organization with their id, name, image and state.',
+    annotations: { ...READ, openWorldHint: false },
+  },
+  getBox: {
+    title: 'Get a Box',
+    description: 'Get one box by id or name: state, image, resources and network settings.',
+    annotations: { ...READ, openWorldHint: false },
+  },
+  startBox: {
+    title: 'Start a Box',
+    description: 'Start a stopped box.',
+    annotations: { ...WRITE, destructiveHint: false, idempotentHint: true },
+  },
+  stopBox: {
+    title: 'Stop a Box',
+    description: 'Stop a running box. Its disk is kept, and startBox resumes it.',
+    annotations: { ...WRITE, destructiveHint: true, idempotentHint: true },
+  },
+  removeBox: {
+    title: 'Remove a Box',
+    description: 'Delete a box and its disk. This cannot be undone.',
+    annotations: { ...WRITE, destructiveHint: true, idempotentHint: true },
+  },
+  startExecution: {
+    title: 'Run a command',
+    description:
+      'Run a command in a box, starting the box if needed. With wait (the default) it returns stdout, stderr and exit_code; with wait=false it returns the execution_id to poll with getExecution.',
+    annotations: { ...WRITE, destructiveHint: true, idempotentHint: false },
+  },
+  getExecution: {
+    title: 'Get command status',
+    description: 'Get the status and exit code of an execution. Output comes from startExecution with wait.',
+    annotations: { ...READ, openWorldHint: false },
+  },
+  uploadFiles: {
+    title: 'Upload files',
+    description: 'Upload files into a box as a base64-encoded tar archive in body_base64.',
+    annotations: { ...WRITE, destructiveHint: true, idempotentHint: true },
+  },
+  downloadFiles: {
+    title: 'Download files',
+    description: 'Download a path from a box as a base64-encoded tar archive.',
+    annotations: { ...READ, openWorldHint: true },
+  },
 }
 
 /**
- * Registers the MCP tools: the {@link DIRECT_TOOLS} plus three meta-tools that
+ * Registers the MCP tools: the {@link DIRECT_TOOLS} plus four meta-tools that
  * reach every catalog operation by `operationId` (the Stainless "dynamic tools"
  * pattern), so `tools/list` stays small however many routes the API has.
  */
@@ -86,14 +135,16 @@ export class McpTools {
       // An `@All` route serves every verb, so it decides any operation on its path.
       this.permissions.set(op.operationId, routes.get(`${op.method} ${shape}`) ?? routes.get(`all ${shape}`) ?? [])
     }
-    for (const [operationId, description] of Object.entries(DIRECT_TOOLS)) {
+    for (const [operationId, { title, description, annotations }] of Object.entries(DIRECT_TOOLS)) {
       const op = catalog.get(operationId)
       if (!op) {
         throw new Error(`MCP direct tool ${operationId} is missing from the OpenAPI catalog`)
       }
       this.strategy.registerTool({
         name: operationId,
+        title,
         description,
+        annotations,
         parameters: operationId === 'startExecution' ? withWait(op.inputSchema) : op.inputSchema,
         handler: (args, _ctx, request: Request) => this.invoke(op, args, request),
       })
@@ -106,19 +157,25 @@ export class McpTools {
   private registerMetaTools(catalog: McpCatalog): void {
     this.strategy.registerTool({
       name: 'list_api_endpoints',
+      title: 'Find BoxLite API operations',
       description:
-        'List BoxLite API operations (operationId, method, path, summary), optionally filtered by a search string. Use get_api_endpoint_schema, then invoke_api_endpoint.',
+        'List BoxLite API operations, their invocation tool and summary, optionally filtered by a search string. API reference: https://github.com/boxlite-ai/boxlite/tree/main/openapi.',
       parameters: { type: 'object', properties: { search: { type: 'string' } }, additionalProperties: false },
-      annotations: { readOnlyHint: true },
+      annotations: { ...READ, openWorldHint: false },
       handler: (args) =>
         jsonResult({
-          endpoints: catalog
-            .search(args.search as string | undefined)
-            .map(({ operationId, method, path, summary }) => ({ operationId, method, path, summary })),
+          endpoints: catalog.search(args.search as string | undefined).map((op) => ({
+            operationId: op.operationId,
+            method: op.method,
+            path: op.path,
+            summary: op.summary,
+            invocationTool: invocationTool(op),
+          })),
         }),
     })
     this.strategy.registerTool({
       name: 'get_api_endpoint_schema',
+      title: 'Describe a BoxLite API operation',
       description: 'Get the description and argument JSON Schema of one BoxLite API operation.',
       parameters: {
         type: 'object',
@@ -126,30 +183,51 @@ export class McpTools {
         required: ['operationId'],
         additionalProperties: false,
       },
-      annotations: { readOnlyHint: true },
+      annotations: { ...READ, openWorldHint: false },
       handler: (args) => {
         const op = catalog.get(args.operationId as string)
         if (!op) return errorResult(`Unknown operationId: ${args.operationId}`)
         const { operationId, method, path, summary, description, inputSchema } = op
-        return jsonResult({ operationId, method, path, summary, description, inputSchema })
+        return jsonResult({
+          operationId,
+          method,
+          path,
+          summary,
+          description,
+          inputSchema,
+          invocationTool: invocationTool(op),
+        })
       },
     })
-    this.strategy.registerTool({
-      name: 'invoke_api_endpoint',
-      description:
-        'Call one BoxLite API operation by operationId with arguments matching its get_api_endpoint_schema schema.',
-      parameters: {
-        type: 'object',
-        properties: { operationId: { type: 'string' }, arguments: { type: 'object' } },
-        required: ['operationId'],
-        additionalProperties: false,
-      },
-      handler: (args, _ctx, request: Request) => {
-        const op = catalog.get(args.operationId as string)
-        if (!op) return errorResult(`Unknown operationId: ${args.operationId}`)
-        return this.invoke(op, (args.arguments as Record<string, unknown>) ?? {}, request)
-      },
-    })
+    for (const kind of ['read', 'write'] as const) {
+      const name = `${kind}_api_endpoint`
+      this.strategy.registerTool({
+        name,
+        title: kind === 'read' ? 'Read from the BoxLite API' : 'Change data through the BoxLite API',
+        description:
+          kind === 'read'
+            ? 'Call a GET, HEAD or OPTIONS operation in the BoxLite REST API. Arguments follow get_api_endpoint_schema. API reference: https://github.com/boxlite-ai/boxlite/tree/main/openapi.'
+            : 'Call a modifying operation in the BoxLite REST API. May create, replace or delete data. Arguments follow get_api_endpoint_schema. API reference: https://github.com/boxlite-ai/boxlite/tree/main/openapi.',
+        annotations:
+          kind === 'read'
+            ? { ...READ, openWorldHint: true }
+            : { ...WRITE, destructiveHint: true, idempotentHint: false },
+        parameters: {
+          type: 'object',
+          properties: { operationId: { type: 'string' }, arguments: { type: 'object' } },
+          required: ['operationId'],
+          additionalProperties: false,
+        },
+        handler: (args, _ctx, request: Request) => {
+          const op = catalog.get(args.operationId as string)
+          if (!op) return errorResult(`Unknown operationId: ${args.operationId}`)
+          if (invocationTool(op) !== name) {
+            return errorResult(`${op.operationId} requires ${invocationTool(op)}`)
+          }
+          return this.invoke(op, (args.arguments as Record<string, unknown>) ?? {}, request)
+        },
+      })
+    }
   }
 
   private async invoke(op: McpOperation, args: Record<string, unknown>, request: Request): Promise<ToolResult> {
@@ -252,6 +330,10 @@ export class McpTools {
     }
     return ids
   }
+}
+
+function invocationTool(op: McpOperation): string {
+  return ['get', 'head', 'options'].includes(op.method) ? 'read_api_endpoint' : 'write_api_endpoint'
 }
 
 function withWait(schema: Record<string, unknown>): Record<string, unknown> {

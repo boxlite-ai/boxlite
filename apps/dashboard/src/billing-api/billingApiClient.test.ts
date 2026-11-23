@@ -54,6 +54,13 @@ describe('getOrganizationPlan', () => {
         includedQuotaCents: 25000,
         quotaConsumedCents: 6250,
         quotaRemainingCents: 18750,
+        trial: {
+          startedAt: '2026-08-05T00:00:00.000Z',
+          endsAt: '2026-08-12T00:00:00.000Z',
+          conversionAmountCents: 14900,
+          currency: 'USD',
+          conversionState: 'not_attempted',
+        },
       },
     })
     const plan = await api.getOrganizationPlan('org-1')
@@ -64,6 +71,13 @@ describe('getOrganizationPlan', () => {
       includedQuotaCents: 25000,
       quotaConsumedCents: 6250,
       quotaRemainingCents: 18750,
+    })
+    expect(plan?.trial).toEqual({
+      startedAt: new Date('2026-08-05T00:00:00.000Z'),
+      endsAt: new Date('2026-08-12T00:00:00.000Z'),
+      conversionAmountCents: 14900,
+      currency: 'USD',
+      conversionState: 'not_attempted',
     })
   })
 
@@ -344,5 +358,22 @@ describe('PR 829 real-data parity: wallet transactions', () => {
     expect(requestedUrl).toBe(
       'http://billing.test/api/billing/organization/org-1/wallet/transactions?page=2&perPage=25',
     )
+  })
+})
+
+describe('saved card actions', () => {
+  it('sets the default card through its own path', async () => {
+    const api = serve(undefined)
+    await expect(api.setDefaultPaymentMethod('org-1', 'card-2')).resolves.toBeUndefined()
+    expect(requestedMethod).toBe('post')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/payment-methods/card-2/default')
+    expect(requestedData).toBeUndefined()
+  })
+
+  it('removes a card with DELETE on the card path', async () => {
+    const api = serve(undefined)
+    await expect(api.removePaymentMethod('org-1', 'card-2')).resolves.toBeUndefined()
+    expect(requestedMethod).toBe('delete')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/payment-methods/card-2')
   })
 })

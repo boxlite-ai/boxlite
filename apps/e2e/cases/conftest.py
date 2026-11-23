@@ -104,6 +104,7 @@ def bound_box_lifetime(options) -> None:
     which is the same policy for the same reason.
 
     A case that sets either window owns both: see the module comment above.
+    A checkpoint create inherits the captured policy and forbids overrides.
 
     Boxes created by the polyglot drivers (`apps/e2e/sdks/`) and the CLI pass
     through neither, and `apps/e2e/sweep.py` will not reclaim them either: it
@@ -117,6 +118,8 @@ def bound_box_lifetime(options) -> None:
     `os.Exit`/`DIE` paths that skip their cleanup entirely; both legs
     `--ignore` those cases, so they never create a cloud box.
     """
+    if getattr(options, "checkpoint", None) is not None:
+        return
     if getattr(options, "auto_stop", None) is None and getattr(options, "auto_delete", None) is None:
         options.auto_stop = E2E_AUTO_STOP_SECONDS
         options.auto_delete = E2E_AUTO_DELETE_SECONDS
@@ -306,6 +309,54 @@ async def drain(ex) -> tuple[str, str]:
     out_t = asyncio.create_task(collect_stream(ex.stdout()))
     err_t = asyncio.create_task(collect_stream(ex.stderr()))
     return await asyncio.gather(out_t, err_t)
+
+
+async def wait_for_box_state(rt, box_id: str, expected: str, timeout: float = 60):
+    """Wait for REST lifecycle completion, including a bound on stalled reads."""
+    last_state = "not observed"
+
+    async def poll():
+        nonlocal last_state
+        while True:
+            info = await rt.get_info(box_id)
+            assert info is not None, f"box {box_id} disappeared while waiting for {expected}"
+            last_state = info.state.status
+            if last_state == expected:
+                return info
+            assert last_state not in ("failed", "error"), (
+                f"box {box_id} became {last_state} while waiting for {expected}"
+            )
+            await asyncio.sleep(0.2)
+
+    try:
+        return await asyncio.wait_for(poll(), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise AssertionError(
+            f"box {box_id} did not reach {expected} within {timeout}s; last state: {last_state}"
+        ) from exc
+
+
+async def wait_until_unlisted(
+    rt,
+    box_ids: list[str],
+    timeout: float = 60,
+    interval: float = 1.0,
+) -> list[str]:
+    """Return the removed boxes `list_info()` still shows after `timeout`.
+
+    A cloud remove returns once the destroy is queued, so the box stays listed
+    until the runner destroys it. 60 seconds matches the suite's bound for a
+    single box state change. A `list_info()` error propagates; it is never
+    read as unlisted.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        listed = {info.id for info in await rt.list_info()}
+        remaining = [box_id for box_id in box_ids if box_id in listed]
+        left = deadline - time.monotonic()
+        if not remaining or left <= 0:
+            return remaining
+        await asyncio.sleep(min(interval, left))
 
 
 def stdout_line_count(s: str) -> int:

@@ -7,19 +7,27 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Sidebar } from './Sidebar'
+import { ONBOARDING_OPEN_EVENT } from '@/lib/onboarding-progress'
+
+vi.mock('./billing/SidebarBalance', () => ({ SidebarBalance: () => null }))
 
 vi.mock('posthog-js/react', () => ({
   usePostHog: () => ({ capture: vi.fn(), reset: vi.fn() }),
 }))
 
+const authState = vi.hoisted(() => ({
+  profile: { sub: 'user-a', name: 'BoxLite User', email: 'user@example.com', picture: '' },
+}))
 vi.mock('react-oidc-context', () => ({
   useAuth: () => ({
-    user: { profile: { name: 'BoxLite User', email: 'user@example.com' } },
+    user: { profile: authState.profile },
     signoutRedirect: vi.fn(),
   }),
 }))
+
+vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ organizationsApi: { listOrganizationMembers: vi.fn() } }) }))
 
 vi.mock('usehooks-ts', () => ({
   useCopyToClipboard: () => [undefined, vi.fn()],
@@ -27,7 +35,6 @@ vi.mock('usehooks-ts', () => ({
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn() } }))
 
-vi.mock('@/assets/Logo', () => ({ LogoText: () => <span>BoxLite</span> }))
 vi.mock('@/contexts/ThemeContext', () => ({
   useTheme: () => ({ theme: 'dark', setTheme: vi.fn() }),
 }))
@@ -37,7 +44,7 @@ const organizationState = vi.hoisted(() => {
 })
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
-    selectedOrganization: { id: 'org-1' },
+    selectedOrganization: organizationState.personal,
     onSelectOrganization: organizationState.onSelectOrganization,
   }),
 }))
@@ -50,14 +57,440 @@ describe('Sidebar primary navigation', () => {
 
   beforeAll(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    window.matchMedia = vi
+      .fn()
+      .mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })
+  })
+
+  beforeEach(() => {
+    localStorage.clear()
+    authState.profile = { sub: 'user-a', name: 'BoxLite User', email: 'user@example.com', picture: '' }
   })
 
   afterEach(() => {
     act(() => root?.unmount())
     root = null
     document.body.innerHTML = ''
+    vi.useRealTimers()
     // A test that adds organizations must not leak them into the next one.
     organizationState.organizations = [organizationState.personal]
+  })
+
+  function renderRoute(path: string) {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={[path]}>
+          <Sidebar isBannerVisible={false} version="test" />
+        </MemoryRouter>,
+      )
+    })
+  }
+
+  function profileAvatar() {
+    return document.querySelector('[aria-label="Open profile menu"] > span')!
+  }
+
+  function rerenderProfile() {
+    act(() =>
+      root!.render(
+        <MemoryRouter initialEntries={['/dashboard/boxes']}>
+          <Sidebar isBannerVisible={false} version="test" />
+        </MemoryRouter>,
+      ),
+    )
+  }
+
+  it('keeps avatar initials visible while loading and replaces them only after success', () => {
+    authState.profile.picture = 'https://images.example/avatar.png'
+    renderRoute('/dashboard/boxes')
+    const avatar = profileAvatar()
+    const image = avatar.querySelector('img')!
+    expect(avatar.textContent).toBe('BU')
+    expect(image.classList.contains('invisible')).toBe(true)
+    act(() => image.dispatchEvent(new Event('load')))
+    expect(profileAvatar().textContent).toBe('')
+    expect(image.classList.contains('invisible')).toBe(false)
+    expect(image.alt).toBe('')
+  })
+
+  it('removes a failed avatar image and retains initials without retrying', () => {
+    authState.profile.picture = 'https://images.example/broken.png'
+    renderRoute('/dashboard/boxes')
+    const image = profileAvatar().querySelector('img')!
+    act(() => image.dispatchEvent(new Event('error')))
+    expect(profileAvatar().querySelector('img')).toBeNull()
+    expect(profileAvatar().textContent).toBe('BU')
+    rerenderProfile()
+    expect(profileAvatar().querySelector('img')).toBeNull()
+  })
+
+  it('resets avatar failures when the URL changes and ignores events from the old image', () => {
+    authState.profile.picture = 'https://images.example/broken.png'
+    renderRoute('/dashboard/boxes')
+    const oldImage = profileAvatar().querySelector('img')!
+    act(() => oldImage.dispatchEvent(new Event('error')))
+    authState.profile.picture = 'https://images.example/new.png'
+    rerenderProfile()
+    const newImage = profileAvatar().querySelector('img')!
+    expect(newImage.src).toBe(authState.profile.picture)
+    act(() => oldImage.dispatchEvent(new Event('load')))
+    expect(profileAvatar().textContent).toBe('BU')
+    act(() => newImage.dispatchEvent(new Event('load')))
+    expect(newImage.classList.contains('invisible')).toBe(false)
+  })
+
+  it('resets the avatar for another account even when its URL is unchanged', () => {
+    authState.profile.picture = 'https://images.example/shared.png'
+    renderRoute('/dashboard/boxes')
+    const oldImage = profileAvatar().querySelector('img')!
+    act(() => oldImage.dispatchEvent(new Event('load')))
+    authState.profile = { ...authState.profile, sub: 'user-b', name: 'Next Account' }
+    rerenderProfile()
+    const newImage = profileAvatar().querySelector('img')!
+    expect(newImage).not.toBe(oldImage)
+    expect(profileAvatar().textContent).toBe('NA')
+    expect(newImage.classList.contains('invisible')).toBe(true)
+  })
+
+  it.each([
+    ['  BoxLite   User  ', 'user@example.com', 'BU'],
+    ['  ', ' user@example.com ', 'U'],
+    ['', '', ''],
+  ])('uses a stable avatar fallback for name %j and email %j', (name, email, initials) => {
+    authState.profile = { ...authState.profile, name, email, picture: '  ' }
+    renderRoute('/dashboard/boxes')
+    expect(profileAvatar().querySelector('img')).toBeNull()
+    expect(profileAvatar().textContent).toBe(initials)
+    expect(!!profileAvatar().querySelector('svg')).toBe(!initials)
+    expect(profileAvatar().getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('expands without changing the active route and restores the saved preference', () => {
+    renderRoute('/dashboard/boxes/example')
+    const toggle = document.querySelector<HTMLButtonElement>('[aria-label="Expand navigation"]')!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    act(() => toggle.click())
+    expect(document.querySelector('[aria-label="Collapse navigation"]')?.getAttribute('aria-expanded')).toBe('true')
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('true')
+    expect(document.querySelector('nav[aria-label="Primary"] a[aria-current="page"]')?.getAttribute('href')).toBe(
+      '/dashboard/boxes',
+    )
+    act(() => root?.unmount())
+    root = null
+    document.body.innerHTML = ''
+    renderRoute('/dashboard/boxes/example')
+    expect(document.querySelector('[aria-label="Collapse navigation"]')).not.toBeNull()
+  })
+
+  it('collapses beside the brand and expands through the compact logo without navigating', () => {
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/images/registries')
+    const collapse = document.querySelector<HTMLButtonElement>('[aria-label="Collapse navigation"]')!
+    const brand = document.querySelector('aside a[aria-label="BoxLite home"]')!
+    expect(collapse.parentElement).toBe(brand.parentElement)
+    act(() => collapse.click())
+    expect(document.querySelector('[aria-label="Collapse navigation"]')).toBeNull()
+    const expand = document.querySelector<HTMLButtonElement>('[aria-label="Expand navigation"]')!
+    expect(expand.querySelector('img')).not.toBeNull()
+    expect(document.activeElement).toBe(expand)
+    act(() => expand.click())
+    expect(document.querySelector('nav a[aria-current="page"]')?.getAttribute('href')).toBe(
+      '/dashboard/images/registries',
+    )
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Collapse navigation')
+  })
+
+  function pointer(
+    element: Element,
+    type: 'pointerover' | 'pointerout',
+    relatedTarget: EventTarget | null = null,
+    pointerType = 'mouse',
+  ) {
+    const event = new MouseEvent(type, { bubbles: true, relatedTarget })
+    Object.defineProperty(event, 'pointerType', { value: pointerType })
+    act(() => element.dispatchEvent(event))
+  }
+
+  function preview() {
+    vi.useFakeTimers()
+    renderRoute('/dashboard/images/registries')
+    const logo = document.querySelector<HTMLButtonElement>('[aria-label="Expand navigation"]')!
+    pointer(logo, 'pointerover')
+    act(() => vi.advanceTimersByTime(350))
+    return logo
+  }
+
+  it('waits for hover intent and previews without persisting expansion', () => {
+    vi.useFakeTimers()
+    renderRoute('/dashboard/boxes')
+    const logo = document.querySelector<HTMLButtonElement>('[aria-label="Expand navigation"]')!
+    pointer(logo, 'pointerover')
+    act(() => vi.advanceTimersByTime(349))
+    expect(logo.getAttribute('aria-expanded')).toBe('false')
+    act(() => vi.advanceTimersByTime(1))
+    expect(document.querySelector('[aria-label="Keep navigation expanded"]')).toBe(logo)
+    expect(document.querySelector('[aria-label="Pin navigation"]')).not.toBeNull()
+    expect(document.querySelector('[aria-label="Collapse navigation"]')).toBeNull()
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('false')
+    const panel = document.querySelector<HTMLElement>('aside > div')!
+    expect(panel.dataset.state).toBe('preview')
+    expect(panel.style.width).toBe('224px')
+    expect(panel.parentElement?.style.getPropertyValue('--navigation-width')).toBe('64px')
+  })
+
+  it('ignores touch hover and cancels a brief mouse pass', () => {
+    vi.useFakeTimers()
+    renderRoute('/dashboard/boxes')
+    const logo = document.querySelector<HTMLButtonElement>('[aria-label="Expand navigation"]')!
+    pointer(logo, 'pointerover', null, 'touch')
+    act(() => vi.advanceTimersByTime(500))
+    expect(logo.getAttribute('aria-expanded')).toBe('false')
+    pointer(logo, 'pointerover')
+    act(() => vi.advanceTimersByTime(100))
+    pointer(logo, 'pointerout')
+    act(() => vi.advanceTimersByTime(500))
+    expect(logo.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('keeps the preview usable across the menu and closes after leaving it', () => {
+    const logo = preview()
+    const child = document.querySelector('nav a[href="/dashboard/images/registries"]')!
+    pointer(logo, 'pointerout', child)
+    act(() => vi.advanceTimersByTime(500))
+    expect(logo.getAttribute('aria-expanded')).toBe('true')
+    pointer(child, 'pointerout')
+    act(() => vi.advanceTimersByTime(149))
+    expect(logo.getAttribute('aria-expanded')).toBe('true')
+    act(() => vi.advanceTimersByTime(1))
+    expect(logo.getAttribute('aria-expanded')).toBe('false')
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('false')
+  })
+
+  it('cancels dismissal on re-entry and pins only when the logo is clicked', () => {
+    const logo = preview()
+    pointer(logo, 'pointerout')
+    act(() => vi.advanceTimersByTime(100))
+    pointer(logo, 'pointerover')
+    act(() => vi.advanceTimersByTime(100))
+    expect(logo.getAttribute('aria-expanded')).toBe('true')
+    act(() => logo.click())
+    act(() => vi.advanceTimersByTime(500))
+    expect(document.querySelector('[aria-label="Collapse navigation"]')).not.toBeNull()
+    expect(document.querySelector<HTMLElement>('aside')?.style.getPropertyValue('--navigation-width')).toBe('224px')
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('true')
+  })
+
+  it('pins the preview with its top pin button and moves focus to collapse', () => {
+    const logo = preview()
+    const pin = document.querySelector<HTMLButtonElement>('[aria-label="Pin navigation"]')
+    expect(pin).not.toBeNull()
+    expect(pin).not.toBe(logo)
+    expect(pin?.parentElement).toBe(logo.parentElement)
+    act(() => pin?.click())
+    act(() => vi.advanceTimersByTime(500))
+    expect(document.querySelector('[aria-label="Pin navigation"]')).toBeNull()
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Collapse navigation')
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('true')
+  })
+
+  it('does not resurrect labels hovered while expanded when the sidebar collapses', () => {
+    vi.useFakeTimers()
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/boxes')
+    for (const selector of [
+      'nav a[href="/dashboard/volumes"]',
+      'nav a[href="/dashboard/domains"]',
+      '[aria-label="Toggle Management navigation"]',
+    ]) {
+      const trigger = document.querySelector(selector)
+      expect(trigger).not.toBeNull()
+      const move = new MouseEvent('pointermove', { bubbles: true })
+      Object.defineProperty(move, 'pointerType', { value: 'mouse' })
+      act(() => trigger?.dispatchEvent(move))
+      act(() => vi.advanceTimersByTime(400))
+    }
+    act(() => document.querySelector<HTMLButtonElement>('[aria-label="Collapse navigation"]')?.click())
+    act(() => vi.advanceTimersByTime(400))
+    expect(document.querySelectorAll('[role="tooltip"]')).toHaveLength(0)
+  })
+
+  it('shows only the focused compact label and clears it when previewing', () => {
+    renderRoute('/dashboard/boxes')
+    const volumes = document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/volumes"]')
+    act(() => volumes?.focus())
+    expect([...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent)).toEqual(['Volumes'])
+    act(() => document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/domains"]')?.focus())
+    expect([...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent)).toEqual(['Domains'])
+    act(() => document.querySelector<HTMLButtonElement>('[aria-label="Expand navigation"]')?.click())
+    expect(document.querySelectorAll('[role="tooltip"]')).toHaveLength(0)
+  })
+
+  it('does not pin when using a group within the preview', () => {
+    preview()
+    const management = document.querySelector<HTMLButtonElement>('[aria-label="Toggle Management navigation"]')!
+    act(() => management.click())
+    expect(management.getAttribute('aria-expanded')).toBe('true')
+    expect(document.querySelector('[aria-label="Pin navigation"]')).not.toBeNull()
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('false')
+  })
+
+  it('retains focused preview children and returns focus to the logo on Escape', () => {
+    const logo = preview()
+    const child = document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/images/registries"]')!
+    act(() => child.focus())
+    pointer(logo, 'pointerout')
+    act(() => vi.advanceTimersByTime(500))
+    expect(document.activeElement).toBe(child)
+    expect(logo.getAttribute('aria-expanded')).toBe('true')
+    act(() => child.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(document.activeElement).toBe(logo)
+    expect(logo.getAttribute('aria-expanded')).toBe('false')
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('false')
+  })
+
+  it('closes when focus leaves a preview that the pointer has already left', () => {
+    const logo = preview()
+    const child = document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/images/registries"]')!
+    act(() => child.focus())
+    pointer(logo, 'pointerout')
+    act(() => vi.advanceTimersByTime(500))
+    act(() => document.querySelector<HTMLButtonElement>('[aria-label="Open profile menu"]')!.focus())
+    act(() => vi.advanceTimersByTime(150))
+    expect(logo.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('reveals the current Images child and supports independent disclosure', () => {
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/images/registries')
+    const child = document.querySelector('a[href="/dashboard/images/registries"][aria-current="page"]')
+    expect(child?.textContent).toBe('Private registries')
+    const disclosure = document.querySelector<HTMLButtonElement>('[aria-label="Toggle Images navigation"]')!
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
+    act(() => disclosure.click())
+    expect(document.querySelector('#images-navigation')?.hasAttribute('hidden')).toBe(true)
+  })
+
+  it('reveals Checkpoints as the current Boxes child without changing its URL', () => {
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/checkpoints')
+    const group = document.querySelector('#boxes-navigation')!
+    expect(group).not.toBeNull()
+    expect(group.hasAttribute('hidden')).toBe(false)
+    expect(group.querySelector('a[aria-current="page"]')?.getAttribute('href')).toBe('/dashboard/checkpoints')
+    expect(group.querySelector('a[href="/dashboard/boxes"]')?.getAttribute('aria-current')).toBeNull()
+    expect(document.querySelector('[aria-label="Toggle Boxes navigation"]')?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('emphasizes the Boxes ancestor in the compact rail without claiming the Box list is current', () => {
+    renderRoute('/dashboard/checkpoints')
+    const boxes = document.querySelector('nav[aria-label="Primary"] a[href="/dashboard/boxes"]')!
+    expect(boxes.className).toContain('bg-sidebar-accent')
+    expect(boxes.getAttribute('aria-label')).toBe('Boxes, current section: Checkpoints')
+    expect(boxes.getAttribute('aria-current')).toBeNull()
+    expect(document.querySelector('nav[aria-label="Primary"] a[href="/dashboard/checkpoints"]')).toBeNull()
+  })
+
+  it('reveals Checkpoints in the hover preview without pinning the navigation', () => {
+    vi.useFakeTimers()
+    renderRoute('/dashboard/checkpoints')
+    pointer(document.querySelector('[aria-label="Expand navigation"]')!, 'pointerover')
+    act(() => vi.advanceTimersByTime(350))
+    const child = document.querySelector('#boxes-navigation a[href="/dashboard/checkpoints"]')!
+    expect(child?.getAttribute('aria-current')).toBe('page')
+    expect(document.querySelector('#boxes-navigation')?.hasAttribute('hidden')).toBe(false)
+    expect(localStorage.getItem('boxlite-navigation-expanded')).toBe('false')
+  })
+
+  it('reveals registry navigation when Images is opened from the compact rail', () => {
+    renderRoute('/dashboard/boxes')
+    act(() => document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/images"]')!.click())
+    expect(document.querySelector('[aria-label="Collapse navigation"]')).not.toBeNull()
+    const registry = document.querySelector<HTMLAnchorElement>('nav a[href="/dashboard/images/registries"]')!
+    act(() => registry.click())
+    expect(registry.getAttribute('aria-current')).toBe('page')
+    const disclosure = document.querySelector<HTMLButtonElement>('[aria-label="Toggle Images navigation"]')!
+    act(() => disclosure.click())
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false')
+    act(() => disclosure.click())
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('does not treat a similar route prefix as the current feature', () => {
+    renderRoute('/dashboard/images-extra')
+    expect(document.querySelector('nav[aria-label="Primary"] a[aria-current="page"]')).toBeNull()
+  })
+
+  it('keeps navigation usable when preference storage is unavailable', () => {
+    const read = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('Unavailable')
+    })
+    const write = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Unavailable')
+    })
+    try {
+      renderRoute('/dashboard/boxes')
+      act(() => document.querySelector<HTMLButtonElement>('[aria-label="Expand navigation"]')!.click())
+      expect(document.querySelector('[aria-label="Collapse navigation"]')).not.toBeNull()
+    } finally {
+      read.mockRestore()
+      write.mockRestore()
+    }
+  })
+
+  it('preserves the onboarding event command', () => {
+    const listener = vi.fn((event: Event) => event.preventDefault())
+    window.addEventListener(ONBOARDING_OPEN_EVENT, listener)
+    try {
+      renderRoute('/dashboard/images')
+      act(() => document.querySelector<HTMLButtonElement>('[aria-label="Open onboarding guide"]')!.click())
+      expect(listener).toHaveBeenCalledOnce()
+      expect(document.querySelector('nav a[aria-current="page"]')?.getAttribute('href')).toBe('/dashboard/images')
+    } finally {
+      window.removeEventListener(ONBOARDING_OPEN_EVENT, listener)
+    }
+  })
+
+  it('places API Keys in the header and Quickstart last in the rail footer', () => {
+    renderRoute('/dashboard/keys')
+    expect(document.querySelector('header a[href="/dashboard/keys"]')?.getAttribute('aria-current')).toBe('page')
+    expect(document.querySelector('aside a[href="/dashboard/keys"]')).toBeNull()
+    const quickstart = document.querySelector('[aria-label="Open onboarding guide"]')!
+    expect(quickstart.closest('nav')).toBeNull()
+    expect(quickstart.closest('aside')).not.toBeNull()
+    const actions = document.querySelectorAll('aside button')
+    expect(actions[actions.length - 1]).toBe(quickstart)
+  })
+
+  it('groups resource destinations under Infrastructure separately from Management', () => {
+    renderRoute('/dashboard/boxes')
+    const infrastructure = document.querySelector('[role="group"][aria-label="Infrastructure"]')!
+    expect([...infrastructure.querySelectorAll('a')].map((link) => link.getAttribute('href'))).toEqual([
+      '/dashboard/boxes',
+      '/dashboard/images',
+      '/dashboard/volumes',
+      '/dashboard/domains',
+    ])
+    expect(infrastructure.querySelector('[aria-label="Toggle Management navigation"]')).toBeNull()
+  })
+  it('keeps a single active CI destination on the connections route', () => {
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/ci/connects')
+    const applications = document.querySelector('[role="group"][aria-label="Applications"]')
+    expect(applications).not.toBeNull()
+    expect(applications?.querySelector('a[href="/dashboard/ci"]')?.getAttribute('aria-current')).toBe('page')
+    expect(applications?.querySelectorAll('a')).toHaveLength(1)
+    expect(applications?.querySelector('[aria-label="Toggle CI navigation"]')).toBeNull()
   })
 
   it('keeps Volumes in primary navigation', () => {
@@ -82,31 +515,30 @@ describe('Sidebar primary navigation', () => {
     const domainLinks = [...document.querySelectorAll<HTMLAnchorElement>('a[href="/dashboard/domains"]')]
     expect(domainLinks.length).toBeGreaterThan(0)
     expect(domainLinks.every((link) => link.textContent === 'Domains')).toBe(true)
+    expect(document.querySelector('a[href="/dashboard/ci"]')?.textContent).toBe('CI')
   })
 
-  it('groups organization management under one profile entry', async () => {
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    act(() => {
-      root = createRoot(host)
-      root.render(
-        <MemoryRouter initialEntries={['/dashboard/boxes']}>
-          <Sidebar isBannerVisible={false} version="test" />
-        </MemoryRouter>,
-      )
-    })
+  it('opens Management children in primary navigation from the compact rail', () => {
+    renderRoute('/dashboard/boxes')
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Toggle Management navigation"]')!
+    act(() => trigger.click())
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(document.querySelector('[aria-label="Collapse navigation"]')).not.toBeNull()
+    expect(document.querySelector('#management-navigation')?.hasAttribute('hidden')).toBe(false)
+    expect(document.querySelector('nav a[href="/dashboard/billing"]')?.textContent).toBe('Billing')
+    expect(document.querySelector('nav a[href="/dashboard/settings"]')?.textContent).toBe('Organization')
+    act(() => trigger.click())
+    expect(document.querySelector('#management-navigation')?.hasAttribute('hidden')).toBe(true)
+  })
 
-    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Open profile menu"]')
-    // Radix opens menus on pointerdown; jsdom has no PointerEvent, and React reads only `button`.
-    await act(async () =>
-      trigger?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })),
-    )
-
-    const entries = [...document.querySelectorAll<HTMLAnchorElement>('a[role="menuitem"]')]
-    expect(entries.find((item) => item.textContent === 'Organization')?.getAttribute('href')).toBe(
-      '/dashboard/settings',
-    )
-    expect(entries.find((item) => item.textContent === 'Members')).toBeUndefined()
+  it('reveals the current management child without preventing manual collapse', () => {
+    localStorage.setItem('boxlite-navigation-expanded', 'true')
+    renderRoute('/dashboard/settings')
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="Toggle Management navigation"]')!
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(document.querySelector('#management-navigation a[aria-current="page"]')?.textContent).toBe('Organization')
+    act(() => trigger.click())
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
   })
 
   it('omits the personal invitations entry from the profile menu', async () => {
@@ -131,7 +563,18 @@ describe('Sidebar primary navigation', () => {
     expect(invitations).toBeNull()
   })
 
-  it('lets a user in several organizations switch to another one from the profile menu', async () => {
+  it('keeps API Keys reachable through the mobile navigation menu', async () => {
+    renderRoute('/dashboard/boxes')
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Open navigation menu"]')!
+    await act(async () =>
+      trigger.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })),
+    )
+    const link = document.querySelector<HTMLAnchorElement>('[role="menu"] a[href="/dashboard/keys"]')
+    expect(link).not.toBeNull()
+    expect(link?.textContent).toContain('API Keys')
+  })
+
+  it('shows the global switcher with complete IDs and removes the profile organization list', async () => {
     organizationState.organizations = [
       { id: 'org-1', name: 'Default Organization', isDefaultForAuthenticatedUser: true },
       { id: 'org-2', name: 'Acme', isDefaultForAuthenticatedUser: false },
@@ -154,9 +597,15 @@ describe('Sidebar primary navigation', () => {
     )
 
     const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
-    expect(items.find((item) => item.textContent?.includes('Default Organization'))?.textContent).toContain('Personal')
-
-    await act(async () => items.find((item) => item.textContent?.includes('Acme'))?.click())
-    expect(organizationState.onSelectOrganization).toHaveBeenCalledWith('org-2')
+    expect(items.some((item) => item.textContent?.includes('Acme'))).toBe(false)
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    const switcher = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Switch organization: Default Organization"]',
+    )!
+    await act(async () => switcher.click())
+    const dialog = document.querySelector('[role="dialog"]')!
+    expect(dialog.textContent).toContain('Default Organizationorg-1')
+    expect(dialog.textContent).toContain('Acmeorg-2')
+    expect(dialog.querySelector('[aria-current="true"]')?.textContent).toContain('org-1')
   })
 })

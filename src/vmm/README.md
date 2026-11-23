@@ -8,11 +8,11 @@ registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCP
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
-are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
-carries; M2's engine adapter will consume that API and inspect the error's host
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `VmControl`, `Error`
+and `Result` are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
+carries; M2's engine adapter consumes that API and inspects the error's host
 cause.
-`Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
+`Vm::new(config, console)` adds COM1, the CMOS RTC, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
 
@@ -27,43 +27,62 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
-| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs, disks }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes, at most 8 `DiskConfig { path, format, read_only }` entries |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `control` and `VmExit` |
+| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
+| `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
-| `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
+| `hotplug` | `HotplugMemory` places a window after boot RAM, plugs 2 MiB blocks and maps 128 MiB slots |
+| `cpu_features` | x86_64 guest-memory capability preflight, CPUID for each vCPU, and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
+| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory view and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices` |
+| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, and on x86_64 the 8250 UART at COM1, the CMOS RTC and the i8042 reset, with `add_legacy_devices` |
 | `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; `devices::add_all` composes it after the disks, so it never renumbers them |
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
-The x86_64 KVM boot and lifecycle are in place. The virtio common
-infrastructure (`virtio`) is in place for M2: the device contract, queue
-adapter, MMIO transport, interrupt handle and the shared virtio workers are
-tested with test devices, and `Vm` owns them. The first production device
-(`virtio::blk`, composed by `devices::add_all`) is tested with a real kernel.
-The output-only virtio console device is implemented and tested against real
-guest RAM and split virtqueues, but it is not wired into `Vm` yet; neither is
-the reporting balloon, so `Vm` composes only the block device for now. Linux
-arm64 and macOS arm64 remain required M2 qualification gates, blocked by their
-boot dependencies (#1698/#2103); unit tests or x86_64 evidence do not qualify
-those platforms or complete M2. The BoxLite engine adapter, engine selection
-and `native` feature wiring are separate M2 work.
-Neither new crate depends on `boxlite-shared`, and both are unpublished while
-their interfaces are being established.
+The Linux x86_64 native engine composes disks, reporting balloon, aggregate
+virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
+The adapter maps the runtime specification into `VmConfig`; optional devices
+are omitted when not requested.
+
+The aggregate virtio-fs device is runtime-extensible: `insert_aggregate`
+publishes a live device by tag when it enters the transport, and
+`lookup_aggregate` returns its filesystem to host-side consumers. VM shutdown
+removes the registration, rejects mutations through cached handles, and clears
+the guest session. Device drop performs the same cleanup if shutdown did not run.
+Retained filesystem handles pin export roots until their final reference drops.
+`AggregateFs::register_fd` registers directory descriptors, and `remove` retires
+per-directory exports.
+A retired export's name stops resolving while its in-use nodes, handles and
+in-flight requests retain their backend; a re-registered name has a new identity
+and independent read-only policy.
+Registration validates that the supplied descriptor refers to a directory;
+host read/write permissions are checked by the kernel for each operation.
+A writable export may modify an existing writable file in a non-writable
+directory, while creating files there still fails with EACCES. The export's
+read-only policy separately rejects mutations with EROFS.
+Guest LOOKUP and accepted READDIRPLUS entries retain root inodes independently
+of open handles. FORGET releases those references; rejected READDIRPLUS entries
+and plain READDIR create no persistent lookup ownership.
+Disk order remains `vda` (container) then
+`vdb` (read-only guest root). The guest runs as PID 1, reports readiness over
+vsock and receives aggregate mount instructions before container startup.
+Linux arm64 and macOS arm64 remain separate M2 qualification gates; x86_64
+results alone do not establish complete M2 acceptance.
+Neither new crate depends on `boxlite-shared`; the release workflow publishes
+`boxlite-hypervisor`, then `boxlite-vmm`, before `boxlite`, now that the engine
+adapter depends on `boxlite-vmm`.
 
 ## Virtio network device
 
 `devices::net::Net::new(socket_path, mac)` implements an internal RX/TX queue
 pair over the Linux gvproxy QEMU stream. It compiles on Unix for socket tests;
-macOS gvproxy uses a different wire protocol. VM assembly and
-snapshots remain out of scope; `Vm::new` does not yet attach this device.
+macOS gvproxy uses a different wire protocol. `Vm::new` attaches Net when
+`VmConfig.network` is present. Snapshots of device state remain unsupported.
 
 - Device ID 1, RX queue 0, TX queue 1, up to 256 entries each; only MAC is
   offered by Net. The unchanged transport owns VERSION_1 negotiation.
@@ -97,40 +116,125 @@ for the scope and interface trade-offs.
 
 ## Guest RAM
 
-`memory::ram_ranges` places one region: at guest address 0 on x86_64, below
-the 32-bit MMIO hole at `0xC000_0000`, and at `0x8000_0000` on arm64. The
-3072 MiB bound keeps every layout inside that region; the region above 4 GiB
-and the arm64 address-space limit are later changes.
+`memory::ram_ranges` fills low RAM in `[0, 3 GiB)` on x86_64 and places any
+remaining RAM starting at 4 GiB. The `[3 GiB, 4 GiB)` MMIO hole does not count
+as RAM. The arm64 layout is a single region starting at 2 GiB.
+
+On Linux x86_64, preflight checks that the exclusive end of each backed region
+fits both the host KVM GPA width and the VMM's four-level startup identity
+map (`2^47`). For example, 36 GPA bits give an exclusive limit of 64 GiB and
+allow at most 64512 MiB (63 GiB) of x86 RAM; 64513 MiB crosses the limit. At
+the same GPA limit the arm64 layout would fit 63488 MiB (62 GiB); this is a
+layout example, not an arm64 host capability check.
+
+The pinned Linux guest kernel's four-level direct map has a 46-bit (64 TiB)
+usable physical address limit. On hosts with at least 47 GPA bits, the kernel
+truncates high RAM at that limit.
+With `2^46` as the exclusive guest physical address limit, subtracting the 1 GiB
+MMIO hole leaves a maximum x86 RAM configuration of
+**64 TiB - 1 GiB (67,107,840 MiB)** before truncation.
 
 `GuestRam` allocates the layout as zero-filled anonymous memory through
-vm-memory and registers it with the host VM. Three rules keep the backend's
+vm-memory and registers it with the host VM. These rules keep the backend's
 `map_memory` contract:
 
-- Host-side users clone the shared `Arc<GuestMemoryMmap>` and access guest
-  memory through vm-memory's volatile API, never through Rust references.
-- `map` registers regions lowest address first and removes the registered
-  prefix when one fails; `unmap` removes them highest first and stops at the
-  first failure, so the count of registered regions stays exact and a later
-  `unmap` retries.
-- The backing is released only after every registration is gone. Dropping a
-  `GuestRam` that may still be registered leaks the backing instead.
+- Host-side users clone the shared `GuestMemoryView`, vm-memory's
+  `GuestMemoryAtomic` over the region map, and access guest memory through
+  vm-memory's volatile API, never through Rust references.
+- A user loads one snapshot per unit of work and drops it before returning;
+  no device keeps one across events.
+- `VirtQueues::drain` and `complete` load one per call. Block, fs, console and
+  balloon load one per device callback, such as `on_event`, `activate` or
+  `quiesce`.
+- Net loads one per guest buffer read or write. Vsock loads one per TX intake
+  pass and one per RX buffer write.
+- The next event therefore sees a map that gained or lost a region. A
+  descriptor naming a removed region fails translation like any other invalid
+  address. A snapshot still held keeps its regions mapped until it drops.
+- `map` registers logical RAM regions from low to high. KVM slices each region
+  into slots of at most `2^31−1` host pages and rolls back installed slices if
+  a registration fails. `GuestRam` also rolls back attempted regions, including
+  any slices the backend could not remove. `unmap` works from high to low and
+  retains failed registrations for retry.
+- The backing is released after all registrations are removed or a freshly
+  created host VM with exclusive ownership is closed before `run` starts.
+  If registrations may still exist, `GuestRam` retains the backing.
 
-`Vm::with_devices` runs validate, allocate, create the host VM, compose the
-devices, then map, so every early return drops the host VM before the RAM;
-`Vm`'s `Drop` unmaps as a backstop. `with_backend` is the same constructor
-without the mutable configuration, for tests. The `memory` and `vm` tests and
-that backend live in `tests/` and are included as unit-test modules, which
+A map replaced while a worker event runs reaches the next event, not the
+current one:
+
+```mermaid
+sequenceDiagram
+  participant W as Virtio worker
+  participant V as GuestMemoryView
+  participant H as Map owner
+  W->>V: memory() at event start
+  V-->>W: snapshot S1 (regions A, B)
+  H->>V: replace with S2 (region A only)
+  Note over W: event still reads B through S1
+  W->>W: drop S1 at event end
+  Note over V: B stays mapped until its last reference drops
+  W->>V: memory() at next event start
+  V-->>W: snapshot S2: a descriptor into B fails translation
+```
+
+`Vm::new` validates the configuration, then opens and checks the KVM system fd
+and reads supported CPUID once. It preflights the RAM addresses and boot leaf
+before spawning the console worker or allocating RAM. The VM builder
+allocates RAM first, then creates the VM fd using that system handle, composes
+devices, registers RAM, then constructs the `Vm` before writing boot data.
+A boot error or panic unwind runs `Vm::drop`, which shuts down the virtio
+workers and quiesces devices before attempting to unmap RAM. If the workers
+fail to join, teardown logs a warning and retains the registrations and
+backing. Teardown also logs unmap failures. The original boot error reaches
+the caller. `with_backend` is the test constructor without mutable configuration.
+The `memory` and `vm` tests and the mock backend live in `tests/` and are included
+as unit-test modules, which
 keeps them outside the counted sources and the coverage denominator; `config`
 and `error` keep inline test modules.
+
+`GuestRam` registers and releases only the boot regions it allocated. The
+shared view can gain hotplug regions, so `GuestRam` keeps its own boot map
+instead of reading registrations back from the view.
+
+## Hotplug memory
+
+`HotplugMemory` owns the window that grows and shrinks guest RAM at runtime.
+Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
+
+- The window starts at or above 4 GiB after all boot RAM. The base is rounded
+  up to the bundled Linux guest's memory block size, and capacity must be a
+  positive multiple of that size. A guest with 6 GiB of boot RAM and 1 GiB of
+  hotplug capacity has a window at `[7 GiB, 8 GiB)`.
+- The planner checks the end against KVM's GPA limit and Linux's pluggable
+  address limit. It checks capacity against KVM's slot budget after boot RAM.
+  E820 and the startup identity map describe the backed boot ranges.
+- The guest plugs 2 MiB blocks. A 128 MiB slot gets its own private anonymous
+  mapping and KVM registration when its first block is plugged.
+- Unplugging the last block of a slot removes its KVM registration, publishes
+  a view without it, then drops the mapping. A held snapshot keeps the mapping
+  alive until it drops, as the [Guest RAM](#guest-ram) diagram shows.
+- Publishing a removal cannot fail: a poisoned view lock is still used, and a
+  region already missing from the view counts as removed.
+- Unplugging blocks discards them with `MADV_DONTNEED` while other blocks in
+  that slot remain plugged. An emptied slot retained after a failed unmap
+  retains its contents.
+- A failed slot map unregisters the slots that plug added and leaves every
+  block unplugged. A failed unmap keeps the slot mapped and visible; `Drop`
+  leaks a slot whose unmap fails.
+
+The virtio-mem device and host control handle that drive it arrive next; the
+`hotplug` tests use the recording backend.
 
 ## Kernel loading
 
 On Linux x86_64, `boot::elf::load_elf(ram, kernel)` delegates ELF parsing and
-segment loading to rust-vmm's linux-loader and returns the entry address as
-`io::Result<u64>`. It reads `kernel` through a seekable reader, usually the
-kernel file, so segments go straight into guest RAM without buffering the
-whole image. It uses vm-memory 0.18 and linux-loader 0.14 with only the ELF
-feature. `boot::prepare` calls it for `Vm::new`.
+segment loading to rust-vmm's linux-loader and returns `io::Result<LoadedKernel>`
+with `entry` and the physical bounds (`start`/`end`, including BSS) so the boot
+page tables can stay clear of the kernel. It reads `kernel` through a seekable
+reader, usually the kernel file, so segments go straight into guest RAM without
+buffering the whole image. It uses vm-memory 0.18 and linux-loader 0.14 with
+only the ELF feature. `boot::prepare` calls it for `Vm::new`.
 
 Pass the pinned `vmlinux` from `make vmm:boot` and fresh zero-filled guest
 RAM before guest execution. BSS relies on that initial zero state. Validation
@@ -156,9 +260,9 @@ the [boot tests](#boot-tests) run Linux itself.
 ## Boot parameters
 
 On Linux x86_64, `boot::params::write_boot_params(ram, cmdline, ranges,
-initramfs)` fills the zero page that RSI points to at the 64-bit entry
-(`Documentation/arch/x86/boot.rst`, `zero-page.rst`) and returns its address,
-`0x7000`:
+initramfs, reserved)` fills the zero page that RSI points to at the 64-bit
+entry (`Documentation/arch/x86/boot.rst`, `zero-page.rst`) and returns its
+address, `0x7000`:
 
 - Setup header: `type_of_loader` `0xFF`, `boot_flag` `0xAA55`, the `HdrS`
   magic, a 16 MiB `kernel_alignment`, and `cmd_line_ptr` and `cmdline_size`
@@ -166,20 +270,23 @@ initramfs)` fills the zero page that RSI points to at the 64-bit entry
   `ramdisk_size` when there is an initramfs. The rest stays zero: no
   `loadflags` or ACPI tables.
 - E820: each RAM range as usable RAM outside `[0x9_FC00, 1 MiB)`, where the
-  MP table and the legacy BIOS areas go. More entries than the 128 table slots
-  fail with `InvalidInput` before anything is written.
+  MP table and the legacy BIOS areas go, while `reserved` intervals are marked
+  `E820_RESERVED` (including the boot page-table span passed by `prepare` when
+  the tables cannot fit in the fixed window and are placed above the kernel).
+  More entries than the 128 table slots fail with `InvalidInput` before
+  anything is written.
 
 `VmConfig::validate` accepts a command line only if it is printable ASCII and
 shorter than 2048 bytes, the kernel's `COMMAND_LINE_SIZE` with the NUL.
 linux-loader's `Cmdline` refuses the same lines, after trimming surrounding
 whitespace.
 
-`boot::prepare(ram, config)` opens `config.kernel` and runs `load_elf`, then
-`load_initramfs` when `config.initramfs` is set, then `write_boot_params`,
-`write_mptable` and `long_mode_entry`, in that order on fresh RAM, and returns
-a `BootSetup` with the boot vCPU registers. A failure names its step,
-`LoadKernel`, `LoadInitramfs` or `WriteBootData`, and keeps the I/O cause.
-`Vm::new` calls `prepare` once RAM is registered.
+`boot::prepare(ram, config, leaf)` opens `config.kernel` and runs `load_elf`,
+loads the optional initramfs, and plans the boot tables using the checked
+`leaf`. It then writes the boot parameters and MP table and sets up long-mode
+entry on fresh RAM, returning a `BootSetup` with the boot vCPU registers. A
+failure names its step, `LoadKernel`, `LoadInitramfs` or `WriteBootData`, and
+keeps the I/O cause. `Vm::new` calls `prepare` once RAM is registered.
 
 ## MP table
 
@@ -232,17 +339,21 @@ The boot tests need Linux x86_64, read/write `/dev/kvm` and the same
 make test:integration:vmm:linux
 ```
 
-Each builds a KVM `Vm` with `prepare` for 256 MiB of RAM on the
-[legacy devices](#legacy-devices-and-the-console) and runs it with
-`Vm::run`. The host VM is KVM behind a test wrapper that counts the edges
-devices raise on GSI 4 and can drop every interrupt. A watchdog stops a boot
-at its timeout, 30 seconds unless stated, so a failed boot reports the serial
-log so far.
+Each builds a KVM `Vm` with `prepare` on the
+[legacy devices](#legacy-devices-and-the-console) and runs it with `Vm::run`,
+with 256 MiB of RAM unless stated. The CMOS RTC starts at
+`2026-01-02T03:04:05Z`. The host VM is KVM behind a test wrapper that counts
+the edges devices raise on GSI 4 and can drop every interrupt. A watchdog
+stops a boot at its timeout, 30 seconds unless stated, so a failed boot
+reports the serial log so far.
 
 - With `earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 reboot=k`, one
   vCPU and no initramfs, the log must show the kernel version, the exact
   command line, the two E820 entries, the memory total and
   `VFS: Unable to mount root fs`.
+- The same boot with 6144 MiB of RAM must show three E820 entries, with the
+  last one above 4 GiB, no reserved entry, and a memory total of nearly all
+  6 GiB: the kernel uses RAM on both sides of the 32-bit MMIO hole.
 - With the same command line, one vCPU and a generated archive whose
   `/init`, a 132-byte static ELF, calls `exit_group(42)`, the log must show
   the `RAMDISK:` range from the zero page, `Unpacking initramfs...`,
@@ -256,9 +367,16 @@ log so far.
   then reports CPU i, the log must show `exitcode=0x00000f00`.
 - With `console=ttyS0 panic=-1 reboot=k`, one vCPU and an `/init` that
   prints a line, waits for the tty to send it and restarts the machine, the
-  log must show the 16550A on IRQ 4, that line and
-  `reboot: Restarting system`, in that order, and GSI 4 must have been
-  raised.
+  log must show the 16550A on IRQ 4, `rtc_cmos rtc_cmos: registered as
+  rtc0`, that line and `reboot: Restarting system`, in that order, and must
+  not show `setting system clock`: kvm-clock keeps the boot time. GSI 4 must
+  have been raised.
+- With `console=ttyS0 panic=-1 reboot=k`, one vCPU and an `/init` that
+  mounts devtmpfs, turns on update interrupts on `/dev/rtc0` with
+  `RTC_UIE_ON`, as `hwclock` does, and waits up to 2 s for one, the log must
+  show `rtc0` registered, the line `/init` prints once one arrives, and
+  `reboot: Restarting system`, with no panic. Linux serves update
+  interrupts with the CMOS alarm, so the line proves the alarm raised IRQ 8.
 - The same boot with a console sink that takes nothing until the run has
   ended, and a 4 KiB queue, must still end with `GuestReset`. The queue drops
   the oldest bytes and counts them; the sink then gets the batch the worker
@@ -282,15 +400,19 @@ reboot=k` turns a panic, and the restart, into the i8042 reset.
 ## Vsock building blocks
 
 The Unix-only `virtio::vsock` module provides the wire codec, captured writable
-guest buffers and registered Unix socket sources. The connection state machine,
-backend routing, device facade and snapshots are subsequent layers of the
-[vsock design](https://github.com/boxlite-ai/boxlite/issues/2312).
-There is no attached vsock device at this layer.
+guest buffers, registered Unix socket sources, stream connections and explicit
+Unix backend routing behind `Vsock`, a stream-only virtio device.
+The [vsock design](https://github.com/boxlite-ai/boxlite/issues/2312) covers this
+contract. `Vm::new` attaches it when `VmConfig::vsock` is present; the native
+engine maps host RPC and ready sockets to guest ports 2695 and 2696. The device
+removes its listener paths after failed attachment or teardown only when the
+path still identifies the socket it bound; pre-existing and replaced paths survive.
 
 The codec uses explicit little-endian fields and rejects truncated packets or
 payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
-uses the chain's total capacity: a 4096-byte chain writes a 44-byte header and
-up to 4052 stream bytes. The caller retains any unsent tail. Header-only buffers
+provides checked scatter writes. The device's receive stage owns fragmentation
+and delivery accounting: a 4096-byte chain writes a 44-byte header and
+up to 4052 stream bytes, retaining any unsent tail. Header-only buffers
 can carry controls; data returns zero bytes, while shorter headers require reset.
 Callers own nonblocking standard-library Unix streams and listeners directly.
 `Registration::stream` and `Registration::listener` clone a handle for the poller;
@@ -301,11 +423,140 @@ registration deregisters and closes only the polling copy, leaving caller I/O
 usable. Closing the caller's socket first is safe too; the polling copy keeps it
 open until deregistration. Failed registration leaves the original socket intact.
 Callers must set accepted streams nonblocking before worker use. This ownership
-change has no measured throughput claim.
+change has no measured throughput claim. Direct std I/O with duplicated mio
+polling handles relies on the Unix epoll/kqueue implementation; dependency
+upgrades must rerun readiness and production-worker continuation tests.
+
+Each connection owns its nonblocking stream and drops its registration before
+the stream. Guest requests receive a RESPONSE when the host socket connects;
+host-initiated flows wait for RESPONSE before exchanging bytes. Unexpected
+handshakes and operations reset only that flow.
+
+While awaiting RESPONSE, a host closing both socket directions cancels the flow,
+discards its queued packets and emits RST, even when unread host bytes remain.
+The connection checks closure using a zero-timeout `poll` inside the existing
+readiness callback. Separate read/write entries distinguish macOS's directional
+hangups; both must report `POLLHUP`. The probe consumes no bytes and preserves
+half-close. Worker dispatch and public event contracts are unchanged. Established
+streams retain the ordered EOF handling below. Cleanup resumes listeners stalled
+at the connection cap; output backpressure still waits for RX capacity. Live hosts
+with unanswered handshakes have no timeout.
+
+Pending guest writes are bounded at 64 KiB. Partial writes retain the tail,
+WouldBlock retains all pending bytes, and only successful writes advance
+`fwd_cnt`. Each turn performs at most one write and one read of up to 4 KiB,
+reporting whether runnable work may remain. The caller preserves outgoing
+packet order and leaves capacity for up to two output packets per turn.
+
+Host data reserves guest credit before entering the outgoing queue. Call
+`delivered` only for payload actually copied into guest buffers; acknowledgments
+beyond that count are rejected, including acknowledgments for retained RX tails.
+Counters wrap at 32 bits. At zero credit, a one-byte lookahead detects an empty
+socket's EOF without sending uncredited data. If it reads data, that byte waits
+for credit and precedes subsequent reads; EOF behind data waits too.
+Credit requests are coalesced until credit returns.
+
+Guest SEND shutdown drains pending writes before closing the host write half;
+guest RECEIVE stops host reads while allowing guest writes. Host EOF emits
+SHUTDOWN/SEND after queued data and leaves guest writes usable. Both guest
+shutdown flags produce RST once pending writes drain.
+
+The backend connects guest requests only to configured paths and accepts host
+connections only from caller-provided listeners. Mappings retain their original
+listeners across backend teardown. The backend shares immutable `Arc<Mappings>`
+and owns registrations for duplicated polling handles; I/O uses concrete std
+sockets without a mutex. Host accepts receive monotonically increasing ports from
+`1 << 30`, skipping configured connect ports; ports are not reused before reset.
+Exhausting the range closes new accepts. Non-transient listener errors remain
+fatal; descriptor-exhaustion retry scheduling is not implemented here.
+
+Limits are 128 live connections and 256 outgoing packets. Callers check
+`can_receive` before consuming a non-RST guest packet and call `drive` when output
+space returns. A TX-head RST is processed even when output is full: it closes
+that flow and discards its queued output without generating a reply. RST does
+not overtake earlier TX packets; REQUEST and SHUTDOWN still wait for capacity.
+A deque rotates flows after each bounded I/O turn, so output pressure
+does not repeatedly favor one flow. Routing scans at most 128 entries; this
+removes the separate sorted map, copied key list and cursor. A reset removes
+that flow's queued packets; RECEIVE shutdown discards its queued data.
+
+Like virtio-net, each device callback has an explicit I/O budget. TX and RX each
+process at most 256 heads; listener scanning attempts at most 256 accepts. The
+128-connection limit and one read/write per connection bound stream data I/O to
+256 calls per callback. Partial listener scans retain their position and whether
+an earlier accept succeeded or was interrupted. Reaching the end schedules another
+sweep only when a retry is needed; readiness arriving mid-sweep also requests a
+full recheck, including when output pressure delays acceptance. A complete empty
+sweep stops. Capacity stalls
+wait for external progress. Budget continuations yield through a private readiness source,
+so the callback does not drain a continuously refilled socket indefinitely.
+
+The device advertises ID 19, an eight-byte read-only CID and three queues with
+maximum size 256: RX, TX and events. It requires all three queues ready and
+successful feature negotiation. It accepts no device-specific feature bits;
+the MMIO transport supplies VERSION_1. Explicit mappings reject duplicate or
+reserved ports, invalid CIDs and invalid Unix pathnames before activation.
+
+Each callback captures RX descriptor metadata and copies TX packets before
+completing any head. No borrowed chain survives intake. TX storage is bounded
+by 256 packets of at most 64 KiB payload; RX retains at most 256 heads.
+Deferred completions use the queue facade's notification decision exactly once.
+The current virtio-queue dependency does not implement the optional legacy
+`NO_INTERRUPT` hint; this device does not offer EVENT_IDX.
+The event queue remains untouched because migration events are unsupported.
+
+```text
+queue/source → process: collect → transmit → backend.drive → receive
+                       → signal private source when work can resume
+```
+
+RX delivery fragments packets at the buffer boundary. For example, a 4096-byte
+payload and 4096-byte RX chain produce 4052 payload bytes, then a 44-byte tail
+in the next chain. Each header and used length describes only that fragment;
+the tail stays ahead of later data and shutdown. Only copied payload advances
+delivered credit. Header-only RX completes with zero bytes when data waits.
+
+Vsock owns a nonblocking Unix socket pair for continuation, with its reader
+registered through the existing `Registration` interface. Scheduling writes one
+byte only when no request is pending; its `BackendReady` callback consumes that
+byte. Requests made during a callback arrive on a later poll, letting other slots
+run. The registration stays fixed for the activation, avoiding per-round SourceId
+allocation. This costs two socket endpoints and one polling duplicate. Private
+callbacks do not trigger listener rescans. The common poller `Waker` remains
+unchanged and is not used to request device callbacks.
+
+Activation rolls back partial registrations on failure and signals the private
+source for the first scan; prepared readiness is retained until worker start.
+Reset closes the notification pair and streams, discards
+deferred work and requires feature negotiation again, while retaining mappings.
+Stopping the worker generation precedes reset, so callbacks cannot write old
+guest buffers after reset. Replenished RX resumes output and deferred TX;
+WouldBlock, missing credit and full output do not continually self-schedule.
+
+Like virtio-net, snapshots advertise `Unsupported`: active and inactive
+`save_state` and `restore_state` reject snapshots. The default `quiesce` succeeds
+without draining buffered traffic or releasing activation; reset/drop retain
+their existing cleanup. There is no serialization, RestoreContext extension
+or active-VM restore.
 
 `make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
 scatter delivery, real Unix stream/listener readiness, and registration cleanup
-in either ownership order, including rejected registrations.
+in either ownership order, including rejected registrations. Connection tests
+also cover both handshakes, actual partial writes and WouldBlock, credit stalls,
+partial delivery acknowledgments, counter wraparound, half-close and zero-credit
+EOF ordering. Backend tests cover explicit mappings, host accepts, limits,
+fairness after output pressure, budgeted listener scans and retries across empty
+scan segments, isolated resets and registration rollback.
+Device tests cover 4096/61/45-byte RX chains, deferred TX/RX ownership,
+and REQUEST/SHUTDOWN TX completion withheld at full output capacity, then
+resumed in order exactly once after RX replenishment. RST tests cover immediate
+TX-head completion at capacity, socket and registration cleanup, isolated output
+discard, and resumption of following TX without RX replenishment. They also cover
+malformed chains, activation rollback and Unsupported snapshots. MMIO tests use
+the production shared worker, including a host burst and EOF without new kicks
+or writes. Vsock tests also check private notification coalescing, preparation
+and reset cleanup. These are local
+socket and guest-memory tests; real-guest qualification remains separate.
 
 ## Lifecycle
 
@@ -334,14 +585,17 @@ nothing mapped.
    `GuestShutdown` and `GuestReset` become `VmExit`, and `VcpuFailed` or
    `DeviceFailed` its error. Later events are dropped.
 
-4. Once every vCPU has joined, `run` shuts down the
-   [virtio workers](#virtio-workers), then finishes the console worker
-   `Vm::new` started, so the guest's last output, a device's included,
-   reaches the sink, or is counted as dropped and logged, before `run`
-   returns. Workers that do not shut down turn a clean exit into
-   `Error::VirtioWorker`; an error that ended the VM stays the result. `Drop`
-   retries the shutdown and keeps the RAM registered, so `GuestRam` leaks it,
-   while the workers still run.
+4. Once every vCPU joins, `run` shuts down the [virtio workers](#virtio-workers),
+   which join dispatch and quiesce every device: console drains published TX,
+   block flushes its backend, and the other devices use a successful no-op.
+   It then finishes the host console worker that `Vm::new` started.
+   Before `run` returns, the guest's last output, including device output, reaches
+   the sink or is counted as dropped and logged.
+
+A join timeout turns a clean exit into `Error::VirtioWorker`; a quiesce failure
+becomes `Error::VirtioDevice`, while an error that ended the VM stays the result.
+`Drop` retries an incomplete join and keeps RAM registered while workers still
+run; a quiesce failure after joining still permits RAM unmapping.
 
 `Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
 thread, even before `run` starts. A VM runs once: a second `run` fails with
@@ -349,23 +603,34 @@ thread, even before `run` starts. A VM runs once: a second `run` fails with
 
 ## Long-mode entry
 
-On Linux x86_64, `boot::entry::long_mode_entry(ram, entry, boot_params)`
+On Linux x86_64, `boot::entry::long_mode_entry(ram, entry, boot_params, plan)`
 writes the state that the Linux 64-bit boot protocol requires
 (`Documentation/arch/x86/boot.rst`, "64-bit Boot Protocol") and returns the
 boot vCPU registers, which the vCPU 0 worker applies after its CPUID and
 MSRs.
 
 - Guest RAM: the GDT at `0x500` holds flat `__BOOT_CS` (`0x10`) and
-  `__BOOT_DS` (`0x18`). Page tables from `0x9000` identity-map
-  `[0, MMIO_HOLE_START)`, where all RAM lies, with 2 MiB pages, whatever the
-  RAM size, and leave the hole unmapped. Nothing is written unless RAM covers
-  `0x500..0xE000`.
+  `__BOOT_DS` (`0x18`). The four-level boot page tables identity-map only
+  backed RAM, leaving the MMIO hole unmapped. Tables start at `0x9000` if
+  they fit in the fixed boot window without overlaps; otherwise they go in
+  low RAM above the kernel. The default leaf is 2 MiB, with 4 KiB leaves
+  where needed. The internal `BOOT_LEAF` may request 1 GiB leaves only with
+  guest CPUID `pdpe1gb`. There is no automatic selection or public switch.
+  All table pages must fit in the selected window; passing address preflight
+  does not guarantee space for the tables.
 - Registers: 64-bit mode with paging (CR0 PE, ET and PG; CR4 PAE; EFER LME
   and LMA), interrupts off, RIP at `entry`, RSI at `boot_params`, a stack
   below `0x8FF0`, and segments decoded from the GDT entries. There is no IDT,
   so an exception before Linux installs its own resets the guest.
 
 ## CPU features
+
+Memory preflight uses the CPUID KVM supports for guests, not raw host CPUID.
+It takes the width from `0x8000_0008` EAX[7:0] and caps it with EAX[23:16]
+when that guest GPA width is nonzero; EAX[15:8] is the virtual width and is
+not used. These EAX fields are separate from the AMD topology in ECX. Missing
+or invalid width data fails preflight. `pdpe1gb` is `0x8000_0001` EDX bit 26;
+its absence rejects only a request for 1 GiB boot leaves.
 
 `cpu_features::vcpu_cpuid(supported, index, count)` turns KVM's supported
 CPUID into vCPU `index`'s. KVM passes the host's APIC ID through and reports
@@ -507,14 +772,31 @@ replace the shared one without changing the transport, the devices or `Vm`.
   `DeviceFailed(Error::VirtioWorker)`.
 - **Shutdown.** `shutdown` closes every source, wakes the thread and waits up
   to 300 s for it to exit before it joins it. A timeout reports
-  `Error::VirtioWorker` with `TimedOut`, and a later call retries.
+  `Error::VirtioWorker` with `TimedOut`, and a later call retries without having
+  called any device cleanup hooks.
+- **Shutdown quiesce.** After joining, the framework calls every device's
+  `quiesce` under its lock while guest RAM is registered, including devices never
+  started. The default succeeds without extra work; console scans published TX,
+  and block flushes/syncs its backend.
+
+Other devices keep their existing reset/drop cleanup. Successful quiesce does
+not promise network delivery, processing of unconsumed queues, filesystem
+durability or snapshots. Synchronous block flush/sync is not bounded by the
+worker join timeout.
+
+Poisoned devices are not called; errors, panics and poisoned locks do not
+prevent later hooks, and the first failure is cached as `ShutdownError::Quiesce`.
+Repeated shutdown never repeats hooks. `ShutdownError::Join` separately
+identifies workers that may still access RAM, so device cleanup errors cannot
+cause a RAM leak.
 
 ## Device composition
 
 `devices::add_all` is the one place that names device types. `Vm::new` calls it
-through `Vm::with_devices`; the helper adds the legacy platform devices, then
+through `Vm::build`; the helper adds the legacy platform devices, then
 each configured device type in slot order, and finally announces every slot on
-the kernel command line.
+the front of the kernel command line, which is always before any `--` that
+starts the init arguments, so the caller's text is never parsed.
 
 - **One line per device.** `add_slot_device` takes the next `Slot`, runs the
   device's attach function, and records the slot for `announce`. Adding a
@@ -524,9 +806,11 @@ the kernel command line.
   adds the device's worker slot and builds the `MmioTransport`; every
   virtio-mmio device uses it, so the wiring is not copied into each device
   module.
-- **Test seam.** `Vm::with_backend` keeps the old closure signature for tests
-  that add mock, conflict or legacy devices directly; `with_devices` hands the
-  closure the mutable `VmConfig` so `add_all` can announce slots.
+- **Test seam.** `Vm::with_backend` lets tests add mock, conflict or legacy
+  devices directly. `Vm::with_devices` also passes the mutable `VmConfig`, so
+  tests can use `add_all` to announce slots. The aggregate filesystem wiring
+  test checks both device announcements followed by the original command line:
+  without disks, the balloon occupies slot 0 and virtio-fs occupies slot 1.
 
 ## Virtio block device
 
@@ -539,15 +823,26 @@ each one, which opens the image and attaches it in the slot `add_slot_device`
 took, and then announces that slot on the kernel command line.
 
 - **Slots.** `virtio::mmio::Slots` hands out `(window, line)` pairs in
-  order: window `i` is `0xd000_0000 + i * 4 KiB`, line `i` is GSI `5 + i`,
-  19 slots in all (the legacy range above COM1 and below the MSI space, as
-  Firecracker and libkrun allocate it). `Slot::cmdline_arg` renders the
+  order: window `i` is `0xd000_0000 + i * 4 KiB`, interrupt lines are GSI 5–7 and
+  9–23, 18 slots in all. GSI 8 stays reserved for the CMOS alarm, while MMIO
+  windows and device order remain consecutive. `Slot::cmdline_arg` renders the
   `virtio_mmio.device=4K@<base>:<gsi>` argument the kernel probes, and
-  `announce` appends one per slot under the command-line budget, so the
+  `announce` puts one per slot at the front under the command-line budget, so the
   chipset claim and the kernel's view come from the same value. Disks take
   slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
-  `/dev/vdb`, and so on.
-- **Configuration.** `DiskConfig { path, format: Raw | Qcow2, read_only }`;
+  `/dev/vdb`, and so on. Production uses up to 13 slots with 8 disks, the
+  balloon, and optional aggregate filesystem, vsock, net and console devices.
+  The [M2 device plan](../../docs/contributing/architecture/vmm/README.md#devices-by-milestone)
+  adds rng for 14 devices within the 18-slot budget. IRQ 8 follows the
+  pinned Linux [RTC platform declaration](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/kernel/rtc.c#L114-L152),
+  and the upper GSI bound follows the 24-pin IOAPIC described in the
+  [Linux KVM IOAPIC source](https://github.com/gregkh/linux/blob/v6.12.110/arch/x86/include/uapi/asm/kvm.h#L77-L99).
+  The VM composition test uses the production attach and boot-loading paths
+  with eight distinct raw disks, with and without aggregate fs. It reads the
+  command line from guest RAM and checks consecutive MMIO windows, GSIs that
+  skip 8, disk capacities in configuration order, balloon/fs device IDs and
+  the real CMOS ports on a mock host VM; it does not boot a Linux guest.
+- **Configuration.** `DiskConfig { block_id, path, format: Raw | Qcow2, read_only }`;
   the format is stated, never probed from the file. A qcow2 image opens the
   backing chain its header names. At most 8 disks; `blk::add_disk` fails with
   `Error::OpenDisk` for an image it cannot open and `add_all` fails with
@@ -561,7 +856,8 @@ took, and then announces that slot on the kernel command line.
   at most 128 MiB, and a read past the end returns zeros, while writes are
   refused.
 - **Backend contract.** `blk::backend::DiskBackend` is the seam a disk
-  engine implements: `disk_info` once after open; `event_source` at every
+  engine implements: `disk_info` once after open; `resize_grow` to a larger
+  aligned size between requests, returning the new information; `event_source` at every
   activation, registered with the worker generation when it is `Some`;
   `submit(token, Request)` per parsed chain, answering `Done(CompletedRequest)`
   inline or `Pending`; `completions` on each `BackendReady` edge, drained
@@ -587,8 +883,26 @@ took, and then announces that slot on the kernel command line.
   and at most 128 MiB, so a conforming guest splits a larger range; imago
   zeroes what the format cannot discard, and a qcow2 image frees the
   clusters without punching the host file.
+- **Disk identity.** `block_id` is a nonempty host control ID, unique within
+  the VM. The native adapter preserves the ID assigned by BoxLite. IDs do not
+  affect attachment order or Linux device names. Invalid IDs fail VM creation
+  before host resources or images are opened.
+- **Online grow.** `vm.control().resize_disk("data", 2 << 30, timeout)`
+  grows the writable disk with `block_id: "data"` to 2 GiB. Targets must be
+  sector-aligned and at least the current capacity. A same-size request is a no-op.
+
+  After growth succeeds, the device worker updates guest capacity and raises a
+  configuration interrupt. A timeout ends the wait and the request can still complete.
+
+  On Linux, preflight rejects a Raw target or qcow2 estimate above the shim's
+  `RLIMIT_FSIZE` soft limit. The temporary qcow2 estimate adds 1 MiB per
+  started GiB of target capacity.
+
+  Fresh standalone samples from QEMU 8.2.2 (`preallocation=metadata`,
+  64 KiB clusters, 16-bit refcounts) added 384 KiB to file length at 1 GiB
+  and 10.25 MiB at 64 GiB. Existing image layouts can require more space.
 - **Reset.** `Status=0` stops the worker slot, then `reset` deregisters the
-  backend source, fails the device with `Fatal` if a request is still in
+  backend and control sources, fails the device with `Fatal` if a request is still in
   flight (no completion can arrive any more, and the guest may already
   reuse that memory), flushes, and forgets the activation. The imago
   backend finishes every request inline, so its table is always empty; a
@@ -621,18 +935,25 @@ port and shares `ConsoleWriter`/`ConsoleWorker` with COM1.
   loss, so a slow or broken sink never delays the guest's completion. Each accepted head is completed
   once, in order, with used length 0; the queue facade decides whether to
   raise the interrupt.
-- **Stop and reset.** `quiesce` stops accepting new kicks; `finish_tx` scans
-  pending TX once even without a kick, completes it, and drops the queue and
-  RAM references. The console writer stays open, so a later activation keeps
-  appending to the same `console.log`. `reset` clears activation and failed
-  state for a new `DRIVER_OK`.
+- **Quiesce and resume.** `quiesce` stops kicks, then scans and completes
+  published TX once, including descriptors without a final kick. Repeated calls
+  do nothing; broken rings are skipped, and a new scan failure is reported.
+  Activation remains available for `resume`, which re-enables kicks without
+  clearing a broken ring.
+- **Reset and release.** `reset` or drop releases queue and RAM references;
+  reset also clears failed state for a new `DRIVER_OK`. The shared writer stays
+  open, so serial output and later activations append to the same `console.log`.
 - **VM seam.** The device is exercised with real guest RAM, split virtqueues,
-  the MMIO transport and the console worker; it is not wired into `Vm` yet.
-  The callback still processes every available TX head, so a continuously
-  refilled queue is unbounded. N1 in the design closes that before the device
-  becomes the default path. A stalled sink cannot block TX, but its backlog
-  is bounded by the 64 KiB pending queue plus the batch the worker is writing,
-  so up to about 128 KiB can be outstanding.
+  the MMIO transport and the console worker. `devices::add_all` registers it
+  when requested; `Vm` retains no concrete console device handle. Shutdown order
+  is vCPU join → device worker join → every device's quiesce → host console finish
+  → RAM unmap on drop.
+
+The callback still processes every available TX head, so a continuously
+refilled queue is unbounded. N1 in the design closes that before the device
+becomes the default path. A stalled sink cannot block TX, but its backlog
+is bounded by the 64 KiB pending queue plus the batch the worker is writing,
+so up to about 128 KiB can be outstanding.
 
 ## Reporting balloon and shared dispatch
 
@@ -719,6 +1040,97 @@ the exact-PFN evidence a per-page protocol would give, and three-platform
 real-guest reporting/reclaim/reuse/lifetime evidence is still required; these
 commands do not waive the arm64 prerequisites.
 
+## Virtio-fs implementation
+
+`virtio::fs::device::Fs::new(tag, shares)` constructs one Linux x86_64 device
+for all exports ([design and stages](https://github.com/boxlite-ai/boxlite/issues/2274)).
+It ports the FUSE interfaces, dispatcher and Linux file operations from
+[libkrun e12b9b3](https://github.com/boxlite-ai/libkrun/tree/e12b9b3780ffa8df9f3e1797b217d13453479167/src/devices/src/virtio/fs),
+with the synthetic namespace following
+[OpenVMM 998904f](https://github.com/microsoft/openvmm/blob/998904f2debee98416c5d007a17f05be1b7dad34/vm/devices/virtio/virtiofs/src/aggregate.rs).
+The port keeps its BSD attribution and local license; libkrun stays unchanged.
+Both production filesystems explicitly implement the migrated `FileSystem`
+operations and lifecycle. The trait keeps only the shared batch-forget loop;
+missing operations fail compilation rather than silently inheriting unsupported
+or no-op defaults.
+
+| Layer | Ownership and contract |
+| --- | --- |
+| Device | Type 26; 36-byte tag plus one request-queue count; priority and request queues of 1024 entries; EVENT_IDX only; both queues required |
+| Descriptor adapter | One traversal builds readable/writable views from the same validated addresses; bounds, directions and incomplete chains fail before host operations |
+| FUSE server | Version 7.27; bounded frame/payload decoding and reply capacity checks; AUTO requires READDIRPLUS; no unimplemented capabilities advertised |
+| AggregateFs | Immutable root 1; global node/handle IDs, per-share policy and routing; cross-share rename/link/copy fail with EXDEV |
+| PassthroughFs | Each share owns its local inode/handle objects and host operations; O_PATH/proc-FD anchors preserve files after rename/unlink |
+| Lifetime | Separate lookup, open and in-flight references; mapping locks do not span file I/O; zero-reference identities are collected; checked IDs are not reused |
+
+The Linux backend requires a returned `STATX_MNT_ID` (Linux 5.8+); a missing
+mount identity fails explicitly rather than merging bind-mount aliases. Xattr
+mutations on write-only files/directories use pinned proc-FD paths, preserving
+host xattr authority without requiring unrelated data-read permission. ACCESS
+selects one guest permission class - owner, else group, else other - and then
+bounds success by the host effective identity; guest root bypasses the read and
+write bits and needs one execute bit for `X_OK`.
+If a directory-plus listing fails after accepting complete entries, the reply
+returns that prefix; an empty listing still returns the host error. A later
+queue error cannot suppress notification of earlier published completions.
+
+Regular OPEN/CREATE return `DIRECT_IO`, not host `O_DIRECT`; entry/attribute
+timeouts are zero and writeback is not negotiated. Directory handles do not
+enable data caching. Linux boot tests check coordinated host rewrites through an
+open guest descriptor, reject shared mappings with ENODEV and read private mappings.
+
+Operations run under the host's existing authority, without changing credentials,
+capabilities or umask. CREATE/MKDIR/MKNOD/SYMLINK accept each uid/gid only when
+it is zero or matches the host; other identities get EPERM. SETATTR retains the
+source's host-authority semantics.
+Read-only enforcement also covers truncating opens and metadata changes.
+Raw parent lookup is refused for every export directory; nested listings omit
+host `..`, so an anchored directory moved outside an export cannot expose its
+new host parent. Symlink contents are resolved in the guest.
+FIFO/device/socket creation and data opens, credential switching, killpriv and
+creation security contexts are unsupported.
+
+FSYNC/FSYNCDIR finish the host sync before replying and propagate errors;
+FLUSH and RELEASE (including RELEASE_FLUSH) do not promise durability.
+FORGET/BATCH_FORGET/DESTROY use zero reply
+bytes but still complete the descriptor. Reset clears session state and objects
+after the caller has stopped callbacks; it keeps export roots and ID counters.
+
+Unsupported POLL/IOCTL requests return ENOSYS for Linux's standard opt-out;
+these do not claim a backend operation succeeded. Other unsupported operations,
+including SYNCFS, return EOPNOTSUPP rather than a kernel-cached success.
+Implemented FSYNC/FSYNCDIR always perform host synchronization and propagate errors.
+
+`VmConfig::filesystem` optionally configures one aggregate device with a mount
+tag and named `FsShareConfig` exports. `devices::add_all` attaches it after the
+disks through the same slot allocator, transport and worker runtime, preserving
+disk order and announcing every device on the kernel command line. Export setup
+errors retain their I/O cause through `Error::Filesystem`. The pinned kernel
+fragment includes both virtio-blk and FUSE/virtio-fs.
+
+A slow synchronous filesystem call stalls every callback on the shared worker;
+a batch budget cannot cancel a blocked host syscall. macOS filesystem support
+and broader user-volume qualification remain follow-ups.
+
+```sh
+make test:unit:vmm FILTER=virtio::fs
+make test:unit:vmm
+make clippy:vmm
+make fmt:check:rust
+```
+
+The filesystem suite uses real files through production backends and memory
+queues: read/write/sync, host sync failure, malformed frames/descriptors, split
+transfers, large-directory pagination, credentials, per-share policy, handle
+survival and reclamation, full queues, reply-free requests and stale-session IDs.
+`make test:integration:vmm:linux` boots the Linux driver to mount exports, copy
+and synchronize files, retain descriptors after rename/unlink, and check cache
+visibility and mixed read-only policies. The separate
+`make test:integration:vmm:mounts` target packages the static production guest
+mount test init supplied as `VMM_GUEST_MOUNT_INIT`. It exercises the guest volume
+adapter's failed-batch rollback, guard rollback and committed mounts, with host
+checks for writable hardlink propagation, snapshot isolation and descriptor cleanup.
+
 ## Chipset
 
 `chipset::ChipsetBuilder` is the one registry of port ranges, MMIO ranges and
@@ -741,8 +1153,8 @@ devices:
 - **Constructors.** A constructor only claims resources and builds state; a
   device that needs a thread starts it after `build`, and a virtio device's
   events run on the worker thread, which starts at its first DRIVER_OK.
-  `Vm::with_devices` passes the guest memory, the workers and the mutable
-  configuration in a `DeviceContext`; `devices::add_all` adds the
+  `Vm::build` passes the guest memory and workers in a `DeviceContext` and
+  supplies the mutable `VmConfig`; `devices::add_all` adds the
   [block devices](#virtio-block-device) and tests use `with_backend` to add a
   transport. A line from `Resources::line` is not armed until `build`
   succeeds: using it earlier fails with `Error::LineNotArmed` and makes no
@@ -762,6 +1174,7 @@ windows, then adds the legacy devices:
 | Ports | Device | Behavior |
 | --- | --- | --- |
 | `0x3F8`–`0x3FF` | `com1`, vm-superio's 16550A | Output goes to the console queue; a pending, enabled THRE or RDA raises an edge on GSI 4; no input yet |
+| `0x70`–`0x71` | `cmos` | See [CMOS RTC](#cmos-rtc) |
 | `0x60`, `0x64` | `i8042`, vm-superio's controller | Reads 0; the first `0xFE` at `0x64` sends `GuestReset` |
 
 - vm-superio must be 0.8.2 or later. It raises THRE on every IER write, so
@@ -781,6 +1194,23 @@ windows, then adds the legacy devices:
 - A failed interrupt sends `DeviceFailed`, once.
 - The guest kernel has no i8042 driver, so the reset is all the device does.
 
+## CMOS RTC
+
+On x86_64, `CmosRtc` serves ports `0x70` (register select) and `0x71` (data).
+Linux exposes the clock as `/dev/rtc0` and takes its boot time from kvm-clock
+because `boot/kernel.config` disables `RTC_HCTOSYS`.
+
+- RTC time follows the host wall clock plus a guest-set offset. SET or a
+  divider reset freezes it. On release, the clock resumes half a second into
+  the written second, matching Linux's RTC write timing. Time registers read
+  in 24-hour BCD or binary.
+- Alarms match hours, minutes, and seconds in guest RTC time. The RTC latches
+  due matches in AF before rescheduling, even with AIE off. Enabling AIE with
+  AF set asserts IRQ 8. Reading register C clears the flags and rearms the
+  alarm. Clearing AIE lowers IRQ 8 and keeps AF.
+- Linux uses the alarm to emulate update interrupts for `hwclock`. A failed
+  IRQ update ends the VM with `DeviceFailed`.
+
 ## Build
 
 `make vmm:boot` builds the pinned x86_64 ELF kernel (`vmlinux`) inside a pinned
@@ -797,26 +1227,31 @@ make fmt:check:rust
 ```
 
 On Linux x86_64 with read/write access to `/dev/kvm`,
-`make test:integration:vmm:kvm` also runs this crate's hardware tests on VMs
-with the largest layout. A flat 32-bit guest reads the last RAM byte and
-reports it on port `0x3f8`. A 64-bit guest entered through
-`long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS` applied, reloads its
-segments from the GDT in RAM, reads markers at RSI and at the top of RAM, and
-stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and 0xB, MISC_ENABLE and
-MTRRdefType for the test to compare. The 3 GiB allocation is `MAP_NORESERVE`, so only the touched
-pages are committed; a host with `vm.overcommit_memory=2` refuses it. The
-[bus](#buses-lines-and-events) and [chipset](#chipset) tests in `tests::kvm`
+`make test:integration:vmm:kvm` also runs this crate's hardware tests. A flat
+32-bit guest uses 3072 MiB to fill the low RAM band, reads its last byte, and
+reports it on port `0x3f8`. A 64-bit guest uses 4097 MiB to place a marker above
+4 GiB. Entered through `long_mode_entry`, with `vcpu_cpuid` and `BOOT_MSRS`
+applied, it reloads its segments from the GDT in RAM, reads markers at RSI and
+at the top of RAM, and stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and
+0xB, MISC_ENABLE and MTRRdefType for the test to compare. The RAM backing is
+sparse anonymous `mmap`: the host needs virtual address space for the full
+mapping, and accessed pages still depend on available memory and host memory
+pressure.
+
+The [bus](#buses-lines-and-events) and [chipset](#chipset) tests in `tests::kvm`
 modules need 2 MiB: a flat 32-bit guest writes and reads a test device on the
 port bus at its register offset, and an `IrqLine` sets GSI 4 and 5 through
 `KVM_IRQ_LINE`, skipping a repeated level. Another flat guest reads a claimed
 and an unclaimed port of a built chipset, and the device's line, armed by the
 build, reaches KVM. A third runs on the [legacy devices](#legacy-devices-and-the-console):
-it prints `OK` on COM1, reads an unclaimed port and unmapped MMIO as all
-ones, and runs no instruction after its i8042 reset. CI runs the same tests
-through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
+it prints `OK` on COM1, reads the CMOS seconds from a fixed clock, reads an
+unclaimed port and unmapped MMIO as all ones, and runs no instruction after
+its i8042 reset. CI runs the same tests through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
 and weekly, it also runs the [boot tests](#boot-tests) on the kernel it builds
 with `make vmm:boot:host`, through `make coverage:vmm:boot`, which needs
-`VMM_KERNEL` like `make test:integration:vmm:linux`.
+`VMM_KERNEL` like `make test:integration:vmm:linux`. The Linux integration test
+`boots_linux_with_six_gib_of_ram` requires `VMM_KERNEL` and checks the E820 map
+and how much memory Linux takes over with 6144 MiB of guest RAM.
 
 With the corresponding Rust targets installed, the crate can also be compiled
 for each host with a backend module without booting a VM:

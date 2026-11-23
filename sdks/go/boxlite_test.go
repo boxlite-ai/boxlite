@@ -265,8 +265,8 @@ func TestBoxOptions(t *testing.T) {
 	if cfg.name != "test-box" {
 		t.Errorf("name: got %q", cfg.name)
 	}
-	if cfg.cpus != 4 {
-		t.Errorf("cpus: got %d", cfg.cpus)
+	if cfg.cpus == nil || *cfg.cpus != 4 {
+		t.Errorf("cpus: got %v", cfg.cpus)
 	}
 	if cfg.memoryMiB != 1024 {
 		t.Errorf("memoryMiB: got %d", cfg.memoryMiB)
@@ -318,6 +318,15 @@ func TestBoxOptions(t *testing.T) {
 	}
 	if cfg.secrets[0].Name != "openai" {
 		t.Errorf("secret name: got %q", cfg.secrets[0].Name)
+	}
+}
+
+func TestWithSecretPreservesHeaders(t *testing.T) {
+	secret := Secret{Name: "test", Value: "value", Hosts: []string{"api.example.com"}, Headers: map[string]string{"x-goog-api-key": "{value}"}}
+	config := &boxConfig{}
+	WithSecret(secret)(config)
+	if got := config.secrets[0].Headers["x-goog-api-key"]; got != "{value}" {
+		t.Fatalf("template = %q", got)
 	}
 }
 

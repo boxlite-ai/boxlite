@@ -4,18 +4,21 @@
 //! The devices behind the buses, and the platform code that adds them.
 
 pub(crate) mod balloon;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod cmos;
 pub(crate) mod console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod i8042;
 #[cfg(unix)]
-#[cfg_attr(not(test), expect(dead_code, reason = "Awaiting VM wiring"))]
 pub(crate) mod net;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod serial;
-#[cfg_attr(not(test), expect(dead_code, reason = "VM wiring follows separately."))]
 pub(crate) mod virtio_console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod x86_64;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use std::sync::{Arc, Mutex};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use self::{console::ConsoleWriter, x86_64::add_legacy_devices};
@@ -26,29 +29,28 @@ use crate::{
     error::Result,
     memory::ReclaimPolicy,
     virtio::{
-        DeviceContext, blk,
+        DeviceContext, blk, fs,
         mmio::{self, Slot, Slots},
     },
 };
 
 /// Adds every device the configuration names, in slot order: the legacy
-/// platform devices, one block per configured disk, then the reporting
-/// balloon. Adding a device is one `add_slot_device` line here;
-/// [`crate::vm`] stays unchanged.
+/// platform devices, disks, reporting balloon, and optional filesystem,
+/// vsock, network and console.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all(
     chipset: &mut ChipsetBuilder,
-    ctx: DeviceContext<'_>,
+    mut ctx: DeviceContext<'_>,
     config: &mut VmConfig,
     console: ConsoleWriter,
 ) -> Result<()> {
-    add_legacy_devices(chipset, console)?;
+    add_legacy_devices(chipset, console.clone(), Box::new(cmos::host_clock))?;
 
     let mut slots = Slots::new();
     let mut used = Vec::new();
     for (index, disk) in config.disks.iter().enumerate() {
         add_slot_device(&mut slots, &mut used, |slot| {
-            blk::add_disk(chipset, &ctx, disk, index, slot)
+            blk::add_disk(chipset, &mut ctx, disk, index, slot)
         })?;
     }
     // The balloon follows the disks so it never renumbers them: the guest
@@ -57,10 +59,38 @@ pub(crate) fn add_all(
     add_slot_device(&mut slots, &mut used, |slot| {
         crate::devices::balloon::add(chipset, &ctx, slot, ReclaimPolicy::default())
     })?;
+    if let Some(filesystem) = &config.filesystem {
+        add_slot_device(&mut slots, &mut used, |slot| {
+            fs::add_filesystem(chipset, &ctx, filesystem, slot)
+        })?;
+    }
+    if let Some(vsock) = &config.vsock {
+        let device = crate::virtio::vsock::Vsock::bind(vsock).map_err(crate::Error::Vsock)?;
+        add_slot_device(&mut slots, &mut used, |slot| {
+            mmio::add_device(chipset, &ctx, "vsock", slot, Arc::new(Mutex::new(device)))
+        })?;
+    }
+    if let Some(network) = &config.network {
+        let device = net::Net::new(network.path.clone(), network.mac);
+        add_slot_device(&mut slots, &mut used, |slot| {
+            mmio::add_device(
+                chipset,
+                &ctx,
+                "virtio-net",
+                slot,
+                Arc::new(Mutex::new(device)),
+            )
+        })?;
+    }
+    if config.virtio_console {
+        let device = Arc::new(Mutex::new(virtio_console::VirtioConsole::new(console)));
+        add_slot_device(&mut slots, &mut used, |slot| {
+            mmio::add_device(chipset, &ctx, "virtio-console", slot, device)
+        })?;
+    }
     // The next device is one more `add_slot_device` line here. A device that
     // must keep slot 0 goes before the disk loop.
-    mmio::announce(&mut config.cmdline, &used)?;
-    Ok(())
+    mmio::announce(&mut config.cmdline, &used)
 }
 
 /// Takes the next slot, runs `attach` with it, and records it for

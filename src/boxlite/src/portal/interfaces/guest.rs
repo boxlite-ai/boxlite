@@ -2,8 +2,8 @@
 
 use boxlite_shared::{
     BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestClient, GuestInitRequest,
-    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, ThawRequest, VirtiofsSource, Volume,
-    guest_init_response,
+    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, SyncClockRequest, ThawRequest,
+    VirtiofsSource, Volume, guest_init_response,
 };
 use tonic::transport::Channel;
 
@@ -79,6 +79,18 @@ impl GuestInterface {
         ensure_guest_version(&response.version, minimum)
     }
 
+    /// Fail before initialization if the guest cannot pin managed-volume subdirectories.
+    pub async fn require_safe_volume_sub_path(&mut self) -> BoxliteResult<()> {
+        let response = self.client.ping(PingRequest {}).await?.into_inner();
+        if response.safe_managed_volume_sub_path {
+            return Ok(());
+        }
+        Err(BoxliteError::Unsupported(
+            "guest does not support safe managed-volume sub_path mounts; recreate the box with the current runtime"
+                .into(),
+        ))
+    }
+
     /// Shutdown the guest agent.
     pub async fn shutdown(&mut self) -> BoxliteResult<()> {
         let _response = self.client.shutdown(ShutdownRequest {}).await?;
@@ -102,6 +114,24 @@ impl GuestInterface {
         let response = self.client.thaw(ThawRequest {}).await?.into_inner();
         Ok(response.thawed_count)
     }
+
+    /// Correct CLOCK_REALTIME from UTC sampled by the host just before sending.
+    ///
+    /// The Linux/native shim pushes initially and checks every 2s, pushing on
+    /// a >=6s check gap, >=60s since success, no success, or host clock rollback.
+    /// It survives detached creator exit and needs no D-Bus. This host-only
+    /// operation leaves the RTC and monotonic clock unchanged.
+    /// Success means absolute drift <=100ms (no adjustment) or an accepted
+    /// clock setting in either direction; 100ms is not a precision guarantee.
+    /// Invalid timestamps, clock-read/set failures, and an agent without this
+    /// method surface as errors.
+    pub async fn sync_clock(&mut self, unix_sec: i64, nanos: i32) -> BoxliteResult<()> {
+        let _response = self
+            .client
+            .sync_clock(SyncClockRequest { unix_sec, nanos })
+            .await?;
+        Ok(())
+    }
 }
 
 /// A guest agent version as `(major, minor, patch)`.
@@ -119,7 +149,7 @@ fn parse_guest_version(version: &str) -> Option<GuestVersion> {
     parts.next().is_none().then_some(parsed)
 }
 
-fn ensure_guest_version(version: &str, minimum: GuestVersion) -> BoxliteResult<()> {
+pub(crate) fn ensure_guest_version(version: &str, minimum: GuestVersion) -> BoxliteResult<()> {
     let (major, minor, patch) = minimum;
     let Some(reported) = parse_guest_version(version) else {
         return Err(BoxliteError::Unsupported(format!(
@@ -141,6 +171,31 @@ mod tests {
     use super::*;
 
     const MINIMUM: GuestVersion = (0, 9, 8);
+
+    #[test]
+    fn aggregate_mount_identity_survives_proto_conversion() {
+        let config = VolumeConfig::Virtiofs {
+            tag: "BoxLiteShared".into(),
+            device_tag: "boxlite".into(),
+            export_key: "shared".into(),
+            mount_point: String::new(),
+            read_only: true,
+            container_id: None,
+        };
+        let encoded = config.into_proto();
+        let Some(boxlite_shared::volume::Source::Virtiofs(fs)) = encoded.source else {
+            panic!("filesystem source")
+        };
+        assert_eq!(fs.tag, "BoxLiteShared");
+        assert_eq!(fs.device_tag, "boxlite");
+        assert_eq!(fs.export_key, "shared");
+        assert!(fs.read_only);
+        let legacy = VolumeConfig::virtiofs("BoxLiteShared", "", false, None).into_proto();
+        let Some(boxlite_shared::volume::Source::Virtiofs(fs)) = legacy.source else {
+            panic!("filesystem source")
+        };
+        assert!(fs.device_tag.is_empty() && fs.export_key.is_empty());
+    }
 
     #[test]
     fn guest_older_than_the_minimum_is_rejected() {
@@ -191,6 +246,9 @@ pub enum VolumeConfig {
     Virtiofs {
         /// Virtiofs tag
         tag: String,
+        /// Aggregate device tag and export key; empty for legacy mounts.
+        device_tag: String,
+        export_key: String,
         /// Mount point in guest
         mount_point: String,
         read_only: bool,
@@ -222,6 +280,8 @@ impl VolumeConfig {
     ) -> Self {
         Self::Virtiofs {
             tag: tag.into(),
+            device_tag: String::new(),
+            export_key: String::new(),
             mount_point: mount_point.into(),
             read_only,
             container_id,
@@ -249,6 +309,8 @@ impl VolumeConfig {
         match self {
             VolumeConfig::Virtiofs {
                 tag,
+                device_tag,
+                export_key,
                 mount_point,
                 read_only,
                 container_id,
@@ -257,6 +319,8 @@ impl VolumeConfig {
                 source: Some(boxlite_shared::volume::Source::Virtiofs(VirtiofsSource {
                     tag,
                     read_only,
+                    device_tag,
+                    export_key,
                 })),
                 container_id: container_id.unwrap_or_default(),
             },

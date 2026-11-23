@@ -20,27 +20,34 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use vm_memory::GuestAddressSpace as _;
 
 use linux_loader::loader::bootparam::boot_params;
 use vm_memory::{Bytes, GuestAddress};
 
-use super::prepare;
+use super::{BOOT_LEAF, prepare};
 use crate::{
     VmExit,
     boot::elf::tests::{ENTRY, fixture},
     config::VmConfig,
+    cpu_features::preflight_x86,
     devices::{
         console::{ConsoleWorker, DEFAULT_QUEUE_BYTES},
         x86_64::{COM1, COM1_GSI, add_legacy_devices},
     },
     error::Error,
     memory::{GuestRam, ram_ranges},
+    x86_boot_layout::{CheckedBootLeaf, PageSize},
 };
 
 mod balloon;
 #[cfg(target_os = "linux")]
 #[path = "virtio_blk.rs"]
 mod virtio_blk;
+
+#[cfg(target_os = "linux")]
+#[path = "guest_mounts.rs"]
+mod guest_mounts;
 
 const MEMORY_MIB: u32 = 2;
 const CMDLINE: &str = "console=ttyS0 panic=-1";
@@ -70,6 +77,10 @@ fn config(kernel: PathBuf, cmdline: &str) -> VmConfig {
         cmdline: cmdline.into(),
         initramfs: None,
         disks: Vec::new(),
+        filesystem: None,
+        vsock: None,
+        network: None,
+        virtio_console: false,
     }
 }
 
@@ -82,12 +93,13 @@ fn enters_the_loaded_kernel_with_rsi_at_the_zero_page() {
     let kernel = TempFile::new("prepare.elf", &fixture());
     let ram = ram();
 
-    let regs = prepare(&ram, &config(kernel.0.clone(), CMDLINE))
+    let leaf = PageSize::Mib.checked(false).unwrap();
+    let regs = prepare(&ram, &config(kernel.0.clone(), CMDLINE), leaf)
         .unwrap()
         .boot_regs;
 
     assert_eq!((regs.rip, regs.rsi), (ENTRY, 0x7000));
-    let memory = ram.memory();
+    let memory = ram.memory().memory();
     let mut code = [0; 8];
     memory.read_slice(&mut code, GuestAddress(ENTRY)).unwrap();
     assert_eq!(&code, b"CODE1234", "the kernel is loaded at its entry");
@@ -116,9 +128,10 @@ fn loads_the_initramfs_at_the_top_of_ram_and_records_it() {
         ..config(kernel.0.clone(), CMDLINE)
     };
 
-    let regs = prepare(&ram, &config).unwrap().boot_regs;
+    let leaf = PageSize::Mib.checked(false).unwrap();
+    let regs = prepare(&ram, &config, leaf).unwrap().boot_regs;
 
-    let memory = ram.memory();
+    let memory = ram.memory().memory();
     let params: boot_params = memory.read_obj(GuestAddress(regs.rsi)).unwrap();
     // 2 MiB of RAM minus 3000 bytes, rounded down to a page.
     let hdr = params.hdr;
@@ -162,7 +175,8 @@ fn a_failure_names_its_step_and_keeps_the_io_cause() {
             io::ErrorKind::InvalidInput,
         ),
     ] {
-        let error = prepare(&ram(), &config).unwrap_err();
+        let leaf = PageSize::Mib.checked(false).unwrap();
+        let error = prepare(&ram(), &config, leaf).unwrap_err();
         assert!(
             matches!(
                 error,
@@ -187,6 +201,9 @@ const LINUX_CMDLINE: &str = "earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 re
 const CONSOLE_CMDLINE: &str = "console=ttyS0 panic=-1 reboot=k";
 /// How long a real-kernel boot may take before the watchdog ends it.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(30);
+/// The time the CMOS RTC starts at, 2026-01-02T03:04:05Z, in nanoseconds. It
+/// then runs, so an alarm Linux sets for an update interrupt comes due.
+const CMOS_TIME: i64 = 1_767_323_045_000_000_000;
 
 /// `vcpu_count` vCPUs and 256 MiB of RAM for `kernel` and `initramfs`,
 /// booted with `cmdline`.
@@ -200,6 +217,10 @@ fn linux_config(vcpu_count: u8, cmdline: &str, initramfs: Option<PathBuf>) -> Vm
         cmdline: cmdline.into(),
         initramfs,
         disks: Vec::new(),
+        filesystem: None,
+        vsock: None,
+        network: None,
+        virtio_console: false,
     };
     config.validate().unwrap();
     config
@@ -272,15 +293,15 @@ impl Console {
     }
 }
 
-/// KVM, counting the edges devices raise on GSI 4. With `deliver` off it
-/// drops every interrupt instead of passing it on.
-struct Gsi4Counter {
+/// Counts serial IRQ requests and RTC assertions accepted by KVM.
+struct KvmIrqCounter {
     kvm: boxlite_hypervisor::KvmVm,
     deliver: bool,
     edges: Arc<AtomicUsize>,
+    gsi_8_assertions: Arc<AtomicUsize>,
 }
 
-impl boxlite_hypervisor::Vm for Gsi4Counter {
+impl boxlite_hypervisor::Vm for KvmIrqCounter {
     type Vcpu = boxlite_hypervisor::KvmVcpu;
 
     unsafe fn map_memory(
@@ -307,14 +328,16 @@ impl boxlite_hypervisor::Vm for Gsi4Counter {
             self.edges.fetch_add(1, Ordering::Relaxed);
         }
         if self.deliver {
-            boxlite_hypervisor::Vm::set_irq_line(&self.kvm, line, level)
-        } else {
-            Ok(())
+            self.kvm.set_irq_line(line, level)?;
+            if line == 8 && level {
+                self.gsi_8_assertions.fetch_add(1, Ordering::Relaxed);
+            }
         }
+        Ok(())
     }
 }
 
-impl boxlite_hypervisor::X86Vm for Gsi4Counter {
+impl boxlite_hypervisor::X86Vm for KvmIrqCounter {
     fn supported_cpuid(&self) -> &[boxlite_hypervisor::X86CpuidEntry] {
         boxlite_hypervisor::X86Vm::supported_cpuid(&self.kvm)
     }
@@ -322,7 +345,7 @@ impl boxlite_hypervisor::X86Vm for Gsi4Counter {
 
 /// A KVM VM booting `config` on the legacy devices, before it runs.
 struct LinuxVm {
-    vm: crate::Vm<Gsi4Counter>,
+    vm: crate::Vm<KvmIrqCounter>,
     /// The zero page as `prepare` wrote it.
     zero_page: boot_params,
     /// The console worker behind COM1: a test finishes it once its sink can
@@ -330,30 +353,67 @@ struct LinuxVm {
     console: ConsoleWorker,
     /// The edges the serial port raised on GSI 4.
     gsi_4_edges: Arc<AtomicUsize>,
+    gsi_8_assertions: Arc<AtomicUsize>,
+}
+
+fn probe_boot(config: &VmConfig) -> (boxlite_hypervisor::PreparedKvm, CheckedBootLeaf) {
+    probe_boot_with_leaf(config, BOOT_LEAF)
+}
+
+fn probe_boot_with_leaf(
+    config: &VmConfig,
+    leaf: PageSize,
+) -> (boxlite_hypervisor::PreparedKvm, CheckedBootLeaf) {
+    config.validate().unwrap();
+    let prepared = boxlite_hypervisor::KvmVm::prepare().unwrap();
+    let leaf = preflight_x86(config.memory_mib, prepared.supported_cpuid(), leaf).unwrap();
+    (prepared, leaf)
 }
 
 /// Builds a KVM VM for `config` with the legacy devices, COM1 writing to
-/// `console`. With `deliver_irqs` off, every device interrupt is dropped.
+/// `console` and the CMOS RTC running from `CMOS_TIME`. With `deliver_irqs`
+/// off, every device interrupt is dropped.
 fn linux_vm(config: &VmConfig, deliver_irqs: bool, console: Console) -> LinuxVm {
+    linux_vm_with_leaf(config, deliver_irqs, console, BOOT_LEAF)
+}
+
+fn linux_vm_with_leaf(
+    config: &VmConfig,
+    deliver_irqs: bool,
+    console: Console,
+    leaf: PageSize,
+) -> LinuxVm {
+    let (prepared, leaf) = probe_boot_with_leaf(config, leaf);
     let (writer, console) = ConsoleWorker::spawn(console.sink, console.capacity).unwrap();
     let gsi_4_edges = Arc::new(AtomicUsize::new(0));
+    let gsi_8_assertions = Arc::new(AtomicUsize::new(0));
+    let edges = Arc::clone(&gsi_4_edges);
+    let rtc_assertions = Arc::clone(&gsi_8_assertions);
     let mut zero_page = None;
     let vm = crate::Vm::with_backend(
         config.clone(),
-        || {
-            Ok(Gsi4Counter {
-                kvm: boxlite_hypervisor::KvmVm::new()?,
+        move || {
+            Ok(KvmIrqCounter {
+                kvm: boxlite_hypervisor::KvmVm::from_prepared(prepared)?,
                 deliver: deliver_irqs,
-                edges: Arc::clone(&gsi_4_edges),
+                edges,
+                gsi_8_assertions: rtc_assertions,
             })
         },
         |ram, config| {
-            let setup = prepare(ram, config)?;
+            let setup = prepare(ram, config, leaf)?;
             let address = GuestAddress(setup.boot_regs.rsi);
-            zero_page = Some(ram.memory().read_obj(address).unwrap());
+            zero_page = Some(ram.memory().memory().read_obj(address).unwrap());
             Ok(setup.boot_regs)
         },
-        |chipset, _| add_legacy_devices(chipset, writer),
+        |chipset, _| {
+            let started = Instant::now();
+            let clock = move || {
+                let elapsed = i64::try_from(started.elapsed().as_nanos()).unwrap_or(i64::MAX);
+                CMOS_TIME.saturating_add(elapsed)
+            };
+            add_legacy_devices(chipset, writer, Box::new(clock))
+        },
     )
     .expect("create the KVM VM");
     LinuxVm {
@@ -361,6 +421,7 @@ fn linux_vm(config: &VmConfig, deliver_irqs: bool, console: Console) -> LinuxVm 
         zero_page: zero_page.unwrap(),
         console,
         gsi_4_edges,
+        gsi_8_assertions,
     }
 }
 
@@ -372,6 +433,8 @@ struct LinuxRun {
     exit: crate::Result<VmExit>,
     /// The edges the serial port raised on GSI 4.
     gsi_4_edges: usize,
+    /// RTC IRQ assertions accepted by KVM.
+    gsi_8_assertions: usize,
     /// The console worker, still running: a test finishes it once its sink
     /// can take the rest.
     console: ConsoleWorker,
@@ -387,17 +450,23 @@ fn run_linux(
     timeout: Duration,
     console: Console,
 ) -> LinuxRun {
+    run_linux_vm(linux_vm(config, deliver_irqs, console), timeout)
+}
+
+fn run_linux_vm(vm: LinuxVm, timeout: Duration) -> LinuxRun {
     let LinuxVm {
         mut vm,
         zero_page,
         console,
         gsi_4_edges,
-    } = linux_vm(config, deliver_irqs, console);
+        gsi_8_assertions,
+    } = vm;
     let (exit, elapsed) = run_with_watchdog(&mut vm, timeout);
     LinuxRun {
         zero_page,
         exit,
         gsi_4_edges: gsi_4_edges.load(Ordering::Relaxed),
+        gsi_8_assertions: gsi_8_assertions.load(Ordering::Relaxed),
         console,
         elapsed,
     }
@@ -451,12 +520,14 @@ fn assert_reset(run: &LinuxRun, log: &str) {
 #[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
 fn boots_linux_to_the_root_mount_panic() {
     let log = SerialLog::default();
-    let mut run = run_linux(
+    // Assert E820 from the RAM layout; x86_boot_layout planning tests cover leaf sizes.
+    let vm = linux_vm_with_leaf(
         &linux_config(1, LINUX_CMDLINE, None),
         true,
-        BOOT_TIMEOUT,
         Console::to(&log),
+        PageSize::Mib,
     );
+    let mut run = run_linux_vm(vm, BOOT_TIMEOUT);
 
     run.console.finish();
     let log = log.text();
@@ -487,6 +558,73 @@ fn boots_linux_to_the_root_mount_panic() {
         "{log}"
     );
     assert!(has_prefix("Memory: "), "{log}");
+    assert!(log.contains("VFS: Unable to mount root fs"), "{log}");
+}
+
+/// Boots Linux with RAM on both sides of the MMIO hole and checks the memory
+/// map and the amount of memory Linux took over.
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
+fn boots_linux_with_six_gib_of_ram() {
+    const SIX_GIB_MIB: u32 = 6144;
+    let log = SerialLog::default();
+    let mut config = linux_config(1, LINUX_CMDLINE, None);
+    config.memory_mib = SIX_GIB_MIB;
+    let vm = linux_vm_with_leaf(&config, true, Console::to(&log), PageSize::Mib);
+    let mut run = run_linux_vm(vm, BOOT_TIMEOUT);
+
+    run.console.finish();
+    let log = log.text();
+    assert_reset(&run, &log);
+    let lines: Vec<&str> = log.lines().collect();
+    let has_prefix = |prefix: &str| lines.iter().any(|line| line.starts_with(prefix));
+    assert!(has_prefix("Linux version "), "{log}");
+    assert!(
+        lines.contains(&format!("Command line: {LINUX_CMDLINE}").as_str()),
+        "{log}"
+    );
+
+    let e820: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("BIOS-e820:"))
+        .collect();
+    // 6144 MiB occupies [0, 3 GiB) and [4 GiB, 7 GiB), with
+    // [0x9_fc00, 0x10_0000) excluded from usable RAM in E820.
+    let usable_ranges: [(u64, u64); 3] = [
+        (0, 0x9_fc00),
+        (0x10_0000, 0xc000_0000),
+        (0x1_0000_0000, 0x1_c000_0000),
+    ];
+    let expected_e820 = usable_ranges
+        .map(|(start, end)| format!("BIOS-e820: [mem {start:#018x}-{:#018x}] usable", end - 1));
+    assert_eq!(e820, expected_e820, "{log}");
+
+    let memory = lines
+        .iter()
+        .find_map(|line| line.strip_prefix("Memory: "))
+        .unwrap_or_else(|| panic!("missing Memory: line; log:\n{log}"));
+    let (first, second) = memory
+        .split_once(" available ")
+        .and_then(|(counts, _)| counts.split_once('/'))
+        .unwrap_or_else(|| panic!("invalid Memory: line; log:\n{log}"));
+    let [first, second] = [first, second].map(|count| {
+        count
+            .strip_suffix('K')
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or_else(|| panic!("invalid Memory: count {count:?}; log:\n{log}"))
+    });
+    let available = first.min(second);
+    let total = first.max(second);
+    assert!(
+        available > (5 << 20),
+        "only {available}K available; log:\n{log}"
+    );
+    // Present pages exclude the page-aligned gap below 1 MiB and page 0.
+    assert!(
+        total >= (u64::from(SIX_GIB_MIB) << 10) - 512,
+        "only {total}K total; log:\n{log}"
+    );
     assert!(log.contains("VFS: Unable to mount root fs"), "{log}");
 }
 
@@ -527,20 +665,20 @@ fn exit_program(code: u8) -> Vec<u8> {
     static_program(&[0xbf, code, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05])
 }
 
-/// A static executable that writes `line` and a newline to its stdout, waits
-/// until the tty has sent them, and restarts the machine; `exit_group(1)`
-/// follows in case the restart returns.
-fn print_and_restart(line: &str) -> Vec<u8> {
-    const CODE_LEN: u64 = 81;
-    let message = format!("{line}\n");
-    let message_addr = u32::try_from(PROGRAM_BASE + PROGRAM_HEADERS + CODE_LEN).unwrap();
-    let message_len = u32::try_from(message.len()).unwrap();
+/// The bytes [`restart_code`] emits, and the offset of its `exit_group(1)`.
+const RESTART_LEN: usize = 81;
+const RESTART_EXIT: usize = 69;
+
+/// The end of every restarting `/init`: writes the `len` bytes at `message`
+/// to stdout, waits until the tty has sent them, and restarts the machine;
+/// `exit_group(1)` follows in case the restart returns.
+fn restart_code(message: u32, len: u32) -> Vec<u8> {
     let mut text = Vec::new();
     // mov eax, 1 (write); mov edi, 1; mov esi, message; mov edx, length; syscall
     text.extend_from_slice(&[0xb8, 1, 0, 0, 0, 0xbf, 1, 0, 0, 0, 0xbe]);
-    text.extend_from_slice(&message_addr.to_le_bytes());
+    text.extend_from_slice(&message.to_le_bytes());
     text.push(0xba);
-    text.extend_from_slice(&message_len.to_le_bytes());
+    text.extend_from_slice(&len.to_le_bytes());
     text.extend_from_slice(&[0x0f, 0x05]);
     // mov eax, 16 (ioctl); mov edi, 1; mov esi, 0x5409 (TCSBRK); mov edx, 1
     // (drain, no break); syscall
@@ -553,9 +691,81 @@ fn print_and_restart(line: &str) -> Vec<u8> {
         0xb8, 169, 0, 0, 0, 0xbf, 0xad, 0xde, 0xe1, 0xfe, 0xbe, 0x69, 0x19, 0x12, 0x28, 0xba, 0x67,
         0x45, 0x23, 0x01, 0x45, 0x31, 0xd2, 0x0f, 0x05,
     ]);
+    assert_eq!(text.len(), RESTART_EXIT);
     // mov edi, 1; mov eax, 231 (exit_group); syscall
     text.extend_from_slice(&[0xbf, 1, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05]);
-    assert_eq!(text.len() as u64, CODE_LEN);
+    assert_eq!(text.len(), RESTART_LEN);
+    text
+}
+
+/// A static executable that writes `line` and a newline to its stdout, waits
+/// until the tty has sent them, and restarts the machine; `exit_group(1)`
+/// follows in case the restart returns.
+fn print_and_restart(line: &str) -> Vec<u8> {
+    let message = format!("{line}\n");
+    let message_addr = u32::try_from(PROGRAM_BASE + PROGRAM_HEADERS + RESTART_LEN as u64).unwrap();
+    let mut text = restart_code(message_addr, u32::try_from(message.len()).unwrap());
+    text.extend_from_slice(message.as_bytes());
+    static_program(&text)
+}
+
+/// A static executable that mounts devtmpfs on `/dev`, turns on update
+/// interrupts on `/dev/rtc0`, and waits up to 2 s for one. When one arrives
+/// it prints `line` and restarts like [`print_and_restart`]; otherwise it
+/// exits, so the kernel panics without printing `line`.
+fn read_rtc_update_and_restart(line: &str) -> Vec<u8> {
+    const SETUP_LEN: usize = 119;
+    const STRINGS: &[u8] = b"devtmpfs\0/dev\0/dev/rtc0\0";
+    let data = PROGRAM_BASE + PROGRAM_HEADERS + (SETUP_LEN + RESTART_LEN) as u64;
+    let at = |offset: u64| u32::try_from(data + offset).unwrap().to_le_bytes();
+    let (devtmpfs, dev, rtc0) = (at(0), at(9), at(14));
+    // A `jne` ending at `end` that lands on the restart code's exit_group(1).
+    let to_exit = |end: usize| u8::try_from(SETUP_LEN + RESTART_EXIT - end).unwrap();
+    let mut text = Vec::new();
+    // mount("devtmpfs", "/dev", "devtmpfs", 0, NULL): mov eax, 165; mov edi,
+    // source; mov esi, target; mov edx, type; xor r10d, r10d; xor r8d, r8d;
+    // syscall
+    text.extend_from_slice(&[0xb8, 165, 0, 0, 0, 0xbf]);
+    text.extend_from_slice(&devtmpfs);
+    text.push(0xbe);
+    text.extend_from_slice(&dev);
+    text.push(0xba);
+    text.extend_from_slice(&devtmpfs);
+    text.extend_from_slice(&[0x45, 0x31, 0xd2, 0x45, 0x31, 0xc0, 0x0f, 0x05]);
+    // ebx = open("/dev/rtc0", O_RDONLY): mov eax, 2; mov edi, path; xor esi,
+    // esi; syscall; mov ebx, eax
+    text.extend_from_slice(&[0xb8, 2, 0, 0, 0, 0xbf]);
+    text.extend_from_slice(&rtc0);
+    text.extend_from_slice(&[0x31, 0xf6, 0x0f, 0x05, 0x89, 0xc3]);
+    // ioctl(ebx, RTC_UIE_ON, 0): mov eax, 16; mov edi, ebx; mov esi, 0x7003;
+    // xor edx, edx; syscall
+    text.extend_from_slice(&[
+        0xb8, 16, 0, 0, 0, 0x89, 0xdf, 0xbe, 0x03, 0x70, 0, 0, 0x31, 0xd2, 0x0f, 0x05,
+    ]);
+    // A pollfd {ebx, POLLIN} on the stack, then poll(rsp, 1, 2000) and exit
+    // unless the fd is ready: sub rsp, 8; mov [rsp], ebx; mov dword
+    // [rsp+4], 1; mov eax, 7; mov rdi, rsp; mov esi, 1; mov edx, 2000;
+    // syscall; cmp eax, 1; jne exit
+    text.extend_from_slice(&[
+        0x48, 0x83, 0xec, 0x08, 0x89, 0x1c, 0x24, 0xc7, 0x44, 0x24, 0x04, 1, 0, 0, 0, 0xb8, 7, 0,
+        0, 0, 0x48, 0x89, 0xe7, 0xbe, 1, 0, 0, 0, 0xba, 0xd0, 0x07, 0, 0, 0x0f, 0x05, 0x83, 0xf8,
+        1, 0x75,
+    ]);
+    text.push(to_exit(text.len() + 1));
+    // read(ebx, rsp, 8), and exit unless it returned 8 bytes: xor eax, eax;
+    // mov edi, ebx; mov rsi, rsp; mov edx, 8; syscall; cmp eax, 8; jne exit
+    text.extend_from_slice(&[
+        0x31, 0xc0, 0x89, 0xdf, 0x48, 0x89, 0xe6, 0xba, 8, 0, 0, 0, 0x0f, 0x05, 0x83, 0xf8, 8, 0x75,
+    ]);
+    text.push(to_exit(text.len() + 1));
+    assert_eq!(text.len(), SETUP_LEN);
+    let message = format!("{line}\n");
+    let message_addr = u32::try_from(data + STRINGS.len() as u64).unwrap();
+    text.extend(restart_code(
+        message_addr,
+        u32::try_from(message.len()).unwrap(),
+    ));
+    text.extend_from_slice(STRINGS);
     text.extend_from_slice(message.as_bytes());
     static_program(&text)
 }
@@ -695,8 +905,9 @@ const INIT_MARKER: &str = "INIT-MARKER-0123456789ABCDEF";
 
 /// Boots the kernel named by `VMM_KERNEL` with its console on the 8250 driver
 /// and an `/init` that prints `INIT_MARKER` and restarts the machine. Linux
-/// must find a 16550A on IRQ 4, `/init`'s line must leave through the tty,
-/// and the restart must end the run with the i8042 reset.
+/// must find a 16550A on IRQ 4 and register the CMOS RTC as rtc0 without
+/// setting its clock from it, `/init`'s line must leave through the tty, and
+/// the restart must end the run with the i8042 reset.
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
 fn boots_linux_on_the_legacy_devices_until_init_restarts() {
@@ -718,13 +929,52 @@ fn boots_linux_on_the_legacy_devices_until_init_restarts() {
         &log,
         &[
             &serial_probe_line(),
+            "rtc_cmos rtc_cmos: registered as rtc0",
             INIT_MARKER,
             "reboot: Restarting system",
         ],
     );
+    // The boot time comes from kvm-clock; the CMOS must not override it.
+    assert!(!log.contains("setting system clock"), "{log}");
     assert!(!log.contains("Kernel panic"), "{log}");
     assert!(run.gsi_4_edges > 0);
     assert_eq!(run.console.dropped_bytes(), 0);
+}
+
+/// The line the UIE test's `/init` prints once an update interrupt arrived.
+const RTC_UPDATE_MARKER: &str = "RTC-UPDATE-IRQ-0123456789ABCDEF";
+
+/// Boots the kernel named by `VMM_KERNEL` with an `/init` that turns on
+/// update interrupts on `/dev/rtc0`, as `hwclock` does, and waits up to 2 s
+/// for one. Linux can finish the read in software if alarm setup crosses a
+/// second boundary. The harness also checks that KVM accepted IRQ 8.
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
+fn an_rtc_update_interrupt_reaches_init_through_the_cmos_alarm() {
+    let archive = newc_archive("init", &read_rtc_update_and_restart(RTC_UPDATE_MARKER));
+    let initramfs = TempFile::new("rtc-update.cpio", &archive);
+
+    let log = SerialLog::default();
+    let mut run = run_linux(
+        &linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone())),
+        true,
+        BOOT_TIMEOUT,
+        Console::to(&log),
+    );
+
+    run.console.finish();
+    let log = log.text();
+    assert_reset(&run, &log);
+    assert_in_order(
+        &log,
+        &[
+            "rtc_cmos rtc_cmos: registered as rtc0",
+            RTC_UPDATE_MARKER,
+            "reboot: Restarting system",
+        ],
+    );
+    assert!(run.gsi_8_assertions > 0, "missing RTC IRQ 8 assertion");
+    assert!(!log.contains("Kernel panic"), "{log}");
 }
 
 /// The line the M1 smoke test's `/init` prints.
@@ -932,4 +1182,386 @@ fn stops_a_guest_that_sleeps_forever() {
     assert_eq!(exit.unwrap(), VmExit::StopRequested, "{log}");
     let took = returned.duration_since(stopped);
     assert!(took < Duration::from_secs(2), "{took:?}");
+}
+
+/// A tiny syscall-only init keeps the mount test independent of a guest libc.
+fn filesystem_init(
+    source_export: &str,
+    destination_export: &str,
+    await_host_byte: Option<u8>,
+) -> Vec<u8> {
+    let created = format!("/aggregate/{destination_export}/created");
+    let input = format!("/aggregate/{source_export}/input");
+    let output = format!("/aggregate/{destination_export}/output");
+    let mut code = Vec::new();
+    let mut strings = Vec::new();
+    let mut patches = Vec::new();
+    let mut failures = Vec::new();
+    fn immediate(code: &mut Vec<u8>, opcode: u8, value: u32) {
+        code.push(opcode);
+        code.extend_from_slice(&value.to_le_bytes());
+    }
+    // Reserve a writable read buffer on the process stack.
+    code.extend_from_slice(&[0x48, 0x81, 0xec, 0x00, 0x10, 0, 0]);
+    // syscall(number, rdi, rsi, rdx, r10, r8). String pointers are patched
+    // once the code length and therefore the data addresses are known.
+    for (number, args) in [
+        (83u32, [Some("/aggregate"), None, None]),
+        (165, [Some("boxlite"), Some("/aggregate"), Some("virtiofs")]),
+        (83, [Some(created.as_str()), None, None]),
+        (2, [Some(input.as_str()), None, None]),
+    ] {
+        immediate(&mut code, 0xb8, number);
+        for (opcode, arg) in [0xbf, 0xbe, 0xba].into_iter().zip(args) {
+            if let Some(value) = arg {
+                code.push(opcode);
+                patches.push((code.len(), strings.len()));
+                code.extend_from_slice(&[0; 4]);
+                strings.extend_from_slice(value.as_bytes());
+                strings.push(0);
+            } else {
+                immediate(&mut code, opcode, if number == 83 { 0o755 } else { 0 });
+            }
+        }
+        code.extend_from_slice(&[0x45, 0x31, 0xd2, 0x45, 0x31, 0xc0, 0x0f, 0x05]);
+        code.extend_from_slice(&[0x48, 0x85, 0xc0, 0x0f, 0x88]);
+        failures.push(code.len());
+        code.extend_from_slice(&[0; 4]);
+    }
+    // A cross-export copy uses a read-only source. Check the Linux driver's
+    // actual errno before reading it again through its original open descriptor.
+    if source_export != destination_export {
+        code.extend_from_slice(&[0x49, 0x89, 0xc5]); // save input fd in r13
+        immediate(&mut code, 0xb8, 2);
+        code.push(0xbf);
+        patches.push((code.len(), strings.len()));
+        code.extend_from_slice(&[0; 4]);
+        strings.extend_from_slice(input.as_bytes());
+        strings.push(0);
+        immediate(&mut code, 0xbe, 1); // O_WRONLY
+        code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x83, 0xf8, 0xe2, 0x0f, 0x85]); // -EROFS
+        failures.push(code.len());
+        code.extend_from_slice(&[0; 4]);
+        code.extend_from_slice(&[0x4c, 0x89, 0xe8]); // restore input fd
+    }
+    // Direct-I/O exports do not negotiate shared mmap support. Check the
+    // driver's error rather than treating shared mappings as coherent access.
+    code.extend_from_slice(&[0x49, 0x89, 0xc5]); // input fd in r13
+    immediate(&mut code, 0xb8, 9); // mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0)
+    immediate(&mut code, 0xbf, 0);
+    immediate(&mut code, 0xbe, 4096);
+    immediate(&mut code, 0xba, 1);
+    code.extend_from_slice(&[0x41, 0xba, 1, 0, 0, 0, 0x4d, 0x89, 0xe8]);
+    code.extend_from_slice(&[0x45, 0x31, 0xc9, 0x0f, 0x05]);
+    code.extend_from_slice(&[0x48, 0x83, 0xf8, 0xed, 0x0f, 0x85]); // -ENODEV
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    // Linux permits a private, read-only mapping of a direct-I/O file. Fault
+    // the first byte and compare it with the following read, then unmap it.
+    immediate(&mut code, 0xb8, 9);
+    immediate(&mut code, 0xbf, 0);
+    immediate(&mut code, 0xbe, 4096);
+    immediate(&mut code, 0xba, 1);
+    code.extend_from_slice(&[0x41, 0xba, 2, 0, 0, 0, 0x4d, 0x89, 0xe8]);
+    code.extend_from_slice(&[0x45, 0x31, 0xc9, 0x0f, 0x05]);
+    code.extend_from_slice(&[0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    code.extend_from_slice(&[0x44, 0x0f, 0xb6, 0x30, 0x48, 0x89, 0xc7]); // byte in r14
+    immediate(&mut code, 0xb8, 11); // munmap(address, 4096)
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    // Read the host input into the stack; retain the actual byte count in r12.
+    code.extend_from_slice(&[0x4c, 0x89, 0xe8]); // restore input fd
+    code.extend_from_slice(&[0x89, 0xc7, 0x31, 0xc0, 0x48, 0x89, 0xe6]);
+    immediate(&mut code, 0xba, 4096);
+    code.extend_from_slice(&[0x0f, 0x05, 0x49, 0x89, 0xc4]);
+    code.extend_from_slice(&[0x48, 0x85, 0xc0, 0x0f, 0x8e]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    code.extend_from_slice(&[0x44, 0x38, 0x34, 0x24, 0x0f, 0x85]); // mapped byte == read byte
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    if let Some(expected) = await_host_byte {
+        // Publishing ready after the first read lets the host update the source
+        // without racing that read. Keep using the same fd and positioned reads.
+        immediate(&mut code, 0xb8, 83);
+        code.push(0xbf);
+        patches.push((code.len(), strings.len()));
+        code.extend_from_slice(&[0; 4]);
+        strings.extend_from_slice(format!("/aggregate/{destination_export}/ready\0").as_bytes());
+        immediate(&mut code, 0xbe, 0o755);
+        code.extend_from_slice(&[0x0f, 0x05]);
+        let retry = code.len();
+        immediate(&mut code, 0xb8, 17); // pread64
+        code.extend_from_slice(&[0x4c, 0x89, 0xef, 0x48, 0x89, 0xe6]);
+        immediate(&mut code, 0xba, 4096);
+        code.extend_from_slice(&[0x45, 0x31, 0xd2, 0x0f, 0x05]); // offset=0
+        code.extend_from_slice(&[0x49, 0x89, 0xc4]);
+        code.extend_from_slice(&[0x80, 0x3c, 0x24, expected, 0x0f, 0x85]);
+        let branch = code.len();
+        let displacement = retry as i32 - (branch as i32 + 4);
+        code.extend_from_slice(&displacement.to_le_bytes());
+    }
+    immediate(&mut code, 0xb8, 2); // open output with O_CREAT|O_WRONLY|O_TRUNC
+    code.push(0xbf);
+    patches.push((code.len(), strings.len()));
+    code.extend_from_slice(&[0; 4]);
+    strings.extend_from_slice(output.as_bytes());
+    strings.push(0);
+    immediate(&mut code, 0xbe, 0x241);
+    immediate(&mut code, 0xba, 0o644);
+    code.extend_from_slice(&[0x0f, 0x05, 0x89, 0xc7]);
+    immediate(&mut code, 0xb8, 1);
+    code.extend_from_slice(&[0x48, 0x89, 0xe6, 0x4c, 0x89, 0xe2, 0x0f, 0x05]);
+    code.extend_from_slice(&[0x4c, 0x39, 0xe0, 0x0f, 0x85]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    immediate(&mut code, 0xb8, 74); // fsync output
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    // Rename and unlink the output while its fd remains open, then read its
+    // attributes and synchronize through that retained object.
+    code.extend_from_slice(&[0x49, 0x89, 0xfd]); // retain output fd in r13
+    let renamed = format!("/aggregate/{destination_export}/renamed");
+    for (number, arguments) in [
+        (82, vec![output.as_str(), renamed.as_str()]),
+        (87, vec![renamed.as_str()]),
+    ] {
+        immediate(&mut code, 0xb8, number);
+        for (register, argument) in [0xbf, 0xbe].into_iter().zip(arguments) {
+            code.push(register);
+            patches.push((code.len(), strings.len()));
+            code.extend_from_slice(&[0; 4]);
+            strings.extend_from_slice(argument.as_bytes());
+            strings.push(0);
+        }
+        code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+        failures.push(code.len());
+        code.extend_from_slice(&[0; 4]);
+    }
+    code.extend_from_slice(&[0x4c, 0x89, 0xef, 0x48, 0x89, 0xe6]); // fd, stat buffer
+    immediate(&mut code, 0xb8, 5); // fstat after unlink
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    immediate(&mut code, 0xb8, 74); // fsync after unlink
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    immediate(&mut code, 0xb8, 3); // close output before unmount
+    code.extend_from_slice(&[0x0f, 0x05]);
+    // umount2(aggregate, MNT_DETACH): the input descriptor remains open until
+    // reboot, so detach also exercises shutdown with a live open object.
+    immediate(&mut code, 0xb8, 166);
+    code.push(0xbf);
+    patches.push((code.len(), strings.len()));
+    code.extend_from_slice(&[0; 4]);
+    strings.extend_from_slice(b"/aggregate\0");
+    immediate(&mut code, 0xbe, 2);
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    // Finish using the existing console marker and restart program.
+    let restart = print_and_restart("VIRTIOFS-MOUNT-OK");
+    let mut finish = restart[PROGRAM_HEADERS as usize..].to_vec();
+    // Its absolute message pointer moves by the preceding code length.
+    let pointer = u32::from_le_bytes(finish[11..15].try_into().unwrap());
+    finish[11..15].copy_from_slice(&(pointer + code.len() as u32).to_le_bytes());
+    code.extend_from_slice(&finish);
+    let failure = code.len();
+    code.extend_from_slice(&[0xbf, 1, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05]);
+    for offset in failures {
+        let displacement = failure as i32 - (offset as i32 + 4);
+        code[offset..offset + 4].copy_from_slice(&displacement.to_le_bytes());
+    }
+    let base = (PROGRAM_BASE + PROGRAM_HEADERS + code.len() as u64) as u32;
+    for (offset, string) in patches {
+        code[offset..offset + 4].copy_from_slice(&(base + string as u32).to_le_bytes());
+    }
+    code.extend_from_slice(&strings);
+    static_program(&code)
+}
+
+#[test]
+#[ignore = "requires KVM and VMM_KERNEL with built-in virtio-mmio and virtio-fs"]
+fn mounts_virtiofs_and_copies_host_bytes_through_the_linux_driver() {
+    let directory = std::env::temp_dir().join(format!("boxlite-guest-fs-{}", process::id()));
+    fs::create_dir(&directory).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(directory.clone());
+    let input = b"host bytes copied by the real Linux virtio-fs driver\n";
+    fs::write(directory.join("input"), input).unwrap();
+    fs::write(directory.join("retained-output"), b"").unwrap();
+    fs::hard_link(directory.join("retained-output"), directory.join("output")).unwrap();
+    let archive = newc_archive(
+        "init",
+        &filesystem_init("BoxLiteShared", "BoxLiteShared", None),
+    );
+    let initramfs = TempFile::new("virtiofs.cpio", &archive);
+    let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
+    config.filesystem = Some(crate::FsConfig {
+        tag: "boxlite".into(),
+        shares: vec![crate::FsShareConfig {
+            name: "BoxLiteShared".into(),
+            path: directory.clone(),
+            read_only: false,
+        }],
+    });
+    let log = SerialLog::default();
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
+    let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
+    assert!(
+        matches!(exit, Ok(VmExit::GuestReset)),
+        "{exit:?} {elapsed:?}\n{}",
+        log.text()
+    );
+    assert!(log.text().contains("VIRTIOFS-MOUNT-OK"), "{}", log.text());
+    assert_eq!(fs::read(directory.join("retained-output")).unwrap(), input);
+    assert!(!directory.join("output").exists());
+    assert!(!directory.join("renamed").exists());
+    assert!(directory.join("created").is_dir());
+    drop(vm);
+    let retained: Vec<_> = fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| fs::read_link(entry.ok()?.path()).ok())
+        .filter(|target| target.starts_with(&directory))
+        .collect();
+    assert!(
+        retained.is_empty(),
+        "export descriptors retained: {retained:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires KVM and VMM_KERNEL with built-in virtio-mmio and virtio-fs"]
+fn an_open_guest_file_observes_coordinated_host_rewrites() {
+    let directory = std::env::temp_dir().join(format!("boxlite-cache-fs-{}", process::id()));
+    fs::create_dir(&directory).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(directory.clone());
+    fs::write(directory.join("input"), b"old bytes").unwrap();
+    fs::write(directory.join("retained-output"), b"").unwrap();
+    fs::hard_link(directory.join("retained-output"), directory.join("output")).unwrap();
+    let archive = newc_archive("init", &filesystem_init("shared", "shared", Some(b'n')));
+    let initramfs = TempFile::new("cache-fs.cpio", &archive);
+    let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
+    config.filesystem = Some(crate::FsConfig {
+        tag: "boxlite".into(),
+        shares: vec![crate::FsShareConfig {
+            name: "shared".into(),
+            path: directory.clone(),
+            read_only: false,
+        }],
+    });
+    let log = SerialLog::default();
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
+    let host_directory = directory.clone();
+    let update = thread::spawn(move || {
+        let deadline = Instant::now() + BOOT_TIMEOUT;
+        while !host_directory.join("ready").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "guest never completed its first read"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        fs::write(host_directory.join("input"), b"new bytes").unwrap();
+    });
+    let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
+    update.join().unwrap();
+    assert!(
+        matches!(exit, Ok(VmExit::GuestReset)),
+        "{exit:?} {elapsed:?}\n{}",
+        log.text()
+    );
+    assert!(log.text().contains("VIRTIOFS-MOUNT-OK"), "{}", log.text());
+    assert_eq!(
+        fs::read(directory.join("retained-output")).unwrap(),
+        b"new bytes"
+    );
+}
+
+#[test]
+#[ignore = "requires KVM and VMM_KERNEL with built-in virtio-mmio and virtio-fs"]
+fn copies_between_readonly_snapshot_and_writable_file_exports() {
+    let directory = std::env::temp_dir().join(format!("boxlite-mixed-fs-{}", process::id()));
+    fs::create_dir(&directory).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(directory.clone());
+    let shared = directory.join("shared");
+    let snapshot = directory.join("snapshot");
+    let writable = directory.join("writable");
+    for export in [&shared, &snapshot, &writable] {
+        fs::create_dir(export).unwrap();
+        fs::write(
+            export.join("input"),
+            export.file_name().unwrap().as_encoded_bytes(),
+        )
+        .unwrap();
+    }
+    let original = directory.join("original");
+    fs::write(&original, b"before guest write").unwrap();
+    fs::hard_link(&original, writable.join("output")).unwrap();
+    let archive = newc_archive("init", &filesystem_init("snapshot", "writable", None));
+    let initramfs = TempFile::new("mixed-fs.cpio", &archive);
+    let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
+    config.filesystem = Some(crate::FsConfig {
+        tag: "boxlite".into(),
+        shares: vec![
+            crate::FsShareConfig {
+                name: "shared".into(),
+                path: shared.clone(),
+                read_only: false,
+            },
+            crate::FsShareConfig {
+                name: "snapshot".into(),
+                path: snapshot.clone(),
+                read_only: true,
+            },
+            crate::FsShareConfig {
+                name: "writable".into(),
+                path: writable.clone(),
+                read_only: false,
+            },
+        ],
+    });
+    let log = SerialLog::default();
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
+    let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
+    assert!(
+        matches!(exit, Ok(VmExit::GuestReset)),
+        "{exit:?} {elapsed:?}\n{}",
+        log.text()
+    );
+    assert!(log.text().contains("VIRTIOFS-MOUNT-OK"), "{}", log.text());
+    assert_eq!(fs::read(&original).unwrap(), b"snapshot");
+    assert_eq!(fs::read(shared.join("input")).unwrap(), b"shared");
+    assert_eq!(fs::read(snapshot.join("input")).unwrap(), b"snapshot");
+    assert!(!snapshot.join("output").exists());
+    assert!(writable.join("created").is_dir());
+    drop(vm);
+    let retained: Vec<_> = fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| fs::read_link(entry.ok()?.path()).ok())
+        .filter(|target| target.starts_with(&directory))
+        .collect();
+    assert!(retained.is_empty(), "mixed exports retained: {retained:?}");
 }

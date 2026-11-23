@@ -1390,6 +1390,69 @@ for (const [file, consumer, linuxOnly, name] of [
   })
 }
 
+for (const [file, publication, requiredJobs, name] of [
+  [BUILD_RUNNER_WORKFLOW, 'upload-to-release', ['config', 'resolve-ref', 'build'], 'Runner'],
+  [BUILD_GO_WORKFLOW, 'tag-go-module', ['test'], 'Go'],
+] as const) {
+  test(`${name} release publication survives a skipped manual C build without widening publication`, () => {
+    const workflow = load(readFileSync(file, 'utf8'))
+    const job = workflow.jobs[publication]
+    for (const prerequisite of requiredJobs) {
+      assert.ok([job.needs].flat().includes(prerequisite), `publication must wait for ${prerequisite}`)
+    }
+    const context = {
+      github: { event_name: 'workflow_run', event: { workflow_run: { event: 'release' } } },
+      inputs: {},
+      needs: Object.fromEntries(requiredJobs.map((prerequisite) => [prerequisite, { result: 'success' }])),
+      cancelled: () => false,
+      always: () => true,
+      success: () => false,
+      failure: () => false,
+    }
+    assert.equal(workflowExpression(workflow.jobs['build-c'].if, context), false)
+    // Actions adds success() when no status function is present. A skipped ancestor
+    // makes that default false even after the immediate build/test job succeeds.
+    assert.match(
+      job.if,
+      /\b(?:always|cancelled|success|failure)\s*\(/,
+      'release publication must override implicit success() after the manual C build is skipped',
+    )
+    assert.equal(workflowExpression(job.if, context), true, 'a successful release must publish')
+    assert.equal(workflowExpression(job.if, { ...context, cancelled: () => true }), false)
+
+    for (const prerequisite of requiredJobs) {
+      for (const result of ['failure', 'cancelled', 'skipped']) {
+        assert.equal(
+          workflowExpression(job.if, {
+            ...context,
+            needs: { ...context.needs, [prerequisite]: { result } },
+          }),
+          false,
+          `${prerequisite}=${result} must prevent publication`,
+        )
+      }
+    }
+    for (const [event, upstreamEvent] of [
+      ['workflow_dispatch', 'release'],
+      ['workflow_call', 'release'],
+      ['push', 'release'],
+      ['workflow_run', 'push'],
+      ['workflow_run', 'pull_request'],
+      ['workflow_run', 'workflow_dispatch'],
+      ['workflow_run', 'schedule'],
+    ]) {
+      assert.equal(
+        workflowExpression(job.if, {
+          ...context,
+          github: { event_name: event, event: { workflow_run: { event: upstreamEvent } } },
+        }),
+        false,
+        `${event}/${upstreamEvent} must not publish`,
+      )
+    }
+  })
+}
+
 test('manual Runner identity uses its own C artifact while reusable callers keep their selected source', () => {
   const workflow = load(readFileSync(BUILD_RUNNER_WORKFLOW, 'utf8'))
   const step = workflow.jobs.build.steps.find((step: any) => step.name === 'Resolve artifact identity')
@@ -1428,7 +1491,7 @@ test('manual Runner identity uses its own C artifact while reusable callers keep
 test('Go builds select their C artifact by trigger', () => {
   const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
   const steps = workflow.jobs.test.steps
-  const download = steps.find((step: any) => step.uses?.startsWith('actions/download-artifact@'))
+  const download = steps.find((step: any) => step.name === 'Download commit libboxlite.a')
   assert.ok(download, 'manual Go tests must consume their same-run C SDK artifact')
   const extract = steps.find((step: any) => step.name === 'Extract commit libboxlite.a')
   assert.ok(extract, 'manual Go tests must extract their same-run C SDK artifact')
@@ -1453,6 +1516,170 @@ test('Go builds select their C artifact by trigger', () => {
   assert.equal(workflowExpression(download.if, context), false)
   assert.equal(workflowExpression(extract.if, context), false)
   assert.equal(workflowExpression(release.if, context), true)
+})
+
+test('Go release checkout and archive follow the C run when main has advanced', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const releaseSha = 'a'.repeat(40)
+  const mainSha = 'b'.repeat(40)
+  const github = { event_name: 'workflow_run', sha: mainSha, run_id: 20, event: { workflow_run: { head_sha: releaseSha, id: 10 } } }
+  const configJob = workflow.jobs.config.uses
+    ? load(readFileSync(join(REPO_ROOT, '.github/workflows/config.yml'), 'utf8')).jobs.config
+    : workflow.jobs.config
+  const checkout = configJob.steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(checkout.with?.ref ? workflowExpression(checkout.with.ref, { github }) : github.sha, releaseSha)
+  const testCheckout = workflow.jobs.test.steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(workflowExpression(testCheckout.with?.ref ?? 'github.sha', {
+    github,
+    needs: { config: { outputs: { sha: releaseSha } } },
+  }), releaseSha)
+  const tagCheckout = workflow.jobs['tag-go-module'].steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(workflowExpression(tagCheckout.with?.ref ?? 'github.sha', { github }), releaseSha)
+  const artifact = workflow.jobs.test.steps.find((step: any) => step.name === 'Download C release run artifact')
+  assert.equal(workflowExpression(artifact?.with?.['run-id'] ?? 'github.run_id', { github }), 10)
+})
+
+test('Go release refuses a same-name workflow before trusting its run', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const github = {
+    event_name: 'workflow_run',
+    event: { workflow_run: { conclusion: 'success', event: 'release' } },
+  }
+  const step = workflow.jobs.config.steps?.find((candidate: any) => candidate.name === 'Verify C release producer')
+  if (!step) {
+    assert.equal(workflowExpression(workflow.jobs.config.if, { github }), false, 'a name-only producer enters Go configuration')
+    return
+  }
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-producer-'))
+  try {
+    writeFileSync(join(fixture, 'gh'), '#!/bin/sh\nprintf "245927919\\n"\n', { mode: 0o755 })
+    const env = {
+      ...process.env,
+      PATH: fixture + ':' + process.env.PATH,
+      GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
+      C_REPOSITORY: 'boxlite-ai/boxlite',
+      C_WORKFLOW_PATH: '.github/workflows/build-c.yml',
+      C_SHA: 'a'.repeat(40),
+      C_RUN_ID: '10',
+    }
+    const run = (id: string, path = env.C_WORKFLOW_PATH) => spawnSync('bash', ['-c', step.run], {
+      env: { ...env, C_WORKFLOW_ID: id, C_WORKFLOW_PATH: path },
+      encoding: 'utf8',
+    })
+    const accepted = run('245927919')
+    assert.equal(accepted.status, 0, accepted.stderr)
+    assert.notEqual(run('245927920').status, 0, 'the producer ID must match')
+    assert.notEqual(run('245927919', '.github/workflows/other.yml').status, 0, 'the producer path must match')
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('Go publication refuses a product tag that moves during the matrix', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const step = workflow.jobs['tag-go-module'].steps.find((candidate: any) => candidate.name === 'Create Go module tag')
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-release-tag-'))
+  const origin = join(fixture, 'remote.git')
+  // Git hooks export repository selectors that override the fixture's cwd.
+  const fixtureEnvironment = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
+  )
+  const git = (...args: string[]) => {
+    const result = spawnSync('git', args, { cwd: fixture, encoding: 'utf8', env: fixtureEnvironment })
+    assert.equal(result.status, 0, result.stderr)
+    return result.stdout.trim()
+  }
+  try {
+    git('init', '--quiet', '-b', 'main')
+    git('init', '--quiet', '--bare', origin)
+    git('config', 'user.name', 'BoxLite test')
+    git('config', 'user.email', 'test@example.invalid')
+    writeFileSync(join(fixture, 'Cargo.toml'), '[workspace.package]\nversion = "0.12.0"\n')
+    git('add', 'Cargo.toml')
+    git('commit', '--quiet', '-m', 'release')
+    const releaseSha = git('rev-parse', 'HEAD')
+    git('remote', 'add', 'origin', origin)
+    git('tag', 'v0.12.0', releaseSha)
+    git('push', '--quiet', 'origin', 'refs/tags/v0.12.0')
+    git('commit', '--quiet', '--allow-empty', '-m', 'new main')
+    git('push', '--quiet', '--force', 'origin', 'HEAD:refs/tags/v0.12.0')
+    git('checkout', '--quiet', '--detach', releaseSha)
+    const run = () => spawnSync('bash', ['-c', step.run], {
+      cwd: fixture,
+      env: { ...fixtureEnvironment, C_SHA: releaseSha, RELEASE_TAG: 'v0.12.0' },
+      encoding: 'utf8',
+    })
+    assert.notEqual(run().status, 0, 'a moved product tag must block the Go module tag')
+    assert.equal(git('ls-remote', 'origin', 'refs/tags/sdks/go/v0.12.0'), '')
+    git('push', '--quiet', 'origin', ':refs/tags/v0.12.0')
+    assert.notEqual(run().status, 0, 'a deleted product tag must block publication')
+    git('push', '--quiet', 'origin', 'refs/tags/v0.12.0')
+    const published = run()
+    assert.equal(published.status, 0, published.stderr)
+    assert.equal(git('ls-remote', 'origin', 'refs/tags/sdks/go/v0.12.0').split(/\s/)[0], releaseSha)
+    const retry = run()
+    assert.equal(retry.status, 0, retry.stderr)
+    git('tag', '-a', 'sdks/go/v0.12.0', '-m', 'annotated release', releaseSha)
+    git('push', '--quiet', '--force', 'origin', 'refs/tags/sdks/go/v0.12.0')
+    const annotated = git('ls-remote', '--refs', 'origin', 'refs/tags/sdks/go/v0.12.0')
+    git('remote', 'set-url', '--push', 'origin', join(fixture, 'read-only-remote'))
+    const annotatedRetry = run()
+    assert.equal(annotatedRetry.status, 0, annotatedRetry.stderr)
+    assert.equal(git('ls-remote', '--refs', 'origin', 'refs/tags/sdks/go/v0.12.0'), annotated)
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('Go release compares the public tarball before extracting the C library', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const step = workflow.jobs.test.steps.find((candidate: any) => candidate.name === 'Download prebuilt library')
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-archive-'))
+  const version = `9000.${process.pid}.${Date.now()}`
+  const target = 'linux-x64-gnu'
+  const archiveDir = `boxlite-c-v${version}-${target}`
+  const publicArchive = join(fixture, 'public.tar.gz')
+  const runArchive = join(fixture, 'c-release-run', `${archiveDir}.tar.gz`)
+  const library = join(fixture, 'sdks/go/libboxlite.a')
+  try {
+    mkdirSync(join(fixture, 'payload', archiveDir, 'lib'), { recursive: true })
+    mkdirSync(join(fixture, 'c-release-run'))
+    mkdirSync(join(fixture, 'sdks/go'), { recursive: true })
+    writeFileSync(join(fixture, 'payload', archiveDir, 'lib/libboxlite.a'), 'public C bytes')
+    writeFileSync(join(fixture, 'Cargo.toml'), `[workspace.package]\nversion = "${version}"\n`)
+    const tar = spawnSync('tar', ['czf', publicArchive, '-C', join(fixture, 'payload'), archiveDir], { encoding: 'utf8' })
+    assert.equal(tar.status, 0, tar.stderr)
+    writeFileSync(join(fixture, 'curl'), [
+      '#!/bin/sh',
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = "-o" ]; then exec cp "$PUBLIC_ARCHIVE" "$2"; fi',
+      '  shift',
+      'done',
+      'exec cat "$PUBLIC_ARCHIVE"',
+      '',
+    ].join('\n'), { mode: 0o755 })
+    const run = () => spawnSync('bash', ['-c', step.run.replaceAll('${{ matrix.target }}', target)], {
+      cwd: fixture,
+      env: {
+        ...process.env, PATH: fixture + ':' + process.env.PATH, PUBLIC_ARCHIVE: publicArchive,
+        RUNNER_TEMP: fixture, GITHUB_REPOSITORY: 'boxlite-ai/boxlite', RELEASE_TAG: `v${version}`, PLATFORM: target,
+      },
+      encoding: 'utf8',
+    })
+    writeFileSync(runArchive, 'different C run bytes')
+    assert.notEqual(run().status, 0, 'different public bytes must not enter Go tests')
+    assert.equal(existsSync(library), false)
+    rmSync(runArchive)
+    assert.notEqual(run().status, 0, 'the C run tarball is required')
+    assert.equal(existsSync(library), false)
+    writeFileSync(runArchive, readFileSync(publicArchive))
+    const verified = run()
+    assert.equal(verified.status, 0, verified.stderr)
+    assert.equal(readFileSync(library, 'utf8'), 'public C bytes')
+  } finally {
+    rmSync(join(tmpdir(), archiveDir), { recursive: true, force: true })
+    rmSync(fixture, { recursive: true, force: true })
+  }
 })
 
 test('the cloud E2E suite is reachable only from a deploy or a human', () => {
@@ -1492,9 +1719,9 @@ test('cloud E2E requires the dev identity lane and forwards its scoped credentia
   const workflow = load(readFileSync(E2E_CLOUD_WORKFLOW, 'utf8'))
   const caller = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
   const steps = workflow.jobs.e2e.steps
-  const identity = steps.find((step: any) => step.name === 'Run identity E2E (dev)')
+  const identity = steps.find((step: any) => step.name === 'Run identity E2E (dev and stage)')
   assert.ok(identity, 'dev must execute the cross-org and readonly identity cases')
-  assert.equal(identity.if, "${{ (inputs.stage || 'dev') == 'dev' }}")
+  assert.equal(identity.if, "${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}")
   assert.equal(identity.env.BOXLITE_E2E_PROFILE, 'p2')
   assert.equal(identity.env.BOXLITE_E2E_READONLY_PROFILE, 'p2_readonly')
   assert.equal(identity.env.BOXLITE_E2E_FOREIGN_PROFILE, 'p1')
@@ -1750,11 +1977,11 @@ test('a job calling a reusable workflow grants at least what that workflow asks 
       checked += 1
     }
   }
-  // The same fifteen the input sweep below counts: six `config.yml` loads,
-  // deploy-infra's four, mdeploy-all's three, and two manual SDK builds. The exact count, not a
+  // The same eleven the input sweep below counts: five `config.yml` loads,
+  // deploy-infra's four and two manual SDK builds. The exact count, not a
   // floor, so a call that stops being swept fails here rather than being
   // absorbed — and adding one means changing this number in the same commit.
-  assert.equal(checked, 15, `expected every local reusable call to be swept, saw ${checked}`)
+  assert.equal(checked, 11, `expected every local reusable call to be swept, saw ${checked}`)
 })
 
 test('every reusable workflow is called with the inputs it declares', () => {
@@ -1794,14 +2021,14 @@ test('every reusable workflow is called with the inputs it declares', () => {
       checked += 1
     }
   }
-  // Every local `uses:` in the directory, not just the deploy path's: six
+  // Every local `uses:` in the directory, not just the deploy path's: five
   // build workflows load `config.yml`, `deploy-infra.yml` calls four, and
-  // mdeploy-all makes three, and the manual Runner and Go builds each call
+  // the manual Runner and Go builds each call
   // build-c to pair their SDK sources with the native library from that commit.
   // The exact count, not a floor: a call that stops being swept is the drop
   // this exists to catch, and one that appears is a caller nobody reviewed.
   // Adding a legitimate one means changing this number in the same commit.
-  assert.equal(checked, 15, `expected every reusable-workflow call swept, saw ${checked}`)
+  assert.equal(checked, 11, `expected every reusable-workflow call swept, saw ${checked}`)
 })
 
 /**
@@ -1813,7 +2040,7 @@ test('every reusable workflow is called with the inputs it declares', () => {
  * sentinel went with `mdeploy-all.yml`'s `auto_promote_from`: a promotion's
  * source is dev, and there is no longer a choice that binds a job to nothing.
  */
-const ENVIRONMENTS = ['dev', 'prod']
+const ENVIRONMENTS = ['dev', 'stage', 'prod']
 
 test('every workflow that selects a deployment Environment does so from an allowlist', () => {
   // The rule is stated once in .github/workflows/README.md and enforced here across every
@@ -1844,15 +2071,15 @@ test('every workflow that selects a deployment Environment does so from an allow
         selected || !environment.includes('${{'),
         `${where} selects an Environment through an expression this guard cannot follow: ${environment}`,
       )
-      // A workflow with no dispatch has no dispatcher, and the allowlist exists
-      // to stop one reaching an Environment through a typo. It could not pass
-      // the check either way: `workflow_call` inputs take only boolean, number
-      // and string, so `choice` is a shape a callee cannot declare. What covers
-      // it instead is this same sweep reaching its caller — mdeploy-all binds
-      // the stage from its own allowlisted input. So the rule here is that the
-      // workflow really is unreachable by hand.
+      // Automatic plugin publication has one fixed credential environment.
+      // Reusable deploy workflows inherit an allowlisted stage from their callers.
       const byHand = workflow.on?.workflow_dispatch !== undefined
-      if (!byHand) {
+      if (workflow.on?.workflow_run !== undefined) {
+        assert.deepEqual(Object.keys(workflow.on), ['workflow_run'], `${where} can also be triggered outside its builder`)
+        assert.equal(entry, 'publish-plugins.yml', `${where} is not an allowed automatic publisher`)
+        assert.equal(environment, 'boxlite-plugin-ghcr', `${where} must use the fixed plugin environment`)
+        assert.equal(job.needs, 'verify', `${where} can reach the environment without verifying its build`)
+      } else if (!byHand) {
         assert.ok(
           workflow.on?.workflow_call !== undefined,
           `${where} is reachable by neither dispatch nor call, so nothing can run it`,
@@ -1893,7 +2120,7 @@ test('every workflow that selects a deployment Environment does so from an allow
     // line. Listed here deliberately: the point of pinning the set is that a
     // seventh deploy workflow is a reviewed addition rather than one that
     // appeared.
-    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild-release.yml', 'mbuild.yml', 'mdeploy-all.yml'],
+    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild.yml', 'mdeploy-all.yml', 'publish-plugins.yml'],
     'the swept set no longer matches the deployment workflows',
   )
 })
@@ -1908,53 +2135,39 @@ test('every workflow that selects a deployment Environment does so from an allow
  */
 const SESSION_CHECKING = /npm run (?:--silent )?(?:mstage login|mdeploy|runner:build|runner:promote|runner:update)\b/
 
-test('every step that asks mstage for a session is given a token to answer with', () => {
-  /*
-   * `gh` ships on a runner and is never signed in, and a stage declaration names
-   * github a required provider — so a tool that checks the session first refuses
-   * with `Required sign-ins are missing` wherever GH_TOKEN is out of scope.
-   *
-   * What it cost: a runner build that had federated its cloud identity and
-   * passed `mstage login` one step earlier, then died on the session anyway,
-   * because the token was that step's rather than the whole workflow's. Scope is
-   * the thing asserted, not placement — a step may carry its own.
-   */
+test('every workflow and composite session-checking step receives its caller token', () => {
   const workflowDirectory = join(REPO_ROOT, '.github/workflows')
   let checked = 0
-
-  for (const entry of readdirSync(workflowDirectory)) {
-    if (!/\.ya?ml$/.test(entry)) continue
-    const workflow: any = load(readFileSync(join(workflowDirectory, entry), 'utf8'))
-
-    for (const [jobName, job] of entries(workflow.jobs ?? {})) {
-      for (const step of job.steps ?? []) {
-        // Comments and the lines that only print a command: neither runs one,
-        // and both mention these scripts where a deploy tells an operator what
-        // to rerun by hand.
-        const invoked = String(step.run ?? '')
-          .split('\n')
-          .filter((line: string) => !/^\s*(#|echo\b)/.test(line))
-          .join('\n')
-        if (!SESSION_CHECKING.test(invoked)) continue
-
-        const where = `${entry} job '${jobName}' step '${step.name ?? step.id ?? invoked.trim().slice(0, 40)}'`
-        assert.ok(
-          'GH_TOKEN' in (workflow.env ?? {}) || 'GH_TOKEN' in (job.env ?? {}) || 'GH_TOKEN' in (step.env ?? {}),
-          `${where} runs a tool that checks the mstage session with no GH_TOKEN in scope`,
-        )
-        checked += 1
+  const inspect = (steps: any[], inherited: Record<string, unknown>, location: string, seen = new Set<string>()) => {
+    for (const step of steps) {
+      const env = { ...inherited, ...step.env }
+      const where = location + ' / ' + (step.name ?? step.id ?? step.uses ?? 'run')
+      const invoked = String(step.run ?? '')
+        .split('\n')
+        .filter((line: string) => !/^\s*(#|echo\b)/.test(line))
+        .join('\n')
+      if (SESSION_CHECKING.test(invoked)) {
+        assert.ok('GH_TOKEN' in env, where + ' checks the mstage session without GH_TOKEN')
+        checked++
+      }
+      if (step.uses?.startsWith('./.github/actions/')) {
+        assert.ok(!seen.has(step.uses), where + ' has a composite cycle')
+        const action: any = load(readFileSync(join(REPO_ROOT, step.uses, 'action.yml'), 'utf8'))
+        if (action.runs?.using === 'composite') {
+          inspect(action.runs.steps, env, where, new Set([...seen, step.uses]))
+        }
       }
     }
   }
-
-  // Eight: mbuild's session check and mbuild-release's two; then the five in
-  // mdeploy-all's three tool-reaching jobs — `plan`'s `--check` read,
-  // `build-runner`'s session check and its build, `deploy`'s session check and
-  // its apply.
-  // The exact count, not a floor: a step that stops being swept is exactly the
-  // drop this exists to catch, and one that appears is a tool call nobody
-  // reviewed. Adding a legitimate one means changing this number with it.
-  assert.equal(checked, 8, `expected every session-checking step swept, saw ${checked}`)
+  for (const entry of readdirSync(workflowDirectory).filter((file) => /\.ya?ml$/.test(file))) {
+    const workflow: any = load(readFileSync(join(workflowDirectory, entry), 'utf8'))
+    for (const [jobName, job] of entries(workflow.jobs ?? {})) {
+      inspect(job.steps ?? [], { ...workflow.env, ...job.env }, entry + ' / ' + jobName)
+    }
+  }
+  // Plan read; grouped image check; Runner check/build; two apply callers;
+  // and the reusable image wrapper's session check.
+  assert.equal(checked, 9, `expected every session-checking step swept, saw ${checked}`)
 })
 
 test('API publishing builds once and promotes that exact image without rebuilding', () => {

@@ -4,6 +4,22 @@
     "filter_action": "allow",
     "filter": [
       {
+        "syscall": "fstatfs",
+        "comment": "Native VMM filesystem metadata queries on already-open descriptors. Required with network disabled, when the shim applies this filter."
+      },
+      {
+        "syscall": "getpeername",
+        "comment": "Native vsock bridge Unix peer address queries during guest RPC setup."
+      },
+      {
+        "syscall": "getegid",
+        "comment": "Native aggregate filesystem root attributes use the shim's effective group ID."
+      },
+      {
+        "syscall": "fchmodat",
+        "comment": "Native virtio-fs applies guest-requested modes to shared container metadata through pinned descriptors."
+      },
+      {
         "syscall": "getxattr",
         "comment": "virtiofs xattr passthrough (e.g. dropping security.capability on write); a blocked xattr syscall SIGSYS-kills the VMM"
       },
@@ -527,6 +543,10 @@
         "comment": "libkrun: glibc 2.26+ maps open() to openat(AT_FDCWD, ...). Required at steady-state."
       },
       {
+        "syscall": "openat2",
+        "comment": "M6 virtio-fs: guest path resolution uses openat2(RESOLVE_BENEATH) confinement"
+      },
+      {
         "syscall": "newfstatat",
         "comment": "libkrun: glibc 2.33+ maps stat/fstat to newfstatat. Required at steady-state."
       },
@@ -633,6 +653,10 @@
       {
         "syscall": "tgkill",
         "comment": "libkrun: thread-group signal delivery for VM lifecycle. Required at steady-state."
+      },
+      {
+        "syscall": "rt_sigtimedwait",
+        "comment": "native engine: a vCPU thread drains its kick signal with sigtimedwait after KVM_RUN returns (src/hypervisor/src/kvm/kick.rs); the vmm filter covers every thread."
       },
       {
         "syscall": "nanosleep",

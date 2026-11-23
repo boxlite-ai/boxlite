@@ -65,6 +65,7 @@ describe('AppService admin bootstrap', () => {
       'boxlite-admin',
       [],
       'boxlite-local-admin-key',
+      Context.platform(PlatformReason.BOOTSTRAP),
     )
   })
 

@@ -1,4 +1,4 @@
-PHONY_TARGETS += coverage codecov
+PHONY_TARGETS += coverage\:cli coverage codecov coverage\:go\:checkpoint
 
 # Match Codecov's exclusions locally: production guest and SDK code must not
 # disappear from the denominator just because their tests run separately.
@@ -17,7 +17,7 @@ define run_unit_coverage
 	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_VMM_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov test --no-report $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	$(MAKE) coverage:runtime || rc=$$?; \
-	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth --test ssh_cloud --test custom_kernel_rc $(NEXTEST_FILTER) || rc=$$?; \
+	$(MAKE) coverage:cli || rc=$$?; \
 	$(MAKE) coverage:bindings || rc=$$?; \
 	if [ "$$(uname)" = Linux ]; then \
 		cargo llvm-cov nextest $(GUEST_RUNNER_CONFIG) --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER) || rc=$$?; \
@@ -39,6 +39,10 @@ coverage\:lcov:
 	@mkdir -p target/coverage
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 	@echo "✅ LCOV output: target/coverage/lcov.info"
+
+coverage\:cli:
+	@bash "$(SCRIPT_DIR)/test/with-cli-binary.sh" --coverage \
+		cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth --test ssh_cloud --test custom_kernel_rc --test checkpoint $(NEXTEST_FILTER) -- --skip ::vm_install::
 
 coverage\:runtime:
 	@cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) \
@@ -78,7 +82,8 @@ coverage\:vmm\:kvm: _ensure-kvm
 
 # Add the real-kernel boots of VMM_KERNEL to the same profiles, listed the same way.
 # CI runs it only when the vmm path filter matches.
-coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
+coverage\:vmm\:boot: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/target/vmm/guest-mount/x86_64-unknown-linux-musl/release/boxlite-guest
+coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT) vmm\:guest-mount-init
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
@@ -95,7 +100,30 @@ coverage\:go: dev\:go
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/runner.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	(cd apps/image-service && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/image-service.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
+	(cd apps/secret-server && GOWORK=off go test -race -covermode=atomic -coverpkg=./... \
+		-coverprofile="$(PROJECT_ROOT)/target/coverage/secret-server.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	exit $$rc
+
+PHONY_TARGETS += coverage\:apps\:secret-server\:integration
+coverage\:apps\:secret-server\:integration:
+	@mkdir -p "$(PROJECT_ROOT)/target/coverage"
+	@cd apps/secret-server && SECRET_TEST_DATABASE_URL="$${SECRET_TEST_DATABASE_URL:-postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite}" GOWORK=off go test -race -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$(PROJECT_ROOT)/target/coverage/secret-server-integration.out" ./internal/database ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM)$$'
+
+# Native archive import/export does not boot a VM, but the production constructor still
+# requires a supported host. The Linux native-binding job enables KVM first.
+coverage\:go\:checkpoint: $(if $(CARGO_LLVM_COV),dev\:c,dev\:go)
+	@mkdir -p target/coverage
+	@native_tags=boxlite_dev,boxlite_integration; \
+	if [ -n "$$CARGO_LLVM_COV" ]; then \
+		native_tags=$$native_tags,boxlite_coverage; \
+		native_profile_runtime=("$$(rustc --print target-libdir)"/libprofiler_builtins-*.rlib); \
+		(cd sdks/go && CGO_LDFLAGS="\"$${native_profile_runtime[0]}\"" go test -count=1 -tags=$$native_tags ./integration/archive/internal/nativeprofile) || exit $$?; \
+	fi; \
+	cd sdks/go && go test -count=1 -tags=$$native_tags \
+		-o "$(PROJECT_ROOT)/target/coverage/checkpoint-native.test" \
+		-covermode=atomic -coverpkg=github.com/boxlite-ai/boxlite/sdks/go \
+		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-checkpoint-native.out" \
+		-run '^TestCheckpointNative' ./integration/archive
 
 coverage\:python: _ensure-python-deps
 	@mkdir -p target/coverage/python
@@ -125,7 +153,14 @@ coverage\:node\:integration: dev\:node _local-registry
 	@cd sdks/node && $(WITH_LOCAL_REGISTRY) npm run test:all -- --coverage $(VITEST_FILTER)
 
 coverage\:api: _ensure-apps-deps
-	@cd apps && yarn nx run api:test --coverage --skip-nx-cache $(if $(FILTER),--testNamePattern '$(FILTER)',)
+	@cd apps && yarn nx run api:test --coverage --skip-nx-cache $(if $(TEST_FILES),--runInBand --passWithNoTests=false --testPathPatterns '$(TEST_FILES)',) $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+PHONY_TARGETS += coverage\:ci-listener coverage\:github-ci-runner
+coverage\:ci-listener: _ensure-apps-deps
+	@cd apps && yarn nx run ci-listener:test --coverage --skip-nx-cache --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+coverage\:github-ci-runner: _ensure-apps-deps
+	@cd apps && yarn nx run github-ci-runner:test --coverage --skip-nx-cache --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
 # Add VM integration coverage to the unit profiles instead of erasing them.
 # Run coverage:lcov first for a combined report; BOXLITE_DEPS_STUB must be unset.
@@ -133,10 +168,19 @@ coverage\:integration: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "📊 Generating integration test coverage..."
 	@rc=0; \
 	cargo llvm-cov nextest \
-		-p boxlite --features krun,gvproxy --test '*' \
+		-p boxlite --features krun,gvproxy,native --test '*' \
 		--profile vm --no-report $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov nextest -p boxlite-cli --test '*' \
 		--profile vm --no-report $(NEXTEST_CLI_FILTER) || rc=$$?; \
 	$(MAKE) coverage:report || rc=$$?; \
 	exit $$rc
 	@echo "✅ Combined coverage report: target/coverage/html/index.html"
+
+# Exercise file-copy entry points with a real guest and retain the unit profiles.
+# The serve regression is explicitly ignored by the non-VM unit pass.
+coverage\:copy\:vm: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile vm --retries 0 --status-level pass \
+		-p boxlite --features krun,gvproxy,native --test copy --test copy_ownership
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile vm --retries 0 --status-level pass \
+		-p boxlite-cli --bin boxlite --run-ignored only -E 'test(upload_duplicate_entries_return_conflict)'
+	@$(MAKE) coverage:report

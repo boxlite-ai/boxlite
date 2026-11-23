@@ -26,8 +26,8 @@ on:
   workflow_call:
     inputs:
       libboxlite_source:
-        required: false
-        default: release
+        description: 'Explicitly choose artifact for matching-commit deployments or release for published SDKs.'
+        required: true
         type: string
       ref:
         required: false
@@ -221,7 +221,14 @@ jobs:
   upload-to-release:
     name: Upload to GitHub Release
     needs: [config, resolve-ref, build]
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
+    # The manual C build is skipped on releases; publication must also override implicit success().
+    if: >-
+      !cancelled() &&
+      needs.config.result == 'success' &&
+      needs['resolve-ref'].result == 'success' &&
+      needs.build.result == 'success' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write

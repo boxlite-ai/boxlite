@@ -15,7 +15,29 @@ import { AuditInterceptor } from '../audit/interceptors/audit.interceptor'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { Context } from '../common/context/context'
 import { CreateBoxDto } from './dto/create-box.dto'
+import { Box } from '../box/entities/box.entity'
+import { Organization } from '../organization/entities/organization.entity'
+
+describe('BoxliteBoxController existing box lookup', () => {
+  it.each([false, true])('reads the existing box for current policy=%s', async (enabled) => {
+    const box = new Box('region-1', 'saved-box')
+    const organization = new Organization()
+    organization.nestedVirtualizationEnabled = enabled
+    const boxService = {
+      findOneByIdOrName: jest.fn().mockResolvedValue(box),
+      toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: box.id, name: box.name, state: 'started' }),
+    }
+    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, {} as any)
+    const response = await controller.getBox({ organizationId: organization.id, organization } as any, box.name)
+    expect(response.box_id).toBe(box.id)
+    expect(response).not.toHaveProperty('reuse_error')
+    expect(box).not.toHaveProperty('nestedVirtualization')
+    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith(box.name, organization.id)
+    expect(boxService.toBoxDtoWithExitCode).toHaveBeenCalledWith(box)
+  })
+})
 
 // `openapi/box.openapi.yaml` declares `additionalProperties: false` on
 // CreateBoxRequest, and both other servers enforce it — `boxlite serve` via
@@ -185,6 +207,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       boxService as any,
       boxStateWaiter as any,
       commerceBoxLimitService as any,
+      {} as any,
     )
     return { controller, boxService }
   }
@@ -218,32 +241,34 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   it('refuses a WRITE_BOXES-only key that attaches a volume', async () => {
     const { controller, boxService } = makeController()
 
-    await expect(controller.createBox(keyContext([WRITE_BOXES]), dtoWithVolume)).rejects.toThrow(/managed volume/)
+    await expect(controller.createBox(keyContext([WRITE_BOXES]), dtoWithVolume, Context.user())).rejects.toThrow(
+      /managed volume/,
+    )
     expect(boxService.create).not.toHaveBeenCalled()
   })
 
   it('refuses a key holding only one of the two volume permissions', async () => {
     const { controller, boxService } = makeController()
 
-    await expect(controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES]), dtoWithVolume)).rejects.toThrow(
-      /write:volumes/,
-    )
+    await expect(
+      controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES]), dtoWithVolume, Context.user()),
+    ).rejects.toThrow(/write:volumes/)
     expect(boxService.create).not.toHaveBeenCalled()
   })
 
   it('refuses a key missing only read:volumes', async () => {
     const { controller, boxService } = makeController()
 
-    await expect(controller.createBox(keyContext([WRITE_BOXES, WRITE_VOLUMES]), dtoWithVolume)).rejects.toThrow(
-      /read:volumes/,
-    )
+    await expect(
+      controller.createBox(keyContext([WRITE_BOXES, WRITE_VOLUMES]), dtoWithVolume, Context.user()),
+    ).rejects.toThrow(/read:volumes/)
     expect(boxService.create).not.toHaveBeenCalled()
   })
 
   it('allows a key holding both volume permissions', async () => {
     const { controller, boxService } = makeController()
 
-    await controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES, WRITE_VOLUMES]), dtoWithVolume)
+    await controller.createBox(keyContext([WRITE_BOXES, READ_VOLUMES, WRITE_VOLUMES]), dtoWithVolume, Context.user())
 
     expect(boxService.create).toHaveBeenCalledTimes(1)
   })
@@ -251,7 +276,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   it('does not gate a volume-free create on volume permissions', async () => {
     const { controller, boxService } = makeController()
 
-    await controller.createBox(keyContext([WRITE_BOXES]), { image: 'alpine:latest' } as any)
+    await controller.createBox(keyContext([WRITE_BOXES]), { image: 'alpine:latest' } as any, Context.user())
 
     expect(boxService.create).toHaveBeenCalledTimes(1)
   })
@@ -266,8 +291,8 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       organizationUser: { role: 'owner', assignedRoles: [] },
     } as any
 
-    await controller.createBox(admin, dtoWithVolume)
-    await controller.createBox(owner, dtoWithVolume)
+    await controller.createBox(admin, dtoWithVolume, Context.user())
+    await controller.createBox(owner, dtoWithVolume, Context.user())
 
     expect(boxService.create).toHaveBeenCalledTimes(2)
   })
@@ -275,7 +300,11 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   it('allows a member whose assigned roles grant both volume permissions', async () => {
     const { controller, boxService } = makeController()
 
-    await controller.createBox(memberContext([{ permissions: [READ_VOLUMES, WRITE_VOLUMES] }]), dtoWithVolume)
+    await controller.createBox(
+      memberContext([{ permissions: [READ_VOLUMES, WRITE_VOLUMES] }]),
+      dtoWithVolume,
+      Context.user(),
+    )
 
     expect(boxService.create).toHaveBeenCalledTimes(1)
   })
@@ -283,16 +312,18 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   it('refuses a member whose assigned roles lack the volume permissions', async () => {
     const { controller, boxService } = makeController()
 
-    await expect(controller.createBox(memberContext([{ permissions: [WRITE_BOXES] }]), dtoWithVolume)).rejects.toThrow(
-      /managed volume/,
-    )
+    await expect(
+      controller.createBox(memberContext([{ permissions: [WRITE_BOXES] }]), dtoWithVolume, Context.user()),
+    ).rejects.toThrow(/managed volume/)
     expect(boxService.create).not.toHaveBeenCalled()
   })
 
   it('refuses a member that carries no assigned roles', async () => {
     const { controller, boxService } = makeController()
 
-    await expect(controller.createBox(memberContext(undefined), dtoWithVolume)).rejects.toThrow(/managed volume/)
+    await expect(controller.createBox(memberContext(undefined), dtoWithVolume, Context.user())).rejects.toThrow(
+      /managed volume/,
+    )
     expect(boxService.create).not.toHaveBeenCalled()
   })
 })
@@ -306,7 +337,7 @@ describe('BoxliteBoxController inbound audit', () => {
       createLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
       updateLog: jest.fn().mockResolvedValue({ id: 'audit-1' }),
     }
-    const interceptor = new AuditInterceptor(new Reflector(), auditService as any, { get: jest.fn() } as any)
+    const interceptor = new AuditInterceptor(new Reflector(), auditService as any)
     const request = {
       url: '/api/v1/boxes/box-1/network/inbound',
       ip: '127.0.0.1',
@@ -330,6 +361,7 @@ describe('BoxliteBoxController inbound audit', () => {
         targetId: 'box-1',
         metadata: { body: { mode: 'enabled' } },
       }),
+      expect.any(Number),
     )
   })
 })

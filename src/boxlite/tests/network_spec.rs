@@ -2,9 +2,10 @@
 
 mod common;
 
+use boxlite::BoxCommand;
 use boxlite::net::constants::{HOST_HOSTNAME, HOST_IP};
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec};
-use boxlite::{BoxCommand, BoxliteRuntime};
+use common::TestRuntime as BoxliteRuntime;
 use futures::StreamExt;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
@@ -179,6 +180,12 @@ async fn disabled_network_runs_without_eth0() {
     assert_eq!(
         status, 0,
         "disabled network should remove eth0 entirely, got exit code {status}"
+    );
+
+    let status = run_exit_code(&litebox, "ping", &["-c", "1", "-W", "1", "127.0.0.1"]).await;
+    assert_eq!(
+        status, 0,
+        "localhost must work with external networking disabled"
     );
 
     litebox.stop().await.unwrap();

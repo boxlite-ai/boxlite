@@ -1,0 +1,36 @@
+name: Release dependency audit
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+  merge_group:
+    branches: [main]
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dependency-audit-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Release dependency audit
+    # Skip the job, not the workflow, so other PRs satisfy the required check
+    # without a runner. Merge queues rely on the PR's preflight before admission.
+    if: >-
+      ${{ github.event_name == 'pull_request' &&
+          startsWith(github.event.pull_request.title, 'chore(release): bump version to ') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Audit application production dependencies
+        run: make audit:apps

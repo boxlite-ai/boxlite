@@ -188,9 +188,15 @@ impl Harness {
             })
             .collect();
         ActivationContext {
-            memory: self.memory.clone(),
-            queues: VirtQueues::prepare(queues, SPEC.queue_max, false, false, self.memory.clone())
-                .unwrap(),
+            memory: self.memory.clone().into(),
+            queues: VirtQueues::prepare(
+                queues,
+                SPEC.queue_max,
+                false,
+                false,
+                self.memory.clone().into(),
+            )
+            .unwrap(),
             interrupt: self.interrupt.clone(),
             events: self.registrar.clone(),
             waker: Arc::new(|| {}),
@@ -890,7 +896,7 @@ fn tx_disconnect_and_invalid_activation_do_not_leave_a_source() {
                 &[QUEUE_SIZE],
                 false,
                 false,
-                h.memory.clone(),
+                h.memory.clone().into(),
             )
             .unwrap();
         } else {
@@ -902,7 +908,7 @@ fn tx_disconnect_and_invalid_activation_do_not_leave_a_source() {
                 SPEC.queue_max,
                 false,
                 false,
-                h.memory.clone(),
+                h.memory.clone().into(),
             )
             .unwrap();
         }
@@ -1051,10 +1057,10 @@ fn backend_events_use_registrar_ids_and_idle_polling_does_not_spin() {
 }
 
 #[test]
-fn snapshots_are_explicitly_unsupported() {
+fn quiesce_succeeds_and_snapshots_are_explicitly_unsupported() {
     let (mut h, _peer) = Harness::connected();
     assert_eq!(h.net.spec().snapshot, SnapshotSupport::Unsupported);
-    assert_eq!(h.net.quiesce(), Err(DeviceError::Unsupported("quiesce")));
+    assert_eq!(h.net.quiesce(), Ok(()));
     assert_eq!(h.net.save_state(), Err(SnapshotError::Unsupported));
     assert_eq!(
         h.net.restore_state(

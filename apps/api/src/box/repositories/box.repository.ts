@@ -4,10 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DataSource, EntityManager, FindOptionsWhere, In, Not } from 'typeorm'
+import { DataSource, EntityManager, FindOneOptions, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
+import { Checkpoint } from '../entities/checkpoint.entity'
+import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
+import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
@@ -61,7 +64,7 @@ const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
 // committed; give up on the best-effort update rather than delay its response.
 const ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS = 1000
 
-const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
+export const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
   BoxState.ERROR,
   BoxState.DESTROYING,
   BoxState.DESTROYED,
@@ -79,6 +82,32 @@ type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null }
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
   private readonly logger = new Logger(BoxRepository.name)
+
+  /** Bound background lookups without inheriting waits from the query cache. */
+  async findOne({ lockTimeoutMs, ...options }: FindOneOptions<Box> & { lockTimeoutMs?: number }): Promise<Box | null> {
+    if (lockTimeoutMs === undefined) return super.findOne(options)
+    return this.manager.transaction(async (manager) => {
+      await manager.query("SELECT set_config('lock_timeout', $1, true)", [`${lockTimeoutMs}ms`])
+      return manager.findOne(Box, { ...options, cache: false })
+    })
+  }
+
+  /** Read stable stop candidates without waiting indefinitely on a table lock. */
+  async findRunningForStop(organizationIds: string[]): Promise<Pick<Box, 'id' | 'organizationId' | 'createdAt'>[]> {
+    return this.manager.transaction(async (manager) => {
+      await manager.query("SELECT set_config('lock_timeout', $1, true)", ['500ms'])
+      return manager.find(Box, {
+        where: {
+          state: BoxState.STARTED,
+          desiredState: BoxDesiredState.STARTED,
+          pending: false,
+          organizationId: In(organizationIds),
+        },
+        select: { id: true, organizationId: true, createdAt: true },
+        order: { createdAt: 'ASC', id: 'ASC' },
+      })
+    })
+  }
 
   /** Serialize runtime application and persistence against concurrent box writes. */
   async replaceOutbound(
@@ -134,7 +163,13 @@ export class BoxRepository extends BaseRepository<Box> {
     super(dataSource, eventEmitter, Box)
   }
 
-  async insert(box: Box, maxCreatedBoxes?: number): Promise<Box> {
+  async insert(
+    box: Box,
+    maxCreatedBoxes?: number,
+    onPersist?: (manager: EntityManager, box: Box) => Promise<void>,
+    initialize?: (manager: EntityManager) => Promise<void>,
+    afterInsert?: (manager: EntityManager) => Promise<void>,
+  ): Promise<Box> {
     const now = new Date()
     if (!box.createdAt) {
       box.createdAt = now
@@ -147,8 +182,14 @@ export class BoxRepository extends BaseRepository<Box> {
     box.enforceInvariants()
 
     await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
+      // Provisioning work and ownership must commit with the new Box. Run
+      // initialization before insertion so checkpoint use can hold its row lock.
+      await initialize?.(entityManager)
       await this.lockRegistryCredential(box, entityManager)
       await entityManager.insert(Box, box)
+      // Resource ownership and admission must commit with the Box itself.
+      await onPersist?.(entityManager, box)
+      await afterInsert?.(entityManager)
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)
     })
 
@@ -282,6 +323,85 @@ export class BoxRepository extends BaseRepository<Box> {
     })
   }
 
+  /** Read lifecycle state and ownership in one snapshot, without changing ordinary Box projections. */
+  async findWithCheckpointState(
+    id: string,
+    organizationId?: string,
+  ): Promise<{ box: Box; checkpointState: BoxCheckpointState | null }> {
+    const { entities, raw } = await this.repository
+      .createQueryBuilder('box')
+      .leftJoin(BoxCheckpointState, 'checkpoint', 'checkpoint.boxId = box.id')
+      .addSelect('checkpoint.activeJobId', 'checkpoint_job_id')
+      .addSelect('checkpoint.sequence', 'checkpoint_sequence')
+      .where({ id, ...(organizationId === undefined ? {} : { organizationId }) })
+      .getRawAndEntities<{ checkpoint_job_id: string | null; checkpoint_sequence: number | null }>()
+    const box = entities[0]
+    if (!box) throw new NotFoundException('Box not found')
+    const checkpointState =
+      raw[0].checkpoint_sequence === null
+        ? null
+        : { boxId: id, activeJobId: raw[0].checkpoint_job_id, sequence: raw[0].checkpoint_sequence }
+    return { box, checkpointState }
+  }
+
+  /** Explicit deletion fences checkpoint callbacks before the runner removes the target. */
+  async deleteCheckpointTarget(selected: Box, selectedState: BoxCheckpointState): Promise<Box> {
+    if (!selectedState.activeJobId) throw new ConflictException('Box has no checkpoint operation')
+    const pending = await this.manager.findOneBy(CheckpointOperation, {
+      boxId: selected.id,
+      organizationId: selected.organizationId,
+      jobId: selectedState.activeJobId,
+    })
+    if (!pending) throw new ConflictException('Box has another state change in progress')
+    const changed = await this.dataSource.transaction(async (manager) => {
+      // Match checkpoint use/deletion and receipt processing: checkpoint first.
+      await manager.findOne(Checkpoint, {
+        where: { id: pending.checkpointId, organizationId: selected.organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      const box = await manager.findOne(Box, {
+        where: { id: selected.id, organizationId: selected.organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      const checkpointState = await manager.findOne(BoxCheckpointState, {
+        where: { boxId: selected.id },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (
+        !box ||
+        !checkpointState ||
+        checkpointState.activeJobId !== pending.jobId ||
+        checkpointState.sequence !== pending.sequence ||
+        checkpointState.sequence !== selectedState.sequence
+      )
+        throw new ConflictException('Checkpoint operation changed; retry Box deletion')
+      const previous = { ...box }
+      const operation = await manager.findOne(CheckpointOperation, {
+        where: { id: pending.id, jobId: checkpointState.activeJobId, state: In(['pending', 'failed']) },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!operation) throw new ConflictException('Checkpoint operation changed; retry Box deletion')
+      operation.state = 'cancelled'
+      await manager.save(CheckpointOperation, operation)
+      checkpointState.activeJobId = null
+      checkpointState.sequence += 1
+      await manager.save(BoxCheckpointState, checkpointState)
+      Object.assign(box, Box.getSoftDeleteUpdate(box), {
+        state: BoxState.ERROR,
+        recoverable: false,
+        errorReason: 'Checkpoint operation cancelled for Box deletion',
+      })
+      box.assertValid()
+      box.enforceInvariants()
+      await manager.save(Box, box)
+      return { box, previous }
+    })
+    this.emitUpdateEvents(changed.box, changed.previous)
+    this.invalidateLookupCacheOnUpdate(changed.box, changed.previous)
+    await this.recordOrganizationActivity(changed.box, changed.previous)
+    return changed.box
+  }
+
   // One statement sets the wait cap, takes the lock, and restores the default,
   // so only this lock wait can raise the admission 503. This relies on
   // PostgreSQL evaluating select-list entries in order (ExecBuildProjectionInfo
@@ -322,11 +442,15 @@ export class BoxRepository extends BaseRepository<Box> {
     params: {
       updateData: Partial<Box>
       whereCondition: FindOptionsWhere<Box>
+      lockTimeoutMs?: number
     },
   ): Promise<Box> {
-    const { updateData, whereCondition } = params
+    const { updateData, whereCondition, lockTimeoutMs } = params
 
     const [updatedBox, previousBox] = await this.manager.transaction(async (entityManager) => {
+      if (lockTimeoutMs !== undefined) {
+        await entityManager.query("SELECT set_config('lock_timeout', $1, true)", [`${lockTimeoutMs}ms`])
+      }
       const whereClause = {
         ...whereCondition,
         id,

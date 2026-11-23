@@ -43,14 +43,57 @@ Do not store passwords or API keys in this declaration: CI carries it as a varia
 AWS account identity comes from resolved credentials. GCP project identity is declared explicitly.
 `promoteFrom` does not copy configuration or promote artifacts during an ordinary deploy.
 
+## First account registration
+
+Turnstile protection is opt-in: an absent or blank `TURNSTILE_SITEKEY` keeps automatic local
+registration and requires no widget settings. To enable it, create a Cloudflare Managed widget
+for the actual Dashboard hostname. The API must reach `challenges.cloudflare.com`; the site does
+not need Cloudflare CDN proxying. Auth0 continues to authenticate Google, GitHub and email users.
+
+| API setting | Required/default | Delivery |
+| --- | --- | --- |
+| `TURNSTILE_SITEKEY` | Optional; nonempty enables protection | Ordinary API configuration; public through `/config` when enabled |
+| `TURNSTILE_SECRET_KEY` | Required when enabled | Server-side secret |
+| `TURNSTILE_EXPECTED_HOSTNAMES` | Required when enabled; comma-separated hostnames without scheme, port or path | Ordinary API configuration; private to the API |
+| `TURNSTILE_TIMEOUT_MS` | Positive integer milliseconds; `5000` | Optional API configuration |
+
+The API validates enabled widget settings at startup. `/config` exposes only `turnstile.sitekey`
+and the fixed `turnstile.action=signup`; hostname allowlists, timeout and secret remain server-side.
+When disabled, `/config` omits `turnstile` and the Dashboard uses the ordinary authenticated flow.
+Changes take effect after the API restarts, without rebuilding the Dashboard to change the sitekey.
+
+mdeploy declares the widget settings as optional in `env.selectGroup.api` and marks
+`TURNSTILE_SECRET_KEY` in `env.selectGroup.secret`. Seed the credential in the target cloud's
+secret store, then write its JSON reference with `mstage env set --json` using the
+[secret-reference procedure](../mstage/README.md#secret-references). Accepted examples are
+`{"address":"arn:aws:secretsmanager:REGION:ACCOUNT:secret:NAME"}` and
+`{"address":"projects/PROJECT/secrets/NAME/versions/VERSION"}`. ECS resolves the reference through
+its secret channel; Cloud Run uses `secretKeyRef`. The credential must not be a plaintext API
+environment value. Confirm runtime access to the referenced secret before rolling out the API.
+
+With no sitekey, mdeploy omits all widget settings and does not inject an unused secret reference.
+For the legacy SST path, enabling protection requires the stage-scoped `TURNSTILE_SECRET_KEY` via `sst secret set`, using
+stdin for the value. Its ordinary settings belong in the bootstrap `.env`/stage configuration;
+the secret does not. Use `.env.example` for the names and defaults.
+
 ## Runner sizing
 
-`deploy.runners` in the stage declaration requires `size` (`small`, `medium` or `large`) and
-`rootDiskGb`. GCP also accepts optional `dataDiskGb` for a new runner's separate data disk:
+`deploy.runners.size` selects `small`, `medium`, `large`, `xlarge` or `2xlarge`.
+The two largest tiers default to `n4-standard-32` and `n4-standard-64` on GCP,
+and `c8i.4xlarge` and `c8i.8xlarge` on AWS.
+
+In each stage, optional
+`machineTypes` entries override the cloud machine for individual tiers. Choose
+machines that support nested virtualization and the runner's disk configuration.
+For example, a GCP stage can configure its runners as follows:
 
 ```json
 {
-  "size": "large",
+  "size": "xlarge",
+  "machineTypes": {
+    "xlarge": "n4d-standard-32",
+    "2xlarge": "n4d-standard-64"
+  },
   "rootDiskGb": 100,
   "dataDiskGb": 2048
 }
@@ -100,6 +143,11 @@ Groups in `mstage.env.json` define what each consumer may receive:
 | `otel-collector` | Collector authentication |
 | `runner` | Runner telemetry overrides |
 
+`CHECKPOINTS_ENABLED` is an optional `api` key. After deploying a compatible runner,
+store `CHECKPOINTS_ENABLED=true` and redeploy the API to enable managed checkpoints.
+The API group forwards this value on AWS and GCP; an omitted key or `false` keeps
+admission disabled. Changing the stage store alone does not update an existing API revision.
+
 An array group makes every key required. An object distinguishes `required` from `optional`.
 Missing required values fail before deployment. Optional values enable features only when supplied.
 The exact key list lives in the manifest; avoid maintaining a second list in a runbook.
@@ -118,6 +166,26 @@ The API group delivers this setting on both AWS and GCP. It defaults to `604800`
 Invalid values stop API startup. Existing invitations retain their stored deadlines,
 and explicit API `expiresAt` / `expires_at` values override the default. Emails show
 the exact deadline in UTC. Opening the link joins after sign-in with the invited email.
+
+## Platform subdomain minimum length
+
+Set `PLATFORM_SUBDOMAIN_MIN_LENGTH` in the stage store, then redeploy the API
+with mdeploy using the updated manifest. Run from `apps/infra`:
+
+```bash
+npm run mstage env set -- PLATFORM_SUBDOMAIN_MIN_LENGTH=1 --stage dev
+```
+
+Use `--confirm` when writing a protected stage. Updating the store alone does
+not update a running API. The optional API group delivers this value on both
+AWS and GCP; unset or blank values keep the API default of `5`.
+
+The value must be an integer from `1` to `63`; invalid values stop API startup.
+For example, `1` permits a new single-character name such as `x` beneath the
+configured platform domain, subject to the existing format, reserved-name,
+availability and organization quota checks. The minimum applies only to new
+claims; existing names remain usable if it increases. The dashboard reads the
+minimum from the API, so no frontend setting is needed.
 
 ## Built-in images
 

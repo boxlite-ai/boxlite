@@ -1,0 +1,22 @@
+[
+  {
+    "id": "boxliteadmin000000000001",
+    "email": "admin@boxlite.dev",
+    "given_name": "Admin",
+    "family_name": "BoxLite",
+    "password": { "Plain": "password" },
+    "roles": ["user"],
+    "enabled": true,
+    "email_verified": true
+  },
+  {
+    "id": "boxlitetest0100000000002",
+    "email": "test01@boxlite.dev",
+    "given_name": "Test",
+    "family_name": "User",
+    "password": { "Plain": "password" },
+    "roles": ["user"],
+    "enabled": true,
+    "email_verified": true
+  }
+]

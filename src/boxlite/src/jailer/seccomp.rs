@@ -467,7 +467,9 @@ mod tests {
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[test]
-    fn test_vmm_filter_allows_time_syscall() {
+    fn test_vmm_filter_allows_native_metadata_syscalls() {
+        use std::os::fd::AsRawFd;
+
         // glibc's get_nprocs() calls time(NULL) during vCPU thread init; a
         // missing `time` entry makes the vmm filter's `trap` default action
         // SIGSYS-kill every thread. The raw syscall (not libc::time, which may
@@ -475,6 +477,11 @@ mod tests {
         let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/seccomp_filter.bpf"));
         let filters = deserialize_binary(&bytes[..]).expect("deserialize embedded filter");
         let vmm_filter = get_filter(&filters, SeccompRole::Vmm).expect("vmm filter present");
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("probe"), b"").unwrap();
+        let directory = std::fs::File::open(scratch.path()).unwrap();
+        let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let effective_gid = unsafe { libc::getegid() };
 
         // fork() so a SIGSYS from the `trap` default action kills only the child.
         let pid = unsafe { libc::fork() };
@@ -483,12 +490,46 @@ mod tests {
             if apply_filter(vmm_filter).is_err() {
                 unsafe { libc::_exit(2) };
             }
+            if unsafe { libc::syscall(libc::SYS_getegid) } != i64::from(effective_gid) {
+                unsafe { libc::_exit(5) };
+            }
             let ret =
                 unsafe { libc::syscall(libc::SYS_time, std::ptr::null_mut::<libc::time_t>()) };
-            // `time` is allowlisted: the raw syscall returns the current time
-            // (>= 0), not -1. `trap` would SIGSYS-kill the child before this
-            // point; guard the errno-returning case so a future default-action
-            // change can't let a blocked call exit 0 and pass.
+            if ret == -1 {
+                unsafe { libc::_exit(3) };
+            }
+            let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+            let ret = unsafe {
+                libc::syscall(libc::SYS_fstatfs, directory.as_raw_fd(), stats.as_mut_ptr())
+            };
+            if ret == -1 {
+                unsafe { libc::_exit(4) };
+            }
+            let mut address = std::mem::MaybeUninit::<libc::sockaddr_un>::uninit();
+            let mut len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+            // SAFETY: the live socket and output buffers remain valid in the child.
+            let ret = unsafe {
+                libc::syscall(
+                    libc::SYS_getpeername,
+                    socket.as_raw_fd(),
+                    address.as_mut_ptr(),
+                    &mut len,
+                )
+            };
+            if ret == -1 {
+                unsafe { libc::_exit(6) };
+            }
+            // SAFETY: directory owns the fd and the literal is NUL-terminated.
+            let ret = unsafe {
+                libc::syscall(
+                    libc::SYS_fchmodat,
+                    directory.as_raw_fd(),
+                    c"probe".as_ptr(),
+                    0o600,
+                )
+            };
+            // Native filesystem and Unix bridge operations must survive both
+            // trap-style and errno-style denials.
             unsafe { libc::_exit(i32::from(ret == -1)) };
         }
 

@@ -6,10 +6,14 @@ Keep bootstrap, deployment and runtime identities distinct, and follow the selec
 
 [Infrastructure index](../README.md)
 
-| Cloud | Guide |
-| --- | --- |
-| AWS | [IAM boundaries and shared grants](aws/security.md) |
-| GCP | [Project IAM, service accounts and private ingress](gcp/security.md) |
+| Cloud | Guide                                                                |
+| ----- | -------------------------------------------------------------------- |
+| AWS   | [IAM boundaries and shared grants](aws/security.md)                  |
+| GCP   | [Project IAM, service accounts and private ingress](gcp/security.md) |
+
+Runtime permissions are deployment capabilities, not free-form grants. See
+[API runtime IAM capabilities](api-runtime-iam.md) for the shared contract and the
+disk-resize example.
 
 ## Configuration and secret handling
 
@@ -31,6 +35,5 @@ mdeploy requires confirmation for protected apply/refresh and refuses protected-
 Runner resources independently prevent replacement/deletion and ignore boot-image/startup changes.
 Use the selected cloud’s [runner guide](runners.md) to verify convergence.
 Database protection, backups and availability are explicit stage settings, not implied by the name `prod`.
-
 
 Source: [mdeploy guards](../mdeploy/src/run.ts).

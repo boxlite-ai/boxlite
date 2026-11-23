@@ -164,8 +164,56 @@ func TestServeStopsListeningAfterTheDrain(t *testing.T) {
 	rebound.Close()
 }
 
-// Start refuses a port it cannot bind rather than reporting itself up, so the
-// platform never routes a pull at a process that is not listening.
+// A managed local stack must not bind other loopback or external interfaces.
+func TestStartHonorsLoopbackListenerHost(t *testing.T) {
+	t.Setenv("BOXLITE_LISTEN_HOST", "127.0.0.1")
+	held, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := held.Addr().(*net.TCPAddr).Port
+	held.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- Start(ctx, &config.Config{Port: port, ShutdownTimeoutSec: 1}, nil)
+	}()
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("loopback listener exited before becoming healthy: %v", err)
+		default:
+		}
+		response, err := client.Get("http://127.0.0.1:" + strconv.Itoa(port) + HealthPath)
+		if err == nil {
+			response.Body.Close()
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("loopback listener did not become healthy")
+}
+
+// Rejecting an invalid host proves Start uses the setting, rather than silently
+// listening on all interfaces. No extra loopback alias is needed on macOS.
+func TestStartRejectsInvalidListenerHost(t *testing.T) {
+	t.Setenv("BOXLITE_LISTEN_HOST", "127.0.0.1:invalid")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := Start(ctx, &config.Config{Port: 0, ShutdownTimeoutSec: 1}, nil)
+	if err == nil || !strings.Contains(err.Error(), "127.0.0.1:invalid") {
+		t.Fatalf("Start ignored the invalid listener host: %v", err)
+	}
+}
+
+// An occupied address must fail instead of reporting readiness.
 func TestStartFailsOnAPortItCannotBind(t *testing.T) {
 	// The wildcard address, because that is what Start binds: holding only
 	// 127.0.0.1 leaves 0.0.0.0 free on some platforms and the bind succeeds.

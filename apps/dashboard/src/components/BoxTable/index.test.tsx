@@ -7,9 +7,12 @@
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
+import { Box, BoxDesiredState, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
 import { BoxTable } from './index'
 import { type BoxTableProps } from './types'
+import { toast } from 'sonner'
+
+vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
@@ -143,6 +146,53 @@ describe('BoxTable pagination controls', () => {
     expect(props.onRowClick).not.toHaveBeenCalled()
   })
 
+  it('provides a native detail link without dispatching row navigation twice', () => {
+    const onRowClick = vi.fn()
+    renderBoxTable({ onRowClick, data: [makeBox('1')] })
+    const link = document.querySelector<HTMLAnchorElement>('a[href="/dashboard/boxes/1"]')
+    expect(link).not.toBeNull()
+    act(() => link?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })))
+    expect(onRowClick).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['metaKey', 'ctrlKey', 'shiftKey', 'altKey'])('preserves native detail navigation for %s', (modifier) => {
+    const props = renderBoxTable({ data: [makeBox('native')] })
+    const link = document.querySelector<HTMLAnchorElement>('a[href="/dashboard/boxes/native"]')!
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, [modifier]: true })
+    act(() => link.dispatchEvent(event))
+    expect(event.defaultPrevented).toBe(false)
+    expect(props.onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('keeps detail links native when no row callback is provided', () => {
+    renderBoxTable({ data: [makeBox('native')], onRowClick: undefined })
+    const link = document.querySelector<HTMLAnchorElement>('a[href="/dashboard/boxes/native"]')!
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    act(() => link.dispatchEvent(event))
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it.each(['Enter', ' '])('keeps %s on a nested copy button out of card navigation', (key) => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const props = renderBoxTable({ data: [makeBox('keyboard')] })
+    const card = document.querySelector<HTMLElement>('div[role="button"]')!
+    const copy = card.querySelector<HTMLButtonElement>('button[title="Copy name"]')!
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+    act(() => {
+      copy.focus()
+      copy.dispatchEvent(event)
+    })
+    expect(event.defaultPrevented).toBe(false)
+    expect(props.onRowClick).not.toHaveBeenCalled()
+    // jsdom does not synthesize a native button click from keyboard events.
+    act(() => copy.click())
+    expect(writeText).toHaveBeenCalledWith('box-keyboard')
+    expect(props.onRowClick).not.toHaveBeenCalled()
+    act(() => card.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })))
+    expect(props.onRowClick).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps a transitioning box action disabled', () => {
     const props = renderBoxTable({ data: [{ ...makeBox('busy'), state: BoxState.STARTING }] })
     const actions = document.querySelectorAll<HTMLButtonElement>('button[title="Working…"]')
@@ -156,6 +206,39 @@ describe('BoxTable pagination controls', () => {
     expect(props.handleStart).not.toHaveBeenCalled()
     expect(props.handleStop).not.toHaveBeenCalled()
     expect(props.handleRecover).not.toHaveBeenCalled()
+  })
+
+  it('opens checkpoint capture for the selected Box from More without opening its row', async () => {
+    const box = { ...makeBox('capture-source'), desiredState: BoxDesiredState.STOPPED }
+    const onCreateCheckpoint = vi.fn()
+    const props = renderBoxTable({ data: [box], onCreateCheckpoint })
+    await act(async () => {
+      document
+        .querySelector('[aria-label="More"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }))
+    })
+    const action = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+      (item) => item.textContent?.trim() === 'Checkpoint',
+    )
+    expect(action).toBeDefined()
+    await act(async () => action!.click())
+    expect(onCreateCheckpoint).toHaveBeenCalledWith(box)
+    expect(props.onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('does not offer checkpoint capture for a source changing state', async () => {
+    const box = { ...makeBox('busy-source'), desiredState: BoxDesiredState.STARTED }
+    renderBoxTable({ data: [box], onCreateCheckpoint: vi.fn() })
+    await act(async () => {
+      document
+        .querySelector('[aria-label="More"]')!
+        .dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }))
+    })
+    expect(
+      Array.from(document.querySelectorAll('[role="menuitem"]')).some(
+        (item) => item.textContent?.trim() === 'Checkpoint',
+      ),
+    ).toBe(false)
   })
 
   it('does not navigate when the click ends a text selection over a row', () => {
@@ -211,6 +294,40 @@ describe('BoxTable pagination controls', () => {
 
     expect(writeText).toHaveBeenCalledWith('box-1')
     expect(onRowClick).not.toHaveBeenCalled()
+  })
+
+  it.each(['rejected', 'unavailable'])('reports a %s clipboard without claiming a copied name', async (failure) => {
+    const rejection = Promise.reject(new Error('Clipboard denied'))
+    void rejection.catch(() => {})
+    const writeText = vi.fn().mockReturnValue(rejection)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: failure === 'unavailable' ? undefined : { writeText },
+      configurable: true,
+    })
+    const props = renderBoxTable({ data: [makeBox('clipboard')] })
+    const button = getRequiredElement<HTMLButtonElement>('button[title="Copy name"]')
+
+    await act(async () => button.click())
+
+    expect(toast.error).toHaveBeenCalledWith(
+      failure === 'unavailable' ? 'Clipboard not supported' : 'Failed to copy to clipboard',
+    )
+    expect(button.querySelector('.lucide-check')).toBeNull()
+    expect(props.onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('waits for the clipboard before showing copy success', async () => {
+    let completeCopy = () => {}
+    const writeText = vi.fn().mockReturnValue(new Promise<void>((resolve) => (completeCopy = resolve)))
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    renderBoxTable({ data: [makeBox('clipboard')] })
+    const button = getRequiredElement<HTMLButtonElement>('button[title="Copy name"]')
+
+    await act(async () => button.click())
+    expect(button.querySelector('.lucide-check')).toBeNull()
+
+    await act(async () => completeCopy())
+    expect(button.querySelector('.lucide-check')).not.toBeNull()
   })
 
   it('lets the user choose how many boxes are shown per page', () => {
@@ -296,14 +413,14 @@ describe('BoxTable first pull', () => {
       progress: { phase: BoxProgressPhase.PREPARING_IMAGE, retryAfterMs: 5000 },
     })
 
-    expect(document.body.textContent).toContain('PULLING IMAGE')
+    expect(document.body.textContent).toContain('Pulling image')
   })
 
   it('says a creating box is starting when no pull is reported', () => {
     renderRow({ ...makeBox('1'), state: BoxState.CREATING })
 
-    expect(document.body.textContent).toContain('STARTING')
-    expect(document.body.textContent).not.toContain('PULLING IMAGE')
+    expect(document.body.textContent).toContain('Starting')
+    expect(document.body.textContent).not.toContain('Pulling image')
   })
 })
 
@@ -352,6 +469,27 @@ describe('BoxTable empty state', () => {
 
     buttons.forEach((button) => act(() => button.click()))
     expect(onOpenQuickstart).toHaveBeenCalledTimes(buttons.length)
+  })
+
+  it('offers filter recovery in the compact empty list', () => {
+    const onFiltersChange = vi.fn()
+    renderEmpty({ filters: { idOrName: 'missing' }, onFiltersChange })
+    const mobile = document.querySelector('[role="region"][aria-label="Box cards"]')!
+    expect(mobile.textContent).toContain('No matching Boxes')
+    const clear = [...mobile.querySelectorAll('button')].find((button) => button.textContent === 'Clear filter')!
+    act(() => clear.click())
+    expect(onFiltersChange).toHaveBeenCalledWith({ idOrName: undefined })
+    expect(mobile.textContent).not.toContain('Open Quickstart')
+  })
+
+  it('distinguishes an empty search and offers to clear its filter', () => {
+    const onFiltersChange = vi.fn()
+    renderEmpty({ filters: { idOrName: 'missing' }, onFiltersChange })
+    expect(document.body.textContent).toContain('No matching Boxes')
+    expect(quickstartButtons()).toHaveLength(0)
+    const clear = [...document.querySelectorAll('button')].find((button) => button.textContent === 'Clear filter')!
+    act(() => clear.click())
+    expect(onFiltersChange).toHaveBeenCalledWith({ idOrName: undefined })
   })
 
   it('still explains itself when no guide is available to open', () => {

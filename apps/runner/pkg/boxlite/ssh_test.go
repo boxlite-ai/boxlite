@@ -42,7 +42,7 @@ func newSSHTestBox(t *testing.T, id string, entrypoint string, want enums.BoxSta
 		Id:              id,
 		Image:           "alpine:latest",
 		OsUser:          "root",
-		CpuQuota:        1,
+		CpuQuota:        cpuQuota(1),
 		MemoryQuota:     1,
 		StorageQuota:    1,
 		OutboundEnabled: &networked,

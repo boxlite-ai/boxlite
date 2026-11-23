@@ -8,14 +8,15 @@
  * had nothing to do. Both are asserted here as ordering rather than presence.
  *
  * The third thing it owns is which line a run is on. A commit rollout builds
- * for dev; a release rollout moves the bytes a version was cut from, and is the
- * only thing prod accepts.
+ * for dev/stage; prod accepts only the release line and imports existing GHCR images.
  */
 
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { withActionSources } from './workflow-source.js'
+import { load } from 'js-yaml'
 
 const workflow = readFileSync(
   fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)),
@@ -33,22 +34,21 @@ const jobAt = (name: string) => {
   assert.notEqual(start, -1, `there is no ${name} job`)
   const rest = commands.slice(start + 1)
   const next = rest.search(/\n {2}[a-z][a-z-]*:\n/)
-  return next === -1 ? rest : rest.slice(0, next)
+  return withActionSources(next === -1 ? rest : rest.slice(0, next))
 }
 
 /** Every job that acts on the answer the plan gave. */
-const ACTING = ['release-publish', 'release-promote', 'build-images', 'build-runner', 'deploy']
+const ACTING = ['plan', 'deploy']
 
-test('everything that decides is a read, and every read comes first', () => {
-  // The plan asks two questions and answers four ways; nothing it runs changes
-  // anything, which is what makes it safe to run before the confirm gates below.
-  const plan = jobAt('plan')
-  assert.match(plan, /mbuild verify/, 'the images are not asked about')
-  assert.match(plan, /runner:build -- --stage "\$STAGE" --check/, 'the runner is asked about by building it')
-  assert.doesNotMatch(plan, /mbuild publish|mbuild promote|npm run mdeploy/, 'the plan must not change anything')
-
-  for (const job of ACTING) {
-    assert.match(jobAt(job), /needs: \[[^\]]*plan[^\]]*\]/, `${job} runs without a plan`)
+test('planning reads precede every build and release apply in the approved job', () => {
+  const steps = (load(workflow) as any).jobs.plan.steps
+  const decision = steps.findIndex((step: any) => step.id === 'plan')
+  assert.ok(decision >= 0)
+  assert.match(steps[decision].run, /mbuild verify/)
+  assert.match(steps[decision].run, /runner:build -- --stage "\$STAGE" --check/)
+  assert.doesNotMatch(steps[decision].run, /mbuild publish|mbuild promote|npm run mdeploy/)
+  for (const action of ['mbuild', 'build-staged-runner', 'mdeploy']) {
+    assert.ok(steps.findIndex((step: any) => step.uses === './.github/actions/' + action) > decision)
   }
 })
 
@@ -67,29 +67,21 @@ test('the ref is refused before a single Environment is bound', () => {
   }
 })
 
-test('each component takes exactly one of the plan’s answers', () => {
-  // The three image routes are the same artifact by three means; a component
-  // that could take two would publish over what it had just promoted.
-  assert.match(jobAt('release-publish'), /needs\.plan\.outputs\.api == 'release-publish'/)
-  assert.match(jobAt('release-promote'), /needs\.plan\.outputs\.api == 'release-promote'/)
-  assert.match(jobAt('build-images'), /needs\.plan\.outputs\.api == 'build'/)
-  assert.match(jobAt('build-runner'), /needs\.plan\.outputs\.runner == 'build'/)
+test('each component takes exactly one of the plan answers', () => {
+  const steps = (load(workflow) as any).jobs.plan.steps
+  const images = steps.find((step: any) => step.uses === './.github/actions/mbuild')
+  const runner = steps.find((step: any) => step.uses === './.github/actions/build-staged-runner')
+  assert.equal(images.if, "steps.plan.outputs.api == 'build'")
+  assert.equal(runner.if, "steps.plan.outputs.runner == 'build'")
+  assert.match(jobAt('deploy'), /inputs\.api-route == 'release-import'/)
 })
 
-test('the release line goes through the workflow that refuses a version twice', () => {
-  // `mbuild.yml` skips an artifact already in the registry, which is right for
-  // a commit and wrong for a release. Both release routes call the workflow
-  // that refuses instead, and the commit route is the only caller of the other.
-  assert.match(jobAt('release-publish'), /uses: \.\/\.github\/workflows\/mbuild-release\.yml/)
-  assert.match(jobAt('release-promote'), /uses: \.\/\.github\/workflows\/mbuild-release\.yml/)
-  assert.match(jobAt('build-images'), /uses: \.\/\.github\/workflows\/mbuild\.yml/)
-  // And each is handed the version it is about, plus the commit this run
-  // already resolved it to — mbuild-release compares the two rather than
-  // resolving the tag a second time and hoping they agree.
-  for (const job of ['release-publish', 'release-promote']) {
-    assert.match(jobAt(job), /tag: \$\{\{ needs\.resolve\.outputs\.version \}\}/, `${job} names no version`)
-    assert.match(jobAt(job), /sha: \$\{\{ needs\.resolve\.outputs\.sha \}\}/, `${job} hands over no commit to agree on`)
-  }
+test('release deployment imports GHCR bytes and leaves building to the manual publisher', () => {
+  assert.doesNotMatch(commands, /uses: \.\/\.github\/workflows\/mbuild-release\.yml/)
+  assert.match(jobAt('deploy'), /mbuild import-release/)
+  assert.match(jobAt('plan'), /uses: \.\/\.github\/actions\/mbuild/)
+  assert.match(jobAt('deploy'), /version: \$\{\{ needs\.resolve\.outputs\.version \}\}/)
+  assert.match(jobAt('deploy'), /sha: \$\{\{ needs\.resolve\.outputs\.sha \}\}/)
 })
 
 test('a registry that could not be read is not a stage holding nothing', () => {
@@ -110,7 +102,11 @@ test('a registry that could not be read is not a stage holding nothing', () => {
   assert.ok(absent, 'the CLI declares no exit code of its own for absence')
 
   const plan = jobAt('plan')
-  assert.match(plan, /mbuild verify -- --tag "\$IMAGE_TAG" --stage "\$STAGE" \|\| held=\$\?/, 'the status is thrown away')
+  assert.match(
+    plan,
+    /mbuild verify -- --tag "\$IMAGE_TAG" --stage "\$STAGE" \|\| held=\$\?/,
+    'the status is thrown away',
+  )
   assert.match(plan, new RegExp(`elif \\[ "\\$held" -ne ${absent} \\]; then`), 'absence is not told apart')
   assert.match(plan, /::error title=registry::/, 'a read that never landed decides the plan silently')
 })
@@ -155,11 +151,7 @@ test('a pull request resolves to the commit it would merge, never its head', () 
   assert.match(resolve, /sha="\$\(jq -r '\.potentialMergeCommit\.oid \/\/ empty' <<<"\$pr_json"\)"/)
   assert.match(resolve, /head="\$\(jq -r '\.headRefOid'/, 'the head is not read, so this test guards nothing')
   // Three refusals, each naming what the operator has to do about it.
-  for (const refused of [
-    /is \$state, not open/,
-    /conflicts with its base/,
-    /has no merge commit this run can trust/,
-  ]) {
+  for (const refused of [/is \$state, not open/, /conflicts with its base/, /has no merge commit this run can trust/]) {
     assert.match(resolve, refused, `a pull request is accepted where it should be refused: ${refused}`)
   }
   // UNKNOWN is a "not yet", not a verdict: GitHub computes it lazily and there
@@ -214,12 +206,10 @@ test('the branch check is replaced for a pull request, not skipped', () => {
   assert.match(jobAt('resolve'), /sha: \$\{\{ steps\.tag\.outputs\.sha \}\}/, 'the job publishes a different commit')
 })
 
-test('a pull request reaches dev and no further', () => {
-  // prod's refusal is written on the absence of a version, so it catches a
-  // pull request for the same reason it catches a bare commit — one rule, not
-  // one per shape.
+test('a pull request reaches dev or stage but never prod', () => {
+  // Candidate stages accept PR merges; production still requires a release.
   const resolve = jobAt('resolve')
-  assert.match(resolve, /if \[ "\$STAGE" != 'dev' \] && \[ -z "\$version" \]; then/)
+  assert.match(resolve, /if \[ "\$STAGE" != 'dev' \] && \[ "\$STAGE" != 'stage' \] && \[ -z "\$version" \]; then/)
   assert.match(resolve, /rather than a commit or a pull request/)
 })
 
@@ -250,10 +240,9 @@ test('prod deploys released versions and refuses a bare commit', () => {
    * the choice list later has to say for itself that a commit may reach it.
    */
   const classify = jobAt('resolve')
-  assert.match(classify, /if \[ "\$STAGE" != 'dev' \] && \[ -z "\$version" \]; then/)
+  assert.match(classify, /if \[ "\$STAGE" != 'dev' \] && \[ "\$STAGE" != 'stage' \] && \[ -z "\$version" \]; then/)
   assert.doesNotMatch(classify, /"\$STAGE" = 'prod'/, 'a deny-list on prod admits the next stage silently')
-  // And the plan routes dev to the cut and everything else to the move.
-  assert.match(jobAt('plan'), /\[ "\$STAGE" = 'dev' \] && echo release-publish \|\| echo release-promote/)
+  assert.match(jobAt('plan'), /api=release-import/)
 })
 
 test('an image address carries the version when there is one', () => {
@@ -276,5 +265,5 @@ test('a stage that already holds everything still deploys', () => {
   for (const job of ACTING.filter((name) => name !== 'deploy')) {
     assert.match(deploy, new RegExp(`needs: \\[[^\\]]*${job}[^\\]]*\\]`), `the deploy does not wait for ${job}`)
   }
-  assert.match(deploy, /!cancelled\(\) && !failure\(\)/, 'a skipped artifact job would skip the deploy')
+  assert.match(deploy, /!cancelled\(\)/, 'deployment must check cancellation even when a notice is skipped')
 })

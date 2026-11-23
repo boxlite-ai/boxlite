@@ -10,6 +10,7 @@ use crate::{BoxliteError, BoxliteResult, BoxliteRuntime};
 use std::collections::BTreeSet;
 
 pub mod custom_kernel;
+pub mod native_vmm;
 pub mod nested_virtualization;
 
 /// Comma-separated list of release-candidate features enabled for this process.
@@ -21,6 +22,7 @@ pub const EXPERIMENTAL_FEATURES_ENV: &str = "BOXLITE_EXPERIMENTAL";
 pub enum ExperimentalFeature {
     CustomKernel,
     NestedVirtualization,
+    NativeVmm,
 }
 
 impl ExperimentalFeature {
@@ -29,6 +31,7 @@ impl ExperimentalFeature {
         match self {
             Self::CustomKernel => "custom-kernel",
             Self::NestedVirtualization => "nested-virtualization",
+            Self::NativeVmm => "native-vmm",
         }
     }
 
@@ -36,6 +39,7 @@ impl ExperimentalFeature {
         match self {
             Self::CustomKernel => "custom kernel support",
             Self::NestedVirtualization => "nested virtualization support",
+            Self::NativeVmm => "the native VMM engine",
         }
     }
 }
@@ -58,6 +62,7 @@ impl ExperimentalFeatures {
             let feature = match token {
                 "custom-kernel" => ExperimentalFeature::CustomKernel,
                 "nested-virtualization" => ExperimentalFeature::NestedVirtualization,
+                "native-vmm" => ExperimentalFeature::NativeVmm,
                 "" => {
                     return Err(BoxliteError::Config(
                         "experimental feature list contains an empty feature name".into(),
@@ -65,7 +70,7 @@ impl ExperimentalFeatures {
                 }
                 unknown => {
                     return Err(BoxliteError::Config(format!(
-                        "unknown feature '{unknown}' in experimental feature list; supported values: custom-kernel, nested-virtualization"
+                        "unknown feature '{unknown}' in experimental feature list; supported values: custom-kernel, nested-virtualization, native-vmm"
                     )));
                 }
             };
@@ -100,6 +105,9 @@ impl ExperimentalFeatures {
         }
         if options.advanced.nested_virtualization {
             self.require(ExperimentalFeature::NestedVirtualization)?;
+        }
+        if options.advanced.engine.is_some() {
+            self.require(ExperimentalFeature::NativeVmm)?;
         }
         Ok(())
     }
@@ -220,6 +228,26 @@ mod tests {
         );
 
         let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
+        enabled.require_for_options(&options).unwrap();
+    }
+
+    #[test]
+    fn native_vmm_options_require_the_matching_token() {
+        let mut options = BoxOptions::default();
+        native_vmm::configure(&mut options);
+        assert_eq!(options.advanced.engine, Some(crate::vmm::VmmKind::Native));
+
+        let error = ExperimentalFeatures::default()
+            .require_for_options(&options)
+            .expect_err("engine selection must be disabled by default");
+
+        assert!(
+            error
+                .to_string()
+                .contains("BOXLITE_EXPERIMENTAL=native-vmm")
+        );
+
+        let enabled = ExperimentalFeatures::parse("native-vmm").unwrap();
         enabled.require_for_options(&options).unwrap();
     }
 

@@ -56,7 +56,7 @@ func newTunnelProxy(t *testing.T, accessStatus int) *Proxy {
 	}
 	proxy := &Proxy{
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
-		config:                     &config.Config{},
+		config:                     &config.Config{ProxyDomain: "proxy.test"},
 		boxInboundCache:            publicCache,
 		boxAuthKeyValidCache:       common_cache.NewMapCache[bool](ctx),
 		boxRunnerCache:             runnerCache,
@@ -233,7 +233,7 @@ func TestFailedSignInDoesNotResolveHostAsSignedToken(t *testing.T) {
 	}
 	proxy := &Proxy{
 		apiclient:       apiclient.NewAPIClient(clientConfig),
-		config:          &config.Config{},
+		config:          &config.Config{ProxyDomain: "proxy.test"},
 		boxInboundCache: inboundCache,
 	}
 	request := httptest.NewRequest(http.MethodGet, "http://3000-d-416243644566313233343536.proxy.test/", nil)
@@ -324,7 +324,7 @@ func TestPreviewTokenIsNotValidatedWithTheAPI(t *testing.T) {
 	}
 	proxy := &Proxy{
 		apiclient:            apiclient.NewAPIClient(clientConfig),
-		config:               &config.Config{},
+		config:               &config.Config{ProxyDomain: "proxy.test"},
 		boxInboundCache:      inboundCache,
 		boxAuthKeyValidCache: common_cache.NewMapCache[bool](ctx),
 	}

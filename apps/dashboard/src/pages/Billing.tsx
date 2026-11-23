@@ -4,8 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { TabIcon } from '@/components/ui/TabIcon'
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
+import { PlansSection } from '@/components/billing/PlansSection'
 import { PlanSection } from '@/components/billing/PlanSection'
 import { UsageSection } from '@/components/billing/UsageSection'
 import { WalletSection } from '@/components/billing/WalletSection'
@@ -13,8 +15,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 const TAB_PANE = 'py-6'
 
@@ -38,14 +40,14 @@ function SegBars() {
 /** Stands in until a billing service is deployed — nothing below it can load without one. */
 function BillingComingSoon() {
   return (
-    <div className="flex min-h-[calc(100svh-60px)] items-center justify-center px-6 py-14 lg:px-[40px]">
+    <div className="flex min-h-[var(--app-content-height,calc(100svh_-_60px))] items-center justify-center px-6 py-14 lg:px-[40px]">
       <div className="w-full max-w-[560px] text-center" style={{ animation: 'stat-in 0.5s ease both' }}>
-        <h1 className="mb-3 text-[26px] font-semibold leading-tight tracking-[-0.5px]">Billing is on the way</h1>
-        <p className="mx-auto mb-2 max-w-[440px] text-[13px] leading-relaxed text-muted-foreground">
+        <h1 className="mb-3 text-page font-semibold leading-tight tracking-[-0.5px]">Billing is on the way</h1>
+        <p className="mx-auto mb-2 max-w-[440px] text-body leading-relaxed text-muted-foreground">
           BoxLite is <span className="text-foreground">free while we finish metering</span>. Nothing is charged today —
           run as many boxes as you need.
         </p>
-        <p className="mx-auto mb-[30px] max-w-[440px] text-[12.5px] leading-relaxed text-muted-foreground">
+        <p className="mx-auto mb-[30px] max-w-[440px] text-meta leading-relaxed text-muted-foreground">
           When billing launches, usage will be metered across four dimensions:
         </p>
 
@@ -56,8 +58,8 @@ function BillingComingSoon() {
               className="flex flex-col items-center gap-[9px] border border-border bg-card px-[10px] pb-[14px] pt-4"
             >
               <Icon className="size-[18px] text-muted-foreground" strokeWidth={1.6} />
-              <div className="text-[11px] uppercase tracking-[1px] text-foreground">{name}</div>
-              <div className="text-[9.5px] tracking-[0.5px] text-muted-foreground">{unit}</div>
+              <div className="text-meta uppercase tracking-[1px] text-foreground">{name}</div>
+              <div className="text-meta tracking-[0.5px] text-muted-foreground">{unit}</div>
               <SegBars />
             </div>
           ))}
@@ -65,10 +67,10 @@ function BillingComingSoon() {
 
         <Link
           to={RoutePath.BOXES}
-          className="inline-flex items-center gap-[9px] bg-primary px-[22px] py-3 text-[12.5px] font-semibold tracking-[0.3px] text-primary-foreground transition-opacity hover:opacity-85"
+          className="inline-flex items-center gap-[9px] bg-primary px-[22px] py-3 text-meta font-semibold tracking-[0.3px] text-primary-foreground transition-opacity hover:opacity-85"
         >
           Back to Boxes
-          <span className="text-[14px] leading-none">→</span>
+          <span className="text-body leading-none">→</span>
         </Link>
       </div>
     </div>
@@ -76,14 +78,24 @@ function BillingComingSoon() {
 }
 
 /**
- * One page, three tabs — the arrangement in the design. Each tab is a section
+ * One page, four tabs — the arrangement in the design. Each tab is a section
  * that keeps its own hooks; this only composes and switches them. Critical wallet
  * warnings stay above the tabs; identity and payment guidance stays in Overview.
  */
 function Billing() {
+  usePageTitle('Billing')
   const config = useConfig()
   // Controlled, so the page-level balance warning can send the user to Wallet.
-  const [tab, setTab] = useState('overview')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const tab =
+    requestedTab && ['overview', 'plans', 'usage', 'wallet'].includes(requestedTab) ? requestedTab : 'overview'
+  const setTab = (value: string) =>
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous)
+      next.set('tab', value)
+      return next
+    })
 
   if (!config.billingApiUrl) {
     return <BillingComingSoon />
@@ -93,25 +105,45 @@ function Billing() {
     <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
       <div className="page-container">
         <div className="pt-6">
-          <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Billing</h1>
+          <h1 className="resource-title">Billing</h1>
           <p className="mt-2 text-body leading-relaxed text-muted-foreground">
             Track resource usage, manage your plan, and top up your balance.
           </p>
           <div className="mt-4 w-full empty:hidden">
             <BalanceLowBanner onGoToWallet={() => setTab('wallet')} />
           </div>
-          <TabsList variant="segmented" className="mt-5">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="usage">Usage</TabsTrigger>
-            <TabsTrigger value="wallet">Wallet</TabsTrigger>
-          </TabsList>
+          <div className="mt-5 flex items-center gap-3">
+            <TabsList variant="underline" aria-label="Billing views" className="min-w-0 flex-1 gap-3 sm:gap-6">
+              <TabsTrigger value="overview">
+                <TabIcon name="overview" />
+                Overview
+              </TabsTrigger>
+              <TabsTrigger value="plans">
+                <TabIcon name="list" />
+                Plans
+              </TabsTrigger>
+              <TabsTrigger value="usage">
+                <TabIcon name="chart" />
+                Usage
+              </TabsTrigger>
+              <TabsTrigger value="wallet">
+                <TabIcon name="wallet" />
+                Wallet
+              </TabsTrigger>
+            </TabsList>
+          </div>
         </div>
         <TabsContent value="overview">
           <div className={TAB_PANE}>
             <div className="mb-8 flex flex-col gap-4 empty:hidden">
               <BillingAlerts />
             </div>
-            <PlanSection />
+            <PlanSection onViewPlans={() => setTab('plans')} />
+          </div>
+        </TabsContent>
+        <TabsContent value="plans">
+          <div className={TAB_PANE}>
+            <PlansSection />
           </div>
         </TabsContent>
         <TabsContent value="usage">
@@ -121,7 +153,20 @@ function Billing() {
         </TabsContent>
         <TabsContent value="wallet">
           <div className={TAB_PANE}>
-            <WalletSection />
+            <WalletSection
+              linkCouponCode={searchParams.get('code') ?? undefined}
+              onCouponClaimAccepted={() =>
+                // An accepted claim no longer needs its code in the URL.
+                setSearchParams(
+                  (previous) => {
+                    const next = new URLSearchParams(previous)
+                    next.delete('code')
+                    return next
+                  },
+                  { replace: true },
+                )
+              }
+            />
           </div>
         </TabsContent>
       </div>

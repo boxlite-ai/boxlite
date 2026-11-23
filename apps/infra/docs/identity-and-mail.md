@@ -16,12 +16,56 @@ For a new OIDC setup, follow the selected cloud’s [GCP](gcp/identity-and-mail.
 Other compatible OIDC providers need equivalent manual setup.
 Application invitation mail and the identity provider's verification/reset mail are separate systems.
 
+The branding target catalog includes dev, stage, and prod. Stage resolves to
+`https://stage.boxlite.ai`, API `https://api.stage.boxlite.ai`, public issuer
+`https://auth.stage.boxlite.ai/`, and customer tenant `boxlite-stage.us.auth0.com`.
+Use `npm run auth0:universal-login -- preview --stage stage` after the stage API
+and branding assets are reachable and the CLI is authenticated to that tenant.
+Declaring a target does not create tenant resources or apply branding.
+Adding a target changes the catalog-wide source digest; create a fresh preview
+before applying, including when targeting an unchanged dev/prod entry.
+
 Invitation emails reuse the black BoxLite wordmark at
 `<DASHBOARD_URL>/auth0/boxlite-black-3f7875da.png`, served by the dashboard's public assets.
 It displays at 32 pixels high with proportional width, matching the Auth0 reset email.
 Keep the asset filename aligned with [Auth0 branding](../auth0/branding/README.md) when updating the logo.
 The invitation email tests check both the branding path and the referenced public file, so a
 branding migration cannot silently leave emails pointing to a deleted asset.
+
+## Auth0 Bot Detection
+
+Dashboard first checks the local account through `/api/users/me`. An unknown
+identity completes Turnstile verification through `/api/auth/register` before
+the API creates its user and default organization. Database-email verification
+remains in the login Action; API token verification does not require profile claims.
+Already registered MCP users keep the existing audience and permission checks.
+
+
+The [stage policy](../auth0/bot-detection.json) sets dev and prod to `when_risky`. Auth0 can challenge
+risky email/password signup and login requests. Social connections are outside
+[Bot Detection coverage](https://auth0.com/docs/secure/attack-protection/bot-detection#limitations).
+
+Run from `apps/infra` with an Auth0 CLI session for the target tenant. Preview
+requires `read:attack_protection`, and apply also requires `update:attack_protection`.
+
+```bash
+npm run auth0:bot-detection -- preview --stage dev
+npm run auth0:bot-detection -- apply --stage dev
+```
+
+Use `--stage prod` for the production Auth0 tenant.
+
+Preview shows the tenant, current policy, desired policy and monitoring mode. Apply
+requires monitoring mode off for an active challenge policy. It updates only the
+password challenge field and reads it back. Each stage needs its own policy entry.
+
+Check new signup, returning password login, and password-backed account linking in dev.
+Linking uses a noninteractive password grant, which can fail if Auth0 requires a
+challenge. A successful normal login leaves risk-triggered linking unverified.
+
+To roll back, restore the previous policy printed by the apply command to the stage entry and apply
+again. A restore to `never` can run in monitoring mode. If a write result is uncertain,
+preview the tenant again before retrying.
 
 ## Auth0 email-first login policy
 
@@ -88,12 +132,14 @@ Preview the login policy, inspect the tenant/client/connection/resource plan, th
 npm run auth0:configure-login -- \
   --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> \
-  --connection <database-connection-name>
+  --connection <database-connection-name> \
+  --api-audience <OIDC_AUDIENCE>
 
 npm run auth0:configure-login -- \
   --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> \
   --connection <database-connection-name> \
+  --api-audience <OIDC_AUDIENCE> \
   --apply
 ```
 
@@ -139,9 +185,19 @@ the Auth0 tenant:
 5. Social login remains unchanged.
 
 The deployment order is intentional: Auth0 apply -> live canaries -> BoxLite
-API deploy. The API then rejects old unverified `auth0|...` access tokens across
-HTTP, Socket.IO, and the WebSocket proxy. It does not revoke refresh tokens or
-retroactively gate independently validating Commerce/Analytics services.
+API deploy. The Action is the only email-verification gate: it denies an
+unverified database user on every grant, refresh and device code included, so
+no token reaches the API for one. Beyond the dashboard client and the MCP resource,
+it covers any client asking for the API audience (`--api-audience`) and every
+database connection. The API stores `email_verified` when a token carries it but
+never refuses a token over it, since Auth0 leaves it out of tokens for third-party
+MCP clients. On every stage, apply the Action and wait one access-token lifetime
+before deploying an API without its own check: tokens issued earlier to an
+unverified database user, for the MCP resource or for the API through another
+client, must expire first, because the old Action did not gate them.
+Both `auth0:configure-login` and `auth0:configure-mcp` load the stage `.env` and
+refuse an `--api-audience` other than its `OIDC_AUDIENCE`; `auth0:configure-login`
+also refuses one that names no Auth0 API on the tenant.
 
 ## MCP client sign-in
 
@@ -151,6 +207,9 @@ Each client registers by its Client ID Metadata Document (CIMD); only the
 reviewed documents in [`auth0/mcp-clients.json`](../bootstrap/auth0/mcp-clients.json)
 are registered, and dynamic client registration stays off. Clients with no fixed
 document (Cursor, Windsurf, Gemini CLI, MCP Inspector) use an API key instead.
+
+Loomy uses its [published metadata document](https://loomy.im/oauth/client-metadata/boxlite.json).
+New BoxLite users sign in to the dashboard once before connecting Loomy.
 
 mdeploy sets `MCP_RESOURCE_URL` to `https://<api host>/mcp`, for example
 `https://api.dev.boxlite.ai/mcp`; a stage value overrides it. Each stage then runs,
@@ -170,10 +229,12 @@ path is not `/mcp` at boot. Its Auth0 API can stay; the API refuses its tokens.
 
 ```bash
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
-  --resource-url <MCP_RESOURCE_URL> --connection <connection-a> --connection <connection-b>
+  --resource-url <MCP_RESOURCE_URL> --api-audience <OIDC_AUDIENCE> \
+  --connection <connection-a> --connection <connection-b>
 
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
-  --resource-url <MCP_RESOURCE_URL> --connection <connection-a> --connection <connection-b> --apply
+  --resource-url <MCP_RESOURCE_URL> --api-audience <OIDC_AUDIENCE> \
+  --connection <connection-a> --connection <connection-b> --apply
 ```
 
 | Step | Auth0 default | Set by apply |
@@ -194,8 +255,16 @@ Clients that do not check `iss` ignore it; the dashboard and the `boxlite` CLI
 do not read it.
 
 The preview calls `clients/cimd/preview`, which validates a document without
-creating anything, and otherwise only reads. Apply refuses a tenant with active
-Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
+creating anything, and otherwise only reads. For a client-only rollout, apply
+only when every planned write belongs to that client. Check tenant capacity if
+the plan includes a new registration.
+
+Preview and apply refuse a tenant
+whose deployed, post-login-bound `boxlite-login-policy` Action is not the repo template, stamped and
+hydrated by `auth0:configure-login`, for this exact `--resource-url` and
+`--api-audience`, because that Action is the only email-verification gate: the API
+never refuses a token over `email_verified`. An Action edited by hand fails, even when re-stamped.
+Apply also refuses a tenant with active Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
 under `.sst/auth0-backups/` before each write, and marks each write as sent before
 sending it. Undo a run with `npm run auth0:configure-mcp -- --rollback <journal-path>`:
 rollback deletes what a run created, looking up a create whose response never
@@ -422,7 +491,15 @@ Auth0-managed. The [branding guide](../auth0/branding/README.md) records hashes,
 Prompt text lives in `auth0/branding/prompts/<language>/<prompt>.json`, one Auth0 prompt per file;
 keys starting with `_` are comments the command never sends. Identifier First serves `login-id` and
 `signup-id`, and the single-step `login` and `signup` return when it is off, so each pair carries the
-same copy. The checked-in-copy test in `auth0/universal-login.test.ts` pins both.
+same copy. The checked-in-copy test in `auth0/universal-login.test.ts` pins both. Auth0 renders
+its own default for a missing or empty text value, such as "Log in to BoxLite to continue to ..."
+for `description`. To show no line, set the value to a zero-width space (`"\u200b"`), as the
+login screens do.
+
+Login and signup prompts use account instructions without promising welcome credits.
+The checked-in verification and password-reset emails likewise contain no credit offer.
+Keep promotional amounts out of these identity messages; billing owns credit grants.
+Prompt-copy updates require the preview/apply procedure above even after deploying the dashboard.
 
 The copy renders on the stage's Auth0 domain (`auth.dev.boxlite.ai` for dev), not the dashboard
 origin, and only to a visitor without an Auth0 session. After `apply`, run `preview` again: it reads

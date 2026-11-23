@@ -59,7 +59,7 @@ pub(crate) async fn import_box(
     let litebox = runtime
         // An archive carries the box's options but not what its image resolved
         // to, so an imported box has no record until one is rebuilt.
-        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None)
+        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None, None)
         .await?;
 
     tracing::info!(
@@ -96,17 +96,10 @@ fn options_from_manifest(
             );
         }
     }
+    options.validate_secret_headers()?;
     options.sanitize().map_err(|error| {
         BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
     })?;
-    // The local runtime shares no typed mounts yet(TODO), so an archive that
-    // carries one is refused rather than stored and dropped at boot.
-    if !options.mounts.is_empty() {
-        return Err(BoxliteError::Unsupported(
-            "typed mounts are not supported by the local runtime yet".to_string(),
-        ));
-    }
-
     if policy == ArchiveImportPolicy::Trusted {
         return Ok(options);
     }
@@ -119,6 +112,9 @@ fn options_from_manifest(
     if options.advanced.nested_virtualization {
         return Err(rejected_upload("nested virtualization"));
     }
+    if options.advanced.engine.is_some() {
+        return Err(rejected_upload("engine selection"));
+    }
     if options.advanced.privileged {
         return Err(rejected_upload("privileged mode"));
     }
@@ -127,19 +123,10 @@ fn options_from_manifest(
     }
     // Every mount, not just a host bind: a managed volume reference in an
     // uploaded archive would also select storage the uploader does not own.
-    if !options.volumes.is_empty() {
+    if !options.volumes.is_empty() || !options.mounts.is_empty() {
         return Err(rejected_upload("volume mounts"));
     }
     options.advanced.security = SecurityOptions::default();
-    // That reset also restores the default's hardcoded 1 GiB RLIMIT_FSIZE —
-    // the ceiling #1152 is about — because it replaces the whole struct rather
-    // than just the isolation fields it means to. The box still boots on a
-    // disk sized from its own `disk_size_gb`, so re-derive the limit.
-    // `sanitize` assigns it outright, so running it twice is idempotent.
-    options.sanitize().map_err(|error| {
-        BoxliteError::InvalidArgument(format!("invalid archive box_options: {error}"))
-    })?;
-
     Ok(options)
 }
 
@@ -279,7 +266,6 @@ pub(crate) fn validate_no_backing_references(disk_path: &Path) -> BoxliteResult<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::types::Bytes;
     use tempfile::TempDir;
 
     fn v3_manifest(options: BoxOptions) -> ArchiveManifest {
@@ -291,6 +277,29 @@ mod tests {
             guest_disk_checksum: String::new(),
             container_disk_checksum: String::new(),
             exported_at: "2026-07-26T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn required_headers_import_rejects_before_install() {
+        for suffix in ["", ",\"headers\":null", ",\"headers\":{}"] {
+            let secret = serde_json::from_str(&format!(r#"{{"name":"x","hosts":["api.test.com"],"placeholder":"dummy","value":"private-token"{suffix}}}"#)).unwrap();
+            let manifest = v3_manifest(BoxOptions {
+                secrets: vec![secret],
+                ..Default::default()
+            });
+            for policy in [
+                ArchiveImportPolicy::Trusted,
+                ArchiveImportPolicy::UntrustedRemote,
+            ] {
+                let error = options_from_manifest(&manifest, policy)
+                    .expect_err("import accepted missing headers");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("secret \"x\" has no headers; recreate the box with headers")
+                );
+            }
         }
     }
 
@@ -347,6 +356,23 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("nested virtualization"));
+    }
+
+    #[test]
+    fn untrusted_import_rejects_engine_selection() {
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.engine = Some(crate::vmm::VmmKind::Native);
+        let options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("engine selection"));
     }
 
     #[test]
@@ -422,28 +448,30 @@ mod tests {
         assert!(error.to_string().contains("volume mounts"));
     }
 
-    /// The local runtime shares no typed mounts yet, so an archive that carries
-    /// one is refused whoever imports it, rather than stored and later dropped.
     #[test]
-    fn import_refuses_typed_mounts_until_the_local_runtime_shares_them() {
+    fn import_typed_mount_policy_depends_on_trust() {
         use crate::runtime::options::MountSpec;
 
-        for policy in [
-            ArchiveImportPolicy::Trusted,
-            ArchiveImportPolicy::UntrustedRemote,
+        let trusted = BoxOptions {
+            mounts: vec![MountSpec::bind_mount("/srv/data", "/data")],
+            ..Default::default()
+        };
+        options_from_manifest(&v3_manifest(trusted), ArchiveImportPolicy::Trusted)
+            .expect("trusted archives may carry typed mounts");
+
+        for mount in [
+            MountSpec::bind_mount("/srv/data", "/data"),
+            MountSpec::volume_mount("workspace", "/workspace"),
         ] {
             let options = BoxOptions {
-                mounts: vec![MountSpec::bind_mount("/srv/data", "/data")],
+                mounts: vec![mount],
                 ..Default::default()
             };
-
-            let error = options_from_manifest(&v3_manifest(options), policy)
-                .expect_err("the local runtime shares no typed mounts yet");
-
-            assert!(
-                error.to_string().contains("typed mounts"),
-                "{policy:?}: {error}"
-            );
+            let error =
+                options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                    .expect_err("untrusted archives must not select server storage");
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+            assert!(error.to_string().contains("volume mounts"), "{error}");
         }
     }
 
@@ -471,32 +499,7 @@ mod tests {
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .unwrap();
 
-        // Everything but the file-size ceiling is the server default; that one
-        // is derived from the box's own disk (#1152), so it is the default's
-        // stale 1 GiB that must NOT come back.
-        let mut expected = SecurityOptions::default();
-        expected.resource_limits.max_file_size = Some(Bytes::from_gib(20).as_bytes());
-        assert_eq!(resolved.advanced.security, expected);
-    }
-
-    /// The server-default reset must not put the 1 GiB ceiling back: an
-    /// uploaded archive's box boots on a disk sized from its own
-    /// `disk_size_gb` and needs a limit that covers it.
-    #[test]
-    fn untrusted_import_derives_the_fsize_limit_from_the_disk() {
-        let options = BoxOptions {
-            disk_size_gb: Some(20),
-            ..BoxOptions::default()
-        };
-
-        let resolved =
-            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
-                .unwrap();
-
-        assert_eq!(
-            resolved.advanced.security.resource_limits.max_file_size,
-            Some(Bytes::from_gib(40).as_bytes())
-        );
+        assert_eq!(resolved.advanced.security, SecurityOptions::default());
     }
 
     #[test]
@@ -505,6 +508,8 @@ mod tests {
         advanced.nested_virtualization = true;
         advanced.privileged = true;
         advanced.security = SecurityOptions::disabled();
+        advanced.security.resource_limits.max_file_size = Some(1 << 30);
+        let security = advanced.security.clone();
         let options = BoxOptions {
             advanced,
             ..Default::default()
@@ -516,12 +521,7 @@ mod tests {
         assert!(resolved.advanced.nested_virtualization);
         assert!(resolved.advanced.privileged);
 
-        // `sanitize` derives RLIMIT_FSIZE from `disk_size_gb` (#1152), so the
-        // one security field a trusted import does not carry over verbatim is
-        // the file-size ceiling. Everything else is preserved.
-        let mut expected = SecurityOptions::disabled();
-        expected.resource_limits.max_file_size = Some(Bytes::from_gib(20).as_bytes());
-        assert_eq!(resolved.advanced.security, expected);
+        assert_eq!(resolved.advanced.security, security);
     }
 
     #[test]
@@ -602,6 +602,205 @@ mod tests {
         assert!(
             error.to_string().contains("qcow2"),
             "the error must say the disk is not a usable qcow2, got: {error}"
+        );
+    }
+    #[test]
+    fn fractional_cpus_archive_versions_and_legacy_options() {
+        use crate::litebox::archive::build_zstd_tar_archive;
+        use crate::runtime::layout::FilesystemLayout;
+        let dir = TempDir::new().unwrap();
+        let layout = FilesystemLayout::new(dir.path().join("home"), Default::default());
+        std::fs::create_dir_all(layout.temp_dir()).unwrap();
+        let container_path = dir.path().join("container");
+        std::fs::write(&container_path, b"test disk").unwrap();
+        let manifest_path = dir.path().join(MANIFEST_FILENAME);
+        let archive_path = dir.path().join("box.boxlite");
+        for version in [1, 2, 3, 4, 5, 6, 7, 8] {
+            let mut manifest = v3_manifest(BoxOptions {
+                cpus: Some(if version == 6 { 1.5 } else { 2.0 }),
+                ..Default::default()
+            });
+            manifest.version = version;
+            std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            build_zstd_tar_archive(&archive_path, &manifest_path, &container_path, 1).unwrap();
+            let result = extract_and_validate(&archive_path, &layout);
+            if version > crate::litebox::archive::MAX_SUPPORTED_VERSION {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains(&format!("version {version}")));
+            } else {
+                assert_eq!(
+                    result.unwrap().0.box_options.unwrap().cpus,
+                    manifest.box_options.unwrap().cpus
+                );
+            }
+        }
+        let mut value = serde_json::to_value(v3_manifest(BoxOptions::default())).unwrap();
+        for field in ["cpu_limit", "cpu_limit_millicpu"] {
+            value["box_options"][field] = serde_json::json!(125);
+            let error = serde_json::from_value::<ArchiveManifest>(value.clone()).unwrap_err();
+            assert!(error.to_string().contains(field));
+            value["box_options"][field] = serde_json::Value::Null;
+            serde_json::from_value::<ArchiveManifest>(value.clone()).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod required_import_safety_tests {
+    use super::*;
+    use crate::runtime::options::BoxliteOptions;
+
+    #[tokio::test]
+    async fn required_headers_import_preserves_archive_and_store() {
+        for extra in [
+            ",\"headers\":{\"Host\":\"{value}\"}",
+            "",
+            ",\"headers\":null",
+            ",\"headers\":{}",
+            ",\"headers\":{\"X-Key\":\"{value}\"}",
+        ] {
+            for untrusted in [false, true] {
+                let home = tempfile::tempdir().unwrap();
+                let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+                    home_dir: home.path().join("runtime"),
+                    ..Default::default()
+                })
+                .unwrap();
+                let disk = home.path().join("disk.qcow2");
+                crate::disk::qcow2::write_test_qcow2(&disk, None);
+                let secret = serde_json::from_str(&format!(r#"{{"name":"x","hosts":["api.test.com"],"placeholder":"dummy","value":"token"{extra}}}"#)).unwrap();
+                let manifest = ArchiveManifest {
+                    version: 3,
+                    box_name: None,
+                    image: "alpine:latest".into(),
+                    box_options: Some(BoxOptions {
+                        secrets: vec![secret],
+                        ..Default::default()
+                    }),
+                    guest_disk_checksum: String::new(),
+                    container_disk_checksum: sha256_file(&disk).unwrap(),
+                    exported_at: "2026-11-10T00:00:00Z".into(),
+                };
+                let manifest_path = home.path().join("manifest.json");
+                std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+                let path = home.path().join("saved.boxlite");
+                crate::litebox::archive::build_zstd_tar_archive(&path, &manifest_path, &disk, 1)
+                    .unwrap();
+                let before = std::fs::read(&path).unwrap();
+                let sentinel = runtime.layout.boxes_dir().join("keep");
+                std::fs::create_dir_all(&sentinel).unwrap();
+                std::fs::write(sentinel.join("data"), "original").unwrap();
+                let archive = if untrusted {
+                    BoxArchive::from_untrusted_upload(&path)
+                } else {
+                    BoxArchive::new(&path)
+                };
+                let result = import_box(&runtime, archive, None).await;
+                if extra.contains("X-Key") {
+                    let imported = result.expect("valid headers must remain importable");
+                    let (config, _) = runtime
+                        .box_manager
+                        .box_by_id(imported.id())
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(
+                        serde_json::to_value(config.options).unwrap()["secrets"][0]["headers"]["X-Key"],
+                        "{value}"
+                    );
+                    assert_eq!(std::fs::read(&path).unwrap(), before);
+                    assert_eq!(
+                        std::fs::read_to_string(sentinel.join("data")).unwrap(),
+                        "original"
+                    );
+                    assert_eq!(
+                        std::fs::read_dir(runtime.layout.temp_dir())
+                            .unwrap()
+                            .count(),
+                        0
+                    );
+                    continue;
+                }
+                assert!(result.is_err(), "import accepted headers {extra:?}");
+                let message = result.err().unwrap().to_string();
+                assert!(
+                    message.contains(if extra.contains("Host") {
+                        "header cannot be"
+                    } else {
+                        "secret \"x\" has no headers; recreate the box with headers"
+                    }),
+                    "{message}"
+                );
+                assert!(runtime.list_info().await.unwrap().is_empty());
+                assert_eq!(std::fs::read(&path).unwrap(), before);
+                assert_eq!(
+                    std::fs::read_to_string(sentinel.join("data")).unwrap(),
+                    "original"
+                );
+                assert_eq!(
+                    std::fs::read_dir(runtime.layout.boxes_dir())
+                        .unwrap()
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    std::fs::read_dir(runtime.layout.temp_dir())
+                        .unwrap()
+                        .count(),
+                    0
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn trusted_import_rejects_missing_canonical_volume_without_leaking_box() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().join("runtime"),
+            ..Default::default()
+        })
+        .unwrap();
+        let disk = home.path().join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk, None);
+        let missing_id = uuid::Uuid::new_v4().to_string();
+        let manifest = ArchiveManifest {
+            version: crate::litebox::archive::MANAGED_MOUNTS_ARCHIVE_VERSION,
+            box_name: None,
+            image: "alpine:latest".into(),
+            box_options: Some(BoxOptions {
+                mounts: vec![crate::runtime::options::MountSpec::volume_mount(
+                    &missing_id,
+                    "/workspace",
+                )],
+                ..Default::default()
+            }),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: sha256_file(&disk).unwrap(),
+            exported_at: "2026-11-15T00:00:00Z".into(),
+        };
+        let manifest_path = home.path().join("manifest.json");
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let path = home.path().join("saved.boxlite");
+        crate::litebox::archive::build_zstd_tar_archive(&path, &manifest_path, &disk, 1).unwrap();
+
+        let error = import_box(&runtime, BoxArchive::new(&path), None)
+            .await
+            .err()
+            .expect("an archive must not acquire a missing canonical volume");
+        assert!(matches!(error, BoxliteError::NotFound(_)), "{error:?}");
+        assert!(error.to_string().contains(&missing_id));
+        assert!(runtime.list_info().await.unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count(),
+            0
+        );
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.temp_dir())
+                .unwrap()
+                .count(),
+            0
         );
     }
 }

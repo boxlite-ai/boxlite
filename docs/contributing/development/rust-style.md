@@ -93,6 +93,13 @@ Check lint overrides with the Rust version used by [CI](../../../.github/ci-conf
 a cached local `stable` toolchain can be older. Use `#[expect(..., reason = "...")]`
 while the lint still fires, and remove the override when it no longer does.
 
+The REST client's WebSocket header regression scopes `#[expect(clippy::result_large_err)]`
+to its handshake callback. Tungstenite 0.24 requires `Result<Response, ErrorResponse>`;
+boxing that error would violate the callback contract. Keep the expectation local and
+retain its reason so a dependency change that removes the warning requires review.
+The loopback regression remains runnable with
+`BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=activity_client_labels`.
+
 Run before committing:
 
 ```bash

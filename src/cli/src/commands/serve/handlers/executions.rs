@@ -1019,6 +1019,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
 
         // The stub's channels must stay alive for the length of the test.
@@ -1105,6 +1106,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
 
         let (exec, stdout_tx, stderr_tx, stdin_rx, result_tx) =

@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "artifact_sha256": {},
+  "gates": {
+    "package_and_host_install": {"status":"pending","evidence":""},
+    "cloud_api_workflow": {"status":"pending","evidence":""},
+    "oauth_public_preflight": {"status":"pending","evidence":""},
+    "oauth_host_workflow": {"status":"pending","evidence":""},
+    "local_runtime_workflow": {"status":"pending","evidence":""},
+    "missing_api_key_no_fallback": {"status":"pending","evidence":""},
+    "eight_host_review_cases": {"status":"pending","evidence":""},
+    "server_tool_metadata_and_permissions": {"status":"pending","evidence":""},
+    "openai_surface_eligibility": {"status":"pending","evidence":""},
+    "reviewer_account": {"status":"pending","evidence":""},
+    "demo_recording": {"status":"pending","evidence":""},
+    "publisher_and_domain": {"status":"pending","evidence":""},
+    "published_release_repository": {"status":"pending","evidence":""},
+    "openai_scans": {"status":"pending","evidence":""},
+    "claude_plugin_and_connector_checks": {"status":"pending","evidence":""}
+  }
+}

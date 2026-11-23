@@ -44,6 +44,10 @@ import Redis from 'ioredis'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
+
+/** Disk usage at or above this percentage is logged as critical pressure. */
+const RUNNER_DISK_CRITICAL_THRESHOLD = 90
 
 @Injectable()
 export class RunnerService {
@@ -367,7 +371,13 @@ export class RunnerService {
     },
     appVersion?: string,
     supportsPrivileged?: boolean,
-    context?: { signal?: AbortSignal; infoFailed?: boolean },
+    context?: {
+      signal?: AbortSignal
+      infoFailed?: boolean
+      nestedVirtualizationEnabled?: boolean
+      capabilities?: string[]
+    },
+    dataDiskRef?: RunnerDataDiskRef,
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
     // A timed-out attempt can resume here after its retry has committed.
@@ -389,6 +399,12 @@ export class RunnerService {
 
     if (!context?.infoFailed) {
       updateData.supportsPrivileged = supportsPrivileged === true
+      updateData.nestedVirtualizationEnabled = context?.nestedVirtualizationEnabled === true
+      // The binary's own declaration, not accumulated state: a runner that
+      // stops reporting a capability (downgrade, or a binary predating the
+      // field) loses it on the next heartbeat, so dispatch can never trust a
+      // capability the running binary no longer has.
+      updateData.capabilities = context?.capabilities ?? null
     }
 
     if (domain) {
@@ -405,6 +421,14 @@ export class RunnerService {
 
     if (appVersion) {
       updateData.appVersion = appVersion
+    }
+
+    // Refreshed whenever a heartbeat carries it, never nulled when it does
+    // not: an older runner binary reporting no disk must not erase the
+    // identity a newer one reported (the expansion controller skips runners
+    // without one, so a wiped identity would silently stop expansion).
+    if (dataDiskRef !== undefined) {
+      updateData.dataDiskRef = dataDiskRef
     }
 
     if (serviceHealth !== undefined) {
@@ -436,6 +460,19 @@ export class RunnerService {
       updateData.memoryGiB = metrics.memoryGiB
       updateData.diskGiB = metrics.diskGiB
 
+      const diskUsage = updateData.currentDiskUsagePercentage ?? 0
+      if (diskUsage >= RUNNER_DISK_CRITICAL_THRESHOLD) {
+        this.logger.warn(
+          {
+            'event.name': 'runner.disk_pressure',
+            'disk.pressure_level': 'critical',
+            runnerId,
+            diskUsagePercentage: diskUsage,
+          },
+          `Runner ${runnerId} is at critical data-disk usage (${diskUsage}%)`,
+        )
+      }
+
       updateData.availabilityScore = this.calculateAvailabilityScore(runnerId, {
         cpuLoadAverage: updateData.currentCpuLoadAverage,
         cpuUsage: updateData.currentCpuUsagePercentage,
@@ -454,7 +491,16 @@ export class RunnerService {
     if (!(await this.updateRunnerUnlessDecommissioned(runnerId, updateData))) {
       return
     }
-    this.logger.debug(`Updated health for runner ${runnerId}`)
+    this.logger.debug(
+      {
+        event: 'runner.health.persisted',
+        runnerId,
+        appVersion: appVersion ?? runner.appVersion,
+        capabilities: context?.capabilities ?? [],
+        infoFailed: context?.infoFailed === true,
+      },
+      'Runner health persisted',
+    )
 
     this.eventEmitter.emit(
       RunnerEvents.STATE_UPDATED,
@@ -567,7 +613,11 @@ export class RunnerService {
                     runnerInfo?.metrics,
                     runnerInfo?.appVersion,
                     runnerInfo?.supportsPrivileged,
-                    { signal: abortController.signal, infoFailed: runnerInfoFailed },
+                    {
+                      signal: abortController.signal,
+                      infoFailed: runnerInfoFailed,
+                      nestedVirtualizationEnabled: runnerInfo?.nestedVirtualizationEnabled,
+                    },
                   )
                 })(),
                 new Promise((_, reject) => {

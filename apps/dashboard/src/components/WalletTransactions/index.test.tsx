@@ -42,6 +42,19 @@ describe('WalletTransactionsTable PR #829 surface', () => {
     document.body.innerHTML = ''
   })
 
+  it('shows an empty credit history only after loading finishes', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    act(() => root?.render(<WalletTransactionsTable data={[]} loading />))
+    expect(host.querySelector('[role="status"] h2')?.textContent).toBe('Loading credit activity…')
+    expect(host.textContent).not.toContain('No credit activity yet')
+    act(() => root?.render(<WalletTransactionsTable data={[]} loading={false} />))
+    expect(host.querySelector('h2')?.textContent).toBe('No credit activity yet')
+    expect(host.textContent).toContain('Credit purchases, grants and usage')
+    expect(host.querySelector('[data-transaction-header]')).toBeNull()
+  })
+
   it('keeps the exact transaction grid, date, amount, and status vocabulary', () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -59,7 +72,7 @@ describe('WalletTransactionsTable PR #829 surface', () => {
       'Status',
     ])
     expect(host.querySelector('[data-transaction-date]')?.textContent).toBe('2026-07-01')
-    expect(host.querySelector('[data-transaction-type]')?.textContent).toBe('top-up')
+    expect(host.querySelector('[data-transaction-type]')?.textContent).toBe('Top-up')
     expect(host.querySelector('[data-transaction-amount]')?.textContent).toBe('+100.00')
     expect(host.querySelector('[data-transaction-status]')?.textContent).toBe('ok')
     expect(host.textContent).not.toContain('Details')

@@ -33,7 +33,7 @@ const LoadingFallback = () => {
     <div
       role="status"
       aria-live="polite"
-      className="flex min-h-svh flex-col items-center justify-center gap-7 bg-background px-6 text-center font-mono text-foreground"
+      className="flex min-h-svh flex-col items-center justify-center gap-7 bg-background px-6 text-center font-sans text-foreground"
     >
       <BoxCube state="building" size={76} className="text-foreground" />
       <LogoText className="h-9 w-auto" />

@@ -29,14 +29,26 @@ How to build, test, and change the code.
 - [CLI development](development/cli.md): building, testing, and extending the `boxlite` CLI.
 - [E2E local CI runbook](development/e2e-local.md): the self-hosted runner behind `e2e-local.yml`.
 - [REST API testing](development/rest-api-testing.md): API-key and OIDC coverage across the SDK, CLI, API, runner, and VM.
+- [Local volume testing](development/local-volume-testing.md): unit, guest, real-VM, and Python compatibility checks for local managed volumes.
 - [macOS sandbox debugging](development/macos-sandbox-debugging.md): find and fix Seatbelt denials.
 
 ## Investigations
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-19 · [Trial discovery in Welcome](investigations/2026-11-19-trial-discovery-preview.md): frontend onboarding study, mock boundaries, direct completion and full walkthrough screenshots.
+
+- 2026-11-13 · [Runner data-disk performance scaling](investigations/2026-11-13-runner-data-disk-performance-scaling.md): expansion raises provisioned IOPS/throughput proportionally, clipped to the per-disk ceiling; capacity never waits for performance.
+- 2026-11-13 · [Filestore lookup prerequisites](investigations/2026-11-13-filestore-lookup-prerequisites.md): automatic Filestore IAM and API prerequisites, cross-project configuration, and diagnostic error preservation.
+- 2026-11-13 · [Filestore instance discovery](investigations/2026-11-13-filestore-instance-discovery.md): API-resolved NFS targets, explicit backend selection, and deterministic instance assignment.
+- 2026-11-11 · [CI resource labels](investigations/2026-11-11-ci-resource-labels.md): job-selected Box resources, quota enforcement and original-operation recovery.
+- 2026-11-10 · [Desktop left navigation](investigations/2026-11-10-desktop-left-navigation.md): sidebar layout, hover preview and navigation behavior.
+- 2026-11-10 · [Desktop visual refinement](investigations/2026-11-10-desktop-visual-refinement.md): resource view consistency and desktop review findings.
+- 2026-11-09 · [Desktop dashboard consistency](investigations/2026-11-09-desktop-review-corrections.md): shared resource presentation, compact usage summaries and desktop screenshot evidence.
+- 2026-11-06 · [CI capacity summary](investigations/2026-11-06-ci-capacity-meter.md): inline slot occupancy and owner capacity editing beside the runner filter.
+- 2026-11-06 · [SSH connection dialog](investigations/ssh-connection-dialog.md): progressive connection steps, saved-key recovery, and backend-compatible SSH controls.
 - 2026-11-06 · [Registration email policy](investigations/2026-11-06-registration-email-policy.md): disposable-domain rejection at platform account creation with existing-user access preserved.
-- 2026-11-04 · [CLI-managed SSH setup](investigations/ssh-quick-configuration.md): managed SSH credentials and the printed SSH connection command.
+- 2026-11-04 · [CLI-managed SSH setup](investigations/ssh-quick-configuration.md): historical credential and printed-command design, superseded by direct OpenSSH login.
 - 2026-11-02 · [VMM virtio-net device](investigations/2026-11-02-vmm-virtio-net.md): guest queue framing, gvproxy stream backpressure, event contracts and device-only qualification.
 - 2026-10-28 · [Agent REST API design](investigations/2026-10-28-agent-rest-api-design.md): nine HTTP operations for agents, turns and interaction, with snapshot, retry and event-recovery contracts.
 - 2026-10-23 · [Organization activity facts](investigations/organization-activation-facts.md): lifecycle timestamps, transaction boundaries, and migration availability.

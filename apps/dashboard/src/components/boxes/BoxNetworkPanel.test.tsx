@@ -33,31 +33,57 @@ describe('BoxNetworkPanel', () => {
     root = createRoot(container)
     act(() => {
       root.render(
-        <BoxNetworkPanel network={info} canManage={canManage} onToggleInbound={onToggleInbound} onGetUrl={vi.fn()} />,
+        <BoxNetworkPanel
+          network={info}
+          canManage={canManage}
+          onToggleInbound={onToggleInbound}
+          onCreateTunnel={vi.fn()}
+        />,
       )
     })
     return onToggleInbound
   }
 
-  // Each row is its key, dotted leader, then value; the text reads key then value.
+  // Each row keeps its label before its value in reading order.
   function row(key: string): string | undefined {
     return [...container.querySelectorAll('div')]
-      .map((element) => element.textContent ?? '')
+      .map((element) => (element.textContent ?? '').toLowerCase())
       .find((text) => text.startsWith(key) && !text.includes('network'))
   }
 
   it('reports both directions, with the outbound allowlist size', () => {
     render(network(NetworkMode.DISABLED, NetworkMode.ENABLED, ['api.openai.com', '10.0.0.0/8']))
 
-    expect(row('outbound')).toBe('outboundenabled · 2 hosts allowed')
-    expect(row('inbound')).toBe('inbounddisabled · your organization')
+    expect(container.querySelector('summary')?.textContent).toBe('Restricted · 2 rules')
+    expect([...container.querySelectorAll('details li')].map((item) => item.textContent)).toEqual([
+      'api.openai.com',
+      '10.0.0.0/8',
+    ])
+    expect(row('inbound')).toBe('inbounddisabled')
+    expect(container.textContent).not.toContain('Disabled blocks all inbound tunnel access.')
   })
 
   it('reports enabled inbound and blocked egress', () => {
     render(network(NetworkMode.ENABLED, NetworkMode.DISABLED))
 
     expect(row('outbound')).toBe('outbounddisabled')
-    expect(row('inbound')).toBe('inboundenabled · anyone')
+    expect(row('inbound')).toBe('inboundenabled')
+  })
+
+  it('labels an enabled empty allowlist unrestricted', () => {
+    render(network(NetworkMode.DISABLED, NetworkMode.ENABLED))
+    expect(row('outbound')).toBe('outboundunrestricted')
+  })
+
+  it('does not present saved rules as active when outbound is disabled', () => {
+    render(network(NetworkMode.DISABLED, NetworkMode.DISABLED, ['10.0.0.0/8']))
+    expect(row('outbound')).toBe('outbounddisabled')
+    expect(container.textContent).not.toContain('10.0.0.0/8')
+  })
+
+  it('does not equate an unrecognized outbound mode with disabled', () => {
+    render(network(NetworkMode.DISABLED, 'future-mode' as NetworkMode))
+    expect(row('outbound')).toBe('outboundunknown')
   })
 
   it('turns inbound access off without asking', () => {
@@ -75,16 +101,15 @@ describe('BoxNetworkPanel', () => {
     expect(container.querySelector('[aria-label="Inbound access"]')).toBeNull()
   })
 
-  // A url is a tunnel, which needs inbound access; the control says so up front.
-  // The tunnel route also needs WRITE_BOXES, which viewers lack.
+  // Opening the form does not publish a port or enable inbound.
   it.each([
     [NetworkMode.ENABLED, true, false],
-    [NetworkMode.DISABLED, true, true],
+    [NetworkMode.DISABLED, true, false],
     [NetworkMode.ENABLED, false, true],
-  ])('with inbound %s and canManage %s, get url disabled is %s', (inbound, canManage, disabled) => {
+  ])('with inbound %s and canManage %s, create tunnel disabled is %s', (inbound, canManage, disabled) => {
     render(network(inbound, NetworkMode.ENABLED), vi.fn(), canManage)
 
-    const getUrl = [...container.querySelectorAll('button')].find((button) => button.textContent === 'get url')
+    const getUrl = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Create tunnel')
     expect(getUrl?.disabled).toBe(disabled)
   })
 })

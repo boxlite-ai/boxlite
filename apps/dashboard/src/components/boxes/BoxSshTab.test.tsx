@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { Box, BoxState, NetworkMode } from '@boxlite-ai/api-client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { Box, BoxState } from '@boxlite-ai/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BoxSshTab } from './BoxSshTab'
 
@@ -10,9 +9,10 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   delete: vi.fn(),
-  generate: vi.fn(),
   inbound: vi.fn(),
   organization: 'org-1',
+  user: 'user-1',
+  endpoint: 'https://api.example.test',
   permitted: true,
 }))
 vi.mock('@/hooks/useApi', () => {
@@ -23,15 +23,15 @@ vi.mock('@/hooks/useApi', () => {
   return { useApi: () => api }
 })
 vi.mock('@/hooks/useConfig', () => ({
-  useConfig: () => ({ apiUrl: 'https://api.example.test', oidc: { issuer: '' } }),
+  useConfig: () => ({ apiUrl: mocks.endpoint, oidc: { issuer: '' } }),
 }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: mocks.organization ? { id: mocks.organization } : undefined,
+    authenticatedUserOrganizationMember: { userId: mocks.user },
     authenticatedUserHasPermission: () => mocks.permitted,
   }),
 }))
-vi.mock('@/lib/ssh', async (original) => ({ ...(await original<object>()), generateSshCredentials: mocks.generate }))
 
 const status = {
   enabled: true,
@@ -40,18 +40,8 @@ const status = {
   host_public_key: 'public-host',
   host_key_fingerprint: 'SHA256:test-fingerprint',
 }
-const credentials = {
-  privateKey: 'test-client-key',
-  config: {
-    listen_address: '0.0.0.0:22',
-    host_private_key: 'test-host-key',
-    accounts: [{ login: 'box', authorized_keys: ['test-client-public'] }],
-  },
-}
 let root: Root
 let host: HTMLDivElement
-let blobs: Blob[]
-let queryClient: QueryClient
 function button(label: string): HTMLButtonElement {
   const found = [...document.querySelectorAll('button')].find((b) => b.textContent === label)
   if (!found) throw new Error(`Missing button ${label}`)
@@ -60,282 +50,252 @@ function button(label: string): HTMLButtonElement {
 async function click(label: string) {
   await act(async () => button(label).click())
 }
-async function render(state = BoxState.STARTED, id = 'box-1', refreshSignal = 0, inbound = NetworkMode.ENABLED) {
+async function render(state = BoxState.STARTED, id = 'box-1', refreshSignal = 0, statusContainer?: HTMLDivElement) {
   await act(async () =>
     root.render(
-      <QueryClientProvider client={queryClient}>
-        <BoxSshTab box={{ id, state, network: { inbound: { mode: inbound } } } as Box} refreshSignal={refreshSignal} />
-      </QueryClientProvider>,
+      <BoxSshTab box={{ id, state } as Box} refreshSignal={refreshSignal} statusContainer={statusContainer} />,
     ),
   )
 }
 function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (error: Error) => void
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
-  })
-  return { promise, resolve, reject }
+  return Promise.withResolvers<T>()
 }
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   vi.clearAllMocks()
   mocks.organization = 'org-1'
+  mocks.user = 'user-1'
+  mocks.endpoint = 'https://api.example.test'
   mocks.permitted = true
-  mocks.get.mockResolvedValue({ data: { ...status, enabled: false } })
-  mocks.post.mockResolvedValue({ data: status })
-  mocks.delete.mockResolvedValue({ data: { ...status, enabled: false } })
-  mocks.generate.mockResolvedValue(credentials)
-  mocks.inbound.mockReset().mockResolvedValue(undefined)
-  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  blobs = []
-  vi.stubGlobal(
-    'URL',
-    class extends URL {
-      static createObjectURL(blob: Blob) {
-        blobs.push(blob)
-        return 'blob:test-key'
-      }
-      static revokeObjectURL = vi.fn()
-    },
-  )
+  mocks.get.mockReset().mockResolvedValue({ data: status })
+  mocks.post.mockReset().mockResolvedValue({ data: status })
+  mocks.delete.mockReset().mockResolvedValue({ data: { ...status, enabled: false } })
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
 })
 afterEach(() => {
   act(() => root.unmount())
-  queryClient.clear()
   host.remove()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
-describe('BoxSshTab', () => {
-  it('enables disabled inbound before configuring SSH', async () => {
-    const inbound = deferred<void>()
-    mocks.inbound.mockReturnValueOnce(inbound.promise)
-    await render(BoxState.STARTED, 'box-1', 0, NetworkMode.DISABLED)
-    await click('Setup')
-    expect(mocks.inbound).not.toHaveBeenCalled()
-    await click('Set up SSH')
-    expect(mocks.inbound).toHaveBeenCalledWith('org-1', 'box-1', NetworkMode.ENABLED)
+function disabledStatus() {
+  mocks.get.mockResolvedValue({ data: { ...status, enabled: false, host_public_key: '', host_key_fingerprint: '' } })
+}
+async function toggleSsh() {
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="SSH access"]')!.click())
+}
+
+describe('SSH BoxSshTab static guide and saved access', () => {
+  it('offers direct CLI SSH immediately without configuring SSH in the browser', async () => {
+    await render()
+    await click('Connect via SSH')
+    const commands = [...document.querySelectorAll('pre')].map((node) => node.textContent)
+    expect(commands).toEqual([
+      'curl -fsSL https://sh.boxlite.ai | sh\nexport PATH="$HOME/.local/bin:$PATH"',
+      'boxlite auth login',
+      'boxlite ssh box-1',
+    ])
+    const dialog = document.querySelector('[role="dialog"]')!
+    const body = dialog.querySelector('ol')?.parentElement
+    expect(body?.classList.contains('font-mono')).toBe(false)
+    for (const command of dialog.querySelectorAll('pre')) {
+      expect(command.classList.contains('font-mono')).toBe(true)
+    }
+    expect(dialog.textContent).toContain(
+      'Select the API-key method, then enter an API key ↗ for this organization when prompted.',
+    )
+    expect(dialog.querySelector('a[href="/dashboard/keys"]')).not.toBeNull()
+    expect(dialog.textContent).toContain(
+      'First setup can replace existing SSH access and disconnect clients. Exiting SSH leaves its public tunnel open.',
+    )
+    const docs = dialog.querySelectorAll('a[href="https://docs.boxlite.ai/cloud/ssh"]')
+    expect(docs).toHaveLength(1)
+    expect(docs[0].parentElement!.textContent).toBe(
+      'For other organizations or an existing CLI setup, follow the SSH guide ↗.',
+    )
+    expect(docs[0].parentElement!.classList.contains('text-meta')).toBe(true)
+    expect(docs[0].parentElement!.classList.contains('text-muted-foreground')).toBe(true)
+    expect(document.querySelector('input')).toBeNull()
     expect(mocks.post).not.toHaveBeenCalled()
-    await act(async () => inbound.resolve())
-    expect(mocks.post).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh', credentials.config, { timeout: 30_000 })
-    expect(document.body.textContent).toContain('SSH connection details')
+    expect(mocks.inbound).not.toHaveBeenCalled()
   })
 
-  it('keeps the key and stops setup when enabling inbound fails', async () => {
-    mocks.inbound.mockRejectedValueOnce(new Error('private server details'))
-    await render(BoxState.STARTED, 'box-1', 0, NetworkMode.DISABLED)
-    await click('Setup')
-    await click('Set up SSH')
-    expect(document.body.textContent).toContain('Unable to enable inbound access')
-    expect(document.body.textContent).not.toContain('private server details')
+  it('copies the displayed connection command, reports failure and permits retry without writes', async () => {
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('denied')).mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    await render()
+    await click('Connect via SSH')
+    const connect = document.querySelectorAll('pre')[2]
+    const copy = connect.parentElement!.querySelector('button')!
+    await act(async () => copy.click())
+    expect(copy.textContent).toBe('Copy failed — retry')
+    await act(async () => copy.click())
+    expect(writeText).toHaveBeenLastCalledWith(connect.textContent)
+    expect(copy.textContent).toBe('Copied')
+    await click('Close')
+    await click('Connect via SSH')
+    expect(document.querySelectorAll('pre')[2].parentElement!.querySelector('button')!.textContent).toBe('Copy')
     expect(mocks.post).not.toHaveBeenCalled()
-    expect(button('Download private key')).toBeDefined()
-    await click('Set up SSH')
-    expect(mocks.generate).toHaveBeenCalledOnce()
+    expect(mocks.delete).not.toHaveBeenCalled()
+    expect(mocks.inbound).not.toHaveBeenCalled()
+  })
+
+  it('keeps static guidance readable when the Box stops or write permission is revoked', async () => {
+    await render()
+    await click('Connect via SSH')
+    const guide = document.querySelector('[role="dialog"]')!.textContent
+    mocks.permitted = false
+    await render(BoxState.STOPPED)
+    expect(document.querySelector('[role="dialog"]')!.textContent).toBe(guide)
+    expect(document.querySelector('[aria-label="SSH access"]')).toBeNull()
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  it('keeps unknown status non-actionable without blocking the static guide', async () => {
+    mocks.get.mockRejectedValueOnce(new Error('unavailable'))
+    await render()
+    await click('Connect via SSH')
+    expect(document.querySelector<HTMLButtonElement>('[aria-label="SSH access"]')!.disabled).toBe(true)
+    expect(document.querySelectorAll('pre')[2].textContent).toContain('ssh box-1')
+    await act(async () => document.querySelector<HTMLButtonElement>('[title="Refresh SSH status"]')!.click())
+    expect(document.querySelector<HTMLButtonElement>('[aria-label="SSH access"]')!.disabled).toBe(false)
+  })
+
+  it('renders the shared sidebar switch and changes saved configuration without setup or inbound', async () => {
+    disabledStatus()
+    const slot = document.createElement('div')
+    document.body.append(slot)
+    try {
+      await render(BoxState.STARTED, 'box-1', 0, slot)
+      expect(slot.querySelector('[aria-label="SSH access"]')).not.toBeNull()
+      await toggleSsh()
+      expect(mocks.post).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh/enable', undefined, { timeout: 30_000 })
+      expect(document.querySelector('[role="dialog"]')).toBeNull()
+      await toggleSsh()
+      expect(mocks.delete).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh', { timeout: 30_000 })
+      expect(mocks.inbound).not.toHaveBeenCalled()
+    } finally {
+      slot.remove()
+    }
+  })
+
+  it.each([{ message: 'SSH has no saved configuration' }, { error: { message: 'SSH configuration is required' } }])(
+    'opens CLI guidance for missing configuration without configuring keys',
+    async (data) => {
+      disabledStatus()
+      await render()
+      mocks.post.mockRejectedValueOnce({ isAxiosError: true, response: { status: 409, data } })
+      await toggleSsh()
+      expect(document.querySelectorAll('pre')[2].textContent).toContain('ssh box-1')
+      expect(mocks.post).toHaveBeenCalledOnce()
+      expect(document.querySelector('input')).toBeNull()
+      await act(async () => window.dispatchEvent(new Event('focus')))
+      expect(document.querySelector('[role="alert"]')).not.toBeNull()
+    },
+  )
+
+  it.each([401, 403, 503])('retains an enable error without opening setup for HTTP %s', async (httpStatus) => {
+    disabledStatus()
+    await render()
+    mocks.post.mockRejectedValueOnce({ isAxiosError: true, response: { status: httpStatus } })
+    await toggleSsh()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.querySelector('[role="alert"]')).not.toBeNull()
     expect(mocks.post).toHaveBeenCalledOnce()
   })
 
-  it('does not configure SSH if the box stops while enabling inbound', async () => {
-    const inbound = deferred<void>()
-    mocks.inbound.mockReturnValueOnce(inbound.promise)
-    await render(BoxState.STARTED, 'box-1', 0, NetworkMode.DISABLED)
-    await click('Setup')
-    await click('Set up SSH')
-    expect(mocks.inbound).toHaveBeenCalledOnce()
-    await render(BoxState.STOPPED)
-    await act(async () => inbound.resolve())
-    expect(mocks.post).not.toHaveBeenCalled()
+  it('refreshes on focus without interrupting a pending mutation', async () => {
+    disabledStatus()
+    await render()
+    mocks.get.mockResolvedValue({ data: status })
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(document.querySelector('[aria-label="SSH access"]')!.getAttribute('aria-checked')).toBe('true')
+    const pending = deferred<{ data: typeof status }>()
+    mocks.delete.mockReturnValueOnce(pending.promise)
+    await toggleSsh()
+    const reads = mocks.get.mock.calls.length
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(mocks.get).toHaveBeenCalledTimes(reads)
+    await act(async () => pending.resolve({ data: { ...status, enabled: false } }))
   })
 
-  it('does not read SSH without a selected organization', async () => {
+  it('defers a detail refresh until Disable commits and makes the next toggle Enable', async () => {
+    await render()
+    const pending = deferred<{ data: typeof status }>()
+    mocks.delete.mockReturnValueOnce(pending.promise)
+    await toggleSsh()
+    const readsBefore = mocks.get.mock.calls.length
+    await render(BoxState.STARTED, 'box-1', 1)
+    expect(mocks.get).toHaveBeenCalledTimes(readsBefore)
+    disabledStatus()
+    await act(async () => pending.resolve({ data: { ...status, enabled: false, host_public_key: '' } }))
+    expect(document.querySelector('[aria-label="SSH access"]')!.getAttribute('aria-checked')).toBe('false')
+    expect(mocks.get).toHaveBeenCalledTimes(readsBefore + 1)
+    await toggleSsh()
+    expect(mocks.delete).toHaveBeenCalledOnce()
+    expect(mocks.post).toHaveBeenLastCalledWith('v1/org-1/boxes/box-1/ssh/enable', undefined, { timeout: 30_000 })
+  })
+
+  it.each(['success', 'failure'])('ignores a stale status %s after refresh', async (outcome) => {
+    const pending = deferred<{ data: typeof status }>()
+    mocks.get.mockReturnValueOnce(pending.promise)
+    await render()
+    await render(BoxState.STARTED, 'box-1', 1)
+    await act(async () =>
+      outcome === 'success'
+        ? pending.resolve({ data: { ...status, enabled: false } })
+        : pending.reject(new Error('stale')),
+    )
+    expect(document.querySelector('[aria-label="SSH access"]')!.getAttribute('aria-checked')).toBe('true')
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it.each(['success', 'failure'])('ignores a stale mutation %s after the Box stops', async (outcome) => {
+    await render()
+    const pending = deferred<{ data: typeof status }>()
+    mocks.delete.mockReturnValueOnce(pending.promise)
+    await toggleSsh()
+    disabledStatus()
+    await render(BoxState.STOPPED, 'box-1', 1)
+    await act(async () =>
+      outcome === 'success' ? pending.resolve({ data: status }) : pending.reject(new Error('stale')),
+    )
+    expect(document.querySelector('[aria-label="SSH access"]')!.getAttribute('aria-checked')).toBe('false')
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+    expect(document.querySelector<HTMLButtonElement>('[aria-label="SSH access"]')!.disabled).toBe(true)
+  })
+
+  it.each(['organization', 'box', 'user', 'endpoint'])('discards an open guide when %s changes', async (scope) => {
+    await render()
+    await click('Connect via SSH')
+    if (scope === 'organization') mocks.organization = 'org-2'
+    if (scope === 'user') mocks.user = 'user-2'
+    if (scope === 'endpoint') mocks.endpoint = 'https://other.example.test'
+    await render(BoxState.STARTED, scope === 'box' ? 'box-2' : 'box-1')
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    await click('Connect via SSH')
+    expect(document.querySelectorAll('pre')[1].textContent).toBe('boxlite auth login')
+    expect(document.querySelectorAll('pre')[2].textContent).toBe(
+      scope === 'box' ? 'boxlite ssh box-2' : 'boxlite ssh box-1',
+    )
+    expect(mocks.get).toHaveBeenLastCalledWith(
+      `v1/${mocks.organization}/boxes/${scope === 'box' ? 'box-2' : 'box-1'}/ssh`,
+      { timeout: 30_000 },
+    )
+  })
+
+  it('does not read without an organization and blocks mutations for stopped Boxes', async () => {
     mocks.organization = ''
     await render()
     expect(host.textContent).toBe('')
     expect(mocks.get).not.toHaveBeenCalled()
-  })
-
-  it.each(['success', 'failure'])('ignores a stale status %s after refresh', async (outcome) => {
-    const stale = deferred<{ data: typeof status }>()
-    mocks.get.mockReturnValueOnce(stale.promise)
-    await render()
-    expect(button('Setup').disabled).toBe(true)
-
-    await render(BoxState.STARTED, 'box-1', 1)
-    expect(host.textContent).toContain('SSH disabled')
-    await act(async () => {
-      if (outcome === 'success') stale.resolve({ data: status })
-      else stale.reject(new Error('outdated status request'))
-    })
-
-    expect(host.textContent).toContain('SSH disabled')
-    expect(host.querySelector('[role="alert"]')).toBeNull()
-    expect(button('Setup').disabled).toBe(false)
-  })
-
-  it('does not configure SSH if the box stops during key generation', async () => {
-    const keys = deferred<typeof credentials>()
-    mocks.generate.mockReturnValueOnce(keys.promise)
-    await render()
-    await click('Setup')
-    await click('Set up SSH')
+    mocks.organization = 'org-1'
     await render(BoxState.STOPPED)
-    await act(async () => keys.resolve(credentials))
-
+    await toggleSsh()
     expect(mocks.post).not.toHaveBeenCalled()
-    expect(document.body.textContent).not.toContain('Download private key')
-    expect(button('Set up SSH').disabled).toBe(true)
-  })
-
-  it.each(['success', 'failure'])('ignores a stale mutation %s after refresh', async (outcome) => {
-    const stale = deferred<{ data: typeof status }>()
-    await render()
-    mocks.post.mockReturnValueOnce(stale.promise)
-    await click('Enable')
-    await render(BoxState.STARTED, 'box-1', 1)
-
-    await act(async () => {
-      if (outcome === 'success') stale.resolve({ data: status })
-      else stale.reject(new Error('outdated enable request'))
-    })
-
-    expect(host.textContent).toContain('SSH disabled')
-    expect(host.querySelector('[role="alert"]')).toBeNull()
-    expect(button('Enable').disabled).toBe(false)
-  })
-
-  it('keeps the setup dialog open until key generation and configuration finish', async () => {
-    const keys = deferred<typeof credentials>()
-    mocks.generate.mockReturnValueOnce(keys.promise)
-    await render()
-    await click('Setup')
-    await click('Set up SSH')
-    await click('Close')
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
-
-    await act(async () => keys.resolve(credentials))
-    expect(button('Download private key')).toBeDefined()
-    await click('Close')
-    expect(document.querySelector('[role="dialog"]')).toBeNull()
-  })
-
-  it('reports an enable failure without changing the observed status or retrying', async () => {
-    await render()
-    mocks.post.mockRejectedValueOnce(new Error('private server details'))
-    await click('Enable')
-    expect(host.textContent).toContain('Unable to enable SSH')
-    expect(host.textContent).toContain('SSH disabled')
-    expect(host.textContent).not.toContain('private server details')
-    expect(mocks.post).toHaveBeenCalledOnce()
-    expect(button('Enable').disabled).toBe(false)
-  })
-
-  it('sets up once, downloads the client key, and reopens details without reconfiguring', async () => {
-    await render()
-    await click('Setup')
-    expect(mocks.post).not.toHaveBeenCalled()
-    await click('Set up SSH')
-    expect(mocks.post).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh', credentials.config, { timeout: 30_000 })
-    expect(mocks.inbound).not.toHaveBeenCalled()
-    expect(document.body.textContent).toContain('box@boxlite-box-1')
-    expect(document.body.textContent).toContain('ssh --proxy --')
-    expect(document.body.textContent).not.toContain('--context')
-    expect(document.body.textContent).toContain('boxlite context ls')
-    expect(document.body.textContent).not.toContain('YOUR_CONTEXT')
-    expect(document.body.textContent).toContain('current CLI context')
-    expect(document.body.textContent).toContain('https://api.example.test')
-    expect(document.body.textContent).not.toContain('--url')
-    expect(document.body.textContent).not.toContain('another terminal')
-    expect(document.body.textContent).toContain('SHA256:test-fingerprint')
-    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      expect(this.download).toBe('boxlite-box-1-key')
-    })
-    await click('Download private key')
-    expect(download).toHaveBeenCalledOnce()
-    const key = await new Promise<string>((resolve) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(String(reader.result))
-      reader.readAsText(blobs[0])
-    })
-    expect(key).toBe(credentials.privateKey)
-    expect(document.body.textContent).not.toContain(credentials.privateKey)
-    await click('Close')
-    await click('Setup')
-    expect(mocks.generate).toHaveBeenCalledOnce()
-    expect(mocks.post).toHaveBeenCalledOnce()
-  })
-
-  it('enables and disables saved configuration without generating keys', async () => {
-    await render(BoxState.STARTED, 'box-1', 0, NetworkMode.DISABLED)
-    await click('Enable')
-    expect(mocks.post).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh/enable', undefined, { timeout: 30_000 })
-    expect(host.textContent).toContain('SSH enabled')
-    await click('Disable')
-    expect(mocks.delete).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh', { timeout: 30_000 })
-    expect(host.textContent).toContain('SSH disabled')
-    expect(mocks.generate).not.toHaveBeenCalled()
-    expect(mocks.inbound).not.toHaveBeenCalled()
-  })
-
-  it('keeps credentials on failure for a manual retry and does not render server secrets', async () => {
-    await render()
-    mocks.post.mockRejectedValueOnce(new Error('sensitive request body'))
-    await click('Setup')
-    await click('Set up SSH')
-    expect(document.body.textContent).toContain('SSH setup failed')
-    expect(document.body.textContent).not.toContain('sensitive request body')
-    expect(button('Download private key')).toBeDefined()
-    expect(mocks.post).toHaveBeenCalledOnce()
-    await click('Set up SSH')
-    expect(mocks.generate).toHaveBeenCalledOnce()
-    expect(mocks.post).toHaveBeenCalledTimes(2)
-  })
-
-  it('blocks overlapping actions until the mutation finishes', async () => {
-    await render()
-    let finish!: (result: unknown) => void
-    mocks.post.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve
-        }),
-    )
-    await click('Enable')
-    expect(button('Setup').disabled).toBe(true)
-    expect(button('Disable').disabled).toBe(true)
-    await act(async () => finish({ data: status }))
-    expect(button('Setup').disabled).toBe(false)
-  })
-
-  it.each([BoxState.STOPPED, BoxState.STARTING])('blocks actions for %s boxes', async (state) => {
-    await render(state)
-    for (const label of ['Setup', 'Enable', 'Disable']) expect(button(label).disabled).toBe(true)
-    expect(mocks.post).not.toHaveBeenCalled()
-  })
-
-  it('blocks actions for read-only members and reports status failures', async () => {
-    mocks.permitted = false
-    mocks.get.mockRejectedValueOnce(new Error('unavailable'))
-    await render()
-    for (const label of ['Setup', 'Enable', 'Disable']) expect(button(label).disabled).toBe(true)
-    expect(host.textContent).toContain('Unable to read SSH status')
-  })
-
-  it.each(['organization', 'box'])('discards credentials when the %s changes', async (scope) => {
-    await render()
-    await click('Setup')
-    await click('Set up SSH')
-    if (scope === 'organization') mocks.organization = 'org-2'
-    await render(BoxState.STARTED, scope === 'box' ? 'box-2' : 'box-1')
-    expect(document.querySelector('[role="dialog"]')).toBeNull()
-    await click('Setup')
-    expect(document.body.textContent).not.toContain('Download private key')
+    expect(mocks.delete).not.toHaveBeenCalled()
   })
 })

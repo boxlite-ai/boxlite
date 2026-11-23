@@ -1,3 +1,4 @@
+import { Request } from 'express'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -6,6 +7,7 @@
 
 import {
   Controller,
+  Req,
   Get,
   Post,
   Body,
@@ -29,7 +31,7 @@ import {
   ApiHeader,
   ApiBearerAuth,
 } from '@nestjs/swagger'
-import { BoxDto, BoxLabelsDto } from '../dto/box.dto'
+import { BoxDto } from '../dto/box.dto'
 import { UpdateBoxStateDto } from '../dto/update-box-state.dto'
 import { PaginatedBoxesDto } from '../dto/paginated-boxes.dto'
 import { RunnerService } from '../services/runner.service'
@@ -42,13 +44,16 @@ import { ContentTypeInterceptor } from '../../common/interceptors/content-type.i
 import { BoxAccessGuard } from '../guards/box-access.guard'
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
-import { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
+import { UserContext } from '../../common/decorators/user-context.decorator'
+import { Context } from '../../common/context/context'
+import { OrganizationAuthContext, AuthContextType } from '../../common/interfaces/auth-context.interface'
+import { isProxyContext } from '../../common/interfaces/proxy-context.interface'
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
-import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
+import { Audit, AUDIT_TARGET_ID } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
 // import { UpdateBoxNetworkSettingsDto } from '../dto/update-box-network-settings.dto'
@@ -58,7 +63,6 @@ import { OrGuard } from '../../auth/or.guard'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { SkipThrottle } from '@nestjs/throttler'
 import { ThrottlerScope } from '../../common/decorators/throttler-scope.decorator'
-import { ToolboxProxyUrlDto } from '../dto/toolbox-proxy-url.dto'
 import { AttachTicketDto, CreateAttachTicketDto } from '../dto/attach-ticket.dto'
 import { ATTACH_TICKET_TTL_SECONDS, AttachTicketService } from '../services/attach-ticket.service'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -97,47 +101,6 @@ export class BoxController {
         return
       }
     })
-  }
-
-  @Get()
-  @ApiOperation({
-    summary: 'List all boxes',
-    operationId: 'listBoxes',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'List of all boxes',
-    type: [BoxDto],
-  })
-  @ApiQuery({
-    name: 'verbose',
-    required: false,
-    type: Boolean,
-    description: 'Include verbose output',
-  })
-  @ApiQuery({
-    name: 'labels',
-    type: String,
-    required: false,
-    example: '{"label1": "value1", "label2": "value2"}',
-    description: 'JSON encoded labels to filter by',
-  })
-  @ApiQuery({
-    name: 'includeErroredDeleted',
-    required: false,
-    type: Boolean,
-    description: 'Include errored and deleted boxes',
-  })
-  async listBoxes(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Query('verbose') verbose?: boolean,
-    @Query('labels') labelsQuery?: string,
-    @Query('includeErroredDeleted') includeErroredDeleted?: boolean,
-  ): Promise<BoxDto[]> {
-    const labels = labelsQuery ? JSON.parse(labelsQuery) : undefined
-    const boxes = await this.boxService.findAllDeprecated(authContext.organizationId, labels, includeErroredDeleted)
-
-    return this.boxService.toBoxDtos(boxes)
   }
 
   @Get('paginated')
@@ -314,8 +277,11 @@ export class BoxController {
   async recoverBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxIdOrName') boxIdOrName: string,
+    @UserContext() ctx: Context,
+    @Req() request?: Request,
   ): Promise<BoxDto> {
-    const recoveredBox = await this.boxService.recover(boxIdOrName, authContext.organization)
+    const recoveredBox = await this.boxService.recover(boxIdOrName, authContext.organization, ctx)
+    if (request) request[AUDIT_TARGET_ID] = recoveredBox.id
     let boxDto = await this.boxService.toBoxDto(recoveredBox)
 
     if (boxDto.state !== BoxState.STARTED) {
@@ -323,44 +289,6 @@ export class BoxController {
     }
 
     return boxDto
-  }
-
-  @Put(':boxIdOrName/labels')
-  @UseInterceptors(ContentTypeInterceptor)
-  @ApiOperation({
-    summary: 'Replace box labels',
-    operationId: 'replaceLabels',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Labels have been successfully replaced',
-    type: BoxLabelsDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.REPLACE_LABELS,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      body: (req: TypedRequest<BoxLabelsDto>) => ({
-        labels: req.body?.labels,
-      }),
-    },
-  })
-  async replaceLabels(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Body() labelsDto: BoxLabelsDto,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.replaceLabels(boxIdOrName, labelsDto.labels, authContext.organizationId)
-    return this.boxService.toBoxDto(box)
   }
 
   @Put(':boxId/state')
@@ -410,93 +338,16 @@ export class BoxController {
     description: 'Last activity has been updated',
   })
   @UseGuards(OrGuard([BoxAccessGuard, ProxyGuard, RegionBoxAccessGuard]))
-  async updateLastActivity(@Param('boxId') boxId: string): Promise<void> {
+  async updateLastActivity(
+    @Param('boxId') boxId: string,
+    @AuthContext() authContext: AuthContextType,
+    @Req() request: Request,
+  ): Promise<void> {
+    if (request.headers['x-boxlite-preview-open'] === '1' && authContext && isProxyContext(authContext)) {
+      await this.boxService.updateLastActivityAt(boxId, new Date(), true)
+      return
+    }
     await this.boxService.updateLastActivityAt(boxId, new Date())
-  }
-
-  @Post(':boxIdOrName/autostop/:interval')
-  @ApiOperation({
-    summary: 'Set box auto-stop interval',
-    operationId: 'setAutostopInterval',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'interval',
-    description: 'Auto-stop interval in minutes (0 to disable). Converted to seconds and stored as auto-stop interval.',
-    type: 'number',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Auto-stop interval has been set',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.SET_AUTO_STOP_INTERVAL,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      params: (req) => ({
-        interval: req.params.interval,
-      }),
-    },
-  })
-  async setAutostopInterval(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Param('interval') interval: number,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.setAutostopInterval(boxIdOrName, interval, authContext.organizationId)
-    return this.boxService.toBoxDto(box)
-  }
-
-  @Post(':boxIdOrName/autodelete/:interval')
-  @ApiOperation({
-    summary: 'Set box auto-delete interval',
-    operationId: 'setAutoDeleteInterval',
-  })
-  @ApiParam({
-    name: 'boxIdOrName',
-    description: 'ID or name of the box',
-    type: 'string',
-  })
-  @ApiParam({
-    name: 'interval',
-    description:
-      'Auto-delete interval in minutes (negative value or 0 disables). Converted to seconds and stored as auto-delete interval; 0 disables auto-delete.',
-    type: 'number',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Auto-delete interval has been set',
-    type: BoxDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
-  @UseGuards(BoxAccessGuard)
-  @Audit({
-    action: AuditAction.SET_AUTO_DELETE_INTERVAL,
-    targetType: AuditTarget.BOX,
-    targetIdFromRequest: (req) => req.params.boxIdOrName,
-    targetIdFromResult: (result: BoxDto) => result?.id,
-    requestMetadata: {
-      params: (req) => ({
-        interval: req.params.interval,
-      }),
-    },
-  })
-  async setAutoDeleteInterval(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxIdOrName') boxIdOrName: string,
-    @Param('interval') interval: number,
-  ): Promise<BoxDto> {
-    const box = await this.boxService.setAutoDeleteInterval(boxIdOrName, interval, authContext.organizationId)
-    return this.boxService.toBoxDto(box)
   }
 
   // TODO: Network settings endpoint will not be enabled for now
@@ -540,29 +391,8 @@ export class BoxController {
   //     networkSettings.outboundAllowNet,
   //     authContext.organizationId,
   //   )
-  //   return BoxDto.fromBox(box, '')
+  //   return BoxDto.fromBox(box)
   // }
-
-  @Get(':boxId/toolbox-proxy-url')
-  @ApiOperation({
-    summary: 'Get toolbox proxy URL for a box',
-    operationId: 'getToolboxProxyUrl',
-  })
-  @ApiParam({
-    name: 'boxId',
-    description: 'ID of the box',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Toolbox proxy URL for the specified box',
-    type: ToolboxProxyUrlDto,
-  })
-  @UseGuards(BoxAccessGuard)
-  async getToolboxProxyUrl(@Param('boxId') boxId: string): Promise<ToolboxProxyUrlDto> {
-    const url = await this.boxService.getToolboxProxyUrl(boxId)
-    return new ToolboxProxyUrlDto(url)
-  }
 
   // A browser cannot set `Authorization` on a WebSocket, so the dashboard trades
   // its bearer here for a ticket the `/v1` attach upgrade accepts as `?ticket=`
@@ -586,12 +416,22 @@ export class BoxController {
   })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
+  @Audit({
+    action: AuditAction.ISSUE_ATTACH_TICKET,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxIdOrName,
+    requestMetadata: {
+      executionId: (req) => (typeof req.body?.executionId === 'string' ? req.body.executionId : null),
+    },
+  })
   async createAttachTicket(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxIdOrName') boxIdOrName: string,
     @Body() dto: CreateAttachTicketDto,
+    @Req() request?: Request,
   ): Promise<AttachTicketDto> {
     const box = await this.boxService.findOneByIdOrName(boxIdOrName, authContext.organizationId)
+    if (request) request[AUDIT_TARGET_ID] = box.id
     const ticket = await this.attachTickets.issue({
       userId: authContext.userId,
       organizationId: authContext.organizationId,

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 /// A `boxlite serve` child, torn down (gracefully) when dropped.
 pub struct ServeChild {
     child: Child,
+    command: Command,
     port: u16,
     api_key: Option<String>,
     // Serve's own home. Dropped *after* the child is signalled, so its boxes are
@@ -42,17 +43,25 @@ impl ServeChild {
         cmd.args(["serve", "--host", "127.0.0.1", "--port", &port.to_string()])
             .args(extra)
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::inherit());
 
         let child = cmd.spawn().expect("spawn boxlite serve");
         let serve = Self {
             child,
+            command: cmd,
             port,
             api_key: api_key.map(str::to_string),
             _home: home,
         };
         serve.wait_ready();
         serve
+    }
+
+    /// Reopen the same runtime home to check persisted configuration over HTTP.
+    pub fn restart(&mut self) {
+        self.stop();
+        self.child = self.command.spawn().expect("restart boxlite serve");
+        self.wait_ready();
     }
 
     pub fn port(&self) -> u16 {
@@ -127,8 +136,8 @@ impl ServeChild {
     }
 }
 
-impl Drop for ServeChild {
-    fn drop(&mut self) {
+impl ServeChild {
+    fn stop(&mut self) {
         // SIGINT: it is the signal serve wires to graceful shutdown
         // (`with_graceful_shutdown(ctrl_c())`). The tests drain their boxes
         // first, so this is just to end the process cleanly; a SIGKILL fallback
@@ -150,5 +159,11 @@ impl Drop for ServeChild {
                 }
             }
         }
+    }
+}
+
+impl Drop for ServeChild {
+    fn drop(&mut self) {
+        self.stop();
     }
 }

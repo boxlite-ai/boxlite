@@ -4,6 +4,9 @@
  */
 
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
+import { AuditService } from '../audit/services/audit.service'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { jwtVerify } from 'jose'
 import { TypedConfigService } from '../config/typed-config.service'
 import { LinkedIdentityService } from '../user/linked-identity.service'
@@ -46,6 +49,7 @@ export class AccountLinkService {
     private readonly configService: TypedConfigService,
     private readonly linkedIdentity: LinkedIdentityService,
     private readonly userService: UserService,
+    private readonly audit: AuditService,
   ) {}
 
   /** Move the BoxLite data of the user the token names to the account that stays. */
@@ -56,7 +60,26 @@ export class AccountLinkService {
     if (!isUserId(primaryUserId) || primaryUserId === secondaryUserId) {
       throw new UnauthorizedException('The account-link request does not name two accounts.')
     }
-    await this.linkedIdentity.adopt(primaryUserId, secondaryUserId)
+    const log = await this.audit.createLog({
+      actorId: primaryUserId,
+      actorEmail: '',
+      action: AuditAction.LINK_ACCOUNT,
+      targetType: AuditTarget.USER,
+      targetId: secondaryUserId,
+      source: 'auth0-account-link',
+      metadata: { primaryUserId, secondaryUserId, scope: 'local_ownership' },
+    })
+    try {
+      await this.linkedIdentity.adopt(primaryUserId, secondaryUserId)
+    } catch (error) {
+      await this.audit
+        .updateLog(log.id, { statusCode: 500, errorMessage: 'Local account adoption failed.' })
+        .catch(() => this.logger.error(`Failed to record account adoption result for audit ${log.id}`))
+      throw error
+    }
+    await this.audit
+      .updateLog(log.id, { statusCode: 204 })
+      .catch(() => this.logger.error(`Failed to record account adoption result for audit ${log.id}`))
     this.logger.log(`Moved ${secondaryUserId}'s BoxLite data to ${primaryUserId} for an account link`)
     return { primaryUserId, secondaryUserId }
   }

@@ -1,3 +1,5 @@
+import { Context } from '../common/context/context'
+const ctx = Context.user({ userId: 'user-1', authMethod: 'jwt', clientSource: 'dashboard' })
 import { BoxliteVolumeController } from './boxlite-volume.controller'
 import { VolumeService } from '../box/services/volume.service'
 import { NotFoundException } from '@nestjs/common'
@@ -36,10 +38,14 @@ describe('BoxliteVolumeController', () => {
     const organization = { id: 'org-1' }
 
     await expect(
-      controller.create({
-        organization,
-        organizationId: organization.id,
-      } as never),
+      controller.create(
+        {
+          organization,
+          organizationId: organization.id,
+        } as never,
+        undefined,
+        ctx,
+      ),
     ).resolves.toEqual({
       id: volume.id,
       name: volume.name,
@@ -49,7 +55,7 @@ describe('BoxliteVolumeController', () => {
       last_used_at: lastUsedAt.toISOString(),
       error_reason: undefined,
     })
-    expect(volumeService.create).toHaveBeenCalledWith(organization, {})
+    expect(volumeService.create).toHaveBeenCalledWith(organization, {}, ctx)
     expect(volumeService.waitForReady).toHaveBeenCalledWith(volume.id, 30)
   })
 
@@ -59,11 +65,15 @@ describe('BoxliteVolumeController', () => {
     const { controller, volumeService } = createController()
     const organization = { id: 'org-1' }
 
-    await controller.create({ organization, organizationId: organization.id } as never, {
-      name: 'my-data',
-    })
+    await controller.create(
+      { organization, organizationId: organization.id } as never,
+      {
+        name: 'my-data',
+      },
+      ctx,
+    )
 
-    expect(volumeService.create).toHaveBeenCalledWith(organization, { name: 'my-data' })
+    expect(volumeService.create).toHaveBeenCalledWith(organization, { name: 'my-data' }, ctx)
   })
 
   // The body is optional in the spec, so an absent one must still create an
@@ -72,9 +82,9 @@ describe('BoxliteVolumeController', () => {
     const { controller, volumeService } = createController()
     const organization = { id: 'org-1' }
 
-    await controller.create({ organization, organizationId: organization.id } as never, undefined)
+    await controller.create({ organization, organizationId: organization.id } as never, undefined, ctx)
 
-    expect(volumeService.create).toHaveBeenCalledWith(organization, {})
+    expect(volumeService.create).toHaveBeenCalledWith(organization, {}, ctx)
   })
 
   it('lists volumes for the authenticated organization', async () => {
@@ -111,8 +121,8 @@ describe('BoxliteVolumeController', () => {
   it('deletes a volume by ID', async () => {
     const { controller, volumeService } = createController()
 
-    await expect(controller.remove(volume.id)).resolves.toBeUndefined()
-    expect(volumeService.delete).toHaveBeenCalledWith(volume.id, false)
+    await expect(controller.remove(volume.id, undefined, ctx)).resolves.toBeUndefined()
+    expect(volumeService.delete).toHaveBeenCalledWith(volume.id, ctx, false)
   })
 
   it('propagates a missing-volume error without force', async () => {
@@ -120,14 +130,14 @@ describe('BoxliteVolumeController', () => {
     const error = new NotFoundException('Volume not found')
     volumeService.delete.mockRejectedValueOnce(error)
 
-    await expect(controller.remove(volume.id)).rejects.toBe(error)
+    await expect(controller.remove(volume.id, undefined, ctx)).rejects.toBe(error)
   })
 
   it('passes force deletion semantics to the volume service', async () => {
     const { controller, volumeService } = createController()
 
-    await expect(controller.remove(volume.id, 'true')).resolves.toBeUndefined()
-    expect(volumeService.delete).toHaveBeenCalledWith(volume.id, true)
+    await expect(controller.remove(volume.id, 'true', ctx)).resolves.toBeUndefined()
+    expect(volumeService.delete).toHaveBeenCalledWith(volume.id, ctx, true)
   })
 
   it('propagates non-not-found errors when force is true', async () => {
@@ -135,6 +145,6 @@ describe('BoxliteVolumeController', () => {
     const error = new Error('S3 unavailable')
     volumeService.delete.mockRejectedValueOnce(error)
 
-    await expect(controller.remove(volume.id, 'true')).rejects.toBe(error)
+    await expect(controller.remove(volume.id, 'true', ctx)).rejects.toBe(error)
   })
 })

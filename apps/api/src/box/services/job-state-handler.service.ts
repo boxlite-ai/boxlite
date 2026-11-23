@@ -20,6 +20,7 @@ import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
+import { CheckpointJobReceiver, isCheckpointJobType } from './checkpoint-job-receiver.service'
 
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
@@ -34,6 +35,7 @@ export class JobStateHandlerService {
     private readonly redisLockProvider: RedisLockProvider,
     private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
     private readonly imagePullFailureService: ImagePullFailureService,
+    private readonly checkpointJobReceiver: CheckpointJobReceiver,
   ) {}
 
   /**
@@ -46,6 +48,11 @@ export class JobStateHandlerService {
     }
 
     if (!job.resourceId) {
+      return
+    }
+
+    if (isCheckpointJobType(job.type)) {
+      await this.checkpointJobReceiver.handleJobCompletion(job)
       return
     }
 
@@ -130,7 +137,7 @@ export class JobStateHandlerService {
       // Warm-pool top-up creates stock no one requested; the claim records
       // that box's box.create pair instead (BoxService.assignWarmPoolBox).
       if (box.organizationId !== BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
-        recordBoxJobOutcome('box.create', job.status, box.id)
+        recordBoxJobOutcome('box.create', job.status, box)
       }
     } catch (error) {
       this.logger.error(`Error handling CREATE_BOX job completion for box ${boxId}:`, error)
@@ -176,6 +183,7 @@ export class JobStateHandlerService {
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
+      recordBoxJobOutcome('box.start', job.status, box)
     } catch (error) {
       this.logger.error(`Error handling START_BOX job completion for box ${boxId}:`, error)
     }
@@ -214,7 +222,7 @@ export class JobStateHandlerService {
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
-      recordBoxJobOutcome('box.stop', job.status, box.id)
+      recordBoxJobOutcome('box.stop', job.status, box)
     } catch (error) {
       this.logger.error(`Error handling STOP_BOX job completion for box ${boxId}:`, error)
     }
@@ -249,7 +257,7 @@ export class JobStateHandlerService {
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
-      recordBoxJobOutcome('box.delete', job.status, box.id)
+      recordBoxJobOutcome('box.delete', job.status, box)
     } catch (error) {
       this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)
     }

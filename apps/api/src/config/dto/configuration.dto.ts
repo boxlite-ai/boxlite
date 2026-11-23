@@ -9,6 +9,15 @@ import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
 import { TypedConfigService } from '../typed-config.service'
 import { EndSessionState, isValidHttpUrl } from '../oidc-metadata.service'
 
+@ApiSchema({ name: 'TurnstileConfig' })
+export class TurnstileConfig {
+  @ApiProperty({ description: 'Public Turnstile widget sitekey' })
+  sitekey: string
+
+  @ApiProperty({ description: 'Turnstile challenge action', enum: ['signup'] })
+  action: 'signup'
+}
+
 @ApiSchema({ name: 'Announcement' })
 export class Announcement {
   @ApiProperty({
@@ -130,6 +139,9 @@ export class OidcConfig {
 @ApiExtraModels(Announcement)
 @ApiSchema({ name: 'BoxliteConfiguration' })
 export class ConfigurationDto {
+  @ApiPropertyOptional({ type: TurnstileConfig })
+  turnstile?: TurnstileConfig
+
   @ApiProperty({
     description: 'BoxLite version',
     example: '0.0.1',
@@ -180,13 +192,6 @@ export class ConfigurationDto {
   proxyTemplateUrl: string
 
   @ApiProperty({
-    description: 'Toolbox template URL',
-    example: 'https://proxy.example.com/toolbox',
-  })
-  @IsString()
-  proxyToolboxUrl: string
-
-  @ApiProperty({
     description: 'Dashboard URL',
     example: 'https://dashboard.example.com',
   })
@@ -231,6 +236,10 @@ export class ConfigurationDto {
   rateLimit?: RateLimitConfig
 
   constructor(configService: TypedConfigService, options: { endSessionState: EndSessionState }) {
+    const turnstile = configService.get('turnstile')
+    if (turnstile) {
+      this.turnstile = { sitekey: turnstile.sitekey, action: turnstile.action }
+    }
     this.version = configService.getOrThrow('version')
 
     this.oidc = {
@@ -250,7 +259,6 @@ export class ConfigurationDto {
     }
     this.linkedAccountsEnabled = configService.get('oidc.managementApi.enabled')
     this.proxyTemplateUrl = configService.getOrThrow('proxy.templateUrl')
-    this.proxyToolboxUrl = configService.getOrThrow('proxy.toolboxUrl')
     this.dashboardUrl = configService.getOrThrow('dashboardUrl')
     this.maintananceMode = configService.getOrThrow('maintananceMode')
     this.environment = configService.getOrThrow('environment')

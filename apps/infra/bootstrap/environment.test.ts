@@ -83,7 +83,7 @@ test('deployableStageConfig stores stage configuration and keeps local-only keys
   const { config, excluded } = deployableStageConfig(
     [
       'STACK_DOMAIN=dev.boxlite.ai',
-      'OIDC_AUDIENCE=https://dev.boxlite.ai/api',
+      'OIDC_AUDIENCE=https://api.dev.boxlite.ai',
       // Legitimate locally — stack/app.ts reads it — so it must be kept out rather than reject
       // the whole file and leave an operator on a named profile unable to bootstrap.
       'AWS_PROFILE=developer',
@@ -97,7 +97,7 @@ test('deployableStageConfig stores stage configuration and keeps local-only keys
   )
 
   assert.deepEqual(config, {
-    OIDC_AUDIENCE: 'https://dev.boxlite.ai/api',
+    OIDC_AUDIENCE: 'https://api.dev.boxlite.ai',
     PROXY_TEMPLATE_URL: '',
     STACK_DOMAIN: 'dev.boxlite.ai',
   })
@@ -121,7 +121,7 @@ function throughSecretStore(payload: Record<string, string>) {
 
 const STAGE_ENV_SOURCE = [
   'STACK_DOMAIN=dev.boxlite.ai',
-  'OIDC_AUDIENCE=https://dev.boxlite.ai/api',
+  'OIDC_AUDIENCE=https://api.dev.boxlite.ai',
   'AWS_PROFILE=developer',
   'PROXY_TEMPLATE_URL=',
 ].join('\n')
@@ -139,7 +139,7 @@ test('the digest bootstrap writes is the one hydration recomputes', () => {
   assert.notEqual(recordedDigest, '', 'bootstrap must write a digest for the check to have anything to do')
   assert.equal(recordedDigest, actualDigest)
   assert.deepEqual(apply, {
-    OIDC_AUDIENCE: 'https://dev.boxlite.ai/api',
+    OIDC_AUDIENCE: 'https://api.dev.boxlite.ai',
     PROXY_TEMPLATE_URL: '',
     STACK_DOMAIN: 'dev.boxlite.ai',
   })
@@ -423,12 +423,12 @@ test('sstPlatformState tells a finished install from an interrupted one', () => 
   assert.equal(sstPlatformState(dir), 'ready')
 })
 
-const CONFIG = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_AUDIENCE: 'https://dev.boxlite.ai/api' }
+const CONFIG = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_AUDIENCE: 'https://api.dev.boxlite.ai' }
 
 test('withStageConfigFile hands sst a file holding exactly the serialized configuration', () => {
   // What `sst secret load` will parse. Read inside the callback because the file is gone after it.
   const contents = withStageConfigFile(CONFIG, (path: string) => readFileSync(path, 'utf8'))
-  assert.equal(contents, "OIDC_AUDIENCE='https://dev.boxlite.ai/api'\nSTACK_DOMAIN='dev.boxlite.ai'\n")
+  assert.equal(contents, "OIDC_AUDIENCE='https://api.dev.boxlite.ai'\nSTACK_DOMAIN='dev.boxlite.ai'\n")
 })
 
 test('withStageConfigFile keeps the configuration unreadable to other users while it exists', () => {

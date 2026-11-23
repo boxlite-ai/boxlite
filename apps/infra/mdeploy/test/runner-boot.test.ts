@@ -58,6 +58,17 @@ test('cloud boot installs the standalone kernel before starting the runner', () 
   assert.match(script, /libkrunfw-kernel-dind-x86_64\.bin/)
 })
 
+test('cloud boot installs the NFS client filestore volumes mount with', () => {
+  // filestore volumes run `mount -t nfs -o vers=4.1,hard` as root. nfs-common is
+  // not in the Ubuntu cloud image's default package set, so the boot carries it:
+  // a host without it fails the first filestore box with "unknown filesystem
+  // type nfs", on an instance whose script nobody will read again.
+  const script = render()
+  const installs = script.search(/^apt-get install -y .*nfs-common.*$/m)
+  assert.notEqual(installs, -1, 'the NFS client package is not installed')
+  assert.ok(installs < script.indexOf('systemctl start boxlite-runner'))
+})
+
 test('the script fails fast, and logs where a person can find it', () => {
   const script = render()
   assert.match(script, /^#!\/bin\/bash/)
@@ -277,4 +288,36 @@ test('the policy compares against the exact line the boot script wrote', () => {
   // what has to match is the default behind it.
   assert.ok(validate.includes(`UNIT_ENV_FILE="\${BOXLITE_RUNNER_ENV_FILE:-${RUNNER_ENV_FILE}}"`))
   assert.ok(script.includes(RUNNER_ENV_FILE))
+})
+
+test('boot expands the runner map as quoted environment, never the wrapper itself', () => {
+  const script = render({ environment: { BOXLITE_RUNNER_ENV: '{"BOXLITE_EXPERIMENTAL":"nested-virtualization"}' } })
+  assert.match(script, /^BOXLITE_EXPERIMENTAL="nested-virtualization"$/m)
+  assert.doesNotMatch(script, /^BOXLITE_RUNNER_ENV=/m)
+})
+
+test('invalid maps and deployment-owned keys fail before rendering boot or policy', () => {
+  const invalid = ['null', '[]', '{', '{"X":false}', '{"BAD-KEY":"v"}', '{"X":"line\\nfeed"}', '{"X":"a\\u0000b"}']
+  for (const key of [
+    'BOXLITE_RUNNER_TOKEN',
+    'BOXLITE_API_URL',
+    'OTEL_LOGGING_ENABLED',
+    'OTEL_TRACING_ENABLED',
+    'BOXLITE_KERNEL_PATH',
+    'PATH',
+    'BOXLITE_RUNNER_ENV',
+  ]) {
+    invalid.push(JSON.stringify({ [key]: 'override' }))
+  }
+  for (const runnerEnv of invalid) {
+    assert.throws(() => render({ environment: { BOXLITE_RUNNER_ENV: runnerEnv } }), /BOXLITE_RUNNER_ENV/)
+    assert.throws(
+      () => renderUnitEnvironmentPolicyScripts({ apiUrl: 'https://api.example.test', ...{ runnerEnv } }),
+      /BOXLITE_RUNNER_ENV/,
+    )
+  }
+  assert.throws(
+    () => render({ environment: { DIRECT: 'existing', BOXLITE_RUNNER_ENV: '{"DIRECT":"override"}' } }),
+    /BOXLITE_RUNNER_ENV/,
+  )
 })

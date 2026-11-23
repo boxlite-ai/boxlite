@@ -325,7 +325,7 @@ fn build_path_access(
     }
 
     // The in-shim network backend may validate upstream TLS certificates
-    // (for example secret-substitution MITM forwarding). Keep host trust
+    // (for example secret-injection MITM forwarding). Keep host trust
     // stores readable inside the sandbox without granting broader /etc access.
     for path in system_ca_paths() {
         if path.exists() {

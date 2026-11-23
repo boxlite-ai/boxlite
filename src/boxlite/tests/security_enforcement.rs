@@ -14,7 +14,8 @@
 mod common;
 
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec, RootfsSpec, VolumeSpec};
-use boxlite::{BoxCommand, BoxliteRuntime, LiteBox};
+use boxlite::{BoxCommand, LiteBox};
+use common::TestRuntime as BoxliteRuntime;
 use futures::StreamExt;
 use tempfile::TempDir;
 

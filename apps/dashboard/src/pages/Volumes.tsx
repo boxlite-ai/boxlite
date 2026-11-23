@@ -3,8 +3,23 @@
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
+import { VolumeResourceIcon } from '@/components/ResourceStateIcon'
 
-import { VolumeGlyph, volumeGlyphState } from '@/components/VolumeGlyph'
+import {
+  ResourceFilterEmptyState,
+  ResourceEmptyState,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+  ResourceFilter,
+  ResourceIdentity,
+} from '@/components/ResourceLayout'
+import {
+  FormDialogContent as DialogContent,
+  FormDialogHeader as DialogHeader,
+  FormDialogFooter as DialogFooter,
+  FormDialogBody,
+} from '@/components/ui/form-dialog'
 import { AsciiButton, PanelNote, StatusMark } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import {
@@ -17,21 +32,23 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Database, Plus, Search, Trash } from '@/components/ui/icon'
+import { Dialog, DialogTitle } from '@/components/ui/dialog'
+import { HardDrive, Plus, Trash } from '@/components/ui/icon'
 import { useCreateVolumeMutation } from '@/hooks/mutations/useCreateVolumeMutation'
 import { useDeleteVolumeMutation } from '@/hooks/mutations/useDeleteVolumeMutation'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { useVolumesQuery } from '@/hooks/queries/useVolumesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useVolumeWsSync } from '@/hooks/useVolumeWsSync'
+import { copyToClipboard } from '@/lib/copy-text'
 import { handleApiError } from '@/lib/error-handling'
 import { timeAgo } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { OrganizationRolePermissionsEnum, VolumeDto, VolumeState } from '@boxlite-ai/api-client'
 import { useQueryClient } from '@tanstack/react-query'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 // Must match CreateVolumeDto.VOLUME_NAME_PATTERN on the server, including
 // its two-character minimum (`+`, not `*`): a one-character name is
@@ -45,7 +62,8 @@ const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]+$/
 // buttons under it — and every `fr` column drifted further apart the further
 // right it sat. The last column is therefore fixed, and this string exists
 // once so the two can no longer diverge.
-const ROW_GRID = 'grid grid-cols-[1.6fr_1.2fr_1fr_0.8fr_0.85fr_104px] items-center gap-3 px-2'
+const ROW_GRID =
+  'grid min-w-[760px] grid-cols-[minmax(0,1.4fr)_minmax(0,1.5fr)_120px_100px_100px_104px] items-center gap-4'
 
 // Transitional states read as `warn` rather than blending in with the healthy
 // ones: a volume stuck in `pending_delete` is exactly the leak this page exists
@@ -70,7 +88,9 @@ const STATE_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'idle'> = {
 // source is either a new endpoint or aggregating `BoxDto.volumes` over the
 // full box list, matching on the stored `volumeId` — the API resolves a name
 // to the volume's id before persisting it (box.service.ts).
+/** Lists persistent volumes and gates creation, mounting, and deletion by member permissions and volume state. */
 const Volumes: React.FC = () => {
+  usePageTitle('Volumes')
   const queryClient = useQueryClient()
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   // Volume state changes arrive over the notification socket; keep the
@@ -78,7 +98,8 @@ const Volumes: React.FC = () => {
   useVolumeWsSync()
 
   const queryKey = useMemo(() => queryKeys.volumes.list(selectedOrganization?.id ?? ''), [selectedOrganization?.id])
-  const { data: volumes = [], isLoading, error: volumesError } = useVolumesQuery()
+  const { data: inventory, error: volumesError, isFetching, refetch } = useVolumesQuery()
+  const volumes = inventory ?? []
   const createVolume = useCreateVolumeMutation()
   const deleteVolume = useDeleteVolumeMutation({ invalidateOnSuccess: false })
 
@@ -93,12 +114,6 @@ const Volumes: React.FC = () => {
   const [boxVolumeId, setBoxVolumeId] = useState<string | null>(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [busy, setBusy] = useState<Record<string, boolean>>({})
-
-  useEffect(() => {
-    if (volumesError) {
-      handleApiError(volumesError, 'Failed to fetch volumes')
-    }
-  }, [volumesError])
 
   const updateVolumeStateInCache = useCallback(
     (volumeId: string, state: VolumeState) => {
@@ -166,167 +181,162 @@ const Volumes: React.FC = () => {
     }
   }
 
-  const showEmpty = !isLoading && volumes.length === 0
+  const showEmpty = volumes.length === 0
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
-      <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
+      <div className="resource-page-header flex items-end justify-between">
         <div>
           <h1 className="font-display text-page font-semibold text-foreground">Volumes</h1>
           <p className="mt-2 text-body leading-relaxed text-muted-foreground">Persistent storage across your Boxes.</p>
         </div>
       </div>
 
-      {showEmpty ? (
-        <EmptyState canCreate={canWrite} onCreate={() => setCreateOpen(true)} />
-      ) : (
-        <>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
-            <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px] sm:flex-none">
-              <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
-              <input
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="Filter volumes…"
-                className="w-full border-0 bg-transparent p-0 text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
-              />
-              <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-                {rows.length}
-              </span>
-            </div>
-            <div className="flex-1" />
-            {canWrite && (
-              <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" onClick={() => setCreateOpen(true)}>
-                <Plus className="size-3.5" strokeWidth={2.4} />
-                New Volume
-              </AsciiButton>
-            )}
-          </div>
+      <div className="resource-toolbar">
+        <ResourceFilter
+          label="Filter volumes"
+          disabled={inventory === undefined}
+          value={filter}
+          onChange={(value) => setFilter(value)}
+          count={inventory === undefined ? '—' : rows.length}
+        />
+        <div className="flex-1" />
+        {canWrite && (
+          <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-3.5" strokeWidth={2.4} />
+            New Volume
+          </AsciiButton>
+        )}
+      </div>
 
-          <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <div
-              className={cn(
-                ROW_GRID,
-                'border-b border-border pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground',
-              )}
-            >
-              <span>Name</span>
-              <span>Volume ID</span>
-              <span>Status</span>
-              <span>Created</span>
-              {/* `lastUsedAt` is written only when a box that mounts the volume is
+      <div className="resource-content scroll-edge mt-[14px]">
+        {volumesError && inventory !== undefined && (
+          <ResourceErrorNotice
+            title="Could not refresh volumes. Showing previously loaded data."
+            retrying={isFetching}
+            onRetry={() => void refetch()}
+          />
+        )}
+        <div className={cn(ROW_GRID, 'resource-list-head', rows.length === 0 && 'hidden')}>
+          <span>Name</span>
+          <span>Volume ID</span>
+          <span>Status</span>
+          <span>Created</span>
+          {/* `lastUsedAt` is written only when a box that mounts the volume is
                   created (volume.service.ts:254-272), never on read or write — so it
                   is the moment a mount most recently *began*, not the last time bytes
                   moved. "Latest mount" rather than "last used" (a long-running writer
                   disproves that), and rather than "last mounted", whose past tense
                   would suggest the mount has since ended — which this page cannot know. */}
-              <span>Latest mount</span>
-              <span className="text-right">Actions</span>
-            </div>
+          <span>Latest mount</span>
+          <span className="text-right">Actions</span>
+        </div>
 
-            {rows.map((volume) => {
-              const removable = volume.state === VolumeState.READY || volume.state === VolumeState.ERROR
-              // Both of these used to live in an expandable panel that existed
-              // mainly to hold the mounted-by list. With that gone there is not
-              // enough left to justify a second row, so the status cell carries
-              // the explanation for the two states that have one.
-              const statusDetail =
-                volume.errorReason ||
-                (volume.state === VolumeState.PENDING_DELETE || volume.state === VolumeState.DELETING
-                  ? 'Reclaiming — this can take a few minutes. The volume stays listed until it finishes.'
-                  : undefined)
-              return (
-                <div key={volume.id} className="border-b border-border/60">
-                  <div className={cn(ROW_GRID, 'py-[13px] text-[13px]')}>
-                    <span className="flex min-w-0 items-center gap-3">
-                      <VolumeGlyph state={volumeGlyphState(volume.state)} size={28} className="text-muted-foreground" />
-                      <span className="truncate font-mono font-medium text-foreground">{volume.name}</span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(volume.id)
-                          toast.success('Volume ID copied')
-                        } catch {
-                          toast.error('Could not copy to clipboard')
-                        }
-                      }}
-                      title="Copy volume ID"
-                      className="truncate text-left font-mono text-[12px] text-muted-foreground transition-colors hover:text-foreground"
-                    >
-                      {volume.id}
-                    </button>
-                    <span title={statusDetail} className={statusDetail ? 'cursor-help' : undefined}>
-                      <StatusMark tone={STATE_TONE[volume.state] ?? 'idle'}>
-                        <span className="font-mono text-[11px] uppercase tracking-[0.5px]">{volume.state}</span>
-                      </StatusMark>
-                    </span>
-                    <span className="font-mono text-[12px] text-muted-foreground">{timeAgo(volume.createdAt)}</span>
-                    <span className="font-mono text-[12px] text-muted-foreground">{timeAgo(volume.lastUsedAt)}</span>
-                    {/* Space is tight, so only the promoted action keeps a
+        {rows.map((volume) => {
+          const removable = volume.state === VolumeState.READY || volume.state === VolumeState.ERROR
+          // Both of these used to live in an expandable panel that existed
+          // mainly to hold the mounted-by list. With that gone there is not
+          // enough left to justify a second row, so the status cell carries
+          // the explanation for the two states that have one.
+          const statusDetail =
+            volume.errorReason ||
+            (volume.state === VolumeState.PENDING_DELETE || volume.state === VolumeState.DELETING
+              ? 'Reclaiming — this can take a few minutes. The volume stays listed until it finishes.'
+              : undefined)
+          return (
+            <div key={volume.id}>
+              <div className={cn(ROW_GRID, 'resource-list-row')}>
+                <ResourceIdentity icon={<VolumeResourceIcon state={volume.state} />}>
+                  <span className="resource-name" title={volume.name}>
+                    {volume.name}
+                  </span>
+                </ResourceIdentity>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (await copyToClipboard(volume.id)) toast.success('Volume ID copied')
+                    else toast.error('Could not copy to clipboard')
+                  }}
+                  title="Copy volume ID"
+                  aria-label={`Copy volume ID ${volume.id}`}
+                  className="min-w-0 text-left font-mono text-meta text-muted-foreground transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground"
+                >
+                  <span className="block truncate" title={volume.id}>
+                    {volume.id}
+                  </span>
+                </button>
+                <span title={statusDetail} className={statusDetail ? 'cursor-help' : undefined}>
+                  <StatusMark tone={STATE_TONE[volume.state] ?? 'idle'}>{volume.state}</StatusMark>
+                </span>
+                <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.createdAt)}</span>
+                <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.lastUsedAt)}</span>
+                {/* Space is tight, so only the promoted action keeps a
                         label; destroy is the app's established icon treatment
                         (and a little harder to hit by accident that way). */}
-                    <div className="flex items-center justify-end gap-[6px]">
-                      {canCreateBox && volume.state === VolumeState.READY && (
-                        <AsciiButton
-                          size="sm"
-                          type="button"
-                          // The id, not the name — see the mount-row comment in
-                          // CreateBoxDialog.
-                          onClick={() => setBoxVolumeId(volume.id)}
-                          title={`Create a box with ${volume.name} mounted`}
-                        >
-                          + Box
-                        </AsciiButton>
-                      )}
-                      {canDelete && (
-                        <AsciiButton
-                          variant="danger"
-                          size="icon"
-                          type="button"
-                          onClick={() => {
-                            setDeleteConfirmText('')
-                            setPendingDelete(volume)
-                          }}
-                          disabled={!removable || busy[volume.id]}
-                          title={removable ? 'Delete volume' : 'Only a ready or errored volume can be deleted'}
-                          aria-label={`Delete ${volume.name}`}
-                        >
-                          <Trash className="size-[13px]" strokeWidth={2} />
-                        </AsciiButton>
-                      )}
-                    </div>
-                  </div>
+                <div className="flex items-center justify-end gap-[6px]">
+                  {canCreateBox && volume.state === VolumeState.READY && (
+                    <AsciiButton
+                      variant="quiet"
+                      size="sm"
+                      type="button"
+                      // The id, not the name — see the mount-row comment in
+                      // CreateBoxDialog.
+                      onClick={() => setBoxVolumeId(volume.id)}
+                      title={`Create a box with ${volume.name} mounted`}
+                    >
+                      New Box
+                    </AsciiButton>
+                  )}
+                  {canDelete && (
+                    <AsciiButton
+                      variant="quiet-danger"
+                      size="icon"
+                      type="button"
+                      onClick={() => {
+                        setDeleteConfirmText('')
+                        setPendingDelete(volume)
+                      }}
+                      disabled={!removable || busy[volume.id]}
+                      title={removable ? 'Delete volume' : 'Only a ready or errored volume can be deleted'}
+                      aria-label={`Delete ${volume.name}`}
+                    >
+                      <Trash className="size-[15px]" />
+                    </AsciiButton>
+                  )}
                 </div>
-              )
-            })}
-
-            {rows.length === 0 && (
-              <div className="flex flex-col items-center gap-3 py-10 text-center font-mono text-[12px] text-muted-foreground">
-                <span>No volume matches “{filter.trim()}”</span>
-                <AsciiButton size="sm" type="button" onClick={() => setFilter('')}>
-                  Clear filter
-                </AsciiButton>
               </div>
-            )}
-          </div>
-        </>
-      )}
+            </div>
+          )
+        })}
+
+        {inventory === undefined ? (
+          volumesError ? (
+            <ResourceErrorState title="Could not load volumes" retrying={isFetching} onRetry={() => void refetch()} />
+          ) : (
+            <ResourceLoadingState title="Loading volumes…" />
+          )
+        ) : rows.length === 0 ? (
+          showEmpty ? (
+            <EmptyState />
+          ) : (
+            <ResourceFilterEmptyState title={`No volume matches “${filter.trim()}”`} onClear={() => setFilter('')} />
+          )
+        ) : null}
+      </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="flex w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[460px]">
-          <DialogHeader className="shrink-0 border-b border-border px-4 py-[18px] sm:px-6">
-            <DialogTitle className="text-[18px] font-bold tracking-[-0.3px]">New volume</DialogTitle>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>New Volume</DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col gap-[9px] px-4 py-5 sm:px-6">
+          <FormDialogBody>
             {/* Nothing else here says what a volume is — the payload is just a
                 name — and this dialog is where someone meets the concept. */}
-            <p className="mb-[5px] font-mono text-[11.5px] leading-relaxed text-muted-foreground">
+            <p className="mb-[5px] font-sans text-meta leading-relaxed text-muted-foreground">
               Storage that outlives a box. Mount it into a box to read and write; the data stays once that box is gone,
               and another box can mount it later.
             </p>
-            <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Name</div>
+            <div className="form-field-label">Name</div>
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
@@ -334,14 +344,14 @@ const Volumes: React.FC = () => {
               placeholder="subtitle-models"
               aria-label="Volume name"
               aria-invalid={!nameValid}
-              className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
+              className="form-field-input font-mono"
             />
             {/* Name is the entire create payload — the API accepts nothing else
                 — and a mount takes a name in place of an id, so this is the
                 handle the user will type later. */}
             <PanelNote>Used to mount this volume into a box. It takes a few seconds to become ready.</PanelNote>
-          </div>
-          <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
+          </FormDialogBody>
+          <DialogFooter>
             <AsciiButton type="button" onClick={() => setCreateOpen(false)}>
               Cancel
             </AsciiButton>
@@ -353,7 +363,7 @@ const Volumes: React.FC = () => {
             >
               {createVolume.isPending ? 'Creating…' : 'Create'}
             </AsciiButton>
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -394,7 +404,7 @@ const Volumes: React.FC = () => {
             {/* Deliberately not the uppercase label treatment used elsewhere:
                 the match is case-sensitive, so rendering the name in any case
                 but its own tells the user to type something that will fail. */}
-            <label htmlFor="volume-delete-confirm" className="font-mono text-[11px] text-muted-foreground">
+            <label htmlFor="volume-delete-confirm" className="font-sans text-meta text-muted-foreground">
               Type <span className="text-foreground">{pendingDelete?.name}</span> to confirm
             </label>
             <input
@@ -407,7 +417,7 @@ const Volumes: React.FC = () => {
               autoComplete="off"
               spellCheck={false}
               aria-label="Confirm volume name"
-              className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-[13px] text-foreground outline-none focus:border-destructive"
+              className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-body text-foreground outline-none focus:border-destructive"
             />
           </div>
           <AlertDialogFooter>
@@ -439,26 +449,13 @@ const Volumes: React.FC = () => {
  * Shows the next action before an organization has any volumes.
  * Only members allowed to create volumes receive the creation action.
  */
-function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
+function EmptyState() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-[16px] px-6 text-center">
-      {/* A bordered tile with the disk glyph, matching BillingComingSoon's
-          treatment. The bare 10px brand square this replaces read as a stray
-          artifact rather than an icon, with nothing around it to give it scale. */}
-      <div className="flex size-11 items-center justify-center border border-border bg-card">
-        <Database className="size-5 text-muted-foreground" strokeWidth={1.6} />
-      </div>
-      <div className="font-mono text-[17px] font-semibold">No volumes yet</div>
-      <p className="max-w-[420px] font-mono text-[12.5px] leading-relaxed text-muted-foreground">
-        Create a volume, then mount it when creating a Box.
-      </p>
-      {canCreate && (
-        <AsciiButton variant="primary" className="mt-1" type="button" onClick={onCreate}>
-          <Plus className="size-3.5" strokeWidth={2.4} />
-          New Volume
-        </AsciiButton>
-      )}
-    </div>
+    <ResourceEmptyState
+      title="No volumes yet"
+      icon={<HardDrive className="size-6" />}
+      description="Create a volume, then mount it when creating a Box."
+    />
   )
 }
 

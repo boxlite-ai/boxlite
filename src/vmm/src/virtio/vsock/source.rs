@@ -3,10 +3,10 @@
 
 //! Device-owned I/O with a duplicate polling handle and automatic deregistration.
 
-use crate::virtio::{DeviceError, EventRegistrar, EventSource, SourceId};
+use crate::virtio::{DeviceError, DeviceEvent, EventRegistrar, EventSource, SourceId};
 use mio::{Interest, Registry, Token, event::Source};
 use std::{
-    io,
+    io::{self, Read, Write},
     os::unix::net::{UnixListener, UnixStream},
     sync::Arc,
 };
@@ -104,4 +104,52 @@ impl Drop for Registration {
     fn drop(&mut self) {
         self.registrar.deregister(self.id);
     }
+}
+
+/// One coalesced callback through the existing backend-readiness interface.
+pub(super) struct Reschedule {
+    registration: Registration,
+    reader: UnixStream,
+    writer: UnixStream,
+    pending: bool,
+}
+
+impl Reschedule {
+    pub fn new(registrar: Arc<dyn EventRegistrar>) -> Result<Self, DeviceError> {
+        let (reader, writer) = UnixStream::pair().map_err(notification_error)?;
+        reader.set_nonblocking(true).map_err(notification_error)?;
+        writer.set_nonblocking(true).map_err(notification_error)?;
+        let registration = Registration::stream(&reader, registrar, Interest::READABLE)?;
+        Ok(Self {
+            registration,
+            reader,
+            writer,
+            pending: false,
+        })
+    }
+
+    pub fn schedule(&mut self) -> Result<(), DeviceError> {
+        if !self.pending {
+            self.writer.write_all(&[1]).map_err(notification_error)?;
+            self.pending = true;
+        }
+        Ok(())
+    }
+
+    pub fn acknowledge(&mut self, event: DeviceEvent) -> Result<bool, DeviceError> {
+        if event != DeviceEvent::BackendReady(self.registration.id) {
+            return Ok(false);
+        }
+        match self.reader.read_exact(&mut [0]) {
+            Ok(()) => self.pending = false,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => return Err(notification_error(error)),
+        }
+        Ok(true)
+    }
+}
+
+fn notification_error(error: io::Error) -> DeviceError {
+    tracing::warn!(%error, "vsock private notification failed");
+    DeviceError::Fatal("vsock private notification")
 }

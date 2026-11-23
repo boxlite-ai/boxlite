@@ -11,6 +11,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestUploadRejectsInvalidOverwriteBeforeRuntimeAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, raw := range []string{"invalid", "null"} {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPut, "/v1/boxes/b/files?path=/root&overwrite="+raw, strings.NewReader("unused"))
+		BoxliteFileUpload(ctx)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("overwrite=%s: status=%d body=%s", raw, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
 // renderCopyError drives the production renderer and hands back what a client
 // would actually receive.
 func renderCopyError(t *testing.T, err error) (int, map[string]any) {
@@ -220,28 +233,6 @@ func TestFilesRoutesAnswerInTheDeclaredEnvelope(t *testing.T) {
 		if message == "" || errorType == "" || code == "" {
 			t.Errorf("%s: envelope is missing a field: message=%q type=%q code=%q",
 				name, message, errorType, code)
-		}
-	}
-}
-
-// Absent or malformed values mean the client predates the hint → Unknown,
-// which relays the body with the guest peeking the archive to decide.
-func TestParseSourceIsDir(t *testing.T) {
-	cases := []struct {
-		raw  string
-		want boxlite.CopySourceKind
-	}{
-		{"", boxlite.CopySourceUnknown},
-		{"true", boxlite.CopySourceDir},
-		{"false", boxlite.CopySourceFile},
-		{"1", boxlite.CopySourceDir},
-		{"0", boxlite.CopySourceFile},
-		{"bogus", boxlite.CopySourceUnknown},
-	}
-	for _, c := range cases {
-		got := parseSourceIsDir(c.raw)
-		if got != c.want {
-			t.Errorf("parseSourceIsDir(%q) = %d, want %d", c.raw, got, c.want)
 		}
 	}
 }

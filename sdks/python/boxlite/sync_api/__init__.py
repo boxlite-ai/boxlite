@@ -41,9 +41,10 @@ Note:
     Use the async API (CodeBox, SimpleBox) in those cases.
 """
 
-from ._agents import SyncAgent, SyncAgents, SyncAgentTurn
+from ._agents import SyncAgent, SyncAgentEventStream, SyncAgents, SyncAgentTurn
 from ._box import SyncBox
 from ._boxlite import SyncBoxlite
+from ._checkpoints import SyncCheckpointHandle
 from ._codebox import SyncCodeBox
 from ._domains import SyncDomainHandle
 from ._execution import SyncExecStderr, SyncExecStdout, SyncExecution
@@ -60,6 +61,7 @@ __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     # Entry point
     "SyncAgents",
     "SyncAgent",
+    "SyncAgentEventStream",
     "SyncAgentTurn",
     "SyncBoxlite",
     # Base classes
@@ -67,6 +69,7 @@ __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     "SyncContextManager",
     # Native API mirrors
     "SyncBox",
+    "SyncCheckpointHandle",
     "SyncDomainHandle",
     "SyncImageHandle",
     "SyncNetworkHandle",

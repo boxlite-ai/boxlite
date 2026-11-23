@@ -9,7 +9,6 @@ api_config.go
 api_health.go
 api_images.go
 api_jobs.go
-api_object_storage.go
 api_organizations.go
 api_preview.go
 api_regions.go
@@ -44,12 +43,14 @@ model_admin_organization_impact.go
 model_admin_organization_impact_evidence.go
 model_admin_organization_member.go
 model_admin_organization_member_page.go
+model_admin_organization_nested_virtualization.go
 model_admin_organization_overview.go
 model_admin_organization_overview_page.go
 model_admin_organization_usage.go
 model_admin_region_overview.go
 model_admin_region_overview_page.go
 model_admin_runner.go
+model_admin_set_organization_nested_virtualization_request.go
 model_admin_usage_coverage.go
 model_admin_usage_dimensions.go
 model_admin_usage_error.go
@@ -65,7 +66,6 @@ model_audit_log.go
 model_box.go
 model_box_class.go
 model_box_desired_state.go
-model_box_labels.go
 model_box_memory_usage_dto.go
 model_box_progress.go
 model_box_progress_phase.go
@@ -99,11 +99,7 @@ model_inbound_network_spec.go
 model_job.go
 model_job_status.go
 model_job_type.go
-model_log_entry.go
 model_memory_incident_list_dto.go
-model_metric_data_point.go
-model_metric_series.go
-model_metrics_response.go
 model_network_info.go
 model_network_mode.go
 model_oidc_config.go
@@ -121,8 +117,6 @@ model_outbound_network_spec.go
 model_paginated_audit_logs.go
 model_paginated_boxes.go
 model_paginated_jobs.go
-model_paginated_logs.go
-model_paginated_traces.go
 model_poll_jobs_response.go
 model_posthog_config.go
 model_prompt_draft_dto.go
@@ -136,6 +130,7 @@ model_registry_credential.go
 model_registry_credential_kind.go
 model_runner.go
 model_runner_cpu_incident.go
+model_runner_data_disk_ref.go
 model_runner_full.go
 model_runner_health_metrics.go
 model_runner_healthcheck.go
@@ -145,10 +140,7 @@ model_runner_state.go
 model_save_onboarding_dto.go
 model_save_prompt_draft_dto.go
 model_send_webhook_dto.go
-model_storage_access_dto.go
-model_toolbox_proxy_url.go
-model_trace_span.go
-model_trace_summary.go
+model_turnstile_config.go
 model_update_box_state_dto.go
 model_update_job_status.go
 model_update_organization_default_region.go

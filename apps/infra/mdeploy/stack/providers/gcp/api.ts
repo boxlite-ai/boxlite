@@ -40,6 +40,7 @@ import { CACHE_CA_PATH, CACHE_PASSWORD_VARIABLE, type CacheBinding } from '../..
 import { CLICKHOUSE_PASSWORD_VARIABLE } from '../../clickhouse.ts'
 import { DATABASE_PASSWORD_VARIABLE, type DatabaseBinding } from '../../database.ts'
 import type { Placement } from '../../network.ts'
+import { runnerDataDiskPrefix } from '../../runners.ts'
 import type { StorageBinding } from '../../storage.ts'
 import { containerEnvironment, secretIdOf } from './secret-env.ts'
 import { VOLUME_OBJECT_ACCESS_ROLE } from './storage.ts'
@@ -126,12 +127,15 @@ const bindingsFor = ({
   capability,
   index,
   project,
+  zone,
   member,
   bucketName,
 }: {
   capability: ApiCapability
   index: number
   project: string
+  /** The zone the runner data disks live in, which the disk grant's prefix names. */
+  zone: string
   member: $util.Output<string>
   bucketName: $util.Output<string>
 }): any[] => {
@@ -159,6 +163,16 @@ const bindingsFor = ({
         }),
       ]
     }
+    case 'manage-checkpoint-archives':
+      // Object access on the checkpoint bucket alone: the API deletes archives
+      // and never touches the bucket itself.
+      return [
+        new gcp.storage.BucketIAMMember(`ApiCapability${index}`, {
+          bucket: capability.checkpoints.bucket,
+          role: 'roles/storage.objectUser',
+          member: principal,
+        }),
+      ]
     case 'vend-volume-credentials':
       // Google's equivalent of assuming a role: the API mints a short-lived
       // token for the vending account and scopes it to one organization.
@@ -179,9 +193,7 @@ const bindingsFor = ({
         ? [
             new gcp.secretmanager.SecretIamMember(`ApiCapability${index}`, {
               project,
-              secretId: capability.clickhouse.reader.passwordRef.apply((reference: string) =>
-                secretIdOf(reference),
-              ),
+              secretId: capability.clickhouse.reader.passwordRef.apply((reference: string) => secretIdOf(reference)),
               role: 'roles/secretmanager.secretAccessor',
               member: principal,
             }),
@@ -216,6 +228,86 @@ const bindingsFor = ({
         }),
       ]
     }
+    case 'read-filestore-instances':
+      return capability.projects.map(
+        (filestoreProject) =>
+          new gcp.projects.IAMMember(
+            `ApiFilestoreViewer-${filestoreProject}`,
+            {
+              project: filestoreProject,
+              role: 'roles/file.viewer',
+              member: principal,
+            },
+            {
+              aliases: [{ name: `ApiCapability${index}FilestoreViewer-${filestoreProject}` }],
+            },
+          ),
+      )
+    case 'resize-runner-disks': {
+      /*
+       * Two custom roles because no predefined role is this narrow: the
+       * narrowest that carries `compute.disks.update` also carries create and
+       * delete, and a runaway resizer's ceiling must be "bigger disk, more
+       * money" and nothing past it. One role for the disks, one for the
+       * operations that confirm them — and the disk role is bounded by a CEL
+       * prefix to this stage's data disks, where the operation role stays
+       * unconditional because an operation is not a Disk resource and a name
+       * prefix matches nothing on it.
+       *
+       * The prefix is derived from the same function the disks are created
+       * under, so the grant and the resources it bounds cannot be spelled a
+       * second time. A prefix that matched nothing would be no grant and no
+       * error — the first resize 403ing hours later, which is the failure this
+       * derivation exists to keep out.
+       */
+      const roleIdFor = (role: string): string => {
+        const id = `${$app.name}_${$app.stage}_${role}`.replace(/[^a-zA-Z0-9_.]/g, '_')
+        if (id.length > 64) throw new Error(`The custom role id "${id}" is ${id.length} characters and the limit is 64`)
+        return id
+      }
+      /*
+       * No `protect`, on purpose, matching the registry credential roles —
+       * the other custom roles the API holds, and the closest thing to a
+       * precedent for these. A role holds no state: if it is deleted out of
+       * band, the next deploy recreates it from this declaration; what
+       * `protect` would add is a refusal when a deploy itself deletes one
+       * (a rename, say), and that window — the binding dangling until the
+       * role exists again, the first resize 403ing — is one the registry
+       * roles have lived with since they shipped, now watched by an alarm
+       * rather than a deletion guard.
+       */
+      const resizer = new gcp.projects.IAMCustomRole(`ApiCapability${index}DiskResizerRole`, {
+        project,
+        roleId: roleIdFor('runner_disk_resizer'),
+        title: `Grow runner data disks (${$app.stage})`,
+        permissions: ['compute.disks.get', 'compute.disks.update'],
+      })
+      const operations = new gcp.projects.IAMCustomRole(`ApiCapability${index}DiskOperationReaderRole`, {
+        project,
+        roleId: roleIdFor('runner_disk_operation_reader'),
+        title: `Read runner disk operations (${$app.stage})`,
+        permissions: ['compute.zoneOperations.get'],
+      })
+      return [
+        resizer,
+        operations,
+        new gcp.projects.IAMMember(`ApiCapability${index}DiskResize`, {
+          project,
+          role: resizer.name,
+          member: principal,
+          condition: {
+            title: 'runner-data-disks-only',
+            description: `Disks named ${runnerDataDiskPrefix({ app: $app.name, stage: $app.stage })}*`,
+            expression: `resource.type == "compute.googleapis.com/Disk" && resource.name.startsWith("projects/${project}/zones/${zone}/disks/${runnerDataDiskPrefix({ app: $app.name, stage: $app.stage })}")`,
+          },
+        }),
+        new gcp.projects.IAMMember(`ApiCapability${index}DiskOperations`, {
+          project,
+          role: operations.name,
+          member: principal,
+        }),
+      ]
+    }
   }
 }
 
@@ -224,6 +316,7 @@ export const gcpApiProvider =
     dependencies,
     project,
     region,
+    zone,
     domain,
     dashboardDomain,
     callers,
@@ -234,6 +327,8 @@ export const gcpApiProvider =
     dependencies: ApiDependencies
     project: string
     region: string
+    /** The zone the runner data disks live in, which the disk grant is bounded to. */
+    zone: string
     /** The stage's own domain. `api.<domain>` is where this answers. */
     domain: string
     /** Where the dashboard is served, or null for the stage domain itself. */
@@ -265,6 +360,61 @@ export const gcpApiProvider =
      */
     const hosts = publicHostsFor({ domain, dashboardDomain })
     const apiHost = hosts.api
+    const continuousCi = Boolean(request.environment.CI_GITHUB_APP_CLIENT_ID)
+    const certificateMap = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy' })
+    const { number: projectNumber } = gcp.organizations.getProjectOutput({ projectId: project })
+    const role = new gcp.projects.IAMCustomRole('CustomDomainRuntimeRole', {
+      project,
+      roleId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'custom_domains' }).replaceAll('-', '_'),
+      title: 'Reconcile customer domain certificates',
+      permissions: [
+        'certificatemanager.dnsauthorizations.create',
+        'certificatemanager.dnsauthorizations.get',
+        'certificatemanager.dnsauthorizations.delete',
+        'certificatemanager.certs.create',
+        'certificatemanager.certs.get',
+        'certificatemanager.certs.delete',
+        'certificatemanager.certs.use',
+        'certificatemanager.dnsauthorizations.use',
+        'certificatemanager.certmapentries.create',
+        'certificatemanager.certmapentries.get',
+        'certificatemanager.certmapentries.delete',
+      ],
+    })
+    const customDomainGrant = new gcp.projects.IAMMember('CustomDomainRuntimeGrant', {
+      project,
+      role: role.name,
+      member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+      condition: {
+        title: 'customer-domain-resources-only',
+        // Certificate Manager also evaluates create against the new resource's name.
+        expression: projectNumber.apply((number: string) =>
+          [project, number]
+            .flatMap((id) =>
+              [
+                'certificates/byo-',
+                'dnsAuthorizations/byo-',
+                `certificateMaps/${certificateMap}/certificateMapEntries/byo-`,
+              ].map((path) => `resource.name.startsWith(${JSON.stringify(`projects/${id}/locations/global/${path}`)})`),
+            )
+            .join(' || '),
+        ),
+      },
+    })
+    const queryRole = new gcp.projects.IAMCustomRole('CustomDomainQueryRole', {
+      project,
+      roleId: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'custom_domain_queries' }).replaceAll(
+        '-',
+        '_',
+      ),
+      title: 'Read customer domain project and operations',
+      permissions: ['resourcemanager.projects.get', 'certificatemanager.operations.get'],
+    })
+    const customDomainQueryGrant = new gcp.projects.IAMMember('CustomDomainQueryGrant', {
+      project,
+      role: queryRole.name,
+      member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
+    })
 
     /*
      * Every name this container is handed by reference, in one place.
@@ -305,9 +455,9 @@ export const gcpApiProvider =
       (name) =>
         new gcp.secretmanager.SecretIamMember(`ApiSecretAccess-${name}`, {
           project,
-          secretId: $util.output(handedOver[name] as $util.Input<string>).apply((reference: string) =>
-            secretIdOf(reference),
-          ),
+          secretId: $util
+            .output(handedOver[name] as $util.Input<string>)
+            .apply((reference: string) => secretIdOf(reference)),
           role: 'roles/secretmanager.secretAccessor',
           member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
         }),
@@ -319,6 +469,7 @@ export const gcpApiProvider =
         name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
         project,
         location: region,
+        labels: { stage: $app.stage },
         /*
          * The ingress *is* the restriction. Read the note on `publicInvoker`
          * below before widening this: the two are one decision, and a value
@@ -329,6 +480,7 @@ export const gcpApiProvider =
         // and reads the value held in state — so it refuses the delete half.
         // Left on, the first rename of this service costs two applies.
         deletionProtection: false,
+        ...(continuousCi ? { scaling: { minInstanceCount: 1 } } : {}),
         template: {
           serviceAccount: placement.serviceAccount,
           /*
@@ -386,14 +538,23 @@ export const gcpApiProvider =
           containers: [
             {
               image: request.image,
-              ports: [{ name: 'http1', containerPort: request.port }],
+              resources: { cpuIdle: false },
+              ports: { name: 'http1', containerPort: request.port },
               volumeMounts: [
                 { name: CLOUD_SQL_VOLUME, mountPath: `/${CLOUD_SQL_VOLUME}` },
                 { name: CACHE_CA_VOLUME, mountPath: dirname(CACHE_CA_PATH) },
               ],
               startupProbe: { httpGet: { path: '/api/health', port: request.port }, failureThreshold: 30 },
               livenessProbe: { httpGet: { path: '/api/health', port: request.port } },
-              envs: containerEnvironment({ values: request.environment, addresses }),
+              envs: containerEnvironment({
+                values: {
+                  ...request.environment,
+                  CUSTOM_DOMAIN_GCP_PROJECT: project,
+                  // The edge creates and attaches the map with this same resource name.
+                  CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: certificateMap,
+                },
+                addresses,
+              }),
             },
           ],
         },
@@ -404,7 +565,7 @@ export const gcpApiProvider =
          * while creating the revision, so a binding that lands a moment later is
          * a binding that lands after the refusal.
          */
-        dependsOn: [...dependencies.waitFor, ...readable],
+        dependsOn: [...dependencies.waitFor, customDomainGrant, customDomainQueryGrant, ...readable],
       },
     )
 
@@ -459,7 +620,14 @@ export const gcpApiProvider =
     })
 
     const granted = request.capabilities.flatMap((capability, index) =>
-      bindingsFor({ capability, index, project, member: placement.serviceAccount, bucketName: dependencies.storage.name }),
+      bindingsFor({
+        capability,
+        index,
+        project,
+        zone,
+        member: placement.serviceAccount,
+        bucketName: dependencies.storage.name,
+      }),
     )
 
     /*
@@ -859,6 +1027,8 @@ export const gcpApiProvider =
         publicInvoker,
         ...readable,
         ...granted,
+        customDomainGrant,
+        customDomainQueryGrant,
         vendingCeiling,
         forwarding,
         record,

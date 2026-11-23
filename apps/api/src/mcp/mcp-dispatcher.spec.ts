@@ -18,6 +18,11 @@ import { McpArgumentError, McpDispatcher, McpResponseError, MCP_MAX_BINARY_BYTES
 // proxy dependency ships ESM that Jest does not transform.
 jest.mock('http-proxy-middleware', () => ({ createProxyMiddleware: jest.fn(() => ({ upgrade: jest.fn() })) }))
 
+// Keep the stream longer than its idle deadline, with room for CI scheduling delays between chunks.
+const STREAM_IDLE_TIMEOUT_MS = 1000
+const STREAM_CHUNK_INTERVAL_MS = 50
+const STREAM_CHUNKS = 24
+
 const spec = (name: string) => parse(readFileSync(resolve(__dirname, '../../../../openapi', name), 'utf8'))
 const catalog = new McpCatalog({
   box: spec('box.openapi.yaml'),
@@ -84,11 +89,12 @@ function setup() {
         let sent = 0
         const drip = setInterval(() => {
           res.write(Buffer.alloc(1024, 1))
-          if (++sent === 5) {
+          if (++sent === STREAM_CHUNKS) {
             clearInterval(drip)
             res.end()
           }
-        }, 40)
+        }, STREAM_CHUNK_INTERVAL_MS)
+        res.once('close', () => clearInterval(drip))
         return
       }
       if (req.params.box_id === 'huge') {
@@ -210,7 +216,8 @@ describe('McpDispatcher', () => {
 
   it('keeps reading a slow route that keeps sending data', async () => {
     const { dispatcher } = setup()
-    Object.assign(dispatcher, { idleTimeoutMs: 100 })
+    Object.assign(dispatcher, { idleTimeoutMs: STREAM_IDLE_TIMEOUT_MS })
+    const started = performance.now()
 
     const response = await dispatcher.call(
       startExecution,
@@ -219,7 +226,8 @@ describe('McpDispatcher', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(response.body.length).toBe(5 * 1024)
+    expect(response.body).toEqual(Buffer.alloc(STREAM_CHUNKS * 1024, 1))
+    expect(performance.now() - started).toBeGreaterThan(STREAM_IDLE_TIMEOUT_MS)
   })
 
   it('abandons the route when the MCP client disconnects', async () => {

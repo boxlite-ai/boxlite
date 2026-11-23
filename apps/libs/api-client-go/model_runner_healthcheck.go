@@ -21,12 +21,18 @@ var _ MappedNullable = &RunnerHealthcheck{}
 
 // RunnerHealthcheck struct for RunnerHealthcheck
 type RunnerHealthcheck struct {
+	// Runner runtime authorizes nested virtualization
+	NestedVirtualizationEnabled *bool `json:"nestedVirtualizationEnabled,omitempty"`
 	// Runner preserves the guest privileged creation option
 	SupportsPrivileged *bool `json:"supportsPrivileged,omitempty"`
+	// Capabilities the runner binary supports (e.g. \"filestore\"). Absent from runners predating capability reporting, which the API treats as supporting none of them
+	Capabilities []string `json:"capabilities,omitempty"`
 	// Runner metrics
 	Metrics *RunnerHealthMetrics `json:"metrics,omitempty"`
 	// Health status of individual services on the runner
 	ServiceHealth []RunnerServiceHealth `json:"serviceHealth,omitempty"`
+	// Cloud identity of the runner data disk; absent when the runner has none (AWS or local)
+	DataDiskRef *RunnerDataDiskRef `json:"dataDiskRef,omitempty"`
 	// Runner domain
 	Domain *string `json:"domain,omitempty"`
 	// Runner proxy URL
@@ -56,6 +62,38 @@ func NewRunnerHealthcheck(appVersion string) *RunnerHealthcheck {
 func NewRunnerHealthcheckWithDefaults() *RunnerHealthcheck {
 	this := RunnerHealthcheck{}
 	return &this
+}
+
+// GetNestedVirtualizationEnabled returns the NestedVirtualizationEnabled field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetNestedVirtualizationEnabled() bool {
+	if o == nil || IsNil(o.NestedVirtualizationEnabled) {
+		var ret bool
+		return ret
+	}
+	return *o.NestedVirtualizationEnabled
+}
+
+// GetNestedVirtualizationEnabledOk returns a tuple with the NestedVirtualizationEnabled field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetNestedVirtualizationEnabledOk() (*bool, bool) {
+	if o == nil || IsNil(o.NestedVirtualizationEnabled) {
+		return nil, false
+	}
+	return o.NestedVirtualizationEnabled, true
+}
+
+// HasNestedVirtualizationEnabled returns a boolean if a field has been set.
+func (o *RunnerHealthcheck) HasNestedVirtualizationEnabled() bool {
+	if o != nil && !IsNil(o.NestedVirtualizationEnabled) {
+		return true
+	}
+
+	return false
+}
+
+// SetNestedVirtualizationEnabled gets a reference to the given bool and assigns it to the NestedVirtualizationEnabled field.
+func (o *RunnerHealthcheck) SetNestedVirtualizationEnabled(v bool) {
+	o.NestedVirtualizationEnabled = &v
 }
 
 // GetSupportsPrivileged returns the SupportsPrivileged field value if set, zero value otherwise.
@@ -88,6 +126,38 @@ func (o *RunnerHealthcheck) HasSupportsPrivileged() bool {
 // SetSupportsPrivileged gets a reference to the given bool and assigns it to the SupportsPrivileged field.
 func (o *RunnerHealthcheck) SetSupportsPrivileged(v bool) {
 	o.SupportsPrivileged = &v
+}
+
+// GetCapabilities returns the Capabilities field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetCapabilities() []string {
+	if o == nil || IsNil(o.Capabilities) {
+		var ret []string
+		return ret
+	}
+	return o.Capabilities
+}
+
+// GetCapabilitiesOk returns a tuple with the Capabilities field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetCapabilitiesOk() ([]string, bool) {
+	if o == nil || IsNil(o.Capabilities) {
+		return nil, false
+	}
+	return o.Capabilities, true
+}
+
+// HasCapabilities returns a boolean if a field has been set.
+func (o *RunnerHealthcheck) HasCapabilities() bool {
+	if o != nil && !IsNil(o.Capabilities) {
+		return true
+	}
+
+	return false
+}
+
+// SetCapabilities gets a reference to the given []string and assigns it to the Capabilities field.
+func (o *RunnerHealthcheck) SetCapabilities(v []string) {
+	o.Capabilities = v
 }
 
 // GetMetrics returns the Metrics field value if set, zero value otherwise.
@@ -152,6 +222,38 @@ func (o *RunnerHealthcheck) HasServiceHealth() bool {
 // SetServiceHealth gets a reference to the given []RunnerServiceHealth and assigns it to the ServiceHealth field.
 func (o *RunnerHealthcheck) SetServiceHealth(v []RunnerServiceHealth) {
 	o.ServiceHealth = v
+}
+
+// GetDataDiskRef returns the DataDiskRef field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetDataDiskRef() RunnerDataDiskRef {
+	if o == nil || IsNil(o.DataDiskRef) {
+		var ret RunnerDataDiskRef
+		return ret
+	}
+	return *o.DataDiskRef
+}
+
+// GetDataDiskRefOk returns a tuple with the DataDiskRef field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetDataDiskRefOk() (*RunnerDataDiskRef, bool) {
+	if o == nil || IsNil(o.DataDiskRef) {
+		return nil, false
+	}
+	return o.DataDiskRef, true
+}
+
+// HasDataDiskRef returns a boolean if a field has been set.
+func (o *RunnerHealthcheck) HasDataDiskRef() bool {
+	if o != nil && !IsNil(o.DataDiskRef) {
+		return true
+	}
+
+	return false
+}
+
+// SetDataDiskRef gets a reference to the given RunnerDataDiskRef and assigns it to the DataDiskRef field.
+func (o *RunnerHealthcheck) SetDataDiskRef(v RunnerDataDiskRef) {
+	o.DataDiskRef = &v
 }
 
 // GetDomain returns the Domain field value if set, zero value otherwise.
@@ -284,14 +386,23 @@ func (o RunnerHealthcheck) MarshalJSON() ([]byte, error) {
 
 func (o RunnerHealthcheck) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.NestedVirtualizationEnabled) {
+		toSerialize["nestedVirtualizationEnabled"] = o.NestedVirtualizationEnabled
+	}
 	if !IsNil(o.SupportsPrivileged) {
 		toSerialize["supportsPrivileged"] = o.SupportsPrivileged
+	}
+	if !IsNil(o.Capabilities) {
+		toSerialize["capabilities"] = o.Capabilities
 	}
 	if !IsNil(o.Metrics) {
 		toSerialize["metrics"] = o.Metrics
 	}
 	if !IsNil(o.ServiceHealth) {
 		toSerialize["serviceHealth"] = o.ServiceHealth
+	}
+	if !IsNil(o.DataDiskRef) {
+		toSerialize["dataDiskRef"] = o.DataDiskRef
 	}
 	if !IsNil(o.Domain) {
 		toSerialize["domain"] = o.Domain
@@ -346,9 +457,12 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "nestedVirtualizationEnabled")
 		delete(additionalProperties, "supportsPrivileged")
+		delete(additionalProperties, "capabilities")
 		delete(additionalProperties, "metrics")
 		delete(additionalProperties, "serviceHealth")
+		delete(additionalProperties, "dataDiskRef")
 		delete(additionalProperties, "domain")
 		delete(additionalProperties, "proxyUrl")
 		delete(additionalProperties, "apiUrl")

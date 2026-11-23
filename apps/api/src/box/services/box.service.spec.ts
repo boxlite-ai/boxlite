@@ -21,6 +21,12 @@ import { RegistryCredentialService } from '../../registry/services/registry-cred
 import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-box.dto'
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { Context } from '../../common/context/context'
+import { OrganizationService } from '../../organization/services/organization.service'
+import { SecretServerClient } from './secret-server-client'
+import { createServer } from 'node:http'
+import { AddressInfo } from 'node:net'
+
+const disabledSecretServer = () => new SecretServerClient({ get: () => false } as any)
 
 /** Records every reason as it came, which is what a failure it cannot explain gets. */
 const passThroughPullFailures = () => ({ reasonFor: jest.fn(async (_box: unknown, reason: string) => reason) }) as any
@@ -66,6 +72,7 @@ function makeService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    disabledSecretServer(),
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -206,6 +213,7 @@ function makeNetworkTunnelService() {
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
     {} as any, // organizationBoxLimits (unused by these lifecycle tests)
+    disabledSecretServer(),
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -375,7 +383,10 @@ describe('BoxService inbound defaults', () => {
     Object.assign(service as any, {
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
-      organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      organizationService: {
+        assertOrganizationIsNotSuspended: jest.fn(),
+        isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(false),
+      },
       organizationBoxLimits: { resolve: jest.fn(async (organization) => organization) },
       redis: { exists: jest.fn().mockResolvedValue(1) },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
@@ -391,10 +402,213 @@ describe('BoxService inbound defaults', () => {
       imageResolverService: {
         resolve: jest.fn().mockResolvedValue({ ref: 'quay.io/acme/app@sha256:resolved', isOrgOwned: true }),
       },
+      secretServerClient: disabledSecretServer(),
       ...overrides,
     })
     return { service, boxRepository, runnerService, warmPoolService }
   }
+
+  it('CI platform ownership forces fresh creation and forwards the transaction callback', async () => {
+    const { service, boxRepository, warmPoolService } = makeCreateService({
+      imageResolverService: { resolve: jest.fn().mockResolvedValue({ ref: 'ubuntu:22.04', isOrgOwned: false }) },
+    })
+    warmPoolService.fetchWarmPoolBox.mockRejectedValue(new Error('Warm assignment cannot record this ownership'))
+    const transaction = { query: jest.fn() }
+    const onPersist = jest.fn(async (_tx, _box) => undefined)
+    boxRepository.insert.mockImplementation(async (box, _limit, callback) => {
+      await callback(transaction, box)
+      return box
+    })
+    const result = await service.create({ image: 'ubuntu:22.04', name: 'ci-native' }, activeOrg, Context.user(), {
+      maxCreatedBoxes: 7,
+      onPersist,
+    })
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect(onPersist).toHaveBeenCalledWith(
+      transaction,
+      expect.objectContaining({ id: result.id, organizationId: activeOrg.id }),
+    )
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ id: result.id }), 7, onPersist)
+  })
+
+  describe('Secret Server forwarding', () => {
+    const secrets = [
+      { name: 'first', value: 'private-first', hosts: ['first.example'], headers: { Authorization: 'Bearer {value}' } },
+      { name: 'second', value: 'private-second', hosts: ['second.example'], headers: { 'x-key': '{value}' } },
+    ]
+    const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222']
+
+    async function fixture(status = 201, enabled = true) {
+      let transfer: { boxId: string; payload: any; insertCalls: number }
+      const server = createServer(async (request, response) => {
+        const chunks: Buffer[] = []
+        for await (const chunk of request) chunks.push(chunk)
+        transfer = {
+          boxId: request.url.split('/')[4],
+          payload: JSON.parse(Buffer.concat(chunks).toString()),
+          insertCalls: boxRepository.insert.mock.calls.length,
+        }
+        if (status === -1) {
+          response.writeHead(201)
+          response.write('{')
+          return
+        }
+        response.writeHead(status)
+        response.end(
+          JSON.stringify({
+            secrets: transfer.payload.secrets.map(({ name }, i) => ({ name, secret_id: ids[i] })).reverse(),
+          }),
+        )
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const values = {
+        'secretServer.enabled': enabled,
+        'secretServer.url': `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        'secretServer.devToken': 'test-token',
+      }
+      const { service, boxRepository, warmPoolService } = makeCreateService({
+        secretServerClient: new SecretServerClient({ get: (key: string) => values[key] } as any),
+      })
+      const events = (service as any).eventEmitter
+      return {
+        service,
+        boxRepository,
+        warmPoolService,
+        events,
+        transfer: () => transfer,
+        close: async () => {
+          server.closeAllConnections()
+          await new Promise<void>((resolve) => server.close(() => resolve()))
+        },
+      }
+    }
+
+    it('forwards with the generated ID before insertion, callback, and creation event', async () => {
+      const f = await fixture()
+      const onPersist = jest.fn()
+      const snapshots: unknown[] = []
+      f.boxRepository.insert.mockImplementation(async (box, _limit, callback) => {
+        snapshots.push(structuredClone(box.secrets))
+        await callback({}, box)
+        return box
+      })
+      try {
+        const box = await f.service.create({ name: 'forwarded', secrets }, activeOrg, Context.user(), {
+          createdBy: 'authenticated-user',
+          onPersist,
+        })
+        const sent = f.transfer()
+        expect(sent.insertCalls).toBe(0)
+        expect(sent.boxId).toBe(box.id)
+        expect(sent.boxId).toMatch(/^[a-zA-Z0-9]{12}$/)
+        expect(sent.payload).toMatchObject({ org_id: activeOrg.id, created_by: 'authenticated-user', secrets })
+        const refs = secrets.map(({ name, hosts, headers }, i) => ({
+          name,
+          hosts,
+          headers,
+          placeholder: `<BOXLITE_SECRET:${name}>`,
+          secretId: ids[i],
+        }))
+        expect(snapshots).toEqual([refs])
+        expect(onPersist.mock.calls[0][1].secrets).toEqual(refs)
+        expect(f.events.emitAsync).toHaveBeenCalledWith(
+          BoxEvents.CREATED,
+          expect.objectContaining({ box: expect.objectContaining({ secrets: refs }) }),
+        )
+        expect(JSON.stringify(f.events.emitAsync.mock.calls)).not.toMatch(/private-first|private-second|"value"/)
+        expect(f.warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+      } finally {
+        await f.close()
+      }
+    })
+
+    it.each([503, 401, -1])(
+      'fails before insertion and events on transfer status %s (-1 stalls)',
+      async (status) => {
+        const f = await fixture(status)
+        try {
+          await expect(
+            f.service.create({ name: 'refused', secrets }, activeOrg, Context.user(), { createdBy: 'user' }),
+          ).rejects.toMatchObject({ status: 503, response: { code: 'secret_store_unavailable' } })
+          expect(f.boxRepository.insert).not.toHaveBeenCalled()
+          expect(f.events.emitAsync).not.toHaveBeenCalled()
+        } finally {
+          await f.close()
+        }
+      },
+      10000,
+    )
+
+    describe.each(['direct', 'rest'])('secret name admission through %s create', (path) => {
+      it.each([
+        ['key', 'key'],
+        ['key', 'KEY'],
+        ['open-ai', 'OPEN_AI'],
+        ['key😀', 'KEY_'],
+      ])('rejects conflicting names %s / %s before transfer when enabled', async (first, second) => {
+        const f = await fixture()
+        const onPersist = jest.fn()
+        const input = { secrets: secrets.map((secret, i) => ({ ...secret, name: [first, second][i] })) }
+        const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+        try {
+          await expect(
+            f.service.create(dto as any, activeOrg, Context.user(), { createdBy: 'user', onPersist }),
+          ).rejects.toBeInstanceOf(BadRequestError)
+          expect(f.transfer()).toBeUndefined()
+          expect(f.boxRepository.insert).not.toHaveBeenCalled()
+          expect(onPersist).not.toHaveBeenCalled()
+          expect(f.events.emitAsync).not.toHaveBeenCalled()
+        } finally {
+          await f.close()
+        }
+      })
+
+      it('preserves same-name secrets on different hosts when disabled', async () => {
+        const f = await fixture(201, false)
+        const inline = secrets.map((secret) => ({ ...secret, name: 'key' }))
+        const input = { secrets: inline }
+        const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+        try {
+          await f.service.create(dto as any, activeOrg, Context.user())
+          expect(f.transfer()).toBeUndefined()
+          expect(f.boxRepository.insert.mock.calls[0][0].secrets).toEqual(inline)
+        } finally {
+          await f.close()
+        }
+      })
+    })
+
+    it('does not transfer a request that fails local lifecycle validation', async () => {
+      const f = await fixture()
+      try {
+        await expect(
+          f.service.create({ name: 'invalid', secrets, autoStop: -1 }, activeOrg, Context.user(), {
+            createdBy: 'user',
+          }),
+        ).rejects.toThrow(BadRequestError)
+        expect(f.transfer()).toBeUndefined()
+        expect(f.boxRepository.insert).not.toHaveBeenCalled()
+      } finally {
+        await f.close()
+      }
+    })
+
+    it('keeps plaintext out of failed inserts and emits no creation event', async () => {
+      const f = await fixture()
+      f.boxRepository.insert.mockRejectedValue(new Error('insert failed'))
+      try {
+        await expect(
+          f.service.create({ name: 'failed-insert', secrets }, activeOrg, Context.user(), { createdBy: 'user' }),
+        ).rejects.toThrow('insert failed')
+        expect(f.boxRepository.insert.mock.calls[0][0].secrets.every((secret) => !Object.hasOwn(secret, 'value'))).toBe(
+          true,
+        )
+        expect(f.events.emitAsync).not.toHaveBeenCalled()
+      } finally {
+        await f.close()
+      }
+    })
+  })
 
   /**
    * Two collaborators now stand between the request and the box: admission
@@ -403,6 +617,84 @@ describe('BoxService inbound defaults', () => {
    * asked, and the box records the resolver's answer rather than what the
    * caller typed. Which ref the resolver picks is its own specification's job.
    */
+  describe('organization nesting default', () => {
+    it.each([null, new Error('policy database unavailable')])(
+      'rejects creation when policy lookup returns %p',
+      async (failure) => {
+        const organizationRepository = {
+          findOne: failure instanceof Error ? jest.fn().mockRejectedValue(failure) : jest.fn().mockResolvedValue(null),
+        }
+        const organizationService = Object.create(OrganizationService.prototype)
+        Object.assign(organizationService, { organizationRepository, assertOrganizationIsNotSuspended: jest.fn() })
+        const { service, boxRepository } = makeCreateService({ organizationService })
+        await expect(
+          service.create({ name: 'missing-policy', image: 'alpine' } as any, { id: 'org-1' } as any, Context.user()),
+        ).rejects.toThrow(failure instanceof Error ? failure : /Organization.*not found/)
+        expect(boxRepository.insert).not.toHaveBeenCalled()
+      },
+    )
+
+    it.each([true, false])(
+      'ignores stale organization policy when creating with current policy=%s',
+      async (enabled) => {
+        const organization = { id: 'org-1', nestedVirtualizationEnabled: !enabled }
+        const organizationRepository = {
+          findOne: jest.fn().mockResolvedValue({ id: organization.id, nestedVirtualizationEnabled: enabled }),
+        }
+        const organizationService = Object.create(OrganizationService.prototype)
+        Object.assign(organizationService, { organizationRepository, assertOrganizationIsNotSuspended: jest.fn() })
+        const { service, boxRepository, warmPoolService } = makeCreateService({
+          organizationService,
+          runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1', apiVersion: '0' }) },
+          runnerAdapterFactory: {
+            create: jest
+              .fn()
+              .mockResolvedValue({ runnerInfo: jest.fn().mockResolvedValue({ nestedVirtualizationEnabled: true }) }),
+          },
+          configService: { getOrThrow: () => 1 },
+        })
+        ;(service as any).imageResolverService.resolve.mockResolvedValue({ ref: 'curated', isOrgOwned: false })
+        ;(service as any).redis.exists.mockResolvedValue(0)
+
+        const box = await service.create(
+          { name: 'fresh-policy', image: 'curated' } as any,
+          organization as any,
+          Context.user(),
+        )
+
+        expect(box).not.toHaveProperty('nestedVirtualization')
+        expect(boxRepository.insert.mock.calls[0][0]).not.toHaveProperty('nestedVirtualization')
+        expect(warmPoolService.fetchWarmPoolBox).toHaveBeenCalledTimes(enabled ? 0 : 1)
+        expect(organization.nestedVirtualizationEnabled).toBe(!enabled)
+        expect(organizationRepository.findOne).toHaveBeenCalledWith({
+          where: { id: organization.id },
+          select: { id: true, nestedVirtualizationEnabled: true },
+          cache: false,
+        })
+      },
+    )
+
+    function fixture() {
+      return makeCreateService({
+        organizationService: {
+          assertOrganizationIsNotSuspended: jest.fn(),
+          isNestedVirtualizationEnabled: jest.fn().mockResolvedValue(true),
+        },
+      })
+    }
+    it('bypasses an ordinary warm box for an allowlisted organization', async () => {
+      const { service, warmPoolService } = fixture()
+      ;(service as any).imageResolverService.resolve.mockResolvedValue({ ref: 'curated', isOrgOwned: false })
+      ;(service as any).redis.exists.mockResolvedValue(0)
+      await service.create(
+        { name: 'fresh', image: 'curated' } as any,
+        { id: 'org-1', nestedVirtualizationEnabled: true } as any,
+        Context.user(),
+      )
+      expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    })
+  })
+
   it('stores the ref the resolver returned, not the selector the caller sent', async () => {
     const { service, boxRepository } = makeCreateService()
 
@@ -505,7 +797,7 @@ describe('BoxService inbound defaults', () => {
     const { service, boxRepository } = makeCreateService()
 
     await expect(
-      service.createForWarmPool({ id: 'pool-7', image: 'quay.io/acme/app:v1', target: 'region-1' } as any),
+      service.createForWarmPool({ id: 'pool-7', image: 'quay.io/acme/app:v1', target: 'region-1', cpu: 1 } as any),
     ).rejects.toThrow(/pool-7/)
     expect(boxRepository.insert).not.toHaveBeenCalled()
   })
@@ -807,15 +1099,183 @@ describe('BoxService inbound defaults', () => {
     const { service, boxRepository } = makeCreateService()
 
     await service.create(
-      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      {
+        name: 'secret-box',
+        image: 'base',
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+        ],
+      } as any,
       { id: 'org-1' } as any,
       Context.user(),
     )
 
     expect(boxRepository.insert).toHaveBeenCalledWith(
-      expect.objectContaining({ secrets: [{ name: 'openai', value: 'sk-test' }] }),
+      expect.objectContaining({
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+        ],
+      }),
       undefined,
     )
+  })
+
+  describe.each(['direct', 'rest'])('required headers through %s create', (path) => {
+    it.each([undefined, null, {}])('rejects absent headers %j before persistence', async (headers) => {
+      const { service, boxRepository } = makeCreateService()
+      const input = { image: 'base', secrets: [{ name: 'x', value: 'token', hosts: ['api.test.com'], headers }] }
+      const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+      await expect(service.create(dto as any, { id: 'org-1' } as any, Context.user())).rejects.toThrow(
+        'secret "x" has no headers; recreate the box with headers',
+      )
+      expect(boxRepository.insert).not.toHaveBeenCalled()
+    })
+  })
+
+  describe.each(['direct', 'rest'])('secret headers through %s create', (path) => {
+    it.each([
+      {},
+      '',
+      [],
+      { 'Bad Header': '{value}' },
+      { 'X-Key': '' },
+      { 'X-Key': '{value}{value}' },
+      { 'X-Key': '{other}{value}' },
+      { 'X-Key': '{value}\r\n' },
+      { 'X-Key': '{value}\u007f' },
+      { 'X-Key': '{value}', 'x-key': '{value}' },
+    ])('rejects invalid templates %j before persistence', async (headers) => {
+      const { service, boxRepository } = makeCreateService()
+      const input = { image: 'base', secrets: [{ name: 'key', value: 'token', hosts: ['api.example.com'], headers }] }
+      const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+      await expect(service.create(dto as any, { id: 'org-1' } as any, Context.user())).rejects.toBeInstanceOf(
+        BadRequestError,
+      )
+      expect(boxRepository.insert).not.toHaveBeenCalled()
+    })
+
+    it.each(['\u0000', '\u0001', '\r', '\n', '\u007f'])('rejects control bytes in the value %j', async (control) => {
+      const { service, boxRepository } = makeCreateService()
+      const input = {
+        image: 'base',
+        secrets: [
+          {
+            name: 'key',
+            value: `token${control}`,
+            hosts: ['api.example.com'],
+            headers: { Authorization: 'Bearer {value}' },
+          },
+        ],
+      }
+      const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+      await expect(service.create(dto as any, { id: 'org-1' } as any, Context.user())).rejects.toBeInstanceOf(
+        BadRequestError,
+      )
+      expect(boxRepository.insert).not.toHaveBeenCalled()
+    })
+
+    it('persists multiple templates without interpreting the secret value', async () => {
+      const { service, boxRepository } = makeCreateService()
+      const secrets = [
+        {
+          name: 'key',
+          value: 'token {value}\t',
+          hosts: ['api.example.com', 'API.example.com'],
+          headers: { Authorization: 'Bot {value}', 'X-Key': '\t{value} ' },
+        },
+      ]
+      const input = { image: 'base', secrets }
+      const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+      await service.create(dto as any, { id: 'org-1' } as any, Context.user())
+      expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ secrets }), undefined)
+    })
+  })
+
+  it.each(['direct', 'rest'])('rejects a forbidden secret header on the %s create path', async (path) => {
+    const { service, boxRepository } = makeCreateService()
+    const input = {
+      name: 'secret-box',
+      image: 'base',
+      secrets: [
+        { name: 'key', value: 'test-value', hosts: ['api.example.com'], headers: { 'Proxy-Connection': '{value}' } },
+      ],
+    }
+    const dto = path === 'rest' ? createBoxToCreateBox(plainToInstance(RestCreateBoxDto, input) as any) : input
+
+    let error: unknown
+    try {
+      await service.create(dto as any, { id: 'org-1' } as any, Context.user())
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(BadRequestError)
+    expect(String(error)).not.toContain('test-value')
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'Host',
+    'Connection',
+    'Proxy-Connection',
+    'proxy-authenticate',
+    'Proxy-Authorization',
+    'Keep-Alive',
+    'TE',
+    'Trailer',
+    'Upgrade',
+    'Content-Length',
+    'Transfer-Encoding',
+  ])('rejects forbidden header %s', async (header) => {
+    const { service } = makeCreateService()
+    await expect(
+      service.create(
+        {
+          image: 'base',
+          secrets: [{ name: 'key', value: 'test-value', hosts: ['api.example.com'], headers: { [header]: '{value}' } }],
+        } as any,
+        { id: 'org-1' } as any,
+        Context.user(),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestError)
+  })
+
+  it.each([
+    [
+      { name: 'first', value: 'one', hosts: ['api.example.com'], headers: { 'x-api-key': '{value}' } },
+      { name: 'second', value: 'two', hosts: ['api.example.com'], headers: { Authorization: '{value}' } },
+    ],
+    [
+      {
+        name: 'first',
+        value: 'one',
+        hosts: ['api.example.com', 'API.example.com'],
+        headers: { 'x-api-key': '{value}' },
+      },
+    ],
+  ])('allows distinct headers and repeated hosts within one secret', async (...secrets) => {
+    const { service, boxRepository } = makeCreateService()
+    await service.create({ image: 'base', secrets } as any, { id: 'org-1' } as any, Context.user())
+    expect(boxRepository.insert).toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      'bad token',
+      [{ name: 'key', value: 'test-value', hosts: ['api.example.com'], headers: { 'bad header': '{value}' } }],
+    ],
+    ['empty header', [{ name: 'key', value: 'test-value', hosts: ['api.example.com'], headers: { '': '{value}' } }]],
+    [
+      'duplicate host and header',
+      [
+        { name: 'first', value: 'test-value', hosts: ['API.example.com'], headers: { 'X-API-Key': '{value}' } },
+        { name: 'second', value: 'other-value', hosts: ['api.example.com'], headers: { 'x-api-key': '{value}' } },
+      ],
+    ],
+  ])('rejects %s in secret headers', async (_case, secrets) => {
+    const { service } = makeCreateService()
+    await expect(
+      service.create({ name: 'secret-box', image: 'base', secrets } as any, { id: 'org-1' } as any, Context.user()),
+    ).rejects.toBeInstanceOf(BadRequestError)
   })
 
   it.each([
@@ -859,7 +1319,13 @@ describe('BoxService inbound defaults', () => {
     ;(service as any).redis.exists.mockResolvedValue(0)
 
     await service.create(
-      { name: 'secret-box', image: 'base', secrets: [{ name: 'openai', value: 'sk-test' }] } as any,
+      {
+        name: 'secret-box',
+        image: 'base',
+        secrets: [
+          { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+        ],
+      } as any,
       { id: 'org-1' } as any,
       Context.user(),
     )

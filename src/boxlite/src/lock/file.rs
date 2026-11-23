@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::{LockId, LockManager, Locker};
+use super::{LockGates, LockId, LockManager, Locker};
 use super::{lock_already_allocated, lock_not_allocated, lock_not_found};
 
 /// File-based lock manager for cross-process locking.
@@ -43,6 +43,7 @@ pub struct FileLockManager {
     lock_dir: PathBuf,
     allocated: RwLock<HashSet<LockId>>,
     alloc_lock: Mutex<()>,
+    gates: LockGates,
 }
 
 impl FileLockManager {
@@ -81,6 +82,7 @@ impl FileLockManager {
             lock_dir,
             allocated: RwLock::new(allocated),
             alloc_lock: Mutex::new(()),
+            gates: LockGates::default(),
         })
     }
 
@@ -149,6 +151,7 @@ impl LockManager for FileLockManager {
 
         // Track allocation
         self.allocated.write().unwrap().insert(id);
+        self.gates.get(id);
 
         Ok(id)
     }
@@ -173,7 +176,11 @@ impl LockManager for FileLockManager {
                 }
             })?;
 
-        Ok(Arc::new(FileLock { id, file }))
+        Ok(Arc::new(FileLock {
+            id,
+            file,
+            gate: self.gates.get(id),
+        }))
     }
 
     fn allocate_and_retrieve(&self, id: LockId) -> BoxliteResult<Arc<dyn Locker>> {
@@ -210,7 +217,11 @@ impl LockManager for FileLockManager {
         // Track allocation
         self.allocated.write().unwrap().insert(id);
 
-        Ok(Arc::new(FileLock { id, file }))
+        Ok(Arc::new(FileLock {
+            id,
+            file,
+            gate: self.gates.get(id),
+        }))
     }
 
     fn free(&self, id: LockId) -> BoxliteResult<()> {
@@ -237,6 +248,7 @@ impl LockManager for FileLockManager {
             BoxliteError::Storage(format!("lock file not found: {}", path.display()))
         })?;
 
+        self.gates.remove(id);
         Ok(())
     }
 
@@ -251,6 +263,7 @@ impl LockManager for FileLockManager {
         }
 
         allocated.clear();
+        self.gates.clear();
         Ok(())
     }
 
@@ -284,6 +297,7 @@ impl LockManager for FileLockManager {
             }
         }
 
+        self.gates.clear();
         Ok(())
     }
 }
@@ -292,6 +306,25 @@ impl LockManager for FileLockManager {
 struct FileLock {
     id: LockId,
     file: File,
+    gate: Arc<tokio::sync::RwLock<()>>,
+}
+
+impl FileLock {
+    fn flock(&self, operation: libc::c_int) -> bool {
+        loop {
+            // SAFETY: File owns a live descriptor; callers supply flock flags.
+            let result = unsafe { libc::flock(self.file.as_raw_fd(), operation) };
+            if result == 0 {
+                return true;
+            }
+            let error = std::io::Error::last_os_error();
+            match error.kind() {
+                std::io::ErrorKind::WouldBlock if operation & libc::LOCK_NB != 0 => return false,
+                std::io::ErrorKind::Interrupted => continue,
+                _ => panic!("flock({operation:#x}) failed: {error}"),
+            }
+        }
+    }
 }
 
 impl Locker for FileLock {
@@ -299,12 +332,12 @@ impl Locker for FileLock {
         self.id
     }
 
+    fn gate(&self) -> Option<&Arc<tokio::sync::RwLock<()>>> {
+        Some(&self.gate)
+    }
+
     fn lock(&self) {
-        let fd = self.file.as_raw_fd();
-        let result = unsafe { libc::flock(fd, libc::LOCK_EX) };
-        if result != 0 {
-            panic!("flock(LOCK_EX) failed: {}", std::io::Error::last_os_error());
-        }
+        self.flock(libc::LOCK_EX);
     }
 
     fn unlock(&self) {
@@ -316,9 +349,15 @@ impl Locker for FileLock {
     }
 
     fn try_lock(&self) -> bool {
-        let fd = self.file.as_raw_fd();
-        let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-        result == 0
+        self.flock(libc::LOCK_EX | libc::LOCK_NB)
+    }
+
+    fn read_lock(&self) {
+        self.flock(libc::LOCK_SH);
+    }
+
+    fn try_read_lock(&self) -> bool {
+        self.flock(libc::LOCK_SH | libc::LOCK_NB)
     }
 }
 
@@ -504,3 +543,7 @@ mod tests {
         assert_eq!(manager.allocated_count().unwrap(), 0);
     }
 }
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[path = "tests/flock_errno.rs"]
+mod flock_errno_tests;

@@ -1,14 +1,22 @@
+import {
+  ResourceFilter,
+  ResourceLoadingState,
+  ResourceErrorState,
+  ResourceErrorNotice,
+} from '@/components/ResourceLayout'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { CheckpointCreateDialog } from '@/components/CheckpointCreateDialog'
+import { useCheckpointCapabilities } from '@/hooks/queries/useCheckpointCapabilities'
 import { OrganizationSuspendedError } from '@/api/errors'
-import { AsciiButton, StatCard } from '@/components/ascii'
+import { AsciiButton } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
-import { Plus, Search } from '@/components/ui/icon'
+import { Activity, Container, Plus, Square } from '@/components/ui/icon'
 
 import {
   AlertDialog,
@@ -22,7 +30,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
-import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
 import { deleteBoxViaBoxApi, formatLifecycleSeconds, startBoxViaBoxApi, stopBoxViaBoxApi } from '@/lib/cloudBox'
@@ -39,15 +46,12 @@ import {
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { createBulkActionToast } from '@/lib/bulk-action-toast'
 import { handleApiError } from '@/lib/error-handling'
-import { getLocalStorageItem } from '@/lib/local-storage'
 import {
   mergeOnboardingProgress,
   ONBOARDING_PROGRESS_EVENT,
   readOnboardingProgress,
   type OnboardingProgress,
 } from '@/lib/onboarding-progress'
-import { shouldAutoOpenOnboarding } from '@/lib/onboarding-visibility'
-import { useApiKeysQuery } from '@/hooks/queries/useApiKeysQuery'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { pluralize } from '@/lib/utils'
 import {
@@ -61,25 +65,31 @@ import {
 import { QueryKey, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { generatePath, useNavigate, useSearchParams } from 'react-router-dom'
+import { generatePath, useNavigate } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
+import { getBoxDisplayName } from '@/lib/box-identity'
 import { toast } from 'sonner'
 
-// Below this many boxes the stat cards repeat the table; above it they are the summary.
+// Below this many boxes the table already provides the fleet summary.
 const FLEET_THRESHOLD = 10
 
+/** Lists and filters paginated Boxes, with organization-wide fleet counts and permission-gated lifecycle actions. */
 const Boxes: React.FC = () => {
+  usePageTitle('Boxes')
   const api = useApi()
   const { boxApi } = api
   const { user } = useAuth()
   const userId = user?.profile.sub
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
   const { notificationSocket } = useNotificationSocket()
   const config = useConfig()
   const queryClient = useQueryClient()
   const { selectedOrganization, authenticatedUserOrganizationMember, authenticatedUserHasPermission } =
     useSelectedOrganization()
   const [createBoxOpen, setCreateBoxOpen] = useState(false)
+  const checkpointCapabilities = useCheckpointCapabilities()
+  const [checkpointSource, setCheckpointSource] = useState<{ box: Box; organizationId: string } | null>(null)
+  useEffect(() => setCheckpointSource(null), [selectedOrganization?.id])
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
 
   const updateOnboardingProgress = useCallback(
@@ -156,16 +166,12 @@ const Boxes: React.FC = () => {
     isLoading: boxesDataIsLoading,
     isPlaceholderData: boxesDataIsPlaceholderData,
     error: boxesDataError,
+    isFetching: boxesFetching,
+    refetch: refetchBoxes,
   } = useBoxes(queryKey, queryParams)
   const hasBoxes = (boxesData?.items.length ?? 0) > 0 || (boxesData?.total ?? 0) > 0
   // Zero boxes and no filter narrowing the view: nothing to list, so the page
   // leads with how boxes get made.
-
-  useEffect(() => {
-    if (boxesDataError) {
-      handleApiError(boxesDataError, 'Failed to fetch boxes')
-    }
-  }, [boxesDataError])
 
   const updateBoxInCache = useCallback(
     (boxId: string, updates: Partial<Box>) => {
@@ -180,11 +186,13 @@ const Boxes: React.FC = () => {
     [queryClient, queryKey],
   )
 
+  /** Removes a cached row once; terminal events refetch totals for unknown off-page filter membership. */
   const removeBoxFromCache = useCallback(
     (boxId: string) => {
       queryClient.setQueryData(queryKey, (oldData: any) => {
         if (!oldData?.items) return oldData
         const nextItems = oldData.items.filter((box: Box) => box.id !== boxId)
+        if (nextItems.length === oldData.items.length) return oldData
         return {
           ...oldData,
           items: nextItems,
@@ -251,6 +259,8 @@ const Boxes: React.FC = () => {
   // Delete Box Dialog
 
   const [boxToDelete, setBoxToDelete] = useState<string | null>(null)
+  const deleteDialogBox = boxesData?.items.find((item) => item.id === boxToDelete)
+  const deleteDialogBoxName = deleteDialogBox ? getBoxDisplayName(deleteDialogBox) : (boxToDelete ?? '')
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
   const performBoxStateOptimisticUpdate = useCallback(
@@ -307,7 +317,7 @@ const Boxes: React.FC = () => {
         performBoxStateOptimisticUpdate(data.box.id, updatedState)
       }
 
-      markAllBoxQueriesAsStale()
+      markAllBoxQueriesAsStale(updatedState === BoxState.DESTROYED)
     }
 
     const handleBoxDesiredStateUpdatedEvent = (data: {
@@ -327,7 +337,7 @@ const Boxes: React.FC = () => {
 
       removeBoxFromCache(data.box.id)
 
-      markAllBoxQueriesAsStale()
+      markAllBoxQueriesAsStale(true)
     }
 
     if (!notificationSocket) {
@@ -376,7 +386,7 @@ const Boxes: React.FC = () => {
     try {
       if (!selectedOrganization?.id) throw new Error('Missing organization')
       await startBoxViaBoxApi(api, selectedOrganization.id, id)
-      toast.success(`Starting box with ID: ${id}`)
+      toast.success(`Starting ${boxToStart ? getBoxDisplayName(boxToStart) : id}…`)
       await markAllBoxQueriesAsStale()
     } catch (error) {
       handleApiError(error, 'Failed to start box', {
@@ -437,7 +447,7 @@ const Boxes: React.FC = () => {
       if (!selectedOrganization?.id) throw new Error('Missing organization')
       await stopBoxViaBoxApi(api, selectedOrganization.id, id)
       toast.success(
-        `Stopping box with ID: ${id}`,
+        `Stopping ${boxToStop ? getBoxDisplayName(boxToStop) : id}…`,
         boxToStop?.autoDelete !== undefined && boxToStop.autoDelete > 0
           ? {
               description: `This box will be deleted automatically in ${formatLifecycleSeconds(boxToStop.autoDelete)} unless it is started again.`,
@@ -473,7 +483,7 @@ const Boxes: React.FC = () => {
       setShowDeleteDialog(false)
       removeBoxFromCache(id)
 
-      toast.success(`Deleting box with ID: ${id}`)
+      toast.success(`Deleting ${boxToDelete ? getBoxDisplayName(boxToDelete) : id}…`)
 
       await markAllBoxQueriesAsStale()
     } catch (error) {
@@ -628,7 +638,7 @@ const Boxes: React.FC = () => {
     result.successfulIds.forEach(removeBoxFromCache)
   }
 
-  // Fleet stat cards — real data, independent of the table's current filter/page.
+  // Fleet overview — real data, independent of the table's current filter/page.
   const orgId = selectedOrganization?.id
 
   // Counts come straight from the paginated endpoint's `total` (limit=1, no full fetch).
@@ -661,59 +671,23 @@ const Boxes: React.FC = () => {
     staleTime: 10_000,
   })
 
-  // Onboarding auto-open. Deliberately placed below the fleet-count query: the local "skip"
-  // flag only remembers one browser, so whether this account is actually new is decided by
-  // account state (an API key or any box), which follows the user to a new browser or device.
-  const apiKeysQuery = useApiKeysQuery(orgId)
-
-  useEffect(() => {
-    if (!selectedOrganization || !userId) {
-      return
-    }
-
-    const skipOnboardingKey = `${LocalStorageKey.SkipOnboardingPrefix}${userId}`
-
-    const requestedByUrl = searchParams.get('onboarding') === '1'
-    if (
-      shouldAutoOpenOnboarding({
-        requestedByUrl,
-        canCompleteWelcome: authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER,
-        dismissedInThisBrowser: getLocalStorageItem(skipOnboardingKey) === 'true',
-        accountStateLoaded: apiKeysQuery.isSuccess && totalBoxesQuery.isSuccess,
-        hasApiKeys: (apiKeysQuery.data?.length ?? 0) > 0,
-        hasBoxes: (totalBoxesQuery.data ?? 0) > 0,
-      })
-    ) {
-      navigate(requestedByUrl ? RoutePath.QUICKSTART : RoutePath.WELCOME, { replace: true })
-    }
-  }, [
-    navigate,
-    apiKeysQuery.data,
-    apiKeysQuery.isSuccess,
-    authenticatedUserOrganizationMember?.role,
-    searchParams,
-    selectedOrganization,
-    totalBoxesQuery.data,
-    totalBoxesQuery.isSuccess,
-    userId,
-  ])
-
   const totalBoxesDisplay = totalBoxesQuery.data != null ? totalBoxesQuery.data.toLocaleString('en-US') : '…'
   const runningBoxesDisplay = runningBoxesQuery.data != null ? runningBoxesQuery.data.toLocaleString('en-US') : '…'
   const stoppedBoxesDisplay = stoppedBoxesQuery.data != null ? stoppedBoxesQuery.data.toLocaleString('en-US') : '…'
 
   return (
-    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
       {/* header */}
-      <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
+      <div className="resource-page-header flex items-end justify-between">
         <div>
           <h1 className="font-display text-page font-semibold text-foreground">Boxes</h1>
-          <p className="mt-2 text-body leading-relaxed text-muted-foreground">
-            Create Boxes to run agentic workloads and apps in isolated environments.{' '}
+          {/* A wrapping flex row: when the link drops to its own line it starts at the text edge. */}
+          <p className="mt-2 flex flex-wrap items-center gap-x-3 text-body leading-relaxed text-muted-foreground">
+            <span>Create Boxes to run agentic workloads and apps in isolated environments.</span>
             <button
               type="button"
               onClick={() => navigate(RoutePath.QUICKSTART)}
-              className="ml-2 inline text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+              className="resource-guide-link inline-flex min-h-6 items-center"
             >
               First time here? Follow Quickstart →
             </button>
@@ -721,30 +695,41 @@ const Boxes: React.FC = () => {
         </div>
       </div>
 
-      {/* stat cards — a fleet instrument. With a handful of boxes the table
-          below says the same thing in fewer pixels, so they wait for a fleet. */}
       {(totalBoxesQuery.data ?? 0) >= FLEET_THRESHOLD && (
-        <div className="grid grid-cols-3 gap-2 sm:gap-3 lg:gap-[14px]">
-          <StatCard label="total boxes" value={totalBoxesDisplay} sub="all states" />
-          <StatCard label="running boxes" value={runningBoxesDisplay} sub="active now" live />
-          <StatCard label="stopped boxes" value={stoppedBoxesDisplay} sub="idle" />
-        </div>
+        <dl
+          className="mb-4 grid shrink-0 grid-cols-3 border-y border-border bg-gradient-to-r from-card/80 to-card/20 py-3"
+          aria-label="Boxes overview"
+        >
+          {[
+            { label: 'Total boxes', value: totalBoxesDisplay, icon: Container, color: 'text-brand' },
+            { label: 'Running', value: runningBoxesDisplay, icon: Activity, color: 'text-success' },
+            { label: 'Stopped', value: stoppedBoxesDisplay, icon: Square, color: 'text-muted-foreground' },
+          ].map(({ label, value, icon: Icon, color }) => (
+            <div key={label} className="relative min-w-0 border-border px-3 sm:px-5 [&:not(:first-child)]:border-l">
+              <dt className="font-sans text-meta leading-4 tracking-[0.06em] text-muted-foreground">
+                {label}
+                <Icon
+                  aria-hidden="true"
+                  className={`absolute right-5 top-1/2 hidden size-[18px] -translate-y-1/2 sm:block ${color}`}
+                />
+              </dt>
+              <dd className="break-all font-mono text-section font-medium leading-6 tracking-tight tabular-nums sm:pr-7">
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
       )}
 
       {/* toolbar */}
-      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-stretch lg:mt-[26px]">
-        <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px] sm:flex-none">
-          <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
-          <input
-            value={filters.idOrName ?? ''}
-            onChange={(e) => handleFiltersChange({ ...filters, idOrName: e.target.value || undefined })}
-            placeholder="Filter boxes…"
-            className="w-full border-0 bg-transparent p-0 text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
-          />
-          <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
-            {boxesData?.items.length ?? 0}
-          </span>
-        </div>
+      <div className="resource-toolbar">
+        <ResourceFilter
+          label="Filter boxes"
+          disabled={boxesDataIsLoading}
+          value={filters.idOrName ?? ''}
+          onChange={(value) => handleFiltersChange({ ...filters, idOrName: value || undefined })}
+          count={boxesDataIsPlaceholderData ? '—' : (boxesData?.total ?? '—')}
+        />
         <div className="flex-1" />
         {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) && (
           <CreateBoxDialog
@@ -762,41 +747,74 @@ const Boxes: React.FC = () => {
         )}
       </div>
 
-      <div className="mt-[14px] flex min-h-0 flex-1 flex-col">
-        <BoxTable
-          boxIsLoading={boxIsLoading}
-          boxStateIsTransitioning={boxStateIsTransitioning}
-          handleStart={handleStart}
-          handleStop={handleStop}
-          handleDelete={(id: string) => {
-            setBoxToDelete(id)
-            setShowDeleteDialog(true)
-          }}
-          handleBulkDelete={handleBulkDelete}
-          handleBulkStart={handleBulkStart}
-          handleBulkStop={handleBulkStop}
-          data={boxesData?.items || []}
-          loading={boxesDataIsLoading}
-          isPageFetching={boxesDataIsPlaceholderData}
-          onRowClick={(box: Box) => {
-            navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
-          }}
-          pageCount={boxesData?.totalPages || 0}
-          totalItems={boxesData?.total || 0}
-          onPaginationChange={handlePaginationChange}
-          pagination={{
-            pageIndex: paginationParams.pageIndex,
-            pageSize: paginationParams.pageSize,
-          }}
-          sorting={sorting}
-          onSortingChange={handleSortingChange}
-          filters={filters}
-          onFiltersChange={handleFiltersChange}
-          handleRecover={handleRecover}
-          onOpenQuickstart={() => navigate(RoutePath.QUICKSTART)}
-        />
+      <div className="resource-content mt-[14px]">
+        {boxesData === undefined ? (
+          boxesDataError ? (
+            <ResourceErrorState
+              title="Could not load Boxes"
+              retrying={boxesFetching}
+              onRetry={() => void refetchBoxes()}
+            />
+          ) : (
+            <ResourceLoadingState title="Loading Boxes…" />
+          )
+        ) : (
+          <>
+            {boxesDataError && (
+              <ResourceErrorNotice
+                title="Could not refresh Boxes. Showing previously loaded data."
+                retrying={boxesFetching}
+                onRetry={() => void refetchBoxes()}
+              />
+            )}
+            <BoxTable
+              onCreateCheckpoint={
+                checkpointCapabilities.data?.checkpoints_enabled && selectedOrganization
+                  ? (box) => setCheckpointSource({ box, organizationId: selectedOrganization.id })
+                  : undefined
+              }
+              boxIsLoading={boxIsLoading}
+              boxStateIsTransitioning={boxStateIsTransitioning}
+              handleStart={handleStart}
+              handleStop={handleStop}
+              handleDelete={(id: string) => {
+                setBoxToDelete(id)
+                setShowDeleteDialog(true)
+              }}
+              handleBulkDelete={handleBulkDelete}
+              handleBulkStart={handleBulkStart}
+              handleBulkStop={handleBulkStop}
+              data={boxesData?.items || []}
+              loading={boxesDataIsLoading}
+              isPageFetching={boxesDataIsPlaceholderData}
+              onRowClick={(box: Box) => {
+                navigate(generatePath(RoutePath.BOX_DETAILS, { boxId: getBoxRouteId(box) }))
+              }}
+              pageCount={boxesData?.totalPages || 0}
+              totalItems={boxesData?.total || 0}
+              onPaginationChange={handlePaginationChange}
+              pagination={{
+                pageIndex: paginationParams.pageIndex,
+                pageSize: paginationParams.pageSize,
+              }}
+              sorting={sorting}
+              onSortingChange={handleSortingChange}
+              filters={filters}
+              onFiltersChange={handleFiltersChange}
+              handleRecover={handleRecover}
+              onOpenQuickstart={() => navigate(RoutePath.QUICKSTART)}
+            />
+          </>
+        )}
       </div>
 
+      {checkpointSource && checkpointSource.organizationId === selectedOrganization?.id && (
+        <CheckpointCreateDialog
+          key={`${checkpointSource.organizationId}:${checkpointSource.box.id}`}
+          box={checkpointSource.box}
+          onClose={() => setCheckpointSource(null)}
+        />
+      )}
       {boxToDelete && (
         <AlertDialog
           open={showDeleteDialog}
@@ -809,9 +827,9 @@ const Boxes: React.FC = () => {
         >
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Confirm Box Deletion</AlertDialogTitle>
+              <AlertDialogTitle>{`Delete “${deleteDialogBoxName}”?`}</AlertDialogTitle>
               <AlertDialogDescription>
-                Are you sure you want to delete this box? This action cannot be undone.
+                The Box and everything on its disk are removed. This cannot be undone.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
@@ -821,7 +839,7 @@ const Boxes: React.FC = () => {
                 onClick={() => handleDelete(boxToDelete)}
                 disabled={boxIsLoading[boxToDelete]}
               >
-                {boxIsLoading[boxToDelete] ? 'Deleting...' : 'Delete'}
+                {boxIsLoading[boxToDelete] ? 'Deleting…' : 'Delete'}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

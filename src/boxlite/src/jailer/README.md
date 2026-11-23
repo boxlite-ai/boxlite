@@ -142,10 +142,19 @@ requiring maximum security should use Linux.
 | Resource | Limit Type | Purpose |
 |----------|------------|---------|
 | Open files | RLIMIT_NOFILE | Prevent FD exhaustion |
-| File size | RLIMIT_FSIZE | Prevent disk filling |
+| File size | RLIMIT_FSIZE | Cap growth of individual host files |
 | Processes | RLIMIT_NPROC | Prevent fork bombs |
 | Memory | RLIMIT_AS | Prevent OOM |
 | CPU time | RLIMIT_CPU | Prevent CPU monopolization |
+
+At startup, the jailer sets both `RLIMIT_FSIZE` limits to the configured
+`ResourceLimits.max_file_size` in bytes. If the setting is absent, the shim
+inherits both limits from the host launcher.
+
+The VMM checks guest block I/O against the current virtual capacity. The host
+kernel enforces the shim's soft limit on individual files. A sparse image can
+grow in virtual capacity before later writes extend the host file and reach
+that limit.
 
 ### Layer 4: Environment Sanitization
 

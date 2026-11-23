@@ -19,6 +19,7 @@
     "https://chatgpt.com/oauth/codex/client.json",
     "https://vscode.dev/oauth/client-metadata.json",
     "https://insiders.vscode.dev/oauth/client-metadata.json",
-    "https://zed.dev/oauth/client-metadata.json"
+    "https://zed.dev/oauth/client-metadata.json",
+    "https://loomy.im/oauth/client-metadata/boxlite.json"
   ]
 }

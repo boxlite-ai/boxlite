@@ -143,6 +143,8 @@ tags:
     description: Credential validation and identity lookup
   - name: Boxes
     description: Box lifecycle management
+  - name: Agents
+    description: Agent conversations and tasks
   - name: Execution
     description: Command execution and streaming
   - name: Files
@@ -153,6 +155,8 @@ tags:
     description: Runtime and per-box metrics
   - name: Images
     description: Container image management
+  - name: Checkpoints
+    description: Independent managed disk archives
   - name: Volumes
     description: Managed persistent volumes
   - name: Registries
@@ -305,6 +309,14 @@ paths:
         Creates a new box with the specified configuration.
         The box starts in `configured` status. Call `POST /start` to
         initialize the VM, or it will start lazily on first `exec`.
+
+        `checkpoint_id` creates the box from a ready managed checkpoint
+        instead of an image. The box inherits every saved execution setting,
+        so only `name` may accompany it; any other field is refused with 400.
+        It requires `checkpoints_enabled` and a REST service: local SDK
+        operations return Unsupported. A cloud wait failure after admission,
+        including 408, carries `boxId` in the error body; query that box
+        before retrying an unnamed create.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -328,6 +340,23 @@ paths:
                 $ref: "#/components/schemas/Box"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "408":
+          description: Checkpoint create accepted but still running; the error body includes boxId to query.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, boxId]
+                properties:
+                  message:
+                    type: string
+                  code:
+                    type: string
+                  boxId:
+                    type: string
+                    description: Admitted Box identity; query it before retrying creation.
         "409":
           $ref: "#/components/responses/ConflictError"
         "422":
@@ -425,8 +454,9 @@ paths:
       operationId: startBox
       summary: Start a box (initialize VM)
       description: |
-        Initializes the VM for a box. Idempotent: if already running, returns
-        current state. Transitions: configured → running, stopped → running.
+        Initializes the VM and starts its main command. A running VM can have
+        an unstarted container; this call starts it. It is not a read-only check.
+        Transitions: configured → running, stopped → running.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -1112,6 +1142,11 @@ paths:
         would land on one, is rejected with `400` — such a write would not be
         visible to processes in the box. Extracted files are owned by the
         container's configured user.
+
+        A directory archive extracted to a `path` that does not exist lands
+        as `docker cp` lands a directory: the archive's leading directory
+        becomes `path`. An entry outside that directory is rejected with
+        `400`.
       tags: [Files]
       parameters:
         - name: path
@@ -1379,6 +1414,276 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /{prefix}/boxes/{box_id}/agents:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: createAgent
+      tags: [Agents]
+      summary: Create an agent
+      description: |
+        Forward creation to the adapter. An empty prefix, as in boxlite serve,
+        removes that segment: /v1/boxes/{box_id}/agents.
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentCreateRequest"
+            example: {agent: opencode, options: {cwd: /workspace, config: {model: provider/model}}}
+      responses:
+        "201":
+          description: Agent created
+          headers:
+            Location:
+              description: URL of the created agent
+              schema: {type: string}
+              example: /v1/boxes/box_1/agents/ses_01
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentResource"}
+              example: &agentExample
+                id: ses_01
+                agent: opencode
+                state: null
+                config: {tools: [], mcp: [], model: provider/model}
+                capabilities: {operations: [agents.create, agents.get], input_kinds: [text], max_queued_turns: null, max_pending_steering: null, idempotency_retention_seconds: null}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    get:
+      operationId: getAgent
+      tags: [Agents]
+      summary: Get an agent
+      description: A missing agent or an agent belonging to another Box returns 404.
+      responses:
+        "200":
+          description: Agent snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentResource"}
+              example: *agentExample
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/close:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    post:
+      operationId: closeAgent
+      tags: [Agents]
+      summary: Close an agent
+      description: Success means the adapter confirmed the agent loop stopped.
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentEmptyRequest"}
+            example: {}
+      responses:
+        "204":
+          description: Agent closed
+        "400": {$ref: "#/components/responses/AgentCloseBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    post:
+      operationId: sendAgentTurn
+      tags: [Agents]
+      summary: Send text to an agent
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentSendRequest"}
+            example: {text: Review the change, options: {mode: queue}}
+      responses:
+        "201":
+          description: Turn accepted
+          headers:
+            Location:
+              description: URL of the created turn
+              schema: {type: string}
+              example: /v1/boxes/box_1/agents/ses_01/turns/msg_01
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnState"}
+              example: &turnExample {id: msg_01, agent_id: ses_01, status: queued, cursor: null, result: null, requests: [], steering: []}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "429": {$ref: "#/components/responses/AgentExhausted"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/events:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+    get:
+      operationId: getAgentEvents
+      tags: [Agents]
+      summary: Stream agent events
+      description: |
+        Send 200 headers only after the adapter stream connects. Last-Event-ID
+        takes precedence over after. Adapters without cursor or turn event
+        support reject those options with 400. Emit an SSE id only for a
+        non-null cursor. After opening, stream errors as an error event and close.
+      parameters:
+        - {name: turn_id, in: query, schema: {type: string}, example: msg_01}
+        - {name: after, in: query, schema: {type: string}, example: cursor_1}
+        - {name: Last-Event-ID, in: header, schema: {type: string}, example: cursor_1}
+      responses:
+        "200":
+          description: Connected event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+              example: "event: agent\ndata: {\"cursor\":null,\"agent_id\":\"ses_01\",\"turn_id\":\"msg_01\",\"kind\":\"session.status\",\"data\":{\"status\":\"busy\"}}\n\n"
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/requests/{request_id}/respond:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - {name: request_id, in: path, required: true, schema: {type: string, minLength: 1}, example: req_01}
+    post:
+      operationId: respondAgentRequest
+      tags: [Agents]
+      summary: Respond to an agent request
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentRespondRequest"}
+            example: {response: {type: permission, approved: false}}
+      responses:
+        "200":
+          description: Resulting turn snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnState"}
+              example: *turnExample
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/steer:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - $ref: "#/components/parameters/agentTurnId"
+    post:
+      operationId: steerAgentTurn
+      tags: [Agents]
+      summary: Steer a running turn
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentSteerRequest"}
+            example: {text: Focus on correctness}
+      responses:
+        "200":
+          description: Steering receipt
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentSteeringReceipt"}
+              example: {id: steer_01, turn_id: msg_01, status: accepted}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "429": {$ref: "#/components/responses/AgentExhausted"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}/interrupt:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - $ref: "#/components/parameters/agentTurnId"
+    post:
+      operationId: interruptAgentTurn
+      tags: [Agents]
+      summary: Interrupt a turn
+      description: Success means the adapter confirmed the stop.
+      parameters:
+        - $ref: "#/components/parameters/agentIdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AgentEmptyRequest"}
+            example: {}
+      responses:
+        "204":
+          description: Turn interrupted
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+  /{prefix}/boxes/{box_id}/agents/{agent_id}/turns/{turn_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/agentId"
+      - $ref: "#/components/parameters/agentTurnId"
+    get:
+      operationId: getAgentTurn
+      tags: [Agents]
+      summary: Get an agent turn
+      description: A turn outside the specified agent or Box returns 404.
+      responses:
+        "200":
+          description: Turn snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentTurnState"}
+              example: {id: msg_01, agent_id: ses_01, status: queued, cursor: null, result: null, requests: [], steering: []}
+        "400": {$ref: "#/components/responses/AgentBadRequest"}
+        "401": {$ref: "#/components/responses/AgentUnauthorized"}
+        "404": {$ref: "#/components/responses/AgentNotFound"}
+        "503": {$ref: "#/components/responses/AgentUnavailable"}
+
+
   /{prefix}/domains:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -1387,7 +1692,8 @@ paths:
       summary: List the domains the organization holds
       description: |
         Every held hostname and its Box/App target, or null while unbound,
-        with the organization's allowance. Unbound domains still occupy slots.
+        with the organization's platform-domain allowance. Unbound platform
+        domains still occupy slots; custom domains do not consume this allowance.
         `domain_suffix` is the configured platform hostname suffix, or null
         when requests are unavailable; `min_length` applies to new claims only.
       tags: [Domains]
@@ -1460,11 +1766,16 @@ paths:
         organization return `domain_not_owned` (404), directing the caller to
         Dashboard > Domains to request a domain first. Owned names remain
         bindable independently of the configured suffix, minimum, or quota.
+        Custom domains additionally require an active subscription and a ready
+        Dashboard configuration with current DNS and HTTPS verification.
+        Binding checks persisted readiness; it does not perform a DNS challenge.
         The port is not declared public: the domain answers once the tunnel is
         public and the Box allows inbound access, in either order.
         A name bound to another port moves here; other names stay in place.
         Error codes: `region_not_supported` and `app_target_not_supported` (400).
         App binding is reserved and remains unsupported.
+        Custom-domain errors: `subscription_required` (403),
+        `subscription_not_ready` and `domain_not_ready` (409).
       tags: [Domains]
       requestBody:
         required: true
@@ -1481,14 +1792,25 @@ paths:
                 $ref: "#/components/schemas/Domain"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "403":
+          description: An active organization subscription is required for custom domains
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
     delete:
       operationId: unbindDomain
       summary: Stop routing a domain
       description: |
         Stops routing the exact full hostname, independently of the configured
-        suffix. The organization keeps the name and it still occupies a slot.
+        suffix. The organization keeps the name; platform names still occupy
+        allowance slots. Custom-domain configuration and certificates are retained,
+        and unbind is allowed after subscription expiry. Delete custom domains
+        separately in Dashboard > Domains to release ownership and clean up HTTPS.
         New requests get 404; existing connections run until they close.
         The port's own URL stays public until revokeTunnel.
         Safe to repeat for an owned name; a name not owned by the caller is 404.
@@ -1589,6 +1911,108 @@ paths:
                 $ref: "#/components/schemas/ImageUsage"
         "400":
           $ref: "#/components/responses/BadRequestError"
+
+  /{prefix}/checkpoints:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    post:
+      operationId: createCheckpoint
+      summary: Capture an independent disk checkpoint
+      description: |
+        Export the source box directly, without a snapshot or temporary clone.
+        The source must be stopped and idle; other states return 409.
+        Stop the box and wait for stopped before capture; capture never stops it automatically.
+        Requires Box write permission. Sources with volumes or secrets are
+        refused. A local capture returns ready after export; cloud capture
+        returns creating and becomes ready only after upload succeeds.
+      tags: [Checkpoints]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCheckpointRequest"
+      responses:
+        "201":
+          description: Checkpoint record created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+    get:
+      operationId: listCheckpoints
+      summary: List checkpoints in the routing scope
+      tags: [Checkpoints]
+      parameters:
+        - $ref: "#/components/parameters/pageToken"
+      responses:
+        "200":
+          description: Checkpoint page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckpointList"
+
+  /{prefix}/checkpoints/{checkpoint_key}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: checkpoint_key
+        in: path
+        required: true
+        description: Checkpoint ID or name
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    get:
+      operationId: getCheckpoint
+      summary: Get checkpoint metadata and state
+      tags: [Checkpoints]
+      responses:
+        "200":
+          description: Checkpoint metadata without environment values or object location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: removeCheckpoint
+      summary: Delete checkpoint storage and metadata
+      description: |
+        Requires Box write permission. Refuses active capture and unfinished
+        box creation from this checkpoint. Does not
+        remove boxes previously created from this checkpoint. Storage failure
+        retains deleting state and quota until a successful retry.
+      tags: [Checkpoints]
+      parameters:
+        - name: force
+          in: query
+          description: Ignore absence only; never bypass active use
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "204":
+          description: Storage and metadata removed, or missing with force
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/images/{image_name}:
     parameters:
@@ -1929,6 +2353,32 @@ components:
       schema:
         type: string
 
+    agentId:
+      name: agent_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+      example: ses_01
+
+    agentTurnId:
+      name: turn_id
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+      example: msg_01
+
+    agentIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: |
+        Opaque visible ASCII key forwarded verbatim to the adapter. BoxLite
+        stores nothing and returns no 422 for conflicting keys. Deduplication
+        and retention are adapter-defined; retention is advertised in
+        capabilities.idempotency_retention_seconds, not GET /v1/config.
+        An adapter that cannot deduplicate rejects the key as unsupported.
+      schema: {type: string, minLength: 1, maxLength: 256, pattern: '^[!-~]+$', not: {pattern: '[^!-~]'}}
+      example: retry-create-1
+
     idempotencyKey:
       name: Idempotency-Key
       in: header
@@ -1947,6 +2397,63 @@ components:
   # Responses (Error Templates)
   # -------------------------------------------------------------------------
   responses:
+    AgentCloseBadRequest:
+      description: Invalid argument or unsupported close operation
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          examples:
+            unsupported:
+              value: {error: {message: "agent.close is not supported", type: UnsupportedError, code: unsupported, request_id: req_1}}
+
+    AgentBadRequest:
+      description: Invalid argument or unsupported operation
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          examples:
+            invalid:
+              value: {error: {message: "invalid agent options", type: InvalidArgumentError, code: invalid_argument, request_id: req_1}}
+
+    AgentUnauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          example: {error: {message: "invalid credentials", type: AuthError, code: unauthenticated, request_id: req_1}}
+
+    AgentNotFound:
+      description: Box, agent, turn, or request is missing or belongs to another parent
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          example: {error: {message: "agent not found", type: NotFoundError, code: not_found, request_id: req_1}}
+
+    AgentConflict:
+      description: Agent or turn state does not permit the operation, or request is resolved
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          example: {error: {message: "invalid agent state", type: InvalidStateError, code: invalid_state, request_id: req_1}}
+
+    AgentExhausted:
+      description: Native queue or steering capacity exhausted
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          example: {error: {message: "queue full", type: ResourceExhaustedError, code: resource_exhausted, request_id: req_1}}
+
+    AgentUnavailable:
+      description: Agent unreachable or stop unconfirmed
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/ErrorResponse"}
+          examples:
+            network:
+              value: {error: {message: "agent unreachable", type: NetworkError, code: network_unavailable, request_id: req_1}}
+            upstream:
+              value: {error: {message: "agent unavailable", type: UpstreamUnavailableError, code: upstream_unavailable, request_id: req_1}}
+
     BadRequestError:
       description: Invalid request parameters or body
       content:
@@ -1955,7 +2462,7 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error:
-              message: "invalid argument: cpus must be between 1 and 16"
+              message: "invalid argument: cpus must be between 0.125 and 16, in increments of 0.001 cores"
               type: InvalidArgumentError
               code: invalid_argument
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
@@ -2051,6 +2558,199 @@ components:
   # Schemas
   # -------------------------------------------------------------------------
   schemas:
+    AgentEmptyRequest:
+      type: object
+      additionalProperties: false
+
+    AgentSendRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: {type: string}
+        options:
+          type: object
+          additionalProperties: false
+          properties:
+            mode: {type: string, enum: [queue, reject]}
+            data: {}
+
+    AgentSteerRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: {type: string}
+
+    AgentRespondRequest:
+      type: object
+      additionalProperties: false
+      required: [response]
+      properties:
+        response:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [type, text]
+              properties:
+                type: {const: answer}
+                text: {type: string}
+                data: {}
+            - type: object
+              additionalProperties: false
+              required: [type, approved]
+              properties:
+                type: {const: permission}
+                approved: {type: boolean}
+
+    AgentCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [agent]
+      properties:
+        agent: {type: string}
+        options:
+          type: object
+          additionalProperties: false
+          properties:
+            cwd: {type: string}
+            config:
+              $ref: "#/components/schemas/AgentConfigInput"
+
+    AgentConfigInput:
+      type: object
+      additionalProperties: false
+      description: Optional null config fields are treated as omitted.
+      properties:
+        model: {type: [string, 'null']}
+        reasoning: {type: [string, 'null']}
+        instructions: {type: [string, 'null']}
+        tools: {type: array, items: {type: string}}
+        mcp: {type: array, items: {type: string}}
+        permissions: {}
+        limits: {}
+        output_schema: {}
+
+    AgentResource:
+      type: object
+      required: [id, agent, state, config, capabilities]
+      properties:
+        id: {type: string}
+        agent: {type: string}
+        state:
+          oneOf:
+            - $ref: "#/components/schemas/AgentState"
+            - {type: 'null'}
+        config: {$ref: "#/components/schemas/AgentConfig"}
+        capabilities: {$ref: "#/components/schemas/AgentCapabilities"}
+
+    AgentState:
+      type: object
+      required: [id, status, cursor, active_turn_id, queued_turn_ids, requests, steering]
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [ready, busy, closing, closed, unknown]}
+        cursor: {type: [string, 'null']}
+        active_turn_id: {type: [string, 'null']}
+        queued_turn_ids: {type: array, items: {type: string}}
+        requests: {type: array, items: {$ref: "#/components/schemas/AgentRequest"}}
+        steering: {type: array, items: {$ref: "#/components/schemas/AgentSteeringReceipt"}}
+
+    AgentTurnState:
+      type: object
+      required: [id, agent_id, status, cursor, result, requests, steering]
+      properties:
+        id: {type: string}
+        agent_id: {type: string}
+        status: {$ref: "#/components/schemas/AgentTurnStatus"}
+        cursor: {type: [string, 'null']}
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/AgentResult"
+            - {type: 'null'}
+        requests: {type: array, items: {$ref: "#/components/schemas/AgentRequest"}}
+        steering: {type: array, items: {$ref: "#/components/schemas/AgentSteeringReceipt"}}
+
+    AgentTurnStatus:
+      type: string
+      enum: [queued, running, waiting_input, interrupting, completed, cancelled, failed, unknown]
+
+    AgentResult:
+      type: object
+      required: [turn_id, status, outcome, text, data, artifacts, usage, error]
+      properties:
+        turn_id: {type: string}
+        status: {$ref: "#/components/schemas/AgentTurnStatus"}
+        outcome: {type: [string, 'null'], enum: [answer, question, null]}
+        text: {type: [string, 'null']}
+        data: {}
+        artifacts: {type: array, items: {type: string}}
+        usage: {}
+        error: {type: [string, 'null']}
+
+    AgentConfig:
+      type: object
+      required: [tools, mcp]
+      description: Absent optional fields are omitted from snapshots.
+      properties:
+        tools: {type: array, items: {type: string}}
+        mcp: {type: array, items: {type: string}}
+        model: {type: string}
+        reasoning: {type: string}
+        instructions: {type: string}
+        permissions: {not: {type: 'null'}}
+        limits: {not: {type: 'null'}}
+        output_schema: {not: {type: 'null'}}
+
+    AgentCapabilities:
+      type: object
+      required: [operations, input_kinds, max_queued_turns, max_pending_steering, idempotency_retention_seconds]
+      properties:
+        operations: {type: array, items: {type: string}}
+        input_kinds: {type: array, items: {type: string}}
+        max_queued_turns: {type: [integer, 'null'], minimum: 0}
+        max_pending_steering: {type: [integer, 'null'], minimum: 0}
+        idempotency_retention_seconds: {type: [number, 'null'], minimum: 0}
+
+    AgentRequest:
+      type: object
+      required: [id, turn_id, kind]
+      properties:
+        id: {type: string}
+        turn_id: {type: string}
+        kind:
+          oneOf:
+            - type: object
+              required: [type, text, schema]
+              properties:
+                type: {const: question}
+                text: {type: string}
+                schema: {}
+            - type: object
+              required: [type, tool, arguments]
+              properties:
+                type: {const: permission}
+                tool: {type: string}
+                arguments: {}
+
+    AgentSteeringReceipt:
+      type: object
+      required: [id, turn_id, status]
+      properties:
+        id: {type: string}
+        turn_id: {type: string}
+        status: {type: string, enum: [accepted, applied, unused, unknown]}
+
+    AgentEvent:
+      type: object
+      required: [cursor, agent_id, turn_id, kind, data]
+      properties:
+        cursor: {type: [string, 'null']}
+        agent_id: {type: string}
+        turn_id: {type: [string, 'null']}
+        kind: {type: string}
+        data: {}
+
 
     # =======================================================================
     # Configuration
@@ -2135,6 +2835,14 @@ components:
             snapshots_enabled:
               type: boolean
               description: Whether snapshot create/list/get/remove/restore is supported
+              example: true
+            checkpoints_enabled:
+              type: boolean
+              description: Whether managed checkpoint capture, use and deletion are supported
+              example: true
+            import_enabled:
+              type: boolean
+              description: Whether ordinary archive import is supported
               example: true
             clone_enabled:
               type: boolean
@@ -2384,11 +3092,16 @@ components:
           description: OCI image reference or rootfs path
           example: python:3.11-slim
         cpus:
-          type: integer
-          minimum: 1
-          maximum: 32
-          description: Allocated vCPU cores
-          example: 2
+          type: number
+          minimum: 0.125
+          maximum: 255
+          multipleOf: 0.001
+          description: |
+            Configured CPU allocation. Fractional values use ceil(cpus) guest vCPUs
+            and an aggregate bandwidth quota on the Linux execution host;
+            integers retain existing topology behavior.
+            This reports configuration, not a reservation or proof of enforcement.
+          example: 1.5
         memory_mib:
           type: integer
           minimum: 128
@@ -2485,6 +3198,58 @@ components:
         - failed
         - unknown
 
+    Checkpoint:
+      type: object
+      required: [id, name, source_box_id, created_at, size_bytes, state]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        source_box_id:
+          type: string
+          description: Recorded source identity; source deletion does not remove the checkpoint
+        created_at:
+          type: string
+          format: date-time
+        size_bytes:
+          type: integer
+          minimum: 0
+          description: Complete archive bytes; zero before an archive receipt is available
+        state:
+          type: string
+          enum: [creating, ready, failed, deleting]
+        error_reason:
+          type: string
+          description: Optional failure description without environment values or object locations
+
+    CheckpointList:
+      type: object
+      required: [checkpoints]
+      properties:
+        checkpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Checkpoint"
+        next_page_token:
+          type: string
+          description: Opaque continuation token; omitted on the final page
+
+    CreateCheckpointRequest:
+      type: object
+      additionalProperties: false
+      required: [source_box_id]
+      properties:
+        source_box_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
     CreateBoxRequest:
       type: object
       description: |
@@ -2518,12 +3283,32 @@ components:
           description: |
             Path to a pre-built rootfs (alternative to `image`).
             Mutually exclusive with `image`.
+        checkpoint_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: |
+            ID or name of a ready managed checkpoint to create the box from
+            (alternative to `image`). Mutually exclusive with `image` and
+            `rootfs_path`. Only `name` may accompany it.
         cpus:
-          type: integer
-          minimum: 1
+          type: number
+          minimum: 0.125
           maximum: 16
-          description: Number of vCPUs to allocate
-          example: 2
+          multipleOf: 0.001
+          description: |
+            Creation-only CPU allocation; omitted values retain the server default.
+            Integers (including 2.0) configure vCPU topology without an additional bandwidth quota.
+            Fractional values use ceil(cpus) guest vCPUs and require a Linux execution host,
+            the jailer, and a writable cgroup v2 CPU quota with a 100 ms period.
+            These host requirements apply to the server; a macOS REST client can request
+            fractional CPUs from a supporting Linux server.
+            Quota-write errors prevent startup; cgroup joining remains best-effort,
+            so membership failure can leave a running Box without enforcement.
+            Clients POST directly without a CPU capability probe and verify that successful
+            fractional responses report exactly the requested cpus; they never retry by rounding
+            or dropping it. Integer request JSON remains integral for older servers.
+          example: 1.5
         memory_mib:
           type: integer
           minimum: 128
@@ -2575,8 +3360,11 @@ components:
           items:
             $ref: "#/components/schemas/SecretSpec"
           description: |
-            Secret placeholder rules for outbound HTTPS requests.
-            Matching requests replace `placeholder` with `value` on the host side.
+            Secrets injected into a request header on outbound HTTPS requests.
+            Requests to a secret's hosts replace only configured headers already
+            present in the request. A host that echoes the
+            injected header returns the value to the guest, so bind secrets only to
+            trusted hosts.
         detach:
           type: boolean
           description: Box survives parent process exit
@@ -2843,25 +3631,42 @@ components:
 
     SecretSpec:
       type: object
-      description: Outbound HTTPS secret substitution rule
-      required: [name, value]
+      description: Secret injected into a request header on outbound HTTPS requests to its hosts
+      required: [name, value, hosts, headers]
       properties:
         name:
           type: string
           description: Human-readable secret name
         value:
           type: string
-          description: Real secret value. Never enters the guest VM.
+          description: Real secret value. Not stored in the guest VM; a host that echoes the injected header returns it to the guest.
         hosts:
           type: array
           items:
             type: string
-          description: Matching hosts for this secret. Empty means no host restriction.
+          description: Matching hosts where this secret will be injected. Required, at least one host.
         placeholder:
           type: string
           description: |
-            Placeholder string visible inside the guest.
+            Dummy value for the guest environment; the proxy never parses it.
             Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
+        headers:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            type: string
+          description: |
+            Header names mapped to templates containing exactly one {value} and
+            no other braces. Required; omitted, null and empty maps are rejected.
+            Only headers already present in the original request are overwritten;
+            all entries use this secret's value, substituted once without recursion.
+            Empty maps, invalid HTTP token names, case-insensitive duplicate names,
+            and Host, Content-Length, Connection, Proxy-Connection,
+            Proxy-Authenticate, Proxy-Authorization, Keep-Alive, TE, Trailer,
+            Upgrade and Transfer-Encoding are rejected. Templates and rendered
+            values must not contain ASCII controls other than HTAB or contain DEL.
+            Different secrets must not configure the same case-insensitive host
+            and header pair; repeated hosts within one secret are deduplicated.
 
     Snapshot:
       type: object
@@ -3268,14 +4073,26 @@ components:
         domains:
           type: array
           items:
-            $ref: "#/components/schemas/Domain"
+            type: object
+            required: [hostname, url, target, kind]
+            properties:
+              hostname:
+                $ref: "#/components/schemas/Domain/properties/hostname"
+              url:
+                $ref: "#/components/schemas/Domain/properties/url"
+              target:
+                $ref: "#/components/schemas/Domain/properties/target"
+              kind:
+                type: string
+                enum: [platform, custom]
+                description: Persisted domain ownership type; independent of the configured suffix for new claims.
         limit:
           type: integer
-          description: How many domains the organization may hold, bound or not.
+          description: How many platform domains the organization may hold, bound or not; custom domains do not consume this allowance.
           example: 1
         used:
           type: integer
-          description: How many it holds now.
+          description: How many platform domains it holds now; the domains array also includes custom domains.
           example: 1
         remaining:
           type: integer

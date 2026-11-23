@@ -5,14 +5,18 @@
  */
 
 import { otelSdk } from './tracing'
+import { installCiWebhookBodyParser } from './ci/ci-webhook-body'
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { NestFactory } from '@nestjs/core'
 import { NestExpressApplication } from '@nestjs/platform-express'
 import { AppModule } from './app.module'
 import { SwaggerModule } from '@nestjs/swagger'
 import { INestApplication, Logger, ValidationPipe } from '@nestjs/common'
+import { Context } from './common/context/context'
+import { PlatformReason } from './common/context/platform-reason.enum'
 import { AllExceptionsFilter } from './filters/all-exceptions.filter'
 import { MetricsInterceptor } from './interceptors/metrics.interceptor'
+import { AnalyticsService } from './analytics/services/analytics.service'
 import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.interface'
 import { TypedConfigService } from './config/typed-config.service'
 import { FailedAuthTrackerService } from './auth/failed-auth-tracker.service'
@@ -37,6 +41,7 @@ import { mcpStrategy } from './mcp/mcp.controller'
 import { useApiBodyParsers } from './mcp/mcp-body'
 import { McpTools } from './mcp/mcp-tools'
 import { servedOperations } from './mcp/mcp-routes'
+import { CiListenerService } from './ci/ci-listener.service'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -56,6 +61,7 @@ async function bootstrap() {
     // after authentication.
     bodyParser: false,
   })
+  installCiWebhookBodyParser(app)
   app.useLogger(app.get(PinoLogger))
   app.flushLogs()
   useApiBodyParsers(app)
@@ -94,7 +100,7 @@ async function bootstrap() {
   app.set('trust proxy', true)
   app.useGlobalFilters(new AllExceptionsFilter(failedAuthTracker))
   app.useGlobalInterceptors(new LoggerErrorInterceptor())
-  app.useGlobalInterceptors(new MetricsInterceptor(configService))
+  app.useGlobalInterceptors(new MetricsInterceptor(configService, app.get(AnalyticsService)))
   app.useGlobalInterceptors(app.get(AuditInterceptor))
   app.useGlobalPipes(
     new ValidationPipe({
@@ -181,14 +187,15 @@ async function bootstrap() {
   // Starts listening for shutdown hooks
   app.enableShutdownHooks()
 
-  const host = '0.0.0.0'
+  const host = process.env.BOXLITE_LISTEN_HOST || '0.0.0.0'
   const port = configService.get('port')
 
   if (isApiEnabled()) {
     // MCP tools come from the v1 specs (bundled as assets) and the dashboard document,
     // limited to the routes this app registered, so init() runs first.
     await app.init()
-    const openapi = (name: string) => parseYaml(readFileSync(join(__dirname, 'assets', 'openapi', name), 'utf8'))
+    const specDirectory = process.env.BOXLITE_OPENAPI_DIR || join(__dirname, 'assets', 'openapi')
+    const openapi = (name: string) => parseYaml(readFileSync(join(specDirectory, name), 'utf8'))
     const wsProxy = app.get(BoxliteWsProxyService)
     app.get(McpTools).register({
       box: openapi('box.openapi.yaml'),
@@ -242,6 +249,7 @@ async function bootstrap() {
       }
       socket.destroy()
     })
+    await app.get(CiListenerService).start()
   } else {
     await app.init()
     app.flushLogs()
@@ -284,7 +292,13 @@ async function createAdminApiKey(app: INestApplication, apiKeyName: string) {
   const organizationService = app.get(OrganizationService)
 
   const defaultOrg = await organizationService.findDefaultForUser(BOXLITE_ADMIN_USER_ID)
-  const { value } = await apiKeyService.createApiKey(defaultOrg.id, BOXLITE_ADMIN_USER_ID, apiKeyName, [])
+  const { value } = await apiKeyService.createApiKey(
+    defaultOrg.id,
+    BOXLITE_ADMIN_USER_ID,
+    apiKeyName,
+    [],
+    Context.platform(PlatformReason.BOOTSTRAP),
+  )
   Logger.log(
     `
 =========================================

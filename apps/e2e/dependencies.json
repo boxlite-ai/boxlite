@@ -1,0 +1,14 @@
+{
+  "uv": "0.13.4",
+  "images": {
+    "postgres": "docker.io/library/postgres@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b",
+    "redis": "docker.io/library/redis@sha256:6ba19c50b56777f5c11c58eff8ddb69d0d5f27ba131cffb63f180ccfd43c66af",
+    "registry": "docker.io/library/registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
+    "rauthy": "ghcr.io/sebadob/rauthy:0.37.2@sha256:d733b7580f53c1601c286b5504853b2774e70245f5f9427d9bcda32496b753ee",
+    "rustfs": "ghcr.io/rustfs/rustfs:1.0.4-glibc@sha256:a9b705b9256be756802a60f3498abdc543918b5b5a4437a57a541e89e733c74d"
+  },
+  "guest": {
+    "version": "0.1.0",
+    "image": "ghcr.io/boxlite-ai/boxlite-agent-base@sha256:ee6a25c6428c2935bfb84522bb4ede5870ca2debb655f812e3e1db4ac1166aed"
+  }
+}

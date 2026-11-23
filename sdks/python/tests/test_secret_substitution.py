@@ -1,10 +1,10 @@
 """
-Tests for Secret type and MITM secret substitution.
+Tests for Secret type and header injection.
 
 Test coverage:
   1. PyO3 binding: Secret constructor, field access, mutation, repr
   2. BoxOptions integration: secrets coexist with other fields
-  3. Integration: env var injection, CA cert, upstream substitution (requires VM)
+  3. Integration: env var injection, CA cert, upstream header injection (requires VM)
 
 Requirements:
   - make dev:python (build Python SDK)
@@ -12,6 +12,8 @@ Requirements:
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -32,9 +34,19 @@ if not hasattr(boxlite, "Secret"):
 class TestSecretConstruction:
     """Test Secret class creation and field access via PyO3."""
 
+    def test_custom_headers(self):
+        secret = boxlite.Secret(
+            name="gemini",
+            value="test-value",
+            hosts=["api.example.com"],
+            headers={"x-goog-api-key": "{value}"},
+        )
+        assert secret.headers == {"x-goog-api-key": "{value}"}
+
     def test_basic_creation(self):
         """Secret with all required fields."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="openai",
             value="sk-real-key-123",
             hosts=["api.openai.com"],
@@ -46,6 +58,7 @@ class TestSecretConstruction:
     def test_multiple_hosts(self):
         """Secret targeting multiple hostnames (PyO3 Vec conversion)."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="api_key",
             value="key-123",
             hosts=["api.openai.com", "api.anthropic.com", "api.google.com"],
@@ -56,6 +69,7 @@ class TestSecretConstruction:
     def test_wildcard_host(self):
         """Secret with wildcard hostname pattern."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="corp_key",
             value="key-456",
             hosts=["*.internal.corp.com"],
@@ -64,12 +78,15 @@ class TestSecretConstruction:
 
     def test_empty_hosts_default(self):
         """Hosts defaults to empty list (PyO3 default parameter)."""
-        s = boxlite.Secret(name="test", value="val")
+        s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"}, name="test", value="val"
+        )
         assert s.hosts == []
 
     def test_custom_placeholder(self):
         """Custom placeholder kwarg overrides auto-generated one."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="openai",
             value="sk-123",
             hosts=["api.openai.com"],
@@ -80,7 +97,9 @@ class TestSecretConstruction:
 
     def test_field_mutation(self):
         """PyO3 #[pyo3(get, set)] allows field mutation."""
-        s = boxlite.Secret(name="test", value="val")
+        s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"}, name="test", value="val"
+        )
         s.name = "updated"
         s.value = "new-val"
         s.hosts = ["new-host.com"]
@@ -91,6 +110,7 @@ class TestSecretConstruction:
     def test_repr_redacts_value(self):
         """repr() must not contain the actual secret value."""
         s = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="openai",
             value="sk-super-secret-key-DO-NOT-LEAK",
             hosts=["api.openai.com"],
@@ -107,7 +127,12 @@ class TestBoxOptionsWithSecrets:
 
     def test_secrets_with_other_options(self):
         """Secrets coexist with other BoxOptions fields."""
-        secret = boxlite.Secret(name="key", value="val", hosts=["api.example.com"])
+        secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
+            name="key",
+            value="val",
+            hosts=["api.example.com"],
+        )
         opts = boxlite.BoxOptions(
             image="python:3.12",
             cpus=2,
@@ -129,7 +154,12 @@ class TestBoxOptionsWithSecrets:
 
     def test_secrets_with_network_spec(self):
         """Secrets and NetworkSpec can be used together."""
-        secret = boxlite.Secret(name="key", value="val", hosts=["api.openai.com"])
+        secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
+            name="key",
+            value="val",
+            hosts=["api.openai.com"],
+        )
         opts = boxlite.BoxOptions(
             image="alpine:latest",
             network=boxlite.NetworkSpec(
@@ -146,6 +176,7 @@ class TestBoxOptionsWithSecrets:
     def test_secret_fields_accessible_through_boxoptions(self):
         """Secret fields accessible via BoxOptions.secrets[i]."""
         secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="test",
             value="secret-value",
             hosts=["h1.com", "h2.com"],
@@ -171,16 +202,22 @@ def runtime(shared_sync_runtime):
 
 @pytest.mark.integration
 class TestSecretIntegration:
-    """End-to-end secret substitution via MITM proxy."""
+    """End-to-end secret header injection via MITM proxy."""
 
     def test_secret_env_vars_and_ca_injection(self, runtime):
         """With secrets: placeholder env vars present, real values hidden, CA cert injected."""
         secrets = [
             boxlite.Secret(
-                name="key_a", value="real-val-a-DO-NOT-LEAK", hosts=["a.com"]
+                headers={"Authorization": "Bearer {value}"},
+                name="key_a",
+                value="real-val-a-DO-NOT-LEAK",
+                hosts=["a.com"],
             ),
             boxlite.Secret(
-                name="key_b", value="real-val-b-DO-NOT-LEAK", hosts=["b.com"]
+                headers={"Authorization": "Bearer {value}"},
+                name="key_b",
+                value="real-val-b-DO-NOT-LEAK",
+                hosts=["b.com"],
             ),
         ]
         sandbox = runtime.create(
@@ -232,16 +269,16 @@ class TestSecretIntegration:
         finally:
             sandbox.stop()
 
-    def test_secret_substitution_reaches_upstream(self, runtime):
-        """The real secret value reaches the upstream endpoint (the whole point of MITM).
+    def test_secret_header_injection_reaches_upstream(self, runtime):
+        """The proxy writes the real value only into the configured header.
 
-        Guest curls an HTTPS echo service with the placeholder in Authorization.
-        The MITM proxy substitutes the real value before it reaches the server.
-        The echo service reflects the headers back, so the guest sees the real value
-        in the response — proving substitution happened at the network boundary.
+        The guest sends a dummy Authorization and a placeholder in another header.
+        The echo service shows that header unchanged and the injected
+        Authorization header, whose echo is the documented residual risk.
         """
         real_value = "sk-test-real-key-12345"
         secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="testkey",
             value=real_value,
             hosts=["httpbingo.org"],
@@ -259,15 +296,15 @@ class TestSecretIntegration:
             )
         )
         try:
-            # Guest sends placeholder in header; MITM substitutes real value;
-            # httpbingo.org echoes it back in JSON response.
             execution = sandbox.exec(
                 "wget",
                 [
                     "-q",
                     "-O-",
                     "--header",
-                    "Authorization: Bearer <BOXLITE_SECRET:testkey>",
+                    "X-Probe: <BOXLITE_SECRET:testkey>",
+                    "--header",
+                    "Authorization: Bearer dummy",
                     "https://httpbingo.org/headers",
                 ],
             )
@@ -275,15 +312,9 @@ class TestSecretIntegration:
             result = execution.wait()
 
             assert result.exit_code == 0, f"wget failed: {stdout}"
-            # The echoed Authorization header should contain the REAL value,
-            # not the placeholder — proving MITM substitution worked.
-            assert real_value in stdout, (
-                f"Real secret not in upstream response. "
-                f"MITM substitution may not be working. Got: {stdout[:500]}"
-            )
-            assert "<BOXLITE_SECRET:testkey>" not in stdout, (
-                "Placeholder leaked to upstream — MITM did not substitute"
-            )
+            headers = json.loads(stdout)["headers"]
+            assert headers["Authorization"] == [f"Bearer {real_value}"]
+            assert headers["X-Probe"] == ["<BOXLITE_SECRET:testkey>"]
         finally:
             sandbox.stop()
 
@@ -294,6 +325,7 @@ class TestSecretIntegration:
         The key assertion: non-secret traffic is not blocked or broken.
         """
         secret = boxlite.Secret(
+            headers={"Authorization": "Bearer {value}"},
             name="key",
             value="val",
             hosts=["api.openai.com"],  # only openai is MITM'd

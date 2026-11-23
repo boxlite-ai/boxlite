@@ -1,4 +1,4 @@
-"""Secrets over REST — the proxy substitutes, the guest never holds the value.
+"""Secrets over REST — the proxy injects, the guest never holds the value.
 
 E2E port of the secret coverage that stops at the wire:
 `src/boxlite/tests/secret_substitution.rs` asserts the JSON shape gvproxy
@@ -13,9 +13,9 @@ the VM" (src/boxlite/src/runtime/options.rs:439-440).
 
 Both halves have to be observed through the platform, not through the test's
 own inputs. Asserting that a placeholder the test itself put in `env` comes
-back from `env` would pass with `secrets` dropped entirely; the substitution
-is what only the proxy can do, so the box sends the placeholder to the
-matching host and the echo says which of the two arrived.
+back from `env` would pass with `secrets` dropped entirely; the injection is
+what only the proxy can do, so the box sends a request to the matching host and
+the echo shows the value in the configured header and the placeholder elsewhere.
 
 The value is fabricated per run, never a real credential, so naming it in an
 assertion leaks nothing.
@@ -33,6 +33,13 @@ from conftest import drain
 SECRET_NAME = "e2e_probe"
 PLACEHOLDER = f"<BOXLITE_SECRET:{SECRET_NAME}>"
 HOST = "httpbingo.org"
+# The proxy overwrites only configured headers the guest already sent, whatever
+# their value (src/deps/libgvproxy-sys/gvproxy-bridge/mitm.go
+# injectSecretHeaders). The guest sends this header with a dummy that appears
+# nowhere else, so its absence from the echo proves this header was overwritten.
+INJECTED_HEADER = "Authorization"
+HEADER_TEMPLATE = "Bearer {value}"
+GUEST_HEADER_DUMMY = "e2e-guest-authorization-dummy"
 # Echoes the request headers as JSON — the only way to see what left the box.
 ECHO_URL = f"https://{HOST}/headers"
 ECHO_FILE = "/tmp/e2e-secret-echo.json"
@@ -64,7 +71,12 @@ async def box_with_secret(rt, image, secret_value):
         boxlite.BoxOptions(
             image=image,
             secrets=[
-                boxlite.Secret(name=SECRET_NAME, value=secret_value, hosts=[HOST]),
+                boxlite.Secret(
+                    name=SECRET_NAME,
+                    value=secret_value,
+                    hosts=[HOST],
+                    headers={INJECTED_HEADER: HEADER_TEMPLATE},
+                ),
             ],
         ),
     )
@@ -97,26 +109,29 @@ async def test_the_guest_never_holds_the_secret_value(box_with_secret, secret_va
 
 
 @pytest.mark.asyncio
-async def test_the_proxy_substitutes_the_placeholder_upstream(
+async def test_the_proxy_injects_only_the_configured_header(
     box_with_secret, secret_value
 ):
     """What leaves the box carries the value the box never had.
 
-    The placeholder is sent from inside the guest; the echo shows what the host
-    received. A stage that drops `secrets` echoes the placeholder back, which
-    is the failure this case exists to catch.
+    The guest sends a dummy in the configured Authorization header and the
+    placeholder in another header; the echo shows what the host received.
+    The dummy is gone, the placeholder arrives unchanged, and the value
+    arrives, so the proxy wrote the configured header and only that one. A
+    stage that drops `secrets` never echoes the value, which is the failure
+    this case exists to catch.
 
     The answer comes back as an exit code rather than as stdout, and the echo
     is graded by a grep inside the guest. Short-exec stdout is dropped
     intermittently on a stage running without #1569 — this case read an empty
     string from a `curl` that had exited 0 — and a lost byte stream would
-    otherwise read as "the substitution did not happen".
+    otherwise read as "the injection did not happen".
     """
     # The control has to sit outside the mechanism under test, so it goes to a
     # host the secret does not bind. Configuring any secret makes gvproxy mint
     # an ephemeral MITM CA (src/boxlite/src/net/gvproxy/services.rs:347-358)
     # and the guest is handed that CA to trust, so TLS to the secret's own host
-    # is terminated by the substitution path whether or not a placeholder rides
+    # is terminated by the injection path whether or not a placeholder rides
     # along — a broken CA fails a "plain" request to it too, and skipping on
     # that would hide the very failure this case exists to catch.
     _, control_err, control = await _run(
@@ -129,8 +144,8 @@ async def test_the_proxy_substitutes_the_placeholder_upstream(
 
     _, err, code = await _run(
         box_with_secret,
-        f"curl -fsS --max-time 20 -H 'X-E2E-Probe: {PLACEHOLDER}' "
-        f"{ECHO_URL} -o {ECHO_FILE}",
+        f"curl -fsS --max-time 20 -H '{INJECTED_HEADER}: {GUEST_HEADER_DUMMY}' "
+        f"-H 'X-E2E-Probe: {PLACEHOLDER}' {ECHO_URL} -o {ECHO_FILE}",
     )
     assert code == 0, (
         f"the box reached {CONTROL_HOST} but not {HOST}, which is the host its "
@@ -138,18 +153,26 @@ async def test_the_proxy_substitutes_the_placeholder_upstream(
         f"({code}): {err.strip()[:200]!r}"
     )
 
+    _, _, dummy_present = await _run(
+        box_with_secret, f"grep -qF -- '{GUEST_HEADER_DUMMY}' {ECHO_FILE}"
+    )
+    assert dummy_present == 1, (
+        f"the guest's {INJECTED_HEADER} value reached {HOST} (grep exit "
+        f"{dummy_present}) — the proxy did not overwrite the configured header"
+    )
+
     _, _, placeholder_present = await _run(
         box_with_secret, f"grep -qF -- '{PLACEHOLDER}' {ECHO_FILE}"
     )
-    assert placeholder_present != 0, (
-        f"the placeholder reached {HOST} unsubstituted — the proxy did not "
-        f"replace it"
+    assert placeholder_present == 0, (
+        f"the placeholder in another header did not reach {HOST} unchanged — "
+        f"the proxy must only write the configured header"
     )
 
     _, _, value_present = await _run(
         box_with_secret, f"grep -qF -- '{secret_value}' {ECHO_FILE}"
     )
     assert value_present == 0, (
-        f"the substituted value never arrived at {HOST} (grep exit "
+        f"the injected value never arrived at {HOST} (grep exit "
         f"{value_present})"
     )

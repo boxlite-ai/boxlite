@@ -34,7 +34,7 @@ class CodeBox(SimpleBox):
         self,
         image: str = "python:slim",
         memory_mib: int | None = None,
-        cpus: int | None = None,
+        cpus: float | None = None,
         runtime: Optional["Boxlite"] = None,
         **kwargs,
     ):
@@ -52,13 +52,16 @@ class CodeBox(SimpleBox):
             image=image, memory_mib=memory_mib, cpus=cpus, runtime=runtime, **kwargs
         )
 
-    async def run(self, code: str, timeout: int | None = None) -> str:
+    async def run(self, code: str, timeout: float | None = None) -> str:
         """
         Execute Python code in the secure container.
 
         Args:
             code: Python code to execute
-            timeout: Execution timeout in seconds (not yet implemented)
+            timeout: Execution timeout in seconds. A timed-out run returns the
+                output written before termination rather than raising. The
+                deadline applies to the process the guest started; a child
+                that keeps the stdout pipe open can still delay the return.
 
         Returns:
             Execution stdout as a string. Use exec() directly if you need
@@ -76,7 +79,7 @@ class CodeBox(SimpleBox):
                 result = await cb.exec("/path/to/python", "-c", code)
         """
         # Execute Python code using python3 -c
-        result = await self.exec("/usr/local/bin/python", "-c", code)
+        result = await self.exec("/usr/local/bin/python", "-c", code, timeout=timeout)
         return result.stdout
 
     async def run_script(self, script_path: str) -> str:

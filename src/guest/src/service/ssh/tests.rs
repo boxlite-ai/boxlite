@@ -1167,6 +1167,7 @@ async fn ssh_partial_updates_persist_and_reenable_without_restart() {
 
 #[tokio::test]
 async fn ssh_shutdown_serializes_with_admitted_activation() {
+    crate::test_syscalls::deny(nix::libc::SYS_sync);
     let mut fixture = TestGuest::new().await;
     fixture.init().await;
     let configuration = config(&private_key(), &[&private_key()], None);

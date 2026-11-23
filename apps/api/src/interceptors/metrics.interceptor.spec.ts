@@ -4,8 +4,14 @@
  */
 
 const mockCapture = jest.fn()
+const mockGroupIdentify = jest.fn()
 jest.mock('posthog-node', () => ({
-  PostHog: jest.fn(() => ({ capture: mockCapture, shutdown: jest.fn() })),
+  PostHog: jest.fn(() => ({
+    capture: mockCapture,
+    groupIdentify: mockGroupIdentify,
+    shutdown: jest.fn(),
+    on: jest.fn(),
+  })),
 }))
 
 import type { INestApplication } from '@nestjs/common'
@@ -19,6 +25,18 @@ import { ImageController } from '../image/controllers/image.controller'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { MetricsInterceptor } from './metrics.interceptor'
+import { AnalyticsService } from '../analytics/services/analytics.service'
+import { AuthGuard } from '@nestjs/passport'
+import { of, lastValueFrom } from 'rxjs'
+import { OrganizationController } from '../organization/controllers/organization.controller'
+import { OrganizationService } from '../organization/services/organization.service'
+import { OrganizationUserService } from '../organization/services/organization-user.service'
+import { OrganizationInvitationService } from '../organization/services/organization-invitation.service'
+import { OrganizationBoxLimitsService } from '../organization/services/organization-box-limits.service'
+import { OrganizationActionGuard } from '../organization/guards/organization-action.guard'
+import { SystemActionGuard } from '../auth/system-action.guard'
+import { OrGuard } from '../auth/or.guard'
+import { UserService } from '../user/user.service'
 
 const ORGANIZATION = { id: 'org-123', imageCountLimit: 20 }
 const CONFIG: Record<string, string> = {
@@ -40,11 +58,33 @@ describe('MetricsInterceptor', () => {
 
   beforeEach(async () => {
     mockCapture.mockReset()
+    mockGroupIdentify.mockReset()
     catalog = { delete: jest.fn().mockResolvedValue(undefined) }
 
     const moduleRef = await Test.createTestingModule({
-      controllers: [ImageController],
-      providers: [{ provide: ImageCatalogService, useValue: catalog }],
+      controllers: [ImageController, OrganizationController],
+      providers: [
+        AnalyticsService,
+        { provide: TypedConfigService, useValue: { get: (key: string) => CONFIG[key] } },
+        { provide: ImageCatalogService, useValue: catalog },
+        {
+          provide: OrganizationService,
+          useValue: {
+            create: jest.fn(async (input) => ({
+              id: 'new-org',
+              name: input.name,
+              createdBy: 'user-1',
+              createdAt: new Date(1),
+              updatedAt: new Date(1),
+              users: [],
+            })),
+          },
+        },
+        { provide: OrganizationUserService, useValue: {} },
+        { provide: OrganizationInvitationService, useValue: {} },
+        { provide: OrganizationBoxLimitsService, useValue: { resolve: jest.fn(async () => ({})) } },
+        { provide: UserService, useValue: { findOne: jest.fn(async () => ({ emailVerified: true })) } },
+      ],
     })
       .overrideGuard(CombinedAuthGuard)
       .useValue({
@@ -57,6 +97,19 @@ describe('MetricsInterceptor', () => {
           return true
         },
       })
+      .overrideGuard(AuthGuard('jwt'))
+      .useValue({
+        canActivate: (context: any) => {
+          context.switchToHttp().getRequest().user = { userId: 'user-1', organizationId: ORGANIZATION.id }
+          return true
+        },
+      })
+      .overrideGuard(OrganizationActionGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(SystemActionGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(OrGuard)
+      .useValue({ canActivate: () => true })
       .overrideGuard(OrganizationResourceActionGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(AuthenticatedRateLimitGuard)
@@ -70,7 +123,7 @@ describe('MetricsInterceptor', () => {
 
     app = moduleRef.createNestApplication()
     app.setGlobalPrefix('api')
-    app.useGlobalInterceptors(new MetricsInterceptor(configService))
+    app.useGlobalInterceptors(new MetricsInterceptor(configService, moduleRef.get(AnalyticsService)))
     await app.listen(0)
   })
 
@@ -82,6 +135,47 @@ describe('MetricsInterceptor', () => {
     const address = app.getHttpServer().address() as AddressInfo
     return fetch(`http://127.0.0.1:${address.port}/api/images/${encodedRef}`, { method: 'DELETE' })
   }
+
+  it('identifies a created organization through the shared analytics client', async () => {
+    const address = app.getHttpServer().address() as AddressInfo
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/organizations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Example' }),
+    })
+    expect(response.status).toBe(201)
+    expect(mockGroupIdentify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupType: 'organization',
+        groupKey: 'new-org',
+        properties: expect.objectContaining({ name: 'Example', environment: 'test' }),
+      }),
+    )
+    expect(mockCapture).toHaveBeenCalledWith(expect.objectContaining({ event: 'api_organization_created' }))
+  })
+
+  it.each(['posthog.apiKey', 'posthog.host'])('preserves responses without %s', async (missing) => {
+    const config = {
+      get: (key: string) => (key === missing ? undefined : CONFIG[key]),
+      getOrThrow: (key: string) => CONFIG[key],
+    }
+    const disabled = new AnalyticsService(config as never)
+    const interceptor = new MetricsInterceptor(config as never, disabled)
+    const next = { handle: jest.fn(() => of('response')) }
+    const context = {
+      switchToHttp: () => {
+        throw new Error('disabled analytics must not inspect the request')
+      },
+    }
+    expect(disabled.enabled).toBe(false)
+    await expect(lastValueFrom(interceptor.intercept(context as never, next))).resolves.toBe('response')
+    disabled.capture({ event: 'ignored', distinctId: 'user-1' })
+    disabled.groupIdentify({ groupType: 'organization', groupKey: 'ignored' })
+    await disabled.handleOrganizationCreatedEvent({ id: 'ignored' } as never)
+    await disabled.onApplicationShutdown()
+    expect(mockCapture).not.toHaveBeenCalled()
+    expect(mockGroupIdentify).not.toHaveBeenCalled()
+  })
 
   it('captures a removed image under the reference the caller named', async () => {
     const response = await deleteImage('quay.io%2Facme%2Fapp')

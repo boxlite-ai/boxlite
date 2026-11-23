@@ -12,6 +12,7 @@ use std::{
         atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering},
     },
 };
+use vm_memory::GuestAddressSpace as _;
 
 use mio::{Interest, Registry, Token, event::Source};
 use virtio_queue::{Queue, QueueT};
@@ -208,11 +209,11 @@ fn activation_with(events: Arc<dyn EventRegistrar>, waker: Waker) -> ActivationC
         &[8],
         false,
         false,
-        Arc::clone(&memory),
+        Arc::clone(&memory).into(),
     )
     .unwrap();
     ActivationContext {
-        memory,
+        memory: memory.into(),
         queues,
         interrupt: Arc::new(TestInterrupt::default()),
         events,
@@ -278,7 +279,7 @@ fn activation_takes_the_context_and_reset_clears_it() {
     assert_eq!(ctx.queues.len(), 1);
     assert_eq!(ctx.queues.max_size(0), Some(8));
     assert!(!ctx.queues.is_ready(0));
-    assert_eq!(ctx.memory.iter().count(), 1);
+    assert_eq!(ctx.memory.memory().iter().count(), 1);
     ctx.interrupt.raise();
     assert_eq!(ctx.interrupt.interrupt_status(), 0x1);
     ctx.interrupt.raise_config();
@@ -335,9 +336,10 @@ fn the_activation_context_registers_deregisters_and_wakes() {
 }
 
 #[test]
-fn snapshot_defaults_are_unsupported() {
+fn quiesce_default_succeeds_and_snapshots_remain_unsupported() {
     let mut device = TestDevice::new();
-    assert!(matches!(device.quiesce(), Err(DeviceError::Unsupported(_))));
+    assert_eq!(device.quiesce(), Ok(()));
+    assert_eq!(device.quiesce(), Ok(()));
     assert_eq!(device.save_state(), Err(SnapshotError::Unsupported));
     assert!(matches!(
         device.restore_state(

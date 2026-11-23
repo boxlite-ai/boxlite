@@ -81,21 +81,37 @@ describe('BoxLite lifecycle policy mapper', () => {
   it('maps REST secret specs to secret placeholder rules', () => {
     const mapped = createBoxToCreateBox({
       secrets: [
-        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+        {
+          name: 'openai',
+          value: 'sk-test',
+          hosts: ['api.openai.com'],
+          placeholder: '<BOXLITE_SECRET:openai>',
+          headers: { 'x-api-key': '{value}' },
+        } as any,
       ],
     })
 
     expect(mapped.secrets).toEqual([
-      { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '<BOXLITE_SECRET:openai>' },
+      {
+        name: 'openai',
+        value: 'sk-test',
+        hosts: ['api.openai.com'],
+        placeholder: '<BOXLITE_SECRET:openai>',
+        headers: { 'x-api-key': '{value}' },
+      },
     ])
   })
 
-  it('passes a secret without hosts/placeholder through untouched', () => {
+  it('passes a secret without a placeholder through untouched', () => {
     const mapped = createBoxToCreateBox({
-      secrets: [{ name: 'openai', value: 'sk-test' }],
+      secrets: [
+        { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+      ],
     })
 
-    expect(mapped.secrets).toEqual([{ name: 'openai', value: 'sk-test' }])
+    expect(mapped.secrets).toEqual([
+      { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], headers: { Authorization: 'Bearer {value}' } },
+    ])
   })
 
   it('returns the effective second-based policy', () => {
@@ -135,7 +151,7 @@ describe('BoxLite container process options mapper', () => {
     row.id = 'box-1'
     row.privileged = privileged
 
-    const response = boxToBoxResponse(BoxDto.fromBox(row, 'https://proxy.invalid'))
+    const response = boxToBoxResponse(BoxDto.fromBox(row))
 
     expect(response).toEqual(expect.objectContaining({ privileged }))
   })
@@ -205,7 +221,7 @@ describe('BoxLite container process options mapper', () => {
     row.outboundEnabled = true
     row.outboundAllowNet = ['api.openai.com']
 
-    const response = boxToBoxResponse(BoxDto.fromBox(row, 'https://proxy.invalid'))
+    const response = boxToBoxResponse(BoxDto.fromBox(row))
 
     expect(response.network).toEqual({
       outbound: { mode: 'enabled', allow_net: ['api.openai.com'] },

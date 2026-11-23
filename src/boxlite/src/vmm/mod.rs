@@ -9,12 +9,28 @@ pub mod controller;
 pub mod engine;
 pub mod exit_info;
 pub mod factory;
+#[cfg_attr(
+    not(any(
+        test,
+        feature = "krun",
+        all(feature = "native", target_os = "linux", target_arch = "x86_64")
+    )),
+    expect(dead_code, reason = "only the engines rewrite the guest arguments")
+)]
+pub(crate) mod guest_args;
 pub(crate) mod guest_artifacts;
 pub mod guest_binary;
 pub mod guest_check;
 #[cfg(feature = "krun")]
 pub mod krun;
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+pub mod native;
 pub mod registry;
+#[cfg(any(
+    test,
+    all(feature = "native", target_os = "linux", target_arch = "x86_64")
+))]
+pub(crate) mod vmm_socket;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
 use crate::jailer::SecurityOptions;
@@ -74,6 +90,9 @@ pub enum VmmKind {
     #[default]
     Libkrun,
     Firecracker,
+    /// BoxLite's own VMM (`boxlite-vmm`), behind the `native` feature and the
+    /// `native-vmm` experimental opt-in.
+    Native,
 }
 
 impl FromStr for VmmKind {
@@ -83,8 +102,9 @@ impl FromStr for VmmKind {
         match s.to_lowercase().as_str() {
             "libkrun" => Ok(VmmKind::Libkrun),
             "firecracker" => Ok(VmmKind::Firecracker),
+            "native" => Ok(VmmKind::Native),
             _ => Err(BoxliteError::Engine(format!(
-                "Unknown engine type: '{}'. Supported: libkrun, firecracker",
+                "Unknown engine type: '{}'. Supported: libkrun, firecracker, native",
                 s
             ))),
         }
@@ -214,6 +234,9 @@ pub struct InstanceSpec {
     pub kernel: Option<PreparedKernel>,
     /// Filesystem shares from host to guest
     pub fs_shares: FsShares,
+    /// Managed-volume paths granted to the host-side jailer before spawn.
+    #[serde(skip)]
+    pub volume_access: Vec<crate::jailer::PathAccess>,
     /// Block device attachments via virtio-blk
     pub block_devices: BlockDevices,
     /// Guest agent entrypoint (e.g., /boxlite/bin/boxlite-guest)

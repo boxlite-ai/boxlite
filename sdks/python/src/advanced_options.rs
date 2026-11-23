@@ -215,7 +215,7 @@ impl PySecurityOptions {
             jailer_enabled: true,
             seccomp_enabled: cfg!(target_os = "linux"),
             max_open_files: Some(1024),
-            max_file_size: Some(1024 * 1024 * 1024), // 1 GiB
+            max_file_size: None,
             max_processes: Some(100),
             max_memory: None,   // Let VM config handle this
             max_cpu_time: None, // Let VM config handle this

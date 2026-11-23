@@ -11,7 +11,6 @@ api/config-api.ts
 api/health-api.ts
 api/images-api.ts
 api/jobs-api.ts
-api/object-storage-api.ts
 api/organizations-api.ts
 api/preview-api.ts
 api/regions-api.ts
@@ -46,6 +45,7 @@ docs/AdminOrganizationImpact.md
 docs/AdminOrganizationImpactEvidence.md
 docs/AdminOrganizationMember.md
 docs/AdminOrganizationMemberPage.md
+docs/AdminOrganizationNestedVirtualization.md
 docs/AdminOrganizationOverview.md
 docs/AdminOrganizationOverviewPage.md
 docs/AdminOrganizationUsage.md
@@ -53,6 +53,7 @@ docs/AdminOrganizationVerifiedCreator.md
 docs/AdminRegionOverview.md
 docs/AdminRegionOverviewPage.md
 docs/AdminRunner.md
+docs/AdminSetOrganizationNestedVirtualizationRequest.md
 docs/AdminUsageCoverage.md
 docs/AdminUsageDimensions.md
 docs/AdminUsageError.md
@@ -72,7 +73,6 @@ docs/Box.md
 docs/BoxApi.md
 docs/BoxClass.md
 docs/BoxDesiredState.md
-docs/BoxLabels.md
 docs/BoxMemoryUsageDto.md
 docs/BoxProgress.md
 docs/BoxProgressPhase.md
@@ -110,14 +110,9 @@ docs/Job.md
 docs/JobStatus.md
 docs/JobType.md
 docs/JobsApi.md
-docs/LogEntry.md
 docs/MemoryIncidentListDto.md
-docs/MetricDataPoint.md
-docs/MetricSeries.md
-docs/MetricsResponse.md
 docs/NetworkInfo.md
 docs/NetworkMode.md
-docs/ObjectStorageApi.md
 docs/OidcConfig.md
 docs/OnboardingDto.md
 docs/Organization.md
@@ -134,8 +129,6 @@ docs/OutboundNetworkSpec.md
 docs/PaginatedAuditLogs.md
 docs/PaginatedBoxes.md
 docs/PaginatedJobs.md
-docs/PaginatedLogs.md
-docs/PaginatedTraces.md
 docs/PollJobsResponse.md
 docs/PosthogConfig.md
 docs/PreviewApi.md
@@ -152,6 +145,7 @@ docs/RegistryCredential.md
 docs/RegistryCredentialKind.md
 docs/Runner.md
 docs/RunnerCpuIncident.md
+docs/RunnerDataDiskRef.md
 docs/RunnerFull.md
 docs/RunnerHealthMetrics.md
 docs/RunnerHealthcheck.md
@@ -162,10 +156,7 @@ docs/RunnersApi.md
 docs/SaveOnboardingDto.md
 docs/SavePromptDraftDto.md
 docs/SendWebhookDto.md
-docs/StorageAccessDto.md
-docs/ToolboxProxyUrl.md
-docs/TraceSpan.md
-docs/TraceSummary.md
+docs/TurnstileConfig.md
 docs/UpdateBoxStateDto.md
 docs/UpdateJobStatus.md
 docs/UpdateOrganizationDefaultRegion.md
@@ -212,6 +203,7 @@ models/admin-organization-impact-evidence.ts
 models/admin-organization-impact.ts
 models/admin-organization-member-page.ts
 models/admin-organization-member.ts
+models/admin-organization-nested-virtualization.ts
 models/admin-organization-overview-page.ts
 models/admin-organization-overview.ts
 models/admin-organization-usage.ts
@@ -219,6 +211,7 @@ models/admin-organization-verified-creator.ts
 models/admin-region-overview-page.ts
 models/admin-region-overview.ts
 models/admin-runner.ts
+models/admin-set-organization-nested-virtualization-request.ts
 models/admin-usage-coverage.ts
 models/admin-usage-dimensions.ts
 models/admin-usage-error.ts
@@ -233,7 +226,6 @@ models/attach-ticket.ts
 models/audit-log.ts
 models/box-class.ts
 models/box-desired-state.ts
-models/box-labels.ts
 models/box-memory-usage-dto.ts
 models/box-progress-phase.ts
 models/box-progress.ts
@@ -269,11 +261,7 @@ models/index.ts
 models/job-status.ts
 models/job-type.ts
 models/job.ts
-models/log-entry.ts
 models/memory-incident-list-dto.ts
-models/metric-data-point.ts
-models/metric-series.ts
-models/metrics-response.ts
 models/network-info.ts
 models/network-mode.ts
 models/oidc-config.ts
@@ -291,8 +279,6 @@ models/outbound-network-spec.ts
 models/paginated-audit-logs.ts
 models/paginated-boxes.ts
 models/paginated-jobs.ts
-models/paginated-logs.ts
-models/paginated-traces.ts
 models/poll-jobs-response.ts
 models/posthog-config.ts
 models/prompt-draft-dto.ts
@@ -305,6 +291,7 @@ models/region.ts
 models/registry-credential-kind.ts
 models/registry-credential.ts
 models/runner-cpu-incident.ts
+models/runner-data-disk-ref.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts
@@ -315,10 +302,7 @@ models/runner.ts
 models/save-onboarding-dto.ts
 models/save-prompt-draft-dto.ts
 models/send-webhook-dto.ts
-models/storage-access-dto.ts
-models/toolbox-proxy-url.ts
-models/trace-span.ts
-models/trace-summary.ts
+models/turnstile-config.ts
 models/update-box-state-dto.ts
 models/update-job-status.ts
 models/update-organization-default-region.ts

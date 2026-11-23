@@ -11,7 +11,7 @@ import type { SocketAddress as NativeSocketAddress } from "node:net";
 
 import type { CopyOptions } from "./copy.js";
 import type { ExecResult } from "./exec.js";
-import { getJsBoxlite, getNativeModule } from "./native.js";
+import { getJsBoxlite } from "./native.js";
 import type { Agents } from "./agents.js";
 import type {
   JsBox,
@@ -103,7 +103,7 @@ export interface SecurityOptions {
 }
 
 /**
- * Secret substitution rule for outbound HTTPS requests.
+ * Secret injected into an outbound HTTPS request header.
  */
 export interface Secret {
   /** Human-readable name for the secret. */
@@ -112,11 +112,14 @@ export interface Secret {
   /** Real secret value. Never enters the guest VM. */
   value: string;
 
-  /** Matching hosts for secret substitution. */
+  /** Hosts that receive the secret. Required at create, at least one host. */
   hosts?: string[];
 
   /** Placeholder exposed to guest code. */
   placeholder?: string;
+
+  /** Required, non-empty header-name to template map. */
+  headers: Record<string, string>;
 }
 
 /**
@@ -611,7 +614,11 @@ export class BoxTunnel {
 export class SimpleBox {
   /** Get the agent namespace without starting the Box. */
   get agents(): Agents {
-    return new (getNativeModule().Agents)();
+    return {
+      create: async (agent, options) =>
+        (await this._ensureBox()).agents.create(agent, options),
+      get: async (id) => (await this._ensureBox()).agents.get(id),
+    };
   }
 
   protected _runtime: BoxRuntime;

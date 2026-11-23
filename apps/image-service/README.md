@@ -29,6 +29,12 @@ served, so the digest a client verifies still holds.
 
 Everything else under `/v2/` is a `404`: this proxy pulls and does not push.
 
+The host listener honors `BOXLITE_LISTEN_HOST`; the managed local stack uses
+`127.0.0.1`, while an unset value retains the all-interface deployment default.
+Listener tests check readiness on standard loopback and rejection of a malformed
+configured host. They do not assume secondary loopback aliases such as
+`127.0.0.2`, which are not configured by default on macOS.
+
 ### Why the version check challenges
 
 A client reads `GET /v2/` to decide whether to send a credential at all.

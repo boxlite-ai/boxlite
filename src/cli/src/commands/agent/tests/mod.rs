@@ -421,14 +421,36 @@ fn agents_help_and_completion_include_nine_flat_commands() {
     }
 }
 
-#[test]
-fn agents_handler_returns_typed_unsupported() {
-    let error = execute(AgentArgs {
-        command: parse(&["create", "box", "--agent", "coder"]),
-    })
-    .unwrap_err();
+/// The agent-level OpenCode stream always ends in an error: every earlier
+/// record must already be written when that error reaches the caller.
+#[tokio::test]
+async fn agents_events_print_every_record_before_the_stream_error() {
+    use boxlite::BoxliteError;
+    use boxlite::agents::AgentEvent;
+    let event = |kind: &str| {
+        Ok(AgentEvent {
+            cursor: None,
+            agent_id: "ses".into(),
+            turn_id: None,
+            kind: kind.into(),
+            data: json!({}),
+        })
+    };
+    let stream: AgentEventStream = Box::pin(futures::stream::iter([
+        event("session.status"),
+        event("session.idle"),
+        Err(BoxliteError::Network("OpenCode event stream ended".into())),
+    ]));
+    let mut out = Vec::new();
+    let error = print_events(stream, &mut out).await.unwrap_err();
     assert!(matches!(
         error.downcast_ref::<BoxliteError>(),
-        Some(BoxliteError::Unsupported(_))
+        Some(BoxliteError::Network(_))
     ));
+    let kinds: Vec<Value> = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["kind"].clone())
+        .collect();
+    assert_eq!(kinds, [json!("session.status"), json!("session.idle")]);
 }

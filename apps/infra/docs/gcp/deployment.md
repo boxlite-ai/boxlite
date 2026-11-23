@@ -19,7 +19,8 @@ Declare the GCP project, bootstrap its prerequisites, load application values, t
 Run `make _ensure-infra-deps` from the repository root, then work from `apps/infra`.
 Copy `.mstage.config.example.json` to `.mstage.config.json` and declare `home: "gcp"`,
 the exact project, region, zone, protection and resource sizing. See [configuration](../configuration.md).
-The manual workflow accepts `dev` and `prod`; the example's `dev2` works locally but is not a workflow choice.
+The manual workflow accepts `dev`, `stage` and `prod`; stage follows dev for commit/PR candidates, while published stable releases run from main.
+The example's `dev2` works locally but is not a workflow choice.
 
 ## Bootstrap a stage
 
@@ -67,6 +68,10 @@ mdeploy uses Pulumi with GCS state. API/dashboard, collector and registry proxy 
 the proxy runs on GKE Autopilot, and runners use Compute Engine; see [architecture](architecture.md).
 Cloudflare credentials come from the encrypted `deploy` group.
 
+The API, collector and registry proxy set Service metadata `labels.stage`; the GKE Proxy cluster sets `resourceLabels.stage`.
+Both use the deployed stage, for example `dev`, so Backoffice can select matching resources.
+Apply these labels before enabling strict inventory filtering; unlabeled resources remain excluded until deployment and Cloud Asset indexing complete.
+
 ## Verify and recover
 
 Run the shared [service checks](../deployment.md#verify-the-result), then inspect
@@ -74,5 +79,46 @@ Run the shared [service checks](../deployment.md#verify-the-result), then inspec
 the fleet necessarily converges. Check gcloud and ADC identity separately for credential failures.
 Use [networking](networking.md) for private routes/firewalls and [ClickHouse](clickhouse.md) for ingestion failures.
 For locks, refresh or removal, follow [shared recovery](../deployment.md#recovery-and-teardown).
+
+New Cloud SQL instances start with `log_connections=on`. Operators manage the full flag list after creation.
+Refresh the Pulumi checkpoint before the first update to an existing instance and after changing flags outside Pulumi.
+
+Subsequent updates reuse the flags recorded in that checkpoint.
+
+## Customer domain HTTPS
+
+The GCP deployment automatically supplies the certificate project and the existing proxy certificate map to the API.
+These are deployment-owned values, not stage inputs. Customer traffic uses the existing `PROXY_DOMAIN` hostname;
+there is no separate custom-domain traffic-host setting. AWS and local deployments without certificate resources leave onboarding disabled.
+
+Customers use a traffic CNAME to this hostname. HTTPS checks resolve the platform hostname's IPv4/IPv6 addresses
+and connect with the customer hostname as SNI, requiring certificate validation; no fixed IP list is configured.
+The existing edge address, forwarding rule and DNS records retain their resource identities.
+
+The GCP bootstrap enables Certificate Manager and Resource Manager, and the edge attaches its certificate map to the proxy.
+The API service account's custom roles are deployed before the API revision.
+Resource-name conditions restrict certificate and DNS authorization operations, including creation, to `byo-*` resources;
+map-entry operations are restricted to `byo-*` entries in the deployed proxy certificate map.
+A separate role grants only project and operation queries; neither role grants certificate-map mutation.
+The API also requires its existing Commerce connection for subscription eligibility.
+Customer CNAME records must use DNS-only mode; see the [DNS guide](../../../../docs/concepts/networking.md#bring-your-own-domain).
+
+Custom domains set Cloud Run `cpuIdle: false`, incurring CPU costs while an instance exists, without adding a minimum instance count.
+Hosted CI independently sets a service-level minimum of one when enabled.
+The API task runs at startup and every minute, advancing at most three due confirmed setups and one maintenance round.
+Startup awaits that work; hostname leases coordinate replicas, and shutdown awaits the active round.
+Scale-to-zero pauses progress until the API starts again; no independent Cloud Scheduler or expiration alerts are provisioned.
+
+For upgrades from the earlier custom-domain workflow, drain old API revisions and in-flight leases before applying the migration and enabling new writers.
+Mixed old/new writers are unsupported; retain resource identities and use a compatible forward fix for rollback.
+Unconfirmed legacy setups require explicit verification, and capped legacy deadlines do not establish certificate expiration.
+
+Maintenance expires unconfirmed, unclaimed drafts after thirty idle days, observes ready TLS/certificates hourly,
+and revisits cleaned tombstones daily for late cloud creates. Unbind and subscription suspension retain cloud resources.
+Admin `POST /admin/custom-domains/maintain` invokes one bounded maintenance round for recovery.
+
+Before production use, verify issuance, customer SNI, public Box access, suspension, recovery and deletion with a controlled hostname.
+Monitor due-work age and cleanup backlog, and configure certificate-expiration alerts with a notification channel.
+Cleanup and monitoring during API inactivity require an independent trigger.
 
 Sources: [bootstrap](../../bootstrap/gcp.ts), [Pulumi entrypoint](../../mdeploy/pulumi/program.ts).

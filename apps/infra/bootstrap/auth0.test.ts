@@ -26,11 +26,12 @@ test('spaApplicationArgs rejects a URL where a hostname is required', () => {
   assert.throws(() => spaApplicationArgs({ dashboardDomain: '' }), /must be a bare hostname/)
 })
 
-test('customApiArgs derives the identifier that becomes OIDC_AUDIENCE', () => {
+test('customApiArgs names the API by the host it answers on, with no path', () => {
   assert.equal(
-    valueAfter(customApiArgs({ stackDomain: 'dev.example.com' }), '--identifier'),
-    'https://dev.example.com/api',
+    valueAfter(customApiArgs({ apiHost: 'api.dev.example.com' }), '--identifier'),
+    'https://api.dev.example.com',
   )
+  assert.throws(() => customApiArgs({ apiHost: 'https://api.dev.example.com' }), /must be a bare hostname/)
 })
 
 test('tenantSettingsArgs sets logout discovery and keeps public signup non-enumerable', () => {

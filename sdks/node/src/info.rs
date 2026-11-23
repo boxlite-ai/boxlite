@@ -252,7 +252,7 @@ pub struct JsBoxInfo {
     pub image: String,
 
     /// Allocated CPU count
-    pub cpus: u8,
+    pub cpus: f64,
 
     /// Allocated memory in MiB
     pub memory_mib: u32,
@@ -335,7 +335,7 @@ mod tests {
             last_updated: SystemTime::UNIX_EPOCH.into(),
             pid: Some(1234),
             image: "alpine:latest".to_string(),
-            cpus: 2,
+            cpus: 2.0,
             memory_mib: 512,
             privileged: None,
             network,

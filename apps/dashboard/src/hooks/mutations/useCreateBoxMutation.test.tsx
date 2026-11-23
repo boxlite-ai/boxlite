@@ -35,7 +35,10 @@ describe('useCreateBoxMutation startup timeout recovery', () => {
   beforeAll(async () => {
     server = createServer((req, res) => {
       res.setHeader('Access-Control-Allow-Origin', '*')
-      res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type, x-boxlite-organization-id')
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'authorization, content-type, x-boxlite-organization-id, x-boxlite-source',
+      )
       if (req.method === 'OPTIONS') {
         res.writeHead(204).end()
         return

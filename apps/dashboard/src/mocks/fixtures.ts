@@ -31,12 +31,28 @@ import {
   VolumeState,
 } from '@boxlite-ai/api-client'
 
-export const MOCK_USER = {
-  sub: 'mock-user-00000000',
-  name: 'Mock User',
-  email: 'mock@boxlite.dev',
-  picture: undefined as string | undefined,
+export const MOCK_ACCOUNTS = [
+  {
+    sub: 'mock-user-00000000',
+    name: 'Jordan Lee',
+    email: 'jordan@example.test',
+    picture: undefined as string | undefined,
+  },
+  {
+    sub: 'mock-user-00000001',
+    name: 'Alex Chen',
+    email: 'alex@example.test',
+    picture: undefined as string | undefined,
+  },
+]
+function mockAccountIndex() {
+  try {
+    return sessionStorage.getItem('mock-account') === '1' ? 1 : 0
+  } catch {
+    return 0
+  }
 }
+export const MOCK_USER = MOCK_ACCOUNTS[mockAccountIndex()]
 
 export const MOCK_ORGANIZATION_ID = 'mock-org-00000000'
 
@@ -53,6 +69,7 @@ const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISO
 export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
   return {
     version: '0.0.0-mock',
+    turnstile: { sitekey: 'mock-sitekey', action: 'signup' },
     // OIDC values are placeholders: the mock target swaps the real AuthProvider
     // for a fake authenticated session, so no OIDC network call is ever made.
     //
@@ -69,7 +86,6 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
     linkedAccountsEnabled: false,
     announcements: {},
     proxyTemplateUrl: 'https://mock.local',
-    proxyToolboxUrl: 'https://mock.local',
     dashboardUrl: 'http://localhost:3000',
     maintananceMode: false,
     environment: 'mock',
@@ -79,7 +95,10 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
 
 export const MOCK_ORGANIZATION: Organization = {
   id: MOCK_ORGANIZATION_ID,
-  name: 'Mock Org',
+  name:
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'trial-onboarding'
+      ? 'Personal workspace'
+      : 'Mock Org',
   createdBy: MOCK_USER.sub,
   isDefaultForAuthenticatedUser: true,
   personal: true,
@@ -136,7 +155,6 @@ export function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'st
     createdAt: now,
     updatedAt: now,
     class: BoxClassEnum.SMALL,
-    toolboxProxyUrl: 'https://mock.local',
     ...overrides,
   }
 }
@@ -145,7 +163,14 @@ export const MOCK_BOXES: Box[] = [
   buildBox({
     id: 'mock-box-running',
     name: 'web-api',
+    autoStop: 900,
+    autoDelete: 4500,
+    autoResume: true,
     state: BoxState.STARTED,
+    network: {
+      outbound: { mode: NetworkMode.ENABLED, allow_net: ['api.openai.com', '10.0.0.0/8'] },
+      inbound: { mode: NetworkMode.DISABLED, allow_net: [] },
+    },
     createdAt: hoursAgo(2),
     volumes: [
       { volumeId: 'subtitle-models', mountPath: '/models' },
@@ -155,6 +180,9 @@ export const MOCK_BOXES: Box[] = [
   buildBox({
     id: 'mock-box-stopped',
     name: 'batch-worker',
+    autoStop: 0,
+    autoDelete: 0,
+    autoResume: false,
     state: BoxState.STOPPED,
     createdAt: daysAgo(5),
     desiredState: BoxDesiredState.STOPPED,
@@ -208,6 +236,21 @@ export const MOCK_BOXES: Box[] = [
       "Failed to pull image 'quay.io/acme/internal-tools:2.1': quay.io refused the pull (UNAUTHORIZED). The image is private or does not exist, and no registry login of the organization covers it.",
   }),
 ]
+
+// Opt-in fleet fixtures survive reloads without changing the default small account.
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'fleet') {
+  for (let index = 0; index < 7; index++) {
+    const running = index < 4
+    MOCK_BOXES.push(
+      buildBox({
+        id: `mock-fleet-${index + 1}`,
+        name: `${running ? 'worker' : 'batch'}-${index + 1}`,
+        state: running ? BoxState.STARTED : BoxState.STOPPED,
+        desiredState: running ? BoxDesiredState.STARTED : BoxDesiredState.STOPPED,
+      }),
+    )
+  }
+}
 
 export const MOCK_PAGINATED_BOXES: PaginatedBoxes = {
   items: MOCK_BOXES,

@@ -4,8 +4,50 @@ C bindings for the BoxLite runtime, providing a stable C API for integrating Box
 
 The [agent API](../../docs/reference/agents.md#c-api-and-ownership) covers
 Box-owned sessions, turns, callbacks and handle ownership.
+The CLI and C agent API share the core JSON mapping documented there. Open an
+event stream before sending work, and drain the terminal callback after freeing
+the subscription before releasing its `user_data` or the runtime.
 
 **C Standard:** C11-compatible compiler (GCC/Clang)
+
+**Upgrade notice:** existing local boxes with secrets must be recreated with explicit
+`headers`, including boxes managed by `boxlite serve`. See the
+[required-headers migration notes](../../docs/reference/configuration.md#secrets).
+
+## Managed checkpoints
+
+Execution setters are rejected even when they set defaults, such as
+`boxlite_options_set_detach(opts, 0)`, before or after checkpoint selection.
+Null, empty or invalid UTF-8 checkpoint input returns `InvalidArgument` from
+create; it never falls back to the constructor's image. A synchronous refusal
+leaves the options handle owned by the caller.
+
+A checkpoint is a source for a new box, like an image: pass it to the ordinary
+create call. The checkpoint handle only manages checkpoints. Archive import is a
+separate operation for local `.boxlite` files and is unchanged. The CLI form is
+`boxlite create --checkpoint ID [--name NAME]`.
+
+The source must be stopped before checkpoint creation; stop it and wait for `stopped` first.
+Checkpoint creation rejects other states and never stops the source automatically.
+
+`boxlite_checkpoint_create`, `list`, `get` and `remove` require a
+REST runtime and use its existing post-and-drain event queue. Local runtimes
+deliver an unsupported-operation error through the same callback queue.
+To create a Box from a checkpoint, call `boxlite_options_set_checkpoint` on the
+options and pass them to `boxlite_create_box`. Only the name may accompany it.
+Input strings are copied before return. Metadata callbacks own `CCheckpointInfo`
+or `CCheckpointList`; release them with `boxlite_free_checkpoint_info` or
+`boxlite_free_checkpoint_list`. List entries belong to the list. Error
+pointers are borrowed during callback dispatch.
+
+Cloud capture may initially report `creating`; wait for `ready` before use.
+A Box created from a checkpoint inherits all saved execution settings; any other
+option fails the create with an invalid-argument error.
+Force removal ignores absence and never bypasses active use.
+Storage belongs to the server. Existing native archive
+export/import remains available.
+`boxlite_box_name` returns an owned name string, released with
+`boxlite_free_string`, or null for an unnamed Box.
 
 ## Table of Contents
 
@@ -58,6 +100,13 @@ Both APIs support:
 ---
 
 ## Features
+
+Secrets for outbound HTTPS can use `boxlite_options_add_secret_with_headers()`.
+Pass parallel header-name and template arrays, such as `"x-goog-api-key"` and
+`"{value}"`. At least one entry is required; zero entries are rejected at creation. Templates must
+contain exactly one `{value}`; empty strings are rejected at box creation.
+The existing `boxlite_options_add_secret()` remains ABI-compatible, but its
+headerless secret is rejected at creation. Use the plural function above.
 
 ### Core Features
 - **C-compatible FFI bindings** (`cdylib`, `staticlib`)
@@ -382,7 +431,7 @@ The Simple API provides a streamlined interface for common use cases with automa
 // Create and auto-start a box
 BoxliteErrorCode boxlite_simple_new(
     const char* image,          // "python:slim", "alpine:3.19", etc.
-    int cpus,                   // 0 = default (2)
+    double cpus,                // 0 = default; fractions require a Linux execution host
     int memory_mib,             // 0 = default (512)
     CBoxliteSimple** out_box,
     CBoxliteError* out_error
@@ -470,6 +519,12 @@ void boxlite_runtime_free(CBoxliteRuntime* runtime);
 ```
 
 #### Box Lifecycle
+
+Nested virtualization is a creation option:
+`boxlite_advanced_options_set_nested_virtualization(advanced, 1)` requires runtime
+experimental authorization. Attach the advanced options before create; runtime
+saves the existing BoxConfig. `boxlite_start_box` retains its original signature
+and uses saved configuration. Passing `0` selects an ordinary new Box.
 
 ```c
 // Create box (auto-started)
@@ -1123,14 +1178,17 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 - `boxlite_copy_into`, `boxlite_copy_out` and `boxlite_copy_out_start` no
   longer flatten a directory source. The C bindings - and the Go SDK built on
   them - copied a directory's contents where the Rust, Python and Node SDKs
-  copied the directory itself; a directory is now copied under its own name.
-  End the source path with `/.` to copy only the contents, as before.
-- `boxlite_copy_in_start` takes a `BoxliteCopySourceKind source_kind` as its
-  third argument instead of `bool source_is_dir`. Use
-  `BoxliteCopySourceKindDir` for a directory tree,
-  `BoxliteCopySourceKindFile` for a single file, or
-  `BoxliteCopySourceKindUnknown` when the caller cannot tell (older
-  clients); with that kind the guest peeks the archive to decide.
+  copied the directory itself. `boxlite_copy_into` and `boxlite_copy_out` now
+  land a directory as `docker cp` does: it becomes a destination that does not
+  exist, and lands under its own name in one that does. End the source path
+  with `/.` to copy only the contents either way, as before.
+- `boxlite_copy_in_start` no longer takes a source shape (`bool
+  source_is_dir`, later `BoxliteCopySourceKind source_kind`), and
+  `boxlite_copy_out_start` no longer reports one through `out_source_kind`;
+  `BoxliteCopySourceKind` is gone. The archive's first entry says whether it
+  holds a file or a directory, and the receiver lands it by that, as
+  `docker cp` does. A guest from before this change, sent no shape, spools
+  the upload and caps it at 512 MiB.
 
 Before:
 ```c
@@ -1175,17 +1233,15 @@ while (!request_done) {
 
 Before:
 ```c
-boxlite_copy_in_start(handle, "/dst", true, copy_cb, user_data, &error);
+boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindDir, copy_cb, user_data, &error);
+int32_t kind;
+CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &kind, &error);
 ```
 
 After:
 ```c
-/* dir tree */
-boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindDir, copy_cb, user_data, &error);
-/* one file */
-boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindFile, copy_cb, user_data, &error);
-/* old client, shape unknown */
-boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindUnknown, copy_cb, user_data, &error);
+boxlite_copy_in_start(handle, "/dst", copy_cb, user_data, &error);
+CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &error);
 ```
 
 ### From 0.1.x to 0.2.0
@@ -1386,7 +1442,10 @@ cargo build -p boxlite-c
 See `sdks/c/tests/` for the test suite.
 
 - `make test:unit:ffi` runs the Rust-side FFI tests; `make test:unit:c` and `make test:integration:c` build and run the C tests. `FILTER=<pattern>` narrows each.
+- Rust FFI tests borrowing runtime out-pointers should use `runtime.as_ref().expect(...)` at the borrow site, making the non-null precondition explicit to static analysis. Keep the allocation alive through the reference's last use, then free the runtime; a null check alone does not establish pointer validity.
+- `make test:unit:ffi FILTER=checkpoint` exercises checkpoint create/list/get/import/remove through loopback HTTP and the real post-and-drain queue, including callback-owned metadata, Box handles and errors. Native binding coverage runs these Rust FFI tests alongside the C executable tests; no VM is needed.
 - `make test:unit:c FILTER=agents` obtains a live Box handle from a loopback REST server, checks successful namespace allocation and release, and verifies agent-operation errors without starting a VM. Null-handle checks alone cannot cover namespace ownership.
+- `BOXLITE_TEST_OPENCODE_BINARY=/absolute/path/to/opencode make test:integration:c:agents` runs a compiled C caller and Rust agent against the same scripted model in separate local VMs. It compares result fields and the first event, and checks C getter and unsupported-steering behavior. The binary must be OpenCode 2.2.2 for the guest's Linux architecture and glibc.
 - C integration tests pin `alpine:3.19`, which avoids drifting to the latest Alpine release line; the tag still receives patch updates, so it does not guarantee an immutable userland. `test_ssh_integration.c` pulls it through the same registry mirrors the Python and Node suites use.
 - `FREE_STR_CALLS` counts string frees across the whole test process. A Rust test that frees a counted FFI payload, or reads the counter, must hold `FREE_STR_LOCK` for as long as it does so, even if it never reads the counter. Without the lock, plain `cargo test` threads count its frees in another test's delta. nextest's process-per-test runs hide this.
 

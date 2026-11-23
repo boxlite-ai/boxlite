@@ -39,7 +39,7 @@ func TestIntegrationSelfStoppedBoxRestartsAfterCachedHandleGoesSpent(t *testing.
 		Id:           "spent-handle-restart-box",
 		Image:        "alpine:latest",
 		OsUser:       "root",
-		CpuQuota:     1,
+		CpuQuota:     cpuQuota(1),
 		MemoryQuota:  1,
 		StorageQuota: 1,
 		// Short enough that the box stops itself promptly, long enough that the

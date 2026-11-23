@@ -575,6 +575,23 @@ unsafe fn drain(rt: *mut RuntimeHandle, timeout_ms: c_int, out_error: *mut FFIEr
 unsafe fn dispatch_event(event: RuntimeEvent) {
     unsafe {
         match event {
+            RuntimeEvent::AgentCompletion(dispatch) => dispatch(),
+            RuntimeEvent::AgentCreate {
+                callback,
+                user_data,
+                result,
+            } => match result {
+                Ok(agent) => callback(
+                    Box::into_raw(Box::new(agent)),
+                    ptr::null(),
+                    user_data as *mut c_void,
+                ),
+                Err(error) => {
+                    let mut error = crate::error::error_to_c_error(error);
+                    callback(ptr::null_mut(), &error, user_data as *mut c_void);
+                    crate::boxlite_error_free(&mut error);
+                }
+            },
             RuntimeEvent::Stdout {
                 cb,
                 user_data,
@@ -660,6 +677,16 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CVolumeInfo>(result, user_data, cb),
+            RuntimeEvent::CheckpointInfo {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CCheckpointInfo>(result, user_data, cb),
+            RuntimeEvent::CheckpointList {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CCheckpointList>(result, user_data, cb),
             RuntimeEvent::VolumeGet {
                 cb,
                 user_data,

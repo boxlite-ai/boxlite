@@ -259,7 +259,7 @@ fn make(spec: DeviceSpec) -> Fixture {
         device,
         Arc::clone(&interrupt),
         MmioResources {
-            memory,
+            memory: memory.into(),
             sender: events.sender(),
             worker: Arc::clone(&worker) as Arc<dyn WorkerControl>,
         },
@@ -287,7 +287,7 @@ fn try_make(spec: DeviceSpec) -> crate::error::Result<MmioTransport> {
         device,
         interrupt,
         MmioResources {
-            memory,
+            memory: memory.into(),
             sender: events.sender(),
             worker,
         },
@@ -833,7 +833,7 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
                 device,
                 interrupt,
                 MmioResources {
-                    memory,
+                    memory: memory.into(),
                     sender: resources.event_sender(),
                     worker,
                 },
@@ -884,14 +884,14 @@ fn the_transport_claims_a_four_kib_window() {
 }
 
 #[test]
-fn slots_hand_out_consecutive_windows_and_lines_until_exhausted() {
+fn slots_hand_out_consecutive_windows_and_skip_the_rtc_line_until_exhausted() {
     let mut slots = Slots::new();
     for index in 0..Slots::CAPACITY {
         let slot = slots.take().unwrap();
         assert_eq!(slot.base, 0xd000_0000 + u64::from(index) * MMIO_WINDOW_LEN);
-        assert_eq!(slot.gsi, 5 + index);
+        assert_eq!(slot.gsi, if index < 3 { 5 + index } else { 6 + index });
     }
-    assert_eq!(Slots::CAPACITY, 19);
+    assert_eq!(Slots::CAPACITY, 18);
     assert!(matches!(slots.take(), Err(Error::VirtioSlotsExhausted)));
     assert_eq!(
         Error::VirtioSlotsExhausted.to_string(),
@@ -911,14 +911,14 @@ fn a_slot_names_itself_the_way_the_kernel_parses_it() {
 }
 
 #[test]
-fn announcing_appends_each_slot_within_the_command_line_budget() {
+fn announcing_puts_each_slot_first_within_the_command_line_budget() {
     let mut slots = Slots::new();
     let taken = [slots.take().unwrap(), slots.take().unwrap()];
     let mut cmdline = String::from("console=ttyS0");
     announce(&mut cmdline, &taken).unwrap();
     assert_eq!(
         cmdline,
-        "console=ttyS0 virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
+        "virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6 console=ttyS0"
     );
     let mut empty = String::new();
     announce(&mut empty, &taken[..1]).unwrap();
@@ -938,14 +938,41 @@ fn announcing_appends_each_slot_within_the_command_line_budget() {
 }
 
 #[test]
+fn announce_puts_the_device_arguments_before_any_init_arguments() {
+    let mut slots = Slots::new();
+    let taken = [slots.take().unwrap()];
+    // A quoted value may hold ` -- `; the kernel reads it as one parameter,
+    // so the device argument must not land inside the quotes.
+    let mut quoted = String::from("console=ttyS0 label=\"a -- b\" -- x");
+    announce(&mut quoted, &taken).unwrap();
+    assert!(
+        quoted.contains("label=\"a -- b\""),
+        "the quoted value changed: {quoted}"
+    );
+    assert_eq!(
+        quoted,
+        "virtio_mmio.device=4K@0xd0000000:5 console=ttyS0 label=\"a -- b\" -- x"
+    );
+
+    let mut cmdline = String::from("console=ttyS0 init=/init -- --listen vsock://2695");
+    announce(&mut cmdline, &taken).unwrap();
+    assert_eq!(
+        cmdline,
+        "virtio_mmio.device=4K@0xd0000000:5 console=ttyS0 init=/init -- --listen vsock://2695"
+    );
+}
+
+#[test]
 fn add_device_puts_each_device_in_its_own_slot() {
     let vm = Arc::new(MockVm::new());
     let events = EventLoop::new().unwrap();
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
     let workers = VirtioWorkers::new(events.sender()).unwrap();
+    let mut controls = crate::control::ControlRegistry::default();
     let ctx = DeviceContext {
-        memory: &memory,
+        memory: &memory.clone().into(),
         workers: &workers,
+        controls: &mut controls,
     };
 
     let mut slots = Slots::new();

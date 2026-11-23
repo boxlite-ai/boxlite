@@ -37,7 +37,7 @@ class SyncDomainHandle:
     def unbind(self, domain: str) -> tuple[()]:
         """Unbind a full hostname, returning ``()``; failures raise BoxliteError.
 
-        The organization keeps the hostname and its quota slot. Repeating
+        The organization keeps the hostname; platform names retain their quota slot. Repeating
         unbind on a held, already unbound hostname also returns ``()``.
         """
         return self._sync(self._handle.unbind(domain))

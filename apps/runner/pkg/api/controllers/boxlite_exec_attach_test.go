@@ -146,6 +146,11 @@ func (s *stubAttachExec) WriteStdin(data []byte) (int, error) {
 	if s.stdinW == nil {
 		return 0, fmt.Errorf("stdin is closed")
 	}
+	select {
+	case <-s.done:
+		return 0, fmt.Errorf("stdin is closed")
+	default:
+	}
 	return s.stdinW.Write(data)
 }
 func (s *stubAttachExec) DoneCh() <-chan struct{} { return s.done }

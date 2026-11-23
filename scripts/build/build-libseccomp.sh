@@ -77,7 +77,9 @@ ensure_libseccomp_for_target() {
 
     local build_root
     build_root=$(mktemp -d -t boxlite-libseccomp-XXXXXX)
-    trap 'rm -rf "$build_root"' EXIT
+    # Capture the local path before returning to a sourced caller.
+    # shellcheck disable=SC2064
+    trap "$(printf 'rm -rf -- %q' "$build_root")" EXIT
 
     local tarball="$build_root/libseccomp-$LIBSECCOMP_VERSION.tar.gz"
     local url="https://github.com/seccomp/libseccomp/releases/download/v$LIBSECCOMP_VERSION/libseccomp-$LIBSECCOMP_VERSION.tar.gz"

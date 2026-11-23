@@ -2,10 +2,18 @@ PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:gu
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
+PHONY_TARGETS += test\:unit\:openapi\:server
 PHONY_TARGETS += test\:apps\:infra-local
+PHONY_TARGETS += test\:apps\:mbuild
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
+PHONY_TARGETS += test\:apps\:ci-listener
 PHONY_TARGETS += _local-registry
+PHONY_TARGETS += _guest-boot-probe
+PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
+PHONY_TARGETS += test\:integration\:c\:agents
+PHONY_TARGETS += test\:integration\:agent-sdk-parity
+PHONY_TARGETS += test\:integration\:lifecycle-race
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -19,6 +27,7 @@ export FAIL_FAST
 # native name selector, so match semantics are per-runner (nextest/ctest/
 # go: regex, pytest -k / vitest -t: expression/substring).
 export FILTER
+PHONY_TARGETS += test\:fractional-cpus\:acceptance
 
 # Advanced nextest-only filter expression. Use this for CI-specific exclusions
 # that cannot be expressed as a simple positive FILTER pattern.
@@ -41,12 +50,15 @@ PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
 VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
 CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
 GOTEST_FILTER    = $(if $(FILTER),-run '$(FILTER)',)
+# RACE=1 runs the Go suites under the race detector; the detector's slowdown
+# pushes the full SDK suite past half an hour, so race runs get an hour.
+GOTEST_RACE      = $(if $(RACE),-race -timeout 60m,)
 
 # The Rust unit-test crate set, shared by test:unit:rust and the coverage
 # targets so coverage measures exactly what the unit suite runs. Test builds
 # still get boxlite's default features back through the boxlite-test-utils
 # dev-dependency, so they need the vendored submodules or BOXLITE_DEPS_STUB=1.
-RUST_UNIT_CORE_ARGS   = -p boxlite --no-default-features --lib
+RUST_UNIT_CORE_ARGS   = -p boxlite --no-default-features --features native --lib
 RUST_UNIT_SHARED_ARGS = -p boxlite-shared --lib
 RUST_UNIT_REST_ARGS   = -p boxlite --no-default-features --features rest --lib
 RUST_UNIT_VMM_ARGS    = -p boxlite-hypervisor -p boxlite-vmm --lib
@@ -237,10 +249,10 @@ test\:unit\:sdk:
 	@echo "── SDK unit suites (python, node, c, go) ──"
 	$(call run_suites,test:unit:python test:unit:node test:unit:c test:unit:go)
 
-# SDK integration suites: Python integration + Node integration + C SDK test suite.
+# SDK integration suites run on the VM-capable E2E runner, including Go archives.
 test\:integration\:sdk:
-	@echo "── SDK integration suites (python, node, c) ──"
-	$(call run_integration_suites,test:integration:python test:integration:node test:integration:c)
+	@echo "── SDK integration suites (python, node, c, go) ──"
+	$(call run_integration_suites,test:integration:python test:integration:node test:integration:c test:integration:go)
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
 #
@@ -263,12 +275,12 @@ test\:unit\:rust:
 	cargo test $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	exit $$rc
 
-# CLI integration binaries need a VM; this target runs only inline unit-test modules.
+# Inline tests also execute installed proxies through the actual CLI binary.
 test\:unit\:cli:
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \
+		bash "$(SCRIPT_DIR)/test/with-cli-binary.sh" cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \
 	else \
-		cargo test -p boxlite-cli --bins -- --test-threads=1 '::tests::'; \
+		bash "$(SCRIPT_DIR)/test/with-cli-binary.sh" cargo test -p boxlite-cli --bins -- --test-threads=1 '::tests::'; \
 	fi
 
 # Hypervisor and VMM crate unit tests alone; they need no VM and no vendored
@@ -280,6 +292,10 @@ test\:unit\:vmm:
 test\:vmm\:boot:
 	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_build.py"
 	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_box_build.py"
+
+# CPU bandwidth acceptance requires a delegated CPU controller (or root).
+test\:fractional-cpus\:acceptance: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo test -p boxlite --test fractional_cpus $(CARGOTEST_FILTER) -- --ignored --test-threads=1 --nocapture
 
 # Missing /dev/kvm must fail hardware qualification, not report skipped tests as a pass.
 _ensure-kvm:
@@ -303,7 +319,13 @@ export VMM_KERNEL
 VMM_BALLOON_INIT ?= $(CURDIR)/target/vmm/boot/balloon-init
 export VMM_BALLOON_INIT
 
+# Freestanding guest that watches its disk grow while it runs.
+VMM_DISK_GROW_INIT ?= $(CURDIR)/target/vmm/boot/disk-grow-init
+export VMM_DISK_GROW_INIT
+
 $(VMM_BALLOON_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/balloon_init.c
+$(VMM_DISK_GROW_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/disk_grow_init.c
+$(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT):
 	@mkdir -p "$(@D)"
 	$(CC) -O2 -nostdlib -static -fno-pie -no-pie -fno-stack-protector -fno-builtin -Wl,--build-id=none "$<" -o "$@"
 
@@ -324,9 +346,31 @@ VMM_BOOT_TESTS_TIMEOUT ?= 900s
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
 # init restarts, once through the public Vm::new as the M1 smoke test.
-test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
+test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
-	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture
+	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture --skip boot::tests::guest_mounts::
+
+# Exercise the production guest mount adapter inside a real initramfs guest.
+PHONY_TARGETS += test\:integration\:vmm\:mounts
+test\:integration\:vmm\:mounts: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/target/vmm/guest-mount/x86_64-unknown-linux-musl/release/boxlite-guest
+test\:integration\:vmm\:mounts: _ensure-kvm _ensure-vmm-kernel vmm\:guest-mount-init
+	@cargo test -p boxlite-vmm --lib --no-run
+	@timeout 60s cargo test -p boxlite-vmm --lib boot::tests::guest_mounts:: -- --ignored --test-threads=1
+
+# Boot the real kernel through the native engine inside boxlite-shim: the M1 initramfs to its marker,
+# a typed Unsupported failure into the exit file, and an alpine box through the runtime up to
+# PID 1 on the ext4 root, readiness, shebang exec, stop and removal.
+VMM_GUEST ?= $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/x86_64-unknown-linux-musl/debug/boxlite-guest
+VMM_GUEST_PROBE ?= $(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/x86_64-unknown-linux-musl/debug/examples/guest-boot-probe
+export VMM_GUEST VMM_GUEST_PROBE
+
+_guest-boot-probe: $(if $(SETUP_DONE),,runtime\:debug)
+	@bash "$(SCRIPT_DIR)/test/build-guest-boot-probe.sh"
+
+test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe $(VMM_DISK_GROW_INIT)
+	@cargo test -p boxlite --features native --lib --no-run
+	@timeout 300s cargo test -p boxlite --features native --lib vmm::native::tests:: -- --ignored --test-threads=1
+	@timeout 600s cargo test -p boxlite --features krun,gvproxy,native --test native_vmm -- --ignored --test-threads=1
 
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
@@ -354,7 +398,7 @@ test\:unit\:guest:
 	if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run $(GUEST_RUNNER_CONFIG) --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
+		cargo test -p boxlite-guest --bins -- --test-threads=1 $(if $(FILTER),$(FILTER),capabilit spec::tests sysctl::tests); \
 	fi
 
 # Keep ordinary guest mount tests unprivileged. Only explicitly ignored tests
@@ -433,24 +477,47 @@ test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
 test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:rust)
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --features krun,gvproxy --test '*' --no-fail-fast --profile vm \
+		cargo nextest run -p boxlite --features krun,gvproxy,native --test '*' --no-fail-fast --profile vm \
 			$(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
+		cargo test -p boxlite --features krun,gvproxy,native --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
 	fi
 
-# OpenCode agent adapter tests (requires VM environment). Ignored by the suite above:
+# Explicit opt-in: these ignored tests must execute, not merely match FILTER.
+test\:integration\:lifecycle-race: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_REPRO_ROOTFS" -a -d "$$BOXLITE_REPRO_ROOTFS" || { \
+		echo "Set BOXLITE_REPRO_ROOTFS to a local OCI image directory" >&2; exit 1; }
+	@test -z "$$BOXLITE_DEPS_STUB" || { echo "Real VM tests cannot use dependency stubs" >&2; exit 1; }
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite --features krun,gvproxy,native --lib --test start_stop_race \
+			-E 'binary(start_stop_race) | test(implicit_job_rechecks_after_admission)' \
+			--run-ignored only --no-tests=fail --no-fail-fast --profile vm; \
+	else \
+		cargo test -p boxlite --features krun,gvproxy,native --test start_stop_race \
+			-- --ignored --test-threads=1 --nocapture && \
+		cargo test -p boxlite --features krun,gvproxy,native --lib \
+			-- --ignored --test-threads=1 --nocapture implicit_job_rechecks_after_admission; \
+	fi
+
+# OpenCode agent adapter and `boxlite agent` CLI tests (requires VM). Ignored by the suites above:
 # each Box needs the OpenCode 2.2.2 release binary named by BOXLITE_TEST_OPENCODE_BINARY.
 test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
 	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
 		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
 	@echo "🧪 Running OpenCode agent tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --features krun,gvproxy --test agents_opencode --run-ignored only \
+		cargo nextest run -p boxlite --features krun,gvproxy,test-support,native --test agents_opencode --run-ignored only \
 			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite --features krun,gvproxy --test agents_opencode --no-fail-fast -- \
+		cargo test -p boxlite --features krun,gvproxy,test-support,native --test agents_opencode --no-fail-fast -- \
+			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
+	fi && \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-cli --test agents --run-ignored only \
+			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite-cli --test agents --no-fail-fast -- \
 			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
 	fi
 
@@ -463,6 +530,28 @@ test\:perf\:import-export: runtime
 		--test import_export_benchmark -- --ignored --test-threads=1 --nocapture
 
 # BoxLite C SDK unit tests.
+test\:integration\:c\:agents:
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
+		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
+	@$(MAKE) dev:c
+	@mkdir -p sdks/c/tests/build
+	@cd sdks/c/tests/build && cmake .. -DBOXLITE_LIB_DIR="$(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug"
+	@cd sdks/c/tests/build && cmake --build . --target test_agents_opencode -j
+	@BOXLITE_C_AGENT_VM_BIN="$(PROJECT_ROOT)/sdks/c/tests/build/test_agents_opencode" \
+		cargo test -p boxlite-c --lib c_opencode_vm_matches_rust -- --ignored --test-threads=1 --nocapture
+
+# Run the same OpenCode scenario in Rust, Python and Node, comparing each SDK
+# result with the Rust result produced in this invocation.
+test\:integration\:agent-sdk-parity: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { echo "Set BOXLITE_TEST_OPENCODE_BINARY" >&2; exit 1; }
+	@set -eu; parity_dir="$$(mktemp -d "$${TMPDIR:-/tmp}/boxlite-agent-parity.XXXXXXXX")"; \
+	trap 'rm -rf "$$parity_dir"' EXIT; \
+	export BOXLITE_AGENT_RUST_BASELINE="$$parity_dir/rust.json"; \
+	$(MAKE) test:integration:agents SETUP_DONE=1 CARGOTEST_FILTER=opencode_agent_creates_sends_streams_and_waits NEXTEST_FILTER="-E 'test(opencode_agent_creates_sends_streams_and_waits)' --no-tests=pass"; \
+	test -s "$$BOXLITE_AGENT_RUST_BASELINE"; \
+	$(MAKE) test:integration:python SETUP_DONE=1 PYTEST_FILTER='-k python_agent_opencode_flow'; \
+	$(MAKE) test:integration:node SETUP_DONE=1 VITEST_FILTER='tests/agents-opencode.integration.test.ts'
+
 test\:unit\:ffi:
 	@echo "🧪 Running BoxLite C SDK unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
@@ -483,14 +572,16 @@ test\:unit\:gvproxy:
 # Rust client at, so a class it gets wrong is a class every conformance run
 # gets wrong.
 #
-# Discovery is restricted to the modules that import only the stdlib
-# (openapi/reference-server/errors.py, like config.py). The rest of that
-# directory needs python-dotenv, fastapi and pydantic, which no setup target
-# here installs — discovering the whole directory would fail this suite on
-# every checkout that does not intend to run the server.
+# Run the dependency-backed server contract suite as well as the stdlib-only
+# error mapping checks. The server target supplies its own Python dependencies.
 test\:unit\:openapi:
+	@$(MAKE) test:unit:openapi:server
+	@. .venv/bin/activate && uv run --with pyyaml --with jsonschema --python .venv/bin/python python -m unittest discover -s openapi/tests -p 'test_*.py' -v
 	@echo "🧪 Running OpenAPI reference-server unit tests..."
 	@python3 -m unittest discover -s openapi/reference-server/tests -p 'test_error*.py' -v
+
+test\:unit\:openapi\:server: _ensure-python-deps
+	@. .venv/bin/activate && uv run --with fastapi --with uvicorn --with sse-starlette --with PyJWT --with python-multipart --with python-dotenv --with pyyaml --python .venv/bin/python python -m unittest discover -s openapi/reference-server/tests -p 'test_handle_cache.py' -v
 
 test\:unit\:scripts:
 	@python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v
@@ -507,6 +598,10 @@ test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 			cargo test -p boxlite-cli --test $$test_name --no-fail-fast -- --test-threads=4 \
 			$(CARGOTEST_FILTER) || rc=$$?; \
 		done; \
+		case 'commands::ssh::setup::vm_install::ssh_local_install_config' in \
+			*"$(FILTER)"*) cargo test -p boxlite-cli --bin boxlite --no-fail-fast -- \
+				--test-threads=1 '::vm_install::' || rc=$$? ;; \
+		esac; \
 		exit $$rc; \
 	fi
 
@@ -597,10 +692,10 @@ test\:all\:c:
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
 	@$(MAKE) dev:go
-	@cd sdks/go && go test -tags boxlite_dev -v $(GOTEST_FILTER) ./...
+	@cd sdks/go && go test -tags boxlite_dev $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
-# Go SDK archive round-trip integration test. Intentionally excluded from
-# default test matrices and CI.
+# Native Go archive import/export tests require a supported host.
+# Keep them in the VM-capable integration workflow, outside hosted unit coverage.
 test\:integration\:go: dev\:go
 	@echo "🧪 Running Go SDK archive integration test (requires VM)..."
 	@cd sdks/go && go test -count=1 -tags=boxlite_dev,boxlite_integration -v $(GOTEST_FILTER) ./integration/archive
@@ -637,14 +732,31 @@ test\:apps\:infra: _ensure-infra-deps
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 
+PHONY_TARGETS += test\:apps\:infra\:auth0
+test\:apps\:infra\:auth0: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:tooling
+	@cd apps/infra && node --import tsx --test bootstrap/auth0*.test.ts bootstrap/configure-auth0-login.test.ts
+
 test\:apps\:mdeploy: _ensure-infra-deps
 	@cd apps/infra && npm run --silent typecheck:mdeploy
 	@cd apps/infra && npm run --silent test:mdeploy
+
+test\:apps\:mbuild: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mbuild
+	@cd apps/infra && npm run --silent test:mbuild
 
 test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."
 	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
 	@cd apps/infra && npm run typecheck
+
+test\:apps\:infra\:mdeploy: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mdeploy
+	@cd apps/infra && npm exec -- tsx --conditions=development --test --test-concurrency=1 mdeploy/test/*.test.ts
+
+test\:apps\:infra\:mstage: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mstage
+	@cd apps/infra && npm exec -- tsx --conditions=development --test --test-concurrency=1 mstage/test/*.test.ts
 
 test\:apps\:api: _ensure-apps-deps
 	@echo "🧪 Running API unit tests..."
@@ -653,12 +765,31 @@ test\:apps\:api: _ensure-apps-deps
 test\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:test --run $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
+test\:apps\:ci-listener: _ensure-apps-deps
+	@cd apps && yarn nx run ci-listener:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+PHONY_TARGETS += test\:apps\:github-ci-runner
+test\:apps\:github-ci-runner: _ensure-apps-deps
+	@cd apps && yarn nx run github-ci-runner:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
-	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
+	@cd apps/runner && go test -tags boxlite_dev $(GOTEST_RACE) ./... $(GOTEST_FILTER)
+
+PHONY_TARGETS += test\:integration\:runner
+test\:integration\:runner: dev\:go
+	@cd apps/runner && go test -count=1 -tags boxlite_dev,boxlite_integration ./pkg/boxlite $(GOTEST_FILTER)
 
 test\:apps\:proxy:
 	@cd apps/proxy && go test ./... $(GOTEST_FILTER)
+
+PHONY_TARGETS += test\:apps\:secret-server
+test\:apps\:secret-server:
+	@cd apps/secret-server && GOWORK=off go test -race ./... $(GOTEST_FILTER)
+
+PHONY_TARGETS += test\:apps\:secret-server\:integration
+test\:apps\:secret-server\:integration:
+	@cd apps/secret-server && SECRET_TEST_DATABASE_URL="$${SECRET_TEST_DATABASE_URL:-postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite}" GOWORK=off go test -race -count=1 ./internal/database ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM)$$'
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
@@ -689,12 +820,61 @@ test\:install-script:
 	@bash scripts/release/test_install.sh
 
 # ─── E2E: SDK → API → Runner → VM ───────────────────────────────────────────
+export FILTER E2E_ARGS
+E2E_STATE_DIR ?= $(PROJECT_ROOT)/target/e2e
+E2E_PYTHON ?= $(PROJECT_ROOT)/.venv-e2e/bin/python
+export E2E_PYTHON
+# A command-line E2E_STATE_DIR must win over an inherited BOXLITE_E2E_STATE_DIR,
+# or down would tear down the stale state dir while builds fill the new one.
+ifeq ($(origin E2E_STATE_DIR),command line)
+BOXLITE_E2E_STATE_DIR = $(E2E_STATE_DIR)
+else
+BOXLITE_E2E_STATE_DIR ?= $(E2E_STATE_DIR)
+endif
+export BOXLITE_E2E_STATE_DIR
+
 test\:e2e\:setup:
-	@apps/e2e/bootstrap.sh
-	@python3 apps/e2e/fixture_setup.py
+	@python3 apps/e2e/local.py setup
+
+test\:e2e\:up:
+	@python3 apps/e2e/local.py up
+
+test\:e2e\:down:
+	@python3 apps/e2e/local.py down
+
+test\:e2e\:doctor:
+	@python3 apps/e2e/local.py doctor
+
+test\:e2e\:status:
+	@python3 apps/e2e/local.py status
 
 test\:e2e:
-	@cd apps/e2e && python3 -m pytest cases/ -v
+	@python3 apps/e2e/local.py run
+
+test\:e2e\:deps:
+	@python3 apps/e2e/python_env.py "$(E2E_PYTHON)"
+
+test\:e2e\:deps\:apps:
+	@cd apps && corepack yarn install --immutable
+
+test\:e2e\:deps\:node:
+	@cd sdks/node && node scripts/check-lockfile.mjs && npm ci --no-audit --no-fund
+
+test\:e2e\:build\:python:
+	@"$(E2E_PYTHON)" -m uv pip install --python "$(E2E_PYTHON)" --no-deps --no-build-isolation --config-settings 'build-args=--locked --profile dev' --editable sdks/python
+
+
+# Go's build cache does not track external CGO archives.
+test\:e2e\:build\:runner:
+	@python3 apps/e2e/build_runner.py "$(abspath $(E2E_STATE_DIR))"
+
+test\:e2e\:build\:proxies:
+	@mkdir -p "$(E2E_STATE_DIR)/bin"
+	@cd apps/proxy && go build -o "$(abspath $(E2E_STATE_DIR))/bin/proxy" ./cmd/proxy
+	@cd apps/image-service && go build -o "$(abspath $(E2E_STATE_DIR))/bin/registry-proxy" ./cmd/registry-proxy
+
+test\:e2e\:build\:node:
+	@cd sdks/node && npm run build:native -- -- --locked && npm run build
 
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash apps/e2e/two_sided.sh
@@ -762,3 +942,25 @@ plugin-boxlite-force:
 
 test\:unit\:plugins: plugin-boxlite-force
 	@PYTHONDONTWRITEBYTECODE=1 $(PLUGIN_PYTHON) -m unittest discover -s tests/plugins -p 'test_*.py'
+
+# Explicit-engine milestone matrices. The facade configures every new Box, including
+# literal BoxOptions and recovery subprocesses; normal test runs remain krun.
+PHONY_TARGETS += test\:integration\:vmm\:m2 test\:integration\:vmm\:m2\:run test\:integration\:vmm\:m2\:list
+PHONY_TARGETS += test\:integration\:vmm\:m3 test\:integration\:vmm\:m3\:run test\:integration\:vmm\:m3\:list
+M2_TEST_SUITES := lifecycle shutdown detach recovery exec_options exec_user run_main_command resize_tty zygote_integration copy snapshot clone_export_import network gvproxy_backend network_spec copy_ownership execution_shutdown
+M3_TEST_SUITES := copy_ownership mount_security secret_substitution security_enforcement network_spec volume_matrix container_cgroup_limits
+ENGINE ?= native
+test\:integration\:vmm\:m2: MATRIX = m2
+test\:integration\:vmm\:m3: MATRIX = m3
+test\:integration\:vmm\:m2 test\:integration\:vmm\:m2\:run test\:integration\:vmm\:m2\:list: MATRIX_TEST_SUITES = $(M2_TEST_SUITES)
+test\:integration\:vmm\:m3 test\:integration\:vmm\:m3\:run test\:integration\:vmm\:m3\:list: MATRIX_TEST_SUITES = $(M3_TEST_SUITES)
+MATRIX_TEST_ARGS = -p boxlite --features krun,gvproxy,native $(foreach suite,$(MATRIX_TEST_SUITES),--test $(suite)) --run-ignored all --profile vm $(NEXTEST_FILTER)
+
+test\:integration\:vmm\:m2 test\:integration\:vmm\:m3: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug)
+	@ENGINE='$(ENGINE)' MATRIX_MAKE='$(MAKE)' bash "$(SCRIPT_DIR)/test/vmm-matrix.sh" '$(MATRIX)' $(MATRIX_TEST_SUITES)
+
+test\:integration\:vmm\:m2\:list test\:integration\:vmm\:m3\:list:
+	@cargo nextest list $(MATRIX_TEST_ARGS) --message-format json
+
+test\:integration\:vmm\:m2\:run test\:integration\:vmm\:m3\:run:
+	@cargo nextest run $(MATRIX_TEST_ARGS) --no-fail-fast --retries 0 --success-output final

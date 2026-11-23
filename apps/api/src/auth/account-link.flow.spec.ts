@@ -93,7 +93,12 @@ function tenant(
   const users = { findOne: jest.fn(async (id: string) => (known.has(id) ? { id } : null)) }
   const controller = new AccountLinkController(
     config,
-    new AccountLinkService(config, { adopt } as unknown as LinkedIdentityService, users as unknown as UserService),
+    new AccountLinkService(
+      config,
+      { adopt } as unknown as LinkedIdentityService,
+      users as unknown as UserService,
+      { createLog: jest.fn().mockResolvedValue({ id: 'audit' }), updateLog: jest.fn().mockResolvedValue({}) } as any,
+    ),
   )
   const passwordAccount = accounts.find((user) => user.identities.some((each) => each.connection === 'boxlite-users'))
   const grant = {
@@ -165,6 +170,7 @@ function tenant(
     .replace('__ACCOUNT_LINK_FORM_ID_JSON__', JSON.stringify('ap_link'))
     .replace('__AUTH0_DOMAIN_JSON__', JSON.stringify(DOMAIN))
     .replace('__MCP_RESOURCE_URL_JSON__', JSON.stringify(''))
+    .replace('__API_AUDIENCE_JSON__', JSON.stringify(''))
   expect(source).not.toMatch(/__[A-Z_]+_JSON__/)
   const exports: Record<string, Handler> = {}
   runInNewContext(source, { exports, require, Buffer, URL, fetch, console: { log: () => undefined } })

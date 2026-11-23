@@ -8,7 +8,13 @@
 
 use chrono::Utc;
 use rusqlite::{OptionalExtension, params};
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
+use crate::BaseDiskID;
 use crate::litebox::config::BoxConfig;
 use crate::runtime::id::BoxID;
 use crate::runtime::types::BoxState;
@@ -23,12 +29,38 @@ use super::{Database, db_err};
 #[derive(Clone)]
 pub struct BoxStore {
     db: Database,
+    #[cfg(any(test, feature = "test-support"))]
+    config_reads: Arc<AtomicUsize>,
+    #[cfg(any(test, feature = "test-support"))]
+    state_reads: Arc<AtomicUsize>,
 }
 
 impl BoxStore {
     /// Create a new BoxStore from a Database.
     pub fn new(db: Database) -> Self {
-        Self { db }
+        Self {
+            db,
+            #[cfg(any(test, feature = "test-support"))]
+            config_reads: Arc::new(AtomicUsize::new(0)),
+            #[cfg(any(test, feature = "test-support"))]
+            state_reads: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "unit-test instrumentation"))]
+    pub fn reset_read_counts(&self) {
+        self.config_reads.store(0, Ordering::Relaxed);
+        self.state_reads.store(0, Ordering::Relaxed);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "unit-test instrumentation"))]
+    pub fn read_counts(&self) -> (usize, usize) {
+        (
+            self.config_reads.load(Ordering::Relaxed),
+            self.state_reads.load(Ordering::Relaxed),
+        )
     }
 
     /// Get a reference to the underlying database.
@@ -44,6 +76,8 @@ impl BoxStore {
     /// Load box configuration by ID.
     #[allow(dead_code)] // API symmetry with load_state
     pub fn load_config(&self, box_id: &str) -> BoxliteResult<Option<BoxConfig>> {
+        #[cfg(any(test, feature = "test-support"))]
+        self.config_reads.fetch_add(1, Ordering::Relaxed);
         let conn = self.db.conn();
 
         let json: Option<String> = db_err!(
@@ -80,6 +114,8 @@ impl BoxStore {
 
     /// Load box state by ID.
     pub fn load_state(&self, box_id: &str) -> BoxliteResult<Option<BoxState>> {
+        #[cfg(any(test, feature = "test-support"))]
+        self.state_reads.fetch_add(1, Ordering::Relaxed);
         let conn = self.db.conn();
 
         let json: Option<String> = db_err!(
@@ -154,6 +190,24 @@ impl BoxStore {
     /// Uses a transaction to ensure both inserts succeed or neither does.
     /// Follows Podman pattern of explicit transactions for multi-statement operations.
     pub fn save(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+        self.save_impl(config, state, None)
+    }
+
+    pub(crate) fn save_clone(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: &BaseDiskID,
+    ) -> BoxliteResult<()> {
+        self.save_impl(config, state, Some(base_disk_id))
+    }
+
+    fn save_impl(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: Option<&BaseDiskID>,
+    ) -> BoxliteResult<()> {
         let mut conn = self.db.conn();
         let tx = db_err!(conn.transaction())?;
 
@@ -182,6 +236,14 @@ impl BoxStore {
             params![config.id, state.status.as_str(), state.pid, state_json],
         ))?;
 
+        // A clone and its backing-disk dependency become visible together.
+        if let Some(base_disk_id) = base_disk_id {
+            db_err!(tx.execute(
+                "INSERT INTO base_disk_ref (base_disk_id, box_id) VALUES (?1, ?2)",
+                params![base_disk_id, config.id],
+            ))?;
+        }
+
         // Commit transaction
         db_err!(tx.commit())?;
 
@@ -198,6 +260,22 @@ impl BoxStore {
             (Some(c), Some(s)) => Ok(Some((c, s))),
             _ => Ok(None),
         }
+    }
+
+    /// List every persisted box configuration without requiring a state row.
+    pub fn list_configs(&self) -> BoxliteResult<Vec<BoxConfig>> {
+        let conn = self.db.conn();
+        let mut stmt = db_err!(conn.prepare("SELECT json FROM box_config"))?;
+        let rows = db_err!(stmt.query_map([], |row| row.get::<_, String>(0)))?;
+        let mut configs = Vec::new();
+        for row in rows {
+            let json = db_err!(row)?;
+            let config = serde_json::from_str(&json).map_err(|error| {
+                BoxliteError::Database(format!("Failed to deserialize config: {error}"))
+            })?;
+            configs.push(config);
+        }
+        Ok(configs)
     }
 
     /// List all boxes as (config, state) pairs.
@@ -390,7 +468,7 @@ mod tests {
             },
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("test:latest".to_string()),
-                cpus: Some(2),
+                cpus: Some(2.0),
                 memory_mib: Some(512),
                 ..Default::default()
             },

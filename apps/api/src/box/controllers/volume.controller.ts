@@ -34,6 +34,8 @@ import { ContentTypeInterceptor } from '../../common/interceptors/content-type.i
 import { CustomHeaders } from '../../common/constants/header.constants'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
+import { UserContext } from '../../common/decorators/user-context.decorator'
+import { Context } from '../../common/context/context'
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
@@ -106,8 +108,9 @@ export class VolumeController {
   async createVolume(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() createVolumeDto: CreateVolumeDto,
+    @UserContext() ctx: Context,
   ): Promise<VolumeDto> {
-    const volume = await this.volumeService.create(authContext.organization, createVolumeDto)
+    const volume = await this.volumeService.create(authContext.organization, createVolumeDto, ctx)
     return VolumeDto.fromVolume(volume)
   }
 
@@ -158,32 +161,7 @@ export class VolumeController {
     targetIdFromRequest: (req) => req.params.volumeId,
   })
   @UseGuards(VolumeAccessGuard)
-  async deleteVolume(@Param('volumeId') volumeId: string): Promise<void> {
-    return this.volumeService.delete(volumeId)
-  }
-
-  @Get('by-name/:name')
-  @ApiOperation({
-    summary: 'Get volume details by name',
-    operationId: 'getVolumeByName',
-  })
-  @ApiParam({
-    name: 'name',
-    description: 'Name of the volume',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Volume details',
-    type: VolumeDto,
-  })
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.READ_VOLUMES])
-  @UseGuards(VolumeAccessGuard)
-  async getVolumeByName(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('name') name: string,
-  ): Promise<VolumeDto> {
-    const volume = await this.volumeService.findByName(authContext.organizationId, name)
-    return VolumeDto.fromVolume(volume)
+  async deleteVolume(@Param('volumeId') volumeId: string, @UserContext() ctx: Context): Promise<void> {
+    return this.volumeService.delete(volumeId, ctx)
   }
 }

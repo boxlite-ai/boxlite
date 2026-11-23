@@ -107,6 +107,7 @@ class SecretSpec(BaseModel):
     value: str
     hosts: list[str] = Field(default_factory=list)
     placeholder: Optional[str] = None
+    headers: dict[str, str] = Field(min_length=1)
 
 
 class NetworkSpec(BaseModel):
@@ -164,7 +165,7 @@ class CreateBoxRequest(BaseModel):
     name: Optional[str] = None
     image: Optional[str] = "alpine:latest"
     rootfs_path: Optional[str] = None
-    cpus: Optional[int] = None
+    cpus: Optional[float] = None
     memory_mib: Optional[int] = None
     disk_size_gb: Optional[int] = None
     working_dir: Optional[str] = None
@@ -402,6 +403,7 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
                 value=secret.value,
                 hosts=secret.hosts,
                 placeholder=secret.placeholder,
+                headers=secret.headers,
             )
             for secret in req.secrets
         ]

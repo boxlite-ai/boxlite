@@ -166,11 +166,10 @@ impl Drop for PipeWriter {
 
 /// Stream `src` into a tar byte stream.
 ///
-/// Returns the source shape (`source_is_dir = src.is_dir()`) alongside the
-/// stream. The pack runs on a `spawn_blocking` thread; a pack failure surfaces
-/// as a terminal `Err` item on the stream.
-pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool, BoxByteStream)> {
-    let source_is_dir = src.is_dir();
+/// The archive's first entry carries its shape (see [`Landing`]). The pack
+/// runs on a `spawn_blocking` thread; a pack failure surfaces as a terminal
+/// `Err` item on the stream.
+pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<BoxByteStream> {
     if !src.exists() {
         return Err(BoxliteError::NotFound(format!(
             "source path {} does not exist",
@@ -191,7 +190,7 @@ pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool
             let _ = task_tx.blocking_send(Err(io::Error::other(e)));
         }
     });
-    Ok((source_is_dir, Box::pin(ReceiverStream::new(rx))))
+    Ok(Box::pin(ReceiverStream::new(rx)))
 }
 
 /// Body of the pack task: runs [`pack_blocking`] under `catch_unwind` so a
@@ -225,22 +224,38 @@ fn with_causes(err: &dyn std::error::Error) -> String {
     detail
 }
 
+fn copy_unpack_error(error: io::Error) -> BoxliteError {
+    if error.kind() == io::ErrorKind::AlreadyExists {
+        BoxliteError::AlreadyExists(with_causes(&error))
+    } else {
+        BoxliteError::Storage(format!(
+            "failed to extract archive: {}",
+            with_causes(&error)
+        ))
+    }
+}
+
 /// Controls how a tar archive is unpacked to a destination.
 pub struct UnpackContext {
     /// Allow overwriting existing files/directories.
     pub overwrite: bool,
     /// Create parent directories if they don't exist.
     pub mkdir_parents: bool,
-    /// Force directory extraction mode (skip single-file detection).
-    /// Set `true` when the caller knows the destination is a directory
-    /// (e.g. original path had trailing `/`).
+    /// The caller's path names a directory, by a trailing `/` the path may
+    /// have lost since: every entry lands inside `dest`, whatever leads the
+    /// archive.
     pub force_directory: bool,
 }
 
 /// Paths observed while unpacking a one-shot tar stream.
 #[derive(Debug, Default)]
 pub struct UnpackReport {
-    /// Extracted paths relative to the destination, including implied directories.
+    /// The destination itself was written as a file or symlink, or created
+    /// as a directory. An empty archive leaves this false.
+    pub destination_written: bool,
+    /// Extracted paths relative to the destination, including implied
+    /// directories. A file that lands as the destination itself is not
+    /// listed: it has no path below the destination.
     pub entry_paths: Vec<PathBuf>,
     /// Entry directories that existed before streamed extraction reached them.
     ///
@@ -249,11 +264,8 @@ pub struct UnpackReport {
     pub preexisting_dirs: Vec<PathBuf>,
 }
 
-/// Unpack a tar archive to `dest`.
-///
-/// Automatically detects whether to extract as a single file (FileToFile)
-/// or into a directory (IntoDirectory) based on tar contents and dest path,
-/// unless `force_directory` is set.
+/// Unpack a tar archive to `dest`, landing it the way `docker cp` does (see
+/// [`Landing`]).
 ///
 /// Runs blocking I/O on a dedicated thread via `spawn_blocking`.
 pub async fn unpack(tar_path: PathBuf, dest: PathBuf, opts: UnpackContext) -> BoxliteResult<()> {
@@ -263,145 +275,583 @@ pub async fn unpack(tar_path: PathBuf, dest: PathBuf, opts: UnpackContext) -> Bo
 }
 
 fn unpack_blocking(tar_path: &Path, dest: &Path, opts: &UnpackContext) -> BoxliteResult<()> {
-    let mode = if opts.force_directory {
-        ExtractionMode::IntoDirectory
-    } else {
-        detect_extraction_mode(dest, tar_path)?
-    };
-    let tar_file = std::fs::File::open(tar_path).map_err(|e| {
+    let mut tar_file = std::fs::File::open(tar_path).map_err(|e| {
         BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
     })?;
-    extract_from_reader(tar_file, dest, opts, mode, None)
+    land(&mut tar_file, dest, opts, None, &|_| Ok(()), None)
 }
 
-/// Extract a tar archive read from `reader` to `dest` using the given `mode`.
+/// Extract a tar archive read from `reader` to `dest`, each entry where
+/// [`Landing`] places it, once `refuse` has passed where it lands. Objects
+/// this copy creates go to `owner` at creation; objects that predate the
+/// copy keep their owner.
 fn extract_from_reader<R: Read>(
     reader: R,
     dest: &Path,
     opts: &UnpackContext,
-    mode: ExtractionMode,
+    owner: Option<&UnpackOwner>,
+    refuse: &Refusal<'_>,
     mut report: Option<&mut UnpackReport>,
 ) -> BoxliteResult<()> {
+    let mut landing = Landing::new(dest, opts.force_directory, (dest.exists(), dest.is_dir()));
+    let mut archive = tar::Archive::new(reader);
+    archive.set_overwrite(opts.overwrite);
     let mut seen = HashSet::new();
-    let mut record = |path: &Path, existing_root: Option<&Path>| {
-        if let Some(report) = report.as_deref_mut() {
-            record_paths(report, &mut seen, existing_root, path);
+    let mut directories = Vec::new();
+    let mut directory_origins = std::collections::HashMap::new();
+    for entry in archive
+        .entries()
+        .map_err(|e| BoxliteError::Storage(format!("failed to read tar entries: {e}")))?
+    {
+        let mut file =
+            entry.map_err(|e| BoxliteError::Storage(format!("failed to read tar entry: {e}")))?;
+        let undecided = !landing.decided();
+        let placed = landing.place(&file, opts.overwrite)?;
+        // Before `prepare`, so a refused first entry leaves `dest` untouched.
+        if let Some(landed) = &placed {
+            refuse(&landed.name)?;
         }
-    };
-    match mode {
-        ExtractionMode::FileToFile => {
-            if let Some(parent) = dest.parent() {
-                if opts.mkdir_parents && !parent.exists() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        BoxliteError::Storage(format!(
-                            "failed to create parent dir {}: {}",
-                            parent.display(),
-                            e
-                        ))
-                    })?;
-                } else if !parent.exists() {
+        if undecided && landing.decided() {
+            if !opts.overwrite {
+                // Components trim a terminal separator before the no-follow
+                // lookup. Asked once the first entry decided: an empty
+                // archive touches nothing, and a refusal still precedes any
+                // write.
+                check_copy_destination(dest.components().as_path(), true)?;
+            }
+            landing.prepare(opts, owner)?;
+        }
+        let Some(landed) = placed else {
+            continue;
+        };
+        // A contents header describes the source, not the destination's mode.
+        if entry_is_directory(&file) && landed.name.as_os_str().is_empty() && landing.dest_exists {
+            continue;
+        }
+        if let Some(report) = report.as_deref_mut() {
+            record_paths(report, &mut seen, Some(dest), &landed.name);
+        }
+        if !opts.overwrite {
+            let directory = entry_is_directory(&file);
+            for path in implied_dirs_then_self(&landed.name) {
+                if path != landed.name || directory {
+                    if let std::collections::hash_map::Entry::Vacant(slot) =
+                        directory_origins.entry(path.clone())
+                    {
+                        let target = dest.join(&path);
+                        let created = match std::fs::create_dir(&target) {
+                            Ok(()) => true,
+                            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                                check_copy_destination(&target, true)?;
+                                false
+                            }
+                            Err(error) => return Err(copy_unpack_error(error)),
+                        };
+                        if created {
+                            hand_over(&target, owner).map_err(copy_unpack_error)?;
+                        }
+                        slot.insert(created);
+                    }
+                } else {
+                    check_copy_destination(&dest.join(&path), false)?;
+                }
+            }
+            if directory && directory_origins.get(&landed.name) == Some(&false) {
+                continue;
+            }
+        }
+        if entry_is_directory(&file) {
+            directories.push((file, landed));
+        } else {
+            unpack_at(&mut file, dest, &landed, owner).map_err(copy_unpack_error)?;
+            // A hard link adds a name to an inode whose owner must be preserved.
+            if file.header().entry_type().is_hard_link() {
+                continue;
+            }
+            // An entry that lands as the destination itself has an empty
+            // name; `dest.join("")` would append a trailing separator, which
+            // turns a no-follow chown of a symlink into ENOTDIR.
+            let landed_path = if landed.name.as_os_str().is_empty() {
+                dest.to_path_buf()
+            } else {
+                dest.join(&landed.name)
+            };
+            hand_over(&landed_path, owner).map_err(copy_unpack_error)?;
+        }
+    }
+    // A root landing as `dest` sorts last, so its mode comes last.
+    directories.sort_by(|(_, a), (_, b)| b.name.cmp(&a.name));
+    for (mut dir, landed) in directories {
+        let target = if landed.name.as_os_str().is_empty() {
+            dest.to_path_buf()
+        } else {
+            dest.join(&landed.name)
+        };
+        let preexisting = target.symlink_metadata().is_ok();
+        unpack_at(&mut dir, dest, &landed, owner).map_err(copy_unpack_error)?;
+        if !preexisting {
+            hand_over(&target, owner).map_err(copy_unpack_error)?;
+        }
+    }
+    if let Some(report) = report {
+        report.destination_written =
+            landing.decided() && (landing.lands_a_file() || !landing.dest_exists);
+    }
+    Ok(())
+}
+
+/// A caller's veto on where an entry lands, relative to the destination
+/// (empty for the destination itself), asked before anything is written
+/// there.
+type Refusal<'a> = dyn Fn(&Path) -> BoxliteResult<()> + Send + Sync + 'a;
+
+/// Unpack `reader` to `dest` the way `docker cp` lands a copy (see
+/// [`Landing`]), writing straight into `dest`: a failed copy keeps what it
+/// wrote.
+fn land<R: Read>(
+    reader: &mut R,
+    dest: &Path,
+    opts: &UnpackContext,
+    owner: Option<&UnpackOwner>,
+    refuse: &Refusal<'_>,
+    report: Option<&mut UnpackReport>,
+) -> BoxliteResult<()> {
+    extract_from_reader(&mut *reader, dest, opts, owner, refuse, report)?;
+    // Extraction can finish before the byte stream ends: tar-rs stops at the
+    // archive end marker. Drain the raw stream so a terminal producer error
+    // cannot become success.
+    io::copy(reader, &mut io::sink())
+        .map_err(|e| BoxliteError::Storage(format!("failed to drain tar stream: {}", e)))?;
+    Ok(())
+}
+
+/// Where an archive entry lands, relative to the destination.
+struct Landed {
+    /// Empty for the entry that becomes the destination itself.
+    name: PathBuf,
+    /// A hard link's target, relative to the destination.
+    link: Option<PathBuf>,
+}
+
+/// Where one archive's entries land, as `docker cp` lands a copy. The first
+/// entry decides; records about other entries (PAX headers, GNU long names)
+/// never do.
+///
+/// - A leading directory `X/` becomes a missing destination, trailing `/` or
+///   not: `X/a` lands as `a`, and a later entry outside `X/` fails the copy.
+///   An existing directory takes it under its own name, and an existing
+///   non-directory fails the copy. A leading `./` (`SRC/.`) roots nothing.
+/// - A leading file or symlink lands under its own name in an existing
+///   directory or in a missing destination the caller spelled with a
+///   trailing `/`. Otherwise one with a one-component name lands as the
+///   destination itself, and any entry after it fails the copy; a nested
+///   name (`app/main.py`, as leaves-only archives carry) lands under its
+///   own name when the destination is missing or a directory, and the
+///   copy fails when it is an existing non-directory. A trailing `/` that
+///   names an existing non-directory fails the copy.
+///
+/// Entries are written as they are read, so a failed copy keeps what it wrote.
+struct Landing {
+    dest: PathBuf,
+    dest_exists: bool,
+    dest_is_dir: bool,
+    /// `dest` takes every entry under its own name.
+    into_dir: bool,
+    /// `None` until the first entry decides it.
+    shape: Option<Shape>,
+}
+
+enum Shape {
+    /// The first entry, by its archive name, lands as the destination.
+    File(PathBuf),
+    /// Entries land under the destination, with the leading directory
+    /// stripped when it becomes the destination.
+    Tree { root: Option<PathBuf> },
+}
+
+impl Landing {
+    fn new(dest: &Path, force_directory: bool, (dest_exists, dest_is_dir): (bool, bool)) -> Self {
+        Self {
+            dest: dest.to_path_buf(),
+            dest_exists,
+            dest_is_dir,
+            into_dir: force_directory
+                || dest_is_dir
+                || dest.as_os_str().to_string_lossy().ends_with('/'),
+            shape: None,
+        }
+    }
+
+    fn decided(&self) -> bool {
+        self.shape.is_some()
+    }
+
+    fn lands_a_file(&self) -> bool {
+        matches!(self.shape, Some(Shape::File(_)))
+    }
+
+    /// What the first entry, of `kind` and sanitized `name`, makes of this
+    /// copy.
+    fn decide(
+        &self,
+        kind: tar::EntryType,
+        name: Option<&Path>,
+        overwrite: bool,
+    ) -> BoxliteResult<Shape> {
+        if kind.is_dir() {
+            if self.dest_exists && !self.dest_is_dir {
+                let message = format!(
+                    "cannot copy a directory to {}, which is not a directory",
+                    self.dest.display()
+                );
+                return Err(if overwrite {
+                    BoxliteError::InvalidArgument(message)
+                } else {
+                    BoxliteError::AlreadyExists(message)
+                });
+            }
+            let root = name
+                .filter(|name| !self.dest_exists && name.components().count() == 1)
+                .map(Path::to_path_buf);
+            return Ok(Shape::Tree { root });
+        }
+        // A nested name (`app/main.py`) is one of many a leaves-only archive
+        // carries, so it lands under its own name.
+        let name = match name {
+            Some(name) if !self.into_dir && name.components().count() == 1 => name.to_path_buf(),
+            _ => return Ok(Shape::Tree { root: None }),
+        };
+        if kind.is_hard_link() {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "archive starts with hard link {}: a copy to {} lands one entry, \
+                 leaving nothing to link to",
+                name.display(),
+                self.dest.display()
+            )));
+        }
+        Ok(Shape::File(name))
+    }
+
+    /// Ready the destination for what the first entry decided, handing
+    /// directories this creates to `owner`.
+    fn prepare(&self, opts: &UnpackContext, owner: Option<&UnpackOwner>) -> BoxliteResult<()> {
+        let dest = &self.dest;
+        if self.lands_a_file() {
+            if let Some(parent) = dest
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty() && !parent.exists())
+            {
+                if !opts.mkdir_parents {
                     return Err(BoxliteError::Storage(format!(
                         "parent directory of {} does not exist",
                         dest.display()
                     )));
                 }
+                create_parents_owned(parent, owner).map_err(copy_unpack_error)?;
             }
-            if !opts.overwrite && dest.exists() {
+        } else if !self.dest_exists {
+            if !opts.mkdir_parents {
                 return Err(BoxliteError::Storage(format!(
-                    "destination {} exists and overwrite=false",
+                    "destination {} does not exist",
                     dest.display()
                 )));
             }
-            let mut archive = tar::Archive::new(reader);
-            let mut entries = archive
-                .entries()
-                .map_err(|e| BoxliteError::Storage(format!("failed to read tar entries: {}", e)))?;
-            if let Some(entry) = entries.next() {
-                let mut entry = entry.map_err(|e| {
-                    BoxliteError::Storage(format!("failed to read tar entry: {}", e))
-                })?;
-                if let Ok(path) = entry.path() {
-                    record(path.as_ref(), None);
-                }
-                entry.unpack(dest).map_err(|e| {
-                    BoxliteError::Storage(format!(
-                        "failed to unpack file to {}: {}",
-                        dest.display(),
-                        with_causes(&e)
-                    ))
-                })?;
-            }
-            Ok(())
+            create_parents_owned(dest, owner).map_err(copy_unpack_error)?;
         }
-        ExtractionMode::IntoDirectory => {
-            if !dest.exists() {
-                if opts.mkdir_parents {
-                    std::fs::create_dir_all(dest).map_err(|e| {
-                        BoxliteError::Storage(format!(
-                            "failed to create destination {}: {}",
-                            dest.display(),
-                            e
-                        ))
-                    })?;
-                } else {
-                    return Err(BoxliteError::Storage(format!(
-                        "destination {} does not exist",
-                        dest.display()
-                    )));
-                }
+        if self.dest_exists && !self.dest_is_dir && !opts.overwrite {
+            return Err(BoxliteError::AlreadyExists(format!(
+                "destination {} exists and overwrite=false",
+                dest.display()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Where `entry` lands, or `None` for what extraction skips: records about
+    /// other entries, which `Entry::unpack` skips too, and names that are
+    /// empty or climb out with `..`.
+    fn place<R: Read>(
+        &mut self,
+        entry: &tar::Entry<'_, R>,
+        overwrite: bool,
+    ) -> BoxliteResult<Option<Landed>> {
+        let kind = entry.header().entry_type();
+        let directory = entry_is_directory(entry);
+        if kind.is_pax_global_extensions()
+            || kind.is_pax_local_extensions()
+            || kind.is_gnu_longname()
+            || kind.is_gnu_longlink()
+        {
+            return Ok(None);
+        }
+        let name = entry
+            .path()
+            .ok()
+            .and_then(|path| sanitize_entry_path(&path));
+        let first = self.shape.is_none();
+        if first {
+            // Extraction skips a file it cannot name, so that file decides
+            // nothing. A directory named `./` still leads.
+            if name.is_none() && !directory {
+                return Ok(None);
             }
-            if dest.exists() && !opts.overwrite {
-                return Err(BoxliteError::Storage(format!(
-                    "destination {} exists and overwrite=false",
-                    dest.display()
-                )));
-            }
-            let mut archive = tar::Archive::new(reader);
-            // The same pass tar::Archive::unpack would run, with one
-            // addition: every extracted name is recorded (sanitized, with
-            // implied directories) so callers can hand the created paths to
-            // the box user and refuse entries the mounts shadow — without
-            // consuming the one-shot stream twice. Directory entries are
-            // delayed and sorted the way tar-rs does it (permissions).
-            let mut directories = Vec::new();
-            for entry in archive
-                .entries()
-                .map_err(|e| BoxliteError::Storage(format!("failed to read tar entries: {}", e)))?
+            let shape_kind = if directory {
+                tar::EntryType::Directory
+            } else {
+                kind
+            };
+            self.shape = Some(self.decide(shape_kind, name.as_deref(), overwrite)?);
+        }
+        let name = match name {
+            Some(name) => name,
+            None if directory
+                && entry
+                    .path()?
+                    .components()
+                    .all(|part| matches!(part, std::path::Component::CurDir)) =>
             {
-                let mut file = entry.map_err(|e| {
-                    BoxliteError::Storage(format!("failed to read tar entry: {}", e))
-                })?;
-                if let Ok(path) = file.path() {
-                    record(path.as_ref(), Some(dest));
-                }
-                if file.header().entry_type() == tar::EntryType::Directory {
-                    directories.push(file);
-                } else {
-                    file.unpack_in(dest).map_err(|e| {
-                        BoxliteError::Storage(format!(
-                            "failed to extract archive: {}",
-                            with_causes(&e)
-                        ))
-                    })?;
-                }
+                return Ok(Some(Landed {
+                    name: PathBuf::new(),
+                    link: None,
+                }));
             }
-            directories.sort_by(|a, b| b.path_bytes().cmp(&a.path_bytes()));
-            for mut dir in directories {
-                dir.unpack_in(dest).map_err(|e| {
-                    BoxliteError::Storage(format!("failed to extract archive: {}", with_causes(&e)))
-                })?;
+            None => return Ok(None),
+        };
+        let root = match &self.shape {
+            Some(Shape::File(_)) if first => {
+                return Ok(Some(Landed {
+                    name: PathBuf::new(),
+                    link: None,
+                }));
             }
-            Ok(())
-        }
+            Some(Shape::File(file)) => {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "archive entry {} follows {}, the file the archive starts with: \
+                     a copy to {} lands that one file; copy into an existing directory \
+                     to land them all",
+                    name.display(),
+                    file.display(),
+                    self.dest.display()
+                )));
+            }
+            Some(Shape::Tree { root }) => root.as_deref(),
+            None => return Ok(None),
+        };
+        // A hard link without a target is tar-rs's error to report.
+        let link = match entry.link_name() {
+            Ok(Some(target)) if kind.is_hard_link() && !target.as_os_str().is_empty() => {
+                Some(target.into_owned())
+            }
+            _ => None,
+        };
+        let Some(root) = root else {
+            return Ok(Some(Landed { name, link }));
+        };
+        // Only a directory may land as the destination itself.
+        let under_root = |path: &Path, dir: bool| {
+            sanitize_entry_path(path)
+                .and_then(|path| Some(path.strip_prefix(root).ok()?.to_path_buf()))
+                .filter(|rest| dir || !rest.as_os_str().is_empty())
+                .ok_or_else(|| {
+                    BoxliteError::InvalidArgument(format!(
+                        "archive entry {} is outside {}/, the directory the archive starts \
+                         with: a copy to a missing destination lands only that directory's \
+                         contents; copy into an existing directory to keep the layout",
+                        path.display(),
+                        root.display()
+                    ))
+                })
+        };
+        Ok(Some(Landed {
+            name: under_root(&name, directory)?,
+            link: link.map(|target| under_root(&target, false)).transpose()?,
+        }))
     }
 }
 
+fn entry_is_directory<R: Read>(entry: &tar::Entry<'_, R>) -> bool {
+    let kind = entry.header().entry_type();
+    kind.is_dir()
+        || (!kind.is_hard_link()
+            && !kind.is_symlink()
+            && !kind.is_pax_global_extensions()
+            && !kind.is_pax_local_extensions()
+            && !kind.is_gnu_longname()
+            && !kind.is_gnu_longlink()
+            && entry.header().as_ustar().is_none()
+            && entry.path_bytes().ends_with(b"/"))
+}
+
+/// Unpack `entry` where `landed` says, after the checks
+/// `Entry::unpack_in` makes (`tar-0.4.45/src/entry.rs`). `unpack_in` takes
+/// the place from the entry's own name, so it cannot land an entry anywhere
+/// else; `Entry::unpack` writes the entry as `unpack_in` would.
+fn unpack_at<R: Read>(
+    entry: &mut tar::Entry<'_, R>,
+    dest: &Path,
+    landed: &Landed,
+    owner: Option<&UnpackOwner>,
+) -> io::Result<()> {
+    if landed.name.as_os_str().is_empty() {
+        return entry.unpack(dest).map(drop);
+    }
+    let path = dest.join(&landed.name);
+    let parent = path.parent().unwrap_or(dest);
+    create_dirs_inside(dest, parent, owner)?;
+    let base = inside(dest, parent)?;
+    match &landed.link {
+        // `Entry::unpack` would resolve the target from the working directory.
+        Some(target) => {
+            let target = base.join(target);
+            inside(&base, &target)?;
+            std::fs::hard_link(&target, &path).map_err(|e| {
+                let context = format!("hard linking {} to {}", target.display(), path.display());
+                io::Error::new(e.kind(), format!("{e} when {context}"))
+            })
+        }
+        None => entry.unpack(&path).map(drop),
+    }
+}
+
+fn check_copy_destination(path: &Path, directory: bool) -> BoxliteResult<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if !(directory && metadata.is_dir()) => Err(BoxliteError::AlreadyExists(
+            format!("destination {} exists and overwrite=false", path.display()),
+        )),
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(copy_unpack_error(error)),
+        _ => Ok(()),
+    }
+}
+
+/// The guest rootfs stays pinned for the entire ownership handoff.
+struct UnpackOwner {
+    rootfs: PathBuf,
+    anchor: std::fs::File,
+    uid: u32,
+    gid: u32,
+}
+
+/// Resolve every parent inside the rootfs; do not follow the leaf symlink.
+fn hand_over(path: &Path, owner: Option<&UnpackOwner>) -> io::Result<()> {
+    let Some(owner) = owner else {
+        return Ok(());
+    };
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+        let relative = path
+            .strip_prefix(&owner.rootfs)
+            .map_err(|_| io::Error::from_raw_os_error(nix::libc::EXDEV))?;
+        let leaf = relative
+            .file_name()
+            .ok_or_else(|| io::Error::from_raw_os_error(nix::libc::EINVAL))?;
+        let parent = relative
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty());
+        let how = nix::fcntl::OpenHow::new()
+            .flags(
+                nix::fcntl::OFlag::O_PATH
+                    | nix::fcntl::OFlag::O_DIRECTORY
+                    | nix::fcntl::OFlag::O_CLOEXEC,
+            )
+            .resolve(
+                nix::fcntl::ResolveFlag::RESOLVE_IN_ROOT
+                    | nix::fcntl::ResolveFlag::RESOLVE_NO_MAGICLINKS,
+            );
+        let fd = nix::fcntl::openat2(
+            owner.anchor.as_raw_fd(),
+            parent.unwrap_or(Path::new(".")),
+            how,
+        )?;
+        // SAFETY: openat2 returns a fresh descriptor owned by this scope.
+        let parent = unsafe { OwnedFd::from_raw_fd(fd) };
+        nix::unistd::fchownat(
+            Some(parent.as_raw_fd()),
+            Path::new(leaf),
+            Some(nix::unistd::Uid::from_raw(owner.uid)),
+            Some(nix::unistd::Gid::from_raw(owner.gid)),
+            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .map_err(io::Error::from)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (path, &owner.rootfs, &owner.anchor, owner.uid, owner.gid);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "guest ownership requires Linux",
+        ))
+    }
+}
+
+/// Create the directories missing above `dir` (up to and including it),
+/// outermost first, handing each one this creates to `owner`.
+fn create_parents_owned(dir: &Path, owner: Option<&UnpackOwner>) -> io::Result<()> {
+    let missing: Vec<&Path> = dir
+        .ancestors()
+        .take_while(|dir| !dir.as_os_str().is_empty())
+        .take_while(|dir| dir.symlink_metadata().is_err())
+        .collect();
+    for dir in missing.into_iter().rev() {
+        std::fs::create_dir(dir).map_err(|e| {
+            io::Error::new(e.kind(), format!("{e} when creating {}", dir.display()))
+        })?;
+        hand_over(dir, owner)?;
+    }
+    Ok(())
+}
+
+/// Create the directories missing down to `dir`, each once its parent
+/// resolves inside `dest`, as tar-rs's `ensure_dir_created` does, handing
+/// each one this creates to `owner`.
+fn create_dirs_inside(dest: &Path, dir: &Path, owner: Option<&UnpackOwner>) -> io::Result<()> {
+    let missing: Vec<&Path> = dir
+        .ancestors()
+        .take_while(|dir| dir.symlink_metadata().is_err())
+        .collect();
+    for dir in missing.into_iter().rev() {
+        if let Some(parent) = dir.parent() {
+            inside(dest, parent)?;
+        }
+        std::fs::create_dir_all(dir).map_err(|e| {
+            io::Error::new(e.kind(), format!("{e} when creating dir {}", dir.display()))
+        })?;
+        hand_over(dir, owner)?;
+    }
+    Ok(())
+}
+
+/// The canonical `dest`, once `path` resolves inside it, as tar-rs's
+/// `validate_inside_dst` checks: an earlier entry may be a symlink on the way.
+fn inside(dest: &Path, path: &Path) -> io::Result<PathBuf> {
+    let canonical = |path: &Path| {
+        path.canonicalize().map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("{e} while canonicalizing {}", path.display()),
+            )
+        })
+    };
+    let dest = canonical(dest)?;
+    if canonical(path)?.starts_with(&dest) {
+        return Ok(dest);
+    }
+    Err(io::Error::other(format!(
+        "{} resolves outside {}",
+        path.display(),
+        dest.display()
+    )))
+}
+
 /// Record `path` — sanitized, plus every directory its name implies,
-/// outermost first — in `report`, deduplicated through `seen`. Mirrors
-/// [`entry_paths_blocking`] so the streamed extraction reports exactly the
-/// same path shape the staged path's pre-scan does. When `existing_root` is
-/// present, directories that predate their first archive occurrence are also
-/// recorded before extraction can create or replace them.
+/// outermost first — in `report`, deduplicated through `seen`. A tar need not
+/// carry an entry for a directory it puts files in, and extraction conjures
+/// the missing ones regardless (`tar-0.4.45/src/entry.rs`,
+/// `ensure_dir_created`), so the implied directories are reported too: the
+/// guest hands the box user only what the report names. When `existing_root`
+/// is present, directories that predate their first archive occurrence are
+/// also recorded before extraction can create or replace them.
 fn record_paths(
     report: &mut UnpackReport,
     seen: &mut HashSet<PathBuf>,
@@ -424,66 +874,6 @@ fn record_paths(
 }
 
 // ── Entry names ───────────────────────────────────────────────────
-
-/// Paths extraction will create, relative to the extraction root.
-///
-/// Everything the archive names, plus every directory those names imply.
-/// A tar need not carry an entry for a directory it puts files in, and plenty
-/// of writers emit only leaves — `PUT /boxes/{id}/files` takes whatever
-/// `application/x-tar` the caller built. Extraction conjures the missing
-/// directories regardless (`tar-0.4.45/src/entry.rs`, `ensure_dir_created`),
-/// so stopping at the leaves under-reports what the copy made: the guest hands
-/// the box user only what this list names, and an unnamed directory stays
-/// root-owned around a file the workload does own.
-///
-/// The tar is caller-supplied, so its entry names are untrusted: an entry may
-/// be absolute (`/etc/shadow`) or climb out (`../../x`). Extraction already
-/// refuses both, so this applies the same rule — otherwise a later
-/// `dest.join(rel)` would escape the destination entirely, since `Path::join`
-/// discards the base when handed an absolute path.
-///
-/// Header-only in intent, but not in cost: `tar::Archive::entries()` leaves
-/// the reader's `Seek` impl unused, so stepping over an entry's payload reads
-/// it (`tar-0.4.45/src/archive.rs`, `fn skip`). Walking an archive costs the
-/// whole archive, which is why this runs on a blocking thread like [`pack`]
-/// and [`unpack`].
-///
-/// A malformed archive yields the names read so far rather than an error:
-/// extraction reads the same bytes moments later and reports the real parse
-/// error, and until then the worst case is that no names are found.
-pub async fn entry_paths(tar_path: PathBuf) -> BoxliteResult<Vec<PathBuf>> {
-    tokio::task::spawn_blocking(move || entry_paths_blocking(&tar_path))
-        .await
-        .map_err(|e| BoxliteError::Storage(format!("entry_paths task join error: {}", e)))
-}
-
-fn entry_paths_blocking(tar_path: &Path) -> Vec<PathBuf> {
-    let Ok(file) = std::fs::File::open(tar_path) else {
-        return Vec::new();
-    };
-    let mut archive = tar::Archive::new(file);
-    let Ok(entries) = archive.entries() else {
-        return Vec::new();
-    };
-
-    // Deduplicated because a directory is usually implied by many entries —
-    // and often named outright as well, once the archive carries it and again
-    // through each file inside it.
-    let mut created = Vec::new();
-    let mut seen = HashSet::new();
-    for path in entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.path().ok().map(|path| path.into_owned()))
-        .filter_map(|path| sanitize_entry_path(&path))
-    {
-        for step in implied_dirs_then_self(&path) {
-            if seen.insert(step.clone()) {
-                created.push(step);
-            }
-        }
-    }
-    created
-}
 
 /// `path` preceded by every directory its own name implies, outermost first.
 ///
@@ -555,104 +945,115 @@ impl Read for PipeReader {
     }
 }
 
-/// Unpack a tar byte stream to `dest`.
-///
-/// Unlike the file-based [`unpack`], there is no archive peek — the extraction
-/// shape is taken authoritatively from `opts.force_directory` (`true` →
-/// directory, `false` → single file). Callers must resolve that from the peer's
-/// `source_is_dir` hint; a missing hint must fall back to the file-based
-/// [`unpack`] path, never call here with a guessed bool.
+/// Unpack a tar byte stream to `dest`, landing it the way `docker cp` does
+/// (see [`Landing`]): the first entry decides as it streams by, so nothing is
+/// staged.
 ///
 /// Returns the extracted paths relative to `dest` (sanitized, implied
 /// directories included) and which of those directories already existed, so
-/// the caller can hand only newly created paths to the box user and refuse
-/// entries the mounts shadow.
+/// the caller can hand only newly created paths to the box user.
 pub async fn unpack_stream(
-    mut stream: BoxByteStream,
+    stream: BoxByteStream,
     dest: PathBuf,
     opts: UnpackContext,
 ) -> BoxliteResult<UnpackReport> {
+    unpack_stream_refusing(stream, dest, opts, None, |_| Ok(())).await
+}
+
+/// [`unpack_stream`], asking `refuse` about each entry's landing path,
+/// relative to `dest`, before writing it, and handing every object this copy
+/// creates to `owner` the moment it is created. The guest refuses entries a
+/// mount would shadow this way, so a refused entry is never written; entries
+/// before it stay. Objects that predate the copy keep their owner.
+pub async fn unpack_stream_refusing<F>(
+    stream: BoxByteStream,
+    dest: PathBuf,
+    opts: UnpackContext,
+    owner: Option<(PathBuf, u32, u32)>,
+    refuse: F,
+) -> BoxliteResult<UnpackReport>
+where
+    F: Fn(&Path) -> BoxliteResult<()> + Send + Sync + 'static,
+{
     let (tx, rx) = mpsc::channel::<io::Result<Vec<u8>>>(COPY_CHUNKS_IN_FLIGHT);
-    let forward = tokio::spawn(async move {
+    // Dropping the unpack future must close the source and the reader channel,
+    // including when the source is idle and never wakes the forwarding task.
+    let mut forward = tokio::task::JoinSet::new();
+    forward.spawn(async move {
+        let mut stream = stream;
         while let Some(item) = stream.next().await {
             if tx.send(item).await.is_err() {
                 break;
             }
         }
     });
-    let mut reader = PipeReader { rx, pending: None };
     let unpack = tokio::task::spawn_blocking(move || {
-        let mode = if opts.force_directory {
-            ExtractionMode::IntoDirectory
-        } else {
-            ExtractionMode::FileToFile
-        };
+        let owner = owner
+            .map(|(rootfs, uid, gid)| {
+                std::fs::File::open(&rootfs).map(|anchor| UnpackOwner {
+                    rootfs,
+                    anchor,
+                    uid,
+                    gid,
+                })
+            })
+            .transpose()
+            .map_err(copy_unpack_error)?;
+        let mut reader = PipeReader { rx, pending: None };
         let mut report = UnpackReport::default();
-        extract_from_reader(&mut reader, &dest, &opts, mode, Some(&mut report))?;
-        // Extraction can finish before the byte stream ends: FileToFile stops
-        // after one entry, and tar-rs stops at the archive end marker. Drain
-        // the raw stream so a terminal producer error cannot become success.
-        io::copy(&mut reader, &mut io::sink())
-            .map_err(|e| BoxliteError::Storage(format!("failed to drain tar stream: {}", e)))?;
+        land(
+            &mut reader,
+            &dest,
+            &opts,
+            owner.as_ref(),
+            &refuse,
+            Some(&mut report),
+        )?;
         Ok(report)
     });
     let result = unpack.await;
     // Abort the forwarder before mapping the join result, so a panicked
     // unpack task can't leak a forwarder that keeps draining the stream.
-    forward.abort();
-    result.map_err(|e| BoxliteError::Storage(format!("unpack task join error: {}", e)))?
+    forward.abort_all();
+    result.map_err(|e| BoxliteError::Storage(format!("unpack task join error: {e}")))?
 }
 
-// ── Private ───────────────────────────────────────────────────────
-
-enum ExtractionMode {
-    FileToFile,
-    IntoDirectory,
-}
-
-/// Inspect the destination path and tar contents to decide extraction mode.
-///
-/// Rules (evaluated in order):
-/// 1. Dest path has trailing `/` → directory mode
-/// 2. Dest exists as a directory → directory mode
-/// 3. Tar contains exactly one regular file → file-to-file mode
-/// 4. Fallback → directory mode
-fn detect_extraction_mode(dest: &Path, tar_path: &Path) -> BoxliteResult<ExtractionMode> {
-    if dest.as_os_str().to_string_lossy().ends_with('/') {
-        return Ok(ExtractionMode::IntoDirectory);
-    }
-    if dest.is_dir() {
-        return Ok(ExtractionMode::IntoDirectory);
-    }
-    let tar_file = std::fs::File::open(tar_path).map_err(|e| {
-        BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
-    })?;
-    let mut archive = tar::Archive::new(tar_file);
-    if let Ok(entries) = archive.entries() {
-        let mut count = 0u32;
-        let mut is_regular = false;
-        for entry in entries {
-            count += 1;
-            if count > 1 {
-                break;
-            }
-            if let Ok(e) = entry {
-                is_regular = e.header().entry_type() == tar::EntryType::Regular;
-            }
-        }
-        if count == 1 && is_regular {
-            return Ok(ExtractionMode::FileToFile);
-        }
-    }
-    Ok(ExtractionMode::IntoDirectory)
+/// Upload into a guest's rootfs directory, handing every object this copy
+/// creates to the box user. Ownership resolves parents inside the pinned
+/// `rootfs`; ordinary host unpacking keeps `unpack_stream`/`unpack`. The
+/// caller supplies the container's uid and gid and holds its mount gate for the
+/// transfer; `refuse` receives each entry's landing path relative to `dest`.
+pub async fn unpack_stream_owned<F>(
+    stream: BoxByteStream,
+    dest: PathBuf,
+    opts: UnpackContext,
+    rootfs: PathBuf,
+    owner: (u32, u32),
+    refuse: F,
+) -> BoxliteResult<()>
+where
+    F: Fn(&Path) -> BoxliteResult<()> + Send + Sync + 'static,
+{
+    unpack_stream_refusing(stream, dest, opts, Some((rootfs, owner.0, owner.1)), refuse)
+        .await
+        .map(drop)
 }
 
 #[cfg(test)]
 mod tests {
+    mod streaming;
+
     use super::*;
     use tempfile::TempDir;
 
     // ── Helpers ───────────────────────────────────────────────────
+
+    // macOS exposes its temporary root through /var, a symlink. Policy tests
+    // must start at its real directory and introduce links explicitly.
+    fn copy_policy_tempdir() -> TempDir {
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        tempfile::tempdir_in(root).unwrap()
+    }
 
     fn uc(overwrite: bool, mkdir_parents: bool, force_directory: bool) -> UnpackContext {
         UnpackContext {
@@ -687,18 +1088,16 @@ mod tests {
         builder.finish().unwrap();
     }
 
-    /// Create a tar carrying only file entries — no entry for any directory
-    /// their names sit in, which is what plenty of tar writers emit.
     fn create_leaf_only_tar(tar_path: &Path, entry_names: &[&str]) {
-        let tar_file = std::fs::File::create(tar_path).unwrap();
-        let mut builder = tar::Builder::new(tar_file);
+        let mut builder = tar::Builder::new(std::fs::File::create(tar_path).unwrap());
         for name in entry_names {
-            let content = name.as_bytes();
             let mut header = tar::Header::new_gnu();
-            header.set_size(content.len() as u64);
+            header.set_size(name.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            builder.append_data(&mut header, name, content).unwrap();
+            builder
+                .append_data(&mut header, name, name.as_bytes())
+                .unwrap();
         }
         builder.finish().unwrap();
     }
@@ -1111,6 +1510,41 @@ mod tests {
     // ── unpack: detection modes ──────────────────────────────────
 
     #[tokio::test]
+    async fn no_overwrite_rejects_destination_symlink_with_trailing_slash() {
+        for dangling in [false, true] {
+            for trailing_slash in [false, true] {
+                let tmp = copy_policy_tempdir();
+                let archive = tmp.path().join("input.tar");
+                create_single_file_tar(&archive, "file", b"new");
+                let target = tmp.path().join("target");
+                if !dangling {
+                    std::fs::create_dir(&target).unwrap();
+                    std::fs::write(target.join("keep"), b"original").unwrap();
+                }
+                let leaf = tmp.path().join("leaf");
+                std::os::unix::fs::symlink(&target, &leaf).unwrap();
+                let destination = if trailing_slash {
+                    leaf.join("")
+                } else {
+                    leaf.clone()
+                };
+                let result = unpack(archive, destination, default_unpack(false)).await;
+                assert!(
+                    matches!(result, Err(BoxliteError::AlreadyExists(_))),
+                    "{result:?}"
+                );
+                assert_eq!(std::fs::read_link(&leaf).unwrap(), target);
+                assert!(!target.join("file").exists());
+                if dangling {
+                    assert!(!target.exists());
+                } else {
+                    assert_eq!(std::fs::read(target.join("keep")).unwrap(), b"original");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn unpack_single_file_to_nonexistent_path_uses_file_mode() {
         let tmp = TempDir::new().unwrap();
         let tar_path = tmp.path().join("single.tar");
@@ -1171,8 +1605,10 @@ mod tests {
         );
     }
 
+    /// A lone directory entry is a single-root archive: it becomes the
+    /// missing destination, as `docker cp` lands an empty directory.
     #[tokio::test]
-    async fn unpack_single_dir_entry_uses_dir_mode() {
+    async fn unpack_single_dir_entry_becomes_a_missing_dest() {
         let tmp = TempDir::new().unwrap();
         let tar_path = tmp.path().join("dir_only.tar");
 
@@ -1192,11 +1628,13 @@ mod tests {
         unpack(tar_path, dest.clone(), default_unpack(true))
             .await
             .unwrap();
-        assert!(dest.join("somedir").is_dir());
+        assert!(dest.is_dir());
+        assert_eq!(landed(&dest), Vec::<PathBuf>::new());
     }
 
+    /// An empty archive has no first entry to land, so nothing lands.
     #[tokio::test]
-    async fn unpack_empty_tar_uses_dir_mode() {
+    async fn unpack_empty_tar_lands_nothing() {
         let tmp = TempDir::new().unwrap();
         let tar_path = tmp.path().join("empty.tar");
 
@@ -1205,11 +1643,10 @@ mod tests {
         builder.into_inner().unwrap();
 
         let dest = tmp.path().join("output");
-        // Empty tar + dir mode + mkdir_parents → creates empty directory
         unpack(tar_path, dest.clone(), default_unpack(true))
             .await
             .unwrap();
-        assert!(dest.is_dir());
+        assert!(!dest.exists());
     }
 
     // ── unpack: force_directory ──────────────────────────────────
@@ -1262,7 +1699,7 @@ mod tests {
 
     #[tokio::test]
     async fn unpack_overwrite_false_rejects_existing_file() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = copy_policy_tempdir();
         let tar_path = tmp.path().join("file.tar");
         create_single_file_tar(&tar_path, "data.txt", b"new content");
 
@@ -1275,8 +1712,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unpack_overwrite_false_rejects_existing_dir() {
-        let tmp = TempDir::new().unwrap();
+    async fn unpack_overwrite_false_reuses_existing_dir() {
+        let tmp = copy_policy_tempdir();
         let tar_path = tmp.path().join("dir.tar");
         create_dir_tar(&tar_path);
 
@@ -1284,7 +1721,320 @@ mod tests {
         std::fs::create_dir(&dest).unwrap();
 
         let result = unpack(tar_path, dest, uc(false, false, false)).await;
-        assert!(result.is_err());
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn no_overwrite_reuses_old_format_directory_headers() {
+        let tmp = copy_policy_tempdir();
+        let tar_path = tmp.path().join("old.tar");
+        let mut archive = tar::Builder::new(std::fs::File::create(&tar_path).unwrap());
+        let mut header = tar::Header::new_old();
+        for (name, kind) in [
+            ("existing/", b'0'),
+            ("contiguous/", b'7'),
+            ("character/", b'3'),
+            ("block/", b'4'),
+            ("fifo/", b'6'),
+            ("unknown/", b'Z'),
+        ] {
+            header.set_path(name).unwrap();
+            header.set_entry_type(tar::EntryType::new(kind));
+            header.set_size(0);
+            header.set_mode(0o700);
+            header.set_cksum();
+            archive.append(&header, std::io::empty()).unwrap();
+        }
+        archive.finish().unwrap();
+        drop(archive);
+        let dest = tmp.path().join("output");
+        let names = [
+            "existing",
+            "contiguous",
+            "character",
+            "block",
+            "fifo",
+            "unknown",
+        ];
+        for name in names {
+            std::fs::create_dir_all(dest.join(name)).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(dest.join(name), std::fs::Permissions::from_mode(0o750))
+                    .unwrap();
+            }
+        }
+        let result = unpack(tar_path, dest.clone(), uc(false, false, false)).await;
+        assert!(
+            result.is_ok(),
+            "old directory header must reuse directory: {result:?}"
+        );
+        for name in names {
+            assert!(dest.join(name).is_dir());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(dest.join(name))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o750
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn no_overwrite_adds_new_files_to_existing_and_missing_directories() {
+        for existing in [false, true] {
+            let tmp = copy_policy_tempdir();
+            let tar_path = tmp.path().join("files.tar");
+            create_single_file_tar(&tar_path, "new.txt", b"new");
+            let dest = tmp.path().join("output");
+            if existing {
+                std::fs::create_dir(&dest).unwrap();
+                std::fs::write(dest.join("keep.txt"), b"original").unwrap();
+            }
+            let result = unpack(tar_path, dest.clone(), uc(false, true, true)).await;
+            assert!(result.is_ok(), "new entries must succeed: {result:?}");
+            assert_eq!(std::fs::read(dest.join("new.txt")).unwrap(), b"new");
+            if existing {
+                assert_eq!(std::fs::read(dest.join("keep.txt")).unwrap(), b"original");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn no_overwrite_partial_conflicts_match_stream_and_staged() {
+        for streamed in [false, true] {
+            let tmp = copy_policy_tempdir();
+            let tar_path = tmp.path().join("files.tar");
+            create_leaf_only_tar(&tar_path, &["new.txt", "keep.txt"]);
+            let dest = tmp.path().join("output");
+            std::fs::create_dir(&dest).unwrap();
+            std::fs::write(dest.join("keep.txt"), b"original").unwrap();
+            let result = if streamed {
+                let data = std::fs::read(&tar_path).unwrap();
+                unpack_stream(
+                    Box::pin(futures::stream::iter([Ok(data)])),
+                    dest.clone(),
+                    uc(false, true, true),
+                )
+                .await
+                .map(|_| ())
+            } else {
+                unpack(tar_path, dest.clone(), uc(false, true, true)).await
+            };
+            assert!(
+                matches!(result, Err(BoxliteError::AlreadyExists(_))),
+                "{result:?}"
+            );
+            assert_eq!(std::fs::read(dest.join("keep.txt")).unwrap(), b"original");
+            assert_eq!(std::fs::read(dest.join("new.txt")).unwrap(), b"new.txt");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_overwrite_preserves_link_and_directory_collisions() {
+        for collision in ["directory", "symlink", "dangling"] {
+            let tmp = copy_policy_tempdir();
+            let tar_path = tmp.path().join("file.tar");
+            create_single_file_tar(&tar_path, "occupied", b"replacement");
+            let dest = tmp.path().join("output");
+            std::fs::create_dir(&dest).unwrap();
+            let occupied = dest.join("occupied");
+            let target = tmp.path().join("target");
+            if collision == "directory" {
+                std::fs::create_dir(&occupied).unwrap();
+            } else {
+                if collision == "symlink" {
+                    std::fs::write(&target, b"original").unwrap();
+                }
+                std::os::unix::fs::symlink(&target, &occupied).unwrap();
+            }
+            let result = unpack(tar_path, dest, uc(false, true, true)).await;
+            assert!(
+                matches!(result, Err(BoxliteError::AlreadyExists(_))),
+                "{result:?}"
+            );
+            if collision == "directory" {
+                assert!(occupied.is_dir());
+            } else {
+                assert_eq!(std::fs::read_link(occupied).unwrap(), target);
+                if collision == "symlink" {
+                    assert_eq!(std::fs::read(target).unwrap(), b"original");
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_overwrite_checks_implied_directory_conflicts() {
+        for linked in [false, true] {
+            let tmp = copy_policy_tempdir();
+            let tar_path = tmp.path().join("file.tar");
+            create_single_file_tar(&tar_path, "occupied/new.txt", b"new");
+            let dest = tmp.path().join("output");
+            std::fs::create_dir(&dest).unwrap();
+            let target = dest.join("target");
+            std::fs::create_dir(&target).unwrap();
+            if linked {
+                std::os::unix::fs::symlink(&target, dest.join("occupied")).unwrap();
+            } else {
+                std::fs::write(dest.join("occupied"), b"original").unwrap();
+            }
+            let result = unpack(tar_path, dest.clone(), uc(false, true, true)).await;
+            assert!(
+                matches!(result, Err(BoxliteError::AlreadyExists(_))),
+                "{result:?}"
+            );
+            assert!(!target.join("new.txt").exists());
+            if !linked {
+                assert_eq!(std::fs::read(dest.join("occupied")).unwrap(), b"original");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_overwrite_reuses_directory_without_resetting_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = copy_policy_tempdir();
+        let tar_path = tmp.path().join("dir.tar");
+        create_dir_tar(&tar_path);
+        let dest = tmp.path().join("output");
+        std::fs::create_dir_all(dest.join("mydir")).unwrap();
+        std::fs::set_permissions(dest.join("mydir"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        unpack(tar_path, dest.clone(), uc(false, true, true))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(dest.join("mydir"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::read(dest.join("mydir/file.txt")).unwrap(),
+            b"inside dir"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_overwrite_applies_late_header_to_new_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = copy_policy_tempdir();
+        let tar_path = tmp.path().join("late.tar");
+        let mut builder = tar::Builder::new(std::fs::File::create(&tar_path).unwrap());
+        let mut file = tar::Header::new_gnu();
+        file.set_size(4);
+        file.set_mode(0o600);
+        file.set_cksum();
+        builder
+            .append_data(&mut file, "private/file", b"data".as_slice())
+            .unwrap();
+        let mut directory = tar::Header::new_gnu();
+        directory.set_entry_type(tar::EntryType::Directory);
+        directory.set_size(0);
+        directory.set_mode(0o700);
+        directory.set_cksum();
+        builder
+            .append_data(&mut directory, "private/", io::empty())
+            .unwrap();
+        builder.finish().unwrap();
+        let dest = tmp.path().join("output");
+        unpack(tar_path, dest.clone(), uc(false, true, true))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(dest.join("private"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_overwrite_preserves_competing_directory_metadata() {
+        use std::os::unix::fs::PermissionsExt;
+        struct CompetingReader {
+            data: io::Cursor<Vec<u8>>,
+            target: PathBuf,
+            competitor_created: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl Read for CompetingReader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.data.position() == 512 && std::fs::create_dir(&self.target).is_ok() {
+                    std::fs::set_permissions(&self.target, std::fs::Permissions::from_mode(0o700))?;
+                    self.competitor_created
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                let count = buf.len().min(512);
+                self.data.read(&mut buf[..count])
+            }
+        }
+        let tmp = copy_policy_tempdir();
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(0o600);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "private", io::empty())
+            .unwrap();
+        let target = tmp.path().join("private");
+        let created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reader = CompetingReader {
+            data: io::Cursor::new(builder.into_inner().unwrap()),
+            target: target.clone(),
+            competitor_created: created.clone(),
+        };
+        extract_from_reader(
+            reader,
+            tmp.path(),
+            &uc(false, true, true),
+            None,
+            &|_| Ok(()),
+            None,
+        )
+        .unwrap();
+        let expected = if created.load(std::sync::atomic::Ordering::SeqCst) {
+            0o700
+        } else {
+            0o600
+        };
+        assert_eq!(
+            std::fs::metadata(target).unwrap().permissions().mode() & 0o777,
+            expected,
+            "another creator's metadata must remain intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_overwrite_reports_typed_file_conflict() {
+        let tmp = copy_policy_tempdir();
+        let tar_path = tmp.path().join("file.tar");
+        create_single_file_tar(&tar_path, "keep.txt", b"replacement");
+        let dest = tmp.path().join("keep.txt");
+        std::fs::write(&dest, b"original").unwrap();
+        let error = unpack(tar_path, dest.clone(), default_unpack(false))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::AlreadyExists(_)), "{error:?}");
+        assert_eq!(std::fs::read(dest).unwrap(), b"original");
     }
 
     // ── unpack: mkdir_parents ────────────────────────────────────
@@ -1314,7 +2064,7 @@ mod tests {
         unpack(tar_path, dest.clone(), uc(true, true, true))
             .await
             .unwrap();
-        assert!(dest.join("mydir").join("file.txt").is_file());
+        assert!(dest.join("file.txt").is_file());
     }
 
     /// A failed extraction must carry the errno, not just the operation.
@@ -1358,44 +2108,14 @@ mod tests {
         );
     }
 
-    // ── entry_paths ──────────────────────────────────────────────
-
-    /// The walk must not run on the caller's async worker.
-    ///
-    /// It reads the whole archive (see [`entry_paths`]), and the caller
-    /// chooses how big that is — `boxlite-guest` accepts uploads up to
-    /// 512 MiB. Run inline on the guest agent's runtime, one such copy stalls
-    /// every other RPC sharing that worker — exec output, health checks — for
-    /// as long as the read takes.
-    ///
-    /// A `current_thread` runtime makes the difference observable: one worker,
-    /// so `ticker` can only be polled if the walk yields. Called inline the
-    /// walk never yields and `ticker` is still pending when it returns.
-    #[tokio::test(flavor = "current_thread")]
-    async fn entry_paths_yields_the_worker_while_it_walks() {
-        let tmp = TempDir::new().unwrap();
-        let tar_path = tmp.path().join("big.tar");
-        // Large enough that the read cannot plausibly finish between handing
-        // the closure to the blocking pool and the first poll of its handle,
-        // so a passing assertion means the yield happened, not that it raced.
-        create_single_file_tar(&tar_path, "payload.bin", &vec![0u8; 4 << 20]);
-
-        let ticker = tokio::spawn(async {});
-        let paths = entry_paths(tar_path).await.unwrap();
-
-        assert_eq!(paths, vec![PathBuf::from("payload.bin")]);
-        assert!(
-            ticker.is_finished(),
-            "the walk held the only worker for the whole archive"
-        );
-    }
+    // ── entry names ──────────────────────────────────────────────
 
     /// The tar is caller-supplied. An entry that is absolute or climbs out is
     /// skipped by extraction, so it must be skipped here too — otherwise
     /// `dest.join(entry)` escapes, and in the guest that hands a root-owned
     /// chown a file this copy never created.
     #[test]
-    fn entry_paths_that_escape_the_destination_are_dropped() {
+    fn names_that_escape_the_destination_are_dropped() {
         assert_eq!(sanitize_entry_path(Path::new("../../etc/shadow")), None);
         assert_eq!(sanitize_entry_path(Path::new("a/../../b")), None);
         assert_eq!(sanitize_entry_path(Path::new("..")), None);
@@ -1404,7 +2124,7 @@ mod tests {
     /// An absolute entry keeps its tail, matching extraction stripping the
     /// leading `/` rather than refusing the entry outright.
     #[test]
-    fn absolute_entry_paths_are_made_relative() {
+    fn absolute_names_are_made_relative() {
         assert_eq!(
             sanitize_entry_path(Path::new("/etc/shadow")),
             Some(PathBuf::from("etc/shadow"))
@@ -1412,7 +2132,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_entry_paths_survive() {
+    fn ordinary_names_survive() {
         assert_eq!(
             sanitize_entry_path(Path::new("./dir/file.txt")),
             Some(PathBuf::from("dir/file.txt"))
@@ -1420,79 +2140,40 @@ mod tests {
         assert_eq!(sanitize_entry_path(Path::new(".")), None);
     }
 
-    /// The names must be the ones extraction will actually create, or the
-    /// guest's mount check and its ownership hand-off both reason about a
-    /// layout that never existed.
-    #[tokio::test]
-    async fn entry_paths_match_what_extraction_creates() {
-        let tmp = TempDir::new().unwrap();
-        let tar_path = tmp.path().join("dir.tar");
-        create_dir_tar(&tar_path);
-
-        let names = entry_paths(tar_path.clone()).await.unwrap();
-
-        let dest = tmp.path().join("dest");
-        unpack(tar_path, dest.clone(), uc(true, true, true))
-            .await
-            .unwrap();
-        for name in &names {
-            assert!(
-                dest.join(name).exists(),
-                "{} was named but not extracted",
-                name.display()
-            );
-        }
-        assert_eq!(
-            names,
-            vec![PathBuf::from("mydir"), PathBuf::from("mydir/file.txt")]
-        );
-    }
-
-    /// The other half of the same contract: nothing extraction creates may go
-    /// unnamed.
+    /// Nothing extraction creates may go unreported.
     ///
     /// A tar need not carry an entry for a directory it puts files in, and
     /// plenty of writers emit only leaves — `PUT /boxes/{id}/files` takes any
     /// `application/x-tar` the caller built. Extraction still conjures the
-    /// directories (`tar-0.4.45/src/entry.rs`, `ensure_dir_created`), so a list
-    /// that stops at the leaves under-reports what this copy made, and the
-    /// guest hands the box user only what this list names: the file arrives
-    /// owned by the workload inside a directory still owned by root, which is
-    /// POL-304 again one level up.
+    /// directories (`tar-0.4.45/src/entry.rs`, `ensure_dir_created`), so a
+    /// report that stops at the leaves under-reports what this copy made, and
+    /// the guest hands the box user only what the report names: the file
+    /// arrives owned by the workload inside a directory still owned by root,
+    /// which is POL-304 again one level up.
     #[tokio::test]
-    async fn entry_paths_name_the_directories_a_nested_entry_implies() {
+    async fn the_report_names_the_directories_a_nested_entry_implies() {
+        use tar::EntryType::Regular;
         let tmp = TempDir::new().unwrap();
-        let tar_path = tmp.path().join("leaves.tar");
-        create_leaf_only_tar(&tar_path, &["app/main.py", "app/util.py"]);
-
-        let names = entry_paths(tar_path.clone()).await.unwrap();
-
+        let entries = [("app/main.py", Regular, ""), ("app/util.py", Regular, "")];
         let dest = tmp.path().join("dest");
-        unpack(tar_path, dest.clone(), uc(true, true, false))
+
+        let report = unpack_stream(archive_of(&entries), dest.clone(), uc(true, true, false))
             .await
             .unwrap();
 
-        let named: std::collections::HashSet<PathBuf> =
-            names.iter().map(|rel| dest.join(rel)).collect();
+        let named: std::collections::HashSet<PathBuf> = report
+            .entry_paths
+            .iter()
+            .map(|rel| dest.join(rel))
+            .collect();
         for created in extracted_paths(&dest) {
             assert!(
                 named.contains(&created),
                 "{} was created by extraction but never named; named: {:?}",
                 created.display(),
-                names
+                report.entry_paths
             );
         }
-    }
-
-    /// A truncated archive must not fail the walk: extraction reads the same
-    /// bytes moments later and reports the real parse error.
-    #[tokio::test]
-    async fn entry_paths_on_a_malformed_archive_is_empty_not_an_error() {
-        let tmp = TempDir::new().unwrap();
-        let tar_path = tmp.path().join("junk.tar");
-        std::fs::write(&tar_path, b"not a tar at all").unwrap();
-
-        assert_eq!(entry_paths(tar_path).await.unwrap(), Vec::<PathBuf>::new());
     }
 
     #[tokio::test]
@@ -1749,22 +2430,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_pack_reports_source_is_dir() {
-        let tmp = TempDir::new().unwrap();
-
-        let file = tmp.path().join("f.txt");
-        std::fs::write(&file, b"x").unwrap();
-        let (is_dir, _stream) = pack_stream(file, default_pack()).await.unwrap();
-        assert!(!is_dir);
-
-        let dir = tmp.path().join("d");
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::write(dir.join("f.txt"), b"x").unwrap();
-        let (is_dir, _stream) = pack_stream(dir, default_pack()).await.unwrap();
-        assert!(is_dir);
-    }
-
-    #[tokio::test]
     async fn stream_pack_nonexistent_source_errors() {
         let tmp = TempDir::new().unwrap();
         let result = pack_stream(tmp.path().join("does-not-exist"), default_pack()).await;
@@ -1777,7 +2442,7 @@ mod tests {
         let src = tmp.path().join("hello.txt");
         std::fs::write(&src, b"streaming hello").unwrap();
 
-        let (source_is_dir, stream) = pack_stream(
+        let stream = pack_stream(
             src,
             PackContext {
                 follow_symlinks: true,
@@ -1786,7 +2451,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!source_is_dir);
 
         let dest = tmp.path().join("dest.txt");
         let report = unpack_stream(stream, dest.clone(), uc(true, true, false))
@@ -1795,20 +2459,22 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "streaming hello");
         assert_eq!(
             report.entry_paths,
-            vec![PathBuf::from("hello.txt")],
-            "streamed extraction must report the entry it created"
+            Vec::<PathBuf>::new(),
+            "a file landing as the destination has no path below it to report"
         );
     }
 
+    /// POL-593: a directory streamed to a missing destination becomes it, as
+    /// `docker cp SRC DEST` lands it, and the report names where entries landed.
     #[tokio::test]
-    async fn stream_roundtrip_dir_tree() {
+    async fn stream_dir_to_a_missing_dest_becomes_it() {
         let tmp = TempDir::new().unwrap();
         let src_dir = tmp.path().join("s");
         std::fs::create_dir_all(src_dir.join("sub")).unwrap();
         std::fs::write(src_dir.join("a.txt"), "aaa").unwrap();
         std::fs::write(src_dir.join("sub").join("b.txt"), "bbb").unwrap();
 
-        let (source_is_dir, stream) = pack_stream(
+        let stream = pack_stream(
             src_dir,
             PackContext {
                 follow_symlinks: true,
@@ -1817,26 +2483,505 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(source_is_dir);
 
         let dest = tmp.path().join("out");
         let report = unpack_stream(stream, dest.clone(), uc(true, true, true))
             .await
             .unwrap();
+        assert_eq!(std::fs::read_to_string(dest.join("a.txt")).unwrap(), "aaa");
         assert_eq!(
-            std::fs::read_to_string(dest.join("s").join("a.txt")).unwrap(),
-            "aaa"
-        );
-        assert_eq!(
-            std::fs::read_to_string(dest.join("s").join("sub").join("b.txt")).unwrap(),
+            std::fs::read_to_string(dest.join("sub").join("b.txt")).unwrap(),
             "bbb"
         );
-        for expected in ["s", "s/a.txt", "s/sub", "s/sub/b.txt"] {
+        for expected in ["a.txt", "sub", "sub/b.txt"] {
             assert!(
                 report.entry_paths.contains(&PathBuf::from(expected)),
                 "created paths missing {expected}: {:?}",
                 report.entry_paths
             );
         }
+    }
+
+    // ── landing each entry ───────────────────────────────────────
+
+    /// A one-chunk stream of `(name, kind, link target)` entries, as a caller
+    /// may build one; a regular file holds its own name.
+    fn archive_of(entries: &[(&str, tar::EntryType, &str)]) -> BoxByteStream {
+        let mut builder = tar::Builder::new(Vec::new());
+        for &(name, kind, target) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(kind);
+            header.set_mode(0o755);
+            let data = if kind.is_file() { name.as_bytes() } else { &[] };
+            header.set_size(data.len() as u64);
+            if kind.is_hard_link() || kind.is_symlink() {
+                builder.append_link(&mut header, name, target).unwrap();
+            } else {
+                builder.append_data(&mut header, name, data).unwrap();
+            }
+        }
+        Box::pin(futures::stream::iter([Ok(builder.into_inner().unwrap())]))
+    }
+
+    /// A PAX global header (`git archive` leads with one) describes the
+    /// archive; extraction creates nothing for it, so it is not reported.
+    #[tokio::test]
+    async fn a_pax_global_header_is_not_reported() {
+        use tar::EntryType::{Regular, XGlobalHeader};
+        let tmp = TempDir::new().unwrap();
+        let entries = [("pax_global_header", XGlobalHeader, ""), ("a", Regular, "")];
+
+        let report = unpack_stream(
+            archive_of(&entries),
+            tmp.path().join("out"),
+            uc(true, true, true),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.entry_paths, vec![PathBuf::from("a")]);
+    }
+
+    /// A hard link's target names another entry, found in the destination.
+    #[tokio::test]
+    async fn hard_links_resolve_in_the_destination() {
+        use std::os::unix::fs::MetadataExt;
+        use tar::EntryType::{Directory, Link, Regular};
+        let tmp = TempDir::new().unwrap();
+        let dest = tmp.path().to_path_buf();
+        let entries = [
+            ("X/", Directory, ""),
+            ("X/a", Regular, ""),
+            ("X/h", Link, "X/a"),
+        ];
+
+        unpack_stream(archive_of(&entries), dest.clone(), uc(true, true, true))
+            .await
+            .unwrap();
+
+        let inode = |name: &str| std::fs::metadata(dest.join(name)).unwrap().ino();
+        assert_eq!(inode("X/h"), inode("X/a"));
+    }
+
+    /// A failure names the paths involved, as tar-rs's own errors do.
+    #[tokio::test]
+    async fn landing_errors_name_their_paths() {
+        use tar::EntryType::Link;
+        let tmp = TempDir::new().unwrap();
+        let entries = [("h", Link, "missing-target")];
+
+        let err = unpack_stream(
+            archive_of(&entries),
+            tmp.path().to_path_buf(),
+            uc(true, true, true),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("missing-target"), "{err}");
+    }
+
+    /// Nothing lands outside the destination: not through a symlink an
+    /// earlier entry made, nor as a hard link to a file outside it. These are
+    /// the checks `unpack_in` makes, which landing makes itself.
+    #[tokio::test]
+    async fn entries_cannot_reach_out_of_the_destination() {
+        use std::os::unix::fs::MetadataExt;
+        use tar::EntryType::{Directory, Link, Regular, Symlink};
+        let tmp = TempDir::new().unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let secret = outside.join("secret");
+        std::fs::write(&secret, "s").unwrap();
+        let through_symlink = [
+            ("X/", Directory, ""),
+            ("X/s", Symlink, outside.to_str().unwrap()),
+            ("X/s/f", Regular, ""),
+        ];
+        let hard_link_out = [
+            ("X/", Directory, ""),
+            ("X/h", Link, secret.to_str().unwrap()),
+        ];
+        for (i, entries) in [&through_symlink[..], &hard_link_out[..]]
+            .iter()
+            .enumerate()
+        {
+            for exists in [false, true] {
+                let dest = tmp.path().join(format!("out-{i}-{exists}"));
+                if exists {
+                    std::fs::create_dir(&dest).unwrap();
+                }
+
+                let result = unpack_stream(archive_of(entries), dest, uc(true, true, true)).await;
+
+                assert!(result.is_err(), "case {i}, exists={exists}");
+                assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+                assert_eq!(std::fs::metadata(&secret).unwrap().nlink(), 1);
+            }
+        }
+    }
+
+    /// A file with holes travels as a GNU sparse entry (BoxLite's packer
+    /// leaves tar-rs's sparse detection on) and lands with its holes.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn sparse_files_land_with_their_holes() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("s");
+        std::fs::create_dir(&src).unwrap();
+        let image = std::fs::File::create(src.join("disk.img")).unwrap();
+        image.set_len(1 << 20).unwrap();
+        let tar_path = tmp.path().join("s.tar");
+        pack(src, tar_path.clone(), contents_pack()).await.unwrap();
+        let kinds = archived_entries(&tar_path);
+        assert!(kinds
+            .iter()
+            .any(|(_, kind)| *kind == tar::EntryType::GNUSparse));
+
+        let dest = tmp.path().join("out");
+        unpack_stream_owned(
+            Box::pin(futures::stream::iter([Ok(
+                std::fs::read(&tar_path).unwrap()
+            )])),
+            dest.clone(),
+            uc(true, true, true),
+            tmp.path().to_path_buf(),
+            (
+                nix::unistd::Uid::current().as_raw(),
+                nix::unistd::Gid::current().as_raw(),
+            ),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+        let landed = std::fs::metadata(dest.join("disk.img")).unwrap();
+        assert_eq!(landed.len(), 1 << 20);
+        assert_eq!(landed.blocks(), 0, "the hole must not be written out");
+    }
+
+    // ── streaming landing: docker cp's rule ──────────────────────
+
+    /// `parent/s/sub/b.txt`: the contents are one directory, so only the
+    /// leading `./` of `SRC/.` keeps `sub` from passing for the archive root.
+    fn source_tree(parent: &Path) -> PathBuf {
+        let src = parent.join("s");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub").join("b.txt"), "b").unwrap();
+        src
+    }
+
+    /// Stream `src` as a copy does, `SRC` or (`contents`) `SRC/.`, to `dest`.
+    async fn stream_copy(src: &Path, contents: bool, dest: &Path) -> BoxliteResult<UnpackReport> {
+        let opts = PackContext {
+            follow_symlinks: false,
+            include_parent: !contents,
+        };
+        let stream = pack_stream(src.to_path_buf(), opts).await?;
+        unpack_stream(stream, dest.to_path_buf(), uc(true, true, true)).await
+    }
+
+    /// Paths under `root`, relative to it and sorted, read off the disk.
+    fn landed(root: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = extracted_paths(root)
+            .iter()
+            .map(|path| path.strip_prefix(root).unwrap().to_path_buf())
+            .collect();
+        found.sort();
+        found
+    }
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    /// The rest of docker cp's table: an existing destination keeps `SRC`
+    /// under its own name, and `SRC/.` lands the contents either way. The
+    /// report matches the disk.
+    #[tokio::test]
+    async fn stream_dirs_land_the_way_docker_cp_does() {
+        // (`SRC/.`, destination exists, what lands in the destination)
+        let cases: [(bool, bool, &[&str]); 3] = [
+            (false, true, &["s", "s/sub", "s/sub/b.txt"]),
+            (true, false, &["sub", "sub/b.txt"]),
+            (true, true, &["sub", "sub/b.txt"]),
+        ];
+        for (contents, exists, expected) in cases {
+            let tmp = TempDir::new().unwrap();
+            let dest = tmp.path().join("out");
+            if exists {
+                std::fs::create_dir(&dest).unwrap();
+            }
+
+            let report = stream_copy(&source_tree(tmp.path()), contents, &dest)
+                .await
+                .unwrap();
+
+            let case = format!("contents={contents} exists={exists}");
+            let mut reported = report.entry_paths;
+            reported.sort();
+            assert_eq!(landed(&dest), paths(expected), "{case}");
+            assert_eq!(reported, paths(expected), "{case}");
+        }
+    }
+
+    /// `overwrite=false` refuses an existing destination only: one the copy
+    /// creates holds nothing to overwrite.
+    #[tokio::test]
+    async fn a_missing_dest_needs_no_overwrite() {
+        let tmp = TempDir::new().unwrap();
+        let src = source_tree(tmp.path());
+        let stream = pack_stream(src.clone(), default_pack()).await.unwrap();
+        unpack_stream(stream, tmp.path().join("streamed"), uc(false, true, true))
+            .await
+            .unwrap();
+
+        let tar_path = tmp.path().join("s.tar");
+        pack(src, tar_path.clone(), default_pack()).await.unwrap();
+        unpack(tar_path, tmp.path().join("unpacked"), uc(false, true, true))
+            .await
+            .unwrap();
+    }
+
+    /// What a rooted archive lands in a new destination. A PAX global header
+    /// (`git archive --prefix=X/` leads with one) describes the archive, so
+    /// `X` is still the root; a hard link's target is re-rooted with it.
+    #[tokio::test]
+    async fn rooted_archives_land_their_contents() {
+        use tar::EntryType::{Directory, Link, Regular, XGlobalHeader};
+        type ArchiveCase<'a> = (&'a [(&'a str, tar::EntryType, &'a str)], &'a [&'a str]);
+        let cases: [ArchiveCase<'_>; 2] = [
+            (
+                &[
+                    ("pax_global_header", XGlobalHeader, ""),
+                    ("X/", Directory, ""),
+                    ("X/a", Regular, ""),
+                ],
+                &["a"],
+            ),
+            (
+                &[
+                    ("X/", Directory, ""),
+                    ("X/a", Regular, ""),
+                    ("X/h", Link, "X/a"),
+                ],
+                &["a", "h"],
+            ),
+        ];
+        for (entries, expected) in cases {
+            let tmp = TempDir::new().unwrap();
+            let dest = tmp.path().join("out");
+
+            let report = unpack_stream(archive_of(entries), dest.clone(), uc(true, true, true))
+                .await
+                .unwrap();
+
+            assert_eq!(landed(&dest), paths(expected));
+            assert_eq!(report.entry_paths, paths(expected));
+        }
+    }
+
+    /// Once an archive led by `b/` has landed `b`'s contents in a new
+    /// destination, an entry outside `b/` cannot land: the copy fails as the
+    /// caller's error and keeps what it wrote.
+    #[tokio::test]
+    async fn entries_outside_the_root_fail_a_copy_to_a_missing_dest() {
+        use tar::EntryType::{Directory, Link, Regular};
+        let led = [("b/", Directory, ""), ("b/c.txt", Regular, "")];
+        let outside = [
+            ("a.txt", Regular, ""),
+            // `bx` starts with `b` but is not under it.
+            ("bx/y", Regular, ""),
+            ("b/h", Link, "a.txt"),
+        ];
+        for last in outside {
+            let tmp = TempDir::new().unwrap();
+            let dest = tmp.path().join("out");
+
+            let archive = archive_of(&[led[0], led[1], last]);
+            let err = unpack_stream(archive, dest.clone(), uc(true, true, true))
+                .await
+                .unwrap_err();
+
+            assert!(matches!(err, BoxliteError::InvalidArgument(_)), "{err}");
+            assert_eq!(landed(&dest), paths(&["c.txt"]), "{last:?}");
+        }
+    }
+
+    /// Entries land straight in the destination, so a stream that fails
+    /// mid-archive keeps what it wrote.
+    #[tokio::test]
+    async fn a_failed_copy_keeps_what_it_wrote() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("s.tar");
+        pack(source_tree(tmp.path()), tar_path.clone(), default_pack())
+            .await
+            .unwrap();
+        let mut archive = std::fs::read(&tar_path).unwrap();
+        // `s/`, `s/sub/`, then `s/sub/b.txt`: a header and one data block.
+        archive.truncate(4 * 512);
+        let severed: BoxByteStream = Box::pin(futures::stream::iter([
+            Ok(archive),
+            Err(io::Error::other("connection reset")),
+        ]));
+        let dest = tmp.path().join("out");
+
+        let result = unpack_stream(severed, dest.clone(), uc(true, true, true)).await;
+
+        assert!(result.is_err());
+        assert_eq!(landed(&dest), paths(&["sub", "sub/b.txt"]));
+    }
+
+    /// The root's mode lands on the destination after everything inside it,
+    /// so a read-only source root still lands whole.
+    #[tokio::test]
+    async fn stream_read_only_dir_to_a_missing_dest_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let set_mode = |path: &Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        };
+        let tmp = TempDir::new().unwrap();
+        let src = source_tree(tmp.path());
+        let dest = tmp.path().join("out");
+        set_mode(&src, 0o555).unwrap();
+
+        let result = stream_copy(&src, false, &dest).await;
+        let mode = std::fs::metadata(&dest).map(|meta| meta.permissions().mode() & 0o777);
+        // Writable again, so `TempDir` can clean up.
+        for dir in [&src, &dest] {
+            let _ = set_mode(dir, 0o755);
+        }
+
+        result.unwrap();
+        assert_eq!(mode.unwrap(), 0o555);
+        assert_eq!(landed(&dest), paths(&["sub", "sub/b.txt"]));
+    }
+
+    /// Land `entries` at `<tmp>/out` without `force_directory`, once from a
+    /// file and once from a stream, after `prepare` has set up `out`.
+    async fn land_both(
+        entries: &[(&str, tar::EntryType, &str)],
+        prepare: fn(&Path),
+    ) -> Vec<(TempDir, PathBuf, BoxliteResult<()>)> {
+        let bytes: Vec<u8> = archive_of(entries).map(Result::unwrap).concat().await;
+        let mut landings = Vec::new();
+        for streamed in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let dest = tmp.path().join("out");
+            prepare(&dest);
+            let result = if streamed {
+                let stream: BoxByteStream = Box::pin(futures::stream::iter([Ok(bytes.clone())]));
+                unpack_stream(stream, dest.clone(), uc(true, true, false))
+                    .await
+                    .map(drop)
+            } else {
+                let tar_path = tmp.path().join("in.tar");
+                std::fs::write(&tar_path, &bytes).unwrap();
+                unpack(tar_path, dest.clone(), uc(true, true, false)).await
+            };
+            landings.push((tmp, dest, result));
+        }
+        landings
+    }
+
+    /// With no directory to land in, an archive led by anything but a
+    /// directory lands that entry as the destination, as `docker cp` lands a
+    /// file: a symlink too. A PAX global header describes the archive, so the
+    /// entry after it leads.
+    #[tokio::test]
+    async fn a_leading_non_directory_becomes_the_dest() {
+        use tar::EntryType::{Regular, Symlink, XGlobalHeader};
+        let symlink = [("l", Symlink, "target")];
+        let git_archive = [("pax_global_header", XGlobalHeader, ""), ("a", Regular, "")];
+
+        for (_tmp, dest, result) in land_both(&symlink, |_| {}).await {
+            result.unwrap();
+            assert_eq!(std::fs::read_link(&dest).unwrap(), PathBuf::from("target"));
+        }
+        for (_tmp, dest, result) in land_both(&git_archive, |_| {}).await {
+            result.unwrap();
+            assert_eq!(std::fs::read_to_string(&dest).unwrap(), "a");
+        }
+    }
+
+    /// A copy to a file lands one entry: anything after the file that leads
+    /// the archive fails the copy as the caller's error, and the file stays.
+    #[tokio::test]
+    async fn entries_after_a_leading_file_fail_the_copy() {
+        use tar::EntryType::Regular;
+        let entries = [("a", Regular, ""), ("b", Regular, "")];
+
+        for (_tmp, dest, result) in land_both(&entries, |_| {}).await {
+            let err = result.unwrap_err();
+            assert!(matches!(err, BoxliteError::InvalidArgument(_)), "{err}");
+            assert_eq!(std::fs::read_to_string(&dest).unwrap(), "a");
+        }
+    }
+
+    /// A directory cannot land on a file: the copy is the caller's error and
+    /// leaves the file as it was.
+    #[tokio::test]
+    async fn a_directory_cannot_land_on_a_file() {
+        use tar::EntryType::{Directory, Regular};
+        let entries = [("X/", Directory, ""), ("X/a", Regular, "")];
+
+        for (_tmp, dest, result) in
+            land_both(&entries, |dest| std::fs::write(dest, "file").unwrap()).await
+        {
+            let err = result.unwrap_err();
+            assert!(matches!(err, BoxliteError::InvalidArgument(_)), "{err}");
+            assert_eq!(std::fs::read_to_string(&dest).unwrap(), "file");
+        }
+    }
+
+    /// A hard link that leads an archive has no entry before it to link to.
+    #[tokio::test]
+    async fn a_leading_hard_link_is_refused() {
+        use tar::EntryType::Link;
+        let entries = [("h", Link, "a")];
+
+        for (_tmp, dest, result) in land_both(&entries, |_| {}).await {
+            let err = result.unwrap_err();
+            assert!(matches!(err, BoxliteError::InvalidArgument(_)), "{err}");
+            assert!(dest.symlink_metadata().is_err());
+        }
+    }
+
+    /// A refused entry is never written: the veto is asked where each entry
+    /// lands, relative to the destination, before extraction writes it.
+    /// Entries before it stay, as any failed copy keeps what it wrote.
+    #[tokio::test]
+    async fn a_refused_entry_is_never_written() {
+        use tar::EntryType::{Directory, Regular};
+        let tmp = TempDir::new().unwrap();
+        let entries = [
+            ("X/", Directory, ""),
+            ("X/a", Regular, ""),
+            ("X/hosts", Regular, ""),
+            ("X/b", Regular, ""),
+        ];
+        let dest = tmp.path().join("out");
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&asked);
+
+        let err = unpack_stream_refusing(
+            archive_of(&entries),
+            dest.clone(),
+            uc(true, true, false),
+            None,
+            move |landed: &Path| {
+                seen.lock().unwrap().push(landed.to_path_buf());
+                if landed == Path::new("hosts") {
+                    return Err(BoxliteError::Unsupported("hosts is shadowed".into()));
+                }
+                Ok(())
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, BoxliteError::Unsupported(_)), "{err}");
+        assert_eq!(*asked.lock().unwrap(), paths(&["", "a", "hosts"]));
+        assert_eq!(landed(&dest), paths(&["a"]));
     }
 }

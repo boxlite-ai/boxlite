@@ -14,20 +14,21 @@ import {
   InternalServerErrorException,
   HttpException,
   HttpStatus,
+  ServiceUnavailableException,
 } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { Request, Response } from 'express'
 import { Observable, Subscriber, firstValueFrom } from 'rxjs'
-import { AUDIT_CONTEXT_KEY, AuditContext, AuditTargetId } from '../decorators/audit.decorator'
+import { AUDIT_CONTEXT_KEY, AUDIT_TARGET_ID, AuditContext, AuditTargetId } from '../decorators/audit.decorator'
 import { AuditLog, AuditLogMetadata } from '../entities/audit-log.entity'
-import { AuditAction } from '../enums/audit-action.enum'
-import { AuditService } from '../services/audit.service'
+import { AuditService, PendingAuditLease } from '../services/audit.service'
 import { AuthContextType, isAuthContext } from '../../common/interfaces/auth-context.interface'
 import { CustomHeaders } from '../../common/constants/header.constants'
-import { TypedConfigService } from '../../config/typed-config.service'
+import { AUDIT_WRITE_TIMEOUT_MS, remainingAuditTime } from '../audit-write-deadline'
 
 type RequestWithUser = Request & {
   user?: AuthContextType
+  [AUDIT_TARGET_ID]?: string
 }
 
 @Injectable()
@@ -37,7 +38,6 @@ export class AuditInterceptor implements NestInterceptor {
   constructor(
     private readonly reflector: Reflector,
     private readonly auditService: AuditService,
-    private readonly configService: TypedConfigService,
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
@@ -47,12 +47,7 @@ export class AuditInterceptor implements NestInterceptor {
     const auditContext = this.reflector.get<AuditContext>(AUDIT_CONTEXT_KEY, context.getHandler())
 
     // Non-audited request
-    if (!auditContext) {
-      return next.handle()
-    }
-
-    // Toolbox requests are not audited by default
-    if (this.isToolboxAction(auditContext.action) && !this.configService.get('audit.toolboxRequestsEnabled')) {
+    if (!auditContext || (auditContext.methods && !auditContext.methods.includes(request.method))) {
       return next.handle()
     }
 
@@ -76,46 +71,130 @@ export class AuditInterceptor implements NestInterceptor {
     observer: Subscriber<any>,
   ): Promise<void> {
     try {
+      const deadline = performance.now() + AUDIT_WRITE_TIMEOUT_MS
       const actor = this.resolveActor(request.user)
-      const auditLog = await this.auditService.createLog({
-        actorId: actor.actorId,
-        actorEmail: actor.actorEmail,
-        organizationId: actor.organizationId,
-        action: auditContext.action,
-        targetType: auditContext.targetType,
-        targetId: this.resolveTargetId(auditContext, request),
-        ipAddress: request.ip,
-        userAgent: request.get('user-agent'),
-        source: request.get(CustomHeaders.SOURCE.name),
-        metadata: this.resolveRequestMetadata(auditContext, request),
-      })
+      const auditLog = await this.auditService.createLog(
+        {
+          actorId: actor.actorId,
+          actorEmail: actor.actorEmail,
+          organizationId: this.resolveOrganizationId(auditContext, request) ?? actor.organizationId,
+          action: auditContext.action,
+          targetType: auditContext.targetType,
+          targetId: this.resolveTargetId(auditContext, request),
+          ipAddress: request.ip,
+          userAgent: request.get('user-agent'),
+          source: request.get(CustomHeaders.SOURCE.name),
+          metadata: this.resolveRequestMetadata(auditContext, request),
+        },
+        remainingAuditTime(deadline),
+      )
 
+      const completeResponse =
+        auditContext.completion === 'response'
+          ? this.observeResponse(
+              auditContext,
+              auditLog,
+              request,
+              response,
+              await this.auditService.keepPendingLogAlive(auditLog.id, remainingAuditTime(deadline)),
+            )
+          : undefined
       try {
+        remainingAuditTime(deadline)
+      } catch (error) {
+        completeResponse?.(0, 'Audit deadline exceeded before execution.')
+        throw error
+      }
+      try {
+        // A client can disconnect while the initial audit insert is pending.
+        if (completeResponse && response.destroyed) {
+          completeResponse(0, 'Response closed before completion.')
+          observer.next(undefined)
+          observer.complete()
+          return
+        }
         const result = await firstValueFrom(next.handle())
 
-        const organizationId = this.resolveOrganizationId(request, result)
+        const organizationId = this.resolveOrganizationId(auditContext, request, result)
         const targetId = this.resolveTargetId(auditContext, request, result)
         const statusCode = response.statusCode || HttpStatus.NO_CONTENT
-        await this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
+        if (!completeResponse) await this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
 
         observer.next(result)
         observer.complete()
       } catch (handlerError) {
         const errorMessage =
-          handlerError instanceof HttpException ? handlerError.message : 'An unexpected error occurred.'
+          auditContext.errorMessage ??
+          (handlerError instanceof HttpException ? handlerError.message : 'An unexpected error occurred.')
         const statusCode = this.resolveErrorStatusCode(handlerError)
-        await this.recordHandlerError(auditLog, errorMessage, statusCode)
+        if (completeResponse) {
+          completeResponse(statusCode, 'Request failed.')
+        } else {
+          await this.recordHandlerError(auditLog, errorMessage, statusCode, request[AUDIT_TARGET_ID])
+        }
 
         observer.error(handlerError)
       }
     } catch (createLogError) {
       this.logger.error('Failed to create audit log:', createLogError)
-      observer.error(new InternalServerErrorException())
+      observer.error(
+        createLogError instanceof ServiceUnavailableException ? createLogError : new InternalServerErrorException(),
+      )
     }
   }
 
-  private resolveOrganizationId(request: RequestWithUser, result?: any): string | null {
-    return result?.organizationId || this.resolveActor(request.user).organizationId || null
+  private observeResponse(
+    context: AuditContext,
+    log: AuditLog,
+    request: RequestWithUser,
+    response: Response,
+    lease: PendingAuditLease,
+  ) {
+    let completed = false
+    const finish = () => complete(response.statusCode)
+    const close = () =>
+      complete(
+        response.writableFinished ? response.statusCode : 0,
+        response.writableFinished ? undefined : 'Response closed before completion.',
+      )
+    const error = () => complete(0, 'Response failed before completion.')
+    const abort = () => {
+      complete(0, 'Response audit lease lost.')
+      response.destroy()
+    }
+    const complete = (statusCode: number, errorMessage?: string) => {
+      if (completed) return
+      // Claim completion and detach before the asynchronous database write.
+      completed = true
+      response.off('finish', finish)
+      response.off('close', close)
+      response.off('error', error)
+      lease.signal.removeEventListener('abort', abort)
+      void lease
+        .complete({
+          statusCode,
+          errorMessage,
+          targetId: this.resolveTargetId(context, request),
+          organizationId: this.resolveOrganizationId(context, request),
+        })
+        .catch((error) => this.logger.error(`Failed to record response result for audit ${log.id}`, error))
+    }
+    response.once('finish', finish)
+    response.once('close', close)
+    response.once('error', error)
+    lease.signal.addEventListener('abort', abort, { once: true })
+    if (lease.signal.aborted) abort()
+    return complete
+  }
+
+  private resolveOrganizationId(auditContext: AuditContext, request: RequestWithUser, result?: any): string | null {
+    const requested = auditContext.organizationIdFromRequest?.(request)
+    return (
+      this.normalizeTargetId(requested) ||
+      result?.organizationId ||
+      this.resolveActor(request.user).organizationId ||
+      null
+    )
   }
 
   /**
@@ -139,6 +218,7 @@ export class AuditInterceptor implements NestInterceptor {
    * Prioritizes resolving the ID from the response object as the request may not include a unique resource identifier (e.g. delete box by name).
    */
   private resolveTargetId(auditContext: AuditContext, request: RequestWithUser, result?: any): string | null {
+    if (request[AUDIT_TARGET_ID]) return request[AUDIT_TARGET_ID]
     if (auditContext.targetIdFromResult && result) {
       const targetId = this.normalizeTargetId(auditContext.targetIdFromResult(result))
       if (targetId) {
@@ -183,10 +263,6 @@ export class AuditInterceptor implements NestInterceptor {
     return Object.keys(resolvedMetadata).length > 0 ? resolvedMetadata : null
   }
 
-  private isToolboxAction(action: AuditAction): boolean {
-    return action.startsWith('toolbox_')
-  }
-
   private async recordHandlerSuccess(
     auditLog: AuditLog,
     organizationId: string | null,
@@ -194,22 +270,36 @@ export class AuditInterceptor implements NestInterceptor {
     statusCode: number,
   ): Promise<void> {
     try {
-      await this.auditService.updateLog(auditLog.id, {
-        organizationId,
-        targetId,
-        statusCode,
-      })
+      await this.auditService.updateLog(
+        auditLog.id,
+        {
+          organizationId,
+          targetId,
+          statusCode,
+        },
+        AUDIT_WRITE_TIMEOUT_MS,
+      )
     } catch (error) {
       this.logger.error('Failed to record handler result:', error)
     }
   }
 
-  private async recordHandlerError(auditLog: AuditLog, errorMessage: string, statusCode: number): Promise<void> {
+  private async recordHandlerError(
+    auditLog: AuditLog,
+    errorMessage: string,
+    statusCode: number,
+    targetId?: string,
+  ): Promise<void> {
     try {
-      await this.auditService.updateLog(auditLog.id, {
-        errorMessage,
-        statusCode,
-      })
+      await this.auditService.updateLog(
+        auditLog.id,
+        {
+          errorMessage,
+          statusCode,
+          ...(targetId ? { targetId } : {}),
+        },
+        AUDIT_WRITE_TIMEOUT_MS,
+      )
     } catch (error) {
       this.logger.error('Failed to record handler error:', error)
     }

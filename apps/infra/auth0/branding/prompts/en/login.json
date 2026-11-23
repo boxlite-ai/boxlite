@@ -2,6 +2,6 @@
   "_comment": "The single-step login screen, shown only when Identifier First is off; it carries the same copy as login-id so the two variants never disagree when that toggle moves.",
   "login": {
     "title": "Start building on BoxLite",
-    "description": "$100 in free credits with your new account."
+    "description": "\u200b"
   }
 }

@@ -104,7 +104,7 @@ async def test_invalid_argument_zero_cpu_returns_400(rt):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Production bug: CreateBoxDto.memory_mib has @Min(256) but negative "
+        "Production bug: CreateBoxDto.memory_mib has @Min(128) but negative "
         "values are silently coerced to the org default (1024 MiB). Same root "
         "cause as test_invalid_argument_zero_cpu_returns_400 — the global "
         "ValidationPipe doesn't reject out-of-range values for @IsOptional "

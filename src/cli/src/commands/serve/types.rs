@@ -19,7 +19,7 @@ pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub rootfs_path: Option<String>,
     #[serde(default)]
-    pub cpus: Option<u8>,
+    pub cpus: Option<f64>,
     #[serde(default)]
     pub memory_mib: Option<u32>,
     #[serde(default)]
@@ -53,7 +53,7 @@ pub(super) struct CreateBoxRequest {
     pub auto_resume: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
-    /// Secret placeholder rules for outbound HTTPS requests. Placeholder
+    /// Secrets injected into outbound HTTPS request headers. Placeholder
     /// defaults to `<BOXLITE_SECRET:{name}>` when omitted — applied in
     /// `build_box_options`, matching the Go SDK's own default.
     #[serde(default)]
@@ -83,6 +83,7 @@ pub(super) struct SecretSpecRequest {
     pub hosts: Vec<String>,
     #[serde(default)]
     pub placeholder: Option<String>,
+    pub headers: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -161,7 +162,8 @@ pub(super) struct BoxResponse {
     pub updated_at: String,
     pub pid: Option<u32>,
     pub image: String,
-    pub cpus: u8,
+    #[serde(serialize_with = "boxlite::runtime::cpu_count::serialize")]
+    pub cpus: f64,
     pub memory_mib: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privileged: Option<bool>,
@@ -353,6 +355,7 @@ pub(super) struct ServerConfig {
 
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
+    pub checkpoints_enabled: bool,
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
     pub snapshots_enabled: bool,
@@ -491,4 +494,35 @@ pub(super) struct RemoveQuery {
 #[derive(Deserialize)]
 pub(super) struct FileQuery {
     pub path: String,
+    pub overwrite: Option<bool>,
+}
+
+#[cfg(test)]
+mod upload_query_tests {
+    use super::FileQuery;
+
+    #[test]
+    fn upload_overwrite_defaults_and_false_remain_distinct() {
+        let missing: FileQuery = serde_json::from_str(r#"{"path":"/app"}"#).unwrap();
+        let disabled: FileQuery =
+            serde_json::from_str(r#"{"path":"/app","overwrite":false}"#).unwrap();
+        assert!(missing.overwrite.unwrap_or(true));
+        assert!(!disabled.overwrite.unwrap_or(true));
+        assert!(
+            serde_json::from_str::<FileQuery>(r#"{"path":"/app","overwrite":"invalid"}"#).is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn required_headers_create_rejects_missing_map() {
+        let result = serde_json::from_str::<SecretSpecRequest>(
+            r#"{"name":"x","value":"token","hosts":["api.test.com"]}"#,
+        );
+        assert!(result.is_err(), "serve accepted a secret with no headers");
+    }
 }

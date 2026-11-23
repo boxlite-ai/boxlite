@@ -75,9 +75,6 @@ export class Region {
   proxyUrl: string | null
 
   @Column({ nullable: true })
-  toolboxProxyUrl: string | null
-
-  @Column({ nullable: true })
   proxyApiKeyHash: string | null
 
   constructor(params: {
@@ -87,7 +84,6 @@ export class Region {
     id?: string
     organizationId?: string | null
     proxyUrl?: string | null
-    toolboxProxyUrl?: string | null
     proxyApiKeyHash?: string | null
   }) {
     this.name = params.name
@@ -104,7 +100,6 @@ export class Region {
     }
 
     this.proxyUrl = params.proxyUrl ?? null
-    this.toolboxProxyUrl = params.toolboxProxyUrl ?? params.proxyUrl ?? null
     this.proxyApiKeyHash = params.proxyApiKeyHash ?? null
   }
 

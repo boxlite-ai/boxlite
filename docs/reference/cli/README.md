@@ -178,7 +178,7 @@ Commands without shared options omit the global section.
 | `OIDC_CLIENT_ID` | `auth login` | OIDC client-id fallback after an explicit flag and server discovery |
 | `OIDC_AUDIENCE` | `auth login` | OIDC audience fallback after an explicit flag and server discovery |
 | `BOXLITE_LOG_FILE` | logging | Explicit JSON log-file path for any command; a bare filename is relative to the current directory. `serve` otherwise logs to `<BOXLITE_HOME>/logs/serve.log`. |
-| `BOXLITE_EXPERIMENTAL` | `run`, `create` | Comma-separated RC features: `custom-kernel`, `nested-virtualization` |
+| `BOXLITE_EXPERIMENTAL` | `run`, `create` | Comma-separated RC features: `custom-kernel`, `nested-virtualization`, `native-vmm` |
 | `BOXLITE_RECONNECT_GRACE` | `serve` | Reconnect grace before SIGHUP; default `5m` |
 | `BOXLITE_SHUTDOWN_GRACE` | `serve` | Grace between shutdown escalation stages; default `30s` |
 | `BOXLITE_MAX_SESSION_LIFETIME` | `serve` | Session hard cap; default `24h` |
@@ -222,7 +222,7 @@ and [`boxlite auth whoami`](#boxlite-auth-whoami) for the full command surface.
 
 | Command | Behavior |
 |---------|----------|
-| `boxlite context use NAME` | Save the current context for subsequent commands. Validates that a named context exists; `default` always exists. |
+| `boxlite context use NAME` | Save the current context for subsequent commands. Validates that a named context exists; `default` and `embedded` always exist. |
 | `boxlite context show` | Print the effective name, including flag and environment overrides. Does not validate credentials or contact the server. |
 | `boxlite context ls` | List names and endpoints; mark the effective context with `*`. Alias: `list`. `-q` / `--quiet` prints names only. |
 
@@ -253,6 +253,28 @@ Existing remote default logins therefore keep working. `local` is an ordinary
 user-defined name. A missing named context fails before a workload starts, without
 falling back to the embedded runtime. Logout removes credentials but keeps the
 selection; log in again or explicitly `context use default` to recover.
+
+`embedded` is a built-in context that always selects the embedded runtime. It is
+always listed, and `context use embedded` works in any home, so the embedded
+runtime stays reachable after a login stored under `default`:
+
+```bash
+boxlite auth login --url https://<your-server>   # stored under `default`
+boxlite context ls
+# NAME                     ENDPOINT
+# default *                https://<your-server>
+# embedded                 embedded
+boxlite context use embedded
+boxlite list                       # embedded runtime
+```
+
+`auth login` refuses the name `embedded`, and `BOXLITE_API_KEY` has no effect on
+it. It follows the precedence above like any named context: explicit
+`--context embedded` ignores `BOXLITE_REST_URL`, while a saved selection ranks
+below a nonempty one. A login stored under `embedded` by an earlier CLI keeps
+targeting its server and prints a warning on each workload command. Log in under
+another name, then run `boxlite --context embedded auth logout`; from then on
+`embedded` selects the embedded runtime.
 
 Preferences and credentials share the `--home` / `BOXLITE_HOME` directory.
 `cli.toml` stores only the current name; `credentials.toml` retains the compatible
@@ -712,8 +734,11 @@ boxlite inspect -l --format yaml
 **Synopsis:** `boxlite cp [OPTIONS] SRC DST`
 
 Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a `BOX:PATH` reference.
-End a directory `SRC` with `/.` to copy its contents rather than the directory itself, as
-`docker cp` does.
+A directory `SRC` lands as `docker cp` lands it: it becomes a `DST` that does not exist, and
+lands under its own name in one that does. End `SRC` with `/.` to copy its contents either way.
+A file `SRC`, or a symlink copied without `--follow-symlinks`, becomes `DST`, or lands inside it
+when `DST` is a directory or ends in `/`. A directory cannot replace a file: copying one onto an
+existing file `DST` fails.
 
 **Options:**
 
@@ -736,7 +761,9 @@ than the one the box has.
 A directory that merely *contains* a mount is treated differently per direction. Copying
 one **out** is refused (`boxlite cp box:/etc ./etc`), since the archive would carry the
 image's files rather than the mounted ones. Copying **in** is allowed, and refused only
-if a file being written would land on a mount — so `boxlite cp ./x box:/etc` works.
+if a file being written would land on a mount — so `boxlite cp ./x box:/etc` works. The
+copy streams into the box, so that file is refused before it is written, and the files
+written before it stay.
 
 Copy a path outside the mount, or pipe a tar through `boxlite exec`. Files copied in are
 owned by the box's exec user.
@@ -887,6 +914,7 @@ boxlite network tunnel mybox 3000 --revoke
 ```
 boxlite ssh --configure BOX CONFIG
 boxlite ssh BOX
+boxlite ssh BOX --install-ssh-config [--alias NAME] [--overwrite]
 boxlite ssh --status BOX
 boxlite ssh --enable BOX
 boxlite ssh --disable BOX
@@ -898,13 +926,13 @@ CONFIG := --ssh-config FILE
 ```
 
 Control the guest SSH server of a local box or a REST box (`--url`/`--context`).
-With no operation option, `boxlite ssh BOX` performs managed setup and prints a
-complete command to copy and run with OpenSSH. It does not open an interactive shell.
-Choose at most one of `--configure`, `--status`, `--enable`, `--disable`,
-`--tunnel`, or `--proxy`; options may precede or follow BOX.
+With no operation option, `boxlite ssh BOX` prepares CLI-managed credentials and
+logs in immediately using system OpenSSH.
+Choose at most one of `--install-ssh-config`, `--configure`, `--status`, `--enable`,
+`--disable`, `--tunnel`, or `--proxy`; options may precede or follow BOX.
 These replace the former SSH subcommands: for example, `ssh enable dev` becomes
 `ssh dev --enable`, and `ssh setup dev` becomes `ssh dev`.
-Default setup generates and saves client and host keys on the client; complete `--configure`
+Default login saves client and host keys locally; complete `--configure`
 continues to read supplied key files.
 
 These commands add no HTTP routes. Backend requirements differ:
@@ -912,37 +940,64 @@ These commands add no HTTP routes. Backend requirements differ:
 | Commands | Local backend | REST backend |
 |----------|---------------|--------------|
 | `--configure`, `--status`, `--enable`, `--disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
-| default setup | CLI-managed credentials and SSH configuration | Requires SSH control; supported by `boxlite serve` and cloud contexts |
+| default login | CLI-managed credentials and an OpenSSH session through a loopback forwarder | Requires SSH control and tunnel support; unavailable through `boxlite serve` |
+| `--install-ssh-config` | Prepare managed SSH and install a native OpenSSH alias | Requires SSH control; does not open a tunnel during installation |
 | `--proxy`, `--tunnel` | Stdio connection or local listener through the existing tunnel | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
 
 | Operation | Effect | stdout |
 |------------|--------|--------|
 | `--configure` | Replace the complete configuration once; disconnects existing SSH clients | `SshStatus` JSON |
-| default setup | Generate/reuse local keys and replace complete configuration with `box` on `0.0.0.0:22`; disconnects clients | Connection summary, server host-key fingerprint and SSH command |
+| default login | Generate/reuse local keys; configure new/generation-zero identities, enable disabled saved SSH, otherwise read status and connect | Remote session output only |
+| `--install-ssh-config` | Prepare SSH, update the managed Host entry and Include, then exit without logging in | Empty; connection guidance goes to stderr |
 | `--status` | Read state; never starts the box | `SshStatus` JSON |
 | `--enable` | Enable saved configuration on a running box; preserve healthy connections | `SshStatus` JSON |
 | `--disable` | Stop SSH on a running box; never starts the box | `SshStatus` JSON |
 | `--tunnel` | Read status; fail if disabled; forward to the port SSH actually bound | Bound address |
 | `--proxy` | Read status, then connect stdin/stdout to enabled SSH; never configures or enables it | SSH bytes only |
 
-Configure SSH, then execute the printed command:
+Connect directly:
 
 ```bash
 boxlite ssh dev
-# Copy the generated ssh command, including its private-key and ProxyCommand options.
 ```
 
-Custom configuration and default setup each replace the SSH configuration and disconnect existing clients.
-Configuration and the enable switch persist on the container disk; restarting the
-box restores the saved enabled switch. Disable retains credentials. Local
-enable/disable reject idle boxes without changing saved state. Enable without a
-saved configuration also fails. Repeated setup, disable/enable, and restart
-reuse the CLI-managed host key. Setup after complete configuration replaces the
-configured identity with its own saved/generated key.
-`--tunnel` leaves the configuration and generation unchanged, so it can reopen
-forwarding without reconfiguring SSH.
+Install once to use plain OpenSSH:
 
-Setup requires `ssh-keygen`, accepts no key flags, and saves `client_key` and
+```bash
+boxlite ssh dev --install-ssh-config
+ssh dev
+boxlite --context cloud ssh dev --install-ssh-config --alias dev-cloud
+```
+
+The default alias is the resolved box name, or full ID for unnamed boxes.
+Reinstalling the same target is idempotent; conflicts with another BoxLite-managed
+target require `--alias NAME` or `--overwrite`. Overwrite affects only managed
+entries, not handwritten Host blocks. The installer preserves existing user
+configuration, adds one leading Include and stores entries at
+`~/.boxlite/ssh/config`. User/system Match conditions, Includes and personal
+identities remain subject to normal OpenSSH rules; installation does not validate
+the combined configuration or guarantee complete isolation. New original-config
+backups live at `~/.boxlite/ssh/config.backup`.
+Generated proxies fix the backend/home and remote context/endpoint/routing without
+storing API tokens. See [managed aliases](../../guides/ssh.md#managed-openssh-aliases)
+for file safety, configuration precedence and lifecycle rules.
+
+Custom configuration always replaces the whole SSH configuration and disconnects
+clients. Default login does so only for a new managed identity or disabled
+generation-zero status, preserving the SDK startup policy. Generation zero does
+not imply absence of persisted configuration. Existing enabled services are
+queried without modification; disabled services with a positive generation are
+enabled once. No service mutation is retried within the command.
+
+Configuration and the enable switch persist on the container disk; restarting
+restores the saved enabled switch. Disable retains credentials. Explicit
+enable/disable reject idle boxes; enable also fails without saved configuration.
+Default login compares the reported host public key with its validated local host
+key, ignoring comments, and refuses a mismatch without automatically reconfiguring.
+Authentication failure never triggers configuration. `--tunnel` leaves configuration
+and generation unchanged.
+
+Default login requires executable `ssh` and `ssh-keygen` on PATH, accepts no key flags, and saves `client_key` and
 `host_key` in `<home>/boxes/<box-id>/ssh/` for local boxes, or
 `<home>/ssh/remote/<scope>/<box-id>/` for REST boxes (directory 0700, private files 0600).
 The remote scope is a SHA-256 namespace of the context, effective URL and routing
@@ -951,22 +1006,27 @@ home (`--home` / `BOXLITE_HOME` / `~/.boxlite`), independent of local `--config`
 The client private key stays on the host; deleting a local box removes it, while
 remote keys remain for manual cleanup. Clone/export does not transfer the managed
 client identity. Invalid or incomplete saved keys fail without regeneration.
-Configuration failure retains generated keys
-for retry. The command uses absolute paths and the canonical box ID. For REST it
-preserves the selected named context or effective URL, plus the routing prefix,
-and uses a scoped SSH hostname to separate host-key records across contexts and endpoints.
-Authentication is reloaded through the usual stored credentials / `BOXLITE_API_KEY`
-selection; bearer tokens are never included in the command. A named context reloads
-its saved endpoint; URL selection uses default credentials, matching the CLI's
-mutually exclusive context/URL options. Normal SSH host-key verification remains
-enabled. See the [cloud workflow](../../guides/ssh.md#cli).
+Configuration failure retains generated keys for the next invocation. A private
+`known_hosts` file is atomically derived from the saved host key; it never trusts a
+new remote identity automatically. Canonical box IDs and scoped remote aliases
+keep trust independent of box names and ephemeral loopback ports.
 
-An active local proxy holds the same runtime home lock as `--tunnel`. Stop it before
-another local CLI command on that home. See the [SSH guide](../../guides/ssh.md#cli)
-for the complete workflow.
+The command uses a single resolved context/authentication/endpoint/routing snapshot
+throughout the session. Automatic OpenSSH uses `-F /dev/null`, strict host checking,
+only the managed identity, no agent, and no multiplexing. It neither reads nor
+modifies user SSH config. Use `--proxy` or `--tunnel` for a custom client invocation.
+OpenSSH inherits stdio, selects PTY behavior and handles terminal resize; interactive
+Ctrl-C reaches the guest. The CLI returns its exit code, including a remote shell's
+nonzero status, after reaping the child and closing forwarding.
+
+Local login, proxy and tunnel hold the runtime home lock until they end.
+See the [SSH guide](../../guides/ssh.md#cli) for lifecycle and signal handling.
 
 | Flag | Description |
 |------|-------------|
+| `--install-ssh-config` | Prepare managed SSH and install an alias; exclusive with the other operations. |
+| `--alias NAME` | Installed OpenSSH alias instead of the box name/ID; requires `--install-ssh-config`. |
+| `--overwrite` | Repoint a conflicting BoxLite-managed alias; requires `--install-ssh-config`. |
 | `--ssh-config FILE` | Complete `SshConfig` JSON ([schema](../../guides/ssh.md#http-control-with-boxlite-serve)): several accounts, authorized keys, CAs. |
 | `--host-key FILE` | Unencrypted OpenSSH host private key. Requires `--login` and `--authorized-key`. |
 | `--login NAME` | The single login accepted for `--authorized-key`. |
@@ -978,7 +1038,7 @@ Configuration flags require `--configure`; `--listen` requires `--tunnel`.
 They are rejected with incompatible operations before reading files or contacting a box.
 `--ssh-config` conflicts with the
 flag-mode options. Configuration errors name the
-file and position but never print its contents. Custom configuration and default setup follow the SDK's
+file and position but never print its contents. Custom and managed configuration follow the SDK's
 startup rules: it may start a Configured or Stopped box that uses its image's default
 command. Configuration is never retried.
 
@@ -998,23 +1058,30 @@ Ctrl-C closes the listener and its connections, then exits 0; guest SSH stays
 configured. A forwarding failure leaves the preceding configuration unchanged.
 
 - **Local boxes:** the foreground command holds the runtime home, so other local
-  commands on that home fail until Ctrl-C. Exiting the CLI stops running boxes that
-  are not detached, which ends their SSH; use `boxlite create` or `run -d`.
-- **REST boxes:** proxy/tunnel use the box's public tunnel URL for the SSH port and
+  commands on that home fail until the session ends. Non-detached boxes stay alive
+  during login and stop after CLI exit; use `boxlite create` or `run -d` to retain them.
+- **REST boxes:** login/proxy/tunnel use the box's public tunnel URL for the SSH port and
   leave it open on exit, so anyone reaching the URL can attempt SSH logins. Withdraw it
   with `boxlite network tunnel BOX PORT --revoke`. `boxlite serve` has no tunnel
-  route, so there `--proxy` and `--tunnel` fail after reading SSH status even though
-  default setup succeeds. Cloud tunnels require inbound access; CLI exit does not stop
-  the remote box.
+  route, so default login, `--proxy` and `--tunnel` fail there; explicit
+  configure/status/enable/disable remain available. Cloud tunnels require inbound
+  access; CLI exit does not stop the remote box.
 
 ---
 
 ### `boxlite agent`
 
-Agent commands address a Box, an agent and, where needed, a turn. See the
-[failure contract](../agents.md#failure-contract) for operation availability.
-Unsupported operations report an error on stderr and exit with code 1 before
-runtime initialization. Malformed arguments use the normal CLI usage error (code 2).
+Agent commands address a Box, an agent and, where needed, a turn. Each run
+reconnects to the agent by ID, so separate processes share one agent. They work on a
+local runtime with [OpenCode in the Box](../agents.md#opencode-on-a-local-runtime);
+a `--url` profile and operations OpenCode lacks report `Unsupported`. Runtime errors
+go to stderr with exit code 1. Malformed arguments use the normal CLI usage error
+(code 2).
+
+Use a running Box created with `boxlite create` and `boxlite start`, or `boxlite run -d`:
+a Box that is not detached stops when the CLI process that started it exits, which cuts
+off a running turn. Each local `boxlite` process holds the BoxLite home for its whole
+run, so while `events` streams, other commands on that home fail until it ends.
 
 | Purpose | Command after `boxlite agent` | Operation |
 |---|---|---|
@@ -1029,8 +1096,8 @@ runtime initialization. Malformed arguments use the normal CLI usage error (code
 | Interact | `respond BOX --agent AGENT --request REQUEST JSON` | Answer a question or approve/deny a permission request. |
 
 `BOX` is positional, as in `boxlite exec`. Creation requires `--agent IMPLEMENTATION`.
-For example, `boxlite agent create dev --agent coder` selects implementation
-`coder` inside Box `dev`. Other commands use `--agent ID` for a created instance.
+For example, `boxlite agent create dev --agent opencode` selects implementation
+`opencode` inside Box `dev`. Other commands use `--agent ID` for a created instance.
 Mutations never infer an active turn. `inspect --view config|capabilities|requests` selects an agent-only
 read and cannot be combined with `--turn`; omission reads state. The SDK's
 `get`/`get_turn` handle lookups are implicit in CLI targeting.
@@ -1052,12 +1119,33 @@ data and response arguments must be valid JSON. Response JSON uses either
 `{"type":"permission","approved":false}`. The
 [agent API reference](../agents.md#inputs-and-records) describes other record fields.
 
+Output is JSON on stdout, in the
+[record shapes of the C API](../agents.md#c-api-and-ownership):
+
+| Command | Prints | Exit code |
+|---|---|---|
+| `create` | `{"id":"ses_…"}`, the ID later commands pass as `--agent` | 0 |
+| `send`, `respond`, `inspect --turn` | Turn snapshot | 0 |
+| `inspect` | Agent snapshot | 0 |
+| `inspect --view config\|capabilities\|requests` | Config, capabilities, request array | 0 |
+| `wait` | Result, including for `failed` and `cancelled` turns; branch on its `status` | 0; 1 when `--timeout-seconds` expires or the turn is `unknown`, which never interrupts it |
+| `steer` | Steering receipt | 0 |
+| `events` | One event record per line, flushed as it arrives, until the stream ends | 1 when the stream ends with an error, after every earlier record |
+| `close`, `interrupt` | Nothing | 0 |
+
+The agent-level OpenCode stream always ends with a `Network` error, for example
+when its Box stops, so `events` without `--turn` exits with code 1.
+
 ```bash
-boxlite agent create dev --agent coder --cwd /workspace --agent-config '{"model":"model-id"}'
-boxlite agent send dev --agent agent-id "Review this code" --mode reject
-boxlite agent inspect dev --agent agent-id --view requests
-boxlite agent steer dev --agent agent-id --turn turn-id "Focus on tests" --idempotency-key steer-1
-boxlite agent events dev --agent agent-id --turn turn-id --after cursor-1
+boxlite create --name dev debian:bookworm-slim sleep infinity
+boxlite start dev
+boxlite agent create dev --agent opencode --cwd /workspace --agent-config '{"model":"provider/model"}'
+# {"id":"ses_01K…"}
+boxlite agent send dev --agent ses_01K… "Review this code"
+# {"id":"msg_01K…","agent_id":"ses_01K…","status":"queued",…}
+boxlite agent wait dev --agent ses_01K… --turn msg_01K… --timeout-seconds 600
+# {"turn_id":"msg_01K…","status":"completed","outcome":"answer","text":"…",…}
+boxlite agent events dev --agent ses_01K…   # until the stream ends; exit 1
 ```
 
 Agent commands accept the usual Box
@@ -1071,6 +1159,10 @@ logging still applies.
 
 Run a long-running REST API server. The server holds a single `BoxliteRuntime` and exposes the full REST surface for `boxlite --url ...` clients and the language SDKs' REST mode.
 
+Open `http://127.0.0.1:8100/` for the web console, which manages boxes, images and volumes through the same API. With `--api-key`, the console asks for the key once and keeps an `HttpOnly` session cookie until `serve` restarts.
+
+A browser guard runs before auth and answers `403` when the `Origin` header differs from `Host`, blocking cross-site pages and their WebSocket upgrades. SDK and CLI clients send no `Origin` and are unaffected; see the [serve README](../../../src/cli/src/commands/serve/README.md#auth--config).
+
 **Options:**
 
 | Flag | Default | Description |
@@ -1080,6 +1172,7 @@ Run a long-running REST API server. The server holds a single `BoxliteRuntime` a
 | `--home PATH` | `~/.boxlite` | Absolute runtime data directory; env `BOXLITE_HOME` |
 | `--host ADDR` | `127.0.0.1` | Bind address. Any non-loopback address (e.g. `0.0.0.0`) requires `--api-key`; `serve` refuses to start otherwise. |
 | `--api-key KEY` | unset | Require this exact `Authorization: Bearer` value (constant-time match) on every route except `GET /v1/config`; env `BOXLITE_SERVE_API_KEY`. Unset is permissive. |
+| `--allowed-host HOST` | none | Extra `Host` name accepted while bound to loopback; repeatable. A loopback-bound server answers `403` to any other name, so a DNS-rebinding web page cannot reach it. Use this for a reverse proxy that forwards its own name. |
 | `--registry REGISTRY` | none | Image registry; repeatable and prepended to config |
 | `--config PATH` | none | JSON runtime configuration file |
 
@@ -1097,9 +1190,8 @@ BOXLITE_SERVE_API_KEY="$KEY" boxlite serve --host 0.0.0.0
 
 **Synopsis:** `boxlite volume <create|ls|get|rm>`
 
-Manage managed persistent volumes. Volumes are a REST-runtime capability — the
-local runtime has no volume backend, so every subcommand returns
-`named volumes are not supported yet` against it. See
+Manage persistent volumes. LocalRuntime stores them under its home directory;
+REST runtimes use the selected server's volume API. See
 [Connecting to the cloud](#connecting-to-the-cloud).
 
 | Subcommand | Synopsis | Notes |
@@ -1113,9 +1205,9 @@ local runtime has no volume backend, so every subcommand returns
 wants without knowing the id:
 
 ```bash
-boxlite volume create --name my-data       # prints e.g. vol_01K2EXAMPLE
+boxlite volume create --name my-data       # prints a canonical UUID
 boxlite run -v my-data:/data alpine        # by name
-boxlite run -v vol_01K2EXAMPLE:/data alpine # or by id
+boxlite run -v <volume-uuid>:/data alpine  # or by id
 ```
 
 Names must be at least two characters of `[a-zA-Z0-9][a-zA-Z0-9_.-]` — Docker's
@@ -1206,6 +1298,9 @@ Used by `run` and `exec` (defined in `src/cli/src/cli.rs`).
 | `--workdir PATH` | `-w` | Working directory inside the box |
 | `--user NAME[:GROUP]` | `-u` | Run as `name`/`uid`[:`group`/`gid`] |
 
+Environment values may contain spaces and double quotes. For example,
+`-e 'X={"a": "b c"}'` passes the JSON value to the box unchanged.
+
 For `run`, `--tty` always requires TTY-attached stdin, including with
 `--detach`. Foreground `exec --tty` has the same requirement and implies
 interactive input; detached `exec --tty` skips the stdin check and attaches no
@@ -1232,7 +1327,7 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--cpus N` | u8 | Number of CPUs, 1–16 with the bundled guest kernel. 17–255 are rejected when the box is created; 0 and values above 255 fail while parsing the command line |
+| `--cpus N` | f64 | CPU allocation, 0.125–16 with the bundled kernel, step 0.001; fractions require a Linux execution host and round guest vCPUs up, while integers add no bandwidth quota; creation validates numeric values |
 | `--memory MiB` | u32 | Memory limit in mebibytes |
 | `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
 
@@ -1253,6 +1348,11 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--volume VOLUME` | `-v` | Mount a volume; repeatable (see [Volume Mount Syntax](#volume-mount-syntax)) |
+| `--mount type=volume,source=NAME,target=PATH[,readonly][,sub_path=DIR]` | — | Typed managed-volume mount; mutually exclusive with `-v` |
+
+`sub_path` selects an existing directory inside the volume and rejects absolute paths, `..`, and
+symlinks. Reusing the same canonical volume id twice in one box is rejected; use a different box or
+volume for each mount declaration.
 
 ### `NetworkFlags`
 

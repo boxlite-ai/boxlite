@@ -5,10 +5,6 @@
  */
 
 import { AsciiButton } from '@/components/ascii'
-import goIcon from '@/assets/go.svg'
-import pythonIcon from '@/assets/python.svg'
-import { RustIcon } from '@/assets/RustIcon'
-import typescriptIcon from '@/assets/typescript.svg'
 import { QuickstartAgentHandoff } from '@/components/QuickstartAgentHandoff'
 import { QuickstartRecipeHeader, type QuickstartPreview } from '@/components/first-run/QuickstartRecipeHeader'
 import { CODING_AGENT_MARKS } from '@/assets/AgentLogos'
@@ -21,8 +17,9 @@ import {
   DialogOverlay,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { FileText, KeyRound, Server, Terminal } from '@/components/ui/icon'
+import { Tabs, TabsList, TabsTrigger, SEGMENTED_TRIGGER } from '@/components/ui/tabs'
+import { KeyRound } from '@/components/ui/icon'
+import { QuickstartInterfaceIcon } from '@/components/first-run/QuickstartInterfaceIcon'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { getRestApiUrl } from '@/lib/environment'
@@ -37,7 +34,7 @@ import {
   renderOnboardingCodeSteps,
   type OnboardingInterface,
 } from '@/lib/onboarding-code-examples'
-import type { QuickstartGroup, QuickstartIconName, QuickstartInterfaceDefinition } from '@/lib/quickstart/types'
+import type { QuickstartGroup } from '@/lib/quickstart/types'
 import { cn } from '@/lib/utils'
 import type { OnboardingProgress } from '@/lib/onboarding-progress'
 import {
@@ -246,14 +243,12 @@ function ScenarioHeader({
         {scenario === 'publish'
           ? CODING_AGENT_MARKS.map(({ label, Mark }) => <Mark key={label} className="size-[22px]" />)
           : QUICKSTART_INTERFACES.map((item) => (
-              <QuickstartInterfaceIcon key={item.id} item={item} className="size-[22px] grayscale" />
+              <QuickstartInterfaceIcon key={item.id} icon={item.icon} className="size-[22px] grayscale" />
             ))}
       </div>
 
       <Tabs value={scenario} onValueChange={(v) => onSelect(v as ScenarioId)} className="mt-6">
-        {/* The segmented variant's strip is a container the active segment shows
-            through; these are free-standing cards with a gutter between them,
-            so the strip itself carries neither ground nor border. */}
+        {/* Standalone scenario cards retain their gutters and individual frames. */}
         <TabsList variant="segmented" className="grid h-auto w-full grid-cols-2 gap-4 border-0 bg-transparent">
           {SCENARIOS.map((sc) => {
             const Art = SCENARIO_ART[sc.id]
@@ -263,14 +258,9 @@ function ScenarioHeader({
                 value={sc.id}
                 className={cn(
                   'relative h-auto flex-col items-stretch gap-0 border border-border p-0 text-left hover:bg-transparent',
-                  // One rule across the console: the chosen thing is the
-                  // surface that differs from its container, and the ones not
-                  // chosen recede into it. Here the container is the dialog,
-                  // so the chosen card lifts onto `card` and the others sit
-                  // flat on the dialog's own ground.
-                  sc.id === scenario
-                    ? 'border-foreground/45 bg-card opacity-100'
-                    : 'bg-transparent text-muted-foreground',
+                  // Large illustrated cards keep a quiet surface and their own selected frame.
+                  'data-[state=active]:bg-accent data-[state=active]:text-foreground data-[state=active]:hover:bg-accent data-[state=active]:hover:text-foreground',
+                  sc.id === scenario ? 'border-border-selected' : 'bg-transparent text-muted-foreground',
                 )}
               >
                 {/* Corner marks, the way a terminal draws a selected frame. The
@@ -317,39 +307,10 @@ const EXAMPLE_FILES: Record<string, string> = {
   cli: 'quickstart.sh',
   rest: 'quickstart-rest.sh',
 }
-// Multi-color brand marks ship as assets; single-color marks render inline so they
-// inherit `currentColor` and stay visible in both themes.
-const ICON_ASSETS: Partial<Record<QuickstartIconName, string>> = {
-  go: goIcon,
-  python: pythonIcon,
-  typescript: typescriptIcon,
-}
-const ICON_COMPONENTS: Partial<Record<QuickstartIconName, React.ComponentType<{ className?: string }>>> = {
-  file: FileText,
-  rust: RustIcon,
-  server: Server,
-  terminal: Terminal,
-}
-
 const GROUPS: ReadonlyArray<{ id: QuickstartGroup; label: string }> = [
   { id: 'sdk', label: 'SDK' },
   { id: 'direct', label: 'Direct' },
 ]
-
-function QuickstartInterfaceIcon({
-  item,
-  className = 'size-3.5',
-}: {
-  item: QuickstartInterfaceDefinition
-  className?: string
-}) {
-  const iconSrc = ICON_ASSETS[item.icon]
-  if (iconSrc) {
-    return <img src={iconSrc} alt="" className={className} />
-  }
-  const Icon = ICON_COMPONENTS[item.icon]
-  return Icon ? <Icon className={className} /> : null
-}
 
 /**
  * Interface picker. Rendered once for the whole flow — the choice spans steps 2 and 3,
@@ -368,14 +329,16 @@ function InterfacePicker({
   if (quiet) {
     return (
       <Tabs value={selected} onValueChange={onSelect} className="min-w-0 max-w-full">
-        <TabsList variant="segmented" aria-label="SDK or CLI" className="h-auto flex-wrap">
-          {QUICKSTART_INTERFACES.map((item) => (
-            <TabsTrigger key={item.id} value={item.id} className="h-9 gap-1.5 px-3">
-              <QuickstartInterfaceIcon item={item} />
-              {item.label}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="-mx-1 -my-1 overflow-x-auto p-1">
+          <TabsList variant="underline" aria-label="SDK or CLI" className="w-max min-w-full">
+            {QUICKSTART_INTERFACES.map((item) => (
+              <TabsTrigger key={item.id} value={item.id}>
+                <QuickstartInterfaceIcon icon={item.icon} />
+                {item.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
       </Tabs>
     )
   }
@@ -396,19 +359,10 @@ function InterfacePicker({
                     type="button"
                     aria-pressed={on}
                     onClick={() => onSelect(item.id)}
-                    className={cn(
-                      'flex min-h-[34px] items-center justify-center gap-2 px-[12px] py-[7px] text-meta transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand',
-                      quiet
-                        ? on
-                          ? 'rounded-none bg-foreground/[0.07] font-semibold text-foreground'
-                          : 'rounded-none text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground'
-                        : on
-                          ? 'border-foreground/45 bg-card font-semibold text-foreground'
-                          : 'border-border text-muted-foreground hover:text-foreground',
-                      !quiet && 'border',
-                    )}
+                    data-state={on ? 'active' : 'inactive'}
+                    className={cn(SEGMENTED_TRIGGER, 'ml-0 h-9 px-3')}
                   >
-                    <QuickstartInterfaceIcon item={item} />
+                    <QuickstartInterfaceIcon icon={item.icon} />
                     {item.label}
                   </button>
                 )
@@ -431,6 +385,7 @@ function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick:
 
 type CopyTarget = 'api-key' | 'install' | 'code' | 'creation' | 'execution' | 'preview'
 
+/** Keeps short examples at their natural height and bounds scrolling for examples over 35 lines. */
 function QuickstartCode({ code, language }: { code: string; language: string }) {
   return (
     <Suspense fallback={<pre className="quickstart-code overflow-auto whitespace-pre p-4">{code}</pre>}>
@@ -440,7 +395,7 @@ function QuickstartCode({ code, language }: { code: string; language: string }) 
         language={language}
         showCopy={false}
         className="w-full rounded-none border-0 bg-transparent shadow-none"
-        codeAreaClassName="quickstart-code max-h-[420px] overflow-auto rounded-none px-4 pb-5 pt-4 pr-4"
+        codeAreaClassName={`quickstart-code overflow-x-auto rounded-none px-4 pb-5 pt-4 pr-4 ${code.split('\n').length > 35 ? 'max-h-[560px] overflow-y-auto' : ''}`}
       />
     </Suspense>
   )
@@ -449,12 +404,13 @@ function QuickstartCode({ code, language }: { code: string; language: string }) 
 function QuickstartStepHeading({ title }: { title: string }) {
   const split = title.indexOf(' ')
   return (
-    <h2 className="font-display text-base font-semibold">
+    <h2 className="font-display text-em font-semibold">
       <span className="quickstart-step-number">{title.slice(0, split)}</span> {title.slice(split + 1)}
     </h2>
   )
 }
 
+/** Renders numbered SDK instructions with independently copyable code blocks. */
 function InlineCodeSteps({
   language,
   apiKey,
@@ -497,10 +453,10 @@ function InlineCodeSteps({
       ).map((part, index) => (
         <section key={part.id} className="quickstart-step min-w-0">
           <QuickstartStepHeading title={part.title} />
-          <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">{part.note}</p>
-          <div className="mt-4 overflow-hidden rounded-none bg-[hsl(var(--code-background))]">
-            <div className="flex items-center justify-between border-b border-border/60 px-4 py-2">
-              <span className="font-mono text-xs tracking-normal text-muted-foreground">
+          <p className="mt-2 max-w-[900px] font-display text-body leading-relaxed text-muted-foreground">{part.note}</p>
+          <div className="mt-4 overflow-hidden rounded-none quickstart-code-surface">
+            <div className="flex items-center justify-between border-b border-[hsl(var(--quickstart-code-border))] bg-card px-4 py-2">
+              <span className="font-mono text-meta tracking-normal text-muted-foreground">
                 {EXAMPLE_FILES[language]} · part {index + 1}
               </span>
               <QuickstartCopyButton
@@ -523,6 +479,7 @@ export function OnboardingGuideDialog(props: OnboardingGuideDialogProps) {
   return <OnboardingGuideContent key={`${userId}:${selectedOrganization?.id}`} {...props} />
 }
 
+/** Guides SDK, console, and prompt-based setup while keeping progress scoped to the selected account. */
 function OnboardingGuideContent({
   open,
   onOpenChange,
@@ -646,16 +603,16 @@ function OnboardingGuideContent({
         />
       </section>
     ) : (
-      <section className="min-w-0 font-mono">
+      <section className="min-w-0 font-sans">
         <div className="quickstart-sequence min-w-0">
           <section className="quickstart-step min-w-0">
             <QuickstartStepHeading title="1. Get an API key" />
-            <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">
+            <p className="mt-2 max-w-[900px] font-display text-body leading-relaxed text-muted-foreground">
               An API key connects your local code to your BoxLite organization. Create one here, or set BOXLITE_API_KEY
               in your terminal to use an existing key.
             </p>
             {createdKey ? (
-              <div className="mt-4 flex items-start gap-3 rounded-none bg-[hsl(var(--code-background))] p-3">
+              <div className="mt-4 flex items-start gap-3 rounded-none quickstart-code-surface p-3">
                 <code className="quickstart-code min-w-0 flex-1 break-all">{createdKey.value}</code>
                 <QuickstartCopyButton
                   quiet
@@ -670,20 +627,20 @@ function OnboardingGuideContent({
                   value={keyName}
                   onChange={(event) => setKeyName(event.target.value)}
                   placeholder="Key name (optional)"
-                  className="min-w-0 flex-1 rounded-none border border-border/60 bg-transparent px-3 py-2 font-display text-xs outline-none focus:border-brand"
+                  className="min-w-0 flex-1 rounded-none border border-border/60 bg-transparent px-3 py-2 font-mono text-meta outline-none focus:border-brand"
                 />
                 <button
                   type="button"
                   disabled={creating || !canCreateApiKey}
                   onClick={() => void handleCreateKey()}
-                  className="bg-primary px-3 py-2 text-xs text-primary-foreground disabled:opacity-50"
+                  className="bg-primary px-3 py-2 text-meta text-primary-foreground disabled:opacity-50"
                 >
                   {creating ? 'Creating…' : 'Create key'}
                 </button>
               </div>
             )}
             {createdKey && (
-              <p className="mt-3 font-display text-xs text-muted-foreground">
+              <p className="mt-3 font-display text-meta text-muted-foreground">
                 Your key is included in the examples below.
               </p>
             )}
@@ -693,16 +650,16 @@ function OnboardingGuideContent({
               <QuickstartStepHeading title="2. Choose your SDK or CLI" />
               <InterfacePicker quiet selected={language} onSelect={setLanguage} />
             </div>
-            <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">
+            <p className="mt-2 max-w-[900px] font-display text-body leading-relaxed text-muted-foreground">
               {language === 'cli'
                 ? 'Install the BoxLite CLI to create and manage Boxes from your terminal. The commands below connect using your API key.'
                 : language === 'rest'
                   ? 'Use curl and jq to call the BoxLite REST API directly, without an SDK. The requests below create a Box and execute a command using your API key.'
                   : `Install the ${activeInterface.label} SDK in your local project to create Boxes, run commands and read results from your code. Run the installation command below in your terminal.`}
             </p>
-            <div className="mt-4 overflow-hidden rounded-none border border-border/60 bg-[hsl(var(--code-background))]">
-              <div className="flex items-center justify-between border-b border-border/60 px-4 py-2">
-                <span className="font-mono text-xs tracking-normal text-muted-foreground">Local terminal</span>
+            <div className="mt-4 overflow-hidden rounded-none quickstart-code-surface">
+              <div className="flex items-center justify-between border-b border-[hsl(var(--quickstart-code-border))] bg-card px-4 py-2">
+                <span className="font-sans text-meta tracking-normal text-muted-foreground">Local terminal</span>
                 <QuickstartCopyButton
                   quiet
                   copied={copiedTarget === 'install'}
@@ -712,7 +669,7 @@ function OnboardingGuideContent({
               <QuickstartCode code={activeExample.install} language="bash" />
             </div>
           </section>
-          <p className="font-display text-sm leading-relaxed text-muted-foreground">
+          <p className="font-display text-body leading-relaxed text-muted-foreground">
             Save parts 1–3 in order in <span className="font-mono text-foreground">{EXAMPLE_FILES[language]}</span>, or
             use Copy full example below. Run the complete file once to create your Box and open a preview.
           </p>
@@ -724,7 +681,7 @@ function OnboardingGuideContent({
             copiedTarget={copiedTarget}
             onCopy={copyText}
           />
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-none bg-[hsl(var(--code-background))] px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-none quickstart-code-surface px-4 py-3">
             <pre className="quickstart-code min-w-0 overflow-x-auto whitespace-pre">
               ${' '}
               {language === 'cli'
@@ -778,7 +735,7 @@ function OnboardingGuideContent({
               Maybe later
             </button>
             {preview && (
-              <button type="button" className="text-xs text-foreground hover:text-brand" onClick={preview.onConsole}>
+              <button type="button" className="text-meta text-foreground hover:text-brand" onClick={preview.onConsole}>
                 Try in console →
               </button>
             )}
@@ -804,7 +761,7 @@ function OnboardingGuideContent({
                       className={cn(
                         'flex size-6 flex-none items-center justify-center rounded-full border-[1.5px] text-label font-bold transition-colors',
                         isDone
-                          ? 'border-brand bg-brand text-white'
+                          ? 'border-brand bg-brand text-brand-foreground'
                           : active
                             ? 'border-brand text-brand'
                             : 'border-border text-muted-foreground',
@@ -837,7 +794,7 @@ function OnboardingGuideContent({
           {step > 0 && (
             <div className="shrink-0 border-t border-border px-8 py-4">
               {preview && (
-                <label className="flex items-center gap-3 text-xs text-muted-foreground sm:hidden">
+                <label className="flex items-center gap-3 text-meta text-muted-foreground sm:hidden">
                   Interface
                   <select
                     aria-label="SDK or interface"
@@ -875,7 +832,7 @@ function OnboardingGuideContent({
                 <div className="mb-[9px] text-label uppercase tracking-[1.5px] text-muted-foreground">
                   {createdKey ? 'Your API key' : 'Key name'}
                 </div>
-                <div className="flex items-center gap-[10px] border border-border bg-[hsl(var(--code-background))] px-[14px] py-3 focus-within:border-brand">
+                <div className="flex items-center gap-[10px] quickstart-code-surface px-[14px] py-3 focus-within:border-brand">
                   <KeyRound className={cn('size-4 flex-none', createdKey ? 'text-brand' : 'text-muted-foreground')} />
                   {createdKey ? (
                     <span className="flex-1 break-all text-meta leading-relaxed text-foreground">
@@ -946,7 +903,7 @@ function OnboardingGuideContent({
                 <div className="mb-[9px] text-label uppercase tracking-[1.5px] text-muted-foreground">
                   {activeExample.setupLabel ?? 'Run in your local terminal'}
                 </div>
-                <div className="flex items-start gap-3 border border-border bg-[hsl(var(--code-background))] px-[14px] py-3">
+                <div className="flex items-start gap-3 quickstart-code-surface px-[14px] py-3">
                   <span className="flex-none pt-[1px] text-success">$</span>
                   <pre className="quickstart-code scrollbar-elevated min-w-0 flex-1 overflow-x-auto whitespace-pre text-foreground">
                     {activeExample.install}
@@ -997,7 +954,7 @@ function OnboardingGuideContent({
                       code={renderedExample}
                       language={activeExample.codeLanguage}
                       showCopy={false}
-                      className="h-full rounded-none"
+                      className="h-full rounded-none quickstart-code-surface"
                       codeAreaClassName="quickstart-code h-full overflow-auto whitespace-pre pr-24"
                     />
                   </Suspense>
@@ -1040,7 +997,7 @@ function OnboardingGuideContent({
               Maybe later
             </button>
             {preview && !finished && (
-              <button type="button" className="text-xs text-foreground hover:text-brand" onClick={preview.onConsole}>
+              <button type="button" className="text-meta text-foreground hover:text-brand" onClick={preview.onConsole}>
                 Try in console →
               </button>
             )}
@@ -1092,7 +1049,7 @@ function OnboardingGuideContent({
       <DialogContent
         overlay={<DialogOverlay className="bg-background/70 backdrop-blur-md" />}
         className={cn(
-          'flex max-h-[92vh] flex-col gap-0 overflow-hidden p-0 font-mono sm:max-w-[720px]',
+          'flex max-h-[92vh] flex-col gap-0 overflow-hidden p-0 font-sans sm:max-w-[720px]',
           activeScenario === 'untrusted-code' && step === 2 && 'h-[92vh]',
         )}
       >

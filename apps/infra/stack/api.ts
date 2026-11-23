@@ -28,6 +28,7 @@ export interface ApiInputs {
   defaultRunnerApiKey: random.RandomPassword
   defaultRunnerName: string
   oidcClientId: sst.Secret
+  turnstileSecretKey?: sst.Secret
   oidcMgmtClientId: sst.Secret
   oidcMgmtClientSecret: sst.Secret
   accountLinkSecret: sst.Secret
@@ -64,6 +65,7 @@ export function buildApi(input: ApiInputs) {
     defaultRunnerApiKey,
     defaultRunnerName,
     oidcClientId,
+    turnstileSecretKey,
     oidcMgmtClientId,
     oidcMgmtClientSecret,
     accountLinkSecret,
@@ -209,6 +211,19 @@ export function buildApi(input: ApiInputs) {
         REDIS_PASSWORD: redis.password,
         REDIS_TLS: 'true',
 
+        // First local account creation; the Dashboard reads only the public widget settings.
+        ...(turnstileSecretKey
+          ? {
+              TURNSTILE_SITEKEY: requireEnv('TURNSTILE_SITEKEY', 'for first account registration'),
+              TURNSTILE_SECRET_KEY: turnstileSecretKey.value,
+              TURNSTILE_EXPECTED_HOSTNAMES: requireEnv(
+                'TURNSTILE_EXPECTED_HOSTNAMES',
+                'for first account registration',
+              ),
+              TURNSTILE_TIMEOUT_MS: envOr('TURNSTILE_TIMEOUT_MS', '5000'),
+            }
+          : {}),
+
         // Encryption
         ENCRYPTION_KEY: envOr('ENCRYPTION_KEY', encryptionKey.result),
         ENCRYPTION_SALT: envOr('ENCRYPTION_SALT', encryptionSalt.result),
@@ -349,14 +364,8 @@ export function buildApi(input: ApiInputs) {
           // usage export. Admission calls BILLING_API_URL's plan routes directly;
           // the usage publisher needs a different base path on the same service.
           //
-          // The same signal and the same service as BILLING_API_URL, but
-          // deliberately not the same value: the publisher appends
-          // /internal/usage-events, which Commerce serves off its bare origin
-          // because that route authenticates a service rather than a user and
-          // so sits outside its /api/billing prefix. Sending BILLING_API_URL's
-          // value here would 404 every batch — which is why this derives the
-          // origin from it rather than taking a second setting that could be
-          // pointed somewhere else.
+          // An explicit server-side base may use a separate host or path prefix.
+          // Otherwise use BILLING_API_URL's origin; clients append internal routes.
           USAGE_EXPORT_URL: envOr('USAGE_EXPORT_URL', new URL(process.env.BILLING_API_URL).origin),
           USAGE_EXPORT_TOKEN: usageExportToken.value,
           // Export enablement is derived from the credential rather than set

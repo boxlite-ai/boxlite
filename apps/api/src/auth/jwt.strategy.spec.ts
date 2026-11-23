@@ -5,114 +5,61 @@
  */
 
 import { Request } from 'express'
-import { HttpStatus } from '@nestjs/common'
 import * as jose from 'jose'
-import { JwtStrategy, requireVerifiedAuth0DatabaseEmail } from './jwt.strategy'
+import { JwtStrategy } from './jwt.strategy'
 import { UserService } from '../user/user.service'
-import { TypedConfigService } from '../config/typed-config.service'
 import { LoginEventRecorder } from './login-event.recorder'
 import { Context } from '../common/context/context'
-import {
-  EMAIL_VERIFICATION_REQUIRED_CODE,
-  EmailVerificationRequiredException,
-} from '../exceptions/email-verification-required.exception'
 
-const DEFAULT_REGION_ID = 'region-default-id'
-
-function buildStrategy() {
+function buildStrategy(protectedRegistration = true) {
   const createdUser = { id: 'user-1', role: 'user', email: 'new@boxlite.dev' }
 
   const userService = {
-    findOne: jest.fn().mockResolvedValue(null), // new user → triggers create()
+    findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockResolvedValue(createdUser),
     update: jest.fn(),
   } as unknown as UserService
-
-  const configService = {
-    getOrThrow: jest.fn((key: string) => {
-      if (key === 'defaultRegion.id') return DEFAULT_REGION_ID
-      throw new Error(`unexpected config key: ${key}`)
-    }),
-  } as unknown as TypedConfigService
 
   const loginEvents = { recordFirstUse: jest.fn().mockResolvedValue(undefined) } as unknown as LoginEventRecorder
 
   const strategy = new JwtStrategy(
     { jwksUri: 'https://example.com/.well-known/jwks.json', audience: 'aud', issuer: 'iss' },
     userService,
-    configService,
+    { get: () => (protectedRegistration ? { sitekey: 'configured' } : undefined), getOrThrow: () => 'us' } as never,
     loginEvents,
   )
 
   return { strategy, userService, loginEvents }
 }
 
-describe('JwtStrategy.validate — auto-created user', () => {
-  it('anchors the Personal org to the default region for a new OIDC user', async () => {
-    const { strategy, userService } = buildStrategy()
-    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
+describe('JwtStrategy.validate — local account access', () => {
+  it.each([undefined, '', '   ', 42])(
+    'rejects an unusable identity before accessing local accounts (%s)',
+    async (sub) => {
+      const { strategy, userService, loginEvents } = buildStrategy()
+      const request = { get: jest.fn() } as unknown as Request
 
-    await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
+      await expect(strategy.validate(request, { sub })).rejects.toMatchObject({ status: 401 })
 
-    // The bug: without defaultOrganizationDefaultRegionId, the downstream
-    // UserCreatedEvent → handleUserCreatedEvent creates the default org with
-    // defaultRegionId=undefined. Assert the strategy forwards the configured
-    // region id into the create DTO.
-    expect(userService.create).toHaveBeenCalledTimes(1)
-    expect(userService.create).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultOrganizationDefaultRegionId: DEFAULT_REGION_ID }),
-      expect.anything(),
-    )
-  })
+      expect(userService.findOne).not.toHaveBeenCalled()
+      expect(userService.create).not.toHaveBeenCalled()
+      expect(userService.update).not.toHaveBeenCalled()
+      expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
+    },
+  )
 
-  it('creates a first-login user as a registration by the user', async () => {
-    const { strategy, userService } = buildStrategy()
-    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
-
-    await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
-
-    expect(userService.create).toHaveBeenCalledWith(expect.anything(), Context.user())
-  })
-
-  it('rejects an unverified Auth0 database identity before local user creation', async () => {
-    const { strategy, userService } = buildStrategy()
-    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
-
-    await expect(
-      strategy.validate(request, { sub: 'auth0|user-1', email: 'new@boxlite.dev', email_verified: false }),
-    ).rejects.toThrow(EmailVerificationRequiredException)
-    expect(userService.findOne).not.toHaveBeenCalled()
-    expect(userService.create).not.toHaveBeenCalled()
-  })
-
-  it('allows social identities through even when their provider claim is false', async () => {
-    const { strategy, userService } = buildStrategy()
-    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
-
-    await strategy.validate(request, { sub: 'google-oauth2|user-1', email: 'new@boxlite.dev', email_verified: false })
-
-    expect(userService.create).toHaveBeenCalledTimes(1)
-  })
-
-  it('hands the resolved user and the token claims to the login recorder', async () => {
-    const { strategy, loginEvents } = buildStrategy()
+  it('records the first login after automatic registration when protection is disabled', async () => {
+    const { strategy, userService, loginEvents } = buildStrategy(false)
     const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
     const payload = { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true, iat: 1000, exp: 4600 }
 
     await strategy.validate(request, payload)
 
+    expect(userService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1', email: 'new@boxlite.dev', defaultOrganizationDefaultRegionId: 'us' }),
+      Context.user({ userId: 'user-1', authMethod: 'jwt' }),
+    )
     expect(loginEvents.recordFirstUse).toHaveBeenCalledWith('user-1', payload)
-  })
-
-  // A rejected token is not a login, so nothing may be recorded for it.
-  it('does not record a login for a rejected unverified identity', async () => {
-    const { strategy, loginEvents } = buildStrategy()
-    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
-
-    await expect(
-      strategy.validate(request, { sub: 'auth0|user-1', email: 'new@boxlite.dev', email_verified: false }),
-    ).rejects.toThrow(EmailVerificationRequiredException)
-    expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
   })
 
   it.each([undefined, '', '   '])('rejects a new OIDC user without a registration email (%s)', async (email) => {
@@ -121,7 +68,7 @@ describe('JwtStrategy.validate — auto-created user', () => {
 
     await expect(strategy.validate(request, { sub: 'github|new-user', email })).rejects.toMatchObject({
       status: 403,
-      response: { code: 'email_required' },
+      response: { code: 'registration_required' },
     })
 
     expect(userService.create).not.toHaveBeenCalled()
@@ -154,6 +101,39 @@ describe('JwtStrategy.validate — auto-created user', () => {
     expect(loginEvents.recordFirstUse).toHaveBeenCalledTimes(1)
   })
 
+  // Third-party MCP clients get access tokens without profile claims (#2404).
+  it('keeps a known user email and name when the token carries neither', async () => {
+    const { strategy, userService } = buildStrategy()
+    const user = {
+      id: 'google-oauth2|existing',
+      name: 'Existing User',
+      email: 'existing@gmail.com',
+      emailVerified: true,
+    }
+    jest.mocked(userService.findOne).mockResolvedValue(user as never)
+    const request = { get: jest.fn() } as unknown as Request
+
+    await expect(strategy.validate(request, { sub: user.id })).resolves.toMatchObject({
+      userId: user.id,
+      email: user.email,
+    })
+
+    expect(userService.update).not.toHaveBeenCalled()
+  })
+
+  // The login Action is the only email-verification gate; the API trusts the
+  // tokens it lets through, whether or not they carry `email_verified`.
+  it('admits a known database user whose MCP token carries no email_verified', async () => {
+    const { strategy, userService } = buildStrategy()
+    const user = { id: 'auth0|existing', name: 'Existing User', email: 'existing@boxlite.dev', emailVerified: true }
+    jest.mocked(userService.findOne).mockResolvedValue(user as never)
+    const request = { get: jest.fn() } as unknown as Request
+
+    await expect(strategy.validate(request, { sub: user.id })).resolves.toMatchObject({ userId: user.id })
+
+    expect(userService.update).not.toHaveBeenCalled()
+  })
+
   it('preserves an existing user login when the provider updates their email to a disposable domain', async () => {
     const { strategy, userService, loginEvents } = buildStrategy()
     const user = { id: 'github|existing', name: 'Existing User', email: 'existing@gmail.com', emailVerified: true }
@@ -168,64 +148,49 @@ describe('JwtStrategy.validate — auto-created user', () => {
   })
 })
 
-describe('requireVerifiedAuth0DatabaseEmail', () => {
-  it('rejects false or missing verification on Auth0 database identities', () => {
-    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: false })).toThrow(
-      EmailVerificationRequiredException,
-    )
-    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123' })).toThrow(EmailVerificationRequiredException)
-  })
-
-  // 401 would tell the dashboard the token is stale, which re-arms a re-login
-  // loop that cannot clear an unverified address. 403 says the token is fine
-  // and the bearer is not yet allowed — the client can then show a real screen.
-  it('rejects with 403 and a machine-readable code, never 401', () => {
-    let thrown: unknown
-    try {
-      requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: false })
-    } catch (error) {
-      thrown = error
-    }
-
-    const exception = thrown as EmailVerificationRequiredException
-    expect(exception).toBeInstanceOf(EmailVerificationRequiredException)
-    expect(exception.getStatus()).toBe(HttpStatus.FORBIDDEN)
-    expect(exception.getResponse()).toMatchObject({ code: 'email_verification_required' })
-
-    // Pinned to the literal, not the constant: asserting the constant against
-    // itself proves nothing, and the dashboard keeps its own copy of this string
-    // (apps/dashboard/src/api/errors.ts). A rename on either side must break a
-    // test rather than silently desync the wire contract.
-    expect(EMAIL_VERIFICATION_REQUIRED_CODE).toBe('email_verification_required')
-  })
-
-  it('accepts verified Auth0 database and non-Auth0 identities', () => {
-    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: true })).not.toThrow()
-    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'google-oauth2|123', email_verified: false })).not.toThrow()
-  })
-})
-
 describe('JwtStrategy.verifyToken', () => {
   afterEach(() => jest.restoreAllMocks())
 
-  it('applies the same email-verification gate to direct JWT consumers', async () => {
+  it('returns the payload of a token without profile claims', async () => {
     const { strategy } = buildStrategy()
-    jest.spyOn(jose, 'jwtVerify').mockResolvedValue({
-      payload: { sub: 'auth0|123', email_verified: false },
-      protectedHeader: { alg: 'RS256' },
-    } as any)
-
-    await expect(strategy.verifyToken('already-issued-token')).rejects.toThrow(EmailVerificationRequiredException)
-  })
-
-  it('returns a verified Auth0 database payload', async () => {
-    const { strategy } = buildStrategy()
-    const payload = { sub: 'auth0|123', email_verified: true }
+    const payload = { sub: 'auth0|123' }
     jest.spyOn(jose, 'jwtVerify').mockResolvedValue({
       payload,
       protectedHeader: { alg: 'RS256' },
     } as any)
 
     await expect(strategy.verifyToken('verified-token')).resolves.toMatchObject(payload)
+  })
+
+  // Rauthy signs tokens for MCP clients it registers dynamically with EdDSA.
+  async function signedBy(alg: 'EdDSA' | 'RS256' | 'ES256') {
+    const { strategy } = buildStrategy()
+    const { publicKey, privateKey } = await jose.generateKeyPair(alg, { crv: alg === 'EdDSA' ? 'Ed25519' : undefined })
+    const jwk = { ...(await jose.exportJWK(publicKey)), alg, kid: 'k1' }
+    ;(strategy as unknown as { JWKS: unknown }).JWKS = jose.createLocalJWKSet({ keys: [jwk] })
+    const token = await new jose.SignJWT({ sub: 'u1', scope: 'write:boxes' })
+      .setProtectedHeader({ alg, kid: 'k1' })
+      .setIssuer('iss')
+      .setAudience(['dyn$client', 'http://localhost:3001/mcp'])
+      .setExpirationTime('5m')
+      .sign(privateKey)
+    return { strategy, token }
+  }
+
+  it.each(['EdDSA', 'RS256'] as const)('accepts an MCP token signed with %s', async (alg) => {
+    const { strategy, token } = await signedBy(alg)
+    await expect(strategy.verifyMcpToken(token, 'http://localhost:3001/mcp')).resolves.toMatchObject({ sub: 'u1' })
+  })
+
+  it('rejects an MCP token signed with another algorithm', async () => {
+    const { strategy, token } = await signedBy('ES256')
+    await expect(strategy.verifyMcpToken(token, 'http://localhost:3001/mcp')).rejects.toThrow(jose.errors.JOSEError)
+  })
+
+  it('keeps EdDSA out of every non-MCP verification', async () => {
+    const { strategy, token } = await signedBy('EdDSA')
+    await expect(strategy.verifyToken(token, 'http://localhost:3001/mcp')).rejects.toThrow(
+      jose.errors.JOSEAlgNotAllowed,
+    )
   })
 })

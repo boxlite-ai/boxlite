@@ -50,6 +50,16 @@ service Guest {
   // Thaw previously quiesced filesystems (FITHAW ioctl).
   // Must be called after SIGCONT to unblock writes.
   rpc Thaw(ThawRequest) returns (ThawResponse);
+
+  // Correct CLOCK_REALTIME from host UTC only when absolute drift exceeds 100ms.
+  // Linux/native shim: initial push, then checks every 2s; pushes on a >=6s
+  // check gap, >=60s since success, no prior success, or host clock rollback.
+  // Runs for detached Boxes without D-Bus; the host samples after connecting,
+  // immediately before sending. Host-only: no RTC or monotonic clock changes.
+  // Success means drift <=100ms or clock_settime succeeded, in either direction.
+  // 100ms is an adjustment threshold, not an end-to-end precision guarantee.
+  // Invalid timestamps and clock-read/set failures are returned as errors.
+  rpc SyncClock(SyncClockRequest) returns (SyncClockResponse);
 }
 
 // Persistent SSH desired state and live listener control.
@@ -149,6 +159,10 @@ message Volume {
 message VirtiofsSource {
   string tag = 1;         // virtiofs tag name
   bool read_only = 2;     // read only in guest
+  // Aggregate device identity. Empty keeps the legacy per-tag mount behavior.
+  string device_tag = 3;
+  // One directory component beneath the aggregate root; tag remains the logical share name.
+  string export_key = 4;
 }
 
 // Block device volume source
@@ -214,6 +228,7 @@ message PingRequest {}
 
 message PingResponse {
   string version = 1;  // Guest agent version
+  bool safe_managed_volume_sub_path = 2;  // Supports pinned managed-volume subdirectories
 }
 
 message ShutdownRequest {}
@@ -233,6 +248,15 @@ message ThawResponse {
   // Number of filesystems successfully thawed
   uint32 thawed_count = 1;
 }
+
+message SyncClockRequest {
+  // Seconds since the Unix epoch (UTC), sampled on the host.
+  int64 unix_sec = 1;
+  // Nanosecond part of the same instant (0-999999999).
+  int32 nanos = 2;
+}
+
+message SyncClockResponse {}
 
 // ============================================================================
 // SSH runtime configuration
@@ -303,7 +327,7 @@ message ContainerInitRequest {
   // Bind mounts from guest VM paths into container namespace
   repeated BindMount mounts = 4;
   // Additional CA certificates to install in the container trust store.
-  // Used for MITM secret substitution — the container trusts the proxy CA.
+  // Used for MITM secret injection — the container trusts the proxy CA.
   repeated CACert ca_certs = 5;
   // Session id the guest registers the container's init process under, so
   // the main command is addressable through the same execution namespace as
@@ -316,6 +340,19 @@ message ContainerInitRequest {
 
   // Device nodes to reproduce from the guest VM inside the OCI workload.
   repeated ContainerDevice devices = 7;
+
+  // Box limits written to the container cgroup. Absent from an older host.
+  ContainerResources resources = 8;
+}
+
+// Literal cgroup v2 limits, host-computed from box options. 0 means unset,
+// which leaves the controller file at the kernel default ("max").
+message ContainerResources {
+  int64 cpu_quota_us = 1;
+  uint64 cpu_period_us = 2;
+  int64 memory_limit_bytes = 3;
+  // Reserved for a future user option; the host sends 0 today.
+  int64 pids_limit = 4;
 }
 
 message ContainerStartRequest {
@@ -357,6 +394,31 @@ message CACert {
   string pem = 1;  // PEM-encoded X.509 certificate
 }
 
+enum BindMountKind {
+  // Compatibility mode for requests from hosts predating the kind field.
+  // The guest uses the legacy rule: empty subpath means a whole directory,
+  // while non-empty subpath means a single file. New hosts must set an explicit kind.
+  // Example: an old host sends subpath="app.conf" without kind to mount one file.
+  BIND_MOUNT_KIND_UNSPECIFIED = 0;
+
+  // Mount an entire host directory or a whole managed-volume payload.
+  // subpath must be empty.
+  // Examples: -v /host/data:/data or -v workspace:/workspace.
+  BIND_MOUNT_KIND_WHOLE_DIRECTORY = 1;
+
+  // Mount one host file staged in its own shared directory.
+  // subpath contains the file name within that directory.
+  // Example: -v /host/app.conf:/etc/app.conf sends subpath="app.conf".
+  BIND_MOUNT_KIND_SINGLE_FILE = 2;
+
+  // Mount one existing relative directory inside a managed-volume payload.
+  // subpath contains the relative directory path. The guest resolves and pins
+  // it without following symlinks; older guests must be rejected by the version gate.
+  // Example: source=workspace,target=/workspace,sub_path=team/backend sends
+  // subpath="team/backend".
+  BIND_MOUNT_KIND_MANAGED_SUB_DIRECTORY = 3;
+}
+
 // Bind mount from guest volume to container path
 // Uses convention-based paths: /run/boxlite/shared/containers/{container_id}/volumes/{volume_name}
 message BindMount {
@@ -372,10 +434,12 @@ message BindMount {
   // guest applies mount_setattr(MOUNT_ATTR_IDMAP) to remap transparently.
   uint32 owner_uid = 4;
   uint32 owner_gid = 5;
-  // For a single-file mount, the file name within the shared volume dir; the
-  // guest bind-mounts {volume_dir}/{subpath} rather than the whole dir. Empty
-  // for a whole-directory mount.
+  // SINGLE_FILE: file name within the staged share directory.
+  // MANAGED_SUB_DIRECTORY: relative directory inside the volume payload.
+  // Empty for WHOLE_DIRECTORY. UNSPECIFIED retains the legacy interpretation.
   string subpath = 6;
+  // Explicit payload interpretation. Old hosts omit this field.
+  BindMountKind kind = 7;
 }
 
 message ContainerInitResponse {
@@ -393,6 +457,8 @@ enum ContainerInitErrorKind {
   // Zero keeps errors from older guests, which omit this field, internal.
   CONTAINER_INIT_ERROR_KIND_INTERNAL = 0;
   CONTAINER_INIT_ERROR_KIND_UNSUPPORTED = 1;
+  CONTAINER_INIT_ERROR_KIND_INVALID_ARGUMENT = 2;
+  CONTAINER_INIT_ERROR_KIND_NOT_FOUND = 3;
 }
 
 message ContainerInitError {
@@ -453,6 +519,9 @@ message ContainerAdvancedOptions {
 message LinuxOptions {
   // OCI read-only-path list, host-resolved. Empty means unconfined.
   repeated string readonly_paths = 1;
+  // Unshare a cgroup namespace and mount cgroup2 read-only at /sys/fs/cgroup,
+  // so the workload reads its own limits. Host-resolved: false for privileged.
+  bool cgroup_namespace = 2;
 }
 
 message MountOptions {
@@ -621,10 +690,10 @@ message UploadChunk {
   bool mkdir_parents = 4;
   // If true, overwrite existing files (default: true)
   bool overwrite = 5;
-  // Whether the source is a directory (true) or a single file (false).
-  // Set only on the first chunk; unset = unknown (older peer), which makes the
-  // receiver fall back to legacy shape detection.
-  optional bool source_is_dir = 6;
+  // Was the source-shape hint. The archive's first entry carries the shape,
+  // so receivers land by it and peers no longer send this.
+  reserved 6;
+  reserved "source_is_dir";
 }
 
 message UploadResponse {
@@ -654,8 +723,8 @@ message DownloadRequest {
 message DownloadChunk {
   // Raw tar archive bytes
   bytes data = 1;
-  // Whether the source is a directory (true) or a single file (false).
-  // Set only on the first chunk; unset = unknown (older peer), which makes the
-  // receiver fall back to legacy shape detection.
-  optional bool source_is_dir = 2;
+  // Was the source-shape hint. The archive's first entry carries the shape,
+  // so receivers land by it and peers no longer send this.
+  reserved 2;
+  reserved "source_is_dir";
 }

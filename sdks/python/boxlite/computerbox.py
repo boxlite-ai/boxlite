@@ -44,7 +44,7 @@ class ComputerBox(SimpleBox):
 
     def __init__(
         self,
-        cpu: int = const.COMPUTERBOX_CPUS,
+        cpu: float = const.COMPUTERBOX_CPUS,
         memory: int = const.COMPUTERBOX_MEMORY_MIB,
         gui_http_port: int = const.COMPUTERBOX_GUI_HTTP_PORT,
         gui_https_port: int = const.COMPUTERBOX_GUI_HTTPS_PORT,

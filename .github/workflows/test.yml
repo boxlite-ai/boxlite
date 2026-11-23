@@ -7,7 +7,7 @@
 # - Rust: units and non-VM integration, with llvm-cov coverage
 # - Python: pytest with -m "not integration"
 # - Node.js: vitest unit project
-# - Go: SDK, networking bridge, the runner and the image service; API: Jest with Postgres and Redis
+# - Go: SDK, networking bridge, runner, image service and Secret Server; API: Jest with Postgres and Redis
 # - Dashboard: vitest with jsdom, v8 coverage
 # - Plugins: Python package tests and real CLI check/dist commands
 # - Nix: the flake dev shell builds the CLI and boots a box (non-blocking)
@@ -47,7 +47,10 @@ on:
       - 'rust-toolchain.toml'
       - 'sdks/**'
       - 'apps/api/**'
+      - 'apps/libs/ci-listener/**'
+      - 'apps/github-ci-runner/**'
       - 'apps/image-service/**'
+      - 'apps/secret-server/**'
       - 'apps/dashboard/**'
       - 'apps/libs/api-client/**'
       - 'apps/runner/**'
@@ -79,7 +82,8 @@ on:
   # unaffected); the conclusion job reports success-or-skipped.
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    # Native stack entry must publish the trunk's required Test conclusion.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, stacked]
 
 concurrency:
   group: test-${{ github.event_name }}-${{ github.ref }}
@@ -155,6 +159,7 @@ jobs:
               # suite drives these bindings through a built extension.
               - 'sdks/python/boxlite/**/!(*.md)'
               - 'sdks/python/tests/**/!(*.md)'
+              - 'sdks/go/**/!(*.md)'
               - 'scripts/test/coverage-bindings.sh'
               - 'tests/scripts/**/!(*.md)'
               - 'sdks/node/src/**/!(*.md)'
@@ -247,6 +252,7 @@ jobs:
               - 'sdks/go/**/!(*.md)'
               - 'src/deps/libgvproxy-sys/**/!(*.md)'
               - 'apps/image-service/**/!(*.md)'
+              - 'apps/secret-server/**/!(*.md)'
               - 'apps/runner/**/!(*.md)'
               - 'apps/go.work'
               - 'apps/go.work.sum'
@@ -268,7 +274,13 @@ jobs:
               - '.github/workflows/test.yml'
               - '.github/workflows/lint.yml'
             api:
+              - 'Makefile'
+              - 'make/test.mk'
+              - 'make/coverage.mk'
+              - 'make/dev.mk'
               - 'apps/api/**/!(*.md)'
+              - 'apps/libs/ci-listener/**/!(*.md)'
+              - 'apps/github-ci-runner/**/!(*.md)'
               - 'openapi/box.openapi.yaml'
               - 'openapi/admin.openapi.yaml'
               - 'apps/package.json'
@@ -432,9 +444,18 @@ jobs:
         timeout-minutes: 5
         run: make coverage:vmm:kvm
 
+      - name: Prepare real-guest test toolchain
+        if: matrix.platform.target == 'linux-x64-gnu'
+        run: |
+          sudo apt-get install -y musl-tools gperf
+          rustup target add x86_64-unknown-linux-musl
+
       - name: Run real-kernel boot tests with coverage
         if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
         timeout-minutes: 5
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: x86_64-linux-musl-gcc
+          CC_x86_64_unknown_linux_musl: x86_64-linux-musl-gcc
         run: make coverage:vmm:boot
 
       - uses: actions/setup-node@v4
@@ -442,11 +463,22 @@ jobs:
         with:
           node-version: '22'
 
+      - uses: ./.github/actions/setup-go
+        if: matrix.platform.target == 'linux-x64-gnu'
+
       - name: Measure native bindings through SDK callers
         if: matrix.platform.target == 'linux-x64-gnu'
         env:
           BOXLITE_DEPS_STUB: '1'
         run: make coverage:bindings:external
+
+      - name: Measure file-copy workflows with a real guest
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.rust == 'true'
+        timeout-minutes: 20
+        run: |
+          make setup:submodules
+          make setup:build
+          make coverage:copy:vm
 
       - name: Run OpenAPI reference-server unit tests
         # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
@@ -471,7 +503,7 @@ jobs:
         if: matrix.platform.target == 'linux-x64-gnu'
         uses: codecov/codecov-action@v5
         with:
-          files: target/coverage/native-sdk/lcov.info,target/coverage/python/coverage.xml
+          files: target/coverage/native-sdk/lcov.info,target/coverage/native-sdk/go-lcov.info,target/coverage/python/coverage.xml,target/coverage/go-checkpoint-native.out
           flags: rust-unit
           use_oidc: true
           disable_search: true
@@ -569,6 +601,45 @@ jobs:
           disable_search: true
           fail_ci_if_error: true
 
+  secret-server-postgres:
+    name: Secret Server PostgreSQL integration
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: boxlite
+          POSTGRES_PASSWORD: boxlite
+          POSTGRES_DB: boxlite
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U boxlite -d boxlite"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-go
+      - name: Run Secret Server PostgreSQL integration tests
+        env:
+          SECRET_TEST_DATABASE_URL: postgresql://boxlite:boxlite@127.0.0.1:${{ job.services.postgres.ports[5432] }}/boxlite
+        run: make coverage:apps:secret-server:integration
+      - name: Upload Secret Server integration coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/secret-server-integration.out
+          flags: go
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
+
   # Go SDK unit tests
   go:
     name: Go Tests (${{ matrix.platform.target }})
@@ -606,8 +677,34 @@ jobs:
 
       - uses: ./.github/actions/sccache
 
-      - name: Run Go SDK, networking, runner and image-service tests with coverage
+      - name: Run Go SDK, networking and app tests with coverage
         run: make coverage:go
+
+      - name: Qualify nested runtime metadata with KVM coverage
+        id: nested-runtime-coverage
+        if: matrix.platform.target == 'linux-x64-gnu'
+        timeout-minutes: 5
+        env:
+          BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS: '1'
+        run: |
+          mkdir -p target/coverage/full-go
+          for module in go-sdk gvproxy runner image-service secret-server; do
+            cp "target/coverage/$module.out" "target/coverage/full-go/$module.out"
+          done
+          sudo chmod a+rw /dev/kvm
+          make _ensure-kvm
+          make coverage:go GOTEST_FILTER='-count=1 -run NestedVirtualization'
+          # Both passes instrument this checkout with the same atomic mode.
+          # Keep the complete suite's blocks as well as the hardware pass.
+          for module in go-sdk gvproxy runner image-service secret-server; do
+            report="target/coverage/$module.out"
+            full="target/coverage/full-go/$module.out"
+            if [[ "$(head -n 1 "$report")" != 'mode: atomic' || "$(head -n 1 "$full")" != 'mode: atomic' ]]; then
+              echo "Expected atomic coverage profiles for $module" >&2
+              exit 1
+            fi
+            tail -n +2 "$full" >> "$report"
+          done
 
       # coverage:go has already built the native library needed by both analyzers.
       - name: Run Go vet
@@ -624,7 +721,7 @@ jobs:
       - name: Upload Go coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out,target/coverage/runner.out,target/coverage/image-service.out
+          files: target/coverage/go-sdk.out,target/coverage/gvproxy.out,target/coverage/runner.out,target/coverage/image-service.out,target/coverage/secret-server.out
           flags: go
           use_oidc: true
           disable_search: true
@@ -805,11 +902,14 @@ jobs:
         run: "yarn install --immutable"
       - name: Run API unit tests
         run: "yarn nx run api:test --coverage --skip-nx-cache"
+      - name: Run shared and standalone CI Listener tests
+        working-directory: .
+        run: make coverage:ci-listener coverage:github-ci-runner
 
       - name: Upload API coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: target/coverage/api/lcov.info
+          files: target/coverage/api/lcov.info,target/coverage/ci-listener/lcov.info,target/coverage/github-ci-runner/lcov.info
           flags: api
           use_oidc: true
           disable_search: true
@@ -920,7 +1020,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
+    needs: [changes, infra, rust, python, node, go, secret-server-postgres, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

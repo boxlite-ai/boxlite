@@ -8,10 +8,11 @@ and how to fix it when it breaks.
 
 GitHub-hosted runners cannot expose `/dev/kvm`, so BoxLite's integration tests — which boot
 real microVMs through libkrun — only run on hardware that allows nested virtualization. The
-workflow keeps a single **persistent** VM for this: it is started before a run, runs the
-tests, then is **stopped** (never deleted) so its build and image caches survive on its
-disk. Because there is exactly one VM, only one e2e run executes at a time — a newer run
-queues behind the one in progress, and GitHub keeps only the newest pending run.
+workflow selects one of two **persistent** VMs: it starts the primary in `us-east5-a`,
+or falls back to `us-east4-a` after the first rejected primary start. The selected
+VM runs tests and is **stopped** (never deleted), preserving its build and image caches.
+One e2e run selects from the pool at a time; newer runs queue behind the active run,
+and GitHub keeps only the newest pending run.
 
 ## How it runs
 
@@ -29,9 +30,17 @@ flowchart LR
 - **start-runner** — authenticates to GCP through OIDC, writes a fresh runner registration
   token into the VM's metadata, boots the VM, and waits up to 5 minutes for the runner to
   come online. It then removes the token from the metadata, whether or not the runner came up.
-  When the zone rejects the boot for lack of capacity, the VM stays `TERMINATED`; after a
-  minute in that state the job retries the start, up to 6 attempts a minute apart.
-- **e2e-tests** — runs on the self-hosted runner (`gcp-e2e` label, 50-minute timeout):
+  The primary gets one start attempt. If `gcloud` returns `ZONE_RESOURCE_POOL_EXHAUSTED`,
+  `ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS`, or the documented message that the zone
+  lacks enough resources, selection proceeds immediately to token cleanup and fallback.
+  For accepted asynchronous starts, a VM that stays `TERMINATED` for about one minute
+  is treated as rejected; this is a status heuristic, not an exact operation-error diagnosis.
+  Before starting the backup, the job clears the primary token and confirms it is stopped.
+  The backup retains six attempts with one-minute retry intervals. Explicit permission,
+  quota, network, or metadata errors fail without fallback, as does a boot still pending
+  after five minutes.
+- **e2e-tests** — runs on the selected self-hosted runner (`gcp-e2e` and instance-name
+  labels, 50-minute timeout):
   verifies `/dev/kvm`, installs build dependencies, then runs `make test:integration`.
 - **stop-runner** — always runs at the end and stops the VM so it stops costing money,
   except when a `debug` dispatch fails and leaves the VM running for the SSH session.
@@ -46,9 +55,19 @@ of failing every start. (The previous AWS runner failed this way from 2026-10-20
 registered when an instance was first created.)
 
 [`scripts/ci/gcp-e2e-vm.sh`](../../../scripts/ci/gcp-e2e-vm.sh) drives the VM for the
-workflow: `start`, `stop`, and `clear-token`. If the VM is already running with its runner
+workflow: `start-pool` selects the primary through `start-primary` (one attempt), then
+the backup through `start` (six attempts); `stop` and `clear-token` handle cleanup.
+The startup script uses the
+instance name as its runner name and an additional label. Readiness checks match that
+name, and token cleanup and stop use the selected instance and zone.
+
+If the VM is already running with its runner
 online (for example, after a debug session), `start` reuses it; if it is running without an
 online runner, `start` stops it and boots it again with a new token.
+
+A backup retained after a failed debug run stays running when the next run succeeds on
+the primary. That run stops only the primary; stop the retained backup manually after
+debugging. Each VM keeps its own caches, so the first backup run has a cold build.
 
 ### Triggers
 
@@ -73,18 +92,27 @@ online runner, `start` stops it and boots it again with a new token.
 
 | Property | Value |
 |---|---|
-| VM | `ci-gha-e2e-1` in `boxlite-dev-project`, zone `us-east5-a` |
-| Machine type | `c3-highcpu-4` (4 vCPU, 8 GB), nested virtualization enabled. It replaced `n2-custom-4-8192`, which `us-east5-a` repeatedly ran out of (`ZONE_RESOURCE_POOL_EXHAUSTED`). |
+| VMs | Primary `ci-gha-e2e-1` in `us-east5-a`; backup `ci-gha-e2e-2` in `us-east4-a`; project `boxlite-dev-project` |
+| Machine type | Both use `c3-highcpu-4` (4 vCPU, 8 GB), with nested virtualization enabled |
 | Disk / image | 100 GB `pd-balanced`, Ubuntu 24.04 LTS |
-| Runner | name `ci-gha-e2e-1`, label `gcp-e2e` |
-| Network | VPC `ci-gha-e2e`, no firewall rules (no inbound), no external IP; egress through Cloud NAT `ci-gha-e2e-nat` |
+| Runner | Each instance name is its runner name and label, alongside the shared `gcp-e2e` label |
+| Network | VPC `ci-gha-e2e`, no inbound firewall rules or external IP; each region has its own subnet and Cloud NAT |
 | Lifecycle | persistent — stopped between runs, never deleted |
 
-The `ci-gha-e2e` names and the `purpose=ci-github-actions` label keep this VM apart from the
+The `ci-gha-e2e` names and the `purpose=ci-github-actions` label keep these VMs apart from the
 product's own runners (`boxlite-app-*-runner`). Keeping the VM's disk is what makes repeat
 runs fast: the first run compiles everything, and later runs reuse the cached toolchain and
 build output. With 4 vCPUs a cold build is much slower than on the previous 16-vCPU
 `c8i.4xlarge`, so a first run can come close to the 50-minute timeout.
+
+Disk cleanup runs after checkout, before dependency setup, and again after tests and
+diagnostic uploads. At **70% used or less than 50 GiB free**, it removes test caches
+(`target/boxlite-test`, temporary `boxlite-*` paths, and `~/.boxlite`) first. If pressure
+remains, it removes Cargo debug/release outputs, including Linux GNU/musl profiles,
+stopping once usage is below 70% and at least 50 GiB is free. Healthy caches, toolchains,
+`target/native`, `target/nextest`, rescued logs, and persistent test logs are preserved.
+Final cleanup also runs after failure or cancellation, except failed debug sessions;
+it requires successful checkout and a live runner. Cleanup errors fail the step.
 
 Authentication uses no long-lived cloud secrets, and every identity is scoped to this VM:
 
@@ -92,7 +120,7 @@ Authentication uses no long-lived cloud secrets, and every identity is scoped to
   `ci-gha-e2e` (provider `github`) and impersonates `ci-gha-e2e-ctl`. The provider accepts
   only tokens whose `workflow_ref` is this repository's `.github/workflows/e2e-local.yml` on
   any branch. `ci-gha-e2e-ctl` has no project-level role; its only grant is the custom role
-  `ciGhaE2eVmControl` (`compute.instances.get/start/stop/setMetadata`) on this one VM. It
+  `ciGhaE2eVmControl` (`compute.instances.get/start/stop/setMetadata`) on each pool VM. It
   lacks `compute.zoneOperations.get`, so the script never waits on a gcloud operation.
 - **The VM itself** — no service account, so the test code that runs on it gets no GCP
   credentials from the metadata server.
@@ -139,10 +167,48 @@ gcloud iam service-accounts add-iam-policy-binding ci-gha-e2e-ctl@$P.iam.gservic
   --member "principalSet://iam.googleapis.com/projects/929248348760/locations/global/workloadIdentityPools/ci-gha-e2e/attribute.repository_id/1111937658"
 ```
 
+### Add the us-east4 backup
+
+Create these resources once after the primary setup; the VPC, controller role, service
+account, and workload identity federation are shared. The second subnet uses a distinct
+CIDR; both persistent disks and regional NAT resources incur costs between test runs.
+
+```bash
+P=boxlite-dev-project
+gcloud compute networks subnets create ci-gha-e2e-us-east4 --project "$P" \
+  --network ci-gha-e2e --region us-east4 --range 10.250.1.0/24
+gcloud compute routers create ci-gha-e2e-router-us-east4 --project "$P" \
+  --network ci-gha-e2e --region us-east4
+gcloud compute routers nats create ci-gha-e2e-nat-us-east4 --project "$P" \
+  --router ci-gha-e2e-router-us-east4 --region us-east4 \
+  --auto-allocate-nat-external-ips --nat-custom-subnet-ip-ranges ci-gha-e2e-us-east4
+gcloud compute instances create ci-gha-e2e-2 --project "$P" --zone us-east4-a \
+  --machine-type c3-highcpu-4 --enable-nested-virtualization \
+  --image-family ubuntu-2404-lts-amd64 --image-project ubuntu-os-cloud \
+  --boot-disk-size 100GB --boot-disk-type pd-balanced \
+  --subnet ci-gha-e2e-us-east4 --no-address --no-service-account --no-scopes \
+  --shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring \
+  --labels purpose=ci-github-actions,workload=e2e,managed-by=manual \
+  --metadata-from-file startup-script=scripts/ci/gcp-e2e-startup.sh
+gcloud compute instances add-iam-policy-binding ci-gha-e2e-2 --project "$P" --zone us-east4-a \
+  --member "serviceAccount:ci-gha-e2e-ctl@$P.iam.gserviceaccount.com" \
+  --role "projects/$P/roles/ciGhaE2eVmControl"
+gcloud compute instances stop ci-gha-e2e-2 --project "$P" --zone us-east4-a
+```
+
+Before enabling the workflow, update the primary startup metadata too, so its next boot
+registers the instance-name label. Apply startup-script updates to both VMs:
+
+```bash
+gcloud compute instances add-metadata ci-gha-e2e-1 --project boxlite-dev-project \
+  --zone us-east5-a --metadata-from-file startup-script=scripts/ci/gcp-e2e-startup.sh
+gcloud compute instances add-metadata ci-gha-e2e-2 --project boxlite-dev-project \
+  --zone us-east4-a --metadata-from-file startup-script=scripts/ci/gcp-e2e-startup.sh
+```
+
 The organization policy `compute.vmExternalIpAccess` forbids external IPs in this project,
 which is why egress goes through Cloud NAT. After editing `scripts/ci/gcp-e2e-startup.sh`,
-copy it into the VM's metadata with `gcloud compute instances add-metadata` (the command is
-in the script's header). The new script runs on the next boot; a VM left running (for
+copy it into each VM's metadata with the commands above. The script runs on the next boot; a VM left running (for
 example, after a debug session) keeps the old behavior until it is stopped.
 
 When setup finishes, trigger a run with:
@@ -157,8 +223,9 @@ gh workflow run e2e-local.yml
 |---|---|---|
 | `Federate a GCP identity` fails | the run's workflow is not `e2e-local.yml` in this repository, or the pool/provider changed | check the provider condition above; reusable or renamed workflows need the condition updated |
 | `start-runner` times out waiting for the runner to come online | the startup script failed | read the VM's serial port output (`gcloud compute instances get-serial-port-output ci-gha-e2e-1 --project boxlite-dev-project --zone us-east5-a`) and search for `startup-script` |
-| `start-runner` fails with `could not start ci-gha-e2e-1 after 6 attempts` | `us-east5-a` has no `c3-highcpu-4` capacity (`ZONE_RESOURCE_POOL_EXHAUSTED`) | re-run the job later; if it persists, change the VM's machine type with `gcloud compute instances set-machine-type` while it is stopped |
-| `e2e-tests` fails on low disk | `target/` build artifacts filled the disk | the job evicts caches at 80% use and refuses below 20 GB free; if it still fails, grow the disk |
+| Primary logs `rejected the primary start; trying us-east4-a` | Explicit capacity error or a first start that remained `TERMINATED` | The job tries `ci-gha-e2e-2`; explicit capacity errors skip the observation delay |
+| Backup logs `could not start ci-gha-e2e-2 after 6 attempts` | Primary rejected its first start and backup exhausted its retry budget | Inspect both zones; retry when capacity is available |
+| `e2e-tests` fails on low disk | Allowed cache eviction could not restore headroom | cleanup targets below 70% use and at least 50 GiB free before builds and after tests; inspect remaining usage or grow the disk |
 | `e2e-tests` hits its 50-minute timeout with every suite slower | box starts wait on a public registry: `boot_timing_profile` shows `stage_image_prepare` in seconds | Rust, CLI, Python and Node suites pull through a [local registry](../../../src/boxlite/tests/README.md#test_registries--the-local-registry); the C suite's `boxlite_simple_new` test still pulls from docker.io |
 | A pull request doesn't trigger the workflow | the `e2e-local` label is missing | a maintainer adds the label (it is the cost gate) |
 | A labeled fork PR doesn't re-run after a push | fork approval is per-commit | remove and re-add the `e2e-local` label to approve the new head |

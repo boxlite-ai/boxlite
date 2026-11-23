@@ -4,25 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-/**
- * Machine-readable rejection code carried in the API's error envelope (`code`,
- * shaped by apps/api/src/filters/all-exceptions.filter.ts). Branch on this
- * rather than on the human message, which is free to change. Must stay
- * byte-identical to EMAIL_VERIFICATION_REQUIRED_CODE in
- * apps/api/src/exceptions/email-verification-required.exception.ts.
- */
-export const EMAIL_VERIFICATION_REQUIRED_CODE = 'email_verification_required'
-
 export class BoxliteError extends Error {
-  public static fromError(error: Error, code?: string): BoxliteError {
-    if (code === EMAIL_VERIFICATION_REQUIRED_CODE) {
-      return new EmailVerificationRequiredError(error.message, {
-        cause: error.cause,
-      })
-    }
-
+  public static fromError(error: Error, code?: string, retryAfterSeconds?: number): BoxliteError {
     if (code === 'disposable_email' || code === 'email_required' || code === 'invalid_email') {
       return new RegistrationEmailError(error.message, code, { cause: error.cause })
+    }
+
+    if (code && registrationCodes.includes(code)) {
+      return new RegistrationError(error.message, code, retryAfterSeconds, { cause: error.cause })
     }
 
     if (String(error).includes('Organization is suspended')) {
@@ -36,20 +25,40 @@ export class BoxliteError extends Error {
     })
   }
 
-  public static fromString(error: string, options?: { cause?: Error; code?: string }): BoxliteError {
-    return BoxliteError.fromError(new Error(error, { cause: options?.cause }), options?.code)
+  public static fromString(
+    error: string,
+    options?: { cause?: Error; code?: string; retryAfterSeconds?: number },
+  ): BoxliteError {
+    return BoxliteError.fromError(
+      new Error(error, { cause: options?.cause }),
+      options?.code,
+      options?.retryAfterSeconds,
+    )
   }
 }
 
 export class OrganizationSuspendedError extends BoxliteError {}
 
-/**
- * The API accepted the token and still refused the request: this identity has
- * not verified its email address. Distinct from an authentication failure —
- * signing in again cannot clear it, only verifying can, so the UI must offer
- * verification rather than another round trip through login.
- */
-export class EmailVerificationRequiredError extends BoxliteError {}
+const registrationCodes = [
+  'registration_required',
+  'turnstile_token_required',
+  'turnstile_token_invalid',
+  'turnstile_verification_failed',
+  'turnstile_unavailable',
+  'registration_rate_limited',
+  'registration_rate_limit_unavailable',
+]
+
+export class RegistrationError extends BoxliteError {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly retryAfterSeconds?: number,
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+  }
+}
 
 /** The identity is authenticated, but its email cannot be used to create a BoxLite account. */
 export class RegistrationEmailError extends BoxliteError {

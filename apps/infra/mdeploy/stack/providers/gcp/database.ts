@@ -131,6 +131,7 @@ export const gcpDatabaseProvider =
         // an API delete; `protect` refuses one the engine would make.
         dependsOn,
         protect: request.protected,
+        ignoreChanges: ['settings.databaseFlags'],
       },
     )
 

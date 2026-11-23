@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { OrganizationGate } from './components/OrganizationExperience'
 import { NotificationSocketProvider } from '@/providers/NotificationSocketProvider'
 import { OrganizationsProvider } from '@/providers/OrganizationsProvider'
 import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationProvider'
@@ -14,15 +15,7 @@ import { useAuth } from 'react-oidc-context'
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { BannerProvider } from './components/Banner'
 import LoadingFallback from './components/LoadingFallback'
-import { Button } from './components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from './components/ui/dialog'
+import { RegistrationGate } from './components/RegistrationGate'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
 import { useConfig } from './hooks/useConfig'
@@ -31,6 +24,7 @@ import LandingPage from './pages/LandingPage'
 import Logout from './pages/Logout'
 import NotFound from './pages/NotFound'
 import Boxes from './pages/Boxes'
+import Redeem from './pages/Redeem'
 import { ApiProvider } from './providers/ApiProvider'
 import { RegionsProvider } from './providers/RegionsProvider'
 import { BoxSessionProvider } from './providers/BoxSessionProvider'
@@ -39,6 +33,7 @@ import { BoxSessionProvider } from './providers/BoxSessionProvider'
 // load on demand under the dashboard <Outlet> Suspense boundary, so the initial
 // /boxes paint no longer ships Admin/Billing/Settings/Keys/box-details and their
 // recharts/terminal deps. Boxes + the Dashboard shell stay eager (first paint).
+const CiConnectCallback = React.lazy(() => import('./pages/CiConnectCallback'))
 const Keys = React.lazy(() => import('./pages/Keys'))
 // Billing pulls in the plan/wallet/usage sections (and recharts) behind this one chunk.
 const Billing = React.lazy(() => import('./pages/Billing'))
@@ -50,14 +45,14 @@ const FirstBoxQuickstart = React.lazy(() =>
   import('./components/first-run/FirstBoxOnboarding').then((m) => ({ default: m.FirstBoxQuickstart })),
 )
 const Images = React.lazy(() => import('./pages/ImagesPage'))
+const CiPage = React.lazy(() => import('./pages/CiPage'))
+
+const Checkpoints = React.lazy(() => import('./pages/Checkpoints'))
 const ImageDetails = React.lazy(() => import('./pages/ImageDetails'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
 const UserOrganizationInvitations = React.lazy(() => import('@/pages/UserOrganizationInvitations'))
 const BoxDetails = React.lazy(() => import('./components/boxes').then((m) => ({ default: m.BoxDetails })))
-const BoxTerminalFullscreen = React.lazy(() =>
-  import('./components/boxes').then((m) => ({ default: m.BoxTerminalFullscreen })),
-)
 
 const HIDDEN_DASHBOARD_ROUTES = [
   RoutePath.ROLES,
@@ -94,7 +89,7 @@ function App() {
   const config = useConfig()
   const location = useLocation()
   const posthog = usePostHog()
-  const { error: authError, isAuthenticated, user, removeUser } = useAuth()
+  const { error: authError, isAuthenticated, user } = useAuth()
   const boxesRedirect = `${RoutePath.BOXES}${location.search}`
 
   useEffect(() => {
@@ -126,34 +121,24 @@ function App() {
     }
   }, [location, posthog])
 
-  if (authError) {
-    return (
-      <Dialog open>
-        <DialogContent className="[&>button]:hidden">
-          <DialogHeader>
-            <DialogTitle>Authentication Error</DialogTitle>
-            <DialogDescription>{authError.message}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              onClick={async () => {
-                await removeUser()
-                window.location.assign(RoutePath.LANDING)
-              }}
-            >
-              Go Back
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    )
-  }
+  if (authError && location.pathname !== RoutePath.LOGOUT) return <LandingPage />
 
   return (
     <Routes>
       <Route path={RoutePath.LANDING} element={<LandingPage />} />
       <Route path="/lander" element={<Navigate to={RoutePath.LANDING} replace />} />
+      <Route
+        path="/settings/ci/callback"
+        element={
+          <Suspense fallback={<LoadingFallback />}>
+            <ApiProvider>
+              <CiConnectCallback />
+            </ApiProvider>
+          </Suspense>
+        }
+      />
       <Route path={RoutePath.LOGOUT} element={<Logout />} />
+      <Route path={RoutePath.REDEEM} element={<Redeem />} />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />
       <Route
@@ -165,17 +150,21 @@ function App() {
         element={
           <Suspense fallback={<LoadingFallback />}>
             <ApiProvider>
-              <OrganizationsProvider>
-                <SelectedOrganizationProvider>
-                  <RegionsProvider>
-                    <NotificationSocketProvider>
-                      <BannerProvider>
-                        <Dashboard />
-                      </BannerProvider>
-                    </NotificationSocketProvider>
-                  </RegionsProvider>
-                </SelectedOrganizationProvider>
-              </OrganizationsProvider>
+              <RegistrationGate key={user?.profile.sub}>
+                <OrganizationsProvider>
+                  <OrganizationGate>
+                    <SelectedOrganizationProvider>
+                      <RegionsProvider>
+                        <NotificationSocketProvider>
+                          <BannerProvider>
+                            <Dashboard />
+                          </BannerProvider>
+                        </NotificationSocketProvider>
+                      </RegionsProvider>
+                    </SelectedOrganizationProvider>
+                  </OrganizationGate>
+                </OrganizationsProvider>
+              </RegistrationGate>
             </ApiProvider>
           </Suspense>
         }
@@ -188,6 +177,10 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
         <Route path={getRouteSubPath(RoutePath.DOMAINS)} element={<Domains />} />
         <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images tab="images" />} />
+        <Route path={getRouteSubPath(RoutePath.CI)} element={<CiPage tab="runners" />} />
+        <Route path={getRouteSubPath(RoutePath.CI_CONNECTS)} element={<CiPage tab="connects" />} />
+
+        <Route path={getRouteSubPath(RoutePath.CHECKPOINTS)} element={<Checkpoints />} />
         {/* The static segment is declared before `:idOrRef`, as the API orders its routes. */}
         <Route path={getRouteSubPath(RoutePath.IMAGE_REGISTRIES)} element={<Images tab="registries" />} />
         <Route path={getRouteSubPath(RoutePath.IMAGE_DETAILS)} element={<ImageDetails />} />
@@ -212,11 +205,8 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.BILLING_WALLET)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.LIMITS)} element={<Navigate to={RoutePath.BILLING} replace />} />
         <Route path={getRouteSubPath(RoutePath.PRICING)} element={<Navigate to={RoutePath.BILLING} replace />} />
-        {/* Pathless layout route: a single BoxSessionProvider fiber
-            persists across the three box routes, so activation state
-            (e.g. "terminal connected") survives navigation between the
-            details view and its fullscreen siblings. Per-route providers
-            held state in a useRef that died with each unmount. */}
+        {/* Keep the same BoxDetails component and box-scoped activation state across both views.
+            Shell lifetime belongs to the Terminal page and ends when it unmounts. */}
         <Route
           element={
             <BoxSessionProvider>
@@ -224,7 +214,7 @@ function App() {
             </BoxSessionProvider>
           }
         >
-          <Route path={getRouteSubPath(RoutePath.BOX_TERMINAL)} element={<BoxTerminalFullscreen />} />
+          <Route path={getRouteSubPath(RoutePath.BOX_TERMINAL)} element={<BoxDetails page="terminal" />} />
           <Route path={getRouteSubPath(RoutePath.BOX_DETAILS)} element={<BoxDetails />} />
         </Route>
         {HIDDEN_DASHBOARD_ROUTES.map((path) => (

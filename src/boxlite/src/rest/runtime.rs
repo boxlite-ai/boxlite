@@ -40,6 +40,106 @@ impl RestRuntime {
 }
 
 #[async_trait::async_trait]
+impl crate::runtime::checkpoints::CheckpointBackend for RestRuntime {
+    async fn create(
+        &self,
+        source: &str,
+        name: Option<String>,
+    ) -> BoxliteResult<crate::CheckpointInfo> {
+        #[derive(serde::Serialize)]
+        struct Capture<'a> {
+            source_box_id: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            name: Option<String>,
+        }
+        self.client
+            .post(
+                "/checkpoints",
+                &Capture {
+                    source_box_id: source,
+                    name,
+                },
+            )
+            .await
+    }
+
+    async fn list(&self) -> BoxliteResult<Vec<crate::CheckpointInfo>> {
+        #[derive(serde::Deserialize)]
+        struct Page {
+            checkpoints: Vec<crate::CheckpointInfo>,
+            #[serde(default)]
+            next_page_token: Option<String>,
+        }
+        let mut result = Vec::new();
+        let mut token = None::<String>;
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            let query = token
+                .as_deref()
+                .map(|value| vec![("page_token", value)])
+                .unwrap_or_default();
+            let page: Page = self.client.get_with_query("/checkpoints", &query).await?;
+            result.extend(page.checkpoints);
+            match page.next_page_token.filter(|value| !value.is_empty()) {
+                Some(value) if seen.insert(value.clone()) => token = Some(value),
+                Some(_) => {
+                    return Err(BoxliteError::Internal(
+                        "checkpoint server repeated a pagination token".into(),
+                    ));
+                }
+                None => return Ok(result),
+            }
+        }
+    }
+
+    async fn get(&self, key: &str) -> BoxliteResult<crate::CheckpointInfo> {
+        self.client.get(&format!("/checkpoints/{key}")).await
+    }
+
+    async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()> {
+        let path = format!("/checkpoints/{key}");
+        let result = if force {
+            self.client
+                .delete_with_query(&path, &[("force", "true")])
+                .await
+        } else {
+            self.client.delete(&path).await
+        };
+        match result {
+            Err(BoxliteError::NotFound(_)) if force => Ok(()),
+            result => result,
+        }
+    }
+}
+
+impl RestRuntime {
+    /// Create a box from a managed checkpoint. The server restores the saved
+    /// settings and refuses every other create field, so the body is minimal.
+    async fn create_from_checkpoint(
+        &self,
+        checkpoint: &str,
+        name: Option<&str>,
+    ) -> BoxliteResult<LiteBox> {
+        #[derive(serde::Serialize)]
+        struct Request<'a> {
+            checkpoint_id: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            name: Option<&'a str>,
+        }
+        use crate::runtime::checkpoints::checked_name;
+        let request = Request {
+            checkpoint_id: checked_name(checkpoint)?,
+            name: name.map(checked_name).transpose()?,
+        };
+        let response: BoxResponse = self.client.post("/boxes", &request).await?;
+        Ok(litebox_from_rest(Arc::new(RestBox::new(
+            self.client.clone(),
+            response.to_box_info()?,
+        ))))
+    }
+}
+
+#[async_trait::async_trait]
 impl AuthBackend for RestRuntime {
     async fn whoami(&self) -> BoxliteResult<Principal> {
         self.client.get_me().await
@@ -222,6 +322,8 @@ impl BoxOptions {
     /// types (`CreateBoxRequest::from_options`), in `boxlite serve`
     /// (`src/cli/src/commands/serve/types.rs`), and in the spec.
     fn sanitize_remote(&self) -> BoxliteResult<()> {
+        // The server validates CPU quota support on its execution host.
+        self.cpu_count()?;
         self.advanced.validate_privileged_capability_conflict()?;
         if !self.ports.is_empty() {
             return Err(BoxliteError::Unsupported(
@@ -271,6 +373,13 @@ impl BoxOptions {
         if self.advanced.nested_virtualization {
             return Err(BoxliteError::Unsupported(
                 "nested virtualization is only supported by the local runtime".to_string(),
+            ));
+        }
+
+        if self.advanced.engine.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "engine selection (advanced.engine) is only supported by the local runtime"
+                    .to_string(),
             ));
         }
 
@@ -330,7 +439,15 @@ impl BoxOptions {
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        // A checkpoint source carries no other option: the server restores
+        // the saved box, so this never builds a `CreateBoxRequest`.
+        if let Some(checkpoint) = options.checkpoint_source()? {
+            return self
+                .create_from_checkpoint(checkpoint, name.as_deref())
+                .await;
+        }
         options.sanitize_remote()?;
+        options.validate_secrets()?;
 
         // Validate only the caller's requested policy. An unset auto_stop means
         // "no auto-stop", so it must not borrow the server's default here —
@@ -356,7 +473,7 @@ impl RuntimeBackend for RestRuntime {
         }
 
         let req = CreateBoxRequest::from_options(&options, name);
-        let resp: BoxResponse = self.client.post("/boxes", &req).await?;
+        let resp = self.client.create_box(&req).await?;
         let info = resp.to_box_info()?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         Ok(litebox_from_rest(rest_box))
@@ -367,6 +484,13 @@ impl RuntimeBackend for RestRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        if matches!(options.rootfs, crate::RootfsSpec::Checkpoint(_)) {
+            return Err(BoxliteError::Unsupported(
+                "get_or_create cannot use a checkpoint source; a checkpoint box \
+                 cannot be matched against an existing one, so call create"
+                    .into(),
+            ));
+        }
         options.sanitize_remote()?;
 
         if let Some(ref box_name) = name {
@@ -422,8 +546,28 @@ impl RuntimeBackend for RestRuntime {
     }
 
     async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
-        let resp: ListBoxesResponse = self.client.get("/boxes").await?;
-        resp.boxes.iter().map(BoxResponse::to_box_info).collect()
+        let mut result = Vec::new();
+        let mut token = None::<String>;
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            let query = token
+                .as_deref()
+                .map(|value| vec![("pageToken", value)])
+                .unwrap_or_default();
+            let page: ListBoxesResponse = self.client.get_with_query("/boxes", &query).await?;
+            for box_response in page.boxes {
+                result.push(box_response.to_box_info()?);
+            }
+            match page.next_page_token.filter(|value| !value.is_empty()) {
+                Some(value) if seen.insert(value.clone()) => token = Some(value),
+                Some(_) => {
+                    return Err(BoxliteError::Internal(
+                        "box server repeated a pagination token".into(),
+                    ));
+                }
+                None => return Ok(result),
+            }
+        }
     }
 
     async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
@@ -627,6 +771,94 @@ mod tests {
         (port, server)
     }
 
+    const BOXES_PAGE: &str = r#"{"boxes":[{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"first","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}],"next_page_token":"cursor+/="}"#;
+    const BOXES_LAST_PAGE: &str = r#"{"boxes":[{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R6","name":"last","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}],"next_page_token":""}"#;
+
+    #[tokio::test]
+    async fn boxes_pagination_collects_pages_and_encodes_camel_case_token() {
+        let (port, server) = json_server(vec![BOXES_PAGE, BOXES_LAST_PAGE]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let boxes = runtime.list_info().await.unwrap();
+        assert_eq!(boxes.len(), 2, "list_info must include every server page");
+        assert_eq!(boxes[0].name.as_deref(), Some("first"));
+        assert_eq!(boxes[1].name.as_deref(), Some("last"));
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/boxes HTTP/1.1",
+                "GET /v1/boxes?pageToken=cursor%2B%2F%3D HTTP/1.1"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn boxes_pagination_accepts_terminal_tokens_and_empty_pages() {
+        for body in [
+            r#"{"boxes":[]}"#,
+            r#"{"boxes":[],"next_page_token":null}"#,
+            r#"{"boxes":[],"next_page_token":""}"#,
+        ] {
+            let (port, server) = json_server(vec![body]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            assert!(runtime.list_info().await.unwrap().is_empty());
+            assert_eq!(server.await.unwrap(), ["GET /v1/boxes HTTP/1.1"]);
+        }
+
+        let (port, server) = json_server(vec![
+            r#"{"boxes":[],"next_page_token":"cursor+/="}"#,
+            BOXES_LAST_PAGE,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let boxes = runtime.list_info().await.unwrap();
+        assert_eq!(boxes.len(), 1, "an empty page can still have a next page");
+        assert_eq!(boxes[0].name.as_deref(), Some("last"));
+        assert_eq!(server.await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn boxes_pagination_rejects_token_cycles() {
+        for replies in [
+            vec![BOXES_PAGE, BOXES_PAGE],
+            vec![
+                BOXES_PAGE,
+                r#"{"boxes":[],"next_page_token":"other"}"#,
+                BOXES_PAGE,
+            ],
+        ] {
+            let count = replies.len();
+            let (port, server) = json_server(replies).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let error = runtime.list_info().await.unwrap_err();
+            assert!(matches!(error, BoxliteError::Internal(_)));
+            assert!(error.to_string().contains("repeated a pagination token"));
+            assert_eq!(server.await.unwrap().len(), count);
+        }
+    }
+
+    #[tokio::test]
+    async fn boxes_pagination_propagates_later_page_errors() {
+        let (port, server) = http_server(vec![
+            (200, BOXES_PAGE),
+            (403, r#"{"error":{"code":"FORBIDDEN","message":"denied"}}"#),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        assert!(
+            runtime.list_info().await.is_err(),
+            "never return a partial list"
+        );
+        assert_eq!(server.await.unwrap().len(), 2);
+    }
+
     #[tokio::test]
     async fn test_import_box_requires_capability() {
         // Without a running server, import_box should fail with a connection error
@@ -738,7 +970,7 @@ mod tests {
 
     #[tokio::test]
     async fn ordinary_create_does_not_probe_server_capabilities() {
-        let (port, server) = json_server(vec![BOX_RESPONSE]).await;
+        let (port, server) = exchange_server(vec![(200, BOX_RESPONSE)]).await;
         let runtime =
             RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
 
@@ -746,7 +978,125 @@ mod tests {
             .await
             .expect("create without a capability policy");
 
-        assert_eq!(server.await.unwrap(), ["POST /v1/boxes HTTP/1.1"]);
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "POST /v1/boxes HTTP/1.1");
+        // An image create never mentions a checkpoint.
+        assert!(json_body(&requests[0].1).get("checkpoint_id").is_none());
+    }
+
+    fn checkpoint_options(checkpoint: &str) -> BoxOptions {
+        BoxOptions {
+            rootfs: crate::RootfsSpec::Checkpoint(checkpoint.into()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_create_failure_preserves_admitted_identity() {
+        for (status, code) in [(408, "timeout"), (400, "invalid_argument")] {
+            let body = if status == 408 {
+                r#"{"message":"Still importing","code":"timeout","boxId":"admitted-box"}"#
+            } else {
+                r#"{"message":"Import failed","code":"invalid_argument","boxId":"admitted-box"}"#
+            };
+            let (port, server) = exchange_server(vec![(status, body)]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let error = RuntimeBackend::create(&runtime, checkpoint_options("base"), None)
+                .await
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("admitted-box"), "{error}");
+            if code == "invalid_argument" {
+                assert!(matches!(error, BoxliteError::InvalidArgument(_)));
+            }
+            assert_eq!(server.await.unwrap().len(), 1);
+        }
+    }
+
+    fn json_body(body: &str) -> serde_json::Value {
+        serde_json::from_str(body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_from_a_checkpoint_sends_only_the_checkpoint_and_name() {
+        let (port, server) = exchange_server(vec![(201, BOX_RESPONSE)]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        let created =
+            RuntimeBackend::create(&runtime, checkpoint_options("base"), Some("worker".into()))
+                .await
+                .expect("create from a checkpoint");
+
+        assert_eq!(created.id().as_str(), "01HJK4TNRPQSXYZ8WM6NCVT9R5");
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "POST /v1/boxes HTTP/1.1");
+        assert_eq!(
+            json_body(&requests[0].1),
+            serde_json::json!({"checkpoint_id": "base", "name": "worker"})
+        );
+    }
+
+    #[tokio::test]
+    async fn create_from_a_checkpoint_without_a_name_sends_only_the_checkpoint() {
+        let (port, server) = exchange_server(vec![(201, BOX_RESPONSE)]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+
+        RuntimeBackend::create(&runtime, checkpoint_options("base"), None)
+            .await
+            .expect("unnamed create from a checkpoint");
+
+        let requests = server.await.unwrap();
+        assert_eq!(requests[0].0, "POST /v1/boxes HTTP/1.1");
+        assert_eq!(
+            json_body(&requests[0].1),
+            serde_json::json!({"checkpoint_id": "base"})
+        );
+    }
+
+    /// The server inherits the saved settings and accepts no overrides, so the
+    /// client must refuse them rather than send a request that drops them. No
+    /// server listens here: a sent request would surface as a transport error.
+    #[tokio::test]
+    async fn create_from_a_checkpoint_refuses_overrides_and_bad_names_before_any_request() {
+        let runtime = RestRuntime::new(&BoxliteRestOptions::new("http://127.0.0.1:1")).unwrap();
+        let overridden = [
+            BoxOptions {
+                cpus: Some(2.0),
+                ..checkpoint_options("base")
+            },
+            BoxOptions {
+                env: vec![("A".into(), "B".into())],
+                ..checkpoint_options("base")
+            },
+            BoxOptions {
+                detach: true,
+                ..checkpoint_options("base")
+            },
+        ];
+        for options in overridden {
+            let error = RuntimeBackend::create(&runtime, options, None)
+                .await
+                .err()
+                .expect("overrides must be refused");
+            assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
+            assert!(error.to_string().contains("inherits"), "{error}");
+        }
+        for (checkpoint, name) in [("bad/key", None), ("base", Some("bad/name".to_owned()))] {
+            assert!(matches!(
+                RuntimeBackend::create(&runtime, checkpoint_options(checkpoint), name).await,
+                Err(BoxliteError::InvalidArgument(_))
+            ));
+        }
+        assert!(matches!(
+            RuntimeBackend::get_or_create(&runtime, checkpoint_options("base"), None).await,
+            Err(BoxliteError::Unsupported(_))
+        ));
     }
 
     /// A server that does not honor `ExecRequest.user` would run the command
@@ -968,6 +1318,26 @@ mod tests {
         assert!(error.to_string().contains("local runtime"));
     }
 
+    #[tokio::test]
+    async fn create_rejects_engine_selection_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.engine = Some(crate::vmm::VmmKind::Native);
+        let box_options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST engine selection must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
     /// A host path has no meaning against a REST runtime — the server's
     /// filesystem is not the caller's. The path must not leave the client at
     /// all: it is the caller's own business, and a server-side "not found"
@@ -1075,21 +1445,28 @@ mod tests {
     #[tokio::test]
     async fn create_rejects_client_supplied_sandbox_security() {
         let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
-        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
-        advanced.security = crate::runtime::advanced_options::SecurityOptions::disabled();
-        let box_options = BoxOptions {
-            advanced,
-            ..Default::default()
-        };
+        let runtime = crate::BoxliteRuntime::rest(options).expect("failed to create REST runtime");
+        for cpus in [None, Some(2.0), Some(0.125)] {
+            let mut box_options = BoxOptions {
+                cpus,
+                ..Default::default()
+            };
+            box_options.advanced.security = SecurityOptions::disabled();
 
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("a client must not choose the remote server's sandbox policy");
-
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("local runtime"));
+            for result in [
+                runtime.create(box_options.clone(), None).await,
+                runtime
+                    .get_or_create(box_options, Some("named".into()))
+                    .await
+                    .map(|(litebox, _)| litebox),
+            ] {
+                let error = result
+                    .err()
+                    .expect("a client must not choose the remote server's sandbox policy");
+                assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
+                assert!(error.to_string().contains("sandbox security"), "{error}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -1168,6 +1545,70 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[tokio::test]
+    async fn secret_headers_preserve_explicit_templates_on_create() {
+        let (port, server) = capture_server(vec![(200, BOX_RESPONSE), (200, BOX_RESPONSE)]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let mut options = BoxOptions {
+            rootfs: crate::RootfsSpec::Image("alpine:3.21".into()),
+            secrets: vec![crate::Secret {
+                name: "gemini".into(),
+                value: "test-value".into(),
+                hosts: vec!["api.example.com".into()],
+                placeholder: "<BOXLITE_SECRET:gemini>".into(),
+                headers: Some(std::collections::BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer {value}".into(),
+                )])),
+            }],
+            ..Default::default()
+        };
+        RuntimeBackend::create(&runtime, options.clone(), None)
+            .await
+            .unwrap();
+        options.secrets[0].headers = Some(std::collections::BTreeMap::from([(
+            "x-goog-api-key".into(),
+            "{value}".into(),
+        )]));
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .unwrap();
+
+        let requests = server.await.unwrap();
+        let bodies = requests
+            .iter()
+            .map(|(headers, body)| {
+                assert_eq!(headers.lines().next(), Some("POST /v1/boxes HTTP/1.1"));
+                assert!(
+                    headers
+                        .to_ascii_lowercase()
+                        .contains("content-type: application/json\r\n")
+                );
+                serde_json::from_str::<serde_json::Value>(body).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bodies[0]["secrets"][0]["headers"]["Authorization"],
+            "Bearer {value}"
+        );
+        assert_eq!(
+            bodies[1]["secrets"][0]["headers"]["x-goog-api-key"],
+            "{value}"
+        );
+        let mut before = bodies[0].clone();
+        before["secrets"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("headers");
+        let mut with_header = bodies[1].clone();
+        with_header["secrets"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("headers");
+        assert_eq!(before, with_header);
     }
 
     #[tokio::test]
@@ -1956,3 +2397,7 @@ mod tests {
         assert_eq!(server.await.unwrap(), ["GET /v1/domains HTTP/1.1"]);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/fractional_cpus.rs"]
+mod fractional_cpus_tests;

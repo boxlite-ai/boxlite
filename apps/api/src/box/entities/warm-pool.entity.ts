@@ -22,7 +22,7 @@ export class WarmPool {
   @Column()
   target: string
 
-  @Column()
+  @Column({ type: 'double precision' })
   cpu: number
 
   @Column()

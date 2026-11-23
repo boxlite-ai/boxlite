@@ -20,10 +20,13 @@ import {
   ValidationPipe,
   Logger,
   Res,
+  Req,
+  BadRequestException,
   ForbiddenException,
+  HttpException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
-import { Response } from 'express'
+import { Request, Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import {
   OrganizationResourceActionGuard,
@@ -32,20 +35,26 @@ import {
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
+import { UserContext } from '../common/decorators/user-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
+import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
+import { recordBoxRequested } from '../box/utils/box-business-event.util'
 import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto, InboundNetworkSpecDto, OutboundNetworkSpecDto } from './dto/create-box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './mappers/box-to-box.mapper'
-import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
+import { Audit, AUDIT_TARGET_ID, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
+import { BoxPageQuery } from './dto/box-page-query.dto'
+
+const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
@@ -77,6 +86,7 @@ export class BoxliteBoxController {
     private readonly boxService: BoxService,
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
+    private readonly checkpointRecoverService: CheckpointRecoverService,
   ) {}
 
   @Post()
@@ -95,6 +105,7 @@ export class BoxliteBoxController {
       body: (req: TypedRequest<CreateBoxDto>) => ({
         name: req.body?.name,
         image: req.body?.image,
+        checkpoint_id: req.body?.checkpoint_id,
         user: req.body?.user,
         env: req.body?.env
           ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
@@ -108,8 +119,6 @@ export class BoxliteBoxController {
         memory_mib: req.body?.memory_mib,
         disk_size_gb: req.body?.disk_size_gb,
         working_dir: req.body?.working_dir,
-        entrypoint: req.body?.entrypoint,
-        cmd: req.body?.cmd,
         detach: req.body?.detach,
         auto_stop: req.body?.auto_stop,
         auto_delete: req.body?.auto_delete,
@@ -121,7 +130,13 @@ export class BoxliteBoxController {
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto: CreateBoxDto,
+    @UserContext() ctx: Context,
+    @Req() request?: Request,
   ): Promise<BoxResponseDto> {
+    if (dto.checkpoint_id !== undefined) {
+      return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
+    }
+
     // Attaching a managed volume grants the box read/write access to its data,
     // so it is authorized independently of WRITE_BOXES: the caller must hold the
     // volume permissions too. WRITE_BOXES alone must not reach another key's
@@ -134,11 +149,63 @@ export class BoxliteBoxController {
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)
 
-    let box = await this.boxService.create(createBoxDto, organization, Context.user(), { maxCreatedBoxes })
+    let box = await this.boxService.create(createBoxDto, organization, ctx, {
+      maxCreatedBoxes,
+      createdBy: authContext.userId,
+    })
+    if (request) request[AUDIT_TARGET_ID] = box.id
     if (box.state !== BoxState.STARTED) {
       box = await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
     }
     return boxToBoxResponse(box)
+  }
+
+  /** Admit an inherited configuration, record its request, then wait without losing its identity. */
+  private async createBoxFromCheckpoint(
+    authContext: OrganizationAuthContext,
+    dto: CreateBoxDto,
+    ctx: Context,
+    request?: Request,
+  ): Promise<BoxResponseDto> {
+    const overrides = Object.entries(dto)
+      .filter(([field, value]) => value !== undefined && field !== 'checkpoint_id' && field !== 'name')
+      .map(([field]) => field)
+    if (overrides.includes('image')) {
+      throw new BadRequestException('checkpoint_id and image are mutually exclusive')
+    }
+    if (overrides.length) {
+      throw new BadRequestException(
+        `A box created from a checkpoint inherits its settings; only name may be set, remove: ${overrides.join(', ')}`,
+      )
+    }
+    if (dto.name !== undefined && (typeof dto.name !== 'string' || !CHECKPOINT_BOX_NAME.test(dto.name))) {
+      throw new BadRequestException('Invalid box name')
+    }
+
+    const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(authContext.organizationId)
+    const box = await this.checkpointRecoverService.createBox(
+      authContext.organization,
+      dto.checkpoint_id,
+      dto.name,
+      maxCreatedBoxes,
+    )
+    recordBoxRequested('box.create', box, ctx)
+    if (request) request[AUDIT_TARGET_ID] = box.id
+    try {
+      return boxToBoxResponse(await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30))
+    } catch (error) {
+      // Admission already created this identity. Clients must query it after
+      // any wait failure instead of submitting another anonymous Box.
+      const status = error instanceof HttpException ? error.getStatus() : 500
+      const detail = error instanceof HttpException ? error.getResponse() : 'Checkpoint box creation failed'
+      throw new HttpException(
+        { ...(typeof detail === 'string' ? { message: detail } : detail), boxId: box.id },
+        status,
+        {
+          cause: error,
+        },
+      )
+    }
   }
 
   // Mirrors OrganizationResourceActionGuard: a system admin and an interactive
@@ -152,6 +219,7 @@ export class BoxliteBoxController {
     }
   }
 
+  /** Page the authenticated organization's live inventory with a continuation only when matches remain. */
   @Get()
   @ApiResponse({
     status: 200,
@@ -160,12 +228,29 @@ export class BoxliteBoxController {
   })
   async listBoxes(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Query('pageSize') pageSize?: string,
+    @Query() page: BoxPageQuery,
+    @Param('prefix') prefix?: string,
   ): Promise<ListBoxesResponseDto> {
-    const boxes = await this.boxService.findAllDeprecated(authContext.organizationId)
-    const dtos = await this.boxService.toBoxDtos(boxes)
+    const organizationId = authContext.organizationId
+    if (
+      !organizationId ||
+      authContext.organization?.id !== organizationId ||
+      (prefix && prefix !== 'default' && prefix !== organizationId)
+    ) {
+      throw new BadRequestException('A resolved organization is required to list boxes')
+    }
+    const boxes = await this.boxService.findInventory(organizationId, {
+      pageSize: page.pageSize,
+      status: page.status,
+      after: page.after(organizationId),
+    })
+    const returned = boxes.slice(0, page.pageSize)
+    const dtos = await this.boxService.toBoxDtos(returned)
     return {
       boxes: dtos.map(boxToBoxResponse),
+      ...(boxes.length > page.pageSize
+        ? { next_page_token: page.next(organizationId, returned[returned.length - 1].id) }
+        : {}),
     }
   }
 
@@ -206,8 +291,12 @@ export class BoxliteBoxController {
     targetType: AuditTarget.BOX,
     targetIdFromRequest: (req) => req.params.boxId,
   })
-  async removeBox(@AuthContext() authContext: OrganizationAuthContext, @Param('boxId') boxId: string) {
-    await this.boxService.destroy(boxId, authContext.organizationId, Context.user())
+  async removeBox(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @UserContext() ctx: Context,
+  ) {
+    await this.boxService.destroy(boxId, authContext.organizationId, ctx)
   }
 
   @Post(':boxId/start')
@@ -226,15 +315,18 @@ export class BoxliteBoxController {
   async startBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
+    @UserContext() ctx: Context,
+    @Req() request?: Request,
   ): Promise<BoxResponseDto> {
     let box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    if (request) request[AUDIT_TARGET_ID] = box.id
 
     if (this.isStartAlreadyInProgress(box)) {
       const dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
       return boxToBoxResponse(dto)
     }
 
-    box = await this.boxService.start(boxId, authContext.organization)
+    box = await this.boxService.start(box.id, authContext.organization, ctx, { idOnly: true })
     let dto = await this.boxService.toBoxDto(box)
     if (dto.state !== BoxState.STARTED) {
       dto = await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30)
@@ -258,8 +350,9 @@ export class BoxliteBoxController {
   async stopBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
+    @UserContext() ctx: Context,
   ): Promise<BoxResponseDto> {
-    const box = await this.boxService.stop(boxId, authContext.organizationId, Context.user())
+    const box = await this.boxService.stop(boxId, authContext.organizationId, ctx)
     const dto = await this.boxService.toBoxDto(box)
     return boxToBoxResponse(dto)
   }

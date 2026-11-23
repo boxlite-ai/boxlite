@@ -13,6 +13,7 @@ jest.mock('axios', () => ({
   },
 }))
 
+import { PATH_METADATA } from '@nestjs/common/constants'
 import axios from 'axios'
 import { UserController } from './user.controller'
 import { Context } from '../common/context/context'
@@ -59,7 +60,7 @@ beforeEach(() => {
   post.mockReset()
   remove.mockReset()
   post.mockImplementation(async (url: string) =>
-    url === TOKEN_URL ? { data: { access_token: 'management-token' } } : { data: { ticket_url: 'ticket' } },
+    url === TOKEN_URL ? { data: { access_token: 'management-token' } } : { data: {} },
   )
   get.mockResolvedValue({ data: [] })
   remove.mockResolvedValue({})
@@ -96,9 +97,8 @@ describe('UserController OIDC Management API requests', () => {
     await controller.linkAccount({ userId: 'auth0|primary' } as any, { provider: 'github', userId: 'secondary' } as any)
 
     await controller.unlinkAccount({ userId: 'auth0|primary' } as any, 'github', 'secondary')
-    await controller.enrollInSmsMfa({ userId: 'auth0|primary' } as any)
 
-    expect(post.mock.calls.filter(([url]) => url === TOKEN_URL)).toHaveLength(4)
+    expect(post.mock.calls.filter(([url]) => url === TOKEN_URL)).toHaveLength(3)
     expect(get).toHaveBeenCalledWith(`${MANAGEMENT_BASE_URL}/connections`, expect.any(Object))
     expect(get).toHaveBeenCalledWith(`${MANAGEMENT_BASE_URL}/users/github%7Csecondary`, expect.any(Object))
     expect(post).toHaveBeenCalledWith(
@@ -108,11 +108,6 @@ describe('UserController OIDC Management API requests', () => {
     )
     expect(remove).toHaveBeenCalledWith(
       `${MANAGEMENT_BASE_URL}/users/auth0%7Cprimary/identities/github/secondary`,
-      expect.any(Object),
-    )
-    expect(post).toHaveBeenCalledWith(
-      `${MANAGEMENT_BASE_URL}/guardian/enrollments/ticket`,
-      expect.any(Object),
       expect.any(Object),
     )
     expect(configService.getOrThrow).not.toHaveBeenCalledWith('oidc.issuer')
@@ -153,8 +148,16 @@ describe('UserController.create', () => {
   it('creates the user as a registration by an admin', async () => {
     const { controller, userService } = makeController()
 
-    await controller.create({ id: 'user-1', name: 'User One' } as any)
+    await controller.create({ id: 'user-1', name: 'User One' } as any, { get: () => undefined } as never)
 
     expect(userService.create).toHaveBeenCalledWith({ id: 'user-1', name: 'User One' }, Context.admin())
   })
+})
+
+it('does not register the retired SMS enrollment route', () => {
+  const paths = Object.getOwnPropertyNames(UserController.prototype)
+    .filter((name) => name !== 'constructor')
+    .flatMap((name) => Reflect.getMetadata(PATH_METADATA, UserController.prototype[name]) ?? [])
+    .map((path: string) => path.replace(/^\/+|\/+$/g, ''))
+  expect(paths).not.toContain('mfa/sms/enroll')
 })

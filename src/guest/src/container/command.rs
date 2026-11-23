@@ -417,6 +417,7 @@ impl ContainerCommand {
             env: self.env.clone(),
             args: container_args.clone(),
             ssh_workload,
+            pty_config: self.pty_config.clone(),
             uid,
             gid,
             capabilities: self.capabilities.clone(),
@@ -509,8 +510,9 @@ impl SpawnedPty {
 
 /// Create ExecHandle with PTY.
 ///
-/// Sets terminal window size, reconciles PTY master FD as stdin/stdout,
-/// and stores PTY controller for later resizing.
+/// Attaches an initialized PTY master as stdin/stdout and stores its resize
+/// controller. Never reset terminal settings here: the workload may already
+/// have switched the terminal into raw mode.
 ///
 /// In PTY mode, stderr is merged into stdout at the PTY level - there is only
 /// ONE reader from the PTY master to avoid race conditions.
@@ -519,14 +521,6 @@ pub(crate) fn create_pty_child(
     pty_master: OwnedFd,
     config: PtyConfig,
 ) -> BoxliteResult<ExecHandle> {
-    if let Err(error) = set_pty_window_size(&pty_master, &config) {
-        terminate_process(pid);
-        return Err(error);
-    }
-    if let Err(error) = crate::service::exec::tty::apply_modes(&pty_master, &config.modes) {
-        terminate_process(pid);
-        return Err(error);
-    }
     let (stdin, stdout) = match reconcile_pty_fds(&pty_master) {
         Ok(fds) => fds,
         Err(error) => {
@@ -553,36 +547,6 @@ pub(super) fn terminate_process(pid: Pid) {
     let _fence = crate::reaper::reap_fence();
     let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
     let _ = nix::sys::wait::waitpid(pid, None);
-}
-
-/// Set PTY terminal window size via ioctl.
-fn set_pty_window_size(pty_master: &OwnedFd, config: &PtyConfig) -> BoxliteResult<()> {
-    use nix::pty::Winsize;
-    use std::os::fd::AsRawFd;
-
-    let winsize = Winsize {
-        ws_row: config.rows,
-        ws_col: config.cols,
-        ws_xpixel: config.x_pixels,
-        ws_ypixel: config.y_pixels,
-    };
-
-    unsafe {
-        if nix::libc::ioctl(
-            pty_master.as_raw_fd(),
-            nix::libc::TIOCSWINSZ,
-            &winsize as *const _,
-        ) == -1
-        {
-            let errno = std::io::Error::last_os_error();
-            return Err(BoxliteError::Internal(format!(
-                "Failed to set PTY window size ({}x{}): {}",
-                config.rows, config.cols, errno
-            )));
-        }
-    }
-
-    Ok(())
 }
 
 /// Duplicate PTY master FD for stdin and stdout only.
@@ -613,6 +577,10 @@ fn pty_master_to_file(pty_master: OwnedFd) -> std::fs::File {
     std::mem::forget(pty_master); // Transfer ownership, don't close
     unsafe { std::fs::File::from_raw_fd(fd) }
 }
+
+#[cfg(test)]
+#[path = "tests/pty_startup.rs"]
+mod pty_startup_tests;
 
 #[cfg(test)]
 mod tests {

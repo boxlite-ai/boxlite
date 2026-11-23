@@ -1,3 +1,4 @@
+import { ResourceSectionHeading, StatusIndicator } from '@/components/ResourceLayout'
 /*
  * Copyright 2025 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
@@ -97,11 +98,11 @@ export function StatCard({
       )}
     >
       <div className="flex items-start justify-between gap-1">
-        <span className="font-mono text-[9px] uppercase leading-tight tracking-[1px] text-muted-foreground sm:whitespace-nowrap sm:text-[10px] sm:tracking-[1.5px]">
+        <span className="font-sans text-label uppercase leading-tight tracking-[1px] text-muted-foreground sm:whitespace-nowrap sm:text-label sm:tracking-[1.5px]">
           <span style={{ color: BRAND }}>▸</span> {label}
         </span>
         {live && (
-          <span className="inline-flex shrink-0 items-center gap-[5px] font-mono text-[9px] tracking-[1px] text-muted-foreground">
+          <span className="inline-flex shrink-0 items-center gap-[5px] font-sans text-label tracking-[1px] text-muted-foreground">
             <span
               className="size-[6px] rounded-full"
               style={{ background: BRAND, animation: 'live-pulse 1.6s infinite' }}
@@ -111,7 +112,7 @@ export function StatCard({
         )}
       </div>
       {/* mobile: compact numeric value (the dot-matrix is too tall for a 3-up row) */}
-      <div className="font-mono text-[20px] font-semibold leading-none tracking-[-0.5px] sm:hidden">{value}</div>
+      <div className="font-mono text-section font-semibold leading-none tracking-[-0.5px] sm:hidden">{value}</div>
       {/* desktop: dot-matrix value + sub label */}
       <div className="hidden items-end gap-[10px] sm:flex">
         {isNumeric(value) ? (
@@ -121,25 +122,15 @@ export function StatCard({
         ) : (
           <div className="font-mono text-[34px] font-semibold leading-none tracking-[-1px]">{value}</div>
         )}
-        <span className="mb-[2px] font-mono text-[10px] uppercase tracking-[0.5px] text-muted-foreground">{sub}</span>
+        <span className="mb-[2px] font-sans text-label uppercase tracking-[0.5px] text-muted-foreground">{sub}</span>
       </div>
     </Tag>
   )
 }
 
-/** Section heading: ▸ TITLE, optional count, optional right-aligned action. */
+/** Retains the existing section API while sharing its hierarchy with resource details. */
 export function SectionTitle({ title, count, right }: { title: string; count?: ReactNode; right?: ReactNode }) {
-  return (
-    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-[2px]">
-      <div className="flex items-center gap-3">
-        <span className="font-mono text-[11px] uppercase tracking-[1.5px] text-foreground">
-          <span style={{ color: BRAND }}>▸</span> {title}
-        </span>
-        {count && <span className="font-mono text-[11px] text-muted-foreground">{count}</span>}
-      </div>
-      {right}
-    </div>
-  )
+  return <ResourceSectionHeading title={title} count={count} right={right} />
 }
 
 /**
@@ -170,13 +161,13 @@ export function SegmentedBar({ used, limit, segments = 40 }: { used: number; lim
 export function Metric({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
+      <span className="font-sans text-label uppercase tracking-[1.5px] text-muted-foreground">
         <span style={{ color: BRAND }}>▸</span> {label}
       </span>
-      <span className="font-mono text-[26px] font-semibold leading-none tracking-tight tabular-nums text-foreground">
+      <span className="font-mono text-page font-semibold leading-none tracking-tight tabular-nums text-foreground">
         {value}
       </span>
-      {sub && <span className="font-mono text-[11px] text-muted-foreground">{sub}</span>}
+      {sub && <span className="font-sans text-meta text-muted-foreground">{sub}</span>}
     </div>
   )
 }
@@ -188,7 +179,7 @@ export function Metric({ label, value, sub }: { label: string; value: ReactNode;
 export const AsciiButton = forwardRef<
   HTMLButtonElement,
   ComponentProps<'button'> & {
-    variant?: 'primary' | 'secondary' | 'danger' | 'dangerSolid'
+    variant?: 'primary' | 'secondary' | 'danger' | 'dangerSolid' | 'quiet' | 'quiet-danger'
     size?: 'default' | 'sm' | 'icon' | 'icon-lg'
   }
 >(function AsciiButton({ variant = 'secondary', size = 'default', type = 'button', ...props }, ref) {
@@ -197,13 +188,15 @@ export const AsciiButton = forwardRef<
       ref={ref}
       type={type}
       variant={
-        variant === 'primary'
-          ? 'default'
-          : variant === 'dangerSolid'
-            ? 'destructive'
-            : variant === 'danger'
-              ? 'danger'
-              : 'outline'
+        variant === 'quiet' || variant === 'quiet-danger'
+          ? variant
+          : variant === 'primary'
+            ? 'default'
+            : variant === 'dangerSolid'
+              ? 'destructive'
+              : variant === 'danger'
+                ? 'danger'
+                : 'outline'
       }
       size={size === 'icon' ? 'icon-sm' : size}
       {...props}
@@ -222,14 +215,10 @@ export function AsciiChip({
     <button
       type="button"
       className={cn(
-        'border px-4 py-2 font-mono text-[13px] tabular-nums transition-colors',
-        // What is not chosen recedes; the chosen one is simply at full value
-        // with a heavier label. A brand hairline is the weakest mark available
-        // and it measured 2.49:1 on the light theme, so brand is kept for
-        // things that are live rather than for marking a click.
+        'border border-border px-4 py-2 font-mono text-body tabular-nums transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-40',
         selected
-          ? 'border-foreground/45 bg-card font-semibold text-foreground'
-          : 'border-border text-muted-foreground hover:text-foreground',
+          ? 'bg-selection font-semibold text-selection-foreground hover:[&:not(:disabled)]:bg-selection'
+          : 'bg-transparent text-muted-foreground hover:[&:not(:disabled)]:bg-control-hover hover:[&:not(:disabled)]:text-foreground',
         className,
       )}
       {...props}
@@ -248,12 +237,7 @@ const STATUS_COLOR = {
 
 /** Square swatch + label. Replaces rounded badges, which clash with the square language. */
 export function StatusMark({ tone, children }: { tone: keyof typeof STATUS_COLOR; children: ReactNode }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 font-mono text-[12px]">
-      <span className="size-[9px] shrink-0" style={{ background: STATUS_COLOR[tone] }} />
-      <span className={tone === 'bad' ? 'text-destructive' : 'text-foreground'}>{children}</span>
-    </span>
-  )
+  return <StatusIndicator label={children} color={STATUS_COLOR[tone]} />
 }
 
 /** Bordered panel — the standard container for a section's content. */
@@ -264,11 +248,10 @@ export function Panel({ className, children }: { className?: string; children: R
 /**
  * A note under a bar or field: plain explanatory text, no leading marker.
  *
- * The `▸` glyph is reserved for section/heading labels (`SectionTitle`, and
- * the inline heading treatment some dialogs use in its place) — it marks
- * "this line names a section". Putting it on body text too made a heading
+ * Body notes stay unadorned, separate from section headings and metric labels.
+ * Putting a heading marker on body text made a heading
  * and a caption underneath it look like the same kind of line.
  */
 export function PanelNote({ children }: { children: ReactNode }) {
-  return <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">{children}</p>
+  return <p className="mt-1.5 font-sans text-meta text-muted-foreground">{children}</p>
 }

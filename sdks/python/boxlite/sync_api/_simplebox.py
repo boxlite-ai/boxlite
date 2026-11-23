@@ -45,14 +45,20 @@ class SyncSimpleBox:
     @property
     def agents(self) -> SyncAgents:
         """Get the agent namespace without starting the Box."""
-        return SyncAgents()
+
+        def resolve():
+            if self._box is None:
+                raise RuntimeError("Box not started")
+            return self._box
+
+        return SyncAgents(resolve)
 
     def __init__(
         self,
         image: str | None = None,
         rootfs_path: str | None = None,
         memory_mib: int | None = None,
-        cpus: int | None = None,
+        cpus: float | None = None,
         runtime: Optional["SyncBoxlite"] = None,
         name: str | None = None,
         auto_remove: bool = True,

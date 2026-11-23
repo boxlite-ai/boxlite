@@ -402,7 +402,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
              -- the ledger stores organizationId as text, the box table as uuid
              OR p."organizationId" <> b."organizationId"::text
              OR p.region <> b.region
-             OR (b.state = :started AND (p.cpu <> b.cpu OR p.mem <> b.mem OR p.gpu <> b.gpu))
+             OR (b.state = :started AND (p.cpu <> b.cpu OR p.mem <> COALESCE(b.memory_mib, b.mem * 1024) / 1024.0 OR p.gpu <> b.gpu))
              OR (b.state IN (:...diskOnlyStates) AND (p.cpu <> 0 OR p.mem <> 0 OR p.gpu <> 0))
            ))
         OR (b.state IN (:...withoutStates) AND p.id IS NOT NULL)

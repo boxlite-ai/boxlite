@@ -51,7 +51,7 @@ pub struct ExecResult {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_simple_new(
     image: *const c_char,
-    cpus: c_int,
+    cpus: f64,
     memory_mib: c_int,
     out_box: *mut *mut CBoxliteSimple,
     out_error: *mut CBoxliteError,
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn boxlite_result_free(result: *mut CBoxliteExecResult) {
 
 unsafe fn runner_new(
     image: *const c_char,
-    cpus: c_int,
+    cpus: f64,
     memory_mib: c_int,
     out_runner: *mut *mut BoxRunner,
     out_error: *mut FFIError,
@@ -128,7 +128,8 @@ unsafe fn runner_new(
 
         let options = BoxOptions {
             rootfs: RootfsSpec::Image(image_str),
-            cpus: crate::options::cpus_from_c(cpus),
+            // The Simple C API documents zero as the default sentinel.
+            cpus: (cpus != 0.0).then_some(cpus),
             memory_mib: if memory_mib > 0 {
                 Some(memory_mib as u32)
             } else {

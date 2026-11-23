@@ -41,7 +41,7 @@ use crate::{
     chipset::ChipsetBuilder,
     error::{Error, Result},
     events::{Event, EventSender},
-    memory::GuestMemoryMmap,
+    memory::GuestMemoryView,
 };
 
 /// The MMIO window length a transport claims.
@@ -49,7 +49,7 @@ pub(crate) const MMIO_WINDOW_LEN: u64 = 0x1000;
 /// Where the virtio-mmio windows start; slot `i` is `i` windows later.
 const WINDOW_START: u64 = 0xd000_0000;
 /// The interrupt lines the slots use, in order: the legacy range above COM1
-/// and below the MSI space, as Firecracker and libkrun allocate it.
+/// and below the MSI space, skipping GSI 8 reserved for the PC RTC.
 const FIRST_GSI: u32 = 5;
 const LAST_GSI: u32 = 23;
 
@@ -79,7 +79,7 @@ pub(crate) struct Slots {
 
 impl Slots {
     /// How many slots a VM has.
-    pub(crate) const CAPACITY: u32 = LAST_GSI - FIRST_GSI + 1;
+    pub(crate) const CAPACITY: u32 = LAST_GSI - FIRST_GSI;
 
     pub(crate) fn new() -> Self {
         Self::default()
@@ -94,29 +94,35 @@ impl Slots {
         self.taken += 1;
         Ok(Slot {
             base: WINDOW_START + u64::from(index) * MMIO_WINDOW_LEN,
-            gsi: FIRST_GSI + index,
+            gsi: FIRST_GSI + index + u32::from(FIRST_GSI + index >= 8),
         })
     }
 }
 
-/// Appends each slot's argument to `cmdline`, which must leave room for them
-/// under `MAX_CMDLINE_BYTES`: the kernel probes a virtio-mmio device only
-/// when the command line names it, and copies at most that many bytes.
+/// Puts each slot's argument at the front of `cmdline`, which must leave room
+/// for them under `MAX_CMDLINE_BYTES`: the kernel probes a virtio-mmio device
+/// only when the command line names it, and copies at most that many bytes.
+/// The front is always before a `--`, after which the kernel hands everything
+/// to the init program, so the caller's text is never parsed.
 pub(crate) fn announce(cmdline: &mut String, slots: &[Slot]) -> Result<()> {
-    for slot in slots {
-        let argument = slot.cmdline_arg();
-        if cmdline.len() + argument.len() + usize::from(!cmdline.is_empty())
-            >= crate::config::MAX_CMDLINE_BYTES
-        {
-            return Err(Error::InvalidCommandLine(
-                "leaves no room for the virtio device arguments",
-            ));
-        }
-        if !cmdline.is_empty() {
-            cmdline.push(' ');
-        }
-        cmdline.push_str(&argument);
+    if slots.is_empty() {
+        return Ok(());
     }
+    let mut announced = slots
+        .iter()
+        .map(Slot::cmdline_arg)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !cmdline.is_empty() {
+        announced.push(' ');
+        announced.push_str(cmdline);
+    }
+    if announced.len() >= crate::config::MAX_CMDLINE_BYTES {
+        return Err(Error::InvalidCommandLine(
+            "leaves no room for the virtio device arguments",
+        ));
+    }
+    *cmdline = announced;
     Ok(())
 }
 
@@ -147,7 +153,7 @@ pub(crate) fn add_device(
             device,
             interrupt,
             MmioResources {
-                memory: Arc::clone(ctx.memory),
+                memory: ctx.memory.clone(),
                 sender: resources.event_sender(),
                 worker,
             },
@@ -203,8 +209,8 @@ type DeviceResult<T> = std::result::Result<T, DeviceError>;
 
 /// The resources a transport shares with its device and the workers.
 pub(crate) struct MmioResources {
-    /// The guest memory the queues address.
-    pub(crate) memory: Arc<GuestMemoryMmap>,
+    /// The guest memory view the queues address.
+    pub(crate) memory: GuestMemoryView,
     /// The run thread's event sender.
     pub(crate) sender: EventSender,
     /// The device's slot in the virtio workers.
@@ -230,7 +236,7 @@ struct QueueConfig {
 pub(crate) struct MmioTransport {
     device: Arc<Mutex<dyn VirtioDevice>>,
     interrupt: Arc<super::interrupt::MmioInterrupt>,
-    memory: Arc<GuestMemoryMmap>,
+    memory: GuestMemoryView,
     sender: EventSender,
     worker: Arc<dyn WorkerControl>,
     spec: DeviceSpec,
@@ -630,13 +636,13 @@ impl MmioTransport {
             self.spec.queue_max,
             event_idx,
             indirect,
-            Arc::clone(&self.memory),
+            self.memory.clone(),
         )
         .map_err(DeviceError::from)?;
 
         let interrupt: Arc<dyn VirtioInterrupt> = self.interrupt.clone();
         let ctx = ActivationContext {
-            memory: Arc::clone(&self.memory),
+            memory: self.memory.clone(),
             queues,
             interrupt,
             events: worker.events,

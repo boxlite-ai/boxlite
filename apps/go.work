@@ -8,4 +8,5 @@ use (
 	./otel-collector/exporter
 	./proxy
 	./runner
+	./secret-server
 )

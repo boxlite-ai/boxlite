@@ -43,9 +43,22 @@ describe('requiresFreshBox', () => {
   // Secrets become placeholder env vars + an MITM CA when the box is built; a
   // warm box was built without them, so claiming one would silently drop them.
   it('forces a fresh box when secrets are requested', () => {
-    expect(requiresFreshBox({ secrets: [{ name: 'openai', value: 'sk-test' }] }, NO_ORG_EGRESS_LIMIT, CURATED)).toBe(
-      true,
-    )
+    expect(
+      requiresFreshBox(
+        {
+          secrets: [
+            {
+              name: 'openai',
+              value: 'sk-test',
+              hosts: ['api.openai.com'],
+              headers: { Authorization: 'Bearer {value}' },
+            },
+          ],
+        },
+        NO_ORG_EGRESS_LIMIT,
+        CURATED,
+      ),
+    ).toBe(true)
   })
 
   /**

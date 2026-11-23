@@ -6,9 +6,10 @@
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
+import { Context } from '../common/context/context'
 
 const organization = { id: '11111111-1111-4111-8111-111111111111' }
-const authContext = { organization, organizationId: organization.id }
+const authContext = { organization, organizationId: organization.id, userId: 'authenticated-user' }
 const startedBox = {
   id: 'box-1',
   organizationId: organization.id,
@@ -34,6 +35,7 @@ function makeController() {
     boxService as never,
     boxStateWaiter as never,
     commerceBoxLimitService as never,
+    {} as never,
   )
   return { controller, boxService, boxStateWaiter, commerceBoxLimitService }
 }
@@ -42,20 +44,24 @@ describe('BoxliteBoxController creation limit', () => {
   it('resolves the organization limit and passes it only to create', async () => {
     const { controller, boxService, boxStateWaiter, commerceBoxLimitService } = makeController()
 
-    const response = await controller.createBox(authContext as never, { image: 'boxlite/base' } as never)
+    const response = await controller.createBox(
+      authContext as never,
+      { image: 'boxlite/base' } as never,
+      Context.user(),
+    )
 
     expect(commerceBoxLimitService.resolveMaxCreatedBoxes).toHaveBeenCalledWith(organization.id)
     expect(boxService.create).toHaveBeenCalledWith(
       expect.objectContaining({ image: 'boxlite/base' }),
       organization,
       expect.anything(),
-      { maxCreatedBoxes: 3 },
+      { maxCreatedBoxes: 3, createdBy: authContext.userId },
     )
     expect(boxStateWaiter.waitForStarted).not.toHaveBeenCalled()
     expect(response).toEqual(expect.objectContaining({ box_id: 'box-1', status: 'running' }))
 
-    await controller.startBox(authContext as never, 'box-1')
-    await controller.stopBox(authContext as never, 'box-1')
+    await controller.startBox(authContext as never, 'box-1', Context.user())
+    await controller.stopBox(authContext as never, 'box-1', Context.user())
     expect(commerceBoxLimitService.resolveMaxCreatedBoxes).toHaveBeenCalledTimes(1)
   })
 
@@ -63,7 +69,9 @@ describe('BoxliteBoxController creation limit', () => {
     const { controller, boxService, boxStateWaiter, commerceBoxLimitService } = makeController()
     commerceBoxLimitService.resolveMaxCreatedBoxes.mockRejectedValue(new Error('commerce unavailable'))
 
-    await expect(controller.createBox(authContext as never, {} as never)).rejects.toThrow('commerce unavailable')
+    await expect(controller.createBox(authContext as never, {} as never, Context.user())).rejects.toThrow(
+      'commerce unavailable',
+    )
     expect(boxService.create).not.toHaveBeenCalled()
     expect(boxStateWaiter.waitForStarted).not.toHaveBeenCalled()
   })
@@ -72,7 +80,7 @@ describe('BoxliteBoxController creation limit', () => {
     const { controller, boxService, boxStateWaiter } = makeController()
     boxService.create.mockRejectedValue(new BoxCreationLimitExceededError(3, 3))
 
-    await expect(controller.createBox(authContext as never, {} as never)).rejects.toBeInstanceOf(
+    await expect(controller.createBox(authContext as never, {} as never, Context.user())).rejects.toBeInstanceOf(
       BoxCreationLimitExceededError,
     )
     expect(boxStateWaiter.waitForStarted).not.toHaveBeenCalled()

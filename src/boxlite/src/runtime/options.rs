@@ -2,16 +2,15 @@
 
 use crate::runtime::constants::envs as const_envs;
 use crate::runtime::layout::dirs as const_dirs;
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
 use crate::runtime::constants::vm_defaults::MAX_CPUS;
-use crate::runtime::types::Bytes;
 use std::fmt;
 
 // ============================================================================
@@ -381,7 +380,10 @@ mod registry_options_tests {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct BoxOptions {
-    pub cpus: Option<u8>,
+    /// CPU allocation; fractional values require a Linux execution host.
+    /// For REST runtimes, this requirement applies to the server.
+    #[serde(serialize_with = "super::cpu_count::serialize_optional")]
+    pub cpus: Option<f64>,
     pub memory_mib: Option<u32>,
     /// Disk size in GB for the container rootfs (sparse, grows as needed).
     ///
@@ -501,21 +503,23 @@ pub struct BoxOptions {
 
     /// Secrets for MITM proxy injection into outbound HTTPS requests.
     ///
-    /// Each secret maps a placeholder string to a real value. When the box
-    /// makes an HTTPS request to a matching host, placeholders in request
-    /// headers and body are replaced with the actual secret value.
+    /// When the box makes an HTTPS request to a host a secret lists, the proxy
+    /// overwrites the secret's configured header only if the original request
+    /// contains it, including an empty value. Missing headers are not added.
     ///
-    /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is visible to the
-    /// guest; the real value never enters the VM.
+    /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is only a dummy value
+    /// for the guest's environment; the real value never enters the VM.
     #[serde(default)]
     pub secrets: Vec<Secret>,
 }
 
 /// A secret for MITM proxy injection.
 ///
-/// When the guest sends an HTTPS request to one of the listed hosts,
-/// the MITM proxy replaces `placeholder` with `value` in headers and body.
-/// The real `value` never enters the guest VM.
+/// When the guest sends an HTTPS request to one of the listed hosts, the MITM
+/// proxy writes `value` only if the original request contains the configured
+/// header. An upstream that echoes that header returns the value to the guest,
+/// so bind secrets only to trusted hosts.
+/// Otherwise the real `value` never enters the guest VM.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Secret {
     /// Human-readable name for this secret (e.g., "openai_api_key").
@@ -523,7 +527,8 @@ pub struct Secret {
     /// Hosts where this secret should be injected (e.g., ["api.openai.com"]).
     /// Supports exact match and wildcard patterns (e.g., "*.example.com").
     pub hosts: Vec<String>,
-    /// Placeholder string visible to the guest (e.g., "<BOXLITE_SECRET:openai>").
+    /// Dummy value for the guest's environment (e.g., "<BOXLITE_SECRET:openai>"),
+    /// so SDKs that require a key can start. The proxy never parses it.
     pub placeholder: String,
     /// The actual secret value (e.g., "sk-..."). Never enters the VM.
     ///
@@ -532,9 +537,92 @@ pub struct Secret {
     /// The serialized config is protected by stdin pipe (no /proc/cmdline) and
     /// DB file permissions.
     pub value: String,
+    /// Request header names mapped to templates containing exactly one `{value}`.
+    /// Required and non-empty for creation and activation. Optional only so legacy
+    /// stored configurations remain readable without inventing a template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<BTreeMap<String, String>>,
 }
 
 impl Secret {
+    /// Require explicit injection targets before creation or activation.
+    pub(crate) fn require_headers(&self) -> BoxliteResult<&BTreeMap<String, String>> {
+        self.headers
+            .as_ref()
+            .filter(|headers| !headers.is_empty())
+            .ok_or_else(|| {
+                boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
+                    "secret {:?} has no headers; recreate the box with headers",
+                    self.name
+                ))
+            })
+    }
+    /// Validate injection targets and rendered values independently of host policy.
+    fn validate_headers(&self) -> BoxliteResult<()> {
+        use boxlite_shared::errors::BoxliteError;
+        let name = &self.name;
+        let headers = self.require_headers()?;
+        let mut names = std::collections::HashSet::new();
+        for (effective, template) in headers.iter() {
+            if http::header::HeaderName::from_bytes(effective.as_bytes()).is_err() {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} has invalid header name {effective:?}"
+                )));
+            }
+
+            // Go net/http/httputil reverseproxy.go hopHeaders, plus Host and
+            // Content-Length: these control routing, framing, or the connection.
+            const FORBIDDEN_HEADERS: [&str; 11] = [
+                "host",
+                "connection",
+                "proxy-connection",
+                "proxy-authenticate",
+                "proxy-authorization",
+                "keep-alive",
+                "te",
+                "trailer",
+                "upgrade",
+                "content-length",
+                "transfer-encoding",
+            ];
+            if FORBIDDEN_HEADERS
+                .iter()
+                .any(|forbidden| effective.eq_ignore_ascii_case(forbidden))
+            {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} header cannot be {effective:?}"
+                )));
+            }
+            if !names.insert(effective.to_ascii_lowercase()) {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} has duplicate header names"
+                )));
+            }
+            let Some((prefix, suffix)) = template.split_once("{value}") else {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} template must contain exactly one {{value}}"
+                )));
+            };
+            if prefix.contains(['{', '}']) || suffix.contains(['{', '}']) {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} template must contain exactly one {{value}} and no other braces"
+                )));
+            }
+            // Check the rendered bytes without interpreting braces in the secret.
+            if prefix
+                .bytes()
+                .chain(self.value.bytes())
+                .chain(suffix.bytes())
+                .any(|byte| byte.is_ascii_control() && byte != b'\t')
+            {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} has prohibited control characters in its header value"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Environment variable key for this secret's placeholder (e.g., `BOXLITE_SECRET_OPENAI`).
     ///
     /// Sanitizes the name: replaces non-alphanumeric chars with `_`, ensures non-empty.
@@ -568,6 +656,7 @@ impl std::fmt::Debug for Secret {
             .field("name", &self.name)
             .field("hosts", &self.hosts)
             .field("placeholder", &self.placeholder)
+            .field("headers", &self.headers)
             .field("value", &"[REDACTED]")
             .finish()
     }
@@ -636,6 +725,35 @@ impl BoxOptions {
         self.effective_auto_delete() > 0
     }
 
+    /// The checkpoint this box is created from, if that is its rootfs source.
+    ///
+    /// A checkpoint box inherits the saved execution settings, and the server
+    /// accepts no overrides. Any other option that differs from its default is
+    /// therefore rejected here instead of being dropped on the wire.
+    #[cfg(feature = "rest")]
+    pub(crate) fn checkpoint_source(&self) -> BoxliteResult<Option<&str>> {
+        let RootfsSpec::Checkpoint(checkpoint) = &self.rootfs else {
+            return Ok(None);
+        };
+        let inherited = Self {
+            rootfs: self.rootfs.clone(),
+            ..Self::default()
+        };
+        let serialized = |options: &Self| {
+            serde_json::to_value(options).map_err(|error| {
+                BoxliteError::Internal(format!("box options are not serializable: {error}"))
+            })
+        };
+        if serialized(self)? != serialized(&inherited)? {
+            return Err(BoxliteError::InvalidArgument(
+                "a box created from a checkpoint inherits its saved settings; \
+                 leave every other option at its default"
+                    .into(),
+            ));
+        }
+        Ok(Some(checkpoint))
+    }
+
     /// Validate options for a new box: [`Self::sanitize_common`] plus the
     /// outbound rules `update_outbound` accepts, so every saved allowlist can be
     /// re-sent or rolled back to. Start and import skip the rule check, keeping
@@ -656,6 +774,9 @@ impl BoxOptions {
     ///   guest-networking switch (it gates host jailer grants only)
     /// - every mount in `mounts` fits its type
     pub(crate) fn sanitize_common(&self) -> BoxliteResult<()> {
+        // CPU host requirements belong to local execution; REST clients may
+        // run on a different platform from the server.
+        self.cpu_count()?;
         if self.removes_on_stop() && self.detach {
             return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
                 "remove-on-stop is incompatible with detach=true. Detached boxes should use \
@@ -728,6 +849,12 @@ impl BoxOptions {
             port.validate_publishable()?;
         }
 
+        if !self.volumes.is_empty() && !self.mounts.is_empty() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                "volumes and mounts cannot both be non-empty".into(),
+            ));
+        }
+
         for volume in &self.volumes {
             volume.validate()?;
         }
@@ -739,9 +866,100 @@ impl BoxOptions {
         Ok(())
     }
 
-    /// Validate a persisted box without requiring ingestion sources to remain.
+    /// `(host, header)` pairs that more than one secret writes. The proxy lets
+    /// the last secret win for such a pair.
+    fn secret_header_conflicts(&self) -> Vec<(String, String)> {
+        let mut seen = std::collections::HashSet::new();
+        let mut conflicts = Vec::new();
+        for secret in &self.secrets {
+            let Some(headers) = &secret.headers else {
+                continue;
+            };
+            let mut own_hosts = std::collections::HashSet::new();
+            for host in &secret.hosts {
+                let host = host.to_ascii_lowercase();
+                if !own_hosts.insert(host.clone()) {
+                    continue;
+                }
+                for header in headers.keys() {
+                    let pair = (host.clone(), header.to_ascii_lowercase());
+                    if !seen.insert(pair.clone()) {
+                        conflicts.push(pair);
+                    }
+                }
+            }
+        }
+        conflicts
+    }
+
+    /// Validate stored injection rules without applying new host-conflict policy.
+    pub(crate) fn validate_secret_headers(&self) -> BoxliteResult<()> {
+        for secret in &self.secrets {
+            secret.validate_headers()?;
+        }
+        Ok(())
+    }
+
+    /// Validate new secrets, including ingestion-only host and conflict rules.
+    pub(crate) fn validate_secrets(&self) -> BoxliteResult<()> {
+        use boxlite_shared::errors::BoxliteError;
+
+        for secret in &self.secrets {
+            let name = &secret.name;
+            if secret.hosts.is_empty() || secret.hosts.iter().any(String::is_empty) {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} must list at least one host in hosts, with no empty \
+                     entry; it is injected only into requests to those hosts"
+                )));
+            }
+            if secret.placeholder.is_empty() {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} has an empty placeholder; set a non-empty one such as \
+                     <BOXLITE_SECRET:{name}>"
+                )));
+            }
+
+            secret.validate_headers()?;
+        }
+
+        if let Some((host, header)) = self.secret_header_conflicts().into_iter().next() {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "conflicting secrets on host {host:?} for header {header:?}: \
+                 multiple secrets configure the same header"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Check CPU quota support on the host that will execute the box.
+    fn validate_local_cpu_support(&self) -> BoxliteResult<()> {
+        if self.cpu_count()?.is_some_and(|cpu| cpu.is_fractional()) {
+            if !cfg!(target_os = "linux") {
+                return Err(BoxliteError::Unsupported(
+                    "fractional cpus requires a Linux host".into(),
+                ));
+            }
+            if !self.advanced.security.jailer_enabled {
+                return Err(BoxliteError::Unsupported(
+                    "fractional cpus requires the jailer and cgroup v2 CPU controller".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate a persisted box on this host without requiring ingestion sources to remain.
     pub(crate) fn sanitize_persisted(&self) -> BoxliteResult<()> {
+        self.validate_local_cpu_support()?;
         self.sanitize_common()?;
+
+        for (host, header) in self.secret_header_conflicts() {
+            tracing::warn!(
+                host,
+                header,
+                "multiple secrets configure the same header; the last one is used"
+            );
+        }
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize_persisted()?;
@@ -749,42 +967,31 @@ impl BoxOptions {
         Ok(())
     }
 
+    /// Validate and normalize options for local execution.
     pub fn sanitize(&mut self) -> BoxliteResult<()> {
+        self.validate_local_cpu_support()?;
         self.sanitize_common()?;
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize()?;
         }
 
-        // The jailed shim is the sole writer of this box's qcow2 disks, so its
-        // per-file RLIMIT_FSIZE caps their growth: a write past it fails with
-        // `EFBIG` and takes the guest down. `SecurityOptions::default()` cannot
-        // pick that number — it runs for a box that does not exist yet and
-        // cannot see `disk_size_gb` — which is how a fixed 1 GiB ceiling ended
-        // up contradicting every larger disk (#1152). Derive it here, next to
-        // the size it comes from.
-        //
-        // `FSIZE_DISK_MULTIPLIER` is deliberately loose: this is a
-        // runaway-write backstop, not a capacity policy. Capacity is the qcow2
-        // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
-        // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
-        self.advanced.security.resource_limits.max_file_size = Some(
-            Bytes::from_gib(
-                self.disk_size_gb
-                    .unwrap_or(DEFAULT_DISK_SIZE_GB)
-                    .saturating_mul(FSIZE_DISK_MULTIPLIER),
-            )
-            .as_bytes(),
-        );
-
         Ok(())
+    }
+
+    /// Normalize the public resource quantity before deriving quotas or topology.
+    pub(crate) fn cpu_count(&self) -> BoxliteResult<Option<super::cpu_count::CpuCount>> {
+        self.cpus.map(super::cpu_count::CpuCount::new).transpose()
     }
 
     /// The requested vCPU count when the bundled guest kernel cannot bring
     /// all of them online. A custom kernel sets its own ceiling, so it never
     /// exceeds this one.
     pub(crate) fn cpus_beyond_guest_kernel(&self) -> Option<u8> {
-        self.cpus
+        self.cpu_count()
+            .ok()
+            .flatten()
+            .map(|cpu| cpu.vcpus())
             .filter(|&cpus| cpus > MAX_CPUS && self.advanced.kernel.is_none())
     }
 
@@ -795,10 +1002,11 @@ impl BoxOptions {
     /// reuse, and a box created before this limit must keep starting (boot
     /// warns via `cpus_beyond_guest_kernel`).
     pub(crate) fn validate_cpus(&self) -> BoxliteResult<()> {
+        self.cpu_count()?;
         match self.cpus {
-            Some(cpus) if cpus == 0 || self.cpus_beyond_guest_kernel().is_some() => Err(
+            Some(cpus) if self.cpus_beyond_guest_kernel().is_some() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(
-                    "cpus must be between 1 and {MAX_CPUS} (the guest kernel brings up at \
+                    "cpus must be between 0.125 and {MAX_CPUS} (the guest kernel brings up at \
                      most {MAX_CPUS} vCPUs), got {cpus}"
                 )),
             ),
@@ -814,6 +1022,10 @@ pub enum RootfsSpec {
     Image(String),
     /// Use an already prepared rootfs at the given host path.
     RootfsPath(String),
+    /// Use a REST-managed checkpoint, by ID or name. The box inherits the
+    /// checkpoint's saved execution settings, so every other option must stay
+    /// at its default. Local runtimes return `Unsupported`.
+    Checkpoint(String),
 }
 
 impl Default for RootfsSpec {
@@ -837,8 +1049,8 @@ pub struct VolumeSpec {
     /// Managed volume to mount, addressed by its server-assigned id **or** by
     /// its name — the server resolves either.
     ///
-    /// Managed volumes need a REST runtime, since the local runtime has no
-    /// volume backend to resolve a reference against.
+    /// LocalRuntime resolves references through `LocalVolumeStore`; a REST
+    /// runtime resolves them on the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_volume: Option<String>,
 
@@ -914,8 +1126,7 @@ impl VolumeSpec {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MountType {
-    /// A managed volume, by server-assigned id or by name. REST runtimes only:
-    /// the local runtime has no volume backend to resolve one against.
+    /// A managed volume, addressed by runtime-assigned id or by name.
     Volume,
     /// A host directory or file. Local runtime only: over REST the path would
     /// name the server's filesystem, not the caller's.
@@ -1472,7 +1683,6 @@ mod tests {
     use crate::runtime::advanced_options::{
         ContainerCapabilities, NetworkRateLimit, SecurityOptions, SecurityOptionsBuilder,
     };
-    use crate::runtime::types::Bytes;
 
     /// The type decides whose storage `source` names, so only the two exact
     /// spellings parse; a near miss is an error naming what is accepted.
@@ -2068,13 +2278,56 @@ mod tests {
         assert!(opts.sanitize().is_err());
     }
 
+    #[test]
+    fn fractional_cpus_common_validation_ignores_execution_host() {
+        for cpus in [0.125, 0.126, 1.5] {
+            for jailer_enabled in [false, true] {
+                let mut options = BoxOptions {
+                    cpus: Some(cpus),
+                    ..Default::default()
+                };
+                options.advanced.security.jailer_enabled = jailer_enabled;
+                options.sanitize_common().unwrap();
+                options.sanitize_create().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_cpus_local_validation_requires_host_support() {
+        for cpus in [None, Some(2.0), Some(0.125), Some(1.5)] {
+            for jailer_enabled in [false, true] {
+                let mut options = BoxOptions {
+                    cpus,
+                    ..Default::default()
+                };
+                options.advanced.security.jailer_enabled = jailer_enabled;
+                let fractional = cpus.is_some_and(|cpus| cpus.fract() != 0.0);
+                for result in [options.sanitize(), options.sanitize_persisted()] {
+                    if fractional && (!cfg!(target_os = "linux") || !jailer_enabled) {
+                        let error = result.expect_err("fractional CPUs need local host support");
+                        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error}");
+                        let requirement = if cfg!(target_os = "linux") {
+                            "jailer"
+                        } else {
+                            "Linux host"
+                        };
+                        assert!(error.to_string().contains(requirement), "{error}");
+                    } else {
+                        result.unwrap();
+                    }
+                }
+            }
+        }
+    }
+
     /// The vCPU ceiling is a create-time check. A box persisted (or exported)
     /// with more vCPUs than the guest kernel supports must still restart and
     /// import, so neither shared validation path may enforce it.
     #[test]
     fn persisted_and_imported_boxes_keep_cpus_beyond_guest_kernel() {
         let mut opts = BoxOptions {
-            cpus: Some(24),
+            cpus: Some(24.0),
             ..Default::default()
         };
 
@@ -2176,6 +2429,25 @@ mod tests {
 
         let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
         assert!(!legacy.advanced.nested_virtualization);
+    }
+
+    #[test]
+    fn engine_option_roundtrips_and_is_omitted_when_unset() {
+        let stored: BoxOptions =
+            serde_json::from_str(r#"{"advanced":{"engine":"Native"}}"#).unwrap();
+        assert_eq!(stored.advanced.engine, Some(crate::vmm::VmmKind::Native));
+        assert_eq!(
+            serde_json::to_value(stored).unwrap()["advanced"]["engine"],
+            serde_json::json!("Native")
+        );
+
+        let legacy: BoxOptions = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.advanced.engine, None);
+        assert!(
+            serde_json::to_value(legacy).unwrap()["advanced"]
+                .get("engine")
+                .is_none()
+        );
     }
 
     #[test]
@@ -2716,6 +2988,27 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_preserves_configured_file_size_limit() {
+        let mut options = BoxOptions {
+            disk_size_gb: Some(20),
+            ..BoxOptions::default()
+        };
+        options.sanitize().unwrap();
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            None
+        );
+
+        let configured_limit = 32 << 30;
+        options.advanced.security.resource_limits.max_file_size = Some(configured_limit);
+        options.sanitize().unwrap();
+        assert_eq!(
+            options.advanced.security.resource_limits.max_file_size,
+            Some(configured_limit)
+        );
+    }
+
+    #[test]
     fn test_security_builder_env_allowlist() {
         let opts = SecurityOptionsBuilder::new()
             .env_allowlist(vec!["FOO".to_string()])
@@ -2870,6 +3163,10 @@ mod tests {
             hosts: vec!["api.openai.com".to_string()],
             placeholder: "<BOXLITE_SECRET:openai>".to_string(),
             value: "sk-test-super-secret-key-12345".to_string(),
+            headers: Some(std::collections::BTreeMap::from([(
+                "Authorization".into(),
+                "Bearer {value}".into(),
+            )])),
         }
     }
 
@@ -2897,6 +3194,10 @@ mod tests {
                 hosts: vec![],
                 placeholder: String::new(),
                 value: String::new(),
+                headers: Some(std::collections::BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer {value}".into(),
+                )])),
             };
             assert_eq!(secret.env_key(), expected, "name={name:?}");
         }
@@ -2916,6 +3217,10 @@ mod tests {
                 hosts: vec![],
                 placeholder: String::new(),
                 value: String::new(),
+                headers: Some(std::collections::BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer {value}".into(),
+                )])),
             };
             assert_eq!(secret.env_key(), expected, "name={name:?}");
         }
@@ -2992,6 +3297,10 @@ mod tests {
                     hosts: vec!["api.anthropic.com".to_string()],
                     placeholder: "<BOXLITE_SECRET:anthropic>".to_string(),
                     value: "sk-ant-secret".to_string(),
+                    headers: Some(std::collections::BTreeMap::from([(
+                        "Authorization".into(),
+                        "Bearer {value}".into(),
+                    )])),
                 },
             ],
             ..Default::default()
@@ -3042,34 +3351,297 @@ mod tests {
         assert_eq!(opts2.resource_limits.max_processes, Some(50));
     }
 
-    /// The whole point of #1152: the ceiling has to follow the box's own
-    /// `--disk-size`, not a constant picked before the box existed.
     #[test]
-    fn sanitize_scales_fsize_with_the_requested_disk() {
-        let mut options = BoxOptions {
-            disk_size_gb: Some(20),
-            ..BoxOptions::default()
-        };
-        options.sanitize().unwrap();
+    fn required_headers_create_rejects_absent_null_empty() {
+        for suffix in ["", ",\"headers\":null", ",\"headers\":{}"] {
+            let secret = serde_json::from_str(&format!(
+                r#"{{"name":"x","hosts":["api.test.com"],"placeholder":"dummy","value":"private-token"{suffix}}}"#
+            )).unwrap();
+            let options = BoxOptions {
+                secrets: vec![secret],
+                ..Default::default()
+            };
+            let error = options
+                .validate_secrets()
+                .expect_err("missing headers accepted");
+            assert_eq!(
+                error.to_string(),
+                "invalid argument: secret \"x\" has no headers; recreate the box with headers"
+            );
+        }
+    }
 
-        assert_eq!(
-            options.advanced.security.resource_limits.max_file_size,
-            Some(Bytes::from_gib(40).as_bytes()),
-            "a 20 GiB box gets a 40 GiB ceiling"
+    #[test]
+    fn validate_secrets_accepts_valid_secrets() {
+        let opts = BoxOptions {
+            secrets: vec![
+                Secret {
+                    name: "openai".to_string(),
+                    hosts: vec!["api.openai.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+                    value: "sk-test".to_string(),
+                    headers: Some(std::collections::BTreeMap::from([(
+                        "Authorization".into(),
+                        "Bearer {value}".into(),
+                    )])),
+                },
+                Secret {
+                    name: "gemini".to_string(),
+                    hosts: vec!["generativelanguage.googleapis.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:gemini>".to_string(),
+                    value: "AIza-test".to_string(),
+                    headers: Some(std::collections::BTreeMap::from([(
+                        "x-goog-api-key".to_string(),
+                        "{value}".into(),
+                    )])),
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(opts.validate_secrets().is_ok());
+    }
+
+    #[test]
+    fn validate_secrets_rejects_empty_hosts_or_empty_host_entry() {
+        let no_hosts = BoxOptions {
+            secrets: vec![Secret {
+                hosts: vec![],
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(no_hosts.validate_secrets().is_err());
+
+        let empty_host = BoxOptions {
+            secrets: vec![Secret {
+                hosts: vec!["".to_string()],
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(empty_host.validate_secrets().is_err());
+    }
+
+    #[test]
+    fn validate_secrets_rejects_empty_placeholder() {
+        let empty_ph = BoxOptions {
+            secrets: vec![Secret {
+                placeholder: "".to_string(),
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(empty_ph.validate_secrets().is_err());
+    }
+
+    #[test]
+    fn validate_secrets_rejects_invalid_or_forbidden_headers() {
+        for forbidden in [
+            "Host",
+            "Connection",
+            "Proxy-Authorization",
+            "keep-alive",
+            "TE",
+            "Trailer",
+            "upgrade",
+            "content-length",
+            "Transfer-Encoding",
+            "",
+        ] {
+            let opts = BoxOptions {
+                secrets: vec![Secret {
+                    headers: Some(std::collections::BTreeMap::from([(
+                        forbidden.to_string(),
+                        "{value}".into(),
+                    )])),
+                    ..test_secret()
+                }],
+                ..Default::default()
+            };
+            let err = opts.validate_secrets().unwrap_err();
+            assert!(
+                err.to_string().contains("header"),
+                "expected header error for {forbidden:?}, got: {err}"
+            );
+        }
+
+        // Invalid characters for HTTP header name
+        let invalid_char = BoxOptions {
+            secrets: vec![Secret {
+                headers: Some(std::collections::BTreeMap::from([(
+                    "Bad Header: Name".to_string(),
+                    "{value}".into(),
+                )])),
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(invalid_char.validate_secrets().is_err());
+    }
+
+    #[test]
+    fn validate_secrets_rejects_proxy_connection_headers() {
+        let mut accepted_headers = Vec::new();
+        for header in ["Proxy-Connection", "proxy-authenticate"] {
+            let opts = BoxOptions {
+                secrets: vec![Secret {
+                    headers: Some(std::collections::BTreeMap::from([(
+                        header.to_string(),
+                        "{value}".into(),
+                    )])),
+                    ..test_secret()
+                }],
+                ..Default::default()
+            };
+            if opts.validate_secrets().is_ok() {
+                accepted_headers.push(header);
+            }
+        }
+        assert!(
+            accepted_headers.is_empty(),
+            "unexpectedly accepted: {accepted_headers:?}"
         );
     }
 
-    /// No explicit size: the disk is created at `DEFAULT_DISK_SIZE_GB`, so the
-    /// ceiling tracks that.
     #[test]
-    fn sanitize_falls_back_to_the_default_disk_size() {
-        let mut options = BoxOptions::default();
-        options.sanitize().unwrap();
-
-        assert_eq!(
-            options.advanced.security.resource_limits.max_file_size,
-            Some(Bytes::from_gib(20).as_bytes()),
-            "the default 10 GiB disk gets a 20 GiB ceiling"
+    fn secret_headers_rejects_invalid_configuration() {
+        use serde_json::json;
+        let cases = [
+            json!({}),
+            json!({"Bad Header": "{value}"}),
+            json!({"Proxy-Connection": "{value}"}),
+            json!({"proxy-authenticate": "{value}"}),
+            json!({"X-Key": "literal"}),
+            json!({"X-Key": "{value}{value}"}),
+            json!({"X-Key": "{other}{value}"}),
+            json!({"X-Key": "{value}\r\n"}),
+            json!({"X-Key": "{value}", "x-key": "{value}"}),
+        ];
+        let mut accepted = Vec::new();
+        for (index, headers) in cases.into_iter().enumerate() {
+            let mut input = serde_json::to_value(test_secret()).unwrap();
+            input["headers"] = headers;
+            let secret: Secret = serde_json::from_value(input).unwrap();
+            let opts = BoxOptions {
+                secrets: vec![secret],
+                ..Default::default()
+            };
+            if opts.validate_secrets().is_ok() {
+                accepted.push(index);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "accepted invalid headers cases: {accepted:?}"
         );
+    }
+
+    #[test]
+    fn secret_headers_rejects_controls_in_rendered_value() {
+        for control in (0u8..=31).filter(|c| *c != b'\t').chain([127]) {
+            let mut secret = test_secret();
+            secret.value.push(char::from(control));
+            let opts = BoxOptions {
+                secrets: vec![secret],
+                ..Default::default()
+            };
+            let error = opts.validate_secrets().expect_err("control byte accepted");
+            assert!(!error.to_string().contains(&opts.secrets[0].value));
+        }
+    }
+
+    #[test]
+    fn secret_headers_roundtrips_custom_templates() {
+        let mut input = serde_json::to_value(test_secret()).unwrap();
+        input["headers"] = serde_json::json!({"Authorization": "Bot {value}", "X-Key": "{value}"});
+        let secret: Secret = serde_json::from_value(input.clone()).unwrap();
+        let opts = BoxOptions {
+            secrets: vec![secret.clone()],
+            ..Default::default()
+        };
+        opts.validate_secrets().unwrap();
+        assert_eq!(
+            serde_json::to_value(secret).unwrap()["headers"],
+            input["headers"]
+        );
+    }
+
+    #[test]
+    fn validate_secrets_rejects_conflicting_headers_on_same_host() {
+        let opts = BoxOptions {
+            secrets: vec![
+                Secret {
+                    name: "key1".to_string(),
+                    hosts: vec!["api.openai.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:key1>".to_string(),
+                    value: "v1".to_string(),
+                    headers: Some(std::collections::BTreeMap::from([(
+                        "Authorization".into(),
+                        "Bearer {value}".into(),
+                    )])),
+                },
+                Secret {
+                    name: "key2".to_string(),
+                    hosts: vec!["api.openai.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:key2>".to_string(),
+                    value: "v2".to_string(),
+                    headers: Some(std::collections::BTreeMap::from([(
+                        "authorization".to_string(),
+                        "{value}".into(),
+                    )])), // same header (case-insensitive)
+                },
+            ],
+            ..Default::default()
+        };
+        let err = opts.validate_secrets().unwrap_err();
+        assert!(
+            err.to_string().contains("conflicting secrets"),
+            "got: {err}"
+        );
+        assert!(!err.to_string().contains("v1") && !err.to_string().contains("v2"));
+
+        // A stored box from before the rule stays bootable.
+        opts.sanitize_persisted().unwrap();
+        assert_eq!(opts.secret_header_conflicts().len(), 1);
+    }
+
+    #[test]
+    fn validate_secrets_rejects_empty_hosts_but_persisted_boxes_still_load() {
+        let opts = BoxOptions {
+            secrets: vec![Secret {
+                hosts: vec![],
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        let err = opts.validate_secrets().unwrap_err();
+        assert!(err.to_string().contains("hosts"), "got: {err}");
+        // sanitize_create also guards adoption, which must accept a stored secret.
+        opts.sanitize_create().unwrap();
+        assert!(
+            !err.to_string().contains(&test_secret().value),
+            "got: {err}"
+        );
+        opts.sanitize_persisted().unwrap();
+    }
+
+    #[test]
+    fn secret_serde_keeps_legacy_metadata_readable() {
+        let json = r#"{"name":"test","hosts":["api.test.com"],"placeholder":"<PH>","value":"val"}"#;
+        let secret: Secret = serde_json::from_str(json).unwrap();
+        assert_eq!(secret.headers, None);
+        assert!(secret.require_headers().is_err());
+    }
+
+    #[test]
+    fn validate_secrets_allows_a_host_repeated_within_one_secret() {
+        let opts = BoxOptions {
+            secrets: vec![Secret {
+                hosts: vec!["api.example.com".to_string(), "API.example.com".to_string()],
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(opts.validate_secrets().is_ok());
     }
 }

@@ -64,7 +64,7 @@ describe('Registry credential update HTTP boundary', () => {
     app = moduleRef.createNestApplication()
     app.setGlobalPrefix('api')
     app.useGlobalPipes(new ValidationPipe({ transform: true }))
-    app.useGlobalInterceptors(new AuditInterceptor(new Reflector(), audit as never, { get: jest.fn() } as never))
+    app.useGlobalInterceptors(new AuditInterceptor(new Reflector(), audit as never))
     await app.listen(0, '127.0.0.1')
     baseUrl = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/images/registries`
   })
@@ -113,6 +113,7 @@ describe('Registry credential update HTTP boundary', () => {
     expect(service.update).toHaveBeenCalledWith(ORG, ID, LOGIN)
     expect(audit.createLog).toHaveBeenCalledWith(
       expect.objectContaining({ targetId: ID, metadata: { body: { username: LOGIN.username } } }),
+      expect.any(Number),
     )
     expect(JSON.stringify(audit.createLog.mock.calls)).not.toContain(LOGIN.password)
   })

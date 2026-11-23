@@ -3,11 +3,18 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import {
+  FormDialogContent as DialogContent,
+  FormDialogHeader as DialogHeader,
+  FormDialogFooter as DialogFooter,
+  FormDialogBody,
+} from '@/components/ui/form-dialog'
 import { AsciiButton } from '@/components/ascii'
-import { AsciiChip, BRAND, PanelNote } from '@/components/ascii'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { BRAND, PanelNote } from '@/components/ascii'
+import { Dialog, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useConfig } from '@/hooks/useConfig'
@@ -24,9 +31,11 @@ import { VolumeState } from '@boxlite-ai/api-client'
 import { cn } from '@/lib/utils'
 import type { Box } from '@boxlite-ai/api-client'
 import { ChevronDown } from '@/components/ui/icon'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+
+const CPU_STOPS = [0.125, 0.25, 0.5, 1, 2, 4, 8, 16]
 
 const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 
@@ -68,17 +77,26 @@ function Stepper({
   min = 1,
   max,
   onExceed,
+  fractional = false,
+  wholeMiB = false,
+  onValidityChange,
 }: {
   value: number
   onChange: (v: number) => void
   min?: number
   max?: number
   onExceed?: () => void
+  wholeMiB?: boolean
+  fractional?: boolean
+  onValidityChange?: (valid: boolean) => void
 }) {
+  const [invalid, setInvalid] = useState(false)
   const [text, setText] = useState(String(value))
   useEffect(() => {
     setText(String(value))
-  }, [value])
+    setInvalid(false)
+    onValidityChange?.(true)
+  }, [value, onValidityChange])
   const clamp = (n: number) => {
     const v = Math.max(min, n)
     return max != null ? Math.min(max, v) : v
@@ -88,6 +106,25 @@ function Stepper({
   // wouldn't re-sync `text` when the clamped result equalled the previous
   // parent value, leaving a stale typed number in the box).
   const handleTyped = (raw: string) => {
+    if (fractional) {
+      const n = Number(raw)
+      const valid =
+        (wholeMiB ? /^\d+(?:\.\d*)?$/ : /^\d+(?:\.\d{0,3})?$/).test(raw) &&
+        Number.isFinite(n) &&
+        n >= min &&
+        (!wholeMiB || Number.isInteger(n * 1024))
+      setInvalid(!valid)
+      onValidityChange?.(valid)
+      if (!valid) {
+        setText(raw)
+        return
+      }
+      if (max != null && n > max) onExceed?.()
+      const next = clamp(n)
+      setText(next === n ? raw : String(next))
+      onChange(next)
+      return
+    }
     const digits = raw.replace(/[^0-9]/g, '')
     if (digits === '') {
       setText('')
@@ -105,19 +142,25 @@ function Stepper({
   // Text sync is unconditional so `text` stays consistent even when the parent
   // value doesn't change (e.g., already at max).
   const commit = (raw: string) => {
+    if (fractional) {
+      handleTyped(raw)
+      return
+    }
     const n = parseInt(raw, 10)
     const next = Number.isFinite(n) ? clamp(n) : min
     onChange(next)
     setText(String(next))
   }
   const btn =
-    'flex size-11 flex-none items-center justify-center font-mono text-[15px] text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
+    'flex size-11 flex-none items-center justify-center font-sans text-em text-muted-foreground transition-colors enabled:hover:bg-accent enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:size-9'
   return (
     <div className="flex items-stretch border border-border bg-card">
       <button
         type="button"
         aria-label="decrease"
-        onClick={() => onChange(clamp(value - 1))}
+        onClick={() =>
+          onChange(clamp(fractional ? ([...CPU_STOPS].reverse().find((stop) => stop < value) ?? min) : value - 1))
+        }
         disabled={value <= min}
         className={cn(btn, 'border-r border-border')}
       >
@@ -125,19 +168,27 @@ function Stepper({
       </button>
       <input
         value={text}
-        inputMode="numeric"
+        inputMode={fractional ? 'decimal' : 'numeric'}
+        aria-invalid={invalid}
+        title={
+          invalid
+            ? wholeMiB
+              ? 'Enter memory in whole MiB increments, at least 0.125 GiB'
+              : 'Enter at least 0.125 CPU with up to three decimal places'
+            : undefined
+        }
         aria-label="value"
         onChange={(e) => handleTyped(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
         }}
-        className="min-w-0 flex-1 bg-transparent py-[9px] text-center font-mono text-[13px] text-foreground outline-none"
+        className="min-w-0 flex-1 bg-transparent py-[9px] text-center font-mono text-body text-foreground outline-none"
       />
       <button
         type="button"
         aria-label="increase"
-        onClick={() => onChange(clamp(value + 1))}
+        onClick={() => onChange(clamp(fractional ? (CPU_STOPS.find((stop) => stop > value) ?? value + 1) : value + 1))}
         disabled={max != null && value >= max}
         className={cn(btn, 'border-l border-border')}
       >
@@ -151,26 +202,42 @@ function Stepper({
 // full-width below the grid (see CappedResourcesNote) rather than cramped under
 // each narrow column.
 function ResourceField({
+  estimate,
   label,
   unit,
   value,
   onChange,
   max,
   onExceed,
+  fractional,
+  onValidityChange,
 }: {
+  estimate?: string
   label: string
   unit: string
   value: number
   onChange: (v: number) => void
   max?: number
   onExceed?: () => void
+  fractional?: boolean
+  onValidityChange?: (valid: boolean) => void
 }) {
   return (
     <div className="flex flex-col gap-[9px]">
-      <div className="font-mono text-[10px] uppercase tracking-[1px]">
-        {label} <span className="text-muted-foreground">({unit})</span>
+      <div className="font-sans text-label uppercase tracking-[1px]">
+        {label} <span className="normal-case tracking-normal text-muted-foreground">({unit})</span>
       </div>
-      <Stepper value={value} onChange={onChange} max={max} onExceed={onExceed} />
+      <Stepper
+        value={value}
+        onChange={onChange}
+        min={fractional ? 0.125 : 1}
+        max={max}
+        onExceed={onExceed}
+        fractional={fractional}
+        wholeMiB={label === 'Memory'}
+        onValidityChange={onValidityChange}
+      />
+      {estimate && <span className="font-mono text-meta text-muted-foreground">{estimate} / hr</span>}
       {max != null && (
         <span className="font-mono text-meta text-muted-foreground">
           Max {max} {unit}
@@ -187,7 +254,7 @@ function ResourceField({
 function CappedResourcesNote({ items }: { items: { label: string; unit: string; max: number }[] }) {
   if (items.length === 0) return null
   return (
-    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-warning-foreground">
+    <div className="border-l-2 border-warning/60 bg-warning-background/40 px-3 py-2 font-sans text-meta leading-relaxed text-warning-foreground">
       Adjusted to your organization&apos;s max: {items.map((r) => `${r.label} ${r.max} ${r.unit}`).join(' · ')}. Need
       more?{' '}
       <a
@@ -201,79 +268,26 @@ function CappedResourcesNote({ items }: { items: { label: string; unit: string; 
 }
 
 // ── Price ───────────────────────────────────────────────────────────────────
-// Quoted from Commerce's published rates so the number tracks the size chosen
-// above. Three absences are kept distinct, because collapsing them is how a
-// dialog ends up claiming a box is free when it is not:
-//
-//   no billing service  — nothing is charged, and saying "free" is the truth
-//   rates still loading — we do not know the price yet
-//   rates unavailable   — we do not know the price, and usage is metered anyway
-//
-// Only the first may render as $0.00. Commerce settles the real charge, so this
-// is labelled an estimate rather than a price.
-function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
-  const config = useConfig()
-  const pricesQuery = useUsagePricesQuery()
-  const quote = boxHourlyPrice(pricesQuery.data, { cpu, memory, disk })
-  const [breakdownOpen, setBreakdownOpen] = useState(false)
-
-  const ROW = 'flex shrink-0 flex-col gap-1 border-t border-border px-4 py-4 sm:px-6'
-  const LABEL = 'font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground'
-  const FIGURE = 'font-mono text-[20px] font-bold tracking-[-0.5px] sm:text-[24px]'
-
-  if (!config.billingApiUrl) {
-    return (
-      <div className={cn(ROW, 'sm:flex-row sm:items-baseline sm:justify-between')}>
-        <span className={LABEL}>Price per hour</span>
-        <span className={FIGURE}>
-          $0.00 <span className="text-[11px] font-normal text-muted-foreground">/ hr · free in preview</span>
-        </span>
-      </div>
-    )
-  }
-
-  if (!quote) {
-    const loading = pricesQuery.isLoading
-    return (
-      <div className={ROW}>
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
-          <span className={LABEL}>Est. price per hour</span>
-          <span className={cn(FIGURE, 'text-muted-foreground')}>{loading ? '—' : 'Unavailable'}</span>
-        </div>
-        <PanelNote>
-          {loading
-            ? 'Fetching current rates.'
-            : 'Current rates could not be loaded. Usage is still metered — this box is not free.'}
-        </PanelNote>
-      </div>
-    )
-  }
-
-  // The total is the decision; how it splits across CPU/memory/disk is the
-  // audit. Collapsed by default so the row stays one line, on the same `▸`
-  // affordance the sibling Size / Lifecycle / Volumes labels already use.
+function BoxPriceBreakdown({ quote }: { quote: NonNullable<ReturnType<typeof boxHourlyPrice>> }) {
   return (
-    <div className={ROW}>
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
-        <button
-          type="button"
-          aria-expanded={breakdownOpen}
-          aria-controls="box-price-breakdown"
-          onClick={() => setBreakdownOpen((wasOpen) => !wasOpen)}
-          className={cn(LABEL, 'self-start transition-colors hover:text-foreground')}
-        >
-          <span style={{ color: BRAND }}>{breakdownOpen ? '▾' : '▸'}</span> Est. price per hour
-        </button>
-        <span className={FIGURE}>
-          {formatPriceCents(quote.totalCents)}
-          <span className="text-[11px] font-normal text-muted-foreground"> / hr</span>
-        </span>
-      </div>
-      {breakdownOpen && (
-        <div id="box-price-breakdown" className="mt-1 flex flex-col gap-0.5">
+    <Popover>
+      <PopoverTrigger asChild>
+        <AsciiButton size="sm">Price breakdown</AsciiButton>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        aria-label="Price breakdown"
+        className="w-[440px] max-w-[calc(100vw-32px)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
+      >
+        <div className="mb-3 text-body font-medium">Estimated cost per hour</div>
+        <div className="space-y-3">
           {quote.lines.map((line) => (
-            <div key={line.code} className="flex items-baseline justify-between gap-3 font-mono text-[11px]">
-              <span className="text-muted-foreground">
+            <div
+              key={line.code}
+              className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 font-mono text-meta"
+            >
+              <span className="min-w-0 flex-1 text-muted-foreground [overflow-wrap:anywhere]">
                 {line.label} · {line.quantity} {line.quantityUnit} × {formatPriceCents(line.unitPriceCents, 6)}/
                 {line.quantityUnit}·hr
               </span>
@@ -281,8 +295,12 @@ function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
             </div>
           ))}
         </div>
-      )}
-    </div>
+        <div className="mt-3 flex items-baseline justify-between gap-3 border-t border-border pt-3 text-body">
+          <span>Total</span>
+          <span className="font-mono">{formatPriceCents(quote.totalCents)} / hr</span>
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -293,9 +311,12 @@ function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
 // mirror the Lifecycle pattern (chips + a `Custom` escape hatch) so the two
 // sections teach one interaction, not two.
 const SIZE_PRESETS = [
-  { id: 'small', label: 'Small', cpu: 1, memory: 1, disk: 10 },
-  { id: 'medium', label: 'Medium', cpu: 2, memory: 4, disk: 20 },
-  { id: 'large', label: 'Large', cpu: 4, memory: 8, disk: 50 },
+  { id: 'matchbox', label: 'Matchbox', cpu: 0.125, memory: 0.25, disk: 10 },
+  { id: 'pocket', label: 'Pocket', cpu: 0.25, memory: 0.5, disk: 10 },
+  { id: 'lunchbox', label: 'Lunchbox', cpu: 0.5, memory: 1, disk: 10 },
+  { id: 'small', label: 'Shoebox', cpu: 1, memory: 1, disk: 10 },
+  { id: 'medium', label: 'Crate', cpu: 2, memory: 4, disk: 20 },
+  { id: 'large', label: 'Cargo', cpu: 4, memory: 8, disk: 50 },
   { id: 'custom', label: 'Custom', cpu: null, memory: null, disk: null },
 ] as const
 
@@ -411,7 +432,7 @@ function SelectField({
   if (customOpen) {
     return (
       <div className="flex items-center justify-between gap-3">
-        <span className="font-mono text-[10px] uppercase tracking-[1px]">{label}</span>
+        <span className="font-sans text-meta font-medium">{label}</span>
         <div className="flex items-stretch">
           <input
             autoFocus
@@ -423,17 +444,17 @@ function SelectField({
             onKeyDown={(e) => {
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
             }}
-            className="w-[56px] border border-border bg-card px-[10px] py-[7px] text-center font-mono text-[12.5px] text-foreground outline-none focus:border-brand"
+            className="w-[56px] border border-border bg-card px-[10px] py-[7px] text-center font-mono text-meta text-foreground outline-none focus:border-brand"
           />
           <DropdownMenu>
             <DropdownMenuTrigger
               aria-label={`${ariaLabel} unit`}
-              className="flex min-w-[64px] items-center justify-between gap-1 border border-l-0 border-border bg-card px-[9px] py-[7px] font-mono text-[12px] text-muted-foreground outline-none data-[state=open]:border-brand"
+              className="flex min-w-[64px] items-center justify-between gap-1 border border-l-0 border-border bg-card px-[9px] py-[7px] font-mono text-meta text-muted-foreground outline-none data-[state=open]:border-brand"
             >
               <span>{DURATION_UNITS.find((u) => u.id === customUnit)?.label}</span>
               <ChevronDown className="size-3 shrink-0" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="font-mono text-[12px]">
+            <DropdownMenuContent align="end" className="font-mono text-meta">
               {DURATION_UNITS.map((u) => (
                 <DropdownMenuItem
                   key={u.id}
@@ -455,16 +476,16 @@ function SelectField({
 
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="font-mono text-[10px] uppercase tracking-[1px]">{label}</span>
+      <span className="font-sans text-meta font-medium">{label}</span>
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label={ariaLabel}
-          className="flex min-w-[104px] items-center justify-between gap-2 border border-border bg-card px-[11px] py-[7px] font-mono text-[12.5px] text-foreground outline-none data-[state=open]:border-brand"
+          className="flex min-w-[104px] items-center justify-between gap-2 border border-border bg-card px-[11px] py-[7px] font-mono text-meta text-foreground outline-none data-[state=open]:border-brand"
         >
           <span>{current?.label ?? formatLifecycleSeconds(value)}</span>
           <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="font-mono text-[12px]">
+        <DropdownMenuContent align="end" className="font-mono text-meta">
           {options.map((o) => (
             <DropdownMenuItem
               key={o.seconds}
@@ -505,14 +526,14 @@ function MountRow({
         <DropdownMenu>
           <DropdownMenuTrigger
             aria-label="Volume"
-            className="flex min-w-0 flex-1 items-center justify-between gap-2 border border-border bg-card px-[11px] py-[8px] font-mono text-[12.5px] outline-none data-[state=open]:border-brand"
+            className="flex min-w-0 flex-1 items-center justify-between gap-2 border border-border bg-card px-[11px] py-[8px] font-mono text-meta outline-none data-[state=open]:border-brand"
           >
             <span className={cn('truncate', !selected && 'text-muted-foreground')}>
               {selected?.name ?? 'Select a volume'}
             </span>
             <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="font-mono text-[12px]">
+          <DropdownMenuContent align="start" className="font-mono text-meta">
             {volumes.length === 0 && <DropdownMenuItem disabled>No volumes yet</DropdownMenuItem>}
             {volumes.map((v) => {
               const ready = v.state === VolumeState.READY
@@ -535,21 +556,21 @@ function MountRow({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <span className="self-center font-mono text-[12px] text-muted-foreground">→</span>
+        <span className="self-center font-mono text-meta text-muted-foreground">→</span>
 
         <input
           value={mount.mountPath}
           onChange={(e) => onChange({ ...mount, mountPath: e.target.value })}
           placeholder="/data"
           aria-label="Mount path"
-          className="min-w-0 flex-1 border border-border bg-card px-[11px] py-[8px] font-mono text-[12.5px] text-foreground outline-none focus:border-brand"
+          className="min-w-0 flex-1 border border-border bg-card px-[11px] py-[8px] font-mono text-meta text-foreground outline-none focus:border-brand"
         />
 
         <button
           type="button"
           onClick={onRemove}
           aria-label="Remove mount"
-          className="shrink-0 border border-border px-[10px] font-mono text-[12px] text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
+          className="shrink-0 border border-border px-[10px] font-sans text-meta text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
         >
           ✕
         </button>
@@ -558,6 +579,7 @@ function MountRow({
   )
 }
 
+/** Collects a Box image, resource size, mounts, and lifecycle policy, validates them, and submits creation for the current organization. */
 export const CreateBoxDialog = ({
   className,
   children,
@@ -607,7 +629,15 @@ export const CreateBoxDialog = ({
   const { data: catalogImages = [] } = useImagesQuery()
 
   // Only confirmed effective limits constrain input; the server validates unknown limits on creation.
-  const limits = resolvePerBoxLimits(confirmedLimits)
+  const resolvedLimits = resolvePerBoxLimits(confirmedLimits)
+  const limits = { ...resolvedLimits, cpu: Math.min(resolvedLimits.cpu ?? 16, 16) }
+  const config = useConfig()
+  const pricesQuery = useUsagePricesQuery()
+  const effectiveSpec = (spec: BoxSpec): BoxSpec => ({
+    cpu: Math.min(spec.cpu, limits.cpu),
+    memory: Math.min(spec.memory, limits.memory ?? spec.memory),
+    disk: Math.min(spec.disk, limits.disk ?? spec.disk),
+  })
 
   // A DEFAULT value can exceed a stricter per-org cap (e.g. DEFAULTS.disk=10
   // vs an org's maxDiskPerBox=3), which would otherwise send an over-limit
@@ -618,19 +648,57 @@ export const CreateBoxDialog = ({
 
   const [name, setName] = useState('')
   const [imageRef, setImageRef] = useState('')
+  const [imageControl, setImageControl] = useState<HTMLDivElement | null>(null)
+  const [imageMenuWidth, setImageMenuWidth] = useState(0)
+  const [imageRefOverflows, setImageRefOverflows] = useState(false)
+  const imageDescriptionId = useId()
+  useEffect(() => {
+    if (!imageControl) return
+    const measure = () => {
+      // offsetWidth is unaffected by the dialog's opening scale animation.
+      setImageMenuWidth(imageControl.offsetWidth)
+      const input = imageControl.querySelector('input')
+      setImageRefOverflows(Boolean(imageRef && input && input.scrollWidth > input.clientWidth))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(imageControl)
+    return () => observer.disconnect()
+  }, [imageControl, imageRef])
+
   const [cpu, setCpu] = useState(initialCpu)
+  const [cpuValid, setCpuValid] = useState(true)
+  const [memoryValid, setMemoryValid] = useState(true)
+  const resourceDescriptionId = useId()
+  const customDraft = useRef<BoxSpec | null>(null)
+  useEffect(() => {
+    customDraft.current = null
+  }, [selectedOrganization?.id])
   const [memory, setMemory] = useState(initialMemory)
   const [disk, setDisk] = useState(initialDisk)
+  const selectedQuote = boxHourlyPrice(pricesQuery.data, { cpu, memory, disk })
+  const resourceEstimate = (code: string) => {
+    if (!config.billingApiUrl) return '$0.00'
+    const line = selectedQuote?.lines.find((item) => item.code === code)
+    return line ? formatPriceCents(line.subtotalCents, 6) : '—'
+  }
   // 0 means "never" for both — a legitimate value, not the accidental-empty-input
   // bug the old free-text field had, because a dropdown has no empty state.
   const [stopSeconds, setStopSeconds] = useState(DEFAULTS.autoStopIntervalSeconds)
   const [deleteDelaySeconds, setDeleteDelaySeconds] = useState(0)
   const [autoResume, setAutoResumeEnabled] = useState(true)
-  // A mount handed in by the caller (Volumes → "+ Box") is the reason the
-  // dialog opened, so the section it lives in starts open.
-  const [showAdvanced, setShowAdvanced] = useState(() => Boolean(prefillVolume))
   const [mounts, setMounts] = useState<BoxVolumeMount[]>([])
   const [sizePreset, setSizePreset] = useState<SizePresetId>('small')
+  const customResourcesRef = useRef<HTMLDivElement>(null)
+  const focusCustomResources = () => {
+    customResourcesRef.current?.querySelector('input')?.focus({ preventScroll: true })
+    customResourcesRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }
+  useEffect(() => {
+    if (open && sizePreset === 'custom') focusCustomResources()
+  }, [open, sizePreset])
+
   const [submitting, setSubmitting] = useState(false)
   const [capped, setCapped] = useState({ cpu: false, memory: false, disk: false })
 
@@ -646,6 +714,7 @@ export const CreateBoxDialog = ({
     wasOpenRef.current = open
     if (!open || wasOpen) return
 
+    customDraft.current = null
     setName('')
     setImageRef(prefillImage ?? '')
     setCpu(initialCpu)
@@ -658,6 +727,8 @@ export const CreateBoxDialog = ({
     // "+ Box" row action lands on a form that is holding it.
     setMounts(prefillVolume ? [{ volumeId: prefillVolume, mountPath: '/data' }] : [])
     setSizePreset('small')
+    setCpuValid(true)
+    setMemoryValid(true)
     setSubmitting(false)
     setCapped({ cpu: false, memory: false, disk: false })
   }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
@@ -717,7 +788,25 @@ export const CreateBoxDialog = ({
   // catch up silently. A pick the user just made deserves an explanation for
   // why the number on screen doesn't match the tier they clicked.
   const applySizePreset = (id: SizePresetId) => {
+    if (id === sizePreset) {
+      if (id === 'custom') focusCustomResources()
+      return
+    }
+    if (sizePreset === 'custom' && cpuValid && memoryValid) customDraft.current = { cpu, memory, disk }
+    if (id === 'custom' && customDraft.current) {
+      const restored = effectiveSpec(customDraft.current)
+      setCpu(restored.cpu)
+      setMemory(restored.memory)
+      setDisk(restored.disk)
+      setCapped({
+        cpu: restored.cpu !== customDraft.current.cpu,
+        memory: restored.memory !== customDraft.current.memory,
+        disk: restored.disk !== customDraft.current.disk,
+      })
+    }
     setSizePreset(id)
+    setCpuValid(true)
+    setMemoryValid(true)
     const spec = SIZE_PRESETS.find((p) => p.id === id)
     if (!spec || spec.cpu == null || spec.memory == null || spec.disk == null) return // `custom` only reveals the controls
     const nextCpu = limits.cpu != null && spec.cpu > limits.cpu ? limits.cpu : spec.cpu
@@ -730,6 +819,7 @@ export const CreateBoxDialog = ({
   }
 
   const handleCreate = async () => {
+    if (!cpuValid || !memoryValid) return
     if (!selectedOrganization?.id) {
       toast.error('Select an organization to create a box.')
       return
@@ -779,63 +869,65 @@ export const CreateBoxDialog = ({
     <Dialog open={open} onOpenChange={setOpen}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
 
-      <DialogContent
-        className={cn(
-          'flex max-h-[92svh] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[88vh] sm:max-w-[540px]',
-          className,
-        )}
-      >
-        <DialogHeader className="shrink-0 border-b border-border px-4 py-[18px] sm:px-6">
-          <DialogTitle className="text-[18px] font-bold tracking-[-0.3px]">Create a box for your agent</DialogTitle>
+      <DialogContent className={cn('sm:max-w-[760px]', className)}>
+        <DialogHeader>
+          <DialogTitle>New Box</DialogTitle>
+          <DialogDescription className="sr-only">Create a Box for your agent.</DialogDescription>
         </DialogHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-[22px] overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
+        <FormDialogBody>
           {/* name + image — two short single-line controls; a full-width row
               each was pure vertical waste. */}
           <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-2">
             <div className="flex flex-col gap-[9px]">
-              <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Name</div>
+              <div className="form-field-label">Name</div>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="my-new-box"
                 aria-invalid={!nameValid}
                 aria-describedby="create-box-name-hint"
-                className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
+                className="form-field-input font-mono"
               />
               {/* Submitting an empty name is a real, supported path — the API then assigns
                   an adjective-animal name of its own. Say so here, or the placeholder reads
                   as a promise that the box will be called something like "my-new-box". */}
-              <div id="create-box-name-hint" className="font-mono text-[11px] leading-relaxed text-muted-foreground">
+              <div id="create-box-name-hint" className="font-sans text-meta leading-relaxed text-muted-foreground">
                 Optional — auto-named like <span className="text-foreground">cozy-otter</span>.
               </div>
             </div>
 
-            <div className="flex flex-col gap-[9px]">
-              <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Image</div>
+            <div className="flex min-w-0 flex-col gap-[9px]">
+              <div className="form-field-label">Image</div>
               {/* Free text with the catalog as suggestions, not a closed list:
                   any reference the operator's allowlist admits is valid here,
                   and an image only enters the catalog after something has
                   already booted from it — so a picker of known images could
                   never offer the first one. */}
-              <div className="flex items-stretch border border-border bg-card focus-within:border-brand">
+              <div
+                ref={setImageControl}
+                className="flex min-w-0 items-stretch border border-border bg-card focus-within:border-brand"
+              >
                 <input
                   value={imageRef}
                   onChange={(e) => setImageRef(e.target.value)}
                   placeholder="Default image"
                   aria-label="Image reference"
+                  aria-describedby={imageRefOverflows ? imageDescriptionId : undefined}
                   className="w-full min-w-0 border-0 bg-transparent px-[13px] py-[11px] font-mono text-body text-foreground outline-none placeholder:text-muted-foreground"
                 />
                 <DropdownMenu>
                   <DropdownMenuTrigger
-                    aria-label="Choose a known image"
-                    className="flex shrink-0 items-center px-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground data-[state=open]:text-foreground"
+                    aria-label="Browse images"
+                    className="flex shrink-0 items-center gap-2 border-l border-border px-[11px] text-meta text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
+                    Browse images
                     <ChevronDown className="size-3.5" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent
                     align="end"
-                    className="max-h-[260px] min-w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto font-mono text-meta"
+                    style={{ width: imageMenuWidth || undefined }}
+                    className="max-h-[min(260px,var(--radix-dropdown-menu-content-available-height))] min-w-0 max-w-[calc(100vw-32px)] overflow-x-hidden overflow-y-auto font-mono text-meta"
                   >
                     {imageSuggestions.length === 0 ? (
                       <DropdownMenuItem disabled>No images yet</DropdownMenuItem>
@@ -843,7 +935,10 @@ export const CreateBoxDialog = ({
                       imageSuggestions.map((suggestion) => (
                         <DropdownMenuItem
                           key={suggestion.ref}
-                          className={cn('cursor-pointer', suggestion.ref === imageRef && 'text-brand')}
+                          className={cn(
+                            'min-w-0 cursor-pointer whitespace-normal [overflow-wrap:anywhere]',
+                            suggestion.ref === imageRef && 'text-brand',
+                          )}
                           onClick={() => setImageRef(suggestion.ref)}
                         >
                           {suggestion.ref}
@@ -853,7 +948,15 @@ export const CreateBoxDialog = ({
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-              <div className="font-mono text-meta leading-relaxed text-muted-foreground">
+              {imageRefOverflows && (
+                <p
+                  id={imageDescriptionId}
+                  className="min-w-0 font-mono text-meta text-muted-foreground [overflow-wrap:anywhere]"
+                >
+                  {imageRef}
+                </p>
+              )}
+              <div className="font-sans text-meta leading-relaxed text-muted-foreground">
                 Optional — any reference your operator allows. The first box on a new image waits for it to be pulled.
               </div>
             </div>
@@ -864,36 +967,86 @@ export const CreateBoxDialog = ({
               it costs is not an advanced concern; it gets the same visibility
               as Lifecycle and Volumes below. */}
           <fieldset aria-label="Box resources" className="flex min-w-0 flex-col gap-[13px] border-t border-border pt-5">
-            {/* Matches the sibling `▸ Lifecycle` / `▸ Volumes` treatment rather
-                than `ascii.SectionTitle`: inside this dialog the established
-                label scale is 10px/1.2px (Name, Image), and SectionTitle's
-                11px/1.5px heading would read as a different tier from its own
-                siblings. */}
-            <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
-              <span style={{ color: BRAND }}>▸</span> Size
-            </div>
-
-            {(limitsError || !confirmedLimits) && (
-              <p role="status" className="font-mono text-meta text-muted-foreground">
-                {limitsError
-                  ? confirmedLimits
-                    ? 'Could not refresh limits. Showing last known limits.'
-                    : 'Could not load limits. Limits are checked when you create.'
-                  : 'Limits are checked when you create.'}
-              </p>
-            )}
-            <div role="group" aria-label="Size" className="grid grid-cols-2 gap-[6px] sm:grid-cols-4">
-              {SIZE_PRESETS.map((p) => (
-                <AsciiChip
-                  key={p.id}
-                  selected={sizePreset === p.id}
-                  aria-pressed={sizePreset === p.id}
-                  onClick={() => applySizePreset(p.id)}
-                  className="px-2 py-[7px] text-[12px]"
+            <div role="group" aria-label="Size" className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="form-field-label mb-0">Size</div>
+                <AsciiButton
+                  aria-label="Larger or custom box"
+                  aria-pressed={sizePreset === 'custom'}
+                  variant="secondary"
+                  className={sizePreset === 'custom' ? 'border-foreground bg-secondary' : undefined}
+                  aria-expanded={sizePreset === 'custom'}
+                  aria-controls={`${resourceDescriptionId}-custom`}
+                  size="sm"
+                  onClick={() => applySizePreset('custom')}
                 >
-                  {p.label}
-                </AsciiChip>
-              ))}
+                  Larger or custom box
+                </AsciiButton>
+              </div>
+              {(limitsError || !confirmedLimits) && (
+                <p role="status" className="font-sans text-meta text-muted-foreground">
+                  {limitsError
+                    ? confirmedLimits
+                      ? 'Could not refresh limits. Showing last known limits.'
+                      : 'Could not load limits. Limits are checked when you create.'
+                    : 'Limits are checked when you create.'}
+                </p>
+              )}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {SIZE_PRESETS.filter((p) => p.id !== 'custom').map((p, index) => {
+                  const spec = effectiveSpec({ cpu: p.cpu, memory: p.memory, disk: p.disk })
+                  const adjusted = spec.cpu !== p.cpu || spec.memory !== p.memory || spec.disk !== p.disk
+                  const quote = boxHourlyPrice(pricesQuery.data, spec)
+                  const selected = sizePreset === p.id
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      aria-label={p.label}
+                      aria-describedby={`${resourceDescriptionId}-${p.id}`}
+                      aria-pressed={selected}
+                      onClick={() => applySizePreset(p.id)}
+                      className={cn(
+                        'group min-w-0 border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        selected
+                          ? 'border-foreground bg-secondary'
+                          : 'border-border hover:border-muted-foreground hover:bg-accent',
+                      )}
+                    >
+                      <span className="mb-1 flex items-center justify-between gap-2">
+                        <span className="text-body font-medium">{p.label}</span>
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 32 32"
+                          className={cn('size-7 shrink-0', selected ? 'text-foreground' : 'text-muted-foreground')}
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                        >
+                          <g transform={`translate(16 16) scale(${0.55 + index * 0.085}) translate(-16 -16)`}>
+                            <path d="M16 2 29 9.5v13L16 30 3 22.5v-13Z M3 9.5 16 17l13-7.5 M16 17v13 M9.5 5.75l13 7.5" />
+                          </g>
+                        </svg>
+                      </span>
+                      <span id={`${resourceDescriptionId}-${p.id}`} className="block">
+                        <span className="block font-mono text-em">
+                          {spec.cpu} <span className="text-meta text-muted-foreground">vCPU</span>
+                        </span>
+                        <span className="mt-1 block text-meta text-muted-foreground">
+                          {spec.memory} GiB RAM · {spec.disk} GiB disk
+                        </span>
+                        <span className="mt-2 flex flex-wrap items-baseline justify-between gap-1 border-t border-border pt-2">
+                          <span className="font-mono text-body">
+                            {!config.billingApiUrl ? '$0.00' : quote ? formatPriceCents(quote.totalCents) : '—'}
+                            <span className="font-sans text-meta text-muted-foreground"> / hr</span>
+                          </span>
+                          {adjusted && <span className="text-meta text-warning-foreground">Adjusted</span>}
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
             </div>
 
             {/* Hidden once Custom is open: the steppers below already show
@@ -901,8 +1054,8 @@ export const CreateBoxDialog = ({
                 line too was pure duplication — it only earns its place when
                 there's no other visible readout of the current size. */}
             {sizePreset !== 'custom' && (
-              <div className="font-mono text-[11px] text-muted-foreground">
-                · {cpu} vCPU · {memory} GiB · {disk} GiB
+              <div className="font-mono text-meta text-muted-foreground">
+                Selected: {cpu} vCPU · {memory} GiB RAM · {disk} GiB disk
               </div>
             )}
 
@@ -919,9 +1072,16 @@ export const CreateBoxDialog = ({
             />
 
             {sizePreset === 'custom' && (
-              <div className="grid grid-cols-1 gap-[14px] border-t border-dashed border-border pt-[13px] sm:grid-cols-3">
+              <div
+                ref={customResourcesRef}
+                id={`${resourceDescriptionId}-custom`}
+                className="grid scroll-mt-4 grid-cols-1 gap-[14px] border-t border-dashed border-border pt-[13px] sm:grid-cols-3"
+              >
                 <ResourceField
+                  fractional
+                  onValidityChange={setCpuValid}
                   label="CPU"
+                  estimate={cpuValid ? resourceEstimate('cpu') : '—'}
                   unit="vCPU"
                   value={cpu}
                   onChange={changeResource('cpu', setCpu)}
@@ -929,7 +1089,10 @@ export const CreateBoxDialog = ({
                   onExceed={() => setCapped((c) => ({ ...c, cpu: true }))}
                 />
                 <ResourceField
+                  fractional
+                  onValidityChange={setMemoryValid}
                   label="Memory"
+                  estimate={memoryValid ? resourceEstimate('mem') : '—'}
                   unit="GiB"
                   value={memory}
                   onChange={changeResource('memory', setMemory)}
@@ -938,6 +1101,7 @@ export const CreateBoxDialog = ({
                 />
                 <ResourceField
                   label="Disk"
+                  estimate={resourceEstimate('disk')}
                   unit="GiB"
                   value={disk}
                   onChange={changeResource('disk', setDisk)}
@@ -948,29 +1112,7 @@ export const CreateBoxDialog = ({
             )}
           </fieldset>
 
-          {/* Volumes and lifecycle are real controls, but they are the third
-              and fourth decision on a screen whose promise is "a box for your
-              agent" — most boxes take the defaults, and the agent that made the
-              box already chose. One disclosure, both sections, collapsed. */}
-          <div className="border-t border-border pt-4">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced((v) => !v)}
-              aria-expanded={showAdvanced}
-              className="flex w-full items-center justify-between font-mono text-label uppercase tracking-[1.2px] text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <span>
-                <span style={{ color: BRAND }}>{showAdvanced ? '▾' : '▸'}</span> Advanced
-                <span className="ml-2 normal-case tracking-normal text-muted-foreground/70">
-                  volumes · lifecycle
-                  {mounts.length > 0 ? ` · ${mounts.length} mount${mounts.length > 1 ? 's' : ''}` : ''}
-                </span>
-              </span>
-            </button>
-          </div>
-          {showAdvanced && (
-            <>
-              {/* volumes — the only moment a box and a volume can be connected:
+          {/* volumes — the only moment a box and a volume can be connected:
               there is no attach/detach endpoint, so a running box can never
               gain or lose one. That fact used to be spelled out in a note
               below the list, but Size is equally locked at create time (no
@@ -978,119 +1120,152 @@ export const CreateBoxDialog = ({
               Volumes out implied a false asymmetry. Dropped; "+ Mount a
               volume" moved into the header row instead, saving the row it
               cost. */}
-              <div className="flex flex-col gap-[11px] border-t border-border pt-5">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
-                    <span style={{ color: BRAND }}>▸</span> Volumes
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setMounts((prev) => [...prev, { volumeId: '', mountPath: '/data' }])}
-                    className="border border-border px-[10px] py-[4px] font-mono text-[11px] transition-colors hover:border-brand"
-                  >
-                    + Mount a volume
-                  </button>
-                </div>
-
-                {/* Disk above is scratch space that dies with the box; a volume is
-                the opposite of that, which is the one fact worth stating here. */}
-                <PanelNote>
-                  A volume persists independently of this box and can be mounted into another box later.
-                </PanelNote>
-
-                {mounts.length > 0 && (
-                  <div className="flex flex-col gap-[9px]">
-                    {mounts.map((mount, index) => (
-                      <MountRow
-                        key={index}
-                        mount={mount}
-                        volumes={availableVolumes}
-                        onChange={(next) => setMounts((prev) => prev.map((m, i) => (i === index ? next : m)))}
-                        onRemove={() => setMounts((prev) => prev.filter((_, i) => i !== index))}
-                      />
-                    ))}
-                  </div>
-                )}
+          <div className="flex flex-col gap-[11px] border-t border-border pt-5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="form-field-label">
+                <span style={{ color: BRAND }}>▸</span> Volumes
               </div>
+              <button
+                type="button"
+                onClick={() => setMounts((prev) => [...prev, { volumeId: '', mountPath: '/data' }])}
+                className="inline-flex h-7 items-center border border-border px-[10px] font-sans text-meta transition-colors hover:border-brand"
+              >
+                + Mount a volume
+              </button>
+            </div>
 
-              {/* lifecycle — decides when the box disappears (and whether its disk
+            {/* Disk above is scratch space that dies with the box; a volume is
+                the opposite of that, which is the one fact worth stating here. */}
+            <PanelNote>
+              A volume persists independently of this box and can be mounted into another box later.
+            </PanelNote>
+
+            {mounts.length > 0 && (
+              <div className="flex flex-col gap-[9px]">
+                {mounts.map((mount, index) => (
+                  <MountRow
+                    key={index}
+                    mount={mount}
+                    volumes={availableVolumes}
+                    onChange={(next) => setMounts((prev) => prev.map((m, i) => (i === index ? next : m)))}
+                    onRemove={() => setMounts((prev) => prev.filter((_, i) => i !== index))}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* lifecycle — decides when the box disappears (and whether its disk
               goes with it); placed last so it sits directly above the price it
               changes. Three flat rows, always visible: no presets to learn,
               no "Custom" panel hiding the real controls. */}
-              <div className="flex flex-col gap-[13px] border-t border-border pt-5">
-                <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
-                  <span style={{ color: BRAND }}>▸</span> Lifecycle
-                </div>
+          <div className="flex flex-col gap-[13px] border-t border-border pt-5">
+            <div className="form-field-label">
+              <span style={{ color: BRAND }}>▸</span> Lifecycle
+            </div>
 
-                <div className="flex flex-col gap-[9px]">
-                  <SelectField
-                    label="Stop when idle"
-                    ariaLabel="Stop when idle"
-                    value={stopSeconds}
-                    options={STOP_OPTIONS}
-                    onChange={setStopSeconds}
-                  />
-                  {/* The single most surprising part of the feature: only the
+            <div className="flex flex-col gap-[9px]">
+              <SelectField
+                label="Stop when idle"
+                ariaLabel="Stop when idle"
+                value={stopSeconds}
+                options={STOP_OPTIONS}
+                onChange={setStopSeconds}
+              />
+              {/* The single most surprising part of the feature: only the
                   three request paths that refresh `lastActivityAt` count as
                   activity (the REST proxy, the WS attach and the preview
                   proxy's last-activity ping). Nothing running *inside* the box
                   touches it, so a long job is not self-protecting. */}
-                  {stopSeconds > 0 && (
-                    <PanelNote>
-                      Idle means no SDK, terminal or preview traffic. Work running inside the box does not count — a
-                      long job can be stopped mid-run.
-                    </PanelNote>
-                  )}
+              {stopSeconds > 0 && (
+                <PanelNote>
+                  Idle means no SDK, terminal or preview traffic. Work running inside the box does not count — a long
+                  job can be stopped mid-run.
+                </PanelNote>
+              )}
 
-                  {/* Not indented under Stop: a manually-stopped box still needs
+              {/* Not indented under Stop: a manually-stopped box still needs
                   waking even with auto-stop off, so this is its own row, not a
                   modifier of one. */}
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-mono text-[10px] uppercase tracking-[1px]">Wake on access</span>
-                    <Switch aria-label="Wake on access" checked={autoResume} onCheckedChange={setAutoResumeEnabled} />
-                  </div>
-                  {/* Wake is served by the API's own REST/WS proxy
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-sans text-meta font-medium">Wake on access</span>
+                <Switch aria-label="Wake on access" checked={autoResume} onCheckedChange={setAutoResumeEnabled} />
+              </div>
+              {/* Wake is served by the API's own REST/WS proxy
                   (box-auto-resume.service). The preview proxy only pings
                   last-activity, so preview traffic keeps a *running* box alive
                   but cannot bring a stopped one back. */}
-                  <PanelNote>
-                    SDK exec, file operations and terminal attach wake a stopped box. Preview URL traffic keeps a
-                    running box alive but cannot wake a stopped one.
-                  </PanelNote>
+              <PanelNote>
+                SDK exec, file operations and terminal attach wake a stopped box. Preview URL traffic keeps a running
+                box alive but cannot wake a stopped one.
+              </PanelNote>
 
-                  {/* Expressed relative to the stop it follows, not as its own
+              {/* Expressed relative to the stop it follows, not as its own
                   absolute threshold — see the `autoDelete` derivation above. */}
-                  <SelectField
-                    label={stopSeconds > 0 ? 'Delete after stopping' : 'Delete when idle'}
-                    ariaLabel="Delete after stopping"
-                    value={deleteDelaySeconds}
-                    options={DELETE_DELAY_OPTIONS}
-                    onChange={setDeleteDelaySeconds}
-                  />
-                  {/* Same shape as CappedResourcesNote above — left rule, tinted
+              <SelectField
+                label={stopSeconds > 0 ? 'Delete after stopping' : 'Delete when idle'}
+                ariaLabel="Delete after stopping"
+                value={deleteDelaySeconds}
+                options={DELETE_DELAY_OPTIONS}
+                onChange={setDeleteDelaySeconds}
+              />
+              {/* Same shape as CappedResourcesNote above — left rule, tinted
                   ground, mono 11px — in the destructive tone. */}
-                  {deleteDelaySeconds > 0 && (
-                    <p className="border-l-2 border-destructive/60 bg-destructive/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-destructive">
-                      Permanent. The box and everything on its disk are gone — this cannot be undone.
-                    </p>
-                  )}
-                </div>
+              {deleteDelaySeconds > 0 && (
+                <p className="border-l-2 border-destructive/60 bg-destructive/5 px-3 py-2 font-sans text-meta leading-relaxed text-destructive">
+                  Permanent. The box and everything on its disk are gone — this cannot be undone.
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="-mx-6">
+            {!memoryValid && (
+              <p role="alert" className="text-destructive">
+                Enter memory in whole MiB increments, at least 0.125 GiB.
+              </p>
+            )}
+            {!cpuValid && (
+              <p role="alert" className="text-destructive">
+                Enter at least 0.125 CPU with up to three decimal places.
+              </p>
+            )}
+            {/* Keep blocking reasons outside collapsible options, within the scrollable body. */}
+            {(lifecycleError || mountError) && (
+              <p className="border-t border-border px-6 pt-3 font-sans text-meta text-destructive">
+                {lifecycleError ?? mountError}
+              </p>
+            )}
+          </div>
+        </FormDialogBody>
+        <DialogFooter className="flex-wrap items-center">
+          <div className="mr-auto flex basis-full flex-wrap items-center gap-x-4 gap-y-2 text-left sm:basis-auto">
+            <div>
+              <div className="text-meta text-muted-foreground">Estimated total</div>
+              <div className="font-mono text-em">
+                {!cpuValid || !memoryValid
+                  ? '—'
+                  : !config.billingApiUrl
+                    ? '$0.00'
+                    : selectedQuote
+                      ? formatPriceCents(selectedQuote.totalCents)
+                      : pricesQuery.isLoading
+                        ? '—'
+                        : 'Unavailable'}{' '}
+                <span className="font-sans text-meta text-muted-foreground">/ hr</span>
               </div>
-            </>
-          )}
-        </div>
-
-        {/* price — quoted from Commerce's published rates for the size above */}
-        <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />
-
-        {/* footer — any blocking reason is rendered here, beside the button it
-            disables, never inside a collapsible section where it can be hidden */}
-        {(lifecycleError || mountError) && (
-          <p className="shrink-0 border-t border-border px-4 pt-3 font-mono text-[11px] text-destructive sm:px-6">
-            {lifecycleError ?? mountError}
-          </p>
-        )}
-        <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
+            </div>
+            {cpuValid && memoryValid && config.billingApiUrl && selectedQuote && (
+              <BoxPriceBreakdown quote={selectedQuote} />
+            )}
+            {!config.billingApiUrl && <span className="text-meta text-muted-foreground">No usage charges</span>}
+            {config.billingApiUrl && !selectedQuote && (
+              <p role="status" className="basis-full text-meta text-muted-foreground">
+                {pricesQuery.isLoading
+                  ? 'Fetching current rates.'
+                  : 'Current rates could not be loaded. Usage is still metered — this box is not free.'}
+              </p>
+            )}
+          </div>
           <AsciiButton className="h-11 sm:h-9" type="button" onClick={() => setOpen(false)}>
             Cancel
           </AsciiButton>
@@ -1100,12 +1275,18 @@ export const CreateBoxDialog = ({
             type="button"
             onClick={handleCreate}
             disabled={
-              submitting || !selectedOrganization?.id || !nameValid || Boolean(lifecycleError) || Boolean(mountError)
+              submitting ||
+              !cpuValid ||
+              !memoryValid ||
+              !selectedOrganization?.id ||
+              !nameValid ||
+              Boolean(lifecycleError) ||
+              Boolean(mountError)
             }
           >
             {submitting ? 'Creating…' : 'Create Box'}
           </AsciiButton>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

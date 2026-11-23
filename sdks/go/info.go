@@ -78,7 +78,7 @@ type BoxInfo struct {
 	State      State
 	Running    bool
 	PID        int
-	CPUs       int
+	CPUs       float64
 	MemoryMiB  int
 	Network    *NetworkInfo
 	AutoStop   uint32
@@ -92,7 +92,7 @@ type BoxInfo struct {
 	// workload lifecycle outcomes.
 	StartedAt time.Time
 	// LastActivityAt is when the box was last active, as recorded by the
-	// control plane from toolbox and proxy traffic — the clock AutoStop
+	// control plane from execution, file and proxy traffic — the clock AutoStop
 	// measures idleness against. The zero time means no activity was
 	// recorded, which is always the case for local runtimes.
 	LastActivityAt time.Time
@@ -120,13 +120,19 @@ type ResolvedImage struct {
 
 // Info returns information about the box.
 func (b *Box) Info(ctx context.Context) (*BoxInfo, error) {
+	handle, unlock, err := b.acquire()
+	if err != nil {
+		return nil, err
+	}
+
 	b.runtime.ensureDrainRunning()
 
 	ch := make(chan infoResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_info(b.handle, C.cbInfo(), handleToPtr(h), &cerr)
+	code := C.boxlite_box_info(handle, C.cbInfo(), handleToPtr(h), &cerr)
+	unlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
@@ -134,8 +140,12 @@ func (b *Box) Info(ctx context.Context) (*BoxInfo, error) {
 
 	select {
 	case res := <-ch:
-		if res.value != nil && res.value.Name != "" && b.name == "" {
-			b.name = res.value.Name
+		if res.value != nil && res.value.Name != "" {
+			b.mu.Lock()
+			if b.name == "" {
+				b.name = res.value.Name
+			}
+			b.mu.Unlock()
 		}
 		return res.value, res.err
 	case <-ctx.Done():
@@ -227,7 +237,7 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		State:      State(cString(info.status)),
 		Running:    info.running != 0,
 		PID:        pid,
-		CPUs:       int(info.cpus),
+		CPUs:       float64(info.cpus),
 		MemoryMiB:  int(info.memory_mib),
 		Network:    cNetworkInfoToGo(info.network),
 		AutoStop:   uint32(info.auto_stop),

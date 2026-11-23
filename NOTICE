@@ -19,3 +19,19 @@ Copyright 2025 Daytona Platforms, Inc. All Rights Reserved.
 
 Upstream source commit:
 f982c45a42e52c98631002c7dc1df565c44d7aac
+
+Native VMM virtio-fs attribution:
+
+src/vmm/src/virtio/fs/ includes FUSE protocol and file-operation code adapted
+from boxlite-ai/libkrun commit e12b9b3780ffa8df9f3e1797b217d13453479167,
+originally derived from the Chromium OS project's FUSE implementation.
+Copyright 2019 The Chromium OS Authors. All rights reserved.
+The applicable BSD-3-Clause terms are in src/vmm/src/virtio/fs/LICENSE.
+
+Web console terminal attribution:
+
+src/cli/web/vendor/xterm/ contains xterm.js 5.5.0 and @xterm/addon-fit 0.10.0,
+unmodified from the npm registry. Copyright (c) 2017-2019 The xterm.js authors,
+Copyright (c) 2014-2016 SourceLair Private Company, Copyright (c) 2012-2013
+Christopher Jeffrey. The applicable MIT terms are in src/cli/web/vendor/xterm/LICENSE
+and src/cli/web/vendor/xterm/LICENSE.addon-fit.

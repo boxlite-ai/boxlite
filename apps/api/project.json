@@ -6,6 +6,15 @@
   "tags": [],
   "targets": {
     "build": {
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/shared/filestore-instances.ts",
+        {
+          "dependentTasksOutputFiles": "**/*",
+          "transitive": true
+        }
+      ],
       "executor": "@nx/webpack:webpack",
       "options": {
         "outputPath": "dist/apps/api",
@@ -48,6 +57,8 @@
         "{projectRoot}/src/**/*.ts",
         "!{projectRoot}/src/**/*.spec.ts",
         "{projectRoot}/tsconfig.app.json",
+        "^production",
+        "{workspaceRoot}/shared/filestore-instances.ts",
         {
           "dependentTasksOutputFiles": "**/*",
           "transitive": true
@@ -97,7 +108,16 @@
       "inputs": [
         "default",
         "^default",
+        "{workspaceRoot}/shared/filestore-instances.ts",
         { "env": "DB_HOST" },
+        { "env": "DB_PORT" },
+        { "env": "DB_USERNAME" },
+        { "env": "DB_PASSWORD" },
+        { "env": "DB_DATABASE" },
+        { "env": "REDIS_HOST" },
+        { "env": "REDIS_PORT" },
+        { "env": "REDIS_USERNAME" },
+        { "env": "REDIS_PASSWORD" },
         { "runtime": "git hash-object ../openapi/box.openapi.yaml ../openapi/admin.openapi.yaml" }
       ],
       "options": {
