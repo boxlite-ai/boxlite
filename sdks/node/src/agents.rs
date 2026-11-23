@@ -133,11 +133,21 @@ impl JsAgentEventStream {
             return Ok(None);
         }
         let Some(stream) = guard.as_mut() else {
+            if let StreamState::Failed(error) = &*self.state.borrow() {
+                return Err(napi::Error::from_reason(error.clone()));
+            }
             return Ok(None);
         };
         tokio::select! {
             item = stream.next() => match item {
-                Some(Ok(event)) => checked_record(records::event(&event)).map(Some),
+                Some(Ok(event)) => match checked_record(records::event(&event)) {
+                    Ok(record) => Ok(Some(record)),
+                    Err(error) => {
+                        *guard = None;
+                        self.state.send_replace(StreamState::Failed(error.reason.clone()));
+                        Err(error)
+                    }
+                },
                 Some(Err(error)) => { *guard = None; Err(map_err(error)) },
                 None => { *guard = None; Ok(None) },
             },
@@ -401,6 +411,16 @@ fn checked_record(record: Value) -> Result<Value> {
                 Err(napi::Error::from_reason(
                     "agent JSON number exceeds the Node binding's numeric range",
                 ))
+            }
+            Value::Number(n) if n.is_f64() && n.as_f64() == Some(0.0) => {
+                let token = n.to_string();
+                let mantissa = token.split(['e', 'E']).next().unwrap_or_default();
+                if mantissa.bytes().any(|b| matches!(b, b'1'..=b'9')) {
+                    return Err(napi::Error::from_reason(
+                        "nonzero agent JSON number underflows the Node binding's numeric range",
+                    ));
+                }
+                Ok(())
             }
             Value::Array(items) => items.iter().try_for_each(|item| check(item, depth + 1)),
             Value::Object(fields) => fields.values().try_for_each(|item| check(item, depth + 1)),

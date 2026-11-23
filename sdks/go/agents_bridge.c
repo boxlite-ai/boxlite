@@ -37,8 +37,8 @@ enum BoxliteErrorCode go_agent_requests(struct CAgent *agent, uintptr_t token, C
 enum BoxliteErrorCode go_agent_respond(struct CAgent *agent, const char *id, const char *response, const struct CAgentControlOptions *options, uintptr_t token, CBoxliteError *error) {
     return boxlite_agent_respond(agent, id, response, options, agent_turn, (void *)token, error);
 }
-enum BoxliteErrorCode go_agent_wait(struct CAgentTurn *turn, const struct CAgentWaitOptions *options, uintptr_t token, CBoxliteError *error) {
-    return boxlite_agent_turn_wait(turn, options, agent_json, (void *)token, error);
+enum BoxliteErrorCode go_agent_wait(struct CAgentTurn *turn, const struct CAgentWaitOptions *options, struct CAgentWait **wait, uintptr_t token, CBoxliteError *error) {
+    return boxlite_agent_turn_wait_cancellable(turn, options, agent_json, (void *)token, wait, error);
 }
 enum BoxliteErrorCode go_agent_steer(struct CAgentTurn *turn, const char *text, const struct CAgentControlOptions *options, uintptr_t token, CBoxliteError *error) {
     return boxlite_agent_turn_steer(turn, text, options, agent_json, (void *)token, error);

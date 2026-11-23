@@ -206,8 +206,9 @@ accepting additional server fields.
 
 Node agent calls, getters and event reads report a conversion error when a
 returned JSON number exceeds the native binding's supported numeric range.
-This also applies to numbers inside arrays or objects. Finite fractions still
-use JavaScript number precision.
+This includes nonzero numbers that would become zero, even inside arrays or
+objects. Other finite fractions use JavaScript number precision. If an event
+cannot be converted, subsequent reads report the same error.
 
 ### Go JSON mapping
 

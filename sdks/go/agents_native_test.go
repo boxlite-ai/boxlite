@@ -129,7 +129,7 @@ func TestAgentOpaqueDataSurvivesNativeCalls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, data := range []string{
-		`9007199254740993`, `-9223372036854775808`, `18446744073709551615`,
+		`1e400`, `-1e400`, `9007199254740993`, `-9223372036854775808`, `18446744073709551615`,
 		`{"$serde_json::private::Number":"42"}`,
 		`{"$serde_json::private::Number":"hello"}`,
 		`[{"$serde_json::private::Number":"42"},{"$serde_json::private::Number":"hello"}]`,
@@ -615,4 +615,83 @@ func TestAgentRemoteNamespaceRejectsThroughCore(t *testing.T) {
 	closed := box.Agents()
 	agent, err = closed.Get(ctx, "ses_existing")
 	checkAgentError(t, agent, err, ErrInvalidState)
+}
+
+func TestAgentCancelWaitReleasesOnlyItsObserver(t *testing.T) {
+	_, namespace := testAgents(t, false)
+	agent := testCreateAgent(t, namespace)
+	turn, err := agent.Send(context.Background(), "hold wait observers", AgentSendOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := func(ctx context.Context) <-chan error {
+		done := make(chan error, 1)
+		go func() {
+			result, err := turn.Wait(ctx, AgentWaitOptions{})
+			if err == nil && (result == nil || result.Text != "finish") {
+				err = errors.New("unexpected turn result")
+			}
+			done <- err
+		}()
+		return done
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := wait(ctx)
+	b := wait(context.Background())
+	defer func() {
+		_, _ = agent.Respond(context.Background(), "request-1", AgentAnswer{Text: "finish"}, AgentControlOptions{})
+	}()
+	waitForNativeObservers(t, agent, "2")
+	cancel()
+	if err := receiveAgent(t, a); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	waitForNativeObservers(t, agent, "1")
+	if _, err := agent.Respond(context.Background(), "request-1", AgentAnswer{Text: "finish"}, AgentControlOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiveAgent(t, b); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForNativeObservers(t *testing.T, agent *Agent, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		state, err := agent.State()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.Cursor == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("native wait observers = %s, want %s", state.Cursor, want)
+		}
+		runtime.Gosched()
+	}
+}
+
+func TestAgentWaitTimeoutAndRuntimeClose(t *testing.T) {
+	r, namespace := testAgents(t, false)
+	agent := testCreateAgent(t, namespace)
+	turn, err := agent.Send(context.Background(), "hold wait observers", AgentSendOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := time.Duration(0)
+	result, err := turn.Wait(context.Background(), AgentWaitOptions{Timeout: &zero})
+	checkAgentError(t, result, err, ErrInvalidState)
+	done := make(chan error, 1)
+	go func() { _, err := turn.Wait(context.Background(), AgentWaitOptions{}); done <- err }()
+	waitForNativeObservers(t, agent, "1")
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiveAgent(t, done); !errors.Is(err, ErrRuntimeClosed) {
+		t.Fatal(err)
+	}
 }

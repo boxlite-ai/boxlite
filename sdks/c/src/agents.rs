@@ -615,6 +615,77 @@ pub unsafe extern "C" fn boxlite_agent_turn_wait(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     unsafe {
+        submit_turn_wait(
+            turn_arg,
+            options_arg,
+            callback_arg,
+            user_data_arg,
+            out_error,
+            None,
+        )
+    }
+}
+
+/// One observation of a turn, owned by the caller.
+pub struct CAgentWait {
+    _cancel_on_drop: tokio::sync::oneshot::Sender<()>,
+}
+
+/// Start a wait and return its independently releasable handle. On synchronous
+/// refusal, out_wait is cleared and the callback is never queued. On acceptance,
+/// keep user_data valid through the single completion dispatched by runtime_drain.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_agent_turn_wait_cancellable(
+    turn_arg: *mut CAgentTurn,
+    options_arg: *const CAgentWaitOptions,
+    callback_arg: CAgentJsonCb,
+    user_data_arg: *mut c_void,
+    out_wait: *mut *mut CAgentWait,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if out_wait.is_null() {
+            write_error(out_error, null_pointer_error("out_wait"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        *out_wait = ptr::null_mut();
+        let (cancel, receiver) = tokio::sync::oneshot::channel();
+        let code = submit_turn_wait(
+            turn_arg,
+            options_arg,
+            callback_arg,
+            user_data_arg,
+            out_error,
+            Some(receiver),
+        );
+        if code == BoxliteErrorCode::Ok {
+            *out_wait = Box::into_raw(Box::new(CAgentWait {
+                _cancel_on_drop: cancel,
+            }));
+        }
+        code
+    }
+}
+
+/// Release once, including after normal completion. NULL is accepted.
+/// Release never blocks. If cancellation wins, the callback reports Stopped.
+/// The turn and other waiters continue.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_agent_wait_free(wait: *mut CAgentWait) {
+    if !wait.is_null() {
+        unsafe { drop(Box::from_raw(wait)) };
+    }
+}
+
+unsafe fn submit_turn_wait(
+    turn_arg: *mut CAgentTurn,
+    options_arg: *const CAgentWaitOptions,
+    callback_arg: CAgentJsonCb,
+    user_data_arg: *mut c_void,
+    out_error: *mut CBoxliteError,
+    cancellation: Option<tokio::sync::oneshot::Receiver<()>>,
+) -> BoxliteErrorCode {
+    unsafe {
         if turn_arg.is_null() || callback_arg.is_none() {
             write_error(out_error, null_pointer_error("turn or callback"));
             return BoxliteErrorCode::InvalidArgument;
@@ -643,9 +714,16 @@ pub unsafe extern "C" fn boxlite_agent_turn_wait(
             handle.runtime.clone(),
             handle.queue.clone(),
             async move {
-                core.wait(options)
-                    .await
-                    .map(|v| boxlite::agents::records::result(&v))
+                let wait = core.wait(options);
+                let result = match cancellation {
+                    Some(receiver) => tokio::select! {
+                        biased;
+                        _ = receiver => Err(BoxliteError::Stopped("turn wait canceled".into())),
+                        result = wait => result,
+                    },
+                    None => wait.await,
+                };
+                result.map(|v| boxlite::agents::records::result(&v))
             },
             move |result| deliver_json(result, callback, data),
         );

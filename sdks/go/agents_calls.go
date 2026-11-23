@@ -193,8 +193,10 @@ func (t *AgentTurn) Wait(ctx context.Context, options AgentWaitOptions) (*AgentR
 	if options.Timeout != nil && *options.Timeout >= 0 {
 		opts.timeout_seconds = C.double(options.Timeout.Seconds())
 	}
+	var wait *C.struct_CAgentWait
+	defer func() { C.boxlite_agent_wait_free(wait) }()
 	return agentJSONCall(ctx, agentTurnOf(t), func(p *C.struct_CAgentTurn, token C.uintptr_t, e *C.CBoxliteError) C.enum_BoxliteErrorCode {
-		return C.go_agent_wait(p, &opts, token, e)
+		return C.go_agent_wait(p, &opts, &wait, token, e)
 	}, parseAgentResult)
 }
 func (t *AgentTurn) Steer(ctx context.Context, text string, options AgentControlOptions) (*AgentSteeringReceipt, error) {

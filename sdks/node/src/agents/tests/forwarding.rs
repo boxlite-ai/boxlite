@@ -87,7 +87,13 @@ fn agent_bindings_forward_to_core_test_backend() {
             .unwrap();
         assert_eq!(turn.wait(None).await.unwrap()["data"], payload);
         assert_eq!(turn.state().unwrap()["result"]["data"], payload);
-        for token in ["18446744073709551615", "-9223372036854775808", "0.125"] {
+        for token in [
+            "18446744073709551615",
+            "-9223372036854775808",
+            "0.125",
+            "0e-999",
+            "5e-324",
+        ] {
             let payload: Value = serde_json::from_str(token).unwrap();
             let turn = agent
                 .send("echo".into(), Some(json!({"data":payload})))
@@ -95,7 +101,13 @@ fn agent_bindings_forward_to_core_test_backend() {
                 .unwrap();
             assert_eq!(turn.wait(None).await.unwrap()["data"], payload);
         }
-        for token in ["18446744073709551616", "-9223372036854775809", "1e400"] {
+        for token in [
+            "18446744073709551616",
+            "-9223372036854775809",
+            "1e400",
+            "1e-999",
+            "-1e-999",
+        ] {
             let options =
                 serde_json::from_str(&format!(r#"{{"data":[{{"n":{token}}}]}}"#)).unwrap();
             let turn = agent.send("echo".into(), Some(options)).await.unwrap();
@@ -158,4 +170,22 @@ fn agent_bindings_forward_to_core_test_backend() {
         drop(runtime);
         let _ = std::fs::remove_dir_all(home);
     });
+}
+
+#[tokio::test]
+async fn agent_stream_keeps_conversion_failure_on_retry() {
+    let stream = JsAgentEventStream::start(async {
+        let events = ["1e400", "1"].map(|token| {
+            Ok(boxlite::agents::AgentEvent {
+                cursor: None,
+                agent_id: "test".into(),
+                turn_id: None,
+                kind: "data".into(),
+                data: serde_json::from_str(token).unwrap(),
+            })
+        });
+        Ok(Box::pin(futures::stream::iter(events)) as AgentEventStream)
+    });
+    let first = stream.next_event().await.unwrap_err();
+    assert_eq!(stream.next_event().await.unwrap_err().reason, first.reason);
 }

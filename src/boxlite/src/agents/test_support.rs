@@ -6,6 +6,7 @@ use std::sync::Mutex;
 #[derive(Debug, Default)]
 pub(super) struct TestBackend {
     config: AgentConfig,
+    wait_gate: tokio::sync::watch::Sender<bool>,
     turn: Mutex<Option<AgentTurnState>>,
 }
 
@@ -62,7 +63,7 @@ impl AgentBackend for TestBackend {
         Ok(AgentState {
             id: self.id().into(),
             status: AgentStatus::Ready,
-            cursor: None,
+            cursor: (*self.wait_gate.borrow()).then(|| self.wait_gate.receiver_count().to_string()),
             active_turn_id: None,
             queued_turn_ids: vec![],
             requests: vec![],
@@ -70,9 +71,20 @@ impl AgentBackend for TestBackend {
         })
     }
     async fn send(&self, text: &str, options: &AgentSendOptions) -> BoxliteResult<AgentTurnState> {
-        Ok(self.complete(text, options.data.clone()))
+        let mut state = self.complete(text, options.data.clone());
+        if text == "hold wait observers" {
+            state.status = AgentTurnStatus::Running;
+            state.result = None;
+            *self.turn.lock().unwrap() = Some(state.clone());
+            self.wait_gate.send_replace(true);
+        }
+        Ok(state)
     }
     async fn turn(&self, id: &str) -> BoxliteResult<AgentTurnState> {
+        let mut gate = self.wait_gate.subscribe();
+        gate.wait_for(|held| !held)
+            .await
+            .expect("backend owns sender");
         self.turn
             .lock()
             .unwrap()
@@ -97,7 +109,11 @@ impl AgentBackend for TestBackend {
         _: &AgentControlOptions,
     ) -> BoxliteResult<AgentTurnState> {
         match (id, response) {
-            ("request-1", AgentResponse::Answer { text, data }) => Ok(self.complete(&text, data)),
+            ("request-1", AgentResponse::Answer { text, data }) => {
+                let state = self.complete(&text, data);
+                self.wait_gate.send_replace(false);
+                Ok(state)
+            }
             _ => Err(BoxliteError::InvalidArgument(
                 "expected answer to request-1".into(),
             )),

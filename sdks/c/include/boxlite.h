@@ -123,6 +123,9 @@ typedef struct CAgentEvents CAgentEvents;
 // Agent turn handle.
 typedef struct CAgentTurn CAgentTurn;
 
+// One observation of a turn, owned by the caller.
+typedef struct CAgentWait CAgentWait;
+
 // Box-owned namespace; release with boxlite_agents_free.
 typedef struct CAgents CAgents;
 
@@ -996,6 +999,21 @@ enum BoxliteErrorCode boxlite_agent_turn_wait(struct CAgentTurn *turn_arg,
                                               CAgentJsonCb callback_arg,
                                               void *user_data_arg,
                                               CBoxliteError *out_error);
+
+// Start a wait and return its independently releasable handle. On synchronous
+// refusal, out_wait is cleared and the callback is never queued. On acceptance,
+// keep user_data valid through the single completion dispatched by runtime_drain.
+enum BoxliteErrorCode boxlite_agent_turn_wait_cancellable(struct CAgentTurn *turn_arg,
+                                                          const struct CAgentWaitOptions *options_arg,
+                                                          CAgentJsonCb callback_arg,
+                                                          void *user_data_arg,
+                                                          struct CAgentWait **out_wait,
+                                                          CBoxliteError *out_error);
+
+// Release once, including after normal completion. NULL is accepted.
+// Release never blocks. If cancellation wins, the callback reports Stopped.
+// The turn and other waiters continue.
+void boxlite_agent_wait_free(struct CAgentWait *wait);
 
 // Steer this turn without submitting another turn.
 // out_error may be null or writable.

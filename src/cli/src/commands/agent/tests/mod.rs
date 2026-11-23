@@ -79,7 +79,7 @@ fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
         "--mode",
         "reject",
         "--data",
-        r#"{"value":1}"#,
+        r#"{"values": [9007199254740993, 1e400]}"#,
         "--idempotency-key",
         "retry",
     ])
@@ -91,8 +91,8 @@ fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
     assert_eq!(text, "hello");
     assert_eq!(options.mode, SendMode::Reject);
     assert_eq!(
-        serde_json::from_str::<Value>(options.data.unwrap().get()).unwrap(),
-        json!({"value": 1})
+        options.data.unwrap().get(),
+        r#"{"values": [9007199254740993, 1e400]}"#
     );
     assert_eq!(options.control.idempotency_key.as_deref(), Some("retry"));
 }

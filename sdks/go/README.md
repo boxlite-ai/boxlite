@@ -480,7 +480,9 @@ Agent calls and getters reach the C SDK and Rust core through the
 `Box.Agents()` acquires its namespace lazily. Agent and turn wrappers must not be
 copied after first use; `Runtime.Close` releases their native handles.
 Canceling a call stops the Go wait without canceling submitted agent work;
-late returned handles are released. `Agent.Close` invokes the core operation
+late returned handles are released. Canceling an `AgentTurn.Wait` or closing its
+runtime also releases that call’s native observer. Other waits on the same
+turn continue until their own completion, cancellation, or runtime shutdown. `Agent.Close` invokes the core operation
 rather than freeing the local handle. Both event methods return `Unsupported`.
 
 The Go unit and coverage targets enable C `test-support` and the
