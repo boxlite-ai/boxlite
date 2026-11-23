@@ -1,0 +1,70 @@
+name: Build BoxLite plugin packages
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/boxlite/**'
+      - 'scripts/plugins/**'
+      - 'tests/plugins/**'
+      - 'make/plugins.mk'
+      - 'make/test.mk'
+      - 'Makefile'
+      - '.github/actions/setup-python/**'
+      - '.github/workflows/build-plugins.yml'
+  push:
+    tags: ['boxlite-plugin-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned Claude manifest validator
+        run: npm install --global @anthropic-ai/claude-code@2.1.328
+      - name: Build and validate both host packages
+        run: make plugin:boxlite:check:cc plugin:boxlite:review-kit
+      - name: Bind artifacts to the plugin version
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(jq -er '.version' plugins/boxlite/plugin.json)"
+          if [[ "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            if [[ "$GITHUB_REF_TYPE" != tag || "$GITHUB_REF_NAME" != "boxlite-plugin-v$version" ]]; then
+              echo 'Release builds must run on the boxlite-plugin-vVERSION tag matching plugin.json.' >&2
+              exit 1
+            fi
+          fi
+          printf 'version=%s\nartifact=boxlite-plugins-%s-%s-%s\n' \
+            "$version" "$version" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          cd target/plugins
+          sha256sum --check SHA256SUMS
+          sha256sum --check "boxlite-review-kit-$version.zip.sha256"
+      - name: Save validated packages for release or PR preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact }}
+          path: |
+            target/plugins/boxlite-${{ steps.package.outputs.version }}.zip
+            target/plugins/boxlite-marketplace-${{ steps.package.outputs.version }}.zip
+            target/plugins/SHA256SUMS
+            target/plugins/boxlite-review-kit-${{ steps.package.outputs.version }}.zip
+            target/plugins/boxlite-review-kit-${{ steps.package.outputs.version }}.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

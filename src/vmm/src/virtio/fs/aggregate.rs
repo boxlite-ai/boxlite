@@ -11,9 +11,11 @@
 
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
+use std::fs::File;
 use std::io;
 use std::mem;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,32 +33,45 @@ const INTERNAL: Context = Context {
     pid: 0,
 };
 
-pub(crate) struct Share {
-    pub(crate) name: String,
-    pub(crate) path: PathBuf,
-    pub(crate) read_only: bool,
+#[derive(Debug)]
+pub struct Share {
+    pub name: String,
+    pub path: PathBuf,
+    pub read_only: bool,
 }
 
 struct Export {
     name: CString,
     root: u64,
+    identity: u64,
     backend: Arc<PassthroughFs>,
     read_only: bool,
+}
+
+impl Drop for Export {
+    fn drop(&mut self) {
+        // The last aggregate reference releases the backend's descriptors.
+        // destroy is idempotent, so a reset-cycle destroy first is harmless.
+        self.backend.destroy();
+    }
 }
 
 struct Node {
     global: u64,
     identity: u64,
-    share: usize,
+    // The export Arc keeps a removed share's backend alive for this node.
+    export: Arc<Export>,
     local: u64,
-    backend: Arc<PassthroughFs>,
     root: bool,
+    // Retired roots release their backend reference when their final guest
+    // lookup, handle, and in-flight request have finished.
+    retired: AtomicBool,
 }
 
 impl Drop for Node {
     fn drop(&mut self) {
-        if !self.root {
-            self.backend.forget(INTERNAL, self.local, 1);
+        if !self.root || self.retired.load(Ordering::Acquire) {
+            self.export.backend.forget(INTERNAL, self.local, 1);
         }
     }
 }
@@ -81,10 +96,11 @@ impl Drop for Handle {
             // Removing a guest handle prevents new requests. Its last owned Arc
             // releases the backend handle only after existing requests finish.
             let result = if self.directory {
-                node.backend
+                node.export
+                    .backend
                     .releasedir(INTERNAL, node.local, self.flags, self.local)
             } else {
-                node.backend.release(
+                node.export.backend.release(
                     INTERNAL, node.local, self.flags, self.local, false, false, None,
                 )
             };
@@ -98,22 +114,50 @@ impl Drop for Handle {
 #[derive(Default)]
 struct State {
     nodes: BTreeMap<u64, NodeRecord>,
-    local_ids: BTreeMap<(usize, u64), u64>,
+    // (export root, backend-local inode) -> global node. The export root is
+    // the export identity: never reused, so a re-registered name is a new key.
+    local_ids: BTreeMap<(u64, u64), u64>,
     // Scalar identities survive node reclamation, without retaining backend FDs.
-    identities: BTreeMap<(usize, InodeAltKey), u64>,
+    identities: BTreeMap<(u64, InodeAltKey), u64>,
     handles: BTreeMap<u64, Arc<Handle>>,
     next_node: u64,
     next_identity: u64,
     next_handle: u64,
 }
 
-pub(crate) struct AggregateFs {
-    shares: Vec<Export>,
+/// The export registry, keyed by export root, which doubles as the export
+/// identity. Lock order is `registry` before `state`; neither lock spans
+/// backend I/O.
+struct Registry {
+    exports: BTreeMap<u64, Arc<Export>>,
+    /// Cleared by `destroy`; mutations refuse the dead session.
+    alive: bool,
+}
+
+/// One guest namespace over the aggregate's independent per-share backends.
+/// The mount-control socket reaches a live device through the process mount
+/// registry (`virtio::fs::lookup_aggregate`) and drives registration here.
+pub struct AggregateFs {
+    registry: Mutex<Registry>,
     state: Mutex<State>,
 }
 
 fn errno(code: i32) -> io::Error {
     io::Error::from_raw_os_error(code)
+}
+
+// Manual Debug: the registry and state hold backend descriptors and large
+// maps that would make a derived dump unreadable; counts are what matters.
+impl std::fmt::Debug for AggregateFs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (registry, state) = (self.registry.lock().unwrap(), self.state.lock().unwrap());
+        f.debug_struct("AggregateFs")
+            .field("exports", &registry.exports.len())
+            .field("alive", &registry.alive)
+            .field("nodes", &state.nodes.len())
+            .field("handles", &state.handles.len())
+            .finish()
+    }
 }
 
 fn allocate(next: &mut u64) -> io::Result<u64> {
@@ -162,53 +206,127 @@ fn entry_from_attr(inode: u64, attr: libc::stat64) -> Entry {
 }
 
 impl AggregateFs {
-    pub(crate) fn new(shares: Vec<Share>) -> io::Result<Self> {
-        let mut exports = Vec::with_capacity(shares.len());
-        let mut names = std::collections::BTreeSet::new();
-        for (index, share) in shares.into_iter().enumerate() {
-            let name = CString::new(share.name).map_err(|_| errno(libc::EINVAL))?;
-            component(&name, true)?;
-            if !names.insert(name.clone()) {
-                return Err(errno(libc::EINVAL));
-            }
-            exports.push(Export {
-                name,
-                root: index as u64 + 2,
-                backend: Arc::new(PassthroughFs::new(share.path)?),
-                read_only: share.read_only,
-            });
-        }
-        let first = exports.len() as u64 + 2;
+    pub fn new(shares: Vec<Share>) -> io::Result<Self> {
         let fs = Self {
-            shares: exports,
+            registry: Mutex::new(Registry {
+                exports: BTreeMap::new(),
+                alive: true,
+            }),
             state: Mutex::new(State {
-                next_node: first,
-                next_identity: first,
+                next_node: ROOT + 1,
+                next_identity: ROOT + 1,
                 next_handle: 1,
                 ..State::default()
             }),
         };
+        for share in shares {
+            fs.register(share)?;
+        }
         fs.install_roots();
         Ok(fs)
     }
 
-    fn install_roots(&self) {
+    /// Adds an export under `name`. The backend is constructed outside every
+    /// lock so a slow source cannot stall device callbacks; the registry and
+    /// state updates are short critical sections. Returns the export's root
+    /// inode, which is also its registry key and its stable identity.
+    pub(crate) fn register(&self, share: Share) -> io::Result<u64> {
+        let backend = Arc::new(PassthroughFs::new(share.path)?);
+        self.insert_export(share.name, backend, share.read_only)
+    }
+
+    /// Registers a backend over a directory descriptor delivered by the
+    /// runtime. `from_dir_fd` validates its type; host permissions apply per operation.
+    pub fn register_fd(&self, name: String, file: File, read_only: bool) -> io::Result<u64> {
+        let backend = Arc::new(PassthroughFs::from_dir_fd(file)?);
+        self.insert_export(name, backend, read_only)
+    }
+
+    fn insert_export(
+        &self,
+        name: String,
+        backend: Arc<PassthroughFs>,
+        read_only: bool,
+    ) -> io::Result<u64> {
+        let name = CString::new(name).map_err(|_| errno(libc::EINVAL))?;
+        component(&name, true)?;
+        let mut registry = self.registry.lock().unwrap();
+        if !registry.alive {
+            return Err(errno(libc::ENODEV));
+        }
+        if registry.exports.values().any(|export| export.name == name) {
+            return Err(errno(libc::EEXIST));
+        }
         let mut state = self.state.lock().unwrap();
-        for (share, export) in self.shares.iter().enumerate() {
-            state.local_ids.insert((share, ROOT), export.root);
+        let root = allocate(&mut state.next_node)?;
+        let identity = allocate(&mut state.next_identity)?;
+        let export = Arc::new(Export {
+            name,
+            root,
+            identity,
+            backend,
+            read_only,
+        });
+        state.local_ids.insert((root, ROOT), root);
+        state.nodes.entry(root).or_insert_with(|| NodeRecord {
+            node: Arc::new(Node {
+                global: root,
+                identity,
+                export: export.clone(),
+                local: ROOT,
+                root: true,
+                retired: AtomicBool::new(false),
+            }),
+            lookups: 0,
+            opens: 0,
+        });
+        registry.exports.insert(root, export.clone());
+        Ok(root)
+    }
+
+    /// Retires the export published under `name`. Only the name stops
+    /// resolving: nodes, handles and in-flight requests keep their backend
+    /// through their export Arc until their own references drop, and the
+    /// export root becomes an ordinary reclaimable node.
+    pub fn remove(&self, name: &str) -> io::Result<()> {
+        let name = CString::new(name).map_err(|_| errno(libc::EINVAL))?;
+        let mut registry = self.registry.lock().unwrap();
+        if !registry.alive {
+            return Err(errno(libc::ENODEV));
+        }
+        let root = registry
+            .exports
+            .values()
+            .find(|export| export.name == name)
+            .map(|export| export.root)
+            .ok_or_else(|| errno(libc::ENOENT))?;
+        registry.exports.remove(&root);
+        let mut state = self.state.lock().unwrap();
+        if let Some(record) = state.nodes.get_mut(&root) {
+            record.node.retired.store(true, Ordering::Release);
+            Self::collect_zero(&mut state, root);
+        }
+        Ok(())
+    }
+
+    fn install_roots(&self) {
+        let registry = self.registry.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
+        for export in registry.exports.values() {
+            state.local_ids.insert((export.root, ROOT), export.root);
             state
                 .nodes
                 .entry(export.root)
                 .or_insert_with(|| NodeRecord {
                     node: Arc::new(Node {
                         global: export.root,
-                        identity: export.root,
-                        share,
+                        identity: export.identity,
+                        export: export.clone(),
                         local: ROOT,
-                        backend: export.backend.clone(),
                         root: true,
+                        retired: AtomicBool::new(false),
                     }),
-                    lookups: 1,
+                    lookups: 0,
                     opens: 0,
                 });
         }
@@ -238,7 +356,7 @@ impl AggregateFs {
     }
 
     fn writable(&self, node: &Node) -> io::Result<()> {
-        if self.shares[node.share].read_only {
+        if node.export.read_only {
             Err(errno(libc::EROFS))
         } else {
             Ok(())
@@ -255,77 +373,74 @@ impl AggregateFs {
         Ok(node)
     }
 
-    fn map_entry(&self, share: usize, entry: Entry) -> io::Result<Entry> {
+    fn map_entry(&self, export: &Arc<Export>, entry: Entry) -> io::Result<Entry> {
         let local = entry.inode;
-        let backend = &self.shares[share].backend;
-        let result = self.insert_entry(share, entry);
+        let result = self.insert_entry(export, entry);
         if result.is_err() {
-            backend.forget(INTERNAL, local, 1);
+            export.backend.forget(INTERNAL, local, 1);
         }
         result
     }
 
     // READDIRPLUS callbacks leave rollback ownership with the backend.
-    fn insert_entry(&self, share: usize, entry: Entry) -> io::Result<Entry> {
+    fn insert_entry(&self, export: &Arc<Export>, entry: Entry) -> io::Result<Entry> {
         let local = entry.inode;
-        let backend = &self.shares[share].backend;
-        let key = (share, backend.identity(local)?);
+        let key = (export.root, export.backend.identity(local)?);
         let mut state = self.state.lock().unwrap();
-        let (global, identity) = if let Some(global) = state.local_ids.get(&(share, local)).copied()
-        {
-            let record = state
-                .nodes
-                .get_mut(&global)
-                .ok_or_else(|| errno(libc::EBADF))?;
-            if !record.node.root {
+        let (global, identity) =
+            if let Some(global) = state.local_ids.get(&(export.root, local)).copied() {
+                let record = state
+                    .nodes
+                    .get_mut(&global)
+                    .ok_or_else(|| errno(libc::EBADF))?;
                 record.lookups = record
                     .lookups
                     .checked_add(1)
                     .ok_or_else(|| errno(libc::EOVERFLOW))?;
-            }
-            (global, record.node.identity)
-        } else {
-            let global = allocate(&mut state.next_node)?;
-            let identity = match state.identities.get(&key) {
-                Some(identity) => *identity,
-                None => {
-                    let identity = allocate(&mut state.next_identity)?;
-                    state.identities.insert(key, identity);
-                    identity
-                }
+                (global, record.node.identity)
+            } else {
+                let global = allocate(&mut state.next_node)?;
+                let identity = match state.identities.get(&key) {
+                    Some(identity) => *identity,
+                    None => {
+                        let identity = allocate(&mut state.next_identity)?;
+                        state.identities.insert(key, identity);
+                        identity
+                    }
+                };
+                // retain is map-only: it reserves the in-flight object reference,
+                // distinct from the guest lookup that produced this entry.
+                export.backend.retain(local)?;
+                state.local_ids.insert((export.root, local), global);
+                state.nodes.insert(
+                    global,
+                    NodeRecord {
+                        node: Arc::new(Node {
+                            global,
+                            identity,
+                            export: export.clone(),
+                            local,
+                            root: false,
+                            retired: AtomicBool::new(false),
+                        }),
+                        lookups: 1,
+                        opens: 0,
+                    },
+                );
+                (global, identity)
             };
-            // retain is map-only: it reserves the in-flight object reference,
-            // distinct from the guest lookup that produced this entry.
-            backend.retain(local)?;
-            state.local_ids.insert((share, local), global);
-            state.nodes.insert(
-                global,
-                NodeRecord {
-                    node: Arc::new(Node {
-                        global,
-                        identity,
-                        share,
-                        local,
-                        backend: backend.clone(),
-                        root: false,
-                    }),
-                    lookups: 1,
-                    opens: 0,
-                },
-            );
-            (global, identity)
-        };
         Ok(normalize(entry, global, identity))
     }
 
     fn collect_zero(state: &mut State, inode: u64) -> Option<NodeRecord> {
         let record = state.nodes.get(&inode)?;
-        if record.node.root || record.lookups != 0 || record.opens != 0 {
+        let pinned = record.node.root && !record.node.retired.load(Ordering::Acquire);
+        if pinned || record.lookups != 0 || record.opens != 0 {
             return None;
         }
         state
             .local_ids
-            .remove(&(record.node.share, record.node.local));
+            .remove(&(record.node.export.root, record.node.local));
         state.nodes.remove(&inode)
     }
 
@@ -335,9 +450,6 @@ impl AggregateFs {
             let Some(record) = state.nodes.get_mut(&inode) else {
                 return;
             };
-            if record.node.root {
-                return;
-            }
             let released = count.min(record.lookups);
             record.lookups -= released;
             let node = record.node.clone();
@@ -345,7 +457,7 @@ impl AggregateFs {
             (node, released, removed)
         };
         if forward {
-            node.backend.forget(INTERNAL, node.local, released);
+            node.export.backend.forget(INTERNAL, node.local, released);
         }
         drop(removed);
     }
@@ -431,9 +543,11 @@ impl AggregateFs {
             self.writable(&node)?;
         }
         let (local, options) = if directory {
-            node.backend.opendir(ctx, node.local, flags)?
+            node.export.backend.opendir(ctx, node.local, flags)?
         } else {
-            node.backend.open(ctx, node.local, kill_priv, flags)?
+            node.export
+                .backend
+                .open(ctx, node.local, kill_priv, flags)?
         };
         let local = local.ok_or_else(|| errno(libc::EIO))?;
         let handle = self.add_handle(inode, Some(node), local, directory, flags)?;
@@ -455,11 +569,12 @@ impl AggregateFs {
                 continue;
             }
             let entry = if name == c"." {
-                let (mut attr, _) = node.backend.getattr(ctx, node.local, None)?;
+                let (mut attr, _) = node.export.backend.getattr(ctx, node.local, None)?;
                 attr.st_ino = node.identity;
                 entry_from_attr(node.global, attr)
             } else {
-                entry_from_attr(ROOT, synthetic_attr(self.shares.len()))
+                let count = self.registry.lock().unwrap().exports.len();
+                entry_from_attr(ROOT, synthetic_attr(count))
             };
             let result = add(
                 DirEntry {
@@ -483,6 +598,7 @@ impl AggregateFs {
         handle: u64,
         size: u32,
         offset: u64,
+        plus: bool,
         mut add: F,
     ) -> io::Result<()>
     where
@@ -492,9 +608,10 @@ impl AggregateFs {
         if size == 0 {
             return Ok(());
         }
+        let count = self.registry.lock().unwrap().exports.len();
         for (name, cookie) in [(c".", 1), (c"..", 2)] {
             if offset < cookie {
-                let entry = entry_from_attr(ROOT, synthetic_attr(self.shares.len()));
+                let entry = entry_from_attr(ROOT, synthetic_attr(count));
                 if add(
                     DirEntry {
                         ino: ROOT,
@@ -509,24 +626,48 @@ impl AggregateFs {
                 }
             }
         }
-        let start = usize::try_from(offset.saturating_sub(2)).map_err(|_| errno(libc::EINVAL))?;
-        if start > self.shares.len() {
-            return Err(errno(libc::EINVAL));
-        }
-        for (index, share) in self.shares.iter().enumerate().skip(start) {
-            let (mut attr, _) = share.backend.getattr(ctx, ROOT, None)?;
-            attr.st_ino = share.root;
-            let entry = entry_from_attr(share.root, attr);
-            if add(
-                DirEntry {
-                    ino: share.root,
-                    offset: index as u64 + 3,
-                    type_: libc::DT_DIR as u32,
-                    name: share.name.to_bytes(),
-                },
-                entry,
-            )? == 0
-            {
+        // Cookies are export roots plus one: strictly increasing, unique per
+        // export and stable across removals, so a resumed stream neither
+        // repeats nor skips exports that outlive it. New exports register with
+        // higher roots and therefore sort after everything already streamed.
+        let exports: Vec<Arc<Export>> = self
+            .registry
+            .lock()
+            .unwrap()
+            .exports
+            .values()
+            .filter(|export| export.root >= offset)
+            .cloned()
+            .collect();
+        for export in &exports {
+            if plus {
+                let mut state = self.state.lock().unwrap();
+                let Some(record) = state.nodes.get_mut(&export.root) else {
+                    continue;
+                };
+                record.lookups = record
+                    .lookups
+                    .checked_add(1)
+                    .ok_or_else(|| errno(libc::EOVERFLOW))?;
+            }
+            let result = (|| {
+                let (mut attr, _) = export.backend.getattr(ctx, ROOT, None)?;
+                attr.st_ino = export.identity;
+                let entry = entry_from_attr(export.root, attr);
+                add(
+                    DirEntry {
+                        ino: export.identity,
+                        offset: export.root + 1,
+                        type_: libc::DT_DIR as u32,
+                        name: export.name.to_bytes(),
+                    },
+                    entry,
+                )
+            })();
+            if plus && !matches!(result, Ok(count) if count > 0) {
+                self.forget_entry(export.root, 1, false);
+            }
+            if result? == 0 {
                 break;
             }
         }
@@ -540,14 +681,28 @@ impl FileSystem for AggregateFs {
 
     fn init(&self, capable: FsOptions) -> io::Result<FsOptions> {
         let mut options = capable;
-        for share in &self.shares {
-            options &= share.backend.init(capable)?;
+        let exports: Vec<Arc<Export>> = self
+            .registry
+            .lock()
+            .unwrap()
+            .exports
+            .values()
+            .cloned()
+            .collect();
+        for export in &exports {
+            options &= export.backend.init(capable)?;
         }
+        self.registry.lock().unwrap().alive = true;
         self.install_roots();
         Ok(options & (FsOptions::DO_READDIRPLUS | FsOptions::READDIRPLUS_AUTO))
     }
 
     fn destroy(&self) {
+        let exports = {
+            let mut registry = self.registry.lock().unwrap();
+            registry.alive = false;
+            registry.exports.values().cloned().collect::<Vec<_>>()
+        };
         let (handles, nodes) = {
             let mut state = self.state.lock().unwrap();
             state.local_ids.clear();
@@ -556,8 +711,8 @@ impl FileSystem for AggregateFs {
         };
         drop(handles);
         drop(nodes);
-        for share in &self.shares {
-            share.backend.destroy();
+        for export in &exports {
+            export.backend.destroy();
         }
     }
 
@@ -565,21 +720,44 @@ impl FileSystem for AggregateFs {
         component(name, false)?;
         if parent == ROOT {
             if matches!(name.to_bytes(), b"." | b"..") {
-                return Ok(entry_from_attr(ROOT, synthetic_attr(self.shares.len())));
+                let count = self.registry.lock().unwrap().exports.len();
+                return Ok(entry_from_attr(ROOT, synthetic_attr(count)));
             }
-            let (index, share) = self
-                .shares
-                .iter()
-                .enumerate()
-                .find(|(_, share)| share.name.as_c_str() == name)
-                .ok_or_else(|| errno(libc::ENOENT))?;
-            return self.map_entry(index, share.backend.lookup(ctx, ROOT, c".")?);
+            let export = {
+                let registry = self.registry.lock().unwrap();
+                let export = registry
+                    .exports
+                    .values()
+                    .find(|export| export.name.as_c_str() == name)
+                    .cloned()
+                    .ok_or_else(|| errno(libc::ENOENT))?;
+                let mut state = self.state.lock().unwrap();
+                let record = state
+                    .nodes
+                    .get_mut(&export.root)
+                    .ok_or_else(|| errno(libc::EBADF))?;
+                record.lookups = record
+                    .lookups
+                    .checked_add(1)
+                    .ok_or_else(|| errno(libc::EOVERFLOW))?;
+                export
+            };
+            match export.backend.lookup(ctx, ROOT, c".") {
+                Ok(found) => return Ok(normalize(found, export.root, export.identity)),
+                Err(error) => {
+                    self.forget_entry(export.root, 1, false);
+                    return Err(error);
+                }
+            }
         }
         let node = self.node(parent)?;
         if name == c".." {
             return Err(errno(libc::EPERM));
         }
-        self.map_entry(node.share, node.backend.lookup(ctx, node.local, name)?)
+        self.map_entry(
+            &node.export,
+            node.export.backend.lookup(ctx, node.local, name)?,
+        )
     }
 
     fn forget(&self, _ctx: Context, inode: u64, count: u64) {
@@ -596,14 +774,15 @@ impl FileSystem for AggregateFs {
             .map(|handle| self.handle(inode, handle, None))
             .transpose()?;
         if inode == ROOT {
-            return Ok((synthetic_attr(self.shares.len()), TIMEOUT));
+            let count = self.registry.lock().unwrap().exports.len();
+            return Ok((synthetic_attr(count), TIMEOUT));
         }
         let node = match held.as_ref().and_then(|handle| handle.node.clone()) {
             Some(node) => node,
             None => self.node(inode)?,
         };
         let local_handle = held.as_ref().map(|handle| handle.local);
-        let (mut attr, timeout) = node.backend.getattr(ctx, node.local, local_handle)?;
+        let (mut attr, timeout) = node.export.backend.getattr(ctx, node.local, local_handle)?;
         attr.st_ino = node.identity;
         Ok((attr, timeout))
     }
@@ -624,7 +803,7 @@ impl FileSystem for AggregateFs {
         let held = handle
             .map(|handle| self.handle(inode, handle, None))
             .transpose()?;
-        let (mut attr, timeout) = node.backend.setattr(
+        let (mut attr, timeout) = node.export.backend.setattr(
             ctx,
             node.local,
             attr,
@@ -680,16 +859,23 @@ impl FileSystem for AggregateFs {
         extensions: Extensions,
     ) -> io::Result<(Entry, Option<u64>, OpenOptions)> {
         let node = self.mutation_parent(parent, name)?;
-        let (entry, local_handle, options) = node.backend.create(
+        let (entry, local_handle, options) = node.export.backend.create(
             ctx, node.local, name, mode, kill_priv, flags, umask, extensions,
         )?;
         let local_inode = entry.inode;
         let local_handle = local_handle.ok_or_else(|| errno(libc::EIO))?;
-        let entry = match self.map_entry(node.share, entry) {
+        let entry = match self.map_entry(&node.export, entry) {
             Ok(entry) => entry,
             Err(error) => {
-                node.backend
-                    .release(ctx, local_inode, flags, local_handle, false, false, None)?;
+                node.export.backend.release(
+                    ctx,
+                    local_inode,
+                    flags,
+                    local_handle,
+                    false,
+                    false,
+                    None,
+                )?;
                 return Err(error);
             }
         };
@@ -715,8 +901,9 @@ impl FileSystem for AggregateFs {
     ) -> io::Result<Entry> {
         let node = self.mutation_parent(parent, name)?;
         self.map_entry(
-            node.share,
-            node.backend
+            &node.export,
+            node.export
+                .backend
                 .mkdir(ctx, node.local, name, mode, umask, extensions)?,
         )
     }
@@ -732,8 +919,9 @@ impl FileSystem for AggregateFs {
     ) -> io::Result<Entry> {
         let node = self.mutation_parent(parent, name)?;
         self.map_entry(
-            node.share,
-            node.backend
+            &node.export,
+            node.export
+                .backend
                 .mknod(ctx, node.local, name, mode, rdev, umask, extensions)?,
         )
     }
@@ -747,22 +935,23 @@ impl FileSystem for AggregateFs {
     ) -> io::Result<Entry> {
         let node = self.mutation_parent(parent, name)?;
         self.map_entry(
-            node.share,
-            node.backend
+            &node.export,
+            node.export
+                .backend
                 .symlink(ctx, linkname, node.local, name, extensions)?,
         )
     }
     fn readlink(&self, ctx: Context, inode: u64) -> io::Result<Vec<u8>> {
         let node = self.node(inode)?;
-        node.backend.readlink(ctx, node.local)
+        node.export.backend.readlink(ctx, node.local)
     }
     fn unlink(&self, ctx: Context, parent: u64, name: &CStr) -> io::Result<()> {
         let node = self.mutation_parent(parent, name)?;
-        node.backend.unlink(ctx, node.local, name)
+        node.export.backend.unlink(ctx, node.local, name)
     }
     fn rmdir(&self, ctx: Context, parent: u64, name: &CStr) -> io::Result<()> {
         let node = self.mutation_parent(parent, name)?;
-        node.backend.rmdir(ctx, node.local, name)
+        node.export.backend.rmdir(ctx, node.local, name)
     }
     fn rename(
         &self,
@@ -780,12 +969,13 @@ impl FileSystem for AggregateFs {
         }
         let source = self.node(olddir)?;
         let target = self.node(newdir)?;
-        if source.share != target.share {
+        if !Arc::ptr_eq(&source.export, &target.export) {
             return Err(errno(libc::EXDEV));
         }
         self.writable(&source)?;
         self.writable(&target)?;
         source
+            .export
             .backend
             .rename(ctx, source.local, oldname, target.local, newname, flags)
     }
@@ -796,13 +986,14 @@ impl FileSystem for AggregateFs {
         }
         let source = self.node(inode)?;
         let target = self.node(newparent)?;
-        if source.share != target.share {
+        if !Arc::ptr_eq(&source.export, &target.export) {
             return Err(errno(libc::EXDEV));
         }
         self.writable(&target)?;
         self.map_entry(
-            source.share,
+            &source.export,
             source
+                .export
                 .backend
                 .link(ctx, source.local, target.local, newname)?,
         )
@@ -821,7 +1012,7 @@ impl FileSystem for AggregateFs {
     ) -> io::Result<usize> {
         let held = self.handle(inode, handle, Some(false))?;
         let node = held.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
-        node.backend.read(
+        node.export.backend.read(
             ctx, node.local, held.local, writer, size, offset, lock_owner, flags,
         )
     }
@@ -841,7 +1032,7 @@ impl FileSystem for AggregateFs {
         let held = self.handle(inode, handle, Some(false))?;
         let node = held.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
         self.writable(node)?;
-        node.backend.write(
+        node.export.backend.write(
             ctx,
             node.local,
             held.local,
@@ -857,19 +1048,25 @@ impl FileSystem for AggregateFs {
     fn flush(&self, ctx: Context, inode: u64, handle: u64, lock_owner: u64) -> io::Result<()> {
         let held = self.handle(inode, handle, Some(false))?;
         let node = held.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
-        node.backend.flush(ctx, node.local, held.local, lock_owner)
+        node.export
+            .backend
+            .flush(ctx, node.local, held.local, lock_owner)
     }
     fn fsync(&self, ctx: Context, inode: u64, datasync: bool, handle: u64) -> io::Result<()> {
         let held = self.handle(inode, handle, Some(false))?;
         let node = held.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
-        node.backend.fsync(ctx, node.local, datasync, held.local)
+        node.export
+            .backend
+            .fsync(ctx, node.local, datasync, held.local)
     }
     fn fsyncdir(&self, ctx: Context, inode: u64, datasync: bool, handle: u64) -> io::Result<()> {
         let held = self.handle(inode, handle, Some(true))?;
         let Some(node) = held.node.as_ref() else {
             return Ok(());
         };
-        node.backend.fsyncdir(ctx, node.local, datasync, held.local)
+        node.export
+            .backend
+            .fsyncdir(ctx, node.local, datasync, held.local)
     }
 
     fn readdir<F>(
@@ -885,14 +1082,14 @@ impl FileSystem for AggregateFs {
         F: FnMut(DirEntry) -> io::Result<usize>,
     {
         if inode == ROOT {
-            return self.root_directory(ctx, handle, size, offset, |dirent, _| add(dirent));
+            return self.root_directory(ctx, handle, size, offset, false, |dirent, _| add(dirent));
         }
         let held = self.handle(inode, handle, Some(true))?;
         let node = held.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
         if size == 0 || !self.directory_dots(ctx, node, offset, |dirent, _| add(dirent))? {
             return Ok(());
         }
-        node.backend.readdir(
+        node.export.backend.readdir(
             ctx,
             node.local,
             held.local,
@@ -910,13 +1107,13 @@ impl FileSystem for AggregateFs {
                     .offset
                     .checked_add(2)
                     .ok_or_else(|| errno(libc::EOVERFLOW))?;
-                let found = match node.backend.lookup(ctx, node.local, name) {
+                let found = match node.export.backend.lookup(ctx, node.local, name) {
                     Ok(found) => found,
                     // getdents buffered this name before a host-side removal.
                     Err(error) if error.raw_os_error() == Some(libc::ENOENT) => return Ok(1),
                     Err(error) => return Err(error),
                 };
-                let entry = self.map_entry(node.share, found)?;
+                let entry = self.map_entry(&node.export, found)?;
                 let global = entry.inode;
                 let result = add(DirEntry {
                     ino: entry.attr.st_ino,
@@ -942,14 +1139,14 @@ impl FileSystem for AggregateFs {
         F: FnMut(DirEntry, Entry) -> io::Result<usize>,
     {
         if inode == ROOT {
-            return self.root_directory(ctx, handle, size, offset, add);
+            return self.root_directory(ctx, handle, size, offset, true, add);
         }
         let held = self.handle(inode, handle, Some(true))?;
         let node = held.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
         if size == 0 || !self.directory_dots(ctx, node, offset, &mut add)? {
             return Ok(());
         }
-        node.backend.readdirplus(
+        node.export.backend.readdirplus(
             ctx,
             node.local,
             held.local,
@@ -960,7 +1157,7 @@ impl FileSystem for AggregateFs {
                     .offset
                     .checked_add(2)
                     .ok_or_else(|| errno(libc::EOVERFLOW))?;
-                let entry = self.insert_entry(node.share, entry)?;
+                let entry = self.insert_entry(&node.export, entry)?;
                 let global = entry.inode;
                 let result = add(
                     DirEntry {
@@ -995,7 +1192,7 @@ impl FileSystem for AggregateFs {
         if mask & libc::W_OK as u32 != 0 {
             self.writable(&node)?;
         }
-        node.backend.access(ctx, node.local, mask)
+        node.export.backend.access(ctx, node.local, mask)
     }
 
     fn statfs(&self, ctx: Context, inode: u64) -> io::Result<libc::statvfs64> {
@@ -1003,7 +1200,7 @@ impl FileSystem for AggregateFs {
             return Err(errno(libc::EOPNOTSUPP));
         }
         let node = self.node(inode)?;
-        node.backend.statfs(ctx, node.local)
+        node.export.backend.statfs(ctx, node.local)
     }
     fn setxattr(
         &self,
@@ -1018,7 +1215,9 @@ impl FileSystem for AggregateFs {
         }
         let node = self.node(inode)?;
         self.writable(&node)?;
-        node.backend.setxattr(ctx, node.local, name, value, flags)
+        node.export
+            .backend
+            .setxattr(ctx, node.local, name, value, flags)
     }
     fn getxattr(
         &self,
@@ -1031,14 +1230,14 @@ impl FileSystem for AggregateFs {
             return Err(errno(libc::EOPNOTSUPP));
         }
         let node = self.node(inode)?;
-        node.backend.getxattr(ctx, node.local, name, size)
+        node.export.backend.getxattr(ctx, node.local, name, size)
     }
     fn listxattr(&self, ctx: Context, inode: u64, size: u32) -> io::Result<ListxattrReply> {
         if inode == ROOT {
             return Err(errno(libc::EOPNOTSUPP));
         }
         let node = self.node(inode)?;
-        node.backend.listxattr(ctx, node.local, size)
+        node.export.backend.listxattr(ctx, node.local, size)
     }
     fn removexattr(&self, ctx: Context, inode: u64, name: &CStr) -> io::Result<()> {
         if inode == ROOT {
@@ -1046,7 +1245,7 @@ impl FileSystem for AggregateFs {
         }
         let node = self.node(inode)?;
         self.writable(&node)?;
-        node.backend.removexattr(ctx, node.local, name)
+        node.export.backend.removexattr(ctx, node.local, name)
     }
     fn fallocate(
         &self,
@@ -1060,7 +1259,8 @@ impl FileSystem for AggregateFs {
         let held = self.handle(inode, handle, Some(false))?;
         let node = held.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
         self.writable(node)?;
-        node.backend
+        node.export
+            .backend
             .fallocate(ctx, node.local, held.local, mode, offset, length)
     }
     fn lseek(
@@ -1073,7 +1273,8 @@ impl FileSystem for AggregateFs {
     ) -> io::Result<u64> {
         let held = self.handle(inode, handle, Some(false))?;
         let node = held.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
-        node.backend
+        node.export
+            .backend
             .lseek(ctx, node.local, held.local, offset, whence)
     }
     fn copyfilerange(
@@ -1092,11 +1293,11 @@ impl FileSystem for AggregateFs {
         let target = self.handle(inode_out, handle_out, Some(false))?;
         let source_node = source.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
         let target_node = target.node.as_ref().ok_or_else(|| errno(libc::EBADF))?;
-        if source_node.share != target_node.share {
+        if !Arc::ptr_eq(&source_node.export, &target_node.export) {
             return Err(errno(libc::EXDEV));
         }
         self.writable(target_node)?;
-        source_node.backend.copyfilerange(
+        source_node.export.backend.copyfilerange(
             ctx,
             source_node.local,
             source.local,

@@ -464,3 +464,16 @@ Repository secrets, in Settings → Secrets and variables → Actions:
 - `GH_APP_PRIVATE_KEY` — GitHub App key that registers the self-hosted E2E runner
 - `SLACK_WEBHOOK_URL` — optional #release webhook for release dev approvals, final reports and prod apply approvals
 - `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` — optional #dev_deployment webhook for dev apply approvals. An empty secret skips that channel.
+
+## Plugin release artifacts
+
+The build workflow validates the Codex and Claude packages and saves five files for previews and publication. [Build workflow](build-plugins.yml)
+
+The publishing workflow verifies the tag from `main` and publishes one versioned GHCR artifact. [Publishing workflow](publish-plugins.yml)
+
+The publisher downloads the exact artifact ID for the validated build attempt. A main-only environment supplies the registry credential.
+
+Same-version runs serialize. An identical digest can resume attestation, and a conflicting digest stops publication.
+
+The [plugin publishing guide](../../scripts/plugins/README.md#publish-versioned-packages-to-ghcr) covers migration, registry access, retries, and downloads.
+Run `make test:apps:infra` to exercise the workflow guards with real plugin packages.

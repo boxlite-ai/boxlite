@@ -41,10 +41,25 @@ Existing Boxes and private deployment state are not migrated, executed, or remov
 After upgrading, explicitly select and verify the intended backend and organization before operating existing resources.
 Uninstalling the plugin does not remove Boxes, volumes, runtime homes, or independently configured API-key connections.
 
+## Programmatic file transfers
+
+The model chooses the connection, Box ID and paths. The selected host calls `uploadFiles` or `downloadFiles`, and Python handles archive I/O.
+
+Upload does not add a readback or checksum step.
+
+Select an existing Codex or Claude connection; only that host sends MCP requests and resolves credentials.
+The helper needs Python 3.9+ and host shell/filesystem access; it does not implement login or refresh.
+
+Claude authorizes the BoxLite transfer tool in the current session. Python prepares or extracts the archive, and the plugin uses that session's selected MCP connection.
+
+Codex loads its selected connection through app-server. Verify OAuth and API-key acceptance separately. See the [file-transfer prerequisites packaged with this candidate](REVIEWER.md#file-transfer-prerequisites).
+
 ## Data handling
 
-Cloud tool arguments, commands, and selected file archives are sent to the declared BoxLite service.
+Cloud tool arguments, commands and selected file archives use the existing BoxLite MCP endpoint.
+The helper does not persist transfer tickets, pending snapshots or archive payload logs; host-managed output storage follows host behavior.
 Local execution uses the user's host; requested image pulls and guest commands can contact their configured networks.
+
 OAuth tokens stay with the host and API keys stay in the user's private environment; the plugin has no separate telemetry or token store.
 
 ## Release status

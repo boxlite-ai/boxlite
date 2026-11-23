@@ -32,7 +32,8 @@ import type { Placement } from './network.ts'
 import type { RunnerArtifact } from './runner-binary.ts'
 import { instanceFor } from 'naming'
 
-export type RunnerSize = 'small' | 'medium' | 'large'
+export const RUNNER_SIZES = ['small', 'medium', 'large', 'xlarge', '2xlarge'] as const
+export type RunnerSize = (typeof RUNNER_SIZES)[number]
 
 /** One host, as the control plane will know it. */
 export type RunnerSlot = {
@@ -101,6 +102,7 @@ export type RunnerBinary = {
 
 export type RunnerRequest = {
   size: RunnerSize
+  machineTypes?: Partial<Record<RunnerSize, string>>
   rootDiskGb: number
   /** GCP data volume at creation; omitted retains the provider default. Unsupported on AWS. */
   dataDiskGb?: number

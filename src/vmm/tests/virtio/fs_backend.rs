@@ -17,7 +17,7 @@ use std::time::Duration;
 use crate::virtio::fs::filesystem::{
     Context, Extensions, FileSystem, FsOptions, SetattrValid, ZeroCopyReader, ZeroCopyWriter,
 };
-use crate::virtio::fs::{AggregateFs, Share};
+use crate::virtio::fs::{AggregateFs, Share, insert_aggregate, lookup_aggregate, remove_aggregate};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Directory(PathBuf);
@@ -669,7 +669,7 @@ fn validates_share_names_and_preserves_symlink_contents_without_host_traversal()
                 read_only: true,
             },
         ]),
-        libc::EINVAL,
+        libc::EEXIST,
     );
     let fs = dir.backend();
     let (rw, _, _) = roots(&fs);
@@ -1145,4 +1145,401 @@ fn synthetic_root_xattr_queries_report_unsupported_not_invalid_inode() {
         fs.getattr(ctx(), 1, None).unwrap().0.st_mode & libc::S_IFMT,
         libc::S_IFDIR
     );
+}
+
+#[test]
+fn registers_and_removes_exports_at_runtime() {
+    let dir = Directory::new();
+    let fs = dir.backend();
+
+    // A directory no guest has seen becomes resolvable without a reset, and
+    // its own read-only policy applies to it.
+    let late = fs
+        .register(Share {
+            name: "late".into(),
+            path: dir.0.clone(),
+            read_only: true,
+        })
+        .unwrap();
+    let found = fs.lookup(ctx(), 1, c"late").unwrap();
+    assert_eq!(found.inode, late);
+    error(
+        fs.mkdir(ctx(), late, c"sub", 0o755, 0, Extensions::default()),
+        libc::EROFS,
+    );
+
+    // Removal retires the name only: the seeded shares still resolve.
+    fs.remove("late").unwrap();
+    error(fs.lookup(ctx(), 1, c"late"), libc::ENOENT);
+    error(fs.remove("late"), libc::ENOENT);
+    fs.lookup(ctx(), 1, c"rw").unwrap();
+
+    // The name is free again; the new export is a distinct identity with its
+    // own policy.
+    let again = fs
+        .register(Share {
+            name: "late".into(),
+            path: dir.0.clone(),
+            read_only: false,
+        })
+        .unwrap();
+    assert_ne!(again, late);
+    fs.mkdir(ctx(), again, c"sub", 0o755, 0, Extensions::default())
+        .unwrap();
+}
+
+#[test]
+fn rejects_duplicate_names_and_mutations_after_destroy() {
+    let dir = Directory::new();
+    let fs = dir.backend();
+    error(
+        fs.register(Share {
+            name: "rw".into(),
+            path: dir.0.clone(),
+            read_only: false,
+        }),
+        libc::EEXIST,
+    );
+    fs.destroy();
+    error(
+        fs.register(Share {
+            name: "fresh".into(),
+            path: dir.0.clone(),
+            read_only: false,
+        }),
+        libc::ENODEV,
+    );
+    error(fs.remove("rw"), libc::ENODEV);
+}
+
+#[test]
+fn entries_expire_immediately_so_guest_caches_never_mask_deletions() {
+    let dir = Directory::new();
+    let fs = dir.backend();
+    // Zero entry and attribute timeouts keep the guest kernel from caching
+    // lookups: a removed export name resolves to ENOENT on the next lookup
+    // instead of a stale dentry, and a re-registered name resolves to its
+    // new identity. Verified against removal in
+    // registers_and_removes_exports_at_runtime.
+    let root = fs.lookup(ctx(), 1, c"rw").unwrap();
+    assert_eq!(root.entry_timeout, std::time::Duration::ZERO);
+    assert_eq!(root.attr_timeout, std::time::Duration::ZERO);
+    let entry = fs.lookup(ctx(), root.inode, c"agents").unwrap_or_else(|_| {
+        fs.create(
+            ctx(),
+            root.inode,
+            c"agents",
+            0o600,
+            false,
+            libc::O_RDWR as u32,
+            0,
+            Extensions::default(),
+        )
+        .unwrap()
+        .0
+    });
+    assert_eq!(entry.entry_timeout, std::time::Duration::ZERO);
+    assert_eq!(entry.attr_timeout, std::time::Duration::ZERO);
+}
+
+#[test]
+fn removed_export_keeps_open_references_until_released() {
+    let dir = Directory::new();
+    fs::write(dir.0.join("data"), b"payload").unwrap();
+    let fs = AggregateFs::new(vec![Share {
+        name: "share".into(),
+        path: dir.0.clone(),
+        read_only: false,
+    }])
+    .unwrap();
+    let root = fs.lookup(ctx(), 1, c"share").unwrap().inode;
+    let entry = fs.lookup(ctx(), root, c"data").unwrap();
+    let handle = open(&fs, entry.inode, libc::O_RDWR);
+    let (dir_handle, _) = fs.opendir(ctx(), root, 0).unwrap();
+    let dir_handle = dir_handle.unwrap();
+
+    // The name stops resolving, while the open file and directory handles
+    // keep serving their backend.
+    fs.remove("share").unwrap();
+    error(fs.lookup(ctx(), 1, c"share"), libc::ENOENT);
+    assert_eq!(read(&fs, entry.inode, handle).unwrap(), b"payload");
+    // The helper writes at offset 0: the byte lands in front of the payload,
+    // proving the write reached the host file through the old handle.
+    write(&fs, entry.inode, handle, b"!").unwrap();
+    assert_eq!(fs::read(dir.0.join("data")).unwrap(), b"!ayload");
+    let mut names = Vec::new();
+    fs.readdir(ctx(), root, dir_handle, 4096, 0, |dirent| {
+        names.push(dirent.name.to_vec());
+        Ok(1)
+    })
+    .unwrap();
+    assert!(names.contains(&b"data".to_vec()));
+
+    // Releasing every reference reclaims the export: the inodes are no
+    // longer addressable.
+    fs.release(ctx(), entry.inode, 0, handle, false, false, None)
+        .unwrap();
+    fs.releasedir(ctx(), root, 0, dir_handle).unwrap();
+    fs.forget(ctx(), entry.inode, 1);
+    fs.forget(ctx(), root, 1);
+    error(fs.getattr(ctx(), root, None), libc::EBADF);
+    error(fs.getattr(ctx(), entry.inode, None), libc::EBADF);
+}
+
+#[test]
+fn removed_export_keeps_root_lookups_without_open_handles() {
+    let dir = Directory::new();
+    fs::write(dir.0.join("data"), b"payload").unwrap();
+    let fs = AggregateFs::new(vec![Share {
+        name: "share".into(),
+        path: dir.0.clone(),
+        read_only: false,
+    }])
+    .unwrap();
+    let root = fs.lookup(ctx(), 1, c"share").unwrap().inode;
+    fs.lookup(ctx(), 1, c"share").unwrap();
+    fs.forget(ctx(), root, 1);
+    fs.remove("share").unwrap();
+    error(fs.lookup(ctx(), 1, c"share"), libc::ENOENT);
+    fs.getattr(ctx(), root, None).unwrap();
+    let child = fs.lookup(ctx(), root, c"data").unwrap();
+    fs.forget(ctx(), child.inode, 1);
+    fs.forget(ctx(), root, 1);
+    error(fs.getattr(ctx(), root, None), libc::EBADF);
+}
+
+#[test]
+fn root_lookup_racing_removal_preserves_the_export_identity() {
+    let dir = Directory::new();
+    let fs = Arc::new(AggregateFs::new(Vec::new()).unwrap());
+    let root = fs
+        .register_fd("share".into(), File::open(&dir.0).unwrap(), false)
+        .unwrap();
+    let expected = fs.getattr(ctx(), root, None).unwrap().0.st_ino;
+    let removing = fs.clone();
+    super::linux_tests::before_next_statx(move || removing.remove("share").unwrap());
+    let found = fs.lookup(ctx(), 1, c"share").unwrap();
+    assert_eq!(found.inode, root);
+    assert_eq!(found.attr.st_ino, expected);
+    fs.getattr(ctx(), root, None).unwrap();
+    fs.forget(ctx(), root, 1);
+    error(fs.getattr(ctx(), root, None), libc::EBADF);
+}
+
+#[test]
+fn root_directory_entries_retain_only_accepted_readdirplus_lookups() {
+    for mode in 0..4 {
+        let dir = Directory::new();
+        let fs = AggregateFs::new(vec![Share {
+            name: "share".into(),
+            path: dir.0.clone(),
+            read_only: false,
+        }])
+        .unwrap();
+        let (handle, _) = fs.opendir(ctx(), 1, 0).unwrap();
+        let mut root = 2;
+        if mode == 0 {
+            fs.readdir(ctx(), 1, handle.unwrap(), 4096, 2, |_| Ok(1))
+                .unwrap();
+        } else {
+            let result = fs.readdirplus(ctx(), 1, handle.unwrap(), 4096, 2, |_, entry| {
+                root = entry.inode;
+                match mode {
+                    1 => Ok(1),
+                    2 => Ok(0),
+                    _ => Err(io::Error::from_raw_os_error(libc::EIO)),
+                }
+            });
+            if mode == 3 {
+                error(result, libc::EIO);
+            } else {
+                result.unwrap();
+            }
+        }
+        fs.releasedir(ctx(), 1, 0, handle.unwrap()).unwrap();
+        if mode == 0 {
+            root = fs.lookup(ctx(), 1, c"share").unwrap().inode;
+            fs.forget(ctx(), root, 1);
+        }
+        fs.remove("share").unwrap();
+        if mode == 1 {
+            fs.getattr(ctx(), root, None).unwrap();
+            fs.forget(ctx(), root, 1);
+        }
+        error(fs.getattr(ctx(), root, None), libc::EBADF);
+    }
+}
+
+#[test]
+fn remount_replaces_identity_and_content_for_old_references() {
+    let old_dir = Directory::new();
+    let new_dir = Directory::new();
+    fs::write(old_dir.0.join("marker"), b"old").unwrap();
+    fs::write(new_dir.0.join("marker"), b"new").unwrap();
+    let fs = AggregateFs::new(vec![Share {
+        name: "vol".into(),
+        path: old_dir.0.clone(),
+        read_only: false,
+    }])
+    .unwrap();
+    let root = fs.lookup(ctx(), 1, c"vol").unwrap().inode;
+    let file = fs.lookup(ctx(), root, c"marker").unwrap();
+    let handle = open(&fs, file.inode, libc::O_RDONLY);
+
+    fs.remove("vol").unwrap();
+    fs.register(Share {
+        name: "vol".into(),
+        path: new_dir.0.clone(),
+        read_only: false,
+    })
+    .unwrap();
+
+    // The surviving old reference still reads the old backend.
+    assert_eq!(read(&fs, file.inode, handle).unwrap(), b"old");
+    // The name now resolves to a new identity whose content differs.
+    let fresh_root = fs.lookup(ctx(), 1, c"vol").unwrap().inode;
+    assert_ne!(fresh_root, root);
+    let fresh = fs.lookup(ctx(), fresh_root, c"marker").unwrap();
+    assert_ne!(fresh.inode, file.inode);
+    let fresh_handle = open(&fs, fresh.inode, libc::O_RDONLY);
+    assert_eq!(read(&fs, fresh.inode, fresh_handle).unwrap(), b"new");
+}
+
+#[test]
+fn register_fd_publishes_a_delivered_directory_descriptor() {
+    if !super::linux_tests::in_unprivileged_child() {
+        return;
+    }
+    let dir = Directory::new();
+    fs::write(dir.0.join("note"), b"fd").unwrap();
+    let fs = dir.backend();
+
+    let delivered = File::open(&dir.0).unwrap();
+    let root = fs.register_fd("late".into(), delivered, false).unwrap();
+    let entry = fs.lookup(ctx(), root, c"note").unwrap();
+    let handle = open(&fs, entry.inode, libc::O_RDONLY);
+    assert_eq!(read(&fs, entry.inode, handle).unwrap(), b"fd");
+
+    // A descriptor that is not a directory never becomes an export.
+    let regular = File::create(dir.0.join("plain")).unwrap();
+    error(fs.register_fd("bad".into(), regular, false), libc::ENOTDIR);
+    error(fs.lookup(ctx(), 1, c"bad"), libc::ENOENT);
+
+    // Directory mutation rights and existing-file write rights are independent.
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir.0.join("note"), fs::Permissions::from_mode(0o600)).unwrap();
+    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o555)).unwrap();
+    let root = fs
+        .register_fd("strict".into(), File::open(&dir.0).unwrap(), false)
+        .unwrap();
+    let entry = fs.lookup(ctx(), root, c"note").unwrap();
+    let handle = open(&fs, entry.inode, libc::O_RDWR);
+    write(&fs, entry.inode, handle, b"ok").unwrap();
+    assert_eq!(fs::read(dir.0.join("note")).unwrap(), b"ok");
+    error(
+        fs.create(
+            ctx(),
+            root,
+            c"denied",
+            0o600,
+            false,
+            libc::O_RDWR as u32,
+            0,
+            Extensions::default(),
+        ),
+        libc::EACCES,
+    );
+    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn runtime_export_roots_and_children_have_distinct_inode_identities() {
+    let dir = Directory::new();
+    fs::write(dir.0.join("child"), b"data").unwrap();
+    let fs = AggregateFs::new(Vec::new()).unwrap();
+    let first = fs
+        .register_fd("first".into(), File::open(&dir.0).unwrap(), false)
+        .unwrap();
+    let root = fs.lookup(ctx(), 1, c"first").unwrap();
+    let child = fs.lookup(ctx(), first, c"child").unwrap();
+    let second = fs
+        .register_fd("second".into(), File::open(&dir.0).unwrap(), false)
+        .unwrap();
+    let other = fs.getattr(ctx(), second, None).unwrap().0;
+    assert_ne!(root.attr.st_ino, child.attr.st_ino);
+    assert_ne!(root.attr.st_ino, other.st_ino);
+    assert_ne!(child.attr.st_ino, other.st_ino);
+}
+
+/// Fds this process holds that resolve into `dir`.
+fn fds_into(dir: &std::path::Path) -> usize {
+    fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| fs::read_link(entry.ok()?.path()).ok())
+        .filter(|target| target.starts_with(dir))
+        .count()
+}
+
+fn teardown_share(path: &std::path::Path) -> Vec<Share> {
+    vec![Share {
+        name: "seed".into(),
+        path: path.to_path_buf(),
+        read_only: false,
+    }]
+}
+
+#[test]
+fn dropping_the_fs_device_unregisters_the_aggregate_and_closes_its_exports() {
+    let dir = Directory::new();
+    fs::write(dir.0.join("data"), b"payload").unwrap();
+    let tag = "aggregate-device-teardown";
+    let device = crate::virtio::fs::device::Fs::new(tag, teardown_share(&dir.0)).unwrap();
+    insert_aggregate(tag, device.filesystem());
+    lookup_aggregate(tag).unwrap();
+    assert!(fds_into(&dir.0) >= 1);
+
+    drop(device);
+    error(lookup_aggregate(tag), libc::ENODEV);
+    assert_eq!(fds_into(&dir.0), 0);
+}
+
+#[test]
+fn cached_aggregate_handle_rejects_registration_after_device_drop() {
+    let dir = Directory::new();
+    let tag = "aggregate-cached-teardown";
+    let device = crate::virtio::fs::device::Fs::new(tag, teardown_share(&dir.0)).unwrap();
+    insert_aggregate(tag, device.filesystem());
+    let cached = lookup_aggregate(tag).unwrap();
+    drop(device);
+    error(
+        cached.register_fd("late".into(), File::open(&dir.0).unwrap(), false),
+        libc::ENODEV,
+    );
+    error(cached.remove("seed"), libc::ENODEV);
+    drop(cached);
+    assert_eq!(fds_into(&dir.0), 0);
+}
+
+#[test]
+fn aggregate_registry_teardown_is_scoped_to_the_registered_filesystem() {
+    let dir = Directory::new();
+    fs::write(dir.0.join("data"), b"payload").unwrap();
+    let tag = "aggregate-registry-scoped-teardown";
+    let filesystem = Arc::new(AggregateFs::new(teardown_share(&dir.0)).unwrap());
+    insert_aggregate(tag, filesystem.clone());
+    lookup_aggregate(tag).unwrap();
+    assert!(fds_into(&dir.0) >= 1);
+
+    // A foreign aggregate must not unregister the live entry, and the live
+    // entry keeps answering until its own teardown removes it.
+    let outsider = Arc::new(AggregateFs::new(teardown_share(&dir.0)).unwrap());
+    assert!(!remove_aggregate(tag, &outsider));
+    lookup_aggregate(tag).unwrap();
+    drop(outsider);
+    lookup_aggregate(tag).unwrap();
+
+    assert!(remove_aggregate(tag, &filesystem));
+    drop(filesystem);
+    error(lookup_aggregate(tag), libc::ENODEV);
+    assert_eq!(fds_into(&dir.0), 0);
 }
