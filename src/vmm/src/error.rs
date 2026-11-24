@@ -32,6 +32,14 @@ pub enum Error {
     },
     /// The host's guest-memory capabilities are invalid or insufficient.
     HostMemoryCapability(io::Error),
+    /// A hotplug capacity or target in MiB is not a multiple of 128 MiB, or
+    /// does not fit the configured capacity.
+    InvalidHotplugSize(u32),
+    /// The requested hotplug window does not fit the guest or KVM layout.
+    PlanHotplugMemory {
+        capacity_mib: u32,
+        source: io::Error,
+    },
     /// Allocating the guest RAM failed.
     AllocateMemory { bytes: u64, source: io::Error },
     /// A host hypervisor operation failed.
@@ -46,6 +54,8 @@ pub enum Error {
     OpenDisk { path: PathBuf, source: io::Error },
     /// Creating the channel that grows a disk failed.
     DiskControl(io::Error),
+    /// The VM already has a memory control endpoint.
+    RegisterMemoryControl(io::Error),
     /// Every virtio-mmio window and interrupt line is taken.
     VirtioSlotsExhausted,
     /// Devices claimed resources the chipset cannot give them.
@@ -110,6 +120,16 @@ impl fmt::Display for Error {
             Self::HostMemoryCapability(source) => {
                 write!(f, "guest memory capability check failed: {source}")
             }
+            Self::InvalidHotplugSize(mib) => write!(f, "invalid hotplug memory size: {mib} MiB"),
+            Self::PlanHotplugMemory {
+                capacity_mib,
+                source,
+            } => {
+                write!(
+                    f,
+                    "cannot plan {capacity_mib} MiB of hotplug memory: {source}"
+                )
+            }
             Self::AllocateMemory { bytes, .. } => {
                 write!(f, "failed to allocate {bytes} bytes of guest RAM")
             }
@@ -120,6 +140,7 @@ impl fmt::Display for Error {
             Self::InvalidDiskCount(count) => write!(f, "too many disks: {count}"),
             Self::InvalidDiskId(id) => write!(f, "empty or duplicate disk ID: {id:?}"),
             Self::DiskControl(_) => f.write_str("failed to create a disk grow channel"),
+            Self::RegisterMemoryControl(_) => f.write_str("failed to register memory control"),
             Self::OpenDisk { path, .. } => {
                 write!(f, "failed to open the disk image {}", path.display())
             }
@@ -170,6 +191,7 @@ impl error::Error for Error {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
             | Self::GuestMemoryAddressLimit { .. }
+            | Self::InvalidHotplugSize(_)
             | Self::InvalidCommandLine(_)
             | Self::InvalidDiskCount(_)
             | Self::InvalidDiskId(_)
@@ -183,9 +205,11 @@ impl error::Error for Error {
             Self::Vsock(source)
             | Self::Filesystem(source)
             | Self::HostMemoryCapability(source)
+            | Self::PlanHotplugMemory { source, .. }
             | Self::AllocateMemory { source, .. }
             | Self::OpenDisk { source, .. }
             | Self::DiskControl(source)
+            | Self::RegisterMemoryControl(source)
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }
             | Self::WriteBootData { source, .. }

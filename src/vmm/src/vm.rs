@@ -97,8 +97,8 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
-    /// Validates `config` and preflights the RAM layout and boot leaf against
-    /// KVM before spawning the console worker and building the VM.
+    /// Validates `config` and preflights the boot layout and any hotplug window
+    /// against KVM before spawning the console worker and building the VM.
     /// `devices::add_all` adds the legacy devices and one virtio-blk device
     /// per disk, taking each disk's virtio-mmio slot and naming it on the
     /// command line; `config.cmdline` must leave room for those arguments,
@@ -106,15 +106,11 @@ impl Vm<boxlite_hypervisor::KvmVm> {
     /// COM1 output goes to `console` through a queue, so a slow sink never
     /// stalls the guest.
     pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
-        use crate::{boot, cpu_features::preflight_x86, devices::console::DEFAULT_QUEUE_BYTES};
+        use crate::{boot, devices::console::DEFAULT_QUEUE_BYTES};
 
         config.validate()?;
         let prepared = boxlite_hypervisor::KvmVm::prepare()?;
-        let leaf = preflight_x86(
-            config.memory_mib,
-            prepared.supported_cpuid(),
-            boot::BOOT_LEAF,
-        )?;
+        let (leaf, hotplug_window) = boot::preflight(&config, &prepared)?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
         let mut vm = Self::build(
@@ -123,7 +119,9 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             true,
             VirtioWorkers::new,
             move |ram, config| boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
-            |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+            |chipset, ctx, config, host_vm| {
+                crate::devices::add_all(chipset, ctx, config, writer, host_vm, hotplug_window)
+            },
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)
@@ -143,7 +141,7 @@ impl<H: HostVm> Vm<H> {
     where
         H: 'static,
     {
-        Self::with_devices(config, host_vm, boot, |chipset, ctx, _| {
+        Self::with_devices(config, host_vm, boot, |chipset, ctx, _, _| {
             devices(chipset, ctx)
         })
     }
@@ -153,7 +151,12 @@ impl<H: HostVm> Vm<H> {
         config: VmConfig,
         host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
         boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
-        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>, &mut VmConfig) -> Result<()>,
+        devices: impl FnOnce(
+            &mut ChipsetBuilder,
+            DeviceContext<'_>,
+            &mut VmConfig,
+            &Arc<H>,
+        ) -> Result<()>,
     ) -> Result<Self>
     where
         H: 'static,
@@ -164,8 +167,8 @@ impl<H: HostVm> Vm<H> {
     /// Validates `config`, allocates the RAM layout, creates the host VM with
     /// `host_vm`, builds the chipset from the devices `devices` adds,
     /// registers every RAM range and writes the boot data with `boot`.
-    /// `devices` also gets the guest memory, the virtio workers and the
-    /// mutable configuration. Invalid configuration fails before `host_vm`
+    /// `devices` also gets the guest memory, the virtio workers, the mutable
+    /// configuration and the host VM. Invalid configuration fails before `host_vm`
     /// runs, and a chipset conflict before any RAM is registered.
     /// `fresh_vm` requires a newly created VM with no independent vCPUs.
     #[cfg_attr(
@@ -181,7 +184,12 @@ impl<H: HostVm> Vm<H> {
         fresh_vm: bool,
         create_workers: impl FnOnce(EventSender) -> std::io::Result<VirtioWorkers>,
         boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
-        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>, &mut VmConfig) -> Result<()>,
+        devices: impl FnOnce(
+            &mut ChipsetBuilder,
+            DeviceContext<'_>,
+            &mut VmConfig,
+            &Arc<H>,
+        ) -> Result<()>,
     ) -> Result<Self>
     where
         H: 'static,
@@ -207,6 +215,7 @@ impl<H: HostVm> Vm<H> {
                 controls: &mut controls,
             },
             &mut config,
+            &host_vm,
         )?;
         let chipset = chipset.build()?;
         if let Err(error) = ram.map(&*host_vm) {
@@ -245,7 +254,7 @@ impl<H: HostVm> Vm<H> {
         StopHandle(self.sender.clone())
     }
 
-    /// Controls the VM from another thread, addressing disks by their configured IDs.
+    /// Controls the VM from another thread.
     pub fn control(&self) -> VmControl {
         self.control.clone()
     }
@@ -316,6 +325,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         });
         // No vCPU notifies a queue any more. Stop the virtio devices before the
         // console finishes, so a device's last output still reaches the sink.
+        self.control.close_memory();
         let workers = self.workers.as_ref().expect("live VM has virtio workers");
         let shutdown = workers.shutdown().map_err(Error::from);
         let console = self
@@ -354,6 +364,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
 
 impl<H: HostVm> Drop for Vm<H> {
     fn drop(&mut self) {
+        self.control.close_memory();
         // A device event that outlived the shutdown may still touch guest
         // RAM, so the registrations stay and `GuestRam` leaks the backing.
         let workers = self.workers.as_ref().expect("live VM has virtio workers");

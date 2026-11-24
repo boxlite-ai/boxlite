@@ -45,11 +45,8 @@ mod error;
 )]
 mod events;
 #[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "The virtio-mem device that drives hotplug memory comes next."
-    )
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only the Linux x86_64 Vm::new adds devices yet.")
 )]
 mod hotplug;
 #[cfg_attr(
@@ -87,6 +84,7 @@ pub use config::{
     DiskConfig, DiskFormat, FsConfig, FsShareConfig, NetConfig, VmConfig, VsockConfig,
 };
 pub use control::VmControl;
+pub use devices::mem::MemoryStatus;
 pub use error::{Error, Result};
 pub use memory::ReclaimPolicy;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

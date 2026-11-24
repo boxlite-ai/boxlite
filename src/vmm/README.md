@@ -277,8 +277,28 @@ Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
   block unplugged. A failed unmap keeps the slot mapped and visible; `Drop`
   leaks a slot whose unmap fails.
 
-The virtio-mem device and host control handle that drive it arrive next; the
-`hotplug` tests use the recording backend.
+### Virtio-mem device and control
+
+On Linux x86_64, set `VmConfig.hotplug_mib` to the extra capacity above boot
+RAM (`0` disables virtio-mem). `Vm::new` checks the window before building the VM.
+
+BoxLite prepends `memhp_default_state=online` and
+`memory_hotplug.online_policy=auto-movable` to the caller's command line.
+Caller kernel parameters can override these defaults. Arguments after
+`--` go to init.
+
+`vm.control().set_memory_target_mib(256, timeout)` publishes a target of 256 MiB
+above boot RAM and notifies the guest, which plugs or unplugs blocks afterward.
+Targets are multiples of 128 MiB up to the configured capacity.
+
+Use `memory_status(timeout)` to read the capacity, target, plugged and mapped
+MiB. Shrinking is best effort, so the plugged size may stay above the target.
+
+`WouldBlock` means the device is inactive or the control queue is full. An
+accepted command can still run after the caller times out.
+
+Reset discards queued commands. After VM exit, both operations return
+`BrokenPipe` for an enabled device.
 
 ## Kernel loading
 
