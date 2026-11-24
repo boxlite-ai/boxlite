@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DataSource, DataSourceOptions } from 'typeorm'
+import { DataSourceOptions } from 'typeorm'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
 import { join } from 'path'
 import { config } from 'dotenv'
+import { MigrationDataSource } from './migration-data-source'
 
 config({ path: [join(__dirname, '../../.env'), join(__dirname, '../../.env.local')] })
 
@@ -33,7 +34,7 @@ export const baseDataSourceOptions: DataSourceOptions = {
       : false,
 }
 
-const AppDataSource = new DataSource({
+const AppDataSource = new MigrationDataSource({
   ...baseDataSourceOptions,
   migrations: [join(__dirname, '**/*-migration.{ts,js}')],
 })

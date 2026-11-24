@@ -46,6 +46,7 @@ import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
 import { McpModule } from './mcp/mcp.module'
+import { MigrationDataSource, MigrationLockTimeoutError } from './migrations/migration-data-source'
 
 @Module({
   imports: [
@@ -67,6 +68,10 @@ import { McpModule } from './mcp/mcp.module'
     }),
     TypeOrmModule.forRootAsync({
       inject: [TypedConfigService],
+      dataSourceFactory: async (options) => {
+        if (!options) throw new Error('Missing API database options')
+        return new MigrationDataSource(options)
+      },
       useFactory: (configService: TypedConfigService) => {
         return {
           type: 'postgres',
@@ -79,6 +84,7 @@ import { McpModule } from './mcp/mcp.module'
           migrations: [join(__dirname, 'migrations/**/*-migration.{ts,js}')],
           migrationsTransactionMode: 'each',
           migrationsRun: configService.get('runMigrations') || !configService.getOrThrow('production'),
+          toRetry: (error: unknown) => !(error instanceof MigrationLockTimeoutError),
           namingStrategy: new CustomNamingStrategy(),
           manualInitialization: configService.get('skipConnections'),
           ssl: configService.get('database.tls.enabled')
