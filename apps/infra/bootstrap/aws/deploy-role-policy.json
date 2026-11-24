@@ -2,6 +2,30 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "CredentialIngressAclForThisStage",
+      "Effect": "Allow",
+      "Action": [
+        "wafv2:CreateWebACL",
+        "wafv2:GetWebACL",
+        "wafv2:UpdateWebACL",
+        "wafv2:DeleteWebACL",
+        "wafv2:AssociateWebACL",
+        "wafv2:GetWebACLForResource",
+        "wafv2:ListResourcesForWebACL",
+        "wafv2:ListTagsForResource",
+        "wafv2:TagResource",
+        "wafv2:UntagResource"
+      ],
+      "Resource": "arn:aws:wafv2:<REGION>:<ACCOUNT>:regional/webacl/boxlite-<STAGE>-internal-routes/*"
+    },
+    {
+      "Sid": "DisassociateCredentialIngressInThisRegion",
+      "Effect": "Allow",
+      "Action": "wafv2:DisassociateWebACL",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "<REGION>" } }
+    },
+    {
       "Sid": "BoxLiteAwsControlPlane",
       "Effect": "Allow",
       "Action": [

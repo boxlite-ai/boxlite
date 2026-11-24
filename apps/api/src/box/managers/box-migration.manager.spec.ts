@@ -117,7 +117,8 @@ function makeHarness(
     }),
   } as any
   const jobService = {
-    createJob: jest.fn().mockResolvedValue(undefined),
+    createJob: jest.fn().mockResolvedValue({ id: 'job', runnerId: TARGET_RUNNER }),
+    notifyRunner: jest.fn().mockResolvedValue(undefined),
   } as any
   const redisLockProvider = {
     lock: jest.fn().mockResolvedValue(true),
