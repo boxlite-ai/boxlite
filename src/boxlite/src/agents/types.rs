@@ -75,6 +75,7 @@ pub enum AgentStatus {
     Unknown,
 }
 
+#[cfg_attr(feature = "rest", derive(serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentTurnStatus {
@@ -138,10 +139,12 @@ pub enum AgentRequestKind {
 }
 
 /// Text can answer a question; only the Permission variant can grant authority.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentResponse {
     Answer {
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         data: Option<Box<RawValue>>,
     },
     Permission {
@@ -165,6 +168,7 @@ pub struct AgentSteeringReceipt {
     pub status: AgentSteeringStatus,
 }
 
+#[cfg_attr(feature = "rest", derive(serde::Deserialize))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentOutcome {

@@ -23,6 +23,20 @@ const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
 /// File transfers cannot outlive the runner's 24-hour box lifetime cap.
 const FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const TUNNEL_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+const AGENT_RESPONSE_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+async fn read_agent_body(response: &mut reqwest::Response) -> BoxliteResult<Vec<u8>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
+        if chunk.len() > AGENT_RESPONSE_MAX_BYTES.saturating_sub(body.len()) {
+            return Err(BoxliteError::ResourceExhausted(
+                "agent response exceeds 16 MiB".into(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
 
 /// The native REST transport is shared by every SDK binding and the CLI.
 fn client_identity_headers() -> reqwest::header::HeaderMap {
@@ -105,6 +119,8 @@ pub(crate) type WsHandshakeResponse = tokio_tungstenite::tungstenite::handshake:
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
+    agent_writes: Client,
+    stream_http: Client,
     tunnel_connector: TunnelConnector,
     base_url: String,
     /// Routing-slot value substituted into the `{prefix}` URL segment
@@ -125,12 +141,30 @@ pub(crate) struct ApiClient {
 impl ApiClient {
     pub fn new(config: &BoxliteRestOptions) -> BoxliteResult<Self> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let http = Client::builder()
-            .default_headers(client_identity_headers())
-            .timeout(std::time::Duration::from_secs(300))
-            .connect_timeout(std::time::Duration::from_secs(300))
+        let request_client = || {
+            Client::builder()
+                .default_headers(client_identity_headers())
+                .timeout(std::time::Duration::from_secs(300))
+                .connect_timeout(std::time::Duration::from_secs(300))
+        };
+        let http = request_client()
             .build()
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
+        // A write may already have taken effect at the first destination.
+        let agent_writes = request_client()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .build()
+            .map_err(|e| {
+                BoxliteError::Config(format!("failed to create agent write client: {e}"))
+            })?;
+        let stream_http = Client::builder()
+            .default_headers(client_identity_headers())
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| {
+                BoxliteError::Config(format!("failed to create streaming HTTP client: {e}"))
+            })?;
         let tunnel_connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
             .map_err(|e| BoxliteError::Config(format!("failed to load TLS roots: {e}")))?
@@ -143,6 +177,8 @@ impl ApiClient {
 
         Ok(Self {
             http,
+            agent_writes,
+            stream_http,
             tunnel_connector,
             base_url,
             path_prefix,
@@ -312,6 +348,109 @@ impl ApiClient {
     ) -> BoxliteResult<T> {
         let builder = self.http.post(self.url(path)).json(body);
         self.send_json(builder).await
+    }
+
+    pub(crate) async fn post_agent<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &impl serde::Serialize,
+        key: Option<&str>,
+    ) -> BoxliteResult<T> {
+        let mut builder = self.agent_writes.post(self.url(path)).json(body);
+        if let Some(key) = key {
+            builder = builder.header("Idempotency-Key", key);
+        }
+        self.send_agent_json(builder).await
+    }
+
+    pub(crate) async fn get_agent<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
+        self.send_agent_json(self.http.get(self.url(path))).await
+    }
+
+    async fn send_agent_json<T: DeserializeOwned>(
+        &self,
+        builder: RequestBuilder,
+    ) -> BoxliteResult<T> {
+        let builder = self.authorize(builder).await?;
+        let mut response = builder.send().await.map_err(transport_error)?;
+        let status = response.status();
+        let body = read_agent_body(&mut response).await?;
+        if !status.is_success() {
+            return Err(map_http_body(status, &String::from_utf8_lossy(&body)));
+        }
+        serde_json::from_slice(&body)
+            .map_err(|error| BoxliteError::Internal(format!("invalid agent response: {error}")))
+    }
+
+    pub(crate) async fn post_agent_no_content(
+        &self,
+        path: &str,
+        key: Option<&str>,
+    ) -> BoxliteResult<()> {
+        let mut builder = self
+            .agent_writes
+            .post(self.url(path))
+            .json(&serde_json::json!({}));
+        if let Some(key) = key {
+            builder = builder.header("Idempotency-Key", key);
+        }
+        let builder = self.authorize(builder).await?;
+        let mut response = builder.send().await.map_err(transport_error)?;
+        let status = response.status();
+        if status == StatusCode::NO_CONTENT {
+            return Ok(());
+        }
+        let body = read_agent_body(&mut response).await?;
+        if status.is_success() {
+            return Err(BoxliteError::Internal(format!(
+                "agent control returned unexpected HTTP {status}"
+            )));
+        }
+        Err(map_http_body(status, &String::from_utf8_lossy(&body)))
+    }
+
+    pub(crate) async fn agent_events(
+        &self,
+        path: &str,
+        after: Option<&str>,
+        turn_id: Option<&str>,
+    ) -> BoxliteResult<reqwest::Response> {
+        let mut builder = self
+            .stream_http
+            .get(self.url(path))
+            .header(reqwest::header::ACCEPT, "text/event-stream");
+        if let Some(after) = after {
+            builder = builder.query(&[("after", after)]);
+        }
+        if let Some(turn_id) = turn_id {
+            builder = builder.query(&[("turn_id", turn_id)]);
+        }
+        let builder = self.authorize(builder).await?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let mut response = builder.send().await.map_err(transport_error)?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = read_agent_body(&mut response).await?;
+                return Err(map_http_body(status, &String::from_utf8_lossy(&body)));
+            }
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            if !content_type
+                .split(';')
+                .next()
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
+            {
+                return Err(BoxliteError::Internal(
+                    "agent event stream has invalid content type".into(),
+                ));
+            }
+            Ok(response)
+        })
+        .await
+        .map_err(|_| BoxliteError::Network("agent event stream opening timed out".into()))?
     }
 
     /// A fractional create must not silently lose its requested CPU allocation.
@@ -821,6 +960,7 @@ fn ensure_capability(name: &str, enabled: Option<bool>) -> BoxliteResult<()> {
 
 #[cfg(test)]
 mod tests {
+    mod agents;
     use super::ensure_capability;
     use super::*;
     use crate::rest::credential::{AccessToken, Credential};

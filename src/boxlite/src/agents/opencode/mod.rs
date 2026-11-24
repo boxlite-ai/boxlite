@@ -21,7 +21,7 @@
 
 mod http;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, PoisonError, Weak};
@@ -241,6 +241,10 @@ impl Session {
 impl AgentBackend for Session {
     fn adapter(&self) -> &str {
         ADAPTER
+    }
+
+    fn implementation(&self) -> &str {
+        IMPLEMENTATION
     }
 
     fn id(&self) -> &str {

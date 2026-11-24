@@ -250,7 +250,7 @@ export async function deployStack() {
   // The stage bootstrap (bootstrap/aws.ts's ensureApiImageRepository) owns the immutable
   // repository: an image has to be published before a fresh stack can consume one, so the
   // consumer cannot also be responsible for creating its input.
-  const { api } = buildApi({
+  const { api } = await buildApi({
     foundation,
     region: REGION,
     accountId,

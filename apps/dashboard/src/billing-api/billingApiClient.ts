@@ -20,6 +20,7 @@ import {
   PaymentMethod,
   PaymentUrl,
   Plan,
+  PlanTrialEligibility,
   SeriesGranularity,
   UsageFundingBucket,
   UsagePrices,
@@ -48,12 +49,8 @@ export class BillingApiClient {
   private axiosInstance: AxiosInstance
 
   constructor(apiUrl: string, accessToken: string) {
-    this.axiosInstance = axios.create({
-      baseURL: apiUrl,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    })
+    this.axiosInstance = axios.create({ baseURL: apiUrl })
+    this.setAccessToken(accessToken)
 
     this.axiosInstance.interceptors.response.use(
       (response) => {
@@ -62,9 +59,13 @@ export class BillingApiClient {
       (error) => {
         const errorMessage = error.response?.data?.message || error.response?.data || error.message || String(error)
 
-        throw BoxliteError.fromString(String(errorMessage))
+        throw BoxliteError.fromString(String(errorMessage), { cause: error })
       },
     )
+  }
+
+  public setAccessToken(accessToken: string) {
+    this.axiosInstance.defaults.headers.common.Authorization = `Bearer ${accessToken}`
   }
 
   public async getOrganizationWallet(organizationId: string): Promise<OrganizationWallet> {
@@ -93,8 +94,11 @@ export class BillingApiClient {
     return response.data?.message || 'Coupon redeemed successfully'
   }
 
-  public async getOrganizationPlan(organizationId: string): Promise<OrganizationPlan | null> {
-    const response = await this.axiosInstance.get(`/organization/${organizationId}/plan`)
+  public async getOrganizationPlan(organizationId: string, timeout?: number): Promise<OrganizationPlan | null> {
+    const response = await this.axiosInstance.get(
+      `/organization/${organizationId}/plan`,
+      timeout ? { timeout } : undefined,
+    )
     // {} (no `plan` key) means no live plan — the server never sends a bare null.
     const plan = response.data?.plan
     if (!plan) {
@@ -139,8 +143,12 @@ export class BillingApiClient {
     return response.data?.url
   }
 
-  public async downgradePlan(organizationId: string, planId: string | null): Promise<void> {
-    await this.axiosInstance.post(`/organization/${organizationId}/plan/downgrade`, { planId })
+  public async downgradePlan(organizationId: string, planId: string | null, timeout?: number): Promise<void> {
+    await this.axiosInstance.post(
+      `/organization/${organizationId}/plan/downgrade`,
+      { planId },
+      timeout ? { timeout } : undefined,
+    )
   }
 
   public async withdrawPendingPlan(organizationId: string): Promise<void> {
@@ -176,6 +184,14 @@ export class BillingApiClient {
   public async listPlans(): Promise<Plan[]> {
     const response = await this.axiosInstance.get('/plan')
     return response.data
+  }
+
+  public async getPlanTrialEligibility(organizationId: string): Promise<PlanTrialEligibility[]> {
+    const { data } = await this.axiosInstance.get<{ plans: PlanTrialEligibility[] }>(
+      `/organization/${encodeURIComponent(organizationId)}/plan/trial-eligibility`,
+      { validateStatus: (status) => status === 200 },
+    )
+    return data.plans
   }
 
   /**

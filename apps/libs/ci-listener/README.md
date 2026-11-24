@@ -1214,6 +1214,11 @@ The runner's GitHub connection is described in GitHub's
 
 ## Build and test
 
+After a Listener test stops its renewal loop, inspect persisted rows through the
+test database snapshot rather than a scheduling lease. That lease can expire
+during shutdown. The 64-job accumulation test explicitly expires it before
+checking all persisted allocation records; live-operation tests still use fenced reads.
+
 Build and test from the repository root:
 
 ```sh

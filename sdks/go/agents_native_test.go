@@ -570,7 +570,7 @@ func TestAgentRuntimeCloseSerializesWithGetters(t *testing.T) {
 	}
 }
 
-func TestAgentRemoteNamespaceRejectsThroughCore(t *testing.T) {
+func TestAgentRemoteNamespacePropagatesServerNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/boxes/box1" {
 			http.NotFound(w, r)
@@ -596,7 +596,7 @@ func TestAgentRemoteNamespaceRejectsThroughCore(t *testing.T) {
 		t.Fatal("Agents must be lazy")
 	}
 	agent, err := namespace.Create(ctx, "opencode", AgentCreateOptions{})
-	checkAgentError(t, agent, err, ErrUnsupported)
+	checkAgentError(t, agent, err, ErrNotFound)
 	if strings.Contains(err.Error(), "not implemented") {
 		t.Fatal("stub error reached caller")
 	}
@@ -608,7 +608,7 @@ func TestAgentRemoteNamespaceRejectsThroughCore(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent, err = namespace.Get(ctx, "ses_existing")
-	checkAgentError(t, agent, err, ErrUnsupported)
+	checkAgentError(t, agent, err, ErrNotFound)
 	if namespace.native != native {
 		t.Fatal("namespace did not retain its C handle")
 	}

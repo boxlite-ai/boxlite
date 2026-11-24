@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateApiKeyPermissionsEnum as P } from '@boxlite-ai/api-client'
 import { CreateApiKeyDialog } from './CreateApiKeyDialog'
+import { API_KEY_PERMISSION_GROUPS } from '@/lib/api-key-permissions'
 
 const mocks = vi.hoisted(() => ({ create: vi.fn() }))
 vi.mock('@/hooks/mutations/useCreateApiKeyMutation', () => ({
@@ -167,6 +168,124 @@ async function chooseAccess(label: string) {
   expect(option).toBeTruthy()
   await act(async () => option.click())
 }
+describe('API key selection completeness', () => {
+  const supported = API_KEY_PERMISSION_GROUPS.flatMap((group) => group.permissions)
+  const summary = () => document.querySelector('[aria-live="polite"]')!.textContent
+  async function toggle(label: string) {
+    const field = [...document.querySelectorAll('label')].find((item) => item.textContent?.startsWith(label))!
+    await act(async () => document.getElementById(field.htmlFor)!.click())
+  }
+  it('shows selected/available counts globally and in resource groups', async () => {
+    await render()
+    await open()
+    expect(summary()).toContain('1/3 permissions selected')
+    await act(async () => button('Adjust permissions').click())
+    expect([...document.querySelectorAll('summary')].map((item) => item.textContent)).toEqual(
+      expect.arrayContaining(['Boxes1/2 selected', 'Members0/1 selected']),
+    )
+  })
+  it.each([supported, [P.WRITE_BOXES, P.READ_VOLUMES, P.WRITE_VOLUMES]])(
+    'selects exactly the currently available set %#',
+    async (...permissions) => {
+      await render(permissions)
+      await open()
+      await chooseAccess('All available permissions')
+      expect(summary()).toContain(`${permissions.length}/${permissions.length} permissions selected`)
+      expect(summary()).toContain('All available permissions selected')
+      await submit()
+      expect(mocks.create.mock.calls[0][0].permissions.sort()).toEqual([...permissions].sort())
+    },
+  )
+  it('deduplicates supported grants and excludes unsupported scopes', async () => {
+    await render([P.WRITE_BOXES, P.WRITE_BOXES, 'read:boxes' as P])
+    await open()
+    await chooseAccess('All available permissions')
+    expect(summary()).toContain('1/1 permissions selected')
+    await submit()
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES])
+  })
+  it('recognizes manual completeness and clears it when one permission is removed', async () => {
+    await render([P.WRITE_BOXES, P.DELETE_BOXES])
+    await open()
+    await chooseAccess('Custom access')
+    await toggle('Delete boxes')
+    expect(summary()).toContain('All available permissions selected')
+    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    await toggle('Operate boxes')
+    expect(summary()).toContain('1/2 permissions selected')
+    expect(summary()).not.toContain('All available permissions selected')
+    await toggle('Delete boxes')
+    expect(summary()).toContain('0/2 permissions selected')
+    await submit()
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it('keeps an all-selection snapshot when new grants become available', async () => {
+    await render([P.WRITE_BOXES])
+    await open()
+    await chooseAccess('All available permissions')
+    await render([P.WRITE_BOXES, P.DELETE_BOXES])
+    expect(summary()).toContain('1/2 permissions selected')
+    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    await submit()
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES])
+  })
+  it('excludes revoked selections from counts and blocks creation until removed', async () => {
+    await render([P.WRITE_BOXES, P.DELETE_BOXES])
+    await open()
+    await chooseAccess('All available permissions')
+    await render([P.WRITE_BOXES])
+    expect(summary()).toContain('1/1 permissions selected')
+    expect(summary()).not.toContain('All available permissions selected')
+    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    expect(document.querySelector('summary')!.textContent).toBe('Boxes1/1 selected')
+    await submit()
+    expect(mocks.create).not.toHaveBeenCalled()
+    await toggle('Delete boxes')
+    expect(summary()).toContain('All available permissions selected')
+    await submit()
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES])
+  })
+  it.each(['loading', 'error'] as const)('hides stale completeness while permissions are %s', async (status) => {
+    await render()
+    await open()
+    await chooseAccess('All available permissions')
+    await act(async () =>
+      root.render(
+        <CreateApiKeyDialog organizationId="org-1" apiUrl="" availablePermissions={all} permissionsStatus={status} />,
+      ),
+    )
+    expect(summary()).not.toContain('permissions selected')
+    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    await submit()
+    expect(mocks.create).not.toHaveBeenCalled()
+  })
+  it('does not describe an empty grantable set as all selected', async () => {
+    await render([])
+    await open()
+    expect(summary()).toContain('0/0 permissions selected')
+    expect(summary()).not.toContain('All available permissions selected')
+    await act(async () =>
+      document
+        .querySelector('[aria-label="Access"]')!
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+    )
+    const option = [...document.querySelectorAll('[role="option"]')].find(
+      (item) => item.textContent === 'All available permissions',
+    )!
+    expect(option.getAttribute('aria-disabled')).toBe('true')
+  })
+  it('replaces all with a narrower preset and resets on organization switch', async () => {
+    await render(supported)
+    await open()
+    await chooseAccess('All available permissions')
+    await chooseAccess('Operate boxes')
+    expect(summary()).toContain('1/13 permissions selected')
+    await chooseAccess('All available permissions')
+    await render(supported, 'org-2')
+    expect(summary()).toContain('1/13 permissions selected')
+    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Operate boxes')
+  })
+})
 describe('API key access presets', () => {
   it.each([
     ['Manage box lifecycle', [P.WRITE_BOXES, P.DELETE_BOXES]],

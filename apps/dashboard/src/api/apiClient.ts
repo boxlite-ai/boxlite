@@ -86,6 +86,12 @@ function clearReauthAttempted(): void {
 // Prefer bash when the image has it; every image has sh.
 const LOGIN_SHELL = 'if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi'
 
+export interface CancellationFeedbackInput {
+  reasons: string[]
+  intent: string | null
+  note: string
+}
+
 export interface OrganizationOnboarding {
   useCase: FirstRunUseCase
   note: string
@@ -121,6 +127,14 @@ export class ApiClient {
     const receipt = couponClaimReceipt.safeParse(response.data)
     if (response.status !== 202 || !receipt.success) throw new CouponClaimUnconfirmedError()
     return receipt.data
+  }
+
+  public async saveCancellationFeedback(org: string, feedback: CancellationFeedbackInput): Promise<void> {
+    const response = await this.http.put(`/organizations/${encodeURIComponent(org)}/cancellation-feedback`, feedback, {
+      ...this.v1Config(),
+      timeout: 10_000,
+    })
+    if (response.status !== 204) throw new BoxliteError('Feedback save was not confirmed')
   }
 
   public async register(turnstileToken: string): Promise<User> {
@@ -680,6 +694,7 @@ export class ApiClient {
 
   public setAccessToken(accessToken: string) {
     this.config.accessToken = accessToken
+    this._billingApi.setAccessToken(accessToken)
   }
 
   public get boxApi() {

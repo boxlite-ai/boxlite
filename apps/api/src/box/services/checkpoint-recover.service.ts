@@ -16,6 +16,7 @@ import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { Runner } from '../entities/runner.entity'
 import { Checkpoint } from '../entities/checkpoint.entity'
 import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
+import { Job } from '../entities/job.entity'
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { RunnerState } from '../enums/runner-state.enum'
@@ -71,7 +72,8 @@ export class CheckpointRecoverService {
     const persist = async (candidate: string) => {
       box.name = candidate
       let checkpoint: Checkpoint
-      return this.boxes.insert(
+      let job: Job
+      const created = await this.boxes.insert(
         box,
         maxCreatedBoxes,
         undefined,
@@ -90,10 +92,12 @@ export class CheckpointRecoverService {
           this.assertRunner(currentRunner, checkpoint)
         },
         async (manager) => {
-          await this.schedule(manager, checkpoint, box, manager.create(BoxCheckpointState, { boxId: box.id }))
+          job = await this.schedule(manager, checkpoint, box, manager.create(BoxCheckpointState, { boxId: box.id }))
           await manager.save(Box, box)
         },
       )
+      await this.jobs.notifyRunner(job!.runnerId, job!.id)
+      return created
     }
     try {
       const created = name === undefined ? await persistWithGeneratedBoxName(box.id, persist) : await persist(name)
@@ -148,7 +152,7 @@ export class CheckpointRecoverService {
     checkpoint: Checkpoint,
     box: Box,
     checkpointState: BoxCheckpointState,
-  ): Promise<void> {
+  ): Promise<Job> {
     const operation = manager.create(CheckpointOperation, {
       id: randomUUID(),
       organizationId: box.organizationId,
@@ -182,5 +186,6 @@ export class CheckpointRecoverService {
       pending: true,
       errorReason: null,
     })
+    return job
   }
 }

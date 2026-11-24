@@ -17,6 +17,7 @@ describe('V2 optional nesting contract', () => {
     }
     // The repository is supplied by Nest in production.
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobs as any)
+    Object.assign(adapter, { config: { get: () => false } })
     Object.assign(adapter, { runnerRepository: repository })
     void adapter.init({ id: 'runner', apiVersion: '2' } as any)
     return { adapter, jobs, repository }

@@ -340,7 +340,7 @@ export interface ScheduledChange {
   /** What the panel states. */
   text: string
   /** Label for the control that discards it — names the plan being kept. */
-  keepLabel: string
+  keepLabel: string | null
   /** Confirmation once it is discarded. Stated outright rather than derived from keepLabel. */
   keptLabel: string
 }
@@ -363,7 +363,12 @@ export function scheduledChange({
   const keptLabel = `Staying on ${plan.planName}`
 
   if (queued.kind === 'cancel') {
-    return { kind: 'cancel', text: `Your subscription ends ${on} — ${keeps}`, keepLabel, keptLabel }
+    return {
+      kind: 'cancel',
+      text: `Your subscription ends ${on} — ${keeps}`,
+      keepLabel: plan.trial && plan.trial.conversionState !== 'succeeded' ? null : keepLabel,
+      keptLabel,
+    }
   }
   // An id is not user-facing copy. A queued plan the public catalog cannot
   // name is a negotiated one; say what happens without inventing a name.
