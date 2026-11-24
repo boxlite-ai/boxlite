@@ -1,88 +1,85 @@
 ## TL;DR
 
-Choose the intended AWS deployment path before bootstrap; legacy and current app names have different prerequisites.
+Create each AWS stage with a full native Pulumi deployment, then release the API and Runner independently.
 
-# Deploy BoxLite on AWS
+## Details
 
 [Cloud guide](README.md) · [Infrastructure index](../../README.md)
 
-## Prerequisites
+### Prerequisites
 
 | Provide | Requirement |
 | --- | --- |
-| Account | IAM, SSM and bootstrap permissions |
-| Region and capacity | ECS/RDS/Redis services and nested-KVM EC2 capacity |
-| Local tools | Node.js 22+, Git, gh and AWS CLI |
-| Build tools | Docker/buildx when publishing locally |
-| DNS and identity | Cloudflare zone/token and an OIDC issuer, SPA client and API audience |
+| Account | Administrative bootstrap access and separate runtime/deploy roles |
+| Region | ECS, RDS, Redis, nested-KVM EC2 capacity and EBS gp3 |
+| Tools | Node.js 22+, Git, gh, AWS CLI and Pulumi CLI |
+| Publishing | Docker/buildx or existing release artifacts |
+| DNS and identity | Cloudflare zone/token and configured OIDC credentials |
 
-Run `make _ensure-infra-deps` from the repository root, then work from `apps/infra`.
-Declare `home: "aws"`, region, optional role, registry, protection and resource sizing in
-`.mstage.config.json`; account identity comes from resolved credentials. See [configuration](../configuration.md).
+Declare `home: "aws"`, region, registry, protection and sizing in `.mstage.config.json`.
+Account identity comes from resolved credentials; see [configuration](../configuration.md).
 
-## Bootstrap and choose the deployment path
+### Bootstrap and preview
 
-Bootstrap prepares the legacy `boxlite` app; current mdeploy uses `boxlite-app`.
-Read [the compatibility check](../../bootstrap/aws/README.md#aws-mdeploy-compatibility)
-before treating bootstrap as preparation for a current mdeploy stage.
-
-For the retained legacy path, copy `.env.example` to `.env` and fill reviewed non-secret settings:
+Run `make _ensure-infra-deps` from the repository root.
+From `apps/infra`, these operator commands prepare prerequisites and preview the declared stage:
 
 ```bash
 npm run mstage login -- --stage dev
 npm run mstage aws whoami -- --stage dev
 npm run bootstrap -- --stage dev
 npm run mstage config put -- --stage dev
+npm run mdeploy -- --stage dev --diff
 ```
 
-Bootstrap reconciles IAM boundaries, the GitHub OIDC role, ECR and the runner artifact bucket;
-it sets GitHub account/region and Cloudflare credential inputs and imports reviewed stage settings.
-It does not deploy the application or prove health. Supply application secrets, including
-`OIDC_CLIENT_ID`, through the store for the selected app; do not assume the two app names share state.
-Use `--repo owner/name` for an explicit GitHub target and numeric user IDs for `--reviewers`.
-Verify the live GitHub Environment protections after bootstrap.
+Bootstrap prepares the declared app's IAM boundary, distinct deployment role, ECR repository, artifact bucket and state envelope.
+Fill the native mstage groups with the workload configuration before preview.
 
-For an independently prepared mdeploy stage, follow [configuration and digest handling](../configuration.md),
-then the shared [CI](../deployment.md#deploy-through-github-actions) or
-[local preview/apply](../deployment.md#deploy-an-existing-stack) commands. Its engine is SST.
+Parameter Store references must use `/boxlite/workloads/<app>/<stage>/<name>` in the stage account and region.
+Secrets Manager names use `boxlite/workloads/<app>/<stage>/<name>` in the same account and region.
 
-## Retained legacy AWS deployment
+ECS tasks can resolve stage parameters or Secrets Manager references. Runner hosts and managed ClickHouse credentials require a full Secrets Manager ARN without JSON-key or version selectors.
 
-AWS bootstrap currently prepares the legacy `boxlite` app. mdeploy's AWS app is `boxlite-app`;
-its state, runtime-boundary and artifact prerequisites are different. Read the
-[AWS compatibility check](../../bootstrap/aws/README.md#aws-mdeploy-compatibility) before using mdeploy
-on an existing AWS stage or assuming a fresh bootstrap prepared it.
+Bootstrap records the regional state bucket in the SSM parameter `/boxlite/pulumi/bootstrap`. The first deployment uses the default `api+runner` selection to create the network, services and Runner fleet.
 
-`deploy-infra.yml`, `deploy-release.yml`, `build-apps-api-image.yml`, and `npm run deploy`
-remain in the repository. They use the legacy SST tree and its own artifact selectors.
-Use them only when intentionally operating that path; do not mix their selectors with mdeploy's.
+### Deployment scope
 
-| Legacy operation | Behavior |
+| Selection | AWS behavior |
 | --- | --- |
-| `deploy-infra.yml` | Build deployment from a main commit or allowed same-repository PR head |
-| `deploy-release.yml` | Deploy existing release artifacts |
-| `build-apps-api-image.yml` | Build/promote the legacy API image |
-| `npm run deploy -- --stage dev` | Legacy guarded full-stack deploy |
-| `--exclude Runner` / `--exclude Api` | Legacy component scopes; excluded leg keeps its prior revision |
+| `api` | Existing ECS API task/service and its runtime/secret grants |
+| `runner` | Existing fleet's SSM readiness/update commands and artifact/checkpoint grants |
+| `api+runner` | Full infrastructure graph |
 
-The legacy wrapper refuses targeted applies, checks its
-[capability manifest](../../deployment/capabilities.json), enforces the
-[runner policy pack](../../policies/runner/), and runs its own post-deploy checks.
-Its runner updates enter [`scripts/runner-update-binary.mjs`](../../scripts/runner-update-binary.mjs).
-Its API fallback can build locally when no published ref is selected; mdeploy expects published images.
-See [artifact selection](../../artifacts/source.ts), [scope rules](../../deployment/scope.ts),
-[wrapper](../../deployment/sst.ts), and the [workflow reference](../../../../.github/workflows/README.md).
-Preview before switching entrypoints; shared logical names are not proof of a no-op transition.
+Scoped deployments require existing workloads and an unchanged fleet identity and attachment inventory.
+An API-only release keeps the deployed proxy, collector, registry proxy and Runner versions. A Runner-only release keeps all four deployed container images.
 
-## Verify and recover
+Scoped previews and updates refresh the selected targets. Run a full `api+runner --diff` to inspect shared infrastructure.
 
-Run the shared [service checks](../deployment.md#verify-the-result) and inspect
-[SSM runner outcomes](runners.md). Use [networking](networking.md) for ALB/NLB and security groups,
-and [ClickHouse](clickhouse.md) for telemetry. The legacy wrapper's automatic smoke checks do not
-establish that current mdeploy runs the same checks.
+Use shared [CI](../deployment.md#deploy-through-github-actions) or [local commands](../deployment.md#deploy-an-existing-stack).
+Native workflows assume the stage's `AWS_PULUMI_DEPLOY_ROLE_ARN`.
 
-Bootstrap maintains SSM/GitHub Cloudflare credential copies for the legacy path; rotating one
-destination does not rotate the others. Follow [common token scope](../deployment.md#cloudflare-api-token).
-See [recovery and teardown](../deployment.md#recovery-and-teardown) before modifying state or removing resources.
+### Retained-data teardown
 
-Sources: [bootstrap policy ownership](../../bootstrap/aws/README.md), [SST entrypoint](../../mdeploy/sst.config.ts).
+Before removing a stage, drain its Boxes, stop new work, and verify recoverable database backups, Runner data-volume snapshots and required checkpoint objects. Record the physical resource IDs and who will own retained resources after teardown.
+
+Export the current Pulumi stack using the stage backend. Inspect `protect` and `retainOnDelete` for each resource, including EC2 instances, their volume attachments, EBS data volumes and checkpoint buckets.
+
+Change protection for the approved resources in stage configuration and review a full preview. To unprotect an individual resource, approve its exact URN and run `pulumi state unprotect <URN>` on the selected stack.
+Check EC2 attachment and delete-on-termination settings and detach volumes that must survive before terminating their instances.
+
+Run `npm run mdeploy -- --stage <stage> --remove --confirm` after preparing the stack. The command checks for protected resources before starting destruction. Pulumi leaves resources with `retainOnDelete` in the cloud, where they continue to incur charges until their owner deletes them.
+
+### Verify
+
+Run the shared [service checks](../deployment.md#verify-the-result), then inspect [Runner outcomes](runners.md).
+For a host replacement, inspect the reservation with `npm run runner:update -- --stage <stage> --host <instance-id> --rollout-status`.
+Verify a private registry pull, checkpoint capture/import/delete, and EBS expansion before enabling those capabilities in production.
+
+Checkpoint capture requires explicit application enablement.
+Disk expansion defaults to enabled; set `RUNNER_DISK_EXPANSION_ENABLED=false` to disable it.
+AWS customer-owned domains remain deferred; platform wildcard domains are available.
+
+CloudWatch extracts disk failure and critical-pressure metrics from API JSON logs into an app/stage namespace.
+The Runner reachability filter consumes API health-check events. See [security](security.md).
+
+Sources: [native entrypoint](../../mdeploy/pulumi/aws-program.ts), [bootstrap](../../bootstrap/aws/README.md).

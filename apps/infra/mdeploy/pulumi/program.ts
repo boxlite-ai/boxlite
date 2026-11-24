@@ -1,25 +1,6 @@
-/*
- * The GCP stack, run by Pulumi rather than by SST.
- *
- * The modules under `mdeploy/stack/` name no cloud and no engine — they are
- * written against `StackProviders` and against a handful of names SST happens
- * to inject as globals. The GCP provider bundle uses no SST component at all:
- * every resource in it is a plain provider resource — `gcp.*`, plus `random.*`
- * for the two generated passwords and `cloudflare.*` for the DNS records — and
- * `$util` is `@pulumi/pulumi` under another name. So the only thing standing
- * between that bundle and a plain Pulumi program is who defines those names.
- *
- * This file defines them, and then runs the same `deployStack` the SST path
- * runs. Not one line of the stack changes, which is the point: two engines, one
- * description of BoxLite. The AWS path keeps SST because its providers do use
- * SST components — `sst.aws.Vpc`, `sst.aws.Cluster`, `sst.aws.Service` — and
- * nothing else can instantiate those.
- *
- * What this buys is the state backend. SST keeps state only in S3, R2 or a
- * directory on the machine, and its `Home` interface is unimplementable outside
- * its own package. Pulumi's own backend takes `gs://`, so a GCP stage can keep
- * its state in the project it deploys into and needs no other cloud's
- * credentials to deploy at all.
+/**
+ * The GCP Pulumi entrypoint installs provider namespaces and composes the shared stack.
+ * Providers load only for the chosen cloud; AWS has its own native entrypoint.
  */
 
 import { readStackEnvironment } from '../src/stack-env.ts'
@@ -62,11 +43,12 @@ export type PulumiModules = {
     all: unknown
     secret: unknown
   }
-  gcp: object
+  gcp?: object
+  aws?: object
   random: object
   cloudflare: object
   command: object
-  kubernetes: object
+  kubernetes?: object
 }
 
 /** What a program returns to the engine: the stack's outputs, by name. */
@@ -115,19 +97,7 @@ const loadModules: ModuleLoader = async () => {
   }
 }
 
-/**
- * Gives the stack the names SST would have injected.
- *
- * Globals rather than imports because that is what the stack already reads, and
- * rewriting every reference across a dozen modules to reach the same objects by
- * another name would be a change to the AWS path as well — a refactor with no
- * behaviour in it, on the one file set that deploys today.
- *
- * `$transform` and `sst` are deliberately left undefined. Their only callers
- * are the AWS role-boundary rule and the AWS providers' components, both of
- * which belong to the AWS engine; a GCP resource that reached for either should
- * fail loudly here rather than silently do nothing.
- */
+/** Install the chosen program's provider namespaces before importing its resource graph. */
 export const installGlobals = ({
   modules,
   app,
@@ -146,6 +116,7 @@ export const installGlobals = ({
   target.$jsonStringify = modules.pulumi.jsonStringify
   target.$resolve = modules.pulumi.all
   target.gcp = modules.gcp
+  target.aws = modules.aws
   target.random = modules.random
   target.cloudflare = modules.cloudflare
   target.command = modules.command
@@ -188,9 +159,7 @@ export type ProgramInput = {
 /**
  * One deploy, as the function Pulumi calls.
  *
- * The order mirrors `sst.config.ts`'s `run()` exactly, because it is the same
- * deploy: read what this run decides, choose the provider bundle, hand it to
- * the stack.
+ * Read stage configuration, choose the GCP provider bundle, and compose the stack.
  */
 export const gcpProgram =
   ({
@@ -247,7 +216,7 @@ export const gcpProgram =
     /*
      * Which runner binary this deploy installs, from the checkout.
      *
-     * The same function `sst.config.ts` calls, so one commit resolves to one
+     * The same function the AWS program calls, so one commit resolves to one
      * binary on both clouds — a release over public HTTPS, or the object this
      * stage staged for one commit, which is `gs://` here and `s3://` there.
      */

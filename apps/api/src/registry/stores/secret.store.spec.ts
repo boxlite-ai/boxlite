@@ -48,7 +48,9 @@ describe('createSecretStore', () => {
   })
 
   it('refuses a store it does not know rather than falling back to none', () => {
-    expect(() => buildStore({ 'registrySecrets.store': 'vault' })).toThrow('must be "gcp" or "file", got "vault"')
+    expect(() => buildStore({ 'registrySecrets.store': 'vault' })).toThrow(
+      'must be "gcp", "aws" or "file", got "vault"',
+    )
   })
 })
 

@@ -13,7 +13,7 @@
  *   the state bucket         Pulumi keeps its state there and mstage its store,
  *                            so it exists before either has anywhere to write
  *   mstage-bootstrap         the record that names that bucket; the GCS
- *                            counterpart of AWS's `/sst/bootstrap`
+ *                            counterpart of AWS's `/boxlite/pulumi/bootstrap`
  *   mstage-passphrase-*      what the store is sealed with. Generated once and
  *                            never rotated here: rotating it would make every
  *                            stored value unreadable

@@ -98,7 +98,7 @@ const CLICKHOUSE_MODES: ClickHouseMode[] = ['self-hosted', 'managed', 'disabled'
 /** RDS keeps at most 35 days of automated backups; below one means none. */
 const MAX_BACKUP_RETENTION_DAYS = 35
 
-/** A root disk small enough to hold no box image is not worth deploying. */
+/** Shared capacity bounds for operating-system, Runner data and telemetry disks. */
 const DISK_BOUNDS = { min: 20, max: 4_000 }
 
 const ALARM_NAMES: (keyof AlarmRequest)[] = [
@@ -332,7 +332,11 @@ export const loadDeployConfig = ({
   cwd = process.cwd(),
   environment = process.env,
   stage,
-}: { cwd?: string; environment?: NodeJS.ProcessEnv; stage: string }): DeployConfig => {
+}: {
+  cwd?: string
+  environment?: NodeJS.ProcessEnv
+  stage: string
+}): DeployConfig => {
   const mstage = loadMstageConfig({ cwd, environment })
   const declared = stageIn(mstage, stage)
   const where = `${mstage.path}: stage "${stage}" deploy`

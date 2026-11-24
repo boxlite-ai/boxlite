@@ -12,7 +12,6 @@
  * and the stack decides the order.
  */
 
-
 import type { StackProviders } from '../../index.ts'
 import type { Network, NetworkBinding, Placement } from '../../network.ts'
 import type { WorkloadHost } from '../../cluster.ts'
@@ -29,6 +28,8 @@ import { awsMailProvider } from './mail.ts'
 import { awsNetworkProvider } from './network.ts'
 import { awsRunnerProvider } from './runners.ts'
 import { awsStorageProvider } from './storage.ts'
+import { awsRegistryProxyProvider } from './registry-proxy.ts'
+import { awsRegistryCredentialStoreProvider } from './registry-credentials.ts'
 
 const onAws = <T extends { cloud: string }>(value: T, what: string): Extract<T, { cloud: 'aws' }> => {
   if (value.cloud !== 'aws') throw new Error(`The AWS stack was handed ${value.cloud} ${what}`)
@@ -45,7 +46,10 @@ export const awsStackProviders = ({
   accountId,
   domain,
   dashboardDomain = null,
+  stateBucket,
   artifactsBucket,
+  volumePrefix = 'boxlite-volume',
+  zoneId,
   managedClickHouse,
   otelOpenapiEnabled = false,
 }: {
@@ -58,6 +62,9 @@ export const awsStackProviders = ({
   dashboardDomain?: string | null
   /** Where a build-mode runner binary is staged, for the runner's read grant. */
   artifactsBucket: string
+  stateBucket: string
+  volumePrefix?: string
+  zoneId: string
   /**
    * The endpoint and its two secrets for a stage that runs no ClickHouse of its
    * own. Absent rather than empty: a stage with neither has nothing to record,
@@ -66,16 +73,6 @@ export const awsStackProviders = ({
   managedClickHouse: { url: string; writerSecretArn: string; readerSecretArn: string } | null
   otelOpenapiEnabled?: boolean
 }): StackProviders => {
-  /*
-   * One DNS adapter for every record this stack writes.
-   *
-   * Cloudflare rather than Route 53, and the same on both clouds — which is the
-   * one part of the front door that did not have to be replaced when a second
-   * cloud arrived. Built once here because three modules write records and each
-   * building its own would be three provider initialisations.
-   */
-  const dns = sst.cloudflare.dns()
-
   return {
     // mbuild keys the registry by stage, so the addresses come from there
     // rather than from anything this file composes.
@@ -83,33 +80,33 @@ export const awsStackProviders = ({
     network: awsNetworkProvider({ region }),
     storage: awsStorageProvider({ accountId }),
     cluster: ({ network }) => awsClusterProvider({ network }),
-    database: ({ network }) => awsDatabaseProvider({ network: binding(network) }),
-    cache: ({ network }) => awsCacheProvider({ network: binding(network) }),
+    database: ({ network }) =>
+      awsDatabaseProvider({ network: binding(network) }),
+    cache: ({ network }) =>
+      awsCacheProvider({ network: binding(network) }),
     clickhouse: ({ network }) =>
       awsClickHouseProvider({ network: binding(network), region, managed: managedClickHouse, otelOpenapiEnabled }),
-    mail: awsMailProvider({ region, dns }),
+    mail: awsMailProvider({ region, zoneId }),
     collector: ({ host: where, clickhouse, dependsOn }) =>
       awsCollectorProvider({ host: host(where), clickhouse, dependsOn }),
     // The network is ignored here: a security group already says who may reach
     // the API, and repeating it as an identity would be a second answer.
-    api: ({ dependencies }) => awsApiProvider({ dependencies, dns, domain, dashboardDomain }),
+    api: ({ dependencies }) => awsApiProvider({ dependencies, zoneId, domain, dashboardDomain }),
     edge: ({ host: where, network, dependsOn }) =>
-      awsEdgeProvider({ host: host(where), placement: placement(network.placementFor('proxy')), dns, dependsOn }),
-    // No wildcard record or certificate for it on this cloud. Nor a data disk:
-    // a runner keeps box state on the root disk, so there is nothing to resize.
-    servesUserDomain: () => false,
-    resizeRunnerDisks: () => false,
-    /*
-     * Not deployed on this cloud, and said so rather than thrown.
-     *
-     * The registry proxy exists to pull images whose credentials only the
-     * platform holds, and the release that introduces it deploys it where the
-     * platform runs. A throw here would take a whole AWS stage down for a
-     * service nothing on it calls; the inactive handle deploys everything else
-     * and reports no proxy, which is the truth.
-     */
-    registryProxy: () => () => ({ active: false }),
-    registryCredentials: () => ({ active: false }),
+      awsEdgeProvider({ host: host(where), placement: placement(network.placementFor('proxy')), zoneId, dependsOn }),
+    servesUserDomain: () => true,
+    resizeRunnerDisks: () => true,
+    registryProxy: ({ host: where, network, registryCredentials, dependsOn }) =>
+      awsRegistryProxyProvider({
+        host: host(where),
+        placement: placement(network.placementFor('registry-proxy')),
+        runnerPlacement: placement(network.placementFor('runner')),
+        domain,
+        zoneId,
+        registryCredentials,
+        dependsOn,
+      }),
+    registryCredentials: awsRegistryCredentialStoreProvider({ accountId, region }),
     // 64 alphanumeric characters: the value travels through a systemd
     // EnvironmentFile and a JSON payload, and punctuation would drag quoting
     // rules into both.
@@ -119,8 +116,11 @@ export const awsStackProviders = ({
     // refuses anything else rather than creating a host that cannot pull.
     runners: ({ network, adminApiKey, regionId, dependsOn }) =>
       awsRunnerProvider({
+        stateBucket,
         placement: placement(network.placementFor('runner')),
         region,
+        accountId,
+        volumePrefix,
         artifactsBucket,
         adminApiKey,
         regionId,

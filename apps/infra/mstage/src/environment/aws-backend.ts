@@ -1,39 +1,19 @@
-/*
- * The store on AWS, in SST v3.19.3's own layout.
- *
- * This backend does not get to choose how things are named. `sst deploy` reads
- * and writes the same objects, so every path here matches what SST does —
- * `pkg/project/provider/aws.go:541` and `:545` — and a change to any of them
- * would give this platform two stores that disagree.
- *
- *   SSM  /sst/bootstrap                    → the state bucket's name
- *   S3   secret/<app>/<stage>.json         → the sealed map
- *   SSM  /sst/passphrase/<app>/<stage>     → the key
- *   S3   app/<app>/<stage>.json            → the deployment checkpoint
- *   S3   lock/<app>/<stage>.json           → the lock a deploy holds on it
- *
- * The last two are what a stopped deploy leaves behind. SST names all of them
- * `<kind>/<app>/<stage>.json` through one `pathForData` and picks the kind at
- * the call site (`pkg/project/provider/provider.go`).
- *
- * The bucket's name ends in twelve characters chosen at bootstrap, so nothing
- * but that first parameter knows it, and it is never logged — a log is read by
- * more people than an account is. Objects are named by their key instead.
- */
-
+/** AWS stores stage configuration and native Pulumi checkpoints in the regional state bucket. */
 import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectVersionsCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm'
 import { EnvError, objectKey, type StoreBackend, type StoredVersion } from './backend.ts'
 import type { AwsIdentity } from '../aws/identity.ts'
+import { pulumiCheckpointKey as checkpointKey, pulumiLockPrefix } from './pulumi-state.ts'
 
-const BOOTSTRAP_PARAMETER = '/sst/bootstrap'
+const BOOTSTRAP_PARAMETER = '/boxlite/pulumi/bootstrap'
 
 export type AwsClients = {
   s3: { send: (command: any) => Promise<any> }
@@ -80,9 +60,25 @@ export const readStateBucket = async (clients: AwsClients): Promise<string> => {
   return bootstrap.state
 }
 
-/** The other two objects SST keeps per stage, in the same `<kind>/<app>/<stage>.json` shape. */
-const checkpointKey = (app: string, stage: string): string => `app/${app}/${stage}.json`
-const lockKey = (app: string, stage: string): string => `lock/${app}/${stage}.json`
+/** Discover every operation lock, including listings larger than a single S3 page. */
+const lockFiles = async (clients: AwsClients, app: string, stage: string): Promise<string[]> => {
+  const bucket = await readStateBucket(clients)
+  const prefix = pulumiLockPrefix(app, stage)
+  const keys: string[] = []
+  let token: string | undefined
+  do {
+    const answer = await clients.s3.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }),
+    )
+    for (const object of answer.Contents ?? []) {
+      if (typeof object.Key === 'string' && object.Key.startsWith(prefix)) keys.push(object.Key)
+    }
+    const next = answer.IsTruncated ? answer.NextContinuationToken : undefined
+    if (answer.IsTruncated && (!next || next === token)) throw new EnvError('The S3 lock listing returned no next page')
+    token = next
+  } while (token)
+  return [...new Set(keys)].sort()
+}
 
 /** One object as stored, or null when it is not there. Neither of these is sealed. */
 const readObject = async (clients: AwsClients, key: string): Promise<Buffer | null> => {
@@ -100,7 +96,53 @@ const readObject = async (clients: AwsClients, key: string): Promise<Buffer | nu
 
 export const awsBackend = (clients: AwsClients): StoreBackend => ({
   home: 'aws',
-
+  async edit(scope, work) {
+    const Bucket = await readStateBucket(clients)
+    const Key = objectKey(scope.app, scope.stage)
+    for (let attempt = 0; attempt < 8; attempt++) {
+      let etag: string | null | undefined
+      const snapshot: StoreBackend = {
+        ...awsBackend(clients),
+        edit: undefined,
+        async read() {
+          let answer
+          try {
+            answer = await clients.s3.send(new GetObjectCommand({ Bucket, Key }))
+          } catch (error) {
+            if (!isNotFound(error)) throw error
+            etag = null
+            return null
+          }
+          if (!answer.ETag) throw new EnvError(`${Key} has no ETag; cannot safely edit it`)
+          etag = answer.ETag
+          const bytes = Buffer.from(await answer.Body.transformToByteArray())
+          return bytes.length ? bytes : null
+        },
+        async write({ sealed }) {
+          if (etag === undefined) throw new EnvError('A conditional stage edit requires an observed revision')
+          await clients.s3.send(
+            new PutObjectCommand({
+              Bucket,
+              Key,
+              Body: sealed,
+              ContentType: 'application/json',
+              ...(etag === null ? { IfNoneMatch: '*' } : { IfMatch: etag }),
+            }),
+          )
+        },
+      }
+      try {
+        return await work(snapshot)
+      } catch (error: any) {
+        if (
+          !['PreconditionFailed', 'ConditionalRequestConflict'].includes(error?.name) &&
+          ![409, 412].includes(error?.$metadata?.httpStatusCode)
+        )
+          throw error
+      }
+    }
+    throw new EnvError(`${Key} kept changing; retry after concurrent writes finish`)
+  },
   async read({ app, stage, versionId }) {
     const bucket = await readStateBucket(clients)
     const key = objectKey(app, stage)
@@ -109,9 +151,7 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
       answer = await clients.s3.send(new GetObjectCommand({ Bucket: bucket, Key: key, VersionId: versionId }))
     } catch (error) {
       if (!isNotFound(error)) throw error
-      // An unwritten stage is empty rather than an error, as SST reports it. A
-      // *pinned* version that has gone is not: answering empty there starts a
-      // caller with nothing at the moment it asked for something specific.
+      // A missing pinned revision is an error even when the current stage is empty.
       if (versionId) throw new EnvError(`${key} has no version ${versionId}; it was deleted or expired`)
       return null
     }
@@ -185,7 +225,7 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
   },
 
   async passphrase({ app, stage }) {
-    const name = `/sst/passphrase/${app}/${stage}`
+    const name = `/boxlite/pulumi/passphrase/${app}/${stage}`
     let answer
     try {
       answer = await clients.ssm.send(new GetParameterCommand({ Name: name, WithDecryption: true }))
@@ -211,13 +251,19 @@ export const awsBackend = (clients: AwsClients): StoreBackend => ({
       )
     },
 
-    readLock: ({ app, stage }) => readObject(clients, lockKey(app, stage)),
+    async readLock({ app, stage }) {
+      const held = await lockFiles(clients, app, stage)
+      if (!held.length) return null
+      if (held.length > 1)
+        throw new EnvError(`${app}/${stage} has ${held.length} locks; inspect the bucket before dropping any`)
+      return readObject(clients, held[0]!)
+    },
 
     async removeLock({ app, stage }) {
       const bucket = await readStateBucket(clients)
-      // S3 deletes a key that was never there without complaint, so whether a
-      // lock existed is the caller's question and is answered by reading first.
-      await clients.s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: lockKey(app, stage) }))
+      for (const key of await lockFiles(clients, app, stage)) {
+        await clients.s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+      }
     },
   },
 })

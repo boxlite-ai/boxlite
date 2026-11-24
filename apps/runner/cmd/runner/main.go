@@ -212,19 +212,22 @@ func run() int {
 
 	if cfg.ApiVersion == 2 {
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
-			Interval:           cfg.HealthcheckInterval,
-			Timeout:            cfg.HealthcheckTimeout,
-			Collector:          metricsCollector,
-			Logger:             logger,
-			Domain:             cfg.Domain,
-			ApiPort:            cfg.ApiPort,
-			ProxyPort:          cfg.ApiPort,
-			TlsEnabled:         cfg.EnableTLS,
-			Boxlite:            boxliteClient,
-			GCPProjectID:       cfg.GCPProjectID,
-			GCPZone:            cfg.GCPZone,
-			RunnerDataDiskName: cfg.RunnerDataDiskName,
-			RunnerDataDiskType: cfg.RunnerDataDiskType,
+			Interval:               cfg.HealthcheckInterval,
+			Timeout:                cfg.HealthcheckTimeout,
+			Collector:              metricsCollector,
+			Logger:                 logger,
+			Domain:                 cfg.Domain,
+			ApiPort:                cfg.ApiPort,
+			ProxyPort:              cfg.ApiPort,
+			TlsEnabled:             cfg.EnableTLS,
+			Boxlite:                boxliteClient,
+			GCPProjectID:           cfg.GCPProjectID,
+			GCPZone:                cfg.GCPZone,
+			RunnerDataDiskProvider: cfg.RunnerDataDiskProvider,
+			RunnerDataDiskProject:  cfg.RunnerDataDiskProject,
+			RunnerDataDiskZone:     cfg.RunnerDataDiskZone,
+			RunnerDataDiskName:     cfg.RunnerDataDiskName,
+			RunnerDataDiskType:     cfg.RunnerDataDiskType,
 		})
 		if err != nil {
 			logger.Error("Failed to create healthcheck service", "error", err)
@@ -365,6 +368,7 @@ func s3ArchiveStore(cfg *config.Config, logger *slog.Logger) storage.ArchiveStor
 		Region:          cfg.AWSRegion,
 		AccessKeyId:     cfg.AWSAccessKeyId,
 		SecretAccessKey: cfg.AWSSecretAccessKey,
+		SessionToken:    cfg.AWSSessionToken,
 		Bucket:          cfg.AWSDefaultBucket,
 	})
 	if err != nil {

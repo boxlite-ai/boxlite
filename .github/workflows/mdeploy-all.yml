@@ -405,17 +405,11 @@ jobs:
           output="$(npm run --silent mbuild inspect -- --stage "${{ inputs.stage }}")"
           echo "$output" >> "$GITHUB_OUTPUT"
 
-      - name: Check component deployment support
-        if: inputs.components != 'api+runner' && steps.config.outputs.kind != 'artifact-registry'
-        run: |
-          echo '::error title=components::AWS/SST does not support independent API/Runner deployment; select api+runner'
-          exit 1
-
       - name: Federate an AWS identity
         if: steps.config.outputs.kind == 'ecr'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
+          role-to-assume: ${{ vars.AWS_PULUMI_DEPLOY_ROLE_ARN }}
           aws-region: ${{ steps.config.outputs.region }}
           role-session-name: mdeploy-all-plan-${{ github.run_id }}
 
@@ -520,7 +514,7 @@ jobs:
         uses: ./.github/actions/mbuild
         with:
           stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-pulumi-deploy-role-arn: ${{ vars.AWS_PULUMI_DEPLOY_ROLE_ARN }}
           gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
           command: publish
@@ -532,7 +526,7 @@ jobs:
         uses: ./.github/actions/build-staged-runner
         with:
           stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-pulumi-deploy-role-arn: ${{ vars.AWS_PULUMI_DEPLOY_ROLE_ARN }}
           gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           gcp-deployer: ${{ vars.GCP_DEPLOYER }}
           stage: ${{ inputs.stage }}
@@ -543,7 +537,7 @@ jobs:
         uses: ./.github/actions/mdeploy
         with:
           stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-pulumi-deploy-role-arn: ${{ vars.AWS_PULUMI_DEPLOY_ROLE_ARN }}
           gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           gcp-deployer: ${{ vars.GCP_DEPLOYER }}
           gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
@@ -598,7 +592,7 @@ jobs:
       - uses: ./.github/actions/mdeploy
         with:
           stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+          aws-pulumi-deploy-role-arn: ${{ vars.AWS_PULUMI_DEPLOY_ROLE_ARN }}
           gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           gcp-deployer: ${{ vars.GCP_DEPLOYER }}
           gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}

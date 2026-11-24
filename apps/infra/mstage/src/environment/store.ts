@@ -24,8 +24,7 @@ export const ambientClients = (region: string): Clients => awsAmbientClients(reg
  * Where AWS clients become a backend. The overload leaves existing call sites
  * unchanged while letting a GCP caller pass a backend it built itself.
  */
-const backendFrom = (source: Clients | StoreBackend): StoreBackend =>
-  'home' in source ? source : awsBackend(source)
+const backendFrom = (source: Clients | StoreBackend): StoreBackend => ('home' in source ? source : awsBackend(source))
 
 /** One stage's map. A stage that was never written is empty rather than an error. */
 export const readEnvironment = async ({
@@ -131,6 +130,8 @@ export const setValues = async ({
     }
   }
   const backend = backendFrom(clients)
+  if (backend.edit)
+    return backend.edit({ app, stage }, (snapshot) => setValues({ clients: snapshot, app, stage, entries, derive }))
   const current = await readEnvironment({ clients: backend, app, stage })
 
   const next = { ...current }
@@ -173,6 +174,8 @@ export const deleteValues = async ({
   names: readonly string[]
 }): Promise<{ outcomes: DeleteOutcome[] }> => {
   const backend = backendFrom(clients)
+  if (backend.edit)
+    return backend.edit({ app, stage }, (snapshot) => deleteValues({ clients: snapshot, app, stage, names }))
   const current = await readEnvironment({ clients: backend, app, stage })
   // `hasOwn`, not `in`, for the reason `setValues` uses it: the map came out of
   // `JSON.parse`, so it inherits `toString` and the rest of Object.prototype.

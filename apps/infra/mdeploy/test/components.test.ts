@@ -9,7 +9,6 @@ import { runnerFleetFrom } from '../src/stack-env.ts'
 import { gcpRunnerProvider } from '../stack/providers/gcp/runners.ts'
 import { resolveRunnerBinary } from '../stack/runner-binary.ts'
 import { gcpTarget, pulumiDeploy } from '../src/pulumi.ts'
-import { awsTarget } from '../src/sst.ts'
 import { run } from '../src/run.ts'
 
 const environment = { MSTAGE_CONFIG: fileURLToPath(new URL('../../.mstage.config.example.json', import.meta.url)) }
@@ -100,7 +99,7 @@ test('component selection defaults to the full graph and rejects invalid or unsu
   for (const value of ['', 'all', 'proxy', true, []])
     assert.throws(() => deploymentComponents({ home: 'gcp', value }), /--components must/)
   for (const value of ['api', 'runner']) {
-    assert.throws(() => deploymentComponents({ home: 'aws', value }), /AWS\/SST does not support/)
+    assert.equal(deploymentComponents({ home: 'aws', value }), value)
     for (const intent of ['remove', 'refresh'] as const)
       assert.throws(() => deploymentComponents({ home: 'gcp', value, intent }), /deploy and --diff only/)
   }
@@ -229,6 +228,7 @@ for (const components of ['api', 'runner', 'api+runner'] as const) {
                 exportStack: async () => ({ deployment: { resources } }),
                 preview: async (options) => {
                   calls.push({ method: 'diff', options })
+                  options.onEvent?.({ sequence: 1, timestamp: 0, summaryEvent: {} } as any)
                 },
                 up: async (options) => {
                   calls.push({ method: 'deploy', options })
@@ -243,33 +243,18 @@ for (const components of ['api', 'runner', 'api+runner'] as const) {
       assert.equal(calls.length, 1)
       assert.equal(calls[0]!.method, intent)
       const actual = calls[0]!.options
-      if (components === 'api+runner') assert.equal(actual.target, undefined)
-      else {
+      if (components === 'api+runner') {
+        assert.equal(actual.target, undefined)
+      } else {
+        assert.equal(actual.refresh, true)
         assert.deepEqual(actual.target, componentTargets({ components, app, stage, resources, environment: {} }))
         assert.equal(actual.targetDependents, false)
         if (components === 'api')
-          assert.ok(
-            actual.target.some((urn: string) => urn.endsWith('::ApiSecretAccess-*')),
-            'new API secret grants need not exist in old state',
-          )
+          assert.ok(actual.target.some((urn: string) => urn.endsWith('::ApiSecretAccess-*')))
       }
       assert.ok(logs.every((line) => !line.includes('synthetic-passphrase')))
     })
 }
-
-test('AWS adapter refuses a scoped request before identity resolution or SST spawn', async () => {
-  const target = awsTarget({
-    config,
-    scope,
-    backend: {} as any,
-    identity: {
-      assertUsableFor: async () => assert.fail('identity used'),
-      credentials: async () => assert.fail('credentials used'),
-    },
-    spawnProcess: (() => assert.fail('SST spawned')) as any,
-  })
-  await assert.rejects(target.run({ components: 'api', log: () => {} }), /AWS\/SST does not support/)
-})
 
 test('a missing scoped workload is refused before config writes or engine updates', async () => {
   const calls: string[] = []
@@ -319,7 +304,6 @@ test('protected-stage confirmation remains required with the new selection param
 
 test('invalid CLI selections stop before login and stage-store access', async () => {
   for (const argv of [
-    ['--stage', 'dev', '--components', 'api'],
     ['--stage', stage, '--components', 'proxy'],
     ['--stage', stage, '--components', 'runner', '--remove', '--confirm'],
     ['--stage', stage, '--components', 'api', '--refresh'],
@@ -332,6 +316,6 @@ test('invalid CLI selections stop before login and stage-store access', async ()
         checkLogin: async () => assert.fail('login used'),
         fetchEnv: async () => assert.fail('store used'),
       }),
-      /AWS\/SST does not support|--components/,
+      /--components/,
     )
 })

@@ -2,12 +2,11 @@
 
 AWS runs the API, proxy and collector on ECS Fargate, with EC2 runners and managed state services.
 
-# AWS architecture
+## Details
 
 [Cloud guide](README.md) · [Infrastructure index](../../README.md)
 
 This diagram describes source configuration, not a live account inventory.
-Review the [bootstrap compatibility boundary](../../bootstrap/aws/README.md#aws-mdeploy-compatibility) before choosing a deployment path.
 
 [Networking](networking.md) · [Cost inventory](costs.md)
 
@@ -34,7 +33,10 @@ flowchart TB
   box[["Box microVM"]]
   pg[("RDS PostgreSQL")]
   redis[("ElastiCache Redis")]
-  s3[("S3 objects + volumes")]
+  s3[("S3 objects + volumes + checkpoints")]
+  credentials[("Secrets Manager<br/>Registry credentials")]
+  private_registry["ECS Registry Proxy<br/>private TLS NLB"]
+  data[("Retained gp3<br/>Runner data")]
   otel["ECS Fargate<br/>OTel Collector · internal ALB"]
   ch[("Optional ClickHouse<br/>EC2 + EBS or managed")]
  end
@@ -50,7 +52,12 @@ flowchart TB
  api -->|"Schedule boxes"|runner
  api -. "JWT / JWKS" .->idp
  api -->otel -->ch
- runner -->|"Pull box images"|registry
+ runner -->|"Public images"|registry
+ runner -->|"Private pulls"|private_registry -->registry
+ api -->|"Write/revoke"|credentials
+ private_registry -->|"Read pinned versions"|credentials
+ runner -->data
+ runner -->|"Checkpoint archives"|s3
 ```
 
 
@@ -67,7 +74,9 @@ flowchart TB
 
     subgraph aws_cloud["AWS cloud"]
         cf["CloudFront<br/>STACK_DOMAIN"]
-        s3[("S3<br/>storage + box volumes")]
+        s3[("S3<br/>storage + volumes + checkpoints")]
+        credentials[("Secrets Manager<br/>Registry credentials")]
+        data[("Retained EBS gp3<br/>Runner data")]
 
         subgraph vpc["VPC"]
             subgraph public_ingress["public ingress · public subnets"]
@@ -78,6 +87,7 @@ flowchart TB
             subgraph private_services["private services · ECS Fargate"]
                 api["API + Dashboard · NestJS<br/>:3000"]
                 proxy["Proxy<br/>:4000"]
+                private_registry["Registry Proxy<br/>private TLS NLB · :4100"]
 
                 otel["OTel Collector<br/>:4318<br/>internal only"]
             end
@@ -130,9 +140,14 @@ flowchart TB
     runner_api runner_to_otel@-->|"host + box OTLP"| otel
     boxlite_core boxlite_to_boxes@-->|"create + run"| boxes
     boxlite_core boxlite_to_s3@-->|"mount volumes"| s3
-    boxlite_core boxlite_to_ghcr@-->|"pull images"| ghcr
+    boxlite_core boxlite_to_ghcr@-->|"public images"| ghcr
+    runner_api -->|"private pulls"| private_registry --> ghcr
+    api -->|"write/revoke"| credentials
+    private_registry -->|"read"| credentials
+    runner_api --> data
+    runner_api -->|"checkpoint archives"| s3
 
     otel otel_to_telemetry@-.->|"configured export"| telemetry
 ```
 
-Sources: [AWS providers](../../mdeploy/stack/providers/aws/), [retained legacy stack](../../stack/), [legacy SST entrypoint](../../sst.config.ts).
+Sources: [AWS providers](../../mdeploy/stack/providers/aws/), [retained legacy stack](../../stack/), [native AWS entrypoint](../../mdeploy/pulumi/aws-program.ts).

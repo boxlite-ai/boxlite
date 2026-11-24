@@ -9,11 +9,11 @@ AWS hosts optional ClickHouse on EC2 with retained EBS and SSM reconciliation an
 Follow the shared [backend configuration](../clickhouse.md#select-a-backend)
 and [ingestion checks](../clickhouse.md#verify-ingestion-and-queries).
 Platform stdout/stderr, load-balancer health and cloud logs remain in CloudWatch.
-The retained legacy stack selects its mode through `CLICKHOUSE_MODE`; mdeploy uses the stage declaration.
+Select the backend mode in the stage declaration.
 
 ## Managed credentials
 
-The writer/reader `_PASSWORD_SECRET_ARN` inputs are separate Secrets Manager ARNs.
+The writer/reader `_PASSWORD_SECRET_ARN` inputs are separate Secrets Manager ARNs in the workload path for the app and stage.
 Check runtime read grants and restart/rollout behavior when rotating credentials; keep passwords out of the URL.
 
 ## Self-hosted lifecycle
@@ -39,8 +39,7 @@ is not the retained ClickHouse telemetry dataset. Confirm the target account, re
 
 ## Verify the result
 
-Verify insertion and queries independently of VM health. The retained legacy deployment includes
-self-hosted smoke checks; do not assume current mdeploy performs the same checks.
+After deployment, insert a test record and query it to verify ingestion and reads.
 See [retained data precautions](../clickhouse.md#retained-data) before changing backend mode or removing disks.
 
 Source: [ClickHouse provider](../../mdeploy/stack/providers/aws/clickhouse.ts).

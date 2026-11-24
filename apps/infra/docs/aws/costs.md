@@ -6,18 +6,17 @@ Budget for AWS hosting, state, storage, networking and operational services acco
 
 [Cloud guide](README.md) · [Infrastructure index](../../README.md)
 
-This inventory follows the [AWS provider](../../mdeploy/stack/providers/aws/) and retained
-[legacy stack](../../stack/); it is not a live bill or a fixed monthly estimate.
+This inventory lists resources provisioned by the [AWS provider](../../mdeploy/stack/providers/aws/).
 
 | Resource family | BoxLite use |
 | --- | --- |
-| ECS Fargate | API/dashboard, proxy and OTel collector |
-| EC2 and EBS | Runner hosts; optional ClickHouse and retained data disks |
+| ECS Fargate | API/dashboard, proxy, OTel collector and Registry Proxy |
+| EC2 and EBS | Runner hosts and retained gp3 data volumes; optional ClickHouse |
 | RDS | PostgreSQL compute, storage, configured backups and availability |
 | ElastiCache | Redis capacity and availability |
-| S3 | Application objects, volumes, deployment assets/state and runner artifacts |
+| S3 | Application objects, volumes, deployment state, checkpoints and Runner artifacts |
 | ECR | Container images |
-| ALB and NLB | API, proxy and internal service entrypoints |
+| ALB and NLB | API, proxy, private Registry Proxy and internal service entrypoints |
 | CloudFront | Dashboard delivery |
 | NAT instances, public IPv4 and data transfer | Service and runner egress, public endpoints and traffic |
 | Secrets Manager / SSM | Secret values and configuration according to storage tier and usage |

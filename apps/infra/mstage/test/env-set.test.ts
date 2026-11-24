@@ -33,8 +33,8 @@ const clients = ({ stored, passphrase = KEY }: { stored?: Record<string, string>
     ssm: {
       send: async (command: any) => {
         const name = command.input.Name
-        if (name === '/sst/bootstrap') return { Parameter: { Value: JSON.stringify({ state: 'sst-state-x' }) } }
-        if (name === '/sst/passphrase/boxlite/dev') return { Parameter: { Value: passphrase.toString('base64') } }
+        if (name === '/boxlite/pulumi/bootstrap') return { Parameter: { Value: JSON.stringify({ state: 'sst-state-x' }) } }
+        if (name === '/boxlite/pulumi/passphrase/boxlite/dev') return { Parameter: { Value: passphrase.toString('base64') } }
         throw notFound('ParameterNotFound')
       },
     },
@@ -47,7 +47,7 @@ const clients = ({ stored, passphrase = KEY }: { stored?: Record<string, string>
         }
         const object = store[command.input.Key]
         if (!object) throw notFound('NoSuchKey')
-        return { Body: { transformToByteArray: async () => object } }
+        return { ETag: '"fixture"', Body: { transformToByteArray: async () => object } }
       },
     },
   }
@@ -113,7 +113,7 @@ test('a store with no passphrase is not written to, and no passphrase is invente
     ...fake,
     ssm: {
       send: async (command: any) => {
-        if (command.input.Name === '/sst/bootstrap') {
+        if (command.input.Name === '/boxlite/pulumi/bootstrap') {
           return { Parameter: { Value: JSON.stringify({ state: 'sst-state-x' }) } }
         }
         throw notFound('ParameterNotFound')
@@ -122,7 +122,7 @@ test('a store with no passphrase is not written to, and no passphrase is invente
   }
   await assert.rejects(
     () => setValues({ clients: noPassphrase, app: 'boxlite', stage: 'dev', entries: [['A', 'v']] }),
-    /\/sst\/passphrase\/boxlite\/dev does not exist/,
+    /\/boxlite\/pulumi\/passphrase\/boxlite\/dev does not exist/,
   )
   assert.equal(fake.puts.length, 0)
 })

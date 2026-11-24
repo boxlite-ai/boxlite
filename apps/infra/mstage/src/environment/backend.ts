@@ -2,8 +2,8 @@
  * What a cloud has to answer for mstage to keep a stage's configuration in it.
  *
  * Five questions, none mentioning a bucket, a parameter or a secret version:
- * the layout is the backend's business. On AWS it is SST's, because `sst
- * deploy` reads and writes the same objects; elsewhere mstage chooses.
+ * the layout is the backend's business. AWS retains the established
+ * environment envelope; both clouds use native Pulumi deployment state.
  *
  * `StateObjects` below adds the two objects the deploying engine keeps, grouped
  * separately because they belong to that engine rather than to mstage.
@@ -51,6 +51,7 @@ export type StoredVersion = {
  * — Pulumi already encrypted what is secret inside the checkpoint.
  */
 export type StateObjects = {
+  /** Read-only migration evidence from the previous deployment engine, when supported. */
   readCheckpoint: (input: { app: string; stage: string }) => Promise<Buffer | null>
   writeCheckpoint: (input: { app: string; stage: string; checkpoint: Buffer }) => Promise<void>
   readLock: (input: { app: string; stage: string }) => Promise<Buffer | null>
@@ -67,6 +68,8 @@ export type StateObjects = {
 export type StoreBackend = {
   /** Names the cloud this backend keeps configuration in. */
   readonly home: string
+  /** Execute a stage map edit against one revision, retrying when a concurrent writer wins. */
+  edit?: <T>(scope: { app: string; stage: string }, work: (snapshot: StoreBackend) => Promise<T>) => Promise<T>
   read: (input: { app: string; stage: string; versionId?: string }) => Promise<Buffer | null>
   write: (input: { app: string; stage: string; sealed: Buffer }) => Promise<void>
   /** The revision a deploy should pin, or null when there is nothing to pin. */
@@ -76,8 +79,7 @@ export type StoreBackend = {
   passphrase: (input: { app: string; stage: string }) => Promise<Buffer>
   /**
    * The deployment objects the engine of this home leaves for a stage. Which
-   * engine, and therefore which layout, is the backend's own business — SST on
-   * AWS, Pulumi on GCP.
+   * layout remains the backend's business; both clouds use Pulumi checkpoint paths.
    */
   readonly state: StateObjects
 }

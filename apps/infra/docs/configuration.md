@@ -14,7 +14,6 @@ Keep stage declarations in the ignored config file and application values in the
 | `.mstage.config.json` | Stage cloud, region/project/zone, login requirements, registry, scan policy, resource sizing and protection | No |
 | Encrypted stage store | Domains, feature settings, API keys and application secrets | No |
 | GitHub Environment variable | One stage declaration for CI, named `BOXLITE_MSTAGE_BOXLITE_APP_CONFIG` | No |
-| Bootstrap `.env` | Input to the retained AWS bootstrap/deployment path | No |
 
 There is no separate `mbuild.config.json` or `mdeploy.config.json`. Both tools read the two mstage files.
 The loader walks up from the working directory; `MSTAGE_ENV_CONFIG` and `MSTAGE_CONFIG` can name explicit paths.
@@ -72,9 +71,6 @@ its secret channel; Cloud Run uses `secretKeyRef`. The credential must not be a 
 environment value. Confirm runtime access to the referenced secret before rolling out the API.
 
 With no sitekey, mdeploy omits all widget settings and does not inject an unused secret reference.
-For the legacy SST path, enabling protection requires the stage-scoped `TURNSTILE_SECRET_KEY` via `sst secret set`, using
-stdin for the value. Its ordinary settings belong in the bootstrap `.env`/stage configuration;
-the secret does not. Use `.env.example` for the names and defaults.
 
 ## Runner sizing
 
@@ -82,8 +78,8 @@ the secret does not. Use `.env.example` for the names and defaults.
 The two largest tiers default to `n4-standard-32` and `n4-standard-64` on GCP,
 and `c8i.4xlarge` and `c8i.8xlarge` on AWS.
 
-In each stage, optional
-`machineTypes` entries override the cloud machine for individual tiers. Choose
+Both clouds require `rootDiskGb` and accept `dataDiskGb` for a separate data disk.
+Optional `machineTypes` entries override the cloud machine for individual tiers. Choose
 machines that support nested virtualization and the runner's disk configuration.
 For example, a GCP stage can configure its runners as follows:
 
@@ -100,12 +96,14 @@ For example, a GCP stage can configure its runners as follows:
 ```
 
 Disk values are whole GiB from 20 through 4000. Omitting `dataDiskGb` keeps the 200 GiB default;
-the IOPS and throughput presets still come from `size`. AWS keeps box state on the root disk and
-rejects `dataDiskGb`; configure `rootDiskGb` there.
+GCP selects performance presets from `size`; AWS uses gp3 defaults.
+The data disk is independent of the operating-system root disk on both clouds.
 
-On GCP, sizing applies at creation. Existing hosts retain their recorded machine types and disk sizes,
+Runner sizing applies at creation on both clouds. Existing hosts retain their recorded machine types and disk sizes,
 so a fleet can keep smaller hosts while new runners use `large` and a 2 TiB data disk. Updating these
-settings does not resize existing GCP hosts. `RUNNERS` in the encrypted stage store controls the fleet
+settings does not resize existing hosts.
+
+`RUNNERS` in the encrypted stage store controls the fleet
 count; see [scale out](runners.md#scale-out).
 
 Keep the stage declaration and its GitHub Environment copy synchronized with `mstage config put`.
@@ -218,8 +216,7 @@ npm run mstage env versions -- --stage dev
 npm run mstage env list -- --stage dev --version '<stored-version-id>'
 ```
 
-Version availability depends on object retention. A missing requested version is an error; it does
-not silently fall back to the latest object. `mstage` does not merge SST `_fallback` values.
+Version availability depends on object retention. Requesting an unavailable version returns an error.
 
 ## Secret references
 
@@ -239,8 +236,8 @@ npm run --silent mstage config get -- --stage dev
 variable first, then the local file, and emits `{ "dev": { ... } }`. The setup action restores the
 ignored file for a job; promotion restores both source and destination declarations.
 
-The AWS bootstrap `.env` and legacy SST manifest belong to the legacy `boxlite` app.
-The current manifest names `boxlite-app`; see [AWS compatibility](../bootstrap/aws/README.md#aws-mdeploy-compatibility). Updating an ignored
+
+Updating an ignored
 local file does not update the encrypted stage store or a GitHub Environment until its corresponding
 write command runs. Verify each destination after changing it.
 

@@ -1,38 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-/*
- * The AWS half of `npm run bootstrap -- --stage <stage>`: the GitHub OIDC
- * deploy role, its runtime IAM permissions boundary, the Api image repository
- * and the Runner artifacts bucket — everything `mdeploy`/`mbuild` need on AWS
- * and cannot create for themselves, for the same shape of reason gcp.ts's own
- * header gives for its half: the deploy role cannot create itself, every role
- * SST creates must carry the runtime boundary before the first apply
- * (stack/deploy.ts's `$transform`), CI has to push an Api image before any
- * release/build deploy starts, and a build-mode Runner install reads a
- * tarball CI staged before the deploy that installs it ran.
- *
- * Reconciles rather than creates, exactly like gcp.ts: re-running is how an
- * edit to one of the JSON documents in aws/ reaches AWS. That replaces what
- * `aws cloudformation deploy` against bootstrap/aws/github-deploy-role.yaml
- * used to do, with the same shape boxlite-backoffice and boxlite-commerce use
- * for their own AWS bootstrap (apps/infra/iam/*.json there): checked-in IAM
- * documents, applied by a reconcile script instead of a CloudFormation stack.
- * See aws/README.md for what each document grants and why.
- *
- * Talks to the AWS CLI rather than adding an SDK client this directory does
- * not otherwise carry — mbuild already reaches ECR the same way
- * (mbuild/src/publish.ts), and the CLI is a prerequisite for deploying at all.
- */
+/** Bootstrap provisions the GitHub deploy role, the boundary applied by native Pulumi and the stage's artifact stores. */
 
+import { stageDataBucketName } from '../mdeploy/stack/providers/aws/bucket-names.ts'
+import { runnerArtifactsBucket } from '../mdeploy/stack/runner-binary.ts'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-
-import { apiImageRepository } from '../artifacts/api.js'
-import { runnerArtifactsBucketName } from '../artifacts/runner.js'
-import { runtimeBoundaryPolicyArn } from '../deployment/environment.js'
-import { githubDeployRoleName } from './environment.js'
 
 export class AwsBootstrapError extends Error {
   constructor(message: string) {
@@ -57,7 +32,32 @@ const DEPLOY_SESSION_DURATION_SECONDS = '7200'
 // unless an old, non-default one is pruned first. See ensureRuntimeBoundary.
 const MANAGED_POLICY_VERSION_LIMIT = 5
 
-type DocumentScope = { repo: string; stage: string; accountId: string; region: string }
+type NativeBootstrap = {
+  app: string
+  repository: string
+  volumePrefix: string
+  stateBucket: string
+  promotionSource?: { stage: string; region: string; repository: string }
+  immutableTags?: boolean
+  scanOnPush?: boolean
+}
+type DocumentScope = { repo: string; stage: string; accountId: string; region: string; native: NativeBootstrap }
+
+export const nativeAwsNames = ({ app, stage, accountId }: { app: string; stage: string; accountId: string }) => {
+  const roleName = `${app}-${stage}-pulumi-deploy`
+  const bucketName = runnerArtifactsBucket({ app, stage, accountId })
+  if (
+    !/^[a-z0-9][a-z0-9-]{0,62}$/.test(app) ||
+    !/^[a-z0-9][a-z0-9-]{0,62}$/.test(stage) ||
+    !/^[0-9]{12}$/.test(accountId) ||
+    (app + '-' + stage + '-').length > 28 ||
+    roleName.length > 64 ||
+    !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucketName)
+  ) {
+    throw new AwsBootstrapError('App, stage and account must produce valid native AWS role and artifact bucket names')
+  }
+  return { roleName, bucketName }
+}
 
 /**
  * Renders one of the JSON documents in `aws/` for one repository, stage,
@@ -71,17 +71,60 @@ type DocumentScope = { repo: string; stage: string; accountId: string; region: s
  * Exported because the useful assertion is that a real document comes out of
  * this with nothing left to substitute.
  */
-export const render = (contents: string, { repo, stage, accountId, region }: DocumentScope): string =>
-  contents.replaceAll('<REPO>', repo).replaceAll('<STAGE>', stage).replaceAll('<ACCOUNT>', accountId).replaceAll('<REGION>', region)
+export const render = (contents: string, { repo, stage, accountId, region, native }: DocumentScope): string =>
+  contents
+    .replaceAll('<REPO>', repo)
+    .replaceAll('<STAGE>', stage)
+    .replaceAll('<ACCOUNT>', accountId)
+    .replaceAll('<REGION>', region)
+    .replaceAll('<APP>', native.app)
+    .replaceAll('<ECR_REPOSITORY>', native.repository)
+    .replaceAll('<VOLUME_PREFIX>', native.volumePrefix)
+    .replaceAll('<STATE_BUCKET>', native.stateBucket)
+    .replaceAll('<ARTIFACT_BUCKET>', runnerArtifactsBucket({ app: native.app, stage, accountId }))
+    .replaceAll('<STORAGE_BUCKET>', stageDataBucketName(native.app, stage, accountId, 'storage'))
+    .replaceAll('<CHECKPOINT_BUCKET>', stageDataBucketName(native.app, stage, accountId, 'checkpoints'))
 
 const documentFor = (file: string, scope: DocumentScope): string => {
   let contents: string
   try {
-    contents = readFileSync(join(DOCUMENTS, file), 'utf8')
+    contents = readFileSync(join(DOCUMENTS, file !== 'deploy-role-trust.json' ? 'native-' + file : file), 'utf8')
   } catch (error) {
     throw new AwsBootstrapError(`Could not read bootstrap/aws/${file}: ${(error as Error).message}`)
   }
-  return render(contents, scope)
+  const rendered = render(contents, scope)
+  const source = scope.native.promotionSource
+  if (!source || file !== 'deploy-role-policy.json') return rendered
+
+  const bucket = nativeAwsNames({ app: scope.native.app, stage: source.stage, accountId: scope.accountId }).bucketName
+  const policy = JSON.parse(rendered)
+  policy.Statement.push(
+    {
+      Sid: 'ReadPromotionImages',
+      Effect: 'Allow',
+      Action: [
+        'ecr:DescribeImages',
+        'ecr:BatchCheckLayerAvailability',
+        'ecr:BatchGetImage',
+        'ecr:GetDownloadUrlForLayer',
+      ],
+      Resource: `arn:aws:ecr:${source.region}:${scope.accountId}:repository/${source.repository}`,
+    },
+    {
+      Sid: 'ListPromotionArtifacts',
+      Effect: 'Allow',
+      Action: 's3:ListBucket',
+      Resource: `arn:aws:s3:::${bucket}`,
+      Condition: { StringLike: { 's3:prefix': 'runner/*' } },
+    },
+    {
+      Sid: 'ReadPromotionArtifacts',
+      Effect: 'Allow',
+      Action: 's3:GetObject',
+      Resource: `arn:aws:s3:::${bucket}/runner/*`,
+    },
+  )
+  return JSON.stringify(policy)
 }
 
 /**
@@ -125,18 +168,17 @@ const awsFor = ({ run, region }: { run: Run; region: string }): Aws => {
   }
 }
 
-/**
- * The per-stage runtime permissions boundary every role SST creates must
- * carry. A customer-managed policy, not a role, so updating it is a new
- * policy *version* rather than an overwrite — see MANAGED_POLICY_VERSION_LIMIT.
- * Not a concern backoffice/commerce's own bootstrap has: both assume one
- * boundary already exists account-wide and never touch its lifecycle. Mine's
- * is per-stage (runtimeBoundaryPolicyArn) because this stack provisions its
- * own roles from nothing and needs a boundary before the first one exists, so
- * this file owns creating and versioning it.
- */
-const ensureRuntimeBoundary = async ({ aws, scope, log }: { aws: Aws; scope: DocumentScope; log: (line: string) => void }): Promise<string> => {
-  const arn = runtimeBoundaryPolicyArn({ accountId: scope.accountId, appName: 'boxlite', stage: scope.stage })
+/** Bootstrap versions the IAM permissions boundary that the Pulumi program attaches to every stage runtime role. */
+const ensureRuntimeBoundary = async ({
+  aws,
+  scope,
+  log,
+}: {
+  aws: Aws
+  scope: DocumentScope
+  log: (line: string) => void
+}): Promise<string> => {
+  const arn = `arn:aws:iam::${scope.accountId}:policy/${scope.native.app}-${scope.stage}-runtime-boundary`
   const document = documentFor('runtime-boundary-policy.json', scope)
   log(`==> ${arn}`)
 
@@ -145,9 +187,9 @@ const ensureRuntimeBoundary = async ({ aws, scope, log }: { aws: Aws; scope: Doc
       'iam',
       'create-policy',
       '--policy-name',
-      `boxlite-${scope.stage}-runtime-boundary`,
+      `${scope.native.app}-${scope.stage}-runtime-boundary`,
       '--description',
-      'Maximum data-plane permissions for roles created by the BoxLite SST stack',
+      'Maximum data-plane permissions for BoxLite workload roles',
       '--policy-document',
       document,
     ])
@@ -155,7 +197,12 @@ const ensureRuntimeBoundary = async ({ aws, scope, log }: { aws: Aws; scope: Doc
     return arn
   }
 
-  const { Versions } = await aws.read(`Could not list ${arn}'s versions`, ['iam', 'list-policy-versions', '--policy-arn', arn])
+  const { Versions } = await aws.read(`Could not list ${arn}'s versions`, [
+    'iam',
+    'list-policy-versions',
+    '--policy-arn',
+    arn,
+  ])
   const disposable = Versions.filter((version: any) => !version.IsDefaultVersion).sort(
     (a: any, b: any) => new Date(a.CreateDate).getTime() - new Date(b.CreateDate).getTime(),
   )
@@ -200,13 +247,28 @@ const ensureRuntimeBoundary = async ({ aws, scope, log }: { aws: Aws; scope: Doc
  * bootstrap its own copy of this role, trusting its own repository, without
  * editing a file first.
  */
-const ensureDeployRole = async ({ aws, scope, log }: { aws: Aws; scope: DocumentScope; log: (line: string) => void }): Promise<string> => {
-  const name = githubDeployRoleName(scope.stage)
+const ensureDeployRole = async ({
+  aws,
+  scope,
+  log,
+}: {
+  aws: Aws
+  scope: DocumentScope
+  log: (line: string) => void
+}): Promise<string> => {
+  const name = nativeAwsNames({ app: scope.native.app, stage: scope.stage, accountId: scope.accountId }).roleName
   const trust = documentFor('deploy-role-trust.json', scope)
   log(`==> ${name}`)
 
   if (await aws.present(['iam', 'get-role', '--role-name', name])) {
-    await aws.apply(`Could not update ${name}'s trust policy`, ['iam', 'update-assume-role-policy', '--role-name', name, '--policy-document', trust])
+    await aws.apply(`Could not update ${name}'s trust policy`, [
+      'iam',
+      'update-assume-role-policy',
+      '--role-name',
+      name,
+      '--policy-document',
+      trust,
+    ])
     await aws.apply(`Could not set ${name}'s session duration`, [
       'iam',
       'update-role',
@@ -232,16 +294,14 @@ const ensureDeployRole = async ({ aws, scope, log }: { aws: Aws; scope: Document
     log('    created')
   }
 
-  // The fence that makes CreateBoundedBoxLiteRoles/SetBoxLiteRoleBoundary satisfiable: without
-  // it, SST's own task and execution roles are created with no boundary, no Allow matches, and
-  // the deploy dies on iam:CreateRole (deployment/role-boundary.ts, deployment/verify-role.ts).
+  // Pulumi supplies the stage boundary on role creation. The deployment policy enforces that ARN.
   await aws.apply(`Could not write ${name}'s inline policy`, [
     'iam',
     'put-role-policy',
     '--role-name',
     name,
     '--policy-name',
-    'boxlite-sst-deploy',
+    'boxlite-pulumi-deploy',
     '--policy-document',
     documentFor('deploy-role-policy.json', scope),
   ])
@@ -256,11 +316,36 @@ const ensureDeployRole = async ({ aws, scope, log }: { aws: Aws; scope: Document
  * agreement by a test the way a CloudFormation resource name and a JS
  * constant needed to be.
  */
-const ensureApiImageRepository = async ({ aws, stage, log }: { aws: Aws; stage: string; log: (line: string) => void }): Promise<string> => {
-  const repository = apiImageRepository({ app: 'boxlite', stage })
+const ensureApiImageRepository = async ({
+  aws,
+  log,
+  repository,
+  settings,
+}: {
+  aws: Aws
+  repository: string
+  settings: NativeBootstrap
+  log: (line: string) => void
+}): Promise<string> => {
   log(`==> ${repository}`)
 
   if (await aws.present(['ecr', 'describe-repositories', '--repository-names', repository])) {
+    await aws.apply('Could not reconcile repository tag mutability', [
+      'ecr',
+      'put-image-tag-mutability',
+      '--repository-name',
+      repository,
+      '--image-tag-mutability',
+      settings.immutableTags === false ? 'MUTABLE' : 'IMMUTABLE',
+    ])
+    await aws.apply('Could not reconcile repository scanning', [
+      'ecr',
+      'put-image-scanning-configuration',
+      '--repository-name',
+      repository,
+      '--image-scanning-configuration',
+      'scanOnPush=' + (settings.scanOnPush !== false),
+    ])
     log('    already exists')
     return repository
   }
@@ -273,9 +358,9 @@ const ensureApiImageRepository = async ({ aws, stage, log }: { aws: Aws; stage: 
     '--repository-name',
     repository,
     '--image-tag-mutability',
-    'IMMUTABLE',
+    settings.immutableTags === false ? 'MUTABLE' : 'IMMUTABLE',
     '--image-scanning-configuration',
-    'scanOnPush=true',
+    'scanOnPush=' + (settings.scanOnPush !== false),
     '--encryption-configuration',
     'encryptionType=AES256',
   ])
@@ -301,21 +386,30 @@ const ensureArtifactsBucket = async ({
   accountId,
   region,
   log,
+  app,
 }: {
+  app: string
   aws: Aws
   stage: string
   accountId: string
   region: string
   log: (line: string) => void
 }): Promise<string> => {
-  const bucket = runnerArtifactsBucketName({ app: 'boxlite', stage, accountId })
+  const bucket = nativeAwsNames({ app, stage, accountId }).bucketName
   log(`==> ${bucket}`)
 
   if (await aws.present(['s3api', 'head-bucket', '--bucket', bucket])) {
     log('    already exists')
   } else {
-    const locationConfiguration = region === 'us-east-1' ? [] : ['--create-bucket-configuration', `LocationConstraint=${region}`]
-    await aws.apply(`Could not create ${bucket}`, ['s3api', 'create-bucket', '--bucket', bucket, ...locationConfiguration])
+    const locationConfiguration =
+      region === 'us-east-1' ? [] : ['--create-bucket-configuration', `LocationConstraint=${region}`]
+    await aws.apply(`Could not create ${bucket}`, [
+      's3api',
+      'create-bucket',
+      '--bucket',
+      bucket,
+      ...locationConfiguration,
+    ])
     log('    created')
   }
 
@@ -353,7 +447,14 @@ const ensureArtifactsBucket = async ({
     bucket,
     '--lifecycle-configuration',
     JSON.stringify({
-      Rules: [{ ID: 'expire-superseded-runner-builds', Filter: { Prefix: 'runner/' }, Status: 'Enabled', NoncurrentVersionExpiration: { NoncurrentDays: 30 } }],
+      Rules: [
+        {
+          ID: 'expire-superseded-runner-builds',
+          Filter: { Prefix: 'runner/' },
+          Status: 'Enabled',
+          NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+        },
+      ],
     }),
   ])
   log('    encryption, versioning, public-access block and lifecycle rule set')
@@ -361,6 +462,7 @@ const ensureArtifactsBucket = async ({
 }
 
 export type AwsBootstrapInput = {
+  native: NativeBootstrap
   run: Run
   repo: string
   stage: string
@@ -383,14 +485,45 @@ export type AwsBootstrapResult = {
  * one exported entry point, reconciling rather than creating, called once
  * from bootstrap.ts's main().
  */
-export const bootstrapAws = async ({ run, repo, stage, accountId, region, log }: AwsBootstrapInput): Promise<AwsBootstrapResult> => {
+export const bootstrapAws = async ({
+  run,
+  repo,
+  stage,
+  accountId,
+  region,
+  log,
+  native,
+}: AwsBootstrapInput): Promise<AwsBootstrapResult> => {
+  nativeAwsNames({ app: native.app, stage, accountId })
+  if (
+    !/^[a-z0-9][a-z0-9._/-]{1,255}$/.test(native.repository) ||
+    !/^[a-z0-9][a-z0-9-]{1,45}$/.test(native.volumePrefix) ||
+    !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(native.stateBucket)
+  ) {
+    throw new AwsBootstrapError('Invalid native AWS repository, volume prefix or state bucket')
+  }
+  const source = native.promotionSource
+  if (source) {
+    nativeAwsNames({ app: native.app, stage: source.stage, accountId })
+    if (
+      source.stage === stage ||
+      !/^[a-z]{2}(-[a-z0-9]+)+-[0-9]+$/.test(source.region) ||
+      !/^[a-z0-9][a-z0-9._/-]{1,255}$/.test(source.repository)
+    )
+      throw new AwsBootstrapError('Invalid AWS promotion source')
+  }
   const aws = awsFor({ run, region })
-  const scope: DocumentScope = { repo, stage, accountId, region }
+  const scope: DocumentScope = { repo, stage, accountId, region, native }
 
   const boundaryArn = await ensureRuntimeBoundary({ aws, scope, log })
   const roleArn = await ensureDeployRole({ aws, scope, log })
-  const repositoryName = await ensureApiImageRepository({ aws, stage, log })
-  const bucketName = await ensureArtifactsBucket({ aws, stage, accountId, region, log })
+  const repositoryName = await ensureApiImageRepository({
+    aws,
+    log,
+    repository: native.repository,
+    settings: native,
+  })
+  const bucketName = await ensureArtifactsBucket({ aws, stage, accountId, region, log, app: native.app })
 
   return { roleArn, boundaryArn, repositoryName, bucketName }
 }

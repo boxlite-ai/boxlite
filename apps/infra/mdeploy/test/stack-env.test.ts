@@ -295,8 +295,8 @@ test('StackEnvError is the single failure type callers can catch', () => {
  * it. Asserted by reading the two engine entry points rather than by trusting
  * that nobody will paste one into the other.
  */
-test('both engines read this one function rather than each reading the environment', () => {
-  const entries = ['../sst.config.ts', '../pulumi/program.ts'].map((path) =>
+test('both cloud programs read the shared environment and runner selectors', () => {
+  const entries = ['../pulumi/aws-program.ts', '../pulumi/program.ts'].map((path) =>
     readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8'),
   )
   for (const source of entries) {

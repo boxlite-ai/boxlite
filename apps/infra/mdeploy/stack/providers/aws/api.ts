@@ -1,262 +1,276 @@
-/*
- * The control plane on ECS, behind an application load balancer and a CDN.
- *
- * Two front doors, and both are deliberate. The CDN serves the dashboard's
- * static assets at the dashboard's own host; the load balancer answers
- * `api.<domain>` directly, because CloudFront caps a WebSocket at ten minutes
- * and times an origin read out at sixty seconds — which breaks `/attach`,
- * build-log streaming and file uploads. `url` is the CDN's and `address` is the
- * load balancer's, which is why the contract has both.
- *
- * The idle timeout is raised to an hour to match. AWS's own guidance is that a
- * target's keep-alive must be at least the balancer's idle timeout, and
- * `apps/api` sets its Node `keepAliveTimeout` to agree; the pair is what stops
- * a long-idle exec attach from being closed with a 408.
- *
- * Capabilities are expanded here, and this is the only file that knows what
- * *read telemetry* or *vend a volume credential* means on AWS. Each becomes an
- * inline policy on the task role, and each action list is one the API
- * demonstrably calls — see `storage.ts` for why that matters more than it
- * usually does.
- */
-
 import type { Api, ApiCapability, ApiDependencies, ApiProvider, ApiRequest } from '../../api.ts'
 import { publicHostsFor } from '../../api.ts'
 import { CACHE_PASSWORD_VARIABLE } from '../../cache.ts'
 import { CLICKHOUSE_PASSWORD_VARIABLE } from '../../clickhouse.ts'
-import type { WorkloadHost } from '../../cluster.ts'
 import { DATABASE_PASSWORD_VARIABLE } from '../../database.ts'
 import type { Placement } from '../../network.ts'
-import type { StorageBinding } from '../../storage.ts'
+import type { WorkloadHost } from '../../cluster.ts'
+import { awsCertificate, awsDnsName } from './certificate.ts'
+import { awsRuntimeRole, awsService } from './service.ts'
+import { instanceFor } from 'naming'
 
-const HEALTH = {
-  interval: '30 seconds',
-  timeout: '5 seconds',
-  healthyThreshold: 2,
-  unhealthyThreshold: 3,
-} as const
-
-/** An hour, to match `apps/api`'s own keep-alive. See the note above. */
-const IDLE_TIMEOUT_SECONDS = 3_600
-
-const onAws = (storage: { binding: StorageBinding }): Extract<StorageBinding, { cloud: 'aws' }> => {
-  if (storage.binding.cloud !== 'aws') throw new Error(`The AWS API was handed ${storage.binding.cloud} storage`)
-  return storage.binding
+const policy = (Statement: unknown[]) => JSON.stringify({ Version: '2012-10-17', Statement })
+const storageOnAws = (capability: Extract<ApiCapability, { storage: unknown }>) => {
+  const binding = capability.storage.binding
+  if (binding.cloud !== 'aws') throw new Error('The AWS API needs AWS storage')
+  return binding
 }
 
-/**
- * One capability, as the policy documents it becomes.
- *
- * A closed switch rather than a lookup table: a capability added to the
- * contract and not to this switch is a compile error here, which is the only
- * place it could be caught before the request that needed it.
- */
-const grantsFor = (capability: ApiCapability): $util.Input<string>[] => {
+/** Expand capabilities at the provider boundary; the common stack never constructs IAM. */
+export const awsApiGrantsFor = (capability: ApiCapability): $util.Input<string>[] => {
   switch (capability.kind) {
     case 'list-own-bucket':
-      return [onAws(capability.storage).listGrant]
+      return [storageOnAws(capability).listGrant]
     case 'manage-volume-buckets':
-      return [onAws(capability.storage).lifecycleGrant]
+      return [storageOnAws(capability).lifecycleGrant]
     case 'vend-volume-credentials':
       return [
-        onAws(capability.storage).credentialVending.roleArn.apply((arn: string) =>
-          JSON.stringify({
-            Version: '2012-10-17',
-            Statement: [{ Effect: 'Allow', Action: ['sts:AssumeRole'], Resource: [arn] }],
-          }),
+        storageOnAws(capability).credentialVending.roleArn.apply((arn: string) =>
+          policy([{ Effect: 'Allow', Action: 'sts:AssumeRole', Resource: arn }]),
         ),
       ]
     case 'read-telemetry':
-      // The password is delivered by reference, so the task role has to be
-      // allowed to resolve that reference. Nothing else in Secrets Manager.
       return capability.clickhouse.active
         ? [
             capability.clickhouse.reader.passwordRef.apply((arn: string) =>
-              JSON.stringify({
-                Version: '2012-10-17',
-                Statement: [{ Effect: 'Allow', Action: ['secretsmanager:GetSecretValue'], Resource: [arn] }],
-              }),
+              policy([{ Effect: 'Allow', Action: 'secretsmanager:GetSecretValue', Resource: arn }]),
             ),
           ]
         : []
     case 'read-secret':
       return [
         capability.ref.apply((arn: string) =>
-          JSON.stringify({
-            Version: '2012-10-17',
-            Statement: [{ Effect: 'Allow', Action: ['secretsmanager:GetSecretValue'], Resource: [arn] }],
-          }),
+          policy([{ Effect: 'Allow', Action: 'secretsmanager:GetSecretValue', Resource: arn }]),
         ),
       ]
-    case 'write-registry-credentials':
-      // This cloud runs no registry proxy and so keeps no credential store,
-      // and the stack only asks for this where one is active. Reaching here
-      // means that changed without anyone deciding what the grant is.
-      throw new Error(`AWS keeps no registry credential store, but was handed one on ${capability.store.binding.cloud}`)
+    case 'write-registry-credentials': {
+      const binding = capability.store.binding
+      if (binding.cloud !== 'aws') throw new Error('The AWS API needs an AWS registry credential store')
+      return [binding.writeGrant]
+    }
     case 'manage-checkpoint-archives':
-      // Checkpoint storage is reserved on this cloud, and the stack asks for
-      // this only where a checkpoint bucket is active.
-      throw new Error('AWS keeps no checkpoint bucket yet, but was asked to grant one')
+      return [
+        capability.checkpoints.bucket.apply((bucket: string) =>
+          policy([{ Effect: 'Allow', Action: 's3:DeleteObject', Resource: `arn:aws:s3:::${bucket}/checkpoints/*` }]),
+        ),
+      ]
     case 'read-filestore-instances':
       throw new Error('AWS has no GCP Filestore instances to read')
     case 'resize-runner-disks':
-      // This cloud's runners keep box state on the root disk; there is no
-      // per-host data disk to grow. Reaching here means the stack was composed
-      // for a capability whose cloud has nothing to bound it to.
-      throw new Error('AWS keeps no per-runner data disk, so there is nothing to resize')
+      return [
+        $resolve([aws.getCallerIdentityOutput({}).accountId, aws.getRegionOutput({}).name]).apply(([account, region]) =>
+          policy([
+            {
+              Effect: 'Allow',
+              Action: 'ec2:ModifyVolume',
+              Resource: `arn:aws:ec2:${region}:${account}:volume/*`,
+              Condition: {
+                StringEquals: {
+                  'ec2:ResourceTag/boxlite:app': $app.name,
+                  'ec2:ResourceTag/boxlite:stage': $app.stage,
+                  'ec2:ResourceTag/boxlite:role': 'runner-data',
+                },
+              },
+            },
+            { Effect: 'Allow', Action: ['ec2:DescribeVolumes', 'ec2:DescribeVolumesModifications'], Resource: '*' },
+          ]),
+        ),
+      ]
   }
 }
 
 export const awsApiProvider =
   ({
     dependencies,
-    dns,
+    zoneId,
     domain,
     dashboardDomain,
   }: {
     dependencies: ApiDependencies
-    dns: ReturnType<typeof sst.cloudflare.dns>
-    /** The stage's own domain. `api.<domain>` is what the balancer answers on. */
+    zoneId: string
     domain: string
-    /** Where the dashboard is served, or null for the stage domain itself. */
     dashboardDomain: string | null
   }): ApiProvider =>
   (request: ApiRequest): Api => {
     const host = dependencies.host as Extract<WorkloadHost, { cloud: 'aws' }>
     const placement = dependencies.placement as Extract<Placement, { cloud: 'aws' }>
-    const storage = onAws(dependencies.storage)
-    /*
-     * The CDN's name and the balancer's, from the one function that composes
-     * them. `api-environment.ts` asks the same one for the two origins it hands
-     * the dashboard, so neither front door can be published on a name the
-     * dashboard was not told about.
-     */
+    const network = host.cluster.network
     const hosts = publicHostsFor({ domain, dashboardDomain })
-
-    const service = new sst.aws.Service(
-      'Api',
-      {
-        cluster: host.cluster,
-        wait: true,
-        image: request.image,
-        loadBalancer: {
-          domain: { name: hosts.api, dns },
-          rules: [{ listen: '443/https', forward: `${request.port}/http` }],
-          // The API is mounted globally under /api, so the balancer's default
-          // probe of `/` would mark every healthy task unhealthy.
-          health: { [`${request.port}/http`]: { path: '/api/health', ...HEALTH } },
-        },
-        environment: request.environment,
-        // Every name that reaches the container by reference: the store's own
-        // addresses, and the three passwords the stack decided.
-        ssm: {
-          ...request.secrets,
-          [DATABASE_PASSWORD_VARIABLE]: dependencies.database.binding.passwordRef,
-          [CACHE_PASSWORD_VARIABLE]: dependencies.cache.binding.passwordRef,
-          ...(dependencies.clickhouse.active
-            ? { [CLICKHOUSE_PASSWORD_VARIABLE]: dependencies.clickhouse.reader.passwordRef }
-            : {}),
-        },
-        transform: {
-          loadBalancer: (args: any) => {
-            args.loadBalancerType = 'application'
-            args.idleTimeout = IDLE_TIMEOUT_SECONDS
-          },
-          // The reachability the network arranged, plus membership of the two
-          // data stores' own groups. Attached rather than assumed: a task
-          // without them cannot reach the database however correct its
-          // credentials are.
-          service: (args: any) => {
-            args.networkConfiguration = {
-              ...args.networkConfiguration,
-              subnets: placement.subnets,
-              securityGroups: [
-                ...placement.securityGroups,
-                dependencies.database.binding.clientGrant,
-                dependencies.cache.binding.clientGrant,
-              ],
-              assignPublicIp: false,
-            }
-          },
-        },
+    const certificate = awsCertificate('ApiCertificate', [{ domain: hosts.api, zoneId }])
+    const ingress = new aws.ec2.SecurityGroup('ApiBalancerSecurityGroup', {
+      vpcId: network.vpcId,
+      ingress: [{ protocol: 'tcp', fromPort: 443, toPort: 443, cidrBlocks: ['0.0.0.0/0'] }],
+      egress: [{ protocol: '-1', fromPort: 0, toPort: 0, cidrBlocks: [network.cidr] }],
+    })
+    const allowTask = new aws.vpc.SecurityGroupIngressRule('ApiIngressFromBalancer', {
+      securityGroupId: placement.securityGroups[0],
+      referencedSecurityGroupId: ingress.id,
+      ipProtocol: 'tcp',
+      fromPort: request.port,
+      toPort: request.port,
+    })
+    const balancer = new aws.lb.LoadBalancer('ApiLoadBalancer', {
+      loadBalancerType: 'application',
+      subnets: network.publicSubnets,
+      securityGroups: [ingress.id],
+      idleTimeout: 3600,
+    })
+    const target = new aws.lb.TargetGroup('ApiTarget', {
+      vpcId: network.vpcId,
+      targetType: 'ip',
+      protocol: 'HTTP',
+      port: request.port,
+      healthCheck: {
+        path: '/api/health',
+        protocol: 'HTTP',
+        matcher: '200',
+        interval: 30,
+        healthyThreshold: 2,
+        unhealthyThreshold: 3,
       },
-      { dependsOn: dependencies.waitFor },
+    })
+    const listener = new aws.lb.Listener('ApiListener', {
+      loadBalancerArn: balancer.arn,
+      port: 443,
+      protocol: 'HTTPS',
+      certificateArn: certificate.certificateArn,
+      defaultActions: [{ type: 'forward', targetGroupArn: target.arn }],
+    })
+    const role = awsRuntimeRole('ApiTaskRole', 'ecs-tasks.amazonaws.com')
+    const grants = request.capabilities.flatMap(awsApiGrantsFor).map(
+      (grant, index) =>
+        new aws.iam.RolePolicy(`ApiCapability${index}`, {
+          role: role.name,
+          policy: grant,
+        }),
     )
-
-    /*
-     * The role the API assumes to vend a per-organization credential.
-     *
-     * Created here rather than in the storage module because its trust policy
-     * has to name the task role, which exists only once the service does. The
-     * storage module declared its *name* up front, which is what breaks the
-     * cycle: the API's environment could carry the name before the role was
-     * real.
-     */
+    const storage = dependencies.storage.binding
+    if (storage.cloud !== 'aws') throw new Error('The AWS API needs AWS storage')
     const vending = new aws.iam.Role('S3AccessRole', {
       name: storage.credentialVending.roleName,
-      assumeRolePolicy: service.nodes.taskRole.arn.apply((taskRoleArn: string) =>
-        JSON.stringify({
-          Version: '2012-10-17',
-          Statement: [{ Effect: 'Allow', Principal: { AWS: taskRoleArn }, Action: 'sts:AssumeRole' }],
-        }),
+      assumeRolePolicy: role.arn.apply((arn: string) =>
+        policy([{ Effect: 'Allow', Principal: { AWS: arn }, Action: 'sts:AssumeRole' }]),
       ),
     })
-    // What a vended session may do at most. The per-organization session policy
-    // the API attaches narrows it further; effective access is the intersection.
-    new aws.iam.RolePolicy('S3AccessRolePolicy', {
+    const vendingGrant = new aws.iam.RolePolicy('S3AccessRolePolicy', {
       role: vending.name,
-      policy: storage.bucketArn.apply((bucketArn: string) =>
-        JSON.stringify({
-          Version: '2012-10-17',
-          Statement: [
-            { Effect: 'Allow', Action: ['s3:GetObject', 's3:PutObject'], Resource: [`${bucketArn}/*`] },
-            { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: [bucketArn] },
-          ],
-        }),
+      policy: storage.bucketArn.apply((arn: string) =>
+        policy([
+          { Effect: 'Allow', Action: ['s3:GetObject', 's3:PutObject'], Resource: `${arn}/*` },
+          { Effect: 'Allow', Action: 's3:ListBucket', Resource: arn },
+        ]),
       ),
     })
-
-    const attached = request.capabilities.flatMap(grantsFor).map(
-      (policy, index) =>
-        new aws.iam.RolePolicy(`ApiCapability${index}`, {
-          role: service.nodes.taskRole.name,
-          policy,
+    const region = aws.getRegionOutput({}).name
+    const account = aws.getCallerIdentityOutput({}).accountId
+    const service = awsService('Api', {
+      autoscaled: true,
+      host,
+      placement: {
+        ...placement,
+        securityGroups: [
+          ...placement.securityGroups,
+          dependencies.database.binding.clientGrant,
+          dependencies.cache.binding.clientGrant,
+        ],
+      },
+      image: request.image,
+      port: request.port,
+      taskRole: role,
+      environment: {
+        ...request.environment,
+        AWS_REGION: region,
+        AWS_ACCOUNT_ID: account,
+        S3_ENDPOINT: $interpolate`https://s3.${region}.amazonaws.com`,
+        S3_STS_ENDPOINT: $interpolate`https://sts.${region}.amazonaws.com`,
+        S3_ACCOUNT_ID: account,
+        S3_ROLE_NAME: storage.credentialVending.roleName,
+        RUNNER_DISK_CLOUD: 'aws',
+        RUNNER_DISK_APP: $app.name,
+        RUNNER_DISK_STAGE: $app.stage,
+      },
+      secrets: {
+        ...request.secrets,
+        [DATABASE_PASSWORD_VARIABLE]: dependencies.database.binding.passwordRef,
+        [CACHE_PASSWORD_VARIABLE]: dependencies.cache.binding.passwordRef,
+        ...(dependencies.clickhouse.active
+          ? { [CLICKHOUSE_PASSWORD_VARIABLE]: dependencies.clickhouse.reader.passwordRef }
+          : {}),
+      },
+      targets: [{ targetGroupArn: target.arn, containerPort: request.port }],
+      dependsOn: [...dependencies.waitFor, listener, allowTask, vendingGrant, ...grants],
+    })
+    const record = awsDnsName('ApiRecord', hosts.api, zoneId, balancer.dnsName)
+    // CloudFront certificates are regional to us-east-1 even when the application is elsewhere.
+    const cdnRegion = new aws.Provider('DashboardCertificateRegion', { region: 'us-east-1' })
+    const dashboardCertificate = awsCertificate('DashboardCertificate', [{ domain: hosts.dashboard, zoneId }], {
+      provider: cdnRegion,
+    })
+    const cdn = new aws.cloudfront.Distribution(
+      'ApiCdn',
+      {
+        enabled: true,
+        aliases: [hosts.dashboard],
+        isIpv6Enabled: true,
+        origins: [
+          {
+            originId: 'api',
+            domainName: hosts.api,
+            customOriginConfig: {
+              httpPort: 80,
+              httpsPort: 443,
+              originProtocolPolicy: 'https-only',
+              originSslProtocols: ['TLSv1.2'],
+              originReadTimeout: 60,
+            },
+          },
+        ],
+        defaultCacheBehavior: {
+          targetOriginId: 'api',
+          viewerProtocolPolicy: 'redirect-to-https',
+          allowedMethods: ['GET', 'HEAD', 'OPTIONS', 'PUT', 'POST', 'PATCH', 'DELETE'],
+          cachedMethods: ['GET', 'HEAD'],
+          compress: true,
+          cachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad',
+          originRequestPolicyId: 'b689b0a8-53d0-40ab-baf2-68738e2966ac',
+        },
+        restrictions: { geoRestriction: { restrictionType: 'none' } },
+        viewerCertificate: {
+          acmCertificateArn: dashboardCertificate.certificateArn,
+          sslSupportMethod: 'sni-only',
+          minimumProtocolVersion: 'TLSv1.2_2021',
+        },
+        tags: { Name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'dashboard' }) },
+      },
+      { dependsOn: [service.service, record] },
+    )
+    const scaling = new aws.appautoscaling.Target('ApiScalingTarget', {
+      serviceNamespace: 'ecs',
+      scalableDimension: 'ecs:service:DesiredCount',
+      resourceId: $interpolate`service/${host.cluster.name}/${service.service.name}`,
+      minCapacity: 1,
+      maxCapacity: 4,
+    })
+    const scalingPolicies = ['CPU', 'Memory'].map(
+      (metric) =>
+        new aws.appautoscaling.Policy(`Api${metric}Scaling`, {
+          serviceNamespace: scaling.serviceNamespace,
+          scalableDimension: scaling.scalableDimension,
+          resourceId: scaling.resourceId,
+          policyType: 'TargetTrackingScaling',
+          targetTrackingScalingPolicyConfiguration: {
+            predefinedMetricSpecification: { predefinedMetricType: `ECSServiceAverage${metric}Utilization` },
+            targetValue: 70,
+          },
         }),
     )
-
-    /*
-     * The CDN, which serves the dashboard's static assets on its own host.
-     *
-     * SST's Router creates its placeholder origin as `http-only`, and that wins
-     * over the per-request override its CloudFront function sets for HTTPS
-     * origins — CloudFront then refuses the TLS handshake and answers 502.
-     * Flipping it to `https-only` is what makes the function's override take.
-     */
-    const cdn = new sst.aws.Router('ApiCdn', {
-      domain: { name: hosts.dashboard, dns },
-      transform: {
-        cdn: (args: any) => {
-          args.origins = $util.output(args.origins).apply((origins: any[]) =>
-            (origins ?? []).map((origin: any) => ({
-              ...origin,
-              customOriginConfig: origin.customOriginConfig
-                ? { ...origin.customOriginConfig, originProtocolPolicy: 'https-only', originReadTimeout: 60 }
-                : origin.customOriginConfig,
-            })),
-          )
-        },
-      },
-    })
-    cdn.route('/', service.url)
-
+    const dashboardRecord = awsDnsName('DashboardRecord', hosts.dashboard, zoneId, cdn.domainName)
     return {
-      url: cdn.url.apply((url: string) => url.replace(/\/$/, '')),
-      address: service.url.apply((url: string) => url.replace(/\/$/, '')),
-      identity: service.nodes.taskRole.arn,
-      // CloudWatch dimensions a load balancer by the tail of its ARN, from
-      // `app/` onward. Taken from the resource rather than parsed out of a URL,
-      // which is where it would quietly stop matching.
-      metricTarget: service.nodes.loadBalancer.arnSuffix,
-      ready: [service, ...attached],
+      url: $util.output(`https://${hosts.dashboard}`),
+      address: $util.output(`https://${hosts.api}`),
+      identity: role.arn,
+      metricTarget: balancer.arnSuffix,
+      metricLogGroup: service.logGroup,
+      ready: [...service.ready, ...grants, ...scalingPolicies, cdn, dashboardRecord],
     }
   }

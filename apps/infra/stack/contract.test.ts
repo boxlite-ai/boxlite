@@ -661,10 +661,10 @@ test('upgrades every Runner through a dependsOn chain, one host per command', ()
   )
 })
 
-test('no longer points operators at the deleted shell updater', () => {
+test('operator documentation uses the public Runner update command', () => {
   assert.doesNotMatch(liveConfig, /scripts\/deploy\/runner-update-binary\.sh/)
   assert.doesNotMatch(readme, /runner-update-binary\.sh/)
-  assert.match(readme, /scripts\/runner-update-binary\.mjs/)
+  assert.match(readme, /npm run runner:update -- --stage/)
 })
 
 // BILLING_API_URL used to do more than tell the dashboard where to call: while organization

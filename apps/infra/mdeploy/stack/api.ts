@@ -46,12 +46,7 @@ export type ApiCapability =
   | { kind: 'read-telemetry'; clickhouse: ClickHouse }
   | { kind: 'read-secret'; ref: $util.Output<string> }
   | { kind: 'write-registry-credentials'; store: Extract<RegistryCredentialStore, { active: true }> }
-  /**
-   * Grow the stage's runner data disks online, which only GCP answers: the
-   * runner names the disks its environment carried, and what is carried is
-   * derived in the runner provider from the stack's own naming. Every other
-   * cloud keeps no per-host data disk and is handed none of this.
-   */
+  /** Grow deployment-owned Runner block disks through the provider's scoped cloud API. */
   | { kind: 'resize-runner-disks' }
   | { kind: 'read-filestore-instances'; projects: readonly string[] }
 
@@ -123,6 +118,8 @@ export type Api = {
    * which is where it would silently stop matching.
    */
   metricTarget: $util.Output<string>
+  /** API log group for cloud-specific log-to-metric extraction, when used. */
+  metricLogGroup?: $util.Output<string>
   ready: any[]
 }
 

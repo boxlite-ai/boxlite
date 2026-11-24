@@ -2,7 +2,7 @@
 
 mdeploy selects the stage's cloud engine, validates its inputs, and applies one shared BoxLite resource model.
 
-# mdeploy reference
+## Details
 
 [Infrastructure index](../README.md) · [Deployment walkthrough](../docs/deployment.md) · [Architecture](../docs/architecture.md)
 
@@ -17,14 +17,11 @@ automatically.
 mstage: stage declaration + identity + encrypted environment
   → mdeploy: intent and protection checks
     → GCP: Pulumi → GCP providers → GCS state
-    → AWS: SST → AWS providers → SST state
+    → AWS: Pulumi → AWS providers → S3 state
 ```
 
 The current command is `npm run mdeploy -- --stage <stage>` from `apps/infra`.
-The retained `npm run deploy` command uses `deployment/sst.ts` and the legacy `stack/` tree;
-its flags, state assumptions and post-deploy checks are not interchangeable with mdeploy's.
-AWS bootstrap and mdeploy currently use different app names; read the
-[AWS compatibility boundary](../bootstrap/aws/README.md#aws-mdeploy-compatibility) before a transition.
+AWS bootstrap creates prerequisites for the declared app and registry. Create a new AWS stage with a full deployment.
 
 ## Inputs
 
@@ -104,20 +101,20 @@ Provider-input tests do not replace a deployed App/CI acceptance run.
 
 ### Scheduler deployment generation
 
-mdeploy passes the invocation's `CI_SCHEDULER_GENERATION`, or `GITHUB_RUN_ID`
-when no override is supplied, into the API environment on both clouds.
+API-only and full releases on both clouds pass `CI_SCHEDULER_GENERATION` into the API environment, defaulting to `GITHUB_RUN_ID`.
+A Runner-only release keeps the deployed API generation, including its absence on an older stage.
+
 The value must be a positive safe integer in canonical decimal form.
 This is per-deployment metadata, like `BOXLITE_IMAGE_TAG`; do not store it in
 mstage groups. Invocations without either value retain local lease behavior.
 
 A newer generation takes over scheduling after its API listens and the current
 database transaction finishes. Older deployments cannot renew or reacquire ownership.
-Retrying the same workflow run preserves its generation. To roll back an image,
-dispatch a new workflow run so the rollback receives a higher generation.
-Manual invocations must supply a generation greater than the last active deployment.
 
-To test this PR's deployment program, dispatch the workflow with
-`--ref fix/ci-label-capacity`; the deploy program comes from the dispatch ref.
+Retrying the same API workflow run preserves its generation. To roll back an API image, dispatch a new workflow run so the rollback receives a higher generation.
+A manual API or full release must supply a generation greater than the last active API deployment.
+
+To test a PR’s deployment program, use its branch as the workflow dispatch ref.
 
 ## Runner convergence
 
@@ -199,11 +196,18 @@ It is the public rollout entrypoint; the internal CLI receives the same `compone
 | `runner` | Existing Runner OS Policy assignments and artifact-read grant; retains canary-before-fleet rollout and waits |
 | `api+runner` (default) | Full infrastructure graph, including shared resources and topology changes |
 
-AWS/SST supports only `api+runner`; individual API/Runner selection fails before artifact preparation.
-GCP scoped updates require an existing workload and do not bootstrap a new stack.
+AWS `api` targets its existing ECS API task/service and required grants; `runner` targets SSM readiness/update commands and artifact/checkpoint grants.
+For an interrupted AWS Runner rollout, inspect the per-instance record or use the [emergency replacement procedure](../docs/aws/runners.md#emergency-replacement).
+
+Both clouds require existing workloads for scoped updates.
+
+Preview and apply refresh the selected targets. An API-only release can update its Cloud Run revision even when an unrelated provider has drifted.
+Use a full preview to inspect the entire stack.
+
 Runner selection refuses changed host counts, labels or policy membership; reconcile those through a full deployment.
 Component routing handles each selection explicitly and checks exhaustiveness at compile time.
 Adding a scoped component requires its own target mapping; unknown runtime selections are rejected.
+
 VMs, disks, proxy, database and other shared resources are outside the individual component targets.
 The API and Runner keep their existing environment groups and assembly; changing a store value alone does not update a running workload.
 For a configuration-only change, select its component and reuse the deployed artifact ref.
@@ -244,7 +248,7 @@ npm run mdeploy -- --stage dev --refresh
 | `--refresh`          | Reconcile deployment state with the cloud; protected stages require `--confirm` |
 | `--remove --confirm` | Remove an unprotected stage; always refused for a protected stage               |
 | `--local-env`        | Read ambient environment instead of the encrypted stage store                   |
-| `--components`       | Internal workflow selection: `api+runner` by default; GCP `api`/`runner` accept preview/apply only |
+| `--components`       | Internal workflow selection: `api+runner` by default; `api`/`runner` accept preview/apply only |
 
 `--diff`, `--refresh`, and `--remove` are mutually exclusive. All intents check the selected
 stage's login requirements. `--local-env` is an explicit diagnostic override, not the ordinary
@@ -260,8 +264,11 @@ Uniform access and public access prevention are enabled; versioning and soft
 delete retention are disabled for this archive bucket.
 
 This bucket is separate from application storage, per-volume buckets and the
-infrastructure engine's state/checkpoint bucket. AWS does not enable this archive
-capability. Deploy the checkpoint database migration and compatible API/runners
+infrastructure engine's state/checkpoint bucket.
+AWS creates a dedicated private, encrypted S3 bucket and supplies `s3://<bucket>/checkpoints/`.
+Its API role can delete checkpoint objects; Runner roles can upload, download and delete them.
+
+Deploy the checkpoint database migration and compatible API/runners
 with this storage configuration before enabling capture. The REST API and
 capture/import orchestration use this archive path; see the
 [API checkpoint contract](../../api/README.md#checkpoint-capture).
@@ -273,7 +280,7 @@ capture/import orchestration use this archive path; see the
 - [`src/config.ts`](src/config.ts): deployment sizing schema.
 - [`src/stack-env.ts`](src/stack-env.ts): values supplied to both cloud engines.
 - [`stack/index.ts`](stack/index.ts): resource composition.
-- [`sst.config.ts`](sst.config.ts) / [`pulumi/program.ts`](pulumi/program.ts): engine entrypoints.
+- [`pulumi/aws-program.ts`](pulumi/aws-program.ts) / [`pulumi/program.ts`](pulumi/program.ts): native cloud entrypoints.
 
 [`stack/clickhouse-retention.ts`](stack/clickhouse-retention.ts) owns the shared retention default
 and hour validation for both clouds. The legacy deployment path imports it through
