@@ -1,4 +1,5 @@
-import { open, readFile, stat } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { exposedService, parseManifest } from './manifest'
 import { readMigrations, type MigrationFile, type MigrationsRead } from './migrations'
@@ -12,11 +13,9 @@ import {
   type Manifest,
   type UploadManifest,
 } from './types'
-import { UPLOAD_SECRETS } from './redact'
+import { scanSourceSecrets, SOURCE_CREDENTIAL_HINT, sourceFileLabel, sourceSecretKindIn } from './redact'
 import { buildUploadManifest } from './upload'
 
-const SCAN_MAX_SIZE = 1024 * 1024
-const SCAN_HEAD = 64 * 1024
 const NODE_LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock']
 const PYTHON_LOCKFILES = ['uv.lock', 'poetry.lock', 'pdm.lock', 'Pipfile.lock', 'requirements.txt']
 
@@ -25,6 +24,8 @@ export interface CheckLocalOptions {
   upload?: UploadManifest
   /** Reuse an already read migrations directory. */
   migrations?: MigrationsRead
+  /** Commands that do not publish source can report credential findings as warnings. */
+  sourceCredentials?: 'error' | 'warn'
 }
 
 export function formatBytes(n: number): string {
@@ -43,23 +44,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function looksSecret(path: string, size: number): Promise<string | null> {
-  if (size === 0 || size > SCAN_MAX_SIZE) return null
-  const fh = await open(path, 'r')
-  try {
-    const buf = Buffer.alloc(Math.min(size, SCAN_HEAD))
-    const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
-    const head = buf.subarray(0, bytesRead)
-    if (head.includes(0)) return null
-    const text = head.toString('utf8')
-    for (const [re, what] of UPLOAD_SECRETS) if (re.test(text)) return what
-    return null
-  } finally {
-    await fh.close()
-  }
-}
-
-/** File-system checks that need the project directory: referenced paths, migrations, lockfile, upload size, secret-looking files. */
+/** Checks referenced paths, migrations, lockfiles, upload size, and source credentials. */
 export async function checkLocal(
   projectDir: string,
   manifest: Manifest,
@@ -71,16 +56,17 @@ export async function checkLocal(
   const exposed = exposedService(manifest)
   if (exposed?.static !== undefined) {
     if (!(await exists(join(projectDir, exposed.static)))) {
+      const path = sourceFileLabel(exposed.static)
       if (manifest.runtime.build.length > 0)
         warnings.push({
           rule: 'path_missing',
-          message: `service "${exposed.name}": static path ${exposed.static} does not exist yet; it must be produced by runtime.build`,
+          message: `service "${exposed.name}": static path ${path} does not exist yet; it must be produced by runtime.build`,
         })
       else
         errors.push({
           file: MANIFEST_FILE,
           rule: 'path_missing',
-          message: `service "${exposed.name}": static path ${exposed.static} does not exist`,
+          message: `service "${exposed.name}": static path ${path} does not exist`,
         })
     }
   }
@@ -91,7 +77,7 @@ export async function checkLocal(
     if (!migrations.exists)
       warnings.push({
         rule: 'path_missing',
-        message: `[database] is set but ${manifest.database.migrations} does not exist; no migrations will run`,
+        message: `[database] is set but ${sourceFileLabel(manifest.database.migrations)} does not exist; no migrations will run`,
       })
   }
 
@@ -109,15 +95,19 @@ export async function checkLocal(
     })
 
   for (const f of upload.files) {
-    const what = await looksSecret(join(projectDir, f.path), f.size)
-    if (what)
-      warnings.push({
-        rule: 'secret_file',
-        message: `${f.path} looks like it contains ${what} and is not excluded; add it to .boxliteignore`,
-      })
+    const kind =
+      sourceSecretKindIn(f.path) ??
+      (upload.bytes <= UPLOAD_MAX_BYTES
+        ? await scanSourceSecrets(createReadStream(join(projectDir, f.path)))
+        : undefined)
+    if (!kind) continue
+    const file = sourceFileLabel(f.path, f.sha256)
+    const message = `Contains ${kind}. ${SOURCE_CREDENTIAL_HINT}`
+    if (options.sourceCredentials === 'warn') warnings.push({ rule: 'secret_file', message: `${file}: ${message}` })
+    else errors.push({ file, rule: 'secret_file', message })
   }
   for (const p of upload.excludedSecrets)
-    warnings.push({ rule: 'secret_file', message: `${p} looks like a secret file (excluded)` })
+    warnings.push({ rule: 'secret_file', message: `${sourceFileLabel(p)} looks like a secret file (excluded)` })
 
   if (manifest.runtime.image === 'node' && (await exists(join(projectDir, 'package.json')))) {
     const locks = await Promise.all(NODE_LOCKFILES.map((n) => exists(join(projectDir, n))))
@@ -151,7 +141,11 @@ export interface ProjectCheck {
 }
 
 /** Reads boxlite.toml, parses it for `env`, and runs every local check. Never touches the network. */
-export async function checkProject(projectDir: string, env: string): Promise<ProjectCheck> {
+export async function checkProject(
+  projectDir: string,
+  env: string,
+  options: Pick<CheckLocalOptions, 'sourceCredentials'> = {},
+): Promise<ProjectCheck> {
   let source: string
   try {
     source = await readFile(join(projectDir, MANIFEST_FILE), 'utf8')
@@ -178,7 +172,7 @@ export async function checkProject(projectDir: string, env: string): Promise<Pro
   }
   const upload = await buildUploadManifest(projectDir)
   const migrations = await readMigrations(projectDir, parsed.manifest)
-  const local = await checkLocal(projectDir, parsed.manifest, { upload, migrations })
+  const local = await checkLocal(projectDir, parsed.manifest, { ...options, upload, migrations })
   const errors = [...parsed.errors, ...local.errors]
   return {
     result: { ok: errors.length === 0, errors, warnings: [...parsed.warnings, ...local.warnings] },

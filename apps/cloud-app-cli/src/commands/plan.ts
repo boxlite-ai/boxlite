@@ -1,4 +1,4 @@
-import { MicrocloudError } from '@boxlite-ai/cloud-app-shared'
+import { MicrocloudError, type CheckLocalOptions } from '@boxlite-ai/cloud-app-shared'
 import type { Command } from 'commander'
 import type { PlanResponse } from '../api.js'
 import type { MakeCtx } from '../cli.js'
@@ -34,8 +34,12 @@ export function staleError(plan: PlanResponse, baseVersion: number): MicrocloudE
 }
 
 /** check → POST /plan → print the plan; throws on manifest errors (7) and stale base (9, unless forced). */
-export async function runPlan(ctx: Ctx, force: boolean): Promise<PlanOutcome> {
-  const checked = await requireCheck(ctx)
+export async function runPlan(
+  ctx: Ctx,
+  force: boolean,
+  sourceCredentials?: CheckLocalOptions['sourceCredentials'],
+): Promise<PlanOutcome> {
+  const checked = await requireCheck(ctx, sourceCredentials)
   const api = await ctx.appApi()
   const plan = await api.plan(planRequest(ctx, checked, force))
   const app = await ctx.appName()

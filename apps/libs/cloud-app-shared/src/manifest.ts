@@ -21,6 +21,7 @@ import {
   type Size,
 } from './types'
 import { validateCron } from './cron'
+import { sourceSecretKindIn } from './redact'
 
 export interface ParseResult {
   manifest: Manifest | null
@@ -111,6 +112,10 @@ export function lineOf(source: string, path: Path): number | undefined {
   return undefined
 }
 
+function safeDiagnostic(message: string, kind = sourceSecretKindIn(message)): string {
+  return kind ? `boxlite.toml contains ${kind}. Remove the value or use a secret reference.` : message
+}
+
 class Validator {
   readonly errors: CheckError[] = []
   readonly warnings: CheckWarning[] = []
@@ -122,13 +127,13 @@ class Validator {
 
   error(path: Path, rule: string, message: string): void {
     const line = lineOf(this.source, path) ?? lineOf(this.source, ['env', this.env, ...path])
-    const err: CheckError = { file: MANIFEST_FILE, rule, message }
+    const err: CheckError = { file: MANIFEST_FILE, rule, message: safeDiagnostic(message) }
     if (line !== undefined) err.line = line
     this.errors.push(err)
   }
 
   warn(rule: string, message: string): void {
-    this.warnings.push({ rule, message })
+    this.warnings.push({ rule, message: safeDiagnostic(message) })
   }
 
   unknownKeys(table: Raw, allowed: readonly string[], path: Path): void {
@@ -204,7 +209,7 @@ export function parseManifest(toml: string, env = 'main'): ParseResult {
     const err: CheckError = {
       file: MANIFEST_FILE,
       rule: 'toml_syntax',
-      message: String((e as Error).message).split('\n')[0] ?? 'invalid TOML',
+      message: safeDiagnostic(String((e as Error).message).split('\n')[0] ?? 'invalid TOML', sourceSecretKindIn(toml)),
     }
     if (e instanceof TomlError) err.line = e.line
     return { manifest: null, errors: [err], warnings: [] }

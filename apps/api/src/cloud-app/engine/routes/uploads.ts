@@ -3,6 +3,12 @@ import { posix } from 'node:path'
 import { Readable } from 'node:stream'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import {
+  SOURCE_CREDENTIAL_HINT,
+  sourceFileLabel,
+  sourceSecretKindIn,
+  type CheckError,
+} from '@boxlite-ai/cloud-app-shared'
 import { newId, type Vars } from '../auth'
 import { SHA256_RE, snapshotId } from '../blobs'
 import type { SnapshotFile } from '../db'
@@ -28,6 +34,19 @@ function pathProblem(p: string): string | null {
   return null
 }
 
+function credentialPathProblems(files: SnapshotFile[]): CheckError[] {
+  return files.flatMap(({ path, sha256 }) => {
+    const kind = sourceSecretKindIn(path)
+    return kind ? [{ file: sourceFileLabel(path, sha256), rule: 'secret_file', message: `Path contains ${kind}.` }] : []
+  })
+}
+
+function requireSafePaths(files: SnapshotFile[]) {
+  const errors = credentialPathProblems(files)
+  if (errors.length)
+    throw fail('invalid_manifest', 'A source path contains a credential', SOURCE_CREDENTIAL_HINT, { errors })
+}
+
 export function uploadRoutes(ctx: Ctx) {
   const r = new Hono<{ Variables: Vars }>()
   const { store, blobs } = ctx
@@ -38,27 +57,27 @@ export function uploadRoutes(ctx: Ctx) {
       id,
       appId,
     )
-    if (!row) throw fail('not_found', `no upload ${id}`, 'start a new upload')
+    if (!row) throw fail('not_found', `no upload ${sourceFileLabel(id)}`, 'start a new upload')
     return { ...row, files: JSON.parse(row.manifest) as SnapshotFile[] }
   }
 
   r.post('/uploads', async (c) => {
     const app = c.get('app')
     const b = await body(c, z.object({ manifest: z.array(fileSchema).max(100_000) }))
-    const errors: { file: string; rule: string; message: string }[] = []
+    const errors = credentialPathProblems(b.manifest)
     const seen = new Set<string>()
     let total = 0
     for (const f of b.manifest) {
+      const file = sourceFileLabel(f.path, f.sha256)
       const problem = pathProblem(f.path)
-      if (problem) errors.push({ file: f.path, rule: 'upload_path', message: `${f.path}: ${problem}` })
-      if (seen.has(f.path))
-        errors.push({ file: f.path, rule: 'upload_duplicate', message: `${f.path} is listed twice` })
+      if (problem) errors.push({ file, rule: 'upload_path', message: `${file}: ${problem}` })
+      if (seen.has(f.path)) errors.push({ file, rule: 'upload_duplicate', message: `${file} is listed twice` })
       seen.add(f.path)
       if (f.size > MAX_FILE_BYTES)
         errors.push({
-          file: f.path,
+          file,
           rule: 'file_too_large',
-          message: `${f.path} is ${f.size} bytes; files are limited to ${MAX_FILE_BYTES}`,
+          message: `${file} is ${f.size} bytes; files are limited to ${MAX_FILE_BYTES}`,
         })
       total += f.size
     }
@@ -72,10 +91,16 @@ export function uploadRoutes(ctx: Ctx) {
       throw fail(
         'invalid_manifest',
         `${errors.length} problem(s) in the upload manifest`,
-        'fix the files or add them to .boxliteignore',
+        errors.some((error) => error.rule === 'secret_file')
+          ? SOURCE_CREDENTIAL_HINT
+          : 'fix the files or add them to .boxliteignore',
         { errors },
       )
 
+    const missing = await filterAsync(
+      [...new Set(b.manifest.map((f) => f.sha256))],
+      async (sha) => !(await blobs.hasScanned(app.id, sha)),
+    )
     const id = newId('upl')
     await store.run(
       'INSERT INTO uploads (id, app_id, manifest, created_at) VALUES (?, ?, ?, ?)',
@@ -84,10 +109,6 @@ export function uploadRoutes(ctx: Ctx) {
       JSON.stringify(b.manifest),
       now(),
     )
-    const missing = await filterAsync(
-      [...new Set(b.manifest.map((f) => f.sha256))],
-      async (sha) => !(await blobs.has(app.id, sha)),
-    )
     return c.json({ upload_id: id, missing })
   })
 
@@ -95,8 +116,10 @@ export function uploadRoutes(ctx: Ctx) {
     const app = c.get('app')
     const up = await uploadOf(app.id, c.req.param('id'))
     const sha = c.req.param('sha')
-    const file = up.files.find((f) => f.sha256 === sha)
-    if (!file) throw fail('not_found', `sha256 ${sha} is not part of upload ${up.id}`)
+    const files = up.files.filter((f) => f.sha256 === sha)
+    const [file] = files
+    if (!file) throw fail('not_found', `sha256 ${sourceFileLabel(sha)} is not part of upload ${up.id}`)
+    requireSafePaths(files)
     const release = uploadSlot(ctx, app.id)
     if (!release)
       return rateLimited(
@@ -108,7 +131,7 @@ export function uploadRoutes(ctx: Ctx) {
     try {
       const raw = c.req.raw.body
       const stream = raw ? Readable.fromWeb(raw as import('node:stream/web').ReadableStream) : Readable.from([])
-      const out = await blobs.put(app.id, sha, stream, MAX_FILE_BYTES)
+      const out = await blobs.put(app.id, sha, stream, MAX_FILE_BYTES, file.path)
       return c.json({ sha256: sha, bytes: out.bytes, deduped: out.deduped })
     } finally {
       release()
@@ -118,15 +141,16 @@ export function uploadRoutes(ctx: Ctx) {
   r.post('/uploads/:id/complete', async (c) => {
     const app = c.get('app')
     const up = await uploadOf(app.id, c.req.param('id'))
+    requireSafePaths(up.files)
     const missing = await filterAsync(
       [...new Set(up.files.map((f) => f.sha256))],
-      async (sha) => !(await blobs.has(app.id, sha)),
+      async (sha) => !(await blobs.hasScanned(app.id, sha)),
     )
     if (missing.length)
       throw fail(
         'upload_incomplete',
         `${missing.length} file(s) not uploaded yet`,
-        'PUT the missing files, then complete again',
+        'rerun `boxlite-app deploy` for a fresh upload, or PUT the missing files and complete again',
         { missing },
       )
     const id = snapshotId(up.files)

@@ -292,6 +292,7 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
         },
         blobs: {
           has: async () => false,
+          hasScanned: async () => false,
           put: async () => ({ bytes: 0, deduped: false }),
           read: () => {
             throw new Error('source not requested')
