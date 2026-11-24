@@ -36,11 +36,10 @@ use crate::{
     },
 };
 
-/// Guest parameters for hotplug memory: online new blocks at once, with the
-/// zone policy that keeps most of them removable.
+/// Defaults for automatically onlining hotplugged memory in removable zones.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const HOTPLUG_CMDLINE: &str =
-    " memhp_default_state=online memory_hotplug.online_policy=auto-movable";
+    "memhp_default_state=online memory_hotplug.online_policy=auto-movable";
 
 /// Adds every device the configuration names, in slot order: the legacy
 /// platform devices, disks, reporting balloon, and optional filesystem,
@@ -103,7 +102,11 @@ pub(crate) fn add_all<H: boxlite_hypervisor::Vm + Send + Sync + 'static>(
         add_slot_device(&mut slots, &mut used, |slot| {
             mem::add(chipset, &mut ctx, slot, hotplug)
         })?;
-        config.cmdline.push_str(HOTPLUG_CMDLINE);
+        // Keep the defaults before the caller's kernel and init arguments.
+        config.cmdline = match config.cmdline.as_str() {
+            "" => HOTPLUG_CMDLINE.to_owned(),
+            caller => format!("{HOTPLUG_CMDLINE} {caller}"),
+        };
     }
     // The next device is one more `add_slot_device` line here. A device that
     // must keep slot 0 goes before the disk loop.

@@ -84,7 +84,13 @@ static void check_written_gpa(word address, word length) {
     print("HOTPLUG_GPA ", 12); number(highest * page);
 }
 
-__attribute__((used,noreturn)) void run(void) {
+__attribute__((used,noreturn)) void run(word argc, const char *const *argv) {
+    const char expected[] = "--hotplug-test";
+    /* A kernel option after the separator would arrive as an extra argument. */
+    if (argc != 2) finish(16);
+    for (word i = 0; i < sizeof(expected); i++)
+        if (argv[1][i] != expected[i]) finish(16);
+
     const word use_bytes = 640 * MIB;
     word base = capacity();
     print("HOTPLUG_BASE ", 13); number(base);
@@ -107,4 +113,5 @@ __attribute__((used,noreturn)) void run(void) {
     print("HOTPLUG_SHRUNK ", 15); number(now);
     finish(shrunk(now, base) ? 0 : 7);
 }
-__asm__(".global _start\n_start:\n xor %rbp,%rbp\n and $-16,%rsp\n call run\n");
+__asm__(".global _start\n_start:\n xor %rbp,%rbp\n"
+        " mov (%rsp),%rdi\n lea 8(%rsp),%rsi\n and $-16,%rsp\n call run\n");

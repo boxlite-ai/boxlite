@@ -282,9 +282,10 @@ Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
 On Linux x86_64, set `VmConfig.hotplug_mib` to the extra capacity above boot
 RAM (`0` disables virtio-mem). `Vm::new` checks the window before building the VM.
 
-BoxLite appends `memhp_default_state=online` and
-`memory_hotplug.online_policy=auto-movable` to the guest command line. Omit a
-standalone `--` so Linux sees those settings.
+BoxLite prepends `memhp_default_state=online` and
+`memory_hotplug.online_policy=auto-movable` to the caller's command line.
+Caller kernel parameters can override these defaults. Arguments after
+`--` go to init.
 
 `vm.control().set_memory_target_mib(256, timeout)` publishes a target of 256 MiB
 above boot RAM and notifies the guest, which plugs or unplugs blocks afterward.

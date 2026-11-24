@@ -66,7 +66,8 @@ fn grow_and_shrink(boot_mib: u32, window_base: u64) {
         &newc_archive("init", &init),
     );
     let log = SerialLog::default();
-    let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
+    let cmdline = format!("{CONSOLE_CMDLINE} -- --hotplug-test");
+    let mut config = linux_config(1, &cmdline, Some(initramfs.0.clone()));
     config.memory_mib = boot_mib;
     config.hotplug_mib = 1024;
     let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
@@ -83,8 +84,8 @@ fn grow_and_shrink(boot_mib: u32, window_base: u64) {
     let log = log.text();
     eprintln!("virtio-mem KVM elapsed={elapsed:?} status={after_shrink:?}\n{log}");
 
-    assert_eq!(exit.unwrap(), VmExit::StopRequested, "{log}");
     assert!(!log.contains("HOTPLUG_FAIL"), "{log}");
+    assert_eq!(exit.unwrap(), VmExit::StopRequested, "{log}");
     let expected_base = format!("{window_base:#x}");
     assert!(
         log.lines().any(|line| {

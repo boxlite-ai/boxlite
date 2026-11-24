@@ -1973,10 +1973,23 @@ fn an_invalid_hotplug_capacity_fails_before_the_host_vm_exists() {
 fn a_hotplug_capacity_adds_virtio_mem_and_registers_its_control() {
     use crate::devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES};
     use boxlite_hypervisor::VcpuExit;
-    for (capacity, activate) in [(0, false), (128, false), (256, true)] {
+    let caller_cmdline = "console=ttyS0 memhp_default_state=offline \
+                          memory_hotplug.online_policy=contig-zones -- --listen vsock://2695";
+    let defaults = "memhp_default_state=online memory_hotplug.online_policy=auto-movable";
+    for (capacity, activate, cmdline, expected_tail) in [
+        (
+            256,
+            true,
+            caller_cmdline,
+            format!("{defaults} {caller_cmdline}"),
+        ),
+        (128, false, "", defaults.to_owned()),
+        (0, false, caller_cmdline, caller_cmdline.to_owned()),
+    ] {
         let present = capacity != 0;
         let mut configuration = config(1, 2);
         configuration.hotplug_mib = capacity;
+        configuration.cmdline = cmdline.to_owned();
         let window = present.then(|| {
             crate::hotplug::HotplugWindow::plan(
                 &ram_ranges(configuration.memory_mib),
@@ -1993,13 +2006,18 @@ fn a_hotplug_capacity_adds_virtio_mem_and_registers_its_control() {
             || Ok(MockVm::new()),
             |_, config| {
                 // The balloon keeps slot 0; virtio-mem takes the next slot.
-                assert_eq!(config.cmdline.contains("@0xd0001000:6"), present);
-                assert_eq!(
-                    config.cmdline.ends_with(
-                        " memhp_default_state=online memory_hotplug.online_policy=auto-movable"
-                    ),
-                    present
-                );
+                let boot_args = config
+                    .cmdline
+                    .strip_prefix("virtio_mmio.device=4K@0xd0000000:5 ")
+                    .expect("the balloon is the first slot");
+                let boot_args = if present {
+                    boot_args
+                        .strip_prefix("virtio_mmio.device=4K@0xd0001000:6 ")
+                        .expect("virtio-mem is the second slot")
+                } else {
+                    boot_args
+                };
+                assert_eq!(boot_args, expected_tail);
                 Ok(BootRegisters::default())
             },
             |chipset, ctx, config, host_vm| {
