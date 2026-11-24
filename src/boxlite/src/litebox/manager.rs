@@ -118,6 +118,13 @@ impl BoxManager {
         Ok(())
     }
 
+    pub(crate) fn remove_box_with_base_refs(
+        &self,
+        id: &BoxID,
+    ) -> BoxliteResult<Vec<crate::BaseDiskID>> {
+        self.store.delete_with_base_refs(id.as_str())
+    }
+
     /// Get a box by exact ID.
     pub fn box_by_id(&self, id: &BoxID) -> BoxliteResult<Option<(BoxConfig, BoxState)>> {
         self.store.load(id.as_str())

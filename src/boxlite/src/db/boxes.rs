@@ -20,7 +20,7 @@ use crate::runtime::id::BoxID;
 use crate::runtime::types::BoxState;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::{Database, db_err};
+use super::{Database, base_disk::BaseDiskStore, db_err};
 
 /// Box storage wrapping Database.
 ///
@@ -102,7 +102,22 @@ impl BoxStore {
 
     /// Delete box configuration (and state via CASCADE).
     pub fn delete(&self, box_id: &str) -> BoxliteResult<bool> {
-        let conn = self.db.conn();
+        Self::delete_config(&self.db.conn(), box_id)
+    }
+
+    /// Delete a discarded box and its clone-base references in one transaction.
+    pub(crate) fn delete_with_base_refs(&self, box_id: &str) -> BoxliteResult<Vec<BaseDiskID>> {
+        let mut conn = self.db.conn();
+        let tx = db_err!(conn.transaction())?;
+        if !Self::delete_config(&tx, box_id)? {
+            return Err(BoxliteError::NotFound(format!("box {box_id}")));
+        }
+        let affected = BaseDiskStore::remove_refs(&tx, box_id)?;
+        db_err!(tx.commit())?;
+        Ok(affected)
+    }
+
+    fn delete_config(conn: &rusqlite::Connection, box_id: &str) -> BoxliteResult<bool> {
         let rows_affected =
             db_err!(conn.execute("DELETE FROM box_config WHERE id = ?1", params![box_id],))?;
         Ok(rows_affected > 0)
