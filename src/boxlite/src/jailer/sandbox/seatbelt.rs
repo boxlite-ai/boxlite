@@ -255,6 +255,26 @@ fn build_sandbox_policy(
         policy.push_str("; IP networking disabled\n");
     }
 
+    // 8. Keep the shim and its cache namespace read-only under writable paths.
+    if let Some(bin_dir) = binary_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        let bin_dir = bin_dir
+            .canonicalize()
+            .unwrap_or_else(|_| canonicalize_or_original(bin_dir));
+        let cache_root = bin_dir.parent().filter(|path| path.ends_with("shims"));
+        for dir in std::iter::once(bin_dir.as_path()).chain(cache_root) {
+            if let Some(literal) = sbpl_path_literal(dir) {
+                policy.push_str(&format!(
+                    "(deny file-write* (literal {literal}) (subpath {literal}))\n"
+                ));
+            } else {
+                tracing::warn!(path = ?dir, "Skipping non-UTF-8 Seatbelt write denial");
+            }
+        }
+    }
+
     policy
 }
 
@@ -262,7 +282,7 @@ fn build_sandbox_policy(
 fn build_dynamic_read_paths(binary_path: &Path, paths: &[PathAccess]) -> String {
     let mut rules = String::new();
 
-    // Add binary's parent directory (copied shim + libkrunfw)
+    // Grant access to the shim and the libkrunfw files staged beside it.
     if let Some(bin_dir) = binary_path.parent() {
         let bin_dir = canonicalize_or_original(bin_dir);
         if let Some(literal) = sbpl_path_literal(&bin_dir) {
@@ -942,6 +962,40 @@ mod tests {
         assert!(SEATBELT_FILE_WRITE_POLICY.contains("(subpath \"/private/var/tmp\")"));
     }
 
+    #[test]
+    fn test_shared_shim_write_denials_follow_write_grants() {
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let shims = home.path().join("shims");
+        let generation = shims.join("0123456789abcdef");
+        std::fs::create_dir_all(&generation).unwrap();
+        let paths = [PathAccess {
+            path: home.path().to_path_buf(),
+            writable: true,
+        }];
+        let policy = build_sandbox_policy(
+            &paths,
+            &UnixSocketAccess::default(),
+            &generation.join("boxlite-shim"),
+            true,
+        );
+
+        let tmp_grant = policy.find("(subpath \"/private/tmp\")").unwrap();
+        let (grants, denials) = policy.rsplit_once("(allow file-write*").unwrap();
+        assert!(tmp_grant < grants.len());
+        assert!(grants.contains("; Dynamic write paths"));
+        for dir in [&shims, &generation] {
+            let path = dir.canonicalize().unwrap();
+            let literal = sbpl_path_literal(&path).unwrap();
+            assert!(
+                denials.contains(&format!(
+                    "(deny file-write* (literal {literal}) (subpath {literal}))"
+                )),
+                "missing write denial for {} after the write grants",
+                path.display()
+            );
+        }
+    }
+
     /// The static write policy must NOT grant the whole per-user temp/cache
     /// tree (`/private/var/folders`, a.k.a. `$TMPDIR` / `DARWIN_USER_*_DIR`).
     /// The shim's TMPDIR is redirected to a box-scoped path by
@@ -968,11 +1022,12 @@ mod tests {
 
     #[test]
     fn test_dynamic_read_paths_empty() {
-        let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
+        let generation = "/var/lib/boxlite/shims/0123456789abcdef";
+        let binary_path = Path::new(generation).join("boxlite-shim");
         let policy = build_dynamic_read_paths(&binary_path, &[]);
 
         assert!(policy.contains("(allow file-read*"));
-        assert!(policy.contains("/usr/local/bin"));
+        assert!(policy.contains(generation));
     }
 
     #[test]
@@ -1495,6 +1550,45 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout), "tmp-exec-ok\n");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_denies_writes_to_shared_shims_in_tmp() {
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let shims = home.path().join("shims");
+        let generation = shims.join("0123456789abcdef");
+        std::fs::create_dir_all(&generation).unwrap();
+        let shim = generation.join("boxlite-shim");
+        std::fs::write(&shim, b"shim").unwrap();
+        let paths = [PathAccess {
+            path: PathBuf::from("/bin"),
+            writable: false,
+        }];
+        let (sandbox_cmd, sandbox_args) =
+            build_sandbox_exec_args(&paths, &UnixSocketAccess::default(), &shim, false, None);
+        let allowed = home.path().join("allowed");
+        let run = |path: &Path| {
+            Command::new(&sandbox_cmd)
+                .args(&sandbox_args)
+                .args(["/bin/sh", "-c", "echo written > \"$1\"", "sh"])
+                .arg(path)
+                .output()
+                .unwrap()
+        };
+
+        let output = run(&allowed);
+        assert!(output.status.success(), "{:?}", output);
+        for blocked in [&shim, &shims.join("another-shim")] {
+            let output = run(blocked);
+            assert!(!output.status.success(), "write succeeded for {blocked:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("Operation not permitted"),
+                "{output:?}"
+            );
+        }
+        assert_eq!(std::fs::read(&shim).unwrap(), b"shim");
+        assert!(!shims.join("another-shim").exists());
     }
 
     #[cfg(target_os = "macos")]

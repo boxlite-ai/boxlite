@@ -130,9 +130,8 @@ impl Sandbox for BwrapSandbox {
         // The statically-linked shim dlopen's libkrunfw via LD_LIBRARY_PATH (its
         // `$ORIGIN` rpath is ineffective), and `--clearenv` wipes it — without
         // this the VM fails to start ("Couldn't find or load libkrunfw.so.5",
-        // libkrun status=-2). Point it at the shim's own directory (`<box>/bin`),
-        // which is bound into the sandbox and is exactly where `copy_libkrunfw`
-        // placed the library the shim loads.
+        // libkrun status=-2). The staged shim and libkrunfw share a read-only
+        // binding at `<home>/shims/<digest>`.
         let shim_dir = std::path::Path::new(&binary)
             .parent()
             .map(|dir| dir.to_string_lossy().into_owned())
@@ -204,7 +203,7 @@ mod tests {
             detached: false,
         };
 
-        let shim = "/var/lib/boxlite/boxes/abc/bin/boxlite-shim";
+        let shim = "/var/lib/boxlite/shims/0123456789abcdef/boxlite-shim";
         let mut cmd = Command::new(shim);
         BwrapSandbox::new().apply(&ctx, &mut cmd);
 
@@ -219,8 +218,8 @@ mod tests {
             .expect("bwrap must --setenv LD_LIBRARY_PATH so the static shim can dlopen libkrunfw");
         assert_eq!(
             args[pos + 2],
-            "/var/lib/boxlite/boxes/abc/bin",
-            "LD_LIBRARY_PATH must point at the shim's own directory (where libkrunfw is copied)"
+            "/var/lib/boxlite/shims/0123456789abcdef",
+            "LD_LIBRARY_PATH must point at the staged shim and firmware directory"
         );
     }
 
@@ -248,7 +247,7 @@ mod tests {
                 sandbox_profile: None,
                 detached,
             };
-            let mut cmd = Command::new("/var/lib/boxlite/boxes/abc/bin/boxlite-shim");
+            let mut cmd = Command::new("/var/lib/boxlite/shims/0123456789abcdef/boxlite-shim");
             BwrapSandbox::new().apply(&ctx, &mut cmd);
             cmd.get_args().any(|a| a == "--die-with-parent")
         }

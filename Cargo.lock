@@ -568,7 +568,6 @@ dependencies = [
  "rand 0.9.4",
  "rayon",
  "rcgen",
- "reflink-copy",
  "regex",
  "reqwest",
  "rusqlite",
@@ -5013,18 +5012,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "reflink-copy"
-version = "0.1.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13362233b147e57674c37b802d216b7c5e3dcccbed8967c84f0d8d223868ae27"
-dependencies = [
- "cfg-if",
- "libc",
- "rustix 1.1.4",
- "windows 0.62.2",
 ]
 
 [[package]]

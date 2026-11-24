@@ -4,7 +4,7 @@ use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
 
 use crate::{
     BoxID,
-    runtime::layout::BoxFilesystemLayout,
+    runtime::layout::{BoxFilesystemLayout, FilesystemLayout},
     vmm::{InstanceSpec, VmmKind},
 };
 
@@ -375,6 +375,7 @@ impl VmmController for ShimController {
             self.box_id.as_str(),
             &self.options,
         )
+        .with_shim_cache_dir(FilesystemLayout::shims_dir_for(&config.home_dir))
         .with_nested_virtualization(config.nested_virtualization)
         .with_volume_access(config.volume_access.clone());
         let spawned = spawner.spawn(&config_json, config.detach)?;

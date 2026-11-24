@@ -7,12 +7,120 @@
 mod tests {
     use crate::jailer::Jail;
     use crate::jailer::builder::JailerBuilder;
+    use crate::jailer::sandbox::{PathAccess, Sandbox, SandboxContext};
     use crate::runtime::advanced_options::SecurityOptions;
     use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
+    use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::Mutex;
 
     fn test_layout(box_dir: impl Into<PathBuf>) -> BoxFilesystemLayout {
         BoxFilesystemLayout::new(box_dir.into(), FsLayoutConfig::without_bind_mount(), false)
+    }
+
+    #[derive(Default)]
+    struct RecordingSandbox(Mutex<Vec<PathAccess>>);
+
+    impl Sandbox for RecordingSandbox {
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn apply(&self, ctx: &SandboxContext, _cmd: &mut Command) {
+            *self.0.lock().unwrap() = ctx.paths.clone();
+        }
+
+        fn name(&self) -> &'static str {
+            "recording"
+        }
+    }
+
+    fn staging_fixture() -> (
+        tempfile::TempDir,
+        PathBuf,
+        BoxFilesystemLayout,
+        JailerBuilder,
+    ) {
+        let home = tempfile::tempdir().unwrap();
+        let source = home.path().join("installed");
+        fs::create_dir(&source).unwrap();
+        let binary = source.join("boxlite-shim");
+        fs::write(&binary, b"shim").unwrap();
+        let layout = test_layout(home.path().join("boxes/test-box"));
+        let builder = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(layout.clone())
+            .with_jailer_enabled(true);
+        (home, binary, layout, builder)
+    }
+
+    #[test]
+    fn command_stages_into_shared_cache_and_grants_ro_access() {
+        let (home, binary, layout, builder) = staging_fixture();
+        let jail = builder.build_with(RecordingSandbox::default()).unwrap();
+
+        let cmd = jail.command(&binary, &[]);
+        let staged = Path::new(cmd.get_program());
+        let generation = staged.parent().unwrap();
+        let cache = home.path().join("shims").canonicalize().unwrap();
+        assert_eq!(generation.parent(), Some(cache.as_path()));
+        assert_eq!(fs::read(staged).unwrap(), b"shim");
+        assert!(!layout.bin_dir().exists());
+        let grants = jail.sandbox.0.lock().unwrap();
+        for dir in [binary.parent().unwrap(), generation] {
+            let matching: Vec<_> = grants.iter().filter(|grant| grant.path == dir).collect();
+            assert_eq!(matching.len(), 1);
+            assert!(!matching[0].writable);
+        }
+        assert!(grants.iter().all(|grant| grant.path != cache));
+    }
+
+    #[test]
+    fn command_removes_legacy_box_bin_best_effort() {
+        let (_home, binary, layout, builder) = staging_fixture();
+        fs::create_dir_all(layout.bin_dir()).unwrap();
+        fs::write(layout.bin_dir().join("stale-shim"), b"old").unwrap();
+        let jail = builder.build_with(RecordingSandbox::default()).unwrap();
+
+        let cmd = jail.command(&binary, &[]);
+        assert!(Path::new(cmd.get_program()).is_file());
+        assert!(!layout.bin_dir().exists());
+
+        fs::write(layout.bin_dir(), b"not a directory").unwrap();
+        assert_eq!(jail.command(&binary, &[]).get_program(), cmd.get_program());
+    }
+
+    #[test]
+    fn command_falls_back_to_original_binary_on_stage_error() {
+        let (_home, binary, _layout, builder) = staging_fixture();
+        let jail = builder
+            .with_shim_cache_dir(&binary)
+            .build_with(RecordingSandbox::default())
+            .unwrap();
+
+        assert_eq!(jail.command(&binary, &[]).get_program(), binary);
+        let grants = jail.sandbox.0.lock().unwrap();
+        assert!(grants.iter().any(|grant| {
+            grant.path == binary.parent().unwrap().canonicalize().unwrap() && !grant.writable
+        }));
+    }
+
+    #[test]
+    fn command_jailer_disabled_skips_staging_and_leaves_legacy_untouched() {
+        let (home, binary, layout, builder) = staging_fixture();
+        fs::create_dir_all(layout.bin_dir()).unwrap();
+        let legacy = layout.bin_dir().join("stale-shim");
+        fs::write(&legacy, b"old").unwrap();
+        let jail = builder
+            .with_jailer_enabled(false)
+            .build_with(RecordingSandbox::default())
+            .unwrap();
+
+        assert_eq!(jail.command(&binary, &[]).get_program(), binary);
+        assert!(!home.path().join("shims").exists());
+        assert_eq!(fs::read(legacy).unwrap(), b"old");
+        assert!(jail.sandbox.0.lock().unwrap().is_empty());
     }
 
     /// When `jailer_enabled=false`, command() must return a direct command
