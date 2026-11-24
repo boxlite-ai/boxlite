@@ -486,6 +486,7 @@ impl<S: Sandbox> Jail for Jailer<S> {
                         tracing::warn!(error = %err, "Failed to stage shim, using original")
                     }
                 }
+                ctx.shim_cache_dir = Some(cache_dir);
             } else {
                 tracing::debug!(box_id = %self.box_id, "No shim cache directory resolved, using original shim");
             }
@@ -645,6 +646,7 @@ impl<S: Sandbox> Jailer<S> {
             resource_limits: &self.security.resource_limits,
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),
+            shim_cache_dir: None,
             detached: self.detach,
         }
     }
@@ -966,6 +968,7 @@ mod tests {
                 resource_limits: &limits,
                 network_enabled: false,
                 sandbox_profile: None,
+                shim_cache_dir: None,
                 detached: true,
             };
             let mut cmd = std::process::Command::new("/usr/bin/cat");

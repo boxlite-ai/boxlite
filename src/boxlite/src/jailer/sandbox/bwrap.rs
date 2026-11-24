@@ -200,6 +200,7 @@ mod tests {
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,
+            shim_cache_dir: None,
             detached: false,
         };
 
@@ -245,6 +246,7 @@ mod tests {
                 resource_limits: limits,
                 network_enabled: false,
                 sandbox_profile: None,
+                shim_cache_dir: None,
                 detached,
             };
             let mut cmd = Command::new("/var/lib/boxlite/shims/0123456789abcdef/boxlite-shim");

@@ -15,17 +15,36 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
+/// Hidden completion marker written after all generation files are copied.
 const STAMP: &str = ".complete";
+/// Hidden namespace for temporary directories outside the published digest names.
 const STAGING_PREFIX: &str = ".staging.";
+/// Give in-progress staging an hour before treating its directory as abandoned.
 const STAGING_ORPHAN_TTL: Duration = Duration::from_secs(60 * 60);
+/// Retire idle debug generations after an hour to limit buildup from rebuilds.
 const STALE_TTL_DEBUG: Duration = Duration::from_secs(60 * 60);
+/// Keep idle release generations for a week so intermittent runs can reuse them.
 const STALE_TTL_RELEASE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// Skip memoization within two seconds of a source change to account for coarse timestamps.
 const RACY_STAT_WINDOW: Duration = Duration::from_secs(2);
+/// Record whether debug assertions are enabled so cleanup can pick the retention period.
 const BUILD_PROFILE: &str = if cfg!(debug_assertions) {
     "debug"
 } else {
     "release"
 };
+/// Use a 64-bit SHA-256 prefix to keep generation directory names short.
+const DIGEST_BYTES: usize = 8;
+/// A generation name has two hexadecimal digits per digest byte.
+const DIGEST_HEX_LEN: usize = DIGEST_BYTES * 2;
+/// Hash file contents in 64 KiB chunks to amortize reads.
+const HASH_BUFFER_BYTES: usize = 64 * 1024;
+/// Let everyone traverse staged directories and execute shims, with writes limited to the owner.
+#[cfg(unix)]
+const EXECUTABLE_MODE: u32 = 0o755;
+/// Let everyone read firmware, with writes limited to the owner and no execute bits.
+#[cfg(unix)]
+const FIRMWARE_MODE: u32 = 0o644;
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static MEMO: OnceLock<Mutex<HashMap<PathBuf, Arc<MemoEntry>>>> = OnceLock::new();
@@ -94,10 +113,13 @@ fn collect_sources(shim: &Path, dir: &Path, name: &OsStr) -> io::Result<Vec<File
         if filename == name || !filename.as_encoded_bytes().starts_with(b"libkrunfw.") {
             continue;
         }
-        if let Ok(metadata) = fs::metadata(entry.path())
-            && metadata.is_file()
-        {
-            files.push(FileFingerprint::new(filename, &metadata));
+        match fs::metadata(entry.path()) {
+            Ok(metadata) if metadata.is_file() => {
+                files.push(FileFingerprint::new(filename, &metadata));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
         }
     }
     files.sort_unstable_by(|a, b| a.name.cmp(&b.name));
@@ -120,7 +142,7 @@ fn digest_at(
     }
 
     let mut hash = Sha256::new();
-    let mut buffer = [0; 64 * 1024];
+    let mut buffer = [0; HASH_BUFFER_BYTES];
     for source in files {
         let name = source.name.as_encoded_bytes();
         hash.update((name.len() as u64).to_le_bytes());
@@ -137,7 +159,7 @@ fn digest_at(
         }
         source.check_metadata(&path, &file.metadata()?)?;
     }
-    let digest = hex::encode(&hash.finalize()[..8]);
+    let digest = hex::encode(&hash.finalize()[..DIGEST_BYTES]);
     // Coarse file timestamps can alias writes made close to the hash read.
     let cutoff = FileTime::from_system_time(now - RACY_STAT_WINDOW);
     if files.iter().all(|f| f.older_than(cutoff)) {
@@ -229,7 +251,7 @@ fn stage(shim_path: &Path, cache_dir: &Path) -> io::Result<PathBuf> {
             published: false,
         };
         #[cfg(unix)]
-        fs::set_permissions(&staging.path, fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(&staging.path, fs::Permissions::from_mode(EXECUTABLE_MODE))?;
 
         for source in &files {
             let path = dir.join(&source.name);
@@ -239,7 +261,11 @@ fn stage(shim_path: &Path, cache_dir: &Path) -> io::Result<PathBuf> {
             source.check_metadata(&path, &metadata)?;
             #[cfg(unix)]
             {
-                let mode = if source.name == name { 0o755 } else { 0o644 };
+                let mode = if source.name == name {
+                    EXECUTABLE_MODE
+                } else {
+                    FIRMWARE_MODE
+                };
                 fs::set_permissions(&destination, fs::Permissions::from_mode(mode))?;
             }
         }
@@ -298,7 +324,9 @@ pub(crate) fn cleanup_stale(cache_dir: &Path, active_dir: Option<&Path>) {
             }
             continue;
         }
-        if name.len() != 16 || !name.iter().all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        if name.len() != DIGEST_HEX_LEN
+            || !name.iter().all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
             continue;
         }
         if active_dir == Some(path.as_path())
@@ -425,6 +453,18 @@ mod tests {
             assert_eq!(fs::read(path).unwrap(), contents);
         }
         assert!(!staged.with_file_name("libkrunfw.broken").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn stage_shim_rejects_firmware_symlink_loop() {
+        let (_root, shim, cache) = fixture();
+        let firmware = shim.with_file_name("libkrunfw.loop");
+        std::os::unix::fs::symlink("libkrunfw.loop", &firmware).unwrap();
+        let expected = io::Error::from_raw_os_error(libc::ELOOP).to_string();
+
+        let err = stage_shim(&shim, &cache).expect_err("firmware metadata error must fail staging");
+        assert!(err.to_string().contains(&expected), "{err}");
     }
 
     #[test]
