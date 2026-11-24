@@ -31,7 +31,7 @@ read-write. Bind mounts are appropriate when the caller chooses the host path di
 A named local volume is managed by BoxLite rather than by a host path in box configuration. Its
 payload survives box deletion and can be mounted by multiple boxes.
 
-Starting with BoxLite 0.15.0, you can create and inspect named volumes with the local CLI:
+Create and inspect volumes with the CLI:
 
 ```bash
 boxlite volume create --name workspace
