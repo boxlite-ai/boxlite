@@ -1377,6 +1377,62 @@ start endpoint retains its existing startup wait; the Listener observes the orig
 ID and registers a JIT runner only after `running`. A lost creation response remains
 an uncertain outcome and must not trigger a blind retry or adoption by name.
 
+### Creation quota index
+
+Limited creates use PostgreSQL transaction locks and count committed Boxes in a
+separate `READ COMMITTED` statement after locking. Cached Box data cannot admit a request.
+Older API instances, warm-pool claims, checkpoint restores, and other callback-based
+creates take the original organization lock exclusively.
+
+To try parallel admission, an ordinary one-Box insert needs a safe integer request
+limit of at least 8.
+It randomly selects one of 8 organization lanes without checking whether it is free.
+It locks that lane, then takes the original lock in shared mode.
+
+Parallel admission requires a nonnegative safe integer count and at least 8 slots
+under the request's resolved limit.
+
+At the count snapshot, other admitted inserts that are not yet visible still hold
+their lanes. At most 8 additional slots are needed, including this insert.
+
+Otherwise the first transaction finishes without writing. A new transaction takes the
+exclusive lock and checks the exact limit against a fresh count. Limits below 8 and
+limits that are not safe integers take the exclusive path directly.
+
+A limit of 1000 allows parallel admission at 850 or 992 counted Boxes. At 993 the
+exclusive path can still fill the remaining slots. No separate threshold is configured.
+
+Each request's resolved limit is checked at admission, not refreshed at commit. With a
+common resolved limit, concurrent limited creates do not exceed it.
+
+A later request with a higher limit can bring the count above an earlier request's
+lower limit before the earlier request commits. A plan change does not revoke an
+existing admission.
+
+Lock waits share about five seconds; the count and writes retain the connection's
+default lock timeout. Box and last activity still commit together.
+
+Older exclusive-only instances still exclude parallel writers on the original key.
+Parallel releases must use that same key, lane namespaces, and lane count. An earlier
+parallel release may fall back sooner, but shares the same eight lanes and does not
+add capacity.
+
+Mix these releases only if the admission-time contract above is acceptable. A mixed
+rollout does not preserve the earlier request's lower limit at its commit.
+
+The partial B-tree `box_creation_quota_idx` on `box("organizationId")` limits the
+count scan to rows outside `error`, `destroying`, `destroyed`, `archiving`, and `archived`.
+If PostgreSQL cannot use the index, including during rollout or rollback, admission
+still enforces the same cap. Recheck index eligibility if the quota predicate changes.
+
+The pre-deploy migration runs outside a transaction. Use one migration runner
+and allow for extra database I/O during the build. Retry after cancellation:
+the migration replaces a matching invalid index but refuses a same-name object
+with a different definition.
+
+For online rollback, use TypeORM revert with `--transaction none` when this is
+the latest applied migration. The concurrent drop does not require an API rollback.
+
 ## Native hosted CI Listener (in development)
 
 `CiListenerService` imports the shared TypeScript `Listener` directly. Every API

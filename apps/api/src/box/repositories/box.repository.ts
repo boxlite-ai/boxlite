@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { randomInt } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 import { DataSource, EntityManager, FindOneOptions, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
@@ -47,17 +49,14 @@ const PG_LOCK_TIMEOUT_CODE = '55P03'
 // boxlite-proxy.controller.ts (PROXY_START_HINT_TIMEOUT_MS).
 const PROXY_START_LOCK_TIMEOUT_MS = 2000
 
-// Same-organization admissions queue on a transaction-scoped advisory lock
-// keyed by the organization, so a burst waits instead of aborting. The lock
-// must come before the count, under READ COMMITTED: each statement then reads
-// a fresh snapshot that includes the previous holder's committed Box. Cap only
-// the advisory-lock wait, since a queued admission pins a pooled connection;
-// the count and persist keep the default lock_timeout.
 const CREATION_ADMISSION_LOCK_TIMEOUT_MS = 5000
-// First key of the two-key advisory lock: keeps this lock apart from other
-// advisory-lock uses. Each two-key advisory lock use takes its own value.
-export const CREATION_ADMISSION_LOCK_NAMESPACE = 0x424f5841 // 'BOXA'
 const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
+
+// Cross-version protocol: the original two-int key is the shared/exclusive
+// compatibility barrier. Parallel releases must share the same lane keys and count.
+export const CREATION_ADMISSION_LOCK_NAMESPACE = 0x424f5841 // 'BOXA'
+const CREATION_ADMISSION_FIRST_LANE_NAMESPACE = 0x43525000
+const CREATION_ADMISSION_LANES = 8
 
 // Facts updates hold an organization's facts row for one short statement, so a
 // longer wait means something else holds it. The Box write has already
@@ -78,6 +77,7 @@ type ParkedBox = { id: string; updatedAt: Date }
 // The fields of a Box before a write that decide its organization's activity.
 type OrganizationActivitySource = Pick<Box, 'organizationId' | 'state' | 'desiredState' | 'createdAt'>
 type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null }
+type AdmissionLockBudget = { remainingMs: number }
 
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
@@ -181,17 +181,22 @@ export class BoxRepository extends BaseRepository<Box> {
     box.assertValid()
     box.enforceInvariants()
 
-    await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
-      // Provisioning work and ownership must commit with the new Box. Run
-      // initialization before insertion so checkpoint use can hold its row lock.
-      await initialize?.(entityManager)
-      await this.lockRegistryCredential(box, entityManager)
-      await entityManager.insert(Box, box)
-      // Resource ownership and admission must commit with the Box itself.
-      await onPersist?.(entityManager, box)
-      await afterInsert?.(entityManager)
-      await this.upsertLastActivity(entityManager, box.id, box.createdAt)
-    })
+    await this.withCreationAdmission(
+      box.organizationId,
+      maxCreatedBoxes,
+      async (entityManager) => {
+        // Provisioning work and ownership must commit with the new Box. Run
+        // initialization before insertion so checkpoint use can hold its row lock.
+        await initialize?.(entityManager)
+        await this.lockRegistryCredential(box, entityManager)
+        await entityManager.insert(Box, box)
+        // Resource ownership and admission must commit with the Box itself.
+        await onPersist?.(entityManager, box)
+        await afterInsert?.(entityManager)
+        await this.upsertLastActivity(entityManager, box.id, box.createdAt)
+      },
+      onPersist === undefined && initialize === undefined && afterInsert === undefined,
+    )
 
     this.invalidateLookupCacheOnInsert(box)
     await this.recordOrganizationActivity(box)
@@ -297,30 +302,64 @@ export class BoxRepository extends BaseRepository<Box> {
     return box
   }
 
-  private async withCreationAdmission<T>(
+  private async withCreationAdmission(
     organizationId: string,
     maxCreatedBoxes: number | undefined,
-    persist: (entityManager: EntityManager) => Promise<T>,
-  ): Promise<T> {
+    persist: (entityManager: EntityManager) => Promise<void>,
+    singleInsertWithoutCallbacks = false,
+  ): Promise<void> {
     if (maxCreatedBoxes === undefined) {
       return this.dataSource.transaction(persist)
     }
 
-    return this.dataSource.transaction('READ COMMITTED', async (entityManager) => {
-      await this.acquireCreationAdmissionLock(entityManager, organizationId)
-
-      const currentCount = await entityManager.count(Box, {
-        where: {
+    const budget = { remainingMs: CREATION_ADMISSION_LOCK_TIMEOUT_MS }
+    if (
+      singleInsertWithoutCallbacks &&
+      Number.isSafeInteger(maxCreatedBoxes) &&
+      maxCreatedBoxes >= CREATION_ADMISSION_LANES
+    ) {
+      const laneNamespace = CREATION_ADMISSION_FIRST_LANE_NAMESPACE + randomInt(CREATION_ADMISSION_LANES)
+      const admitted = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
+        // Take the lane first so lane waiters do not hold the shared barrier.
+        await this.acquireCreationAdmissionLock(manager, organizationId, budget, laneNamespace)
+        await this.acquireCreationAdmissionLock(
+          manager,
           organizationId,
-          state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
-        },
+          budget,
+          CREATION_ADMISSION_LOCK_NAMESPACE,
+          'shared',
+        )
+        const currentCount = await this.countForCreationAdmission(manager, organizationId)
+        if (!this.hasParallelCreationHeadroom(currentCount, maxCreatedBoxes)) return false
+        await persist(manager)
+        return true
       })
+      if (admitted) return
+      // The no-write transaction has released its locks and connection. Take
+      // the exclusive key in a new transaction, never upgrade it in place.
+    }
+
+    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
+      await this.acquireCreationAdmissionLock(manager, organizationId, budget)
+      const currentCount = await this.countForCreationAdmission(manager, organizationId)
       if (currentCount >= maxCreatedBoxes) {
         throw new BoxCreationLimitExceededError(currentCount, maxCreatedBoxes)
       }
-
-      return persist(entityManager)
+      return persist(manager)
     })
+  }
+
+  private countForCreationAdmission(manager: EntityManager, organizationId: string): Promise<number> {
+    // A separate READ COMMITTED statement sees commits made before lock grant.
+    return manager.count(Box, { where: { organizationId, state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)) } })
+  }
+
+  private hasParallelCreationHeadroom(count: number, max: number): boolean {
+    // At the count snapshot, other admitted inserts not yet visible still hold
+    // their lanes: PostgreSQL makes a commit visible before releasing its lane.
+    // Including this insert, at most eight slots are needed beyond the count.
+    // This checks the request's resolved limit at admission, not at commit.
+    return Number.isSafeInteger(count) && count >= 0 && count <= max - CREATION_ADMISSION_LANES
   }
 
   /** Read lifecycle state and ownership in one snapshot, without changing ordinary Box projections. */
@@ -408,23 +447,36 @@ export class BoxRepository extends BaseRepository<Box> {
   // PostgreSQL evaluating select-list entries in order (ExecBuildProjectionInfo
   // in src/backend/executor/execExpr.c); the docs leave expression order
   // unspecified, so the real-Postgres integration spec checks both halves.
-  private async acquireCreationAdmissionLock(entityManager: EntityManager, organizationId: string): Promise<void> {
-    try {
-      await entityManager.query(
-        `SELECT set_config('lock_timeout', $1, true),
-                pg_advisory_xact_lock($2, hashtext($3)),
-                set_config('lock_timeout', (SELECT reset_val FROM pg_settings WHERE name = 'lock_timeout'), true)`,
-        [`${CREATION_ADMISSION_LOCK_TIMEOUT_MS}ms`, CREATION_ADMISSION_LOCK_NAMESPACE, organizationId],
-      )
-    } catch (error) {
-      if ((error as { code?: string }).code === PG_LOCK_TIMEOUT_CODE) {
-        throw new BoxCreationAdmissionUnavailableError(
-          'Box creation admission remained contended; retry the request',
-          CREATION_ADMISSION_RETRY_AFTER_SECONDS,
+  private async acquireCreationAdmissionLock(
+    manager: EntityManager,
+    organizationId: string,
+    budget: AdmissionLockBudget,
+    namespace = CREATION_ADMISSION_LOCK_NAMESPACE,
+    mode: 'exclusive' | 'shared' = 'exclusive',
+  ): Promise<void> {
+    const timeoutMs = Math.ceil(budget.remainingMs)
+    if (timeoutMs > 0) {
+      const lock = mode === 'shared' ? 'pg_advisory_xact_lock_shared' : 'pg_advisory_xact_lock'
+      const startedAt = performance.now()
+      try {
+        await manager.query(
+          `SELECT set_config('lock_timeout', $1, true),
+                  ${lock}($2, hashtext($3)),
+                  set_config('lock_timeout', (SELECT reset_val FROM pg_settings WHERE name = 'lock_timeout'), true)`,
+          [`${timeoutMs}ms`, namespace, organizationId],
         )
+        return
+      } catch (error) {
+        if ((error as { code?: string }).code !== PG_LOCK_TIMEOUT_CODE) throw error
+      } finally {
+        // Share the budget across lock queries, not pool checkout, count or persist.
+        budget.remainingMs -= performance.now() - startedAt
       }
-      throw error
     }
+    throw new BoxCreationAdmissionUnavailableError(
+      'Box creation admission remained contended; retry the request',
+      CREATION_ADMISSION_RETRY_AFTER_SECONDS,
+    )
   }
 
   /**
