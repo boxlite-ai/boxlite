@@ -675,3 +675,61 @@ mod mounts {
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
     }
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[tokio::test]
+async fn resize_client_validates_replies_and_reports_unsupported_shims() {
+    use boxlite_shared::BoxliteError;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vmm.sock");
+    assert!(matches!(
+        grow_disk(&path, "vda", 4096).await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+    serve(&path, |op, _| match op {
+        ControlOp::ResizeDisk {
+            block_id,
+            bytes: 4096 | 8192,
+        } if block_id == "vda" => Ok(ControlReply::DiskSize(4096)),
+        _ => Err(ControlError::Unsupported("old engine".into())),
+    })
+    .unwrap();
+    grow_disk(&path, "vda", 4096).await.unwrap();
+    assert!(matches!(
+        grow_disk(&path, "vda", 8192).await,
+        Err(BoxliteError::Engine(_))
+    ));
+    assert!(matches!(
+        grow_disk(&path, "vda", 16384).await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[tokio::test]
+async fn an_http_client_reports_uncertainty_with_a_framed_shim() {
+    use boxlite_shared::BoxliteError;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vmm.sock");
+    let listener = tokio::net::UnixListener::bind(&path).unwrap();
+    let old_peer = async {
+        use tokio::io::AsyncReadExt;
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let length = stream.read_u32_le().await.unwrap();
+        assert_eq!(length, u32::from_le_bytes(*b"POST"));
+        assert!(length > 4096);
+    };
+    let (reply, ()) = timeout(CLIENT_TIMEOUT, async {
+        tokio::join!(grow_disk(&path, "vda", 4096), old_peer)
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        reply,
+        Err(BoxliteError::Engine(message)) if message.contains("completion is unknown")
+            && message.contains("retry the target")
+            && message.contains("matching versions")
+    ));
+}

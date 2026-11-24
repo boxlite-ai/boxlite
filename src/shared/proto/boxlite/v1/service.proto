@@ -66,6 +66,9 @@ service Guest {
   // 100ms is an adjustment threshold, not an end-to-end precision guarantee.
   // Invalid timestamps and clock-read/set failures are returned as errors.
   rpc SyncClock(SyncClockRequest) returns (SyncClockResponse);
+
+  // Grow the container root filesystem after its block device has grown.
+  rpc ResizeFilesystem(ResizeFilesystemRequest) returns (ResizeFilesystemResponse);
 }
 
 // Persistent SSH desired state and live listener control.
@@ -263,6 +266,15 @@ message SyncClockRequest {
 }
 
 message SyncClockResponse {}
+
+message ResizeFilesystemRequest {
+  // Container root disk only (/dev/vda); user volumes and guest root are excluded.
+  string device = 1;
+  // Wait for the kernel to observe this capacity before invoking resize2fs.
+  uint64 minimum_bytes = 2;
+}
+
+message ResizeFilesystemResponse {}
 
 // ============================================================================
 // SSH runtime configuration

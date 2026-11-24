@@ -7,7 +7,6 @@
 //! shim. Each connection carries one HTTP/1.1 JSON request and response.
 //! Directory registration attaches one open directory via `SCM_RIGHTS`.
 
-use std::fs::File;
 use std::io;
 use std::path::Path;
 use std::time::Duration;
@@ -18,7 +17,7 @@ use hyper::header::{CONNECTION, CONTENT_TYPE, HOST};
 use hyper::{Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
-use tokio::time::{Instant, timeout, timeout_at};
+use tokio::time::timeout;
 
 #[cfg(any(test, feature = "native"))]
 use {
@@ -32,9 +31,13 @@ use {
     std::{
         cell::RefCell,
         convert::Infallible,
+        fs::File,
         os::unix::net::{UnixListener, UnixStream},
     },
-    tokio::runtime::Runtime,
+    tokio::{
+        runtime::Runtime,
+        time::{Instant, timeout_at},
+    },
 };
 
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
@@ -49,6 +52,8 @@ const MOUNT_PATH: &str = "/v1/mount-control";
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub(super) const MAX_MOUNT_BODY: usize = 64 * 1024;
 const HTTP_BUFFER: usize = 8192;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(15);
 #[cfg(any(test, feature = "native"))]
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 // Allow the request read, ten-second device reply wait, and reply write.
@@ -67,6 +72,7 @@ struct ResizeDiskRequest {
 }
 
 /// The operations a shim may serve.
+#[cfg(any(test, feature = "native"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum ControlOp {
@@ -315,6 +321,7 @@ async fn handle_http(
     json_reply(reply_status(&reply), &reply, max_body)
 }
 
+#[cfg(any(test, feature = "native"))]
 fn parse_resize(body: &[u8]) -> Result<ControlOp, ControlError> {
     let request: ResizeDiskRequest = serde_json::from_slice(body)
         .map_err(|error| ControlError::InvalidInput(error.to_string()))?;
@@ -384,7 +391,6 @@ fn json_reply(
     response
 }
 
-#[cfg(test)]
 async fn request(path: &Path, block_id: &str, bytes: u64) -> io::Result<ControlResponse> {
     let body = serde_json::to_vec(&ResizeDiskRequest {
         block_id: block_id.into(),
@@ -490,6 +496,51 @@ pub(crate) fn exchange(
         }
         Ok(reply)
     })
+}
+
+/// Request an absolute disk capacity through the native shim's host-only channel.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) async fn grow_disk(
+    path: &Path,
+    block_id: &str,
+    bytes: u64,
+) -> boxlite_shared::BoxliteResult<()> {
+    use boxlite_shared::BoxliteError;
+
+    // The worker waits up to ten seconds; allow the bounded exchange to outlast it.
+    let response = timeout(CLIENT_TIMEOUT, request(path, block_id, bytes))
+        .await
+        .map_err(|_| {
+            BoxliteError::Engine(
+                "disk resize completion is unknown: reply timed out; retry the target".into(),
+            )
+        })?
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
+                BoxliteError::Unsupported(
+                    "shim has no disk control channel; restart with the current runtime".into(),
+                )
+            }
+            _ => BoxliteError::Engine(format!(
+                "disk resize completion is unknown: {error}; retry the target. \
+                 If the shim is older than the runtime, restart the box with matching versions."
+            )),
+        })?;
+    match response {
+        Ok(ControlReply::DiskSize(actual)) if actual == bytes => Ok(()),
+        Ok(ControlReply::DiskSize(actual)) => Err(BoxliteError::Engine(format!(
+            "disk resize completion is unknown: shim reported {actual} disk bytes, requested {bytes}; retry the target"
+        ))),
+        Err(ControlError::Unsupported(message)) => Err(BoxliteError::Unsupported(message)),
+        Err(ControlError::InvalidInput(message)) => Err(BoxliteError::InvalidArgument(message)),
+        Err(ControlError::Failed(message)) => Err(BoxliteError::Engine(format!(
+            "disk resize completion is unknown: {message}; query allocation or retry the target"
+        ))),
+        #[cfg(feature = "native")]
+        _ => Err(BoxliteError::Engine(
+            "disk resize completion is unknown: unexpected shim reply; retry the target".into(),
+        )),
+    }
 }
 
 /// `fchmodat`, which the shim's seccomp profile allows, rather than `chmod`.

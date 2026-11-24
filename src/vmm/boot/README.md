@@ -69,6 +69,13 @@ The native adapter attaches the requested devices and uses hvc0 for its default
 console; raw kernel boot tests can still select ttyS0.
 `make test:integration:vmm:native` verifies the actual agent with this kernel.
 
+The fragment enables `CONFIG_BLK_DEV_WRITE_MOUNTED` because `resize2fs` opens
+the mounted container root device read-write for initial sizing and online growth.
+Custom native kernels need this setting when initial disk sizing or online growth calls `resize2fs`.
+Without it, `resize2fs` reports `Resource busy while opening /dev/vda`.
+
+Rebuild the kernel after changing the fragment.
+
 ## Default: building inside a BoxLite box
 
 `boxlite.lock` pins a BoxLite CLI release, its SHA-256 for each host and a

@@ -585,6 +585,10 @@ setup. Its empty disk registry makes `resize_disk()` return `InvalidInput`.
   The `box.sock` listener forwards guest RPCs, including Mount and Detach.
   Upgrade both the runtime and shim, then restart a native box to use its
   HTTP control socket.
+- **Runtime resize.** `LiteBox::resize` confirms the requested device size,
+  runs `resize2fs` in the guest, and saves the completed target in box state.
+  Queries read the image capacity, and callers can retry the same target
+  after an uncertain or partial result.
 - **File size limits.** The VMM bounds guest I/O by virtual disk capacity.
   The host kernel enforces the shim's configured or inherited
   [`RLIMIT_FSIZE` soft limit](../../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
