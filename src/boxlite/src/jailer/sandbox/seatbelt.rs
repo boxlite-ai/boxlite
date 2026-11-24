@@ -275,27 +275,15 @@ fn append_shim_write_denials(
     binary_path: &Path,
     shim_cache_dir: Option<&Path>,
 ) {
+    let link_path = canonicalize_or_original(binary_path);
+    let target = binary_path.canonicalize().ok();
+    append_file_write_denials(policy, &link_path, target.as_deref());
+
     if let Some(cache_dir) = shim_cache_dir {
-        let link_path = canonicalize_or_original(cache_dir);
-        let resolved = cache_dir.canonicalize().ok();
-        let root = resolved.as_deref().unwrap_or(&link_path);
-        if let Some(literal) = sbpl_path_literal(root) {
-            policy.push_str(&format!(
-                "(deny file-write* (literal {literal}) (subpath {literal}))\n"
-            ));
-        } else {
-            tracing::warn!(path = ?root, "Skipping non-UTF-8 Seatbelt write denial");
-        }
-        if root != link_path {
-            append_literal_write_denial(policy, &link_path);
-        }
+        let root = append_subtree_write_denial(policy, cache_dir);
 
         // Staged files are already covered by the cache subtree denial.
-        if canonicalize_or_original(binary_path).starts_with(root)
-            && binary_path
-                .canonicalize()
-                .is_ok_and(|path| path.starts_with(root))
-        {
+        if link_path.starts_with(&root) && target.is_some_and(|path| path.starts_with(&root)) {
             return;
         }
     }
@@ -304,26 +292,63 @@ fn append_shim_write_denials(
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let firmware = std::fs::read_dir(bin_dir)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
+    let mut firmware = Vec::new();
+    let enumeration = match std::fs::read_dir(bin_dir) {
+        Ok(mut entries) => entries.try_for_each(|entry| {
+            let entry = entry?;
+            if entry
                 .file_name()
                 .as_encoded_bytes()
                 .starts_with(b"libkrunfw.")
-        })
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file());
-    for path in std::iter::once(binary_path.to_path_buf()).chain(firmware) {
+            {
+                let path = entry.path();
+                if path.is_file() {
+                    firmware.push(path);
+                }
+            }
+            Ok(())
+        }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    };
+    if let Err(err) = enumeration {
+        tracing::warn!(
+            path = %bin_dir.display(),
+            error = %err,
+            "Failed to enumerate shim firmware, denying writes to the shim directory"
+        );
+        append_subtree_write_denial(policy, bin_dir);
+    }
+
+    for path in firmware {
         let link_path = canonicalize_or_original(&path);
+        let target = path.canonicalize().ok();
+        append_file_write_denials(policy, &link_path, target.as_deref());
+    }
+}
+
+fn append_subtree_write_denial(policy: &mut String, dir: &Path) -> PathBuf {
+    let link_path = canonicalize_or_original(dir);
+    let root = dir.canonicalize().unwrap_or_else(|_| link_path.clone());
+    if let Some(literal) = sbpl_path_literal(&root) {
+        policy.push_str(&format!(
+            "(deny file-write* (literal {literal}) (subpath {literal}))\n"
+        ));
+    } else {
+        tracing::warn!(path = ?root, "Skipping non-UTF-8 Seatbelt write denial");
+    }
+    if root != link_path {
         append_literal_write_denial(policy, &link_path);
-        if let Ok(target) = path.canonicalize()
-            && target != link_path
-        {
-            append_literal_write_denial(policy, &target);
-        }
+    }
+    root
+}
+
+fn append_file_write_denials(policy: &mut String, link_path: &Path, target: Option<&Path>) {
+    append_literal_write_denial(policy, link_path);
+    if let Some(target) = target
+        && target != link_path
+    {
+        append_literal_write_denial(policy, target);
     }
 }
 
@@ -542,6 +567,33 @@ fn darwin_user_cache_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    struct UnreadableShimDir(tempfile::TempDir);
+
+    impl Drop for UnreadableShimDir {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(self.0.path(), std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    fn unreadable_shim_dir() -> Option<UnreadableShimDir> {
+        let dir = UnreadableShimDir(tempfile::tempdir_in("/tmp").unwrap());
+        let path = dir.0.path();
+        for name in ["boxlite-shim", "libkrunfw.dylib"] {
+            std::fs::write(path.join(name), b"original").unwrap();
+        }
+        // Keep known paths searchable and writable while denying directory listing.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o311)).unwrap();
+        match std::fs::read_dir(path) {
+            Ok(_) => {
+                eprintln!("Skipping: can still enumerate a directory with mode 0o311");
+                return None;
+            }
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied),
+        }
+        Some(dir)
+    }
 
     #[test]
     fn test_seatbelt_policy_escapes_injected_file_path() {
@@ -1138,6 +1190,35 @@ mod tests {
                     "missing file write denial for {literal}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_seatbelt_policy_denies_writes_to_unreadable_shim_directory() {
+        let Some(dir) = unreadable_shim_dir() else {
+            return;
+        };
+        let target_dir = tempfile::tempdir_in("/tmp").unwrap();
+        let shim = dir.0.path().join("boxlite-shim");
+        let target = target_dir.path().join("boxlite-shim");
+        std::fs::rename(&shim, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &shim).unwrap();
+
+        let policy = build_sandbox_policy(&[], &UnixSocketAccess::default(), &shim, None, false);
+        let root = dir.0.path().canonicalize().unwrap();
+        let literal = sbpl_path_literal(&root).unwrap();
+        assert!(
+            policy.contains(&format!(
+                "(deny file-write* (literal {literal}) (subpath {literal}))"
+            )),
+            "missing subtree write denial for {literal}"
+        );
+        for path in [root.join("boxlite-shim"), target.canonicalize().unwrap()] {
+            let literal = sbpl_path_literal(&path).unwrap();
+            assert!(
+                policy.contains(&format!("(deny file-write* (literal {literal}))")),
+                "missing shim write denial for {literal}"
+            );
         }
     }
 
@@ -1852,6 +1933,26 @@ mod tests {
             assert_shim_write_denied(run_shim_write_probe(&shim, None, script, path));
             assert_eq!(std::fs::read(path).unwrap(), b"original");
         }
+    }
+
+    #[test]
+    fn test_seatbelt_runtime_denies_firmware_overwrite_in_unreadable_shim_directory() {
+        if !is_sandbox_available() {
+            eprintln!("Skipping: sandbox-exec not available");
+            return;
+        }
+        let Some(dir) = unreadable_shim_dir() else {
+            return;
+        };
+        let shim = dir.0.path().join("boxlite-shim");
+        let firmware = dir.0.path().join("libkrunfw.dylib");
+        assert_shim_write_denied(run_shim_write_probe(
+            &shim,
+            None,
+            "printf changed > \"$1\"",
+            &firmware,
+        ));
+        assert_eq!(std::fs::read(&firmware).unwrap(), b"original");
     }
 
     #[cfg(target_os = "macos")]
