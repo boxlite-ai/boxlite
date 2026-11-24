@@ -131,7 +131,7 @@ export function Turnstile({
   }, [sitekey, action, onToken, attempt, resolvedTheme])
 
   return (
-    <div className="min-h-[90px] space-y-3">
+    <div className="min-h-16 space-y-3">
       {loading && (
         <p role="status" className="text-body text-muted-foreground">
           Loading verification…

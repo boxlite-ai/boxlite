@@ -141,7 +141,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
         </p>
       )}
       {canRegister ? (
-        <>
+        <div className="grid gap-4">
           {legal && (
             <label className="flex items-start gap-2.5 text-left text-body text-muted-foreground">
               <input
@@ -157,20 +157,22 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
             </label>
           )}
           {turnstile?.sitekey && <Turnstile key={challenge} {...turnstile} onToken={setToken} />}
-          <Button className="mt-6 h-10 w-full" onClick={() => void register()} disabled={!canSubmit || submitting}>
-            {submitting ? 'Creating account…' : legal ? 'Continue' : 'Create account'}
-          </Button>
-          {legal && (
-            <Button
-              variant="quiet"
-              className="mt-2 h-10 w-full"
-              disabled={submitting}
-              onClick={() => navigate(RoutePath.LOGOUT, { replace: true })}
-            >
-              Cancel
+          <div className="grid gap-2">
+            <Button className="h-10 w-full" onClick={() => void register()} disabled={!canSubmit || submitting}>
+              {submitting ? 'Creating account…' : legal ? 'Continue' : 'Create account'}
             </Button>
-          )}
-        </>
+            {legal && (
+              <Button
+                variant="quiet"
+                className="h-10 w-full"
+                disabled={submitting}
+                onClick={() => navigate(RoutePath.LOGOUT, { replace: true })}
+              >
+                Cancel
+              </Button>
+            )}
+          </div>
+        </div>
       ) : (
         <Button onClick={() => void retryAccount()}>Try again</Button>
       )}
