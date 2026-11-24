@@ -48,6 +48,15 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         ))
     }
 
+    async fn create_with_managed_outbound_proxy(
+        &self,
+        _options: BoxOptions,
+        _name: Option<String>,
+        _proxy: Option<&str>,
+    ) -> Result<LiteBox, crate::ManagedCreateError> {
+        Err(super::outbound_proxy::requires_cloud().into())
+    }
+
     async fn get_or_create(
         &self,
         options: BoxOptions,
@@ -210,6 +219,14 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 )]
 #[async_trait]
 pub(crate) trait BoxNetworkBackend: Send + Sync {
+    async fn set_managed_proxy(&self, _proxy: Option<&str>) -> BoxliteResult<crate::ProxyMutation> {
+        Err(super::outbound_proxy::requires_cloud())
+    }
+
+    async fn managed_proxy_status(&self) -> BoxliteResult<crate::ManagedProxyStatus> {
+        Err(super::outbound_proxy::requires_cloud())
+    }
+
     async fn update_outbound_proxy(
         &self,
         _config: OutboundNetworkConfig,

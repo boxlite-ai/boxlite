@@ -49,6 +49,10 @@ pub struct RunArgs {
     #[arg(long = "rootfs", value_name = "PATH")]
     pub rootfs: Option<String>,
 
+    /// Select an organization outbound proxy for an image-backed Cloud Box.
+    #[arg(long, conflicts_with = "rootfs", value_name = "NAME")]
+    pub outbound_proxy: Option<String>,
+
     /// Image and command, or command only when --rootfs is set
     #[arg(index = 1, trailing_var_arg = true, value_name = "IMAGE|COMMAND")]
     pub args: Vec<String>,
@@ -193,10 +197,14 @@ impl BoxRunner {
     ) -> anyhow::Result<LiteBox> {
         let options = build_options(&self.args, self.home.as_deref(), rootfs, command_args)?;
 
-        let litebox = self
-            .rt
-            .create(options, self.args.management.name.clone())
-            .await?;
+        let name = self.args.management.name.clone();
+        let litebox = if let Some(proxy) = self.args.outbound_proxy.as_deref() {
+            self.rt
+                .create_with_managed_outbound_proxy(options, name, Some(proxy))
+                .await?
+        } else {
+            self.rt.create(options, name).await?
+        };
 
         Ok(litebox)
     }

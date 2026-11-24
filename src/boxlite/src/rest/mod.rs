@@ -10,6 +10,7 @@ pub mod credential;
 pub(crate) mod error;
 mod exec;
 pub(crate) mod litebox;
+mod managed_proxy;
 pub mod options;
 mod outbound;
 pub(crate) mod runtime;

@@ -165,6 +165,36 @@ pub(crate) struct PyBoxConnection {
 
 #[pymethods]
 impl PyNetworkHandle {
+    #[pyo3(signature = (name))]
+    fn set_managed_proxy<'py>(
+        &self,
+        py: Python<'py>,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            crate::outbound_proxy::public_value(
+                handle
+                    .network()
+                    .set_managed_proxy(name.as_deref())
+                    .await
+                    .map_err(map_err)?,
+            )
+        })
+    }
+
+    fn managed_proxy_status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            crate::outbound_proxy::public_value(
+                handle
+                    .network()
+                    .managed_proxy_status()
+                    .await
+                    .map_err(map_err)?,
+            )
+        })
+    }
     fn update_inbound<'py>(
         &self,
         py: Python<'py>,

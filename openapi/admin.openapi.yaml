@@ -19,7 +19,7 @@ info:
   version: 0.1.0
   description: |
     Organization administration for the hosted BoxLite service. Members can
-    list users and invitations; owners can invite users, cancel invitations,
+    list users, invitations and outbound-proxy registrations. Owners can invite users, cancel invitations,
     and remove users. Admin identifies this API surface, not a platform role.
 
     API keys select their own organization and require the operation's
@@ -30,7 +30,7 @@ info:
 
     Authentication, pagination parameters, and error schemas are shared with
     the Box API. This cloud-only API is not served by the local Box runtime.
-    Dedicated Admin SDK methods are not yet provided; callers may use HTTP.
+    Proxy registry SDK methods are available through the Cloud REST runtime.
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -57,7 +57,297 @@ tags:
   - name: Invites
     description: Organization invitations
 
+  - name: Outbound Proxies
+    description: Organization outbound-proxy registrations
+
 paths:
+  /proxies:
+    get:
+      operationId: listOutboundProxies
+      summary: List of organization proxy registrations
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of organization proxy registrations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxyList"
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+    post:
+      operationId: createOutboundProxy
+      summary: Proxy registration created
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      description: Requires the write:proxies scope or corresponding organization grant.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewOutboundProxy"
+      responses:
+        "201":
+          description: Proxy registration created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxy"
+        "400":
+          $ref: "#/components/responses/ProxyWriteBadRequest"
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "409":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "413":
+          $ref: "#/components/responses/ProxyBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/ProxyUnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+
+  /proxies/{name}:
+    parameters:
+      - $ref: "#/components/parameters/proxyName"
+    get:
+      operationId: getOutboundProxy
+      summary: Current public proxy registration
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Current public proxy registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxy"
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "404":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+    patch:
+      operationId: updateOutboundProxy
+      summary: The new public registry revision
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      description: Requires the write:proxies scope or corresponding organization grant.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOutboundProxy"
+      responses:
+        "200":
+          description: The new public registry revision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxy"
+        "400":
+          $ref: "#/components/responses/ProxyWriteBadRequest"
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "404":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "409":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "413":
+          $ref: "#/components/responses/ProxyBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/ProxyUnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+    delete:
+      operationId: deleteOutboundProxy
+      summary: Proxy registration removed
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      description: Requires the delete:proxies scope or corresponding organization grant.
+      responses:
+        "204":
+          description: Proxy registration removed
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "404":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "409":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "429":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+
+  /{prefix}/proxies:
+    parameters:
+      - $ref: "#/components/parameters/proxyOrganization"
+    get:
+      operationId: listOutboundProxiesForOrganization
+      summary: List of organization proxy registrations
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of organization proxy registrations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxyList"
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+    post:
+      operationId: createOutboundProxyForOrganization
+      summary: Proxy registration created
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      description: Requires the write:proxies scope or corresponding organization grant.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewOutboundProxy"
+      responses:
+        "201":
+          description: Proxy registration created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxy"
+        "400":
+          $ref: "#/components/responses/ProxyWriteBadRequest"
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "409":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "413":
+          $ref: "#/components/responses/ProxyBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/ProxyUnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+
+  /{prefix}/proxies/{name}:
+    parameters:
+      - $ref: "#/components/parameters/proxyOrganization"
+      - $ref: "#/components/parameters/proxyName"
+    get:
+      operationId: getOutboundProxyForOrganization
+      summary: Current public proxy registration
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Current public proxy registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxy"
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "404":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+    patch:
+      operationId: updateOutboundProxyForOrganization
+      summary: The new public registry revision
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      description: Requires the write:proxies scope or corresponding organization grant.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOutboundProxy"
+      responses:
+        "200":
+          description: The new public registry revision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutboundProxy"
+        "400":
+          $ref: "#/components/responses/ProxyWriteBadRequest"
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "404":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "409":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "413":
+          $ref: "#/components/responses/ProxyBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/ProxyUnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+    delete:
+      operationId: deleteOutboundProxyForOrganization
+      summary: Proxy registration removed
+      tags: [Outbound Proxies]
+      security:
+        - BearerAuth: []
+      description: Requires the delete:proxies scope or corresponding organization grant.
+      responses:
+        "204":
+          description: Proxy registration removed
+        "401":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "403":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "404":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "409":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "429":
+          $ref: "#/components/responses/ProxyRegistryError"
+        "503":
+          $ref: "#/components/responses/ProxyRegistryError"
+
   /organizations/users:
     get:
       operationId: listUsers
@@ -239,6 +529,20 @@ components:
     BearerAuth:
       $ref: "./box.openapi.yaml#/components/securitySchemes/BearerAuth"
   parameters:
+    proxyOrganization:
+      name: prefix
+      in: path
+      required: true
+      description: Organization UUID or the legacy default routing slot.
+      schema:
+        type: string
+    proxyName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
     organizationHeader:
       name: X-BoxLite-Organization-ID
       in: header
@@ -250,6 +554,32 @@ components:
         format: uuid
       example: c391e52c-fef2-4aae-80ec-a47b7520ce42
   responses:
+    ProxyRegistryError:
+      description: Registry request rejected or the registry is unavailable
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProxyRegistryError"
+    ProxyWriteBadRequest:
+      description: Request body or registration fields are invalid
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: "#/components/schemas/ProxyRegistryError"
+              - $ref: "#/components/schemas/ProxyParserError"
+    ProxyBodyTooLarge:
+      description: Request body exceeds 100 KiB
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProxyParserError"
+    ProxyUnsupportedMediaType:
+      description: Unsupported request content type or encoding
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProxyParserError"
     ForbiddenError:
       description: Missing membership, owner role, or required API-key scope
       content:
@@ -274,6 +604,104 @@ components:
               type: ResourceExhaustedError
               code: resource_exhausted
   schemas:
+    ProxyParserError:
+      type: object
+      required: [statusCode, message]
+      properties:
+        statusCode:
+          type: integer
+          enum: [400, 413, 415]
+        message:
+          type: string
+      additionalProperties: false
+    ProxyRegistryError:
+      type: object
+      required: [path, timestamp, statusCode, error, message]
+      properties:
+        path:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        statusCode:
+          type: integer
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
+    ProxyCredential:
+      type: object
+      writeOnly: true
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: '^[ -~]+$'
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 255
+          pattern: '^[ -~]+$'
+    NewOutboundProxy:
+      type: object
+      required: [name, url]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{0,62}$'
+        url:
+          $ref: "#/components/schemas/ProxyEndpoint"
+        credential:
+          writeOnly: true
+          anyOf:
+            - $ref: "#/components/schemas/ProxyCredential"
+            - type: "null"
+    UpdateOutboundProxy:
+      type: object
+      additionalProperties: false
+      properties:
+        url:
+          $ref: "#/components/schemas/ProxyEndpoint"
+        credential:
+          writeOnly: true
+          description: Omit to retain the credential for an unchanged endpoint, pass null to clear it, or supply a replacement.
+          anyOf:
+            - $ref: "#/components/schemas/ProxyCredential"
+            - type: "null"
+    ProxyEndpoint:
+      type: string
+      format: uri
+      maxLength: 2048
+      description: HTTP, HTTPS, or SOCKS5 URL with no user information, path, query, or fragment.
+    OutboundProxy:
+      type: object
+      required: [name, url, revision, credential_configured]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        url:
+          $ref: "#/components/schemas/ProxyEndpoint"
+        revision:
+          type: integer
+          minimum: 1
+        credential_configured:
+          type: boolean
+    OutboundProxyList:
+      type: object
+      required: [proxies]
+      properties:
+        proxies:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutboundProxy"
     ErrorResponse:
       $ref: "./box.openapi.yaml#/components/schemas/ErrorResponse"
     CreateInviteRequest:

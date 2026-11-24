@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { PATH_METADATA } from '@nestjs/common/constants'
+import { MODULE_METADATA, PATH_METADATA } from '@nestjs/common/constants'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Reflector } from '@nestjs/core'
@@ -17,6 +17,10 @@ import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
+import { BoxPreparingImageTimeoutError } from '../box/errors/box-preparing-image-timeout.error'
+import { BoxProgressPhase } from '../box/enums/box-progress-phase.enum'
+import { BoxState } from '../box/enums/box-state.enum'
+import { AllExceptionsFilter } from '../filters/all-exceptions.filter'
 import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
@@ -28,6 +32,9 @@ import { BoxliteVolumeController } from './boxlite-volume.controller'
 import { BoxliteImageController } from './boxlite-image.controller'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
+import { BoxliteRestModule } from './boxlite-rest.module'
+import { BoxliteOutboundProxyController } from './boxlite-outbound-proxy.controller'
+import { ProxyRegistryStore } from '../box/outbound-proxy/proxy-registry.store'
 import { RegistriesService } from '../registry/services/registries.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AUDIT_CONTEXT_KEY, AuditContext } from '../audit/decorators/audit.decorator'
@@ -95,7 +102,7 @@ describe('BoxLite REST routing', () => {
     )
   }
 
-  async function startApp(controllers: any[], providers: any[]) {
+  async function startApp(controllers: any[], providers: any[], filter?: AllExceptionsFilter) {
     const moduleRef = await Test.createTestingModule({ controllers, providers })
       // The proxy controller is here only for its routes. Mock whatever it
       // injects, so a constructor dependency added later (#1723 added
@@ -121,6 +128,7 @@ describe('BoxLite REST routing', () => {
     app.setGlobalPrefix('api')
     // As main.ts validates every body, so a DTO's rules hold on its route here.
     app.useGlobalPipes(new ValidationPipe({ transform: true }))
+    if (filter) app.useGlobalFilters(filter)
     await app.listen(0)
   }
 
@@ -137,6 +145,40 @@ describe('BoxLite REST routing', () => {
       body: JSON.stringify(body),
     })
   }
+
+  it('retains Cloud image wait metadata on an admitted proxy create', async () => {
+    const boxId = 'admitted-box'
+    const progress = { phase: BoxProgressPhase.PREPARING_IMAGE, retryAfterMs: 2500 }
+    const create = jest.fn().mockResolvedValue({ id: boxId, state: BoxState.CREATING })
+    const waitForStarted = jest
+      .fn()
+      .mockRejectedValue(new BoxPreparingImageTimeoutError('Image is preparing', progress, boxId))
+    await startApp(
+      [BoxliteBoxController],
+      [
+        { provide: BoxService, useValue: { create } },
+        { provide: BoxStateWaiterService, useValue: { waitForStarted } },
+        { provide: CommerceBoxLimitService, useValue: { resolveMaxCreatedBoxes: jest.fn() } },
+      ],
+      new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never),
+    )
+
+    const address = app.getHttpServer().address() as AddressInfo
+    for (const network of [undefined, { outbound: { mode: 'enabled', proxy: null } }]) {
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/boxes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ image: 'alpine', network }),
+      })
+      expect(response.status).toBe(408)
+      expect(response.headers.get('Retry-After')).toBe('3')
+      const body = await response.json()
+      expect(body).toMatchObject({ statusCode: 408, message: 'Image is preparing', boxId, progress })
+      expect(body.code).toBe(network ? 'outbound_create_admitted' : undefined)
+    }
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(waitForStarted).toHaveBeenCalledTimes(2)
+  })
 
   afterEach(async () => {
     await app?.close()
@@ -486,6 +528,46 @@ describe('BoxLite REST routing', () => {
       expect(await response.json()).toEqual({ registries: [] })
     }
     expect(registries.list).toHaveBeenCalledWith('org-123')
+  })
+
+  it('gives literal proxy and Box roots precedence over organization aliases', async () => {
+    const proxies = {
+      list: jest.fn().mockResolvedValue([]),
+      get: jest.fn(async (_org: string, name: string) => ({ name, revision: 1 })),
+    }
+    const controllers: any[] = Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, BoxliteRestModule)
+    await startApp(
+      controllers.filter(
+        (controller) =>
+          controller === BoxliteBoxController ||
+          controller === BoxliteOutboundProxyController ||
+          controller.prototype instanceof BoxliteOutboundProxyController,
+      ),
+      [
+        { provide: ProxyRegistryStore, useValue: proxies },
+        {
+          provide: BoxService,
+          useValue: {
+            findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'proxies' }),
+            findInventory: jest.fn().mockResolvedValue([]),
+            toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: 'proxies' }),
+            toBoxDtos: jest.fn().mockResolvedValue([]),
+          },
+        },
+      ],
+    )
+
+    for (const prefix of ['', '/default', '/570b5c53-819f-4307-845a-ecf97d838989']) {
+      for (const name of ['boxes', 'proxies', 'volumes', 'checkpoints', 'domains', 'images']) {
+        const response = await get(`/api/v1${prefix}/proxies/${name}`)
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ name, revision: 1 })
+        expect(proxies.get).toHaveBeenLastCalledWith('org-123', name)
+      }
+    }
+    const box = await get('/api/v1/boxes/proxies')
+    expect(box.status).toBe(200)
+    expect(await box.json()).toMatchObject({ box_id: 'proxies' })
   })
 
   it('refuses a registry login id that is not a UUID before the service sees it', async () => {

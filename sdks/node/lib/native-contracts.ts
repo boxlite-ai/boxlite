@@ -631,7 +631,78 @@ export interface JsSshHandle {
   disable(): Promise<JsSshStatus>;
 }
 
+export interface OutboundProxyRegistration {
+  name: string;
+  url: string;
+  revision: number;
+  credential_configured: boolean;
+}
+
+export interface ProxyCredentialInput {
+  username: string;
+  password: string;
+}
+
+export interface ProxyMutation {
+  state: "accepted" | "rejected" | "unknown" | "accepted_release_unconfirmed";
+  http_status: number | null;
+  revision: string | null;
+}
+
+export interface ProxyIdentity {
+  name: string;
+  revision: number;
+}
+
+export interface ProxyPolicyRevision {
+  policy_revision: string;
+  proxy: ProxyIdentity | null;
+}
+
+export interface ManagedProxyStatus {
+  revision: string;
+  application_state: "pending" | "confirmed" | "uncertain";
+  desired: ProxyIdentity | null;
+  committed: ProxyIdentity | null;
+  pending: ProxyPolicyRevision | null;
+  installed: ProxyPolicyRevision | null;
+  runtime_readback: "authenticated" | "unknown";
+}
+
+export interface OutboundProxyHandle {
+  list(): Promise<OutboundProxyRegistration[]>;
+  get(name: string): Promise<OutboundProxyRegistration>;
+  create(
+    name: string,
+    url: string,
+    credential?: ProxyCredentialInput,
+  ): Promise<ProxyMutation>;
+  update(
+    name: string,
+    options: {
+      url?: string;
+      credential?: ProxyCredentialInput;
+      clearCredential?: boolean;
+    },
+  ): Promise<ProxyMutation>;
+  remove(name: string): Promise<ProxyMutation>;
+}
+
+export interface ManagedCreateFailure {
+  admission: "rejected" | "admitted" | "unknown";
+  httpStatus?: number;
+  boxId?: string;
+  message: string;
+}
+
+export interface ManagedCreateResult {
+  readonly box?: JsBox | null;
+  readonly error?: ManagedCreateFailure | null;
+}
+
 export interface JsNetworkHandle {
+  setManagedProxy(name: string | null): Promise<ProxyMutation>;
+  managedProxyStatus(): Promise<ManagedProxyStatus>;
   updateInbound(spec: {
     mode: "enabled" | "disabled";
     allowNet?: string[];
@@ -777,6 +848,12 @@ export interface JsGetOrCreateResult {
 export interface JsBoxlite {
   importBox(archivePath: string, name?: string | null): Promise<JsBox>;
   create(options: JsBoxOptions, name?: string | null): Promise<JsBox>;
+  createWithOutboundProxy(
+    options: JsBoxOptions,
+    proxy: string | null,
+    name?: string | null,
+  ): Promise<ManagedCreateResult>;
+  outboundProxies(): OutboundProxyHandle;
   getOrCreate(
     options: JsBoxOptions,
     name?: string | null,

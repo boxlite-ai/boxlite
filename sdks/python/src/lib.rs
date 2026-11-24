@@ -11,6 +11,7 @@ mod info;
 mod metrics;
 mod network;
 mod options;
+mod outbound_proxy;
 mod registries;
 mod runtime;
 mod snapshot_options;
@@ -96,6 +97,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRuntimeMetrics>()?;
     m.add_class::<PyBoxMetrics>()?;
     m.add_class::<PyNetworkHandle>()?;
+    m.add_class::<outbound_proxy::PyProxyCredential>()?;
+    m.add_class::<outbound_proxy::PyOutboundProxyHandle>()?;
     m.add_class::<PyBoxTunnel>()?;
     m.add_class::<PyBoxConnection>()?;
     m.add_class::<PySocketAddress>()?;

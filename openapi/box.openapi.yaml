@@ -315,6 +315,12 @@ paths:
         operations return Unsupported. A cloud wait failure after admission,
         including 408, carries `boxId` in the error body; query that box
         before retrying an unnamed create.
+
+        An explicit Cloud proxy selection uses a registered name or null.
+        The flat response code outbound_create_rejected identifies a refusal
+        before Box admission. The code outbound_create_admitted identifies a
+        startup error after admission. Use its Box ID to inspect the existing
+        Box. An unclassified failure can leave admission unknown.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -341,7 +347,13 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "408":
-          description: Checkpoint create accepted but still running; the error body includes boxId to query.
+          description: The Box was admitted and startup remains in progress. Inspect boxId before creating another Box.
+          headers:
+            Retry-After:
+              description: Seconds until the next image preparation status check, when available.
+              schema:
+                type: integer
+                minimum: 1
           content:
             application/json:
               schema:
@@ -355,6 +367,13 @@ paths:
                   boxId:
                     type: string
                     description: Admitted Box identity; query it before retrying creation.
+                  progress:
+                    type: object
+                    properties:
+                      phase:
+                        type: string
+                      retryAfterMs:
+                        type: integer
         "409":
           $ref: "#/components/responses/ConflictError"
         "422":
@@ -1402,6 +1421,12 @@ paths:
         from the same organization. Explicit null requests unbind. An already
         bound Box requires a proxy value in every complete replacement.
 
+        A Cloud 409 with outbound_update_blocked refused the new reservation.
+        A Cloud 409 with outbound_application_unconfirmed means the attempt
+        was reserved and application remains uncertain. Check status before
+        another write. After unbind acknowledgement, confirm Runtime release
+        through authenticated installed null at the acknowledged ETag.
+
         New TCP/UDP flows use the replacement allowlist. Existing flows retain
         their policy. Disabled suspends NIC traffic, including DNS and inbound,
         while preserving the control channel for re-enabling.
@@ -2323,6 +2348,9 @@ components:
               type: boolean
               description: Whether Docker-style Linux capability add/drop policy is supported
               example: true
+            outbound_proxy_registry_enabled:
+              type: boolean
+              description: Cloud advertises support for the organization proxy registry and guarded Box bindings.
             privileged_enabled:
               type: boolean
               description: Whether privileged containers inside the guest are supported; host sandbox policy is unchanged

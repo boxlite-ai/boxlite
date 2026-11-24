@@ -43,6 +43,11 @@ pub use litebox::{
     TunnelOptions,
 };
 pub use portal::GuestSession;
+pub use runtime::outbound_proxy::{
+    ManagedCreateAdmission, ManagedCreateError, ManagedProxyStatus, OutboundProxy,
+    OutboundProxyHandle, ProxyCredential, ProxyCredentialChange, ProxyIdentity, ProxyMutation,
+    ProxyMutationState, ProxyPolicyRevision, ProxyRuntimeReadback,
+};
 pub use runtime::{
     AuthHandle, BoxliteRuntime, CheckpointHandle, CheckpointInfo, CheckpointState, Domain,
     DomainHandle, DomainList, DomainTarget, ImageHandle, Principal,

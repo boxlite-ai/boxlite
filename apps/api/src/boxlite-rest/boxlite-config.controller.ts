@@ -29,6 +29,7 @@ export class BoxliteConfigController {
         inbound_update_enabled: true,
         private_tunnels_enabled: true,
         exec_user_enabled: true,
+        outbound_proxy_registry_enabled: process.env.OUTBOUND_PROXY_REGISTRY_ENABLED === 'true',
       },
     }
   }

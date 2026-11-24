@@ -334,6 +334,27 @@ pub struct JsBoxConnection {
 #[napi]
 impl JsNetworkHandle {
     #[napi]
+    pub async fn set_managed_proxy(&self, name: Option<String>) -> Result<serde_json::Value> {
+        crate::outbound_proxy::public_value(
+            self.handle
+                .network()
+                .set_managed_proxy(name.as_deref())
+                .await
+                .map_err(map_err)?,
+        )
+    }
+
+    #[napi]
+    pub async fn managed_proxy_status(&self) -> Result<serde_json::Value> {
+        crate::outbound_proxy::public_value(
+            self.handle
+                .network()
+                .managed_proxy_status()
+                .await
+                .map_err(map_err)?,
+        )
+    }
+    #[napi]
     pub async fn update_inbound(&self, spec: JsInboundNetworkSpec) -> Result<()> {
         self.handle
             .network()

@@ -6,7 +6,14 @@
 
 import { assertCpuAllocation } from '../utils/cpu-allocation'
 import { requestedMemoryMib } from '../utils/memory-allocation'
-import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import {
   Not,
@@ -328,15 +335,31 @@ export class BoxService {
     organization = Object.assign(Object.create(Object.getPrototypeOf(organization)) as Organization, organization, {
       nestedVirtualizationEnabled,
     })
-    validateSecrets(createBoxDto.secrets)
+    const explicitProxy = options.outboundProxy !== undefined
+    try {
+      validateSecrets(createBoxDto.secrets)
+    } catch (error) {
+      if (explicitProxy && error instanceof BadRequestError)
+        throw new BadRequestException({ message: error.message, code: 'outbound_create_rejected' })
+      throw error
+    }
     const proxyName = options.outboundProxy ?? null
     const proxyEnabled = process.env.OUTBOUND_PROXY_REGISTRY_ENABLED === 'true'
     if (proxyName !== null) {
-      if (!proxyEnabled || !this.outboundBootstrap) throw new ConflictException('Managed outbound proxy is unavailable')
-      await this.outboundBootstrap.resolveName(organization.id, proxyName)
+      const code = 'outbound_create_rejected'
+      if (!proxyEnabled || !this.outboundBootstrap)
+        throw new ConflictException({ message: 'Managed outbound proxy is unavailable', code })
+      try {
+        await this.outboundBootstrap.resolveName(organization.id, proxyName)
+      } catch (error) {
+        if (error instanceof NotFoundException) throw new NotFoundException({ message: error.message, code })
+        throw error
+      }
     }
     const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
+      if (explicitProxy)
+        throw new BadRequestException({ message: DISABLED_OUTBOUND_RULES_ERROR, code: 'outbound_create_rejected' })
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
     }
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
@@ -371,7 +394,9 @@ export class BoxService {
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
       const needsFreshBox =
-        proxyName !== null || !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
+        (proxyEnabled && explicitProxy) ||
+        !!options.onPersist ||
+        requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
@@ -1538,7 +1563,10 @@ export class BoxService {
     const resolved = { ...policy, allow_net: allowNet }
     if (proxy !== undefined || (await this.outboundCoordinator?.recognizes(box.id, organizationId))) {
       if (!this.outboundCoordinator || process.env.OUTBOUND_PROXY_REGISTRY_ENABLED !== 'true')
-        throw new ConflictException('Managed outbound proxy is unavailable')
+        throw new ConflictException({
+          message: 'Managed outbound proxy is unavailable',
+          code: 'outbound_update_blocked',
+        })
       return this.outboundCoordinator.replace(
         box.id,
         organizationId,

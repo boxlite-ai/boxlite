@@ -32,7 +32,10 @@ import { BoxliteVolumeController } from './boxlite-volume.controller'
 import { BoxliteImageController } from './boxlite-image.controller'
 import { ImageModule } from '../image/image.module'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
-import { BoxliteOutboundProxyController } from './boxlite-outbound-proxy.controller'
+import {
+  BoxliteOutboundProxyController,
+  BoxlitePrefixedOutboundProxyController,
+} from './boxlite-outbound-proxy.controller'
 import { RegistryModule } from '../registry/registry.module'
 import { BoxliteMemberController } from './boxlite-member.controller'
 import { BoxliteInvitationController } from './boxlite-invitation.controller'
@@ -53,6 +56,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     AuditModule,
   ],
   controllers: [
+    BoxliteOutboundProxyController,
     BoxliteCheckpointController,
     // Canonical domain paths must precede legacy /v1/:prefix resource routes.
     BoxliteDomainController,
@@ -66,10 +70,10 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     BoxliteProxyController,
     BoxliteVolumeController,
     BoxliteRegistryController,
-    BoxliteOutboundProxyController,
     BoxliteImageController,
     BoxliteMemberController,
     BoxliteInvitationController,
+    BoxlitePrefixedOutboundProxyController,
   ],
   providers: [
     BoxliteWsProxyService,

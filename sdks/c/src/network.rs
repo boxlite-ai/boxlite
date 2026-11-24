@@ -47,8 +47,8 @@ async fn connection_fd(
 
 /// Opaque handle for network operations on a box.
 pub struct BoxNetworkHandle {
-    handle: CoreNetworkHandle,
-    tokio_rt: Arc<TokioRuntime>,
+    pub(crate) handle: CoreNetworkHandle,
+    pub(crate) tokio_rt: Arc<TokioRuntime>,
     queue: Arc<EventQueue>,
 }
 

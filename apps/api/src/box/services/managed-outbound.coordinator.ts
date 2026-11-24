@@ -32,6 +32,9 @@ type Control = (box: Box, manager?: EntityManager) => Promise<OutboundControl>
 type RegistrationInfo = { id: string; name: string; current_revision: number }
 const workBatchSize = 16
 const conflict = () => new ConflictException('Managed outbound state is unavailable or unresolved')
+const blocked = (message = conflict().message) => new ConflictException({ message, code: 'outbound_update_blocked' })
+const unconfirmed = (message = conflict().message) =>
+  new ConflictException({ message, code: 'outbound_application_unconfirmed' })
 const retryAfter = () => new Date(Date.now() + 30_000)
 
 @Injectable()
@@ -186,11 +189,14 @@ export class ManagedOutboundCoordinator {
     rollout?: { registrationId: string; revision: number },
   ): Promise<Box> {
     const snapshot = { revision: randomUUID(), policy }
-    if (!validOutboundSnapshot(snapshot)) throw new ConflictException('Invalid managed outbound policy')
+    if (!validOutboundSnapshot(snapshot)) throw blocked('Invalid managed outbound policy')
     const attemptId = randomUUID()
     const disposition = await this.store.locked(id, org, async (locked) => {
       let record = outboundRecord(locked.box)
-      const runner = await this.runner(locked, control)
+      const runner = await this.runner(locked, control).catch((error: unknown) => {
+        if (error instanceof ConflictException) throw blocked(error.message)
+        throw error
+      })
       if ((record.managed.pending || record.managed.unbindRelease) && !(await reconcileManagedOutbound(locked, runner)))
         return 'busy'
       record = outboundRecord(locked.box)
@@ -236,9 +242,12 @@ export class ManagedOutboundCoordinator {
       return 'reserved'
     })
     if (disposition === 'stale') throw new HttpException('Outbound precondition failed', 412)
-    if (disposition !== 'reserved') throw conflict()
-    const box = await this.advance(id, org, control, attemptId)
-    if (outboundRecord(box).revision !== snapshot.revision) throw conflict()
+    if (disposition !== 'reserved') throw blocked()
+    const box = await this.advance(id, org, control, attemptId).catch((error: unknown) => {
+      if (error instanceof HttpException && error.getStatus() === 409) throw unconfirmed(error.message)
+      throw error
+    })
+    if (outboundRecord(box).revision !== snapshot.revision) throw unconfirmed()
     // The commit above must be visible before the Runtime unbind fence is released.
     if (outboundRecord(box).managed?.unbindRelease) {
       await this.advance(id, org, control).catch(() => undefined)

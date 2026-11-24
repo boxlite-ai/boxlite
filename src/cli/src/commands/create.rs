@@ -21,6 +21,10 @@ pub struct CreateArgs {
     #[arg(long = "checkpoint", value_name = "CHECKPOINT")]
     pub checkpoint: Option<String>,
 
+    /// Select an organization outbound proxy for an image-backed Cloud Box.
+    #[arg(long, conflicts_with_all = ["checkpoint", "rootfs"], value_name = "NAME")]
+    pub outbound_proxy: Option<String>,
+
     #[command(flatten)]
     pub management: crate::cli::ManagementFlags,
 
@@ -77,7 +81,12 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
         None => (args.to_box_options(global)?, global.create_runtime()?),
     };
 
-    let litebox = rt.create(box_options, args.management.name.clone()).await?;
+    let litebox = if let Some(proxy) = args.outbound_proxy.as_deref() {
+        rt.create_with_managed_outbound_proxy(box_options, args.management.name, Some(proxy))
+            .await?
+    } else {
+        rt.create(box_options, args.management.name).await?
+    };
     println!("{}", litebox.id());
 
     Ok(())

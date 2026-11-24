@@ -592,6 +592,31 @@ pub struct BoxState {
 
 ---
 
+## Managed Cloud outbound proxies
+
+`BoxliteRuntime::outbound_proxies()` opens the organization registry. Its
+list and get methods return public registration data. Create and update
+accept a write-only `ProxyCredential` over HTTPS.
+
+`ProxyCredentialChange`
+selects keep, clear, or replace when updating.
+
+`BoxliteRuntime::create` omits proxy selection. Use
+`create_with_managed_outbound_proxy(options, name, Some("build-egress"))` to
+select a registration or pass `None` for explicit unbound creation.
+
+A failed acknowledgement carries a `ManagedCreateError`. If it carries a
+Box ID, inspect the existing Box before creating another.
+
+`box.network().set_managed_proxy(Some("build-egress"))` conditionally binds
+the registration using the current Box policy revision. Pass `None` to
+unbind.
+
+A mutation can be rejected, accepted, or uncertain. An acknowledged
+unbind with unconfirmed Runtime release still returns its validated
+acknowledged revision. Use `managed_proxy_status()` to inspect installed
+state for that revision.
+
 ## Network tunnels
 
 | Operation | Signature | Description |

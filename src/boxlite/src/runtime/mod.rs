@@ -10,6 +10,7 @@ pub mod images;
 pub mod layout;
 pub(crate) mod lock;
 pub mod options;
+pub mod outbound_proxy;
 pub mod registries;
 pub(crate) mod signal_handler;
 pub mod types;

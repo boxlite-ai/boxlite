@@ -238,6 +238,48 @@ const NETWORK_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
+const OUTBOUND_PROXY_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "list",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "get",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "create",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "update",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "delete",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "bind",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "unbind",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "status",
+        globals: VOLUME_GLOBALS,
+        children: &[],
+    },
+];
 const DOMAIN_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "bind",
@@ -416,6 +458,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         name: "network",
         globals: BOX_GLOBALS,
         children: NETWORK_SCOPES,
+    },
+    CommandScope {
+        name: "outbound-proxy",
+        globals: VOLUME_GLOBALS,
+        children: OUTBOUND_PROXY_SCOPES,
     },
     CommandScope {
         name: "ssh",
@@ -826,6 +873,8 @@ pub enum Commands {
 
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
+    /// Manage Cloud outbound proxy registrations and bindings.
+    OutboundProxy(crate::commands::outbound_proxy::OutboundProxyArgs),
 
     /// Connect to guest SSH using system OpenSSH
     ///

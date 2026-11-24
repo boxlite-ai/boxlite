@@ -62,6 +62,14 @@ class SyncNetworkHandle:
     def __init__(self, box: "SyncBox") -> None:
         self._owner = box
 
+    def set_managed_proxy(self, name: str | None):
+        """Bind a registration or request unbind with None."""
+        return self._owner._sync(self._owner._box.network.set_managed_proxy(name))
+
+    def managed_proxy_status(self):
+        """Read Cloud binding status and authenticated Runtime evidence."""
+        return self._owner._sync(self._owner._box.network.managed_proxy_status())
+
     def update_inbound(self, spec: "InboundNetworkSpec") -> None:
         """Replace the inbound policy; non-empty allowlists are unsupported."""
         self._owner._sync(self._owner._box.network.update_inbound(spec))

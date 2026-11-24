@@ -19,7 +19,7 @@ import { RequiredOrganizationResourcePermissions } from '../organization/decorat
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 
-@Controller(['v1/proxies', 'v1/:prefix/proxies'])
+@Controller('v1/proxies')
 @ApiExcludeController()
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard)
 export class BoxliteOutboundProxyController {
@@ -71,3 +71,6 @@ export class BoxliteOutboundProxyController {
     request[AUDIT_TARGET_ID] = target
   }
 }
+
+@Controller('v1/:prefix/proxies')
+export class BoxlitePrefixedOutboundProxyController extends BoxliteOutboundProxyController {}

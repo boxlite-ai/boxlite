@@ -28,7 +28,8 @@ const drainTimeoutMs = 100
 
 // Runtime manages BoxLite boxes. Create one with NewRuntime.
 type Runtime struct {
-	handle *C.CBoxliteRuntime
+	handle  *C.CBoxliteRuntime
+	proxyMu sync.RWMutex
 
 	drainMu   sync.Mutex
 	drainOnce sync.Once
@@ -104,6 +105,8 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 // ErrRuntimeClosed and release their per-call resources before the drain
 // goroutine and native runtime are stopped.
 func (r *Runtime) Close() error {
+	r.proxyMu.Lock()
+	defer r.proxyMu.Unlock()
 	if r.handle == nil {
 		return nil
 	}
