@@ -583,8 +583,6 @@ setup. Its empty disk registry makes `resize_disk()` return `InvalidInput`.
   operations, with a directory descriptor attached when registering a mount.
 
   The `box.sock` listener forwards guest RPCs, including Mount and Detach.
-  Upgrade both the runtime and shim, then restart a native box to use its
-  HTTP control socket.
 - **Runtime resize.** `LiteBox::resize` confirms the requested device size,
   runs `resize2fs` in the guest, and saves the completed target in box state.
   Queries read the image capacity, and callers can retry the same target
