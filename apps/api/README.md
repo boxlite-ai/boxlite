@@ -1377,6 +1377,44 @@ start endpoint retains its existing startup wait; the Listener observes the orig
 ID and registers a JIT runner only after `running`. A lost creation response remains
 an uncertain outcome and must not trigger a blind retry or adoption by name.
 
+### Creation quota index
+
+Limited creates use PostgreSQL transaction locks and count committed Boxes in a
+separate `READ COMMITTED` statement after locking. Cached Box data cannot admit a request.
+Older API instances, warm-pool claims, checkpoint restores, and other callback-based
+creates take the original organization lock exclusively.
+
+An ordinary one-Box insert with a safe integer limit of at least 100 takes one of
+8 organization lanes. It then takes the original lock in shared mode.
+
+The admission check uses the first ceiling (100, 200, 400, …) strictly above
+the count. The insert can commit alongside other lanes if the count plus 8 fits
+under that ceiling and the ceiling is within the request limit.
+
+Otherwise the first transaction finishes without writing. A new transaction takes the
+exclusive lock and checks the exact limit against a fresh count. Smaller limits take
+that exclusive path directly.
+
+Lock waits share about five seconds; the count and writes retain the connection's
+default lock timeout. Box and last activity still commit together.
+
+Older exclusive-only instances can coexist with parallel-admission instances.
+The lane count, lane key namespaces, and ordered ceilings are a cross-version protocol.
+Do not mix parallel-admission releases with different values without a compatibility transition.
+
+The partial B-tree `box_creation_quota_idx` on `box("organizationId")` limits the
+count scan to rows outside `error`, `destroying`, `destroyed`, `archiving`, and `archived`.
+If PostgreSQL cannot use the index, including during rollout or rollback, admission
+still enforces the same cap. Recheck index eligibility if the quota predicate changes.
+
+The pre-deploy migration runs outside a transaction. Use one migration runner
+and allow for extra database I/O during the build. Retry after cancellation:
+the migration replaces a matching invalid index but refuses a same-name object
+with a different definition.
+
+For online rollback, use TypeORM revert with `--transaction none` when this is
+the latest applied migration. The concurrent drop does not require an API rollback.
+
 ## Native hosted CI Listener (in development)
 
 `CiListenerService` imports the shared TypeScript `Listener` directly. Every API
