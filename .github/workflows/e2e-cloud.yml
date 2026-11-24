@@ -122,6 +122,14 @@ run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format
 on:
   workflow_call:
     inputs:
+      release_sha:
+        description: Exact tagged commit deployed by release acceptance.
+        required: false
+        type: string
+      deployment_attempt:
+        description: Release dev apply attempt required for acceptance.
+        required: false
+        type: string
       ref:
         # The commit the caller deployed. Without it the suite would build
         # its SDKs from whatever main points at now, while the stack under
@@ -270,6 +278,18 @@ jobs:
       # commit under test. A stage pinned to an older box image needs this.
       BOXLITE_E2E_IMAGE: ${{ inputs.image || '' }}
     steps:
+      - name: Verify the deployed release before acceptance
+        if: inputs.deployment_attempt
+        env:
+          DEPLOYMENT_ATTEMPT: ${{ inputs.deployment_attempt }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOYMENT_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] ||
+            { echo '::error::Repeat dev deployment before rerunning release E2E'; exit 1; }
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)
+          test "$sha" = "$RELEASE_SHA"
       - uses: actions/checkout@v5
         with:
           # On a call, the commit the caller deployed. On a dispatch,
@@ -289,7 +309,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: boxlite-ai/boxlite
-          ref: ${{ inputs.tag }}
+          ref: ${{ inputs.release_sha || inputs.tag }}
           path: target/e2e-release
           persist-credentials: false
 

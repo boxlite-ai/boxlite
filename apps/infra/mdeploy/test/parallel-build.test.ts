@@ -80,7 +80,8 @@ esac
   }
   assert.equal(plan.strategy.matrix.component, '${{ fromJSON(needs.resolve.outputs.prepare_components) }}')
   assert.equal(workflow.jobs.resolve.outputs.prepare_components, '${{ steps.tag.outputs.prepare_components }}')
-  assert.equal(plan.outputs, undefined, 'matrix outputs must not choose the commit deployment route')
+  assert.deepEqual(plan.outputs, { deployment_attempt: '${{ steps.applied.outputs.attempt }}' })
+  assert.equal(plan.steps.find((s: any) => s.id === 'applied').if, "inputs.release_sha && inputs.stage == 'dev'")
   assert.equal(workflow.jobs.deploy.steps.find((step: any) => step.uses === './.github/actions/mdeploy').with['api-route'], 'skip')
   assert.deepEqual(workflow.jobs.deploy.needs, ['resolve', 'plan', 'notify-deploy'])
 })

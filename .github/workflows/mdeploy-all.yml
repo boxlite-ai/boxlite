@@ -14,6 +14,25 @@ run-name: >-
   ${{ inputs.ref || github.sha }} · ${{ inputs.components }}${{ inputs.requested_by != '' && inputs.request_id != '' && format(' · @{0} · {1}', inputs.requested_by, inputs.request_id) || '' }}
 
 on:
+  workflow_call:
+    inputs:
+      stage: { required: true, type: string }
+      ref: { required: true, type: string }
+      release_sha: { required: true, type: string }
+      accepted_attempt: { required: false, type: string }
+      components: { required: true, type: string }
+      apply: { required: true, type: boolean }
+      confirm: { required: true, type: boolean }
+    secrets:
+      SLACK_WEBHOOK_URL: { required: false }
+      SLACK_DEV_DEPLOYMENT_WEBHOOK_URL: { required: false }
+      BOXLITE_DEV_API_KEY: { required: false }
+      BOXLITE_DEV_P2_API_KEY: { required: false }
+      BOXLITE_DEV_P2_READONLY_API_KEY: { required: false }
+    outputs:
+      accepted_attempt:
+        description: Release deployment attempt that passed cloud acceptance
+        value: ${{ jobs.report.outputs.accepted_attempt }}
   workflow_dispatch:
     inputs:
       requested_by:
@@ -351,8 +370,31 @@ jobs:
             esac
           fi
 
+      - name: Validate release caller and published commit
+        if: github.workflow_ref != format('{0}/.github/workflows/mdeploy-all.yml@{1}', github.repository, github.ref)
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RESOLVED: ${{ steps.tag.outputs.sha }}
+          VERSION: ${{ steps.classify.outputs.version }}
+          STAGE: ${{ inputs.stage }}
+          ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mbuild-release.yml@refs/heads/main" &&
+             "$GITHUB_REF" == refs/heads/main && -n "$VERSION" && "$RELEASE_SHA" == "$RESOLVED" ]] ||
+            { echo '::error::Release caller or published commit mismatch'; exit 1; }
+          case "$STAGE" in
+            dev) ;;
+            prod)
+              [[ "$ACCEPTED_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] ||
+                { echo '::error::Rerun dev deployment and acceptance in this attempt'; exit 1; }
+              gh api "repos/$GITHUB_REPOSITORY/environments/prod" | jq -e 'any(.protection_rules[]?; .type == "required_reviewers" and (.reviewers | length) > 0)' >/dev/null
+              ;;
+            *) exit 1 ;;
+          esac
+
       - name: Notify dev reviewers
-        if: inputs.apply && inputs.stage == 'dev'
+        if: inputs.apply && inputs.stage == 'dev' && !inputs.release_sha
         continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}
@@ -360,8 +402,8 @@ jobs:
           APPROVAL_PHASE: ${{ steps.classify.outputs.version != '' && 'Release deployment approval' || 'Commit preparation approval' }}
         run: node apps/infra/scripts/release-pipeline.mjs approval
 
-      - name: Notify prod reviewers
-        if: inputs.apply && inputs.stage == 'prod'
+      - name: Notify release reviewers
+        if: inputs.apply && (inputs.stage == 'prod' || (inputs.stage == 'dev' && inputs.release_sha))
         continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -380,6 +422,8 @@ jobs:
     if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
+    outputs:
+      deployment_attempt: ${{ steps.applied.outputs.attempt }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -389,6 +433,11 @@ jobs:
       group: ${{ matrix.component == 'runner' && 'runner-build' || 'mbuild-publish' }}-${{ inputs.stage }}
       cancel-in-progress: false
     steps:
+      - name: Require acceptance from this attempt
+        if: inputs.release_sha && inputs.stage == 'prod'
+        env:
+          ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
+        run: test "$ACCEPTED_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -558,6 +607,11 @@ jobs:
           apply: ${{ inputs.apply }}
           confirm: ${{ inputs.confirm }}
 
+      - name: Record the approved dev apply
+        id: applied
+        if: inputs.release_sha && inputs.stage == 'dev'
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
   notify-deploy:
     name: Notify reviewers of the commit deployment
     continue-on-error: true
@@ -612,3 +666,73 @@ jobs:
           api-route: skip
           apply: ${{ inputs.apply }}
           confirm: ${{ inputs.confirm }}
+
+  result:
+    name: Notify deployment result
+    needs: [resolve, plan, deploy]
+    if: ${{ always() && !cancelled() && inputs.apply && needs.resolve.result != 'skipped' && contains(fromJSON('["dev","stage","prod"]'), inputs.stage) }}
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Send deployment outcome
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets[(inputs.release_sha || inputs.stage == 'prod') && 'SLACK_WEBHOOK_URL' || 'SLACK_DEV_DEPLOYMENT_WEBHOOK_URL'] }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+          DEPLOY_REF: ${{ inputs.ref || github.sha }}
+          DEPLOY_RESULT: ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result == 'success') && 'success' || 'failure' }}
+        run: node apps/infra/scripts/release-pipeline.mjs result
+
+  e2e:
+    name: Dev release E2E
+    needs: [resolve, plan]
+    if: inputs.release_sha && inputs.stage == 'dev'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/e2e-cloud.yml
+    with:
+      stage: dev
+      ref: ${{ github.sha }}
+      release_sha: ${{ needs.resolve.outputs.sha }}
+      tag: ${{ inputs.ref }}
+      deployment_attempt: ${{ needs.plan.outputs.deployment_attempt || 'missing' }}
+    secrets:
+      BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
+      BOXLITE_DEV_P2_API_KEY: ${{ secrets.BOXLITE_DEV_P2_API_KEY }}
+      BOXLITE_DEV_P2_READONLY_API_KEY: ${{ secrets.BOXLITE_DEV_P2_READONLY_API_KEY }}
+
+  report:
+    name: Report dev acceptance
+    needs: [resolve, plan, e2e]
+    if: always() && inputs.release_sha && inputs.stage == 'dev'
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    outputs:
+      accepted_attempt: ${{ steps.accepted.outputs.attempt }}
+    steps:
+      - id: accepted
+        if: needs.plan.result == 'success' && needs.e2e.result == 'success'
+        env:
+          DEPLOYMENT_ATTEMPT: ${{ needs.plan.outputs.deployment_attempt }}
+        run: |
+          test "$DEPLOYMENT_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          echo "attempt=$DEPLOYMENT_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v5
+        if: always()
+        with:
+          persist-credentials: false
+      - name: Publish E2E result
+        if: always()
+        continue-on-error: true
+        env:
+          TAG: ${{ inputs.ref }}
+          RELEASE_RESULTS: ${{ toJSON(needs) }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: node apps/infra/scripts/release-pipeline.mjs report

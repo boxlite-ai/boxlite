@@ -51,7 +51,7 @@ npm run mbuild import-release -- --tag <full-commit-sha> --version vX.Y.Z --ghcr
 
 This publication-only example skips deployment, E2E, and Slack reporting.
 Omit `build-only` for the default [release pipeline](../docs/release.md):
-wait for release assets, validate dev, and create the same tag's prod deployment for human approval.
+check release assets, deploy and validate dev, report E2E to Slack, then deploy the approved tag to prod within the release run.
 
 The address is `ghcr.io/<owner>/<repository>/<artifact>:vX.Y.Z-<full-sha>`.
 Artifact names and tags match Artifact Registry's layout; GHCR has no stage suffix.

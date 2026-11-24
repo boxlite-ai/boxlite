@@ -14,8 +14,7 @@ Pre-release suffixes are unsupported.
 - Ensure the dev/prod stage declarations, cloud credentials, and cloud E2E credentials are configured.
 - Have permission to start workflows and approve the deployment Environments.
 
-Publication needs package write permission; orchestration needs Actions write permission.
-Neither job binds a cloud Environment; the existing deployment and E2E workflows retain their own approvals.
+Publication needs package write permission. The rollout jobs use the existing stage Environment and cloud identity. Cloud E2E receives only its named dev test keys.
 
 ### 1. Publish the GitHub Release
 
@@ -43,13 +42,9 @@ The successful release C SDK build starts `Build Go SDK` and `Build Runner Binar
 Open **Actions → mbuild-release**:
 
 ```text
-Publish all declared images to GHCR
-  → Wait for required GitHub Release assets
-  → dispatch mdeploy-all: dev, this tag → notify #release → wait for that dev run
-  → dispatch e2e-cloud: dev, this tag → wait for success
-  → verify dev deployment history and prod reviewers
-  → dispatch mdeploy-all: prod, this tag (approval pending)
-  → write the GitHub job summary and optionally send the release report to #release
+Publish GHCR images → check release assets → approve and deploy dev → dev E2E
+  → report the E2E result to #release
+  → on success, review and approve prod → deploy prod
 ```
 
 The publisher reads the tagged commit's artifact declaration and builds its current four images:
@@ -69,52 +64,29 @@ Asset readiness checks the Release API for uploaded, nonempty files, rather than
 | CLI E2E | `boxlite-cli-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, `install.sh` |
 
 The existing installer and deployment workflow verify/download these assets when they consume them.
-Asset waiting is limited to three hours; dev deployment to three hours; E2E to one hour.
-Approve dev/E2E Environment requests within those limits.
+The asset check waits up to three hours. The shared E2E job has a 45-minute execution limit.
 
-All child workflows run from `main`, with these fixed inputs:
+### Approvals and results in the release run
 
-| Workflow | Inputs |
+Open the original `mbuild-release` run for both Environment approvals, deployment logs and E2E results.
+The release calls `mdeploy-all` for dev and prod with the published tag, its exact commit, `api+runner`, apply and confirmation enabled.
+Dev calls `e2e-cloud` with the release tag and dev test keys. A failing or skipped acceptance test prevents promotion.
+
+The E2E report appears in the GitHub summary and, when configured, in Slack before prod approval.
+A configured reviewer on the prod Environment must approve the protected rollout.
+The release run stays open until the production deployment finishes. Each stage imports the verified image digests from GHCR.
+
+### Slack notifications
+
+| Event | Destination |
 | --- | --- |
-| Dev `mdeploy-all.yml` | `stage=dev`, `ref=<release tag>`, `components=api+runner`, `apply=true`, `confirm=true` |
-| `e2e-cloud.yml` | `stage=dev`, `tag=<release tag>`; retain all other defaults |
-| Prod `mdeploy-all.yml` | `stage=prod`, `ref=<release tag>`, `components=api+runner`, `apply=true`, `confirm=true` |
+| Release dev approval, deployment result and E2E report | #release via `SLACK_WEBHOOK_URL` |
+| Prod approval and deployment result | #release via `SLACK_WEBHOOK_URL` |
+| Standalone dev approval and dev/stage deployment results | Dev Slack via `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` |
 
-The pipeline waits for the exact run IDs returned by GitHub dispatch.
-A failed, cancelled, or timed-out dev/E2E run prevents the prod request.
-The GitHub summary includes the E2E result and the prod run link after success, or the failed or interrupted phase.
-
-### Slack approval notices
-
-Configure each incoming webhook as a repository Actions secret for its channel. Each deployment notification step references only its destination’s secret by name.
-
-| Sender | When | Channel and secret |
-| --- | --- | --- |
-| `mbuild-release` | After dev dispatch and before polling, then again with the final E2E result and prod link on success | #release · `SLACK_WEBHOOK_URL` |
-| `mdeploy-all` dev apply | Before the release deployment or commit preparation, and again after successful commit preparation | #dev_deployment · `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` |
-| `mdeploy-all` prod apply | Before the release deployment | #release · `SLACK_WEBHOOK_URL` |
-
-Each notice shows the sending workflow, its run title, GitHub actor, environment and phase. Buttons open GitHub, where reviewers approve the Environment.
-
-For a release-driven dev deployment, both channels receive a link to the same dev child run. A commit with parallel preparation jobs gets one notice for that batch.
-Previews, stage deployments and build-only releases skip these notices.
-
-An empty or unset secret skips delivery to its channel. Review a run directly in GitHub if its notice fails.
-
-A supplied malformed release webhook fails the asset preflight. A final delivery failure leaves the GitHub summary available.
-
-### 3. Approve the prod request
-
-After successful dev acceptance, Slack's **Review prod deployment** button opens the already-created prod run.
-Check the release tag and approve its `prod` Environment in GitHub.
-Each release deployment run has one protected job covering artifact checks, import and apply.
-The run actor is the Actions bot; GitHub records the human reviewer separately.
-Clicking the Slack link opens GitHub; deployment proceeds only after approval.
-
-A successful `mbuild-release` means dev acceptance passed and the prod request was created.
-The release is live only when that prod `mdeploy-all` run succeeds.
-It imports the selected GHCR digests directly into prod's AR/ECR registry, verifies them, scans, and deploys.
-Dev uses its own independent GHCR import.
+Each deployment result names its environment, ref and outcome and includes a button opening the run.
+A preview skips deployment notifications. An unset webhook skips its channel.
+A malformed release webhook fails the asset check. GitHub retains the E2E summary if Slack delivery fails.
 
 ### Manual runs and publication recovery
 
@@ -144,26 +116,12 @@ For an intentional manual deployment, use the [deployment runbook](deployment.md
 
 ### Validation and recovery boundaries
 
-Keep release tags and assets immutable.
-The pipeline compares the tag's commit with the publisher's resolved commit before every dispatch.
-Changes after the prod request is created remain an operator responsibility.
+Keep release tags and assets immutable. The reusable rollout verifies the published SHA, and E2E checks the tag before testing.
+The dev rollout holds the same stage concurrency group as standalone deployments through the acceptance test.
+The prod approval uses the prod group, so another dev deployment can proceed while reviewers consider prod.
 
-Full pipelines share one dev validation concurrency group.
-Before requesting prod, the pipeline checks for overlapping dev applies, including failed/cancelled attempts and manual reruns.
-It inspects at most 500 `mdeploy-all` runs and 50 attempts per run.
-Missing timing, unknown overlapping applies, or truncated history prevents the prod request.
-This check covers `mdeploy-all`; avoid other deployment paths during acceptance.
-
-GitHub's native concurrency queues can replace older pending runs with newer requests.
-This applies to queued release pipelines and prod deployments awaiting approval.
-A Slack link identifies an exact prod run; it does not reserve a permanent queue position.
-Inspect that run's current state before approving or recovering it.
-
-Parent timeouts/cancellation leave dispatched children under GitHub's control.
-Inspect their exact run links before retrying; an interrupted apply may still be running.
-An uncertain dispatch response is never retried automatically because GitHub may already have created the run.
-If only Slack delivery failed, use the GitHub report summary and rerun only the report job.
-Rerunning the whole pipeline can create another deployment request.
+Dev deployment and acceptance must belong to the same run attempt. A retry that would reuse acceptance from an earlier attempt fails closed.
+Inspect any interrupted cloud apply before restarting the full release. GitHub concurrency may replace older pending requests.
 
 ### Common failures
 
@@ -172,9 +130,9 @@ Rerunning the whole pipeline can create another deployment request.
 | Missing GitHub Release | Publish the Release matching the tag |
 | Missing required assets | Inspect the runtime/C/Node/wheels/Runner builds; the Runner build follows the C SDK build |
 | Invalid release webhook | Correct or clear `SLACK_WEBHOOK_URL` before rerunning asset preflight |
-| Missing GHCR image | Recover with `build-only=true`, then inspect downstream runs before restarting |
+| Missing GHCR image | Recover with `build-only=true`, then inspect the release run before restarting |
 | Invalid tag or tag moved | Use an immutable stable release tag whose commit is on `main` |
-| Overlapping dev apply | Finish deployment activity and repeat dev acceptance for the intended release |
+| Stale acceptance attempt | Inspect earlier applies, then rerun deployment and acceptance together |
 | Missing prod reviewers | Configure required reviewers on the `prod` Environment before retrying |
 
 See [deployment mechanics](deployment.md#deploy-through-github-actions) for digest conflicts,

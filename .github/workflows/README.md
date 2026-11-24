@@ -29,7 +29,7 @@ RELEASE (release event)                 build-runtime · build-c · build-node �
                                         mbuild-release-on-release ──▶ mbuild-release
                                           GHCR images + required release assets ready
                                             ──▶ mdeploy-all (dev) ──▶ e2e-cloud (dev, release tag)
-                                            ──▶ mdeploy-all (prod, awaiting approval) ──▶ Slack report
+                                            ──▶ Slack E2E report ──▶ approved mdeploy-all (prod), in the release run
                                         apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
@@ -68,9 +68,9 @@ own.
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: main suite, identity and isolated catalog lanes on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
-| `mdeploy-all.yml` | dispatch | — | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
+| `mdeploy-all.yml` | dispatch, `workflow_call` | yes | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
 | `mbuild.yml` | `workflow_call` | call-only | Reusable wrapper for the shared stage-image action; mdeploy-all invokes it in its image preparation leg |
-| `mbuild-release.yml` | dispatch | — | Publishes GHCR images, waits for required release assets, dispatches dev deployment/E2E, creates a prod approval request, and reports to Slack; `build-only=true` selects publication only |
+| `mbuild-release.yml` | dispatch | — | Publishes GHCR images, waits for required release assets, runs dev deployment and E2E, reports to Slack, then runs the approved prod deployment in the same run; `build-only=true` selects publication only |
 | `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` using its default full pipeline |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
@@ -462,8 +462,8 @@ Repository secrets, in Settings → Secrets and variables → Actions:
 - `PYPI_API_TOKEN` — PyPI, for the wheels
 - `NPM_TOKEN` — npm, for the Node packages
 - `GH_APP_PRIVATE_KEY` — GitHub App key that registers the self-hosted E2E runner
-- `SLACK_WEBHOOK_URL` — optional #release webhook for release dev approvals, final reports and prod apply approvals
-- `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` — optional #dev_deployment webhook for dev apply approvals. An empty secret skips that channel.
+- `SLACK_WEBHOOK_URL` — optional #release webhook for release and prod approvals, deployment outcomes and release E2E reports
+- `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` — optional #dev_deployment webhook for standalone dev approvals and dev/stage deployment outcomes. An empty secret skips that channel.
 
 ## Plugin release artifacts
 

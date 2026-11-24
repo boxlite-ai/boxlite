@@ -1,4 +1,4 @@
-# Release publication and dispatch orchestration hold no cloud Environment.
+# The rollout workflow owns the cloud Environment and stage concurrency.
 name: mbuild-release
 run-name: publish ${{ inputs.tag }} to GHCR${{ !inputs['build-only'] && ' · dev acceptance · prod review' || '' }}
 
@@ -190,8 +190,8 @@ jobs:
             echo 'Image scanning runs after import into the deployment stage.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  assets:
-    name: Wait for release assets
+  check:
+    name: Check release assets
     needs: [resolve, publish]
     if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
@@ -209,57 +209,60 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: node apps/infra/scripts/release-pipeline.mjs assets
 
-  pipeline:
-    name: Validate dev and request prod review
-    needs: [resolve, assets]
+  dev:
+    name: Dev deployment and acceptance
+    needs: [resolve, check]
     if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
-    permissions:
+    permissions: &rollout-permissions
       contents: read
-      actions: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 250
-    concurrency:
-      group: mbuild-release-dev-validation
-      cancel-in-progress: false
-    outputs:
-      phase: ${{ steps.pipeline.outputs.phase }}
-      dev_run_id: ${{ steps.pipeline.outputs.dev_run_id }}
-      dev_result: ${{ steps.pipeline.outputs.dev_result }}
-      e2e_run_id: ${{ steps.pipeline.outputs.e2e_run_id }}
-      e2e_result: ${{ steps.pipeline.outputs.e2e_result }}
-      prod_run_id: ${{ steps.pipeline.outputs.prod_run_id }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Dispatch existing workflows
-        id: pipeline
-        env:
-          TAG: ${{ inputs.tag }}
-          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: node apps/infra/scripts/release-pipeline.mjs run
+      actions: read
+      pull-requests: read
+      packages: read
+      id-token: write
+    uses: ./.github/workflows/mdeploy-all.yml
+    with:
+      stage: dev
+      ref: ${{ inputs.tag }}
+      release_sha: ${{ needs.resolve.outputs.sha }}
+      components: api+runner
+      apply: true
+      confirm: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
+      BOXLITE_DEV_P2_API_KEY: ${{ secrets.BOXLITE_DEV_P2_API_KEY }}
+      BOXLITE_DEV_P2_READONLY_API_KEY: ${{ secrets.BOXLITE_DEV_P2_READONLY_API_KEY }}
+
+  prod:
+    name: Production deployment
+    needs: [resolve, dev]
+    if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
+    permissions: *rollout-permissions
+    uses: ./.github/workflows/mdeploy-all.yml
+    with:
+      stage: prod
+      ref: ${{ inputs.tag }}
+      release_sha: ${{ needs.resolve.outputs.sha }}
+      accepted_attempt: ${{ needs.dev.outputs.accepted_attempt }}
+      components: api+runner
+      apply: true
+      confirm: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
   report:
-    name: Report release results
+    name: Report failed release checks
+    needs: [resolve, publish, check, dev]
+    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' && needs.dev.result == 'skipped' }}
     permissions:
       contents: read
       actions: read
-    needs: [resolve, publish, assets, pipeline]
-    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Publish summary and Slack notification
+      - name: Report release checks
         env:
           TAG: ${{ inputs.tag }}
           RELEASE_RESULTS: ${{ toJSON(needs) }}

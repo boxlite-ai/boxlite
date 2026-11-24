@@ -393,9 +393,9 @@ test('only dev and stage deploy workflows run off main', () => {
   // exactly the workflow that is strictest.
   const workflows = ['mdeploy-all.yml', 'mbuild.yml']
   for (const name of workflows) {
-    const text = workflowSource(name)
-    const guards = [...text.matchAll(/^\s*if: [^\n]*(?:\n\s{6}[^\n]*)*/gm)]
-      .map((match) => match[0])
+    const parsed = load(readFileSync(new URL('../../../../.github/workflows/' + name, import.meta.url), 'utf8')) as any
+    const guards = Object.values<any>(parsed.jobs)
+      .map((job) => job.if ?? '')
       .filter((guard) => guard.includes('refs/heads/main'))
     assert.ok(guards.length > 0, `${name} guards no job by branch`)
     for (const guard of guards) {
