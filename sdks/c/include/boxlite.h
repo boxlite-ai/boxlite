@@ -123,6 +123,9 @@ typedef struct CAgentEvents CAgentEvents;
 // Agent turn handle.
 typedef struct CAgentTurn CAgentTurn;
 
+// One observation of a turn, owned by the caller.
+typedef struct CAgentWait CAgentWait;
+
 // Box-owned namespace; release with boxlite_agents_free.
 typedef struct CAgents CAgents;
 
@@ -292,6 +295,12 @@ typedef struct CCheckpointInfo {
   char *state;
   // Null unless the server reports a failure reason.
   char *error_reason;
+  // Archived guest memory size, or zero when absent.
+  uint64_t memory_size_bytes;
+  // One when memory_size_bytes is present, including a reported zero.
+  int has_memory_size_bytes;
+  // Lowercase disk, full, or unknown.
+  char *kind;
 } CCheckpointInfo;
 
 // Entries belong to this list; release once with boxlite_free_checkpoint_list.
@@ -997,6 +1006,21 @@ enum BoxliteErrorCode boxlite_agent_turn_wait(struct CAgentTurn *turn_arg,
                                               void *user_data_arg,
                                               CBoxliteError *out_error);
 
+// Start a wait and return its independently releasable handle. On synchronous
+// refusal, out_wait is cleared and the callback is never queued. On acceptance,
+// keep user_data valid through the single completion dispatched by runtime_drain.
+enum BoxliteErrorCode boxlite_agent_turn_wait_cancellable(struct CAgentTurn *turn_arg,
+                                                          const struct CAgentWaitOptions *options_arg,
+                                                          CAgentJsonCb callback_arg,
+                                                          void *user_data_arg,
+                                                          struct CAgentWait **out_wait,
+                                                          CBoxliteError *out_error);
+
+// Release once, including after normal completion. NULL is accepted.
+// Release never blocks. If cancellation wins, the callback reports Stopped.
+// The turn and other waiters continue.
+void boxlite_agent_wait_free(struct CAgentWait *wait);
+
 // Steer this turn without submitting another turn.
 // out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_turn_steer(struct CAgentTurn *turn_arg,
@@ -1160,6 +1184,17 @@ enum BoxliteErrorCode boxlite_checkpoint_create(CBoxliteRuntime *runtime,
                                                 CCheckpointInfoCb cb,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
+
+// Queue capture with an optional kind. Null or "disk" selects a disk checkpoint.
+// "full" includes guest memory and VM state.
+// Invalid kinds return InvalidArgument synchronously without invoking the callback.
+enum BoxliteErrorCode boxlite_checkpoint_create_with_options(CBoxliteRuntime *runtime,
+                                                             const char *source,
+                                                             const char *name,
+                                                             const char *kind,
+                                                             CCheckpointInfoCb cb,
+                                                             void *user_data,
+                                                             CBoxliteError *out_error);
 
 // Queue metadata lookup by ID or name. All inputs except out_error are required.
 enum BoxliteErrorCode boxlite_checkpoint_get(CBoxliteRuntime *runtime,

@@ -117,6 +117,13 @@ impl proto::Container for MockService {
     ) -> Result<Response<proto::ContainerMountResponse>, Status> {
         Err(Status::unimplemented("not used by these tests"))
     }
+
+    async fn detach(
+        &self,
+        _: Request<proto::ContainerDetachRequest>,
+    ) -> Result<Response<proto::ContainerDetachResponse>, Status> {
+        Err(Status::unimplemented("not used by these tests"))
+    }
 }
 
 struct TestHandler;

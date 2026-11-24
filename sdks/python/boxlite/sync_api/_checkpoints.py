@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..boxlite import CheckpointHandle, CheckpointInfo
+    from ..boxlite import CheckpointHandle, CheckpointInfo, CheckpointOptions
     from ._boxlite import SyncBoxlite
 
 
@@ -15,8 +15,13 @@ class SyncCheckpointHandle:
         self._handle = handle
         self._bridge = SyncBase(handle, runtime.loop, runtime.dispatcher_fiber)
 
-    def create(self, source: str, name: str | None = None) -> "CheckpointInfo":
-        return self._bridge._sync(self._handle.create(source, name))
+    def create(
+        self,
+        source: str,
+        name: str | None = None,
+        options: "CheckpointOptions | None" = None,
+    ) -> "CheckpointInfo":
+        return self._bridge._sync(self._handle.create(source, name, options))
 
     def list(self) -> list["CheckpointInfo"]:
         return self._bridge._sync(self._handle.list())

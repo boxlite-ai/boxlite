@@ -307,7 +307,7 @@ _ensure-kvm:
 test\:integration\:vmm\:kvm: _ensure-kvm
 	@cargo test -p boxlite-hypervisor -p boxlite-vmm --lib --no-run
 	@status=0; \
-	timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1 || status=1; \
+	timeout 60s cargo test -p boxlite-hypervisor --lib kvm:: -- --ignored --test-threads=1 || status=1; \
 	timeout 60s cargo test -p boxlite-vmm --lib -- --ignored --test-threads=1 vm::tests:: tests::kvm:: || status=1; \
 	exit $$status
 
@@ -371,6 +371,13 @@ test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE
 	@cargo test -p boxlite --features native --lib --no-run
 	@timeout 300s cargo test -p boxlite --features native --lib vmm::native::tests:: -- --ignored --test-threads=1
 	@timeout 600s cargo test -p boxlite --features krun,gvproxy,native --test native_vmm -- --ignored --test-threads=1
+
+# PR2 primitives: descriptor registration, guest RPC attach/detach, and reference lifetime.
+PHONY_TARGETS += test\:integration\:vmm\:mount-delivery
+test\:integration\:vmm\:mount-delivery: export BOXLITE_TEST_ENGINE := native
+test\:integration\:vmm\:mount-delivery: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo test -p boxlite --features native --test native_mount_delivery --no-run
+	@timeout 180s cargo test -p boxlite --features native --test native_mount_delivery -- --ignored --test-threads=1 --nocapture
 
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
@@ -652,7 +659,8 @@ test\:all\:python:
 # Node.js SDK unit tests.
 test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js SDK unit tests..."
-	@cd sdks/node && npm test -- $(VITEST_FILTER)
+	@cargo build -p boxlite-node --example agent_record_fixture
+	@cd sdks/node && BOXLITE_AGENT_FIXTURE_DIR="$(abspath $(or $(CARGO_TARGET_DIR),target))/debug/examples" npm test -- $(VITEST_FILTER)
 	@echo "🧪 Running Node.js binding (Rust) unit tests..."
 	@cargo test -p boxlite-node --lib $(CARGOTEST_FILTER)
 
@@ -691,8 +699,8 @@ test\:all\:c:
 # Go SDK unit tests.
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
-	@$(MAKE) dev:go
-	@cd sdks/go && go test -tags boxlite_dev $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
+	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
+	@cd sdks/go && go test -a -count=1 -tags boxlite_dev,boxlite_agent_test $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
 # Native Go archive import/export tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.
@@ -807,6 +815,13 @@ test\:rest\:e2e:
 
 test\:rest\:report:
 	@python3 scripts/test/rest/report.py
+
+# Validate the production server against a real Rust REST client. Run
+# SETUP_DONE=1 make test:e2e:serve:volume after preparing runtime artifacts.
+PHONY_TARGETS += test\:e2e\:serve\:volume
+test\:e2e\:serve\:volume:
+	@echo "🧪 Starting boxlite serve and exercising volume REST CRUD..."
+	@$(MAKE) test:integration:cli FILTER=volume_crud_over_rest
 
 # Validate acceptance-client invocation without a running cloud or VM.
 test\:e2e\:drivers:

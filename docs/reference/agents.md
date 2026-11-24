@@ -32,17 +32,16 @@ and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-Rust, Python, Node.js, the CLI and C calls on a local runtime run the operations listed in
+Rust, Python, Node.js, the CLI, C and Go support the operations listed in
 [OpenCode on a local runtime](#opencode-on-a-local-runtime). Rust and C can also use
-these operations over the Box REST API. Go returns unsupported errors before
-agent execution.
+these operations over the Box REST API. Go agent calls use the same C transport.
 
 | SDK | Error behavior |
 |---|---|
 | Rust | `Err(BoxliteError::Unsupported(…))` naming the operation or option; no panic |
 | Python | `UnsupportedError` on awaiting operations or reading a property |
 | Node.js | Rejected operation promises; synchronous getter/event errors |
-| Go | `*Error` with `Code: ErrUnsupported` and no result |
+| Go | Calls/getters return typed core `*Error` values and no result on failure; invalid arguments fail before submission; canceled calls return the context error |
 | C | Invalid arguments return `InvalidArgument` synchronously without a callback; accepted async calls return `Ok` and deliver core errors through the drain callback; getters return core errors synchronously |
 | CLI | `boxlite agent …` reports the error on stderr and exits with code 1 |
 
@@ -56,13 +55,13 @@ on failure.
 
 ### OpenCode on a local runtime
 
-Rust, Python, Node.js, the CLI and C calls on a local runtime forward agents to OpenCode 2.2 inside the Box
+Rust, Python, Node.js, the CLI, C and Go calls on a local runtime forward agents to OpenCode 2.2 inside the Box
 ([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
 environment. Another OpenCode version fails with `Unsupported` once its service
-answers, or with `Execution` when it lacks the `opencode service` commands. Go
-returns `Unsupported`. `agent.id()` returns the `ses_…`
+answers, or with `Execution` when it lacks the `opencode service` commands. Rust
+`agent.id()` returns the `ses_…`
 session ID that `agents.get` accepts, including from another process.
 
 ```text
@@ -234,6 +233,14 @@ and make one attempt. A turn result is valid for `wait()` only when its status
 matches a `completed`, `failed`, or `cancelled` turn snapshot. An `unknown`
 turn returns `InvalidState` even when the server includes a result.
 
+### Node agent JSON numbers
+
+Node agent calls, getters and event reads report a conversion error when a
+returned JSON number exceeds the native binding's supported numeric range.
+This includes nonzero numbers that would become zero, even inside arrays or
+objects. Other finite fractions use JavaScript number precision. If an event
+cannot be converted, subsequent reads report the same error.
+
 ### Go JSON mapping
 
 Go's internal agent converters use the core's snake_case JSON fields. Nullable
@@ -251,6 +258,34 @@ use different tagged records, so an answer cannot grant permission.
 Retention is read from `idempotency_retention_seconds` using checked decimal
 conversion to `time.Duration`, without a float64 intermediate. Sub-nanosecond
 fractions are truncated; negative or out-of-range values return an error.
+
+The core emits retention seconds as an exact decimal JSON number built from
+integer seconds and nanoseconds, including Go's maximum duration
+(`9223372036.854775807` seconds). Its JSON values retain integer and decimal
+precision during parsing and serialization; Go keeps opaque payloads as
+`json.RawMessage`. Values already constructed as floating-point numbers retain
+that type's precision limits. Wait timeouts cross the C ABI as `double` seconds
+and do not promise exact nanosecond representation for large durations.
+
+The Go and C bindings preserve send and answer `data` as validated JSON,
+including objects with a literal `$serde_json::private::Number` key.
+Turn results and snapshots preserve any data the adapter returns. OpenCode
+rejects non-null send data with `Unsupported`. Its terminal results and
+snapshots of those results contain `data: null`, including after an answer.
+
+Go calls and getters use the C SDK and these converters. One runtime drainer
+dispatches asynchronous completions; getters copy their JSON synchronously.
+Both event methods return `Unsupported`; subscriptions are a separate delivery step.
+
+Agent namespaces are acquired lazily. Closing a Box releases its local Box handle;
+an acquired namespace, agent or turn remains usable until `Runtime.Close`.
+Agent wrappers must not be copied after first use. Garbage collection releases
+local handles as a fallback, and `Runtime.Close` deterministically releases them.
+`Agent.Close` invokes the core operation; it does not release the local handle.
+
+Cancellation stops the Go wait, not submitted agent work. Late native handles
+are released, including results already buffered when cancellation wins.
+`Runtime.Close` wakes pending calls with `ErrRuntimeClosed` and rejects new calls.
 
 ### Example: handle operation errors
 

@@ -156,7 +156,7 @@ tags:
   - name: Images
     description: Container image management
   - name: Checkpoints
-    description: Independent managed disk archives
+    description: Independent managed checkpoint archives
   - name: Volumes
     description: Managed persistent volumes
   - name: Registries
@@ -311,8 +311,10 @@ paths:
         initialize the VM, or it will start lazily on first `exec`.
 
         `checkpoint_id` creates the box from a ready managed checkpoint
-        instead of an image. The box inherits every saved execution setting,
-        so only `name` may accompany it; any other field is refused with 400.
+        instead of an image. The server uses the checkpoint's `kind` to select
+        disk-only restore or full restore of disk, guest memory, and VM state.
+        The box inherits every saved execution setting. Only `name` may
+        accompany `checkpoint_id`; any other field is refused with 400.
         It requires `checkpoints_enabled` and a REST service: local SDK
         operations return Unsupported. A cloud wait failure after admission,
         including 408, carries `boxId` in the error body; query that box
@@ -1917,14 +1919,19 @@ paths:
       - $ref: "#/components/parameters/prefix"
     post:
       operationId: createCheckpoint
-      summary: Capture an independent disk checkpoint
+      summary: Capture a disk or full checkpoint
       description: |
-        Export the source box directly, without a snapshot or temporary clone.
-        The source must be stopped and idle; other states return 409.
-        Stop the box and wait for stopped before capture; capture never stops it automatically.
+        `disk` capture requires a stopped and idle source box and exports it
+        directly. `full` capture requires a running source box. On a backend
+        that supports the requested kind, a source state mismatch returns 409
+        with code `invalid_state`. If `full` is unsupported, the server returns
+        400 with code `unsupported`. Capture leaves the source lifecycle state
+        to the caller.
+
         Requires Box write permission. Sources with volumes or secrets are
-        refused. A local capture returns ready after export; cloud capture
-        returns creating and becomes ready only after upload succeeds.
+        refused. A local capture returns ready after export. A cloud capture
+        returns creating and becomes ready after upload succeeds. A 201
+        response accepting `full` includes `kind: "full"` even while creating.
       tags: [Checkpoints]
       requestBody:
         required: true
@@ -2328,7 +2335,7 @@ components:
       name: volume_id
       in: path
       required: true
-      description: Server-assigned managed volume identifier
+      description: Server-assigned managed volume identifier. Local servers require the lower-case canonical UUID.
       schema:
         type: string
         minLength: 1
@@ -2840,6 +2847,10 @@ components:
               type: boolean
               description: Whether managed checkpoint capture, use and deletion are supported
               example: true
+            memory_checkpoints_enabled:
+              type: boolean
+              description: Whether full checkpoint capture and restore support disk, guest memory, and VM state
+              example: false
             import_enabled:
               type: boolean
               description: Whether ordinary archive import is supported
@@ -2863,6 +2874,14 @@ components:
             exec_user_enabled:
               type: boolean
               description: Server honors `ExecRequest.user`.
+              example: true
+            volume_read_only_enabled:
+              type: boolean
+              description: "Whether managed-volume mounts may set `read_only: true`."
+              example: true
+            typed_mounts_enabled:
+              type: boolean
+              description: Whether create-box accepts the typed `mounts` field.
               example: true
             idempotency_key_lifetime:
               type: string
@@ -3198,6 +3217,13 @@ components:
         - failed
         - unknown
 
+    CheckpointKind:
+      type: string
+      enum: [disk, full]
+      description: |
+        `disk` includes disk data only. `full` includes disk data, guest memory,
+        and VM state. Omission defaults to `disk`.
+
     Checkpoint:
       type: object
       required: [id, name, source_box_id, created_at, size_bytes, state]
@@ -3219,6 +3245,16 @@ components:
         state:
           type: string
           enum: [creating, ready, failed, deleting]
+        kind:
+          $ref: "#/components/schemas/CheckpointKind"
+        memory_size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Archived guest memory payload size in bytes. Omitted for disk
+            checkpoints, during `creating`, or when unavailable. A known size
+            of zero is reported as `0`.
         error_reason:
           type: string
           description: Optional failure description without environment values or object locations
@@ -3249,6 +3285,8 @@ components:
           minLength: 1
           maxLength: 128
           pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        kind:
+          $ref: "#/components/schemas/CheckpointKind"
 
     CreateBoxRequest:
       type: object
@@ -3290,7 +3328,9 @@ components:
           description: |
             ID or name of a ready managed checkpoint to create the box from
             (alternative to `image`). Mutually exclusive with `image` and
-            `rootfs_path`. Only `name` may accompany it.
+            `rootfs_path`. The checkpoint's `kind` selects disk-only
+            restore or full restore of disk, guest memory, and VM state.
+            Only `name` may accompany `checkpoint_id`.
         cpus:
           type: number
           minimum: 0.125
@@ -3347,6 +3387,15 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/VolumeSpec"
+        mounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/MountSpec"
+          description: |
+            Typed mounts for newer callers. `bind` identifies a path on the
+            server's filesystem and is rejected by `boxlite serve`; use a managed
+            volume for the REST security boundary. A request must not send
+            non-empty legacy `volumes` and typed `mounts` together.
         network:
           $ref: "#/components/schemas/NetworkSpec"
           description: |
@@ -3434,13 +3483,48 @@ components:
             Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
           example: [NET_RAW]
 
+    MountSpec:
+      type: object
+      description: |
+        Typed mount declaration. The mount type is explicit instead of inferred
+        from whether the source looks like a path.
+      additionalProperties: false
+      required: [type, source, target]
+      properties:
+        type:
+          type: string
+          enum: [volume, bind]
+          description: Whether `source` names a managed volume or a host path.
+        source:
+          type: string
+          minLength: 1
+          description: |
+            The volume id or name for `type=volume`; the host path for `type=bind`.
+            A REST server treats a bind source as its own filesystem and rejects it.
+        target:
+          type: string
+          pattern: "^/"
+          description: Absolute mount point inside the box.
+        read_only:
+          type: boolean
+          default: false
+          description: >
+            Mount without write access. Supported only when the server advertises
+            `volume_read_only_enabled`.
+        sub_path:
+          type: string
+          description: >
+            Relative subtree inside a `type=volume` source. It must already exist
+            and cannot traverse out through symlinks. Supported only when the
+            server advertises `typed_mounts_enabled`.
+
     VolumeSpec:
       type: object
       description: |
-        Managed volume mounted into a box. Host bind mounts have no
-        representation here: the path would name the server's filesystem, not
-        the caller's, so the only mount source this API accepts is a managed
-        volume.
+        Legacy managed-volume mount. New requests should use `mounts` with
+        `type=volume`; do not send non-empty `volumes` and `mounts` together.
+        Host bind mounts have no representation here because a REST path would
+        name the server's filesystem.
       additionalProperties: false
       required: [managed_volume, guest_path]
       properties:
@@ -3457,10 +3541,9 @@ components:
         read_only:
           type: boolean
           default: false
-          enum: [false]
-          description: |
-            Read-only managed mounts are not implemented yet; `true` is
-            rejected rather than silently downgraded to read-write.
+          description: >
+            Mount without write access. Supported only when the server advertises
+            `volume_read_only_enabled`.
 
     VolumeState:
       type: string
@@ -3485,6 +3568,18 @@ components:
           type: string
           format: date-time
           description: Volume creation timestamp (UTC)
+        updated_at:
+          type: string
+          format: date-time
+          description: >
+            Last update timestamp. Local directory volumes use the creation time.
+        size_bytes:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          description: >
+            Best-effort size. Local directory volumes report null rather than scan
+            the payload synchronously.
 
     CreateVolumeRequest:
       type: object
@@ -3529,6 +3624,13 @@ components:
         error_reason:
           type: string
           description: Failure detail when state is "error"
+        size_bytes:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          description: >
+            Best-effort size. Local directory volumes report null rather than scan
+            the payload synchronously.
 
     ListVolumesResponse:
       type: object

@@ -157,17 +157,25 @@ impl AgentBackend for RestAgent {
             .ok_or_else(|| BoxliteError::Unsupported("agent.state is not supported".into()))
     }
     async fn send(&self, text: &str, options: &AgentSendOptions) -> BoxliteResult<AgentTurnState> {
-        let mut send_options = serde_json::Map::new();
-        if options.mode == AgentSendMode::Reject {
-            send_options.insert("mode".into(), Value::String("reject".into()));
+        #[derive(serde::Serialize)]
+        struct Options<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            mode: Option<&'static str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            data: Option<&'a serde_json::value::RawValue>,
         }
-        if let Some(data) = &options.data {
-            send_options.insert("data".into(), data.clone());
+        #[derive(serde::Serialize)]
+        struct Send<'a> {
+            text: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            options: Option<Options<'a>>,
         }
-        let mut body = serde_json::json!({"text": text});
-        if !send_options.is_empty() {
-            body["options"] = Value::Object(send_options);
-        }
+        let mode = (options.mode == AgentSendMode::Reject).then_some("reject");
+        let data = options.data.as_deref();
+        let body = Send {
+            text,
+            options: (mode.is_some() || data.is_some()).then_some(Options { mode, data }),
+        };
         let result: Turn = self
             .client
             .post_agent(
@@ -208,24 +216,16 @@ impl AgentBackend for RestAgent {
         response: AgentResponse,
         options: &AgentControlOptions,
     ) -> BoxliteResult<AgentTurnState> {
-        let response = match response {
-            AgentResponse::Answer { text, data } => {
-                let mut value = serde_json::json!({"type": "answer", "text": text});
-                if let Some(data) = data {
-                    value["data"] = data;
-                }
-                value
-            }
-            AgentResponse::Permission { approved } => {
-                serde_json::json!({"type": "permission", "approved": approved})
-            }
-        };
+        #[derive(serde::Serialize)]
+        struct Respond {
+            response: AgentResponse,
+        }
         let path = format!("{}/requests/{}/respond", self.path, segment(request_id)?);
         let result: Turn = self
             .client
             .post_agent(
                 &path,
-                &serde_json::json!({"response": response}),
+                &Respond { response },
                 options.idempotency_key.as_deref(),
             )
             .await?;

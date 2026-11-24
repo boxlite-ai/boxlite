@@ -111,12 +111,15 @@ describe('Standalone App binding and HTTP ingress', () => {
           {
             token: 'private-fixture-installation-token',
             expires_at: new Date(Date.now() + 3600000).toISOString(),
-            permissions: body.permissions,
+            permissions: { ...body.permissions, metadata: 'read' },
+            ...(body.repository_ids ? { repositories: body.repository_ids.map((id: number) => ({ id })) } : {}),
           },
           201,
         )
       }
       if (path === '/installation/repositories') return json({ total_count: repositories.length, repositories })
+      const repository = repositories.find((item) => 'id' in item && path === '/repositories/' + item.id)
+      if (repository) return json(repository)
       if (path === '/installation/token') return new Response(null, { status: 204 })
       throw new Error('Unexpected self-host fixture request')
     }) as typeof fetch
@@ -149,7 +152,7 @@ describe('Standalone App binding and HTTP ingress', () => {
       key = scopeKey(scope),
       notice = { repository: 21, run: 33, job: 55 },
       capacity = testCapacity({ account: 1, tenant: 1 })
-    const reserved = (await journal.reserve(lease, key, notice, capacity))!
+    const reserved = (await journal.reserve(lease, key, null, capacity, { labels: ['boxlite'], scaleSet: 9 }))!
     const effect = randomUUID()
     await journal.advance(lease, reserved.record.key, reserved.record.version, {
       box: { phase: 'requested', id: null },
@@ -182,10 +185,10 @@ describe('Standalone App binding and HTTP ingress', () => {
         memoryMiB: 2048,
         labels: ['boxlite'],
       })
-      await pool.tick(lease, capacity)
+      await pool.balanceScaleSets(lease, [], capacity, new AbortController().signal)
       expect(await journal.allocation(lease, reserved.record.key)).toBeUndefined()
       expect(await journal.hasCapacity(lease, key, capacity)).toBe(true)
-      expect(await journal.reserve(lease, key, notice, capacity)).toBeDefined()
+      expect(await journal.reserve(lease, key, null, capacity, { labels: ['boxlite'], scaleSet: 9 })).toBeDefined()
     } finally {
       await backend.close()
     }
@@ -580,12 +583,10 @@ describe('Standalone App binding and HTTP ingress', () => {
     const scope = (await discover()).scopes[0],
       journal = new ExecutionJournal(state)
     const key = await journal.define(lease, scope)
-    let row = (await journal.reserve(
-      lease,
-      key,
-      { repository: 21, run: 33, job: 55 },
-      testCapacity({ account: 1, tenant: 1 }),
-    ))!
+    let row = (await journal.reserve(lease, key, null, testCapacity({ account: 1, tenant: 1 }), {
+      labels: ['boxlite'],
+      scaleSet: 9,
+    }))!
     row = await journal.advance(lease, row.record.key, row.record.version, {
       box: { phase: 'requested', id: null },
       effect: { id: randomUUID(), kind: 'box-create' },
@@ -617,7 +618,7 @@ describe('Standalone App binding and HTTP ingress', () => {
         { image: 'runner', cpus: 1, memoryMiB: 512, labels: ['boxlite'] },
         (event) => (host as any).observe(event),
       )
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
       const events = logging.mock.calls.map(([line]) => JSON.parse(String(line)))
       expect(events).toContainEqual(
         expect.objectContaining({
@@ -625,7 +626,8 @@ describe('Standalone App binding and HTTP ingress', () => {
           level: exit_code === 0 ? 'info' : 'warn',
           exitCode: exit_code,
           boxId: 'original-log-box',
-          trigger: { repository: 21, run: 33, job: 55 },
+          trigger: null,
+          scaleSet: 9,
         }),
       )
       expect(JSON.stringify(events)).not.toMatch(/private-fixture|private-box|c2VjcmV0/)
@@ -895,11 +897,16 @@ describe('Standalone App binding and HTTP ingress', () => {
   })
   it('stores a repository hint without granting execution outside the verified scope', async () => {
     await expect(listener.receive(verifyWebhook(signed(99), secret)!)).resolves.toBe('stored')
-    const view = await discover(),
-      backend = await host.backend(view.scopes[0], lease)
+    const view = await discover()
+    expect(
+      view.scopes.flatMap((scope) =>
+        scope.runners.kind === 'repository' ? [scope.runners.repository.id] : scope.runners.repositories,
+      ),
+    ).not.toContain(99)
+    const backend = await host.backend(view.scopes[0], lease)
     try {
-      await expect(backend.job({ repository: 99, run: 33, job: 55 })).rejects.toThrow(
-        'outside the original execution scope',
+      expect(await backend.scaleSetAuthority(new AbortController().signal)).toEqual(
+        new Set([view.scopes[0].runners.kind === 'repository' ? view.scopes[0].runners.repository.name : 'unexpected']),
       )
     } finally {
       await backend.close()
@@ -1016,6 +1023,10 @@ describe('Standalone ENV configuration', () => {
     const config = loadConfig(base)
     expect(config.max).toBe(1)
     expect(config.worker).toMatchObject({ cpus: 2, memoryMiB: 2048 })
+    expect(config.worker.image).toBe('ghcr.io/boxlite-ai/boxlite-jitbox:latest')
+    expect(loadConfig({ ...base, CI_WORKER_IMAGE: 'registry.example/worker:v2' }).worker.image).toBe(
+      'registry.example/worker:v2',
+    )
     expect(config.listen).toEqual({ host: '0.0.0.0', port: 8080 })
     expect(config.allowPublic).toBe(false)
     expect(JSON.stringify(config)).not.toContain('private-api-key')

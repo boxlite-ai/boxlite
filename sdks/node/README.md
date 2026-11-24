@@ -20,16 +20,21 @@ and call `events.return()` to close it.
 
 ## Managed checkpoints
 
-A checkpoint is a source for a new box, like an image: pass it to the ordinary
-create call. The checkpoint handle only manages checkpoints. Archive import is a
-separate operation for local `.boxlite` files and is unchanged. The CLI form is
+Pass a checkpoint to the ordinary create call to use it as the source for a new
+box. The checkpoint handle manages checkpoint archives. Archive import loads
+local `.boxlite` files. The CLI form for creating a box from a checkpoint is
 `boxlite create --checkpoint ID [--name NAME]`.
 
-The source must be stopped before `create`; stop it and wait for `stopped` first.
-Checkpoint creation rejects other states and never stops the source automatically.
+In `CheckpointOptions`, `kind: "disk"` captures a stopped, idle source and is
+the default. `kind: "full"` captures disk and memory from a running source.
+Before requesting full capture, the SDK checks that the REST server advertises
+`memory_checkpoints_enabled`.
 
-The REST runtime's `checkpoints` handle exposes `create`, `list`,
-`get` and `remove` as promises. Checkpoints survive their source box.
+The REST runtime's `checkpoints` handle exposes `create(source, name?, options?)`,
+`list()`, `get(key)`, and `remove(key, force?)` as promises. Checkpoints survive
+source deletion. `CheckpointInfo.kind` is `"disk"`, `"full"`, or `"unknown"` for
+an unrecognized server kind. `CheckpointInfo.memorySizeBytes` is absent when
+omitted by the server and preserves a reported zero.
 
 ```typescript
 const checkpoint = await runtime.checkpoints.create("source", "dev-base");

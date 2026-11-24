@@ -36,6 +36,7 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-23 · [Memory and VMState checkpoint API](investigations/2026-11-23-checkpoint-memory-vmstate-api.md): Defines full checkpoint options, capability checks, and the implementation order across the runtime, REST API, CLI, and SDKs.
 - 2026-11-23 · [Create Box subscription value](investigations/2026-11-23-create-box-subscription-value.md): catalog-derived subscription savings beside the PAYG estimate, billing-state rules, and draft-preserving plan access.
 
 - 2026-11-19 · [Trial discovery in Welcome](investigations/2026-11-19-trial-discovery-preview.md): frontend onboarding study, mock boundaries, direct completion and full walkthrough screenshots.

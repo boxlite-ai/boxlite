@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -21,6 +22,10 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 	var mu sync.Mutex
 	var requests []request
 	info := map[string]any{"id": "checkpoint-1", "name": "base", "source_box_id": "source-1", "created_at": "2026-11-06T00:00:00Z", "size_bytes": 4096, "state": "ready"}
+	full := maps.Clone(info)
+	full["id"], full["kind"], full["memory_size_bytes"] = "checkpoint-2", "full", 0
+	future := maps.Clone(info)
+	future["id"], future["kind"], future["memory_size_bytes"] = "checkpoint-3", "future", 4096
 	box := map[string]any{"box_id": "target-1", "name": "worker", "status": "stopped", "image": "alpine:latest", "cpus": 2, "memory_mib": 512, "created_at": info["created_at"], "updated_at": info["created_at"]}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -41,7 +46,7 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/v1/boxes") {
 			response = box
 		} else if r.Method == http.MethodGet && r.URL.Path == "/v1/checkpoints" {
-			response = map[string]any{"checkpoints": []any{info}}
+			response = map[string]any{"checkpoints": []any{info, full, future}}
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/v1/checkpoints/checkpoint-1" {
 			failed := make(map[string]any, len(info)+1)
@@ -70,9 +75,21 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 	if captured.ID != "checkpoint-1" || captured.State != "ready" || captured.SizeBytes != 4096 {
 		t.Fatalf("metadata: %+v", captured)
 	}
+	if captured.Kind != CheckpointKindDisk || captured.MemorySizeBytes != nil {
+		t.Fatalf("disk metadata: %+v", captured)
+	}
 	list, err := checkpoints.List(ctx)
-	if err != nil || len(list) != 1 || list[0].SourceBoxID != "source-1" {
+	if err != nil || len(list) != 3 {
 		t.Fatalf("list: %+v %v", list, err)
+	}
+	if disk := list[0]; disk.ID != "checkpoint-1" || disk.SourceBoxID != "source-1" || disk.Kind != CheckpointKindDisk || disk.MemorySizeBytes != nil {
+		t.Fatalf("disk list metadata: %+v", disk)
+	}
+	if full := list[1]; full.ID != "checkpoint-2" || full.Kind != CheckpointKindFull || full.MemorySizeBytes == nil || *full.MemorySizeBytes != 0 {
+		t.Fatalf("full list metadata: %+v", full)
+	}
+	if future := list[2]; future.ID != "checkpoint-3" || future.Kind != CheckpointKindUnknown || future.MemorySizeBytes == nil || *future.MemorySizeBytes != 4096 {
+		t.Fatalf("unknown list metadata: %+v", future)
 	}
 	detail, err := checkpoints.Get(ctx, "checkpoint-1")
 	if err != nil || detail.ID != captured.ID || detail.State != "failed" || detail.ErrorReason != "archive upload failed" {
@@ -127,9 +144,79 @@ func TestCheckpointManagementNativeRestBoundary(t *testing.T) {
 	}
 }
 
+func TestCheckpointCreateWithOptions(t *testing.T) {
+	zero, used := uint64(0), uint64(4096)
+	post, config := "POST /v1/checkpoints", "GET /v1/config"
+	for _, tc := range []struct {
+		name       string
+		kind       CheckpointKind
+		enabled    bool
+		response   string
+		wantKind   CheckpointKind
+		wantMemory *uint64
+		wantCalls  []string
+	}{
+		{"default", "", false, "", CheckpointKindDisk, nil, []string{post}},
+		{"disk", CheckpointKindDisk, false, "", CheckpointKindDisk, nil, []string{post}},
+		{"full zero", CheckpointKindFull, true, `,"kind":"full","memory_size_bytes":0`, CheckpointKindFull, &zero, []string{config, post}},
+		{"full nonzero", CheckpointKindFull, true, `,"kind":"full","memory_size_bytes":4096`, CheckpointKindFull, &used, []string{config, post}},
+		{"full disabled", CheckpointKindFull, false, "", "", nil, []string{config}},
+		{"unknown response", "", false, `,"kind":"future"`, CheckpointKindUnknown, nil, []string{post}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var calls []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				calls = append(calls, r.Method+" "+r.URL.RequestURI())
+				mu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/v1/config" {
+					_ = json.NewEncoder(w).Encode(map[string]any{"capabilities": map[string]bool{"memory_checkpoints_enabled": tc.enabled}})
+					return
+				}
+				want := map[string]any{"source_box_id": "source-1", "name": "base"}
+				if tc.kind == CheckpointKindFull {
+					want["kind"] = "full"
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !reflect.DeepEqual(body, want) {
+					t.Errorf("request body = %v, want %v (decode error: %v)", body, want, err)
+				}
+				_, _ = w.Write([]byte(`{"id":"cp-1","name":"base","source_box_id":"source-1","created_at":"2026-11-06T00:00:00Z","size_bytes":8192` + tc.response + "}"))
+			}))
+			defer server.Close()
+			runtime, err := NewRest(BoxliteRestOptions{URL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			info, err := runtime.Checkpoints().CreateWithOptions(context.Background(), "source-1", "base", CheckpointOptions{Kind: tc.kind})
+			if tc.kind == CheckpointKindFull && !tc.enabled {
+				requireErrorCode(t, err, ErrUnsupported, "full checkpoint")
+			} else if err != nil || info == nil || info.Kind != tc.wantKind || !reflect.DeepEqual(info.MemorySizeBytes, tc.wantMemory) {
+				t.Fatalf("metadata = %+v, error = %v, want kind %q and memory %v", info, err, tc.wantKind, tc.wantMemory)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if !reflect.DeepEqual(calls, tc.wantCalls) {
+				t.Fatalf("requests = %v, want %v", calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
 func TestCheckpointManagementRejectsInvalidInputsAndClosedRuntime(t *testing.T) {
 	ctx := context.Background()
 	checkpoints := (&Runtime{}).Checkpoints()
+	for _, kind := range []CheckpointKind{"bogus", CheckpointKindUnknown, "full\x00"} {
+		if _, err := checkpoints.CreateWithOptions(ctx, "source-1", "base", CheckpointOptions{Kind: kind}); !IsInvalidArgument(err) {
+			t.Fatalf("create with kind %q: %v", kind, err)
+		}
+	}
+	if _, err := checkpoints.CreateWithOptions(ctx, "source-1", "bad\x00name", CheckpointOptions{Kind: CheckpointKindFull}); !IsInvalidArgument(err) {
+		t.Fatalf("create with invalid name: %v", err)
+	}
 	for _, key := range []string{"", "bad\x00suffix"} {
 		if _, err := checkpoints.Get(ctx, key); !IsInvalidArgument(err) {
 			t.Fatalf("get %q: %v", key, err)

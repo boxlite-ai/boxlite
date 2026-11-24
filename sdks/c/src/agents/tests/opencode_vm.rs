@@ -125,7 +125,8 @@ fn c_opencode_vm_matches_rust() {
             .iter()
             .any(|op| op == "agent.send")
     );
-    let rust_result = boxlite::agents::records::result(&rust_result);
+    let rust_result: serde_json::Value =
+        serde_json::from_str(boxlite::agents::records::result(&rust_result).get()).unwrap();
     for key in ["status", "outcome", "text", "data", "artifacts", "error"] {
         assert_eq!(c_result[key], rust_result[key], "result field {key}");
     }

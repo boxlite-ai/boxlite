@@ -63,7 +63,7 @@ fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
         panic!("expected send")
     };
     assert_eq!(options.mode, SendMode::Queue);
-    assert_eq!(options.data, None);
+    assert!(options.data.is_none());
     assert_eq!(options.control.idempotency_key, None);
 
     let AgentCommand::Send {
@@ -79,7 +79,7 @@ fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
         "--mode",
         "reject",
         "--data",
-        r#"{"value":1}"#,
+        r#"{"values": [9007199254740993, 1e400]}"#,
         "--idempotency-key",
         "retry",
     ])
@@ -90,7 +90,10 @@ fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
     assert_eq!(target.agent_id, "agent");
     assert_eq!(text, "hello");
     assert_eq!(options.mode, SendMode::Reject);
-    assert_eq!(options.data, Some(json!({"value": 1})));
+    assert_eq!(
+        options.data.unwrap().get(),
+        r#"{"values": [9007199254740993, 1e400]}"#
+    );
     assert_eq!(options.control.idempotency_key.as_deref(), Some("retry"));
 }
 
@@ -171,7 +174,7 @@ fn agents_responses_keep_answer_and_permission_json_distinct() {
             panic!("expected respond")
         };
         assert_eq!(request, "request");
-        assert_eq!(parsed, serde_json::from_str::<Value>(response).unwrap());
+        assert_eq!(parsed.get(), response);
         assert_eq!(options.idempotency_key.as_deref(), Some("retry"));
     }
 }

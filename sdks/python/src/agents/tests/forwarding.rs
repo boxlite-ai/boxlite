@@ -49,6 +49,16 @@ async def main():
     assert json.loads(await agent.requests())[0]['id'] == 'request-1'
     reply = await agent.respond('request-1', '{"type":"answer","text":"yes"}', None)
     assert json.loads(await reply.wait(None))['text'] == 'yes'
+    payload = '[9007199254740993,1e400,-1e400]'
+    answer = '{"type":"answer","text":"echo","data":' + payload + '}'
+    for observed in (await agent.send('echo', 'queue', payload, None),
+                     await agent.respond('request-1', answer, None)):
+        for record in (await observed.wait(None), observed.state):
+            data = json.loads(record, parse_int=str, parse_float=str)
+            if 'result' in data:
+                data = data['result']
+            assert data['data'] == ['9007199254740993', '1e400', '-1e400']
+
     for operation, error in (
         (lambda: agent.send('bad', 'bad', 'null', None), InvalidArgumentError),
         (lambda: agent.send('bad', 'queue', '{', None), InvalidArgumentError),

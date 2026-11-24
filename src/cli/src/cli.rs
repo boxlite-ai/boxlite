@@ -782,7 +782,7 @@ pub enum Commands {
     Signal(crate::commands::signal::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
-    /// Manage disk checkpoints on the selected REST server.
+    /// Manage checkpoints on the selected REST server.
     Checkpoint(crate::commands::checkpoint::CheckpointArgs),
     /// Import a .boxlite archive into a new box.
     Import(crate::commands::import::ImportArgs),
