@@ -5,6 +5,10 @@ Provides Docker-like API for executing commands in boxes.
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .boxlite import Execution
 
 __all__ = [
     "ExecResult",
@@ -28,3 +32,12 @@ class ExecResult:
     stdout: str
     stderr: str
     error_message: str | None = None
+
+
+async def _close_exec_stdin(execution: "Execution") -> None:
+    try:
+        stdin = execution.stdin()
+    except RuntimeError:
+        # The native binding raises when the execution has no stdin stream.
+        return
+    await stdin.close()
