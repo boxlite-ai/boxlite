@@ -76,8 +76,8 @@ pub enum AgentCommand {
         #[arg(long, value_name = "REQUEST")]
         request: String,
         /// Typed answer or permission response
-        #[arg(value_name = "JSON", value_parser = parse_json)]
-        response: Value,
+        #[arg(value_name = "JSON", value_parser = parse_raw_json)]
+        response: Box<serde_json::value::RawValue>,
         #[command(flatten)]
         options: AgentControlOptions,
     },
@@ -164,8 +164,8 @@ pub struct AgentSendOptions {
     #[arg(long, value_enum, default_value = "queue")]
     mode: SendMode,
     /// Additional JSON input
-    #[arg(long, value_name = "JSON", value_parser = parse_json)]
-    data: Option<Value>,
+    #[arg(long, value_name = "JSON", value_parser = parse_raw_json)]
+    data: Option<Box<serde_json::value::RawValue>>,
     #[command(flatten)]
     control: AgentControlOptions,
 }
@@ -203,6 +203,10 @@ pub enum AgentView {
     Config,
     Capabilities,
     Requests,
+}
+
+fn parse_raw_json(input: &str) -> serde_json::Result<Box<serde_json::value::RawValue>> {
+    serde_json::from_str(input)
 }
 
 fn parse_json(input: &str) -> serde_json::Result<Value> {
@@ -247,7 +251,7 @@ pub async fn execute(args: AgentArgs, global: &GlobalFlags) -> Result<()> {
             options,
         } => {
             let agent = open_agent(&runtime, &target).await?;
-            let response = records::parse_response(response)?;
+            let response = records::parse_response(response.get())?;
             let turn = agent
                 .respond(&request, response, options.into_core())
                 .await?;
@@ -256,7 +260,9 @@ pub async fn execute(args: AgentArgs, global: &GlobalFlags) -> Result<()> {
         AgentCommand::Inspect { target, options } => {
             let agent = open_agent(&runtime, &target.agent).await?;
             let record = match (target.turn, options.view) {
-                (Some(turn), _) => records::turn_state(&agent.get_turn(&turn).await?.state()?),
+                (Some(turn), _) => {
+                    return print(&records::turn_state(&agent.get_turn(&turn).await?.state()?));
+                }
                 (None, None) => records::agent_state(&agent.state()?),
                 (None, Some(AgentView::Config)) => records::config(&agent.config()?),
                 (None, Some(AgentView::Capabilities)) => {
@@ -318,7 +324,7 @@ async fn open_turn(runtime: &BoxliteRuntime, target: &TurnTarget) -> Result<Agen
     Ok(agent.get_turn(&target.turn).await?)
 }
 
-fn print(record: &Value) -> Result<()> {
+fn print(record: &impl std::fmt::Display) -> Result<()> {
     println!("{record}");
     Ok(())
 }

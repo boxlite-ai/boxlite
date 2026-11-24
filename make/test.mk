@@ -659,7 +659,8 @@ test\:all\:python:
 # Node.js SDK unit tests.
 test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js SDK unit tests..."
-	@cd sdks/node && npm test -- $(VITEST_FILTER)
+	@cargo build -p boxlite-node --example agent_record_fixture
+	@cd sdks/node && BOXLITE_AGENT_FIXTURE_DIR="$(abspath $(or $(CARGO_TARGET_DIR),target))/debug/examples" npm test -- $(VITEST_FILTER)
 	@echo "🧪 Running Node.js binding (Rust) unit tests..."
 	@cargo test -p boxlite-node --lib $(CARGOTEST_FILTER)
 
@@ -698,8 +699,8 @@ test\:all\:c:
 # Go SDK unit tests.
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
-	@$(MAKE) dev:go
-	@cd sdks/go && go test -tags boxlite_dev $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
+	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
+	@cd sdks/go && go test -a -count=1 -tags boxlite_dev,boxlite_agent_test $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
 # Native Go archive import/export tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.

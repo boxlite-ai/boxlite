@@ -105,13 +105,14 @@ async fn remote_agent_create_send_and_get_turn() {
 #[tokio::test]
 async fn remote_agent_send_preserves_optional_request_values() {
     use crate::agents::{AgentSendMode, AgentSendOptions};
+    const RAW_DATA: &str = r#"{ "$serde_json::private::Number": "ordinary key", "number": 1e400 }"#;
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
         let resource = r#"{"id":"ses_test","agent":"opencode","state":null,"config":{"tools":[],"mcp":[]},"capabilities":{"operations":["agent.send"],"input_kinds":["text"],"max_queued_turns":null,"max_pending_steering":null,"idempotency_retention_seconds":null}}"#;
         let turn = r#"{"id":"msg_test","agent_id":"ses_test","status":"queued","cursor":null,"result":null,"requests":[],"steering":[]}"#;
         let mut requests = Vec::new();
-        for response in [resource, turn, turn, turn] {
+        for response in [resource, turn, turn, turn, turn] {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut header = Vec::new();
             while !header.ends_with(b"\r\n\r\n") {
@@ -128,10 +129,7 @@ async fn remote_agent_send_preserves_optional_request_values() {
                 .unwrap();
             let mut body = vec![0; length];
             socket.read_exact(&mut body).await.unwrap();
-            requests.push((
-                header,
-                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
-            ));
+            requests.push((header, String::from_utf8(body).unwrap()));
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).as_bytes()).await.unwrap();
         }
         requests
@@ -150,7 +148,7 @@ async fn remote_agent_send_preserves_optional_request_values() {
             "hello",
             AgentSendOptions {
                 mode: AgentSendMode::Queue,
-                data: Some(serde_json::Value::Null),
+                data: Some(serde_json::value::to_raw_value(&serde_json::Value::Null).unwrap()),
                 ..Default::default()
             },
         )
@@ -161,8 +159,18 @@ async fn remote_agent_send_preserves_optional_request_values() {
             "hello",
             AgentSendOptions {
                 mode: AgentSendMode::Reject,
-                data: Some(serde_json::json!(false)),
+                data: Some(serde_json::value::to_raw_value(&serde_json::json!(false)).unwrap()),
                 idempotency_key: Some("retry-1".into()),
+            },
+        )
+        .await
+        .unwrap();
+    agent
+        .send(
+            "raw",
+            AgentSendOptions {
+                data: Some(serde_json::value::RawValue::from_string(RAW_DATA.into()).unwrap()),
+                ..Default::default()
             },
         )
         .await
@@ -171,13 +179,15 @@ async fn remote_agent_send_preserves_optional_request_values() {
     for (header, _) in &requests[1..] {
         assert!(header.starts_with("POST /v1/boxes/remote-box/agents/ses_test/turns HTTP/1.1\r\n"));
     }
-    assert_eq!(requests[1].1, serde_json::json!({"text":"hello"}));
+    assert!(requests[4].1.contains(RAW_DATA));
+    let body = |i: usize| serde_json::from_str::<serde_json::Value>(&requests[i].1).unwrap();
+    assert_eq!(body(1), serde_json::json!({"text":"hello"}));
     assert_eq!(
-        requests[2].1,
+        body(2),
         serde_json::json!({"text":"hello", "options":{"data":null}})
     );
     assert_eq!(
-        requests[3].1,
+        body(3),
         serde_json::json!({"text":"hello", "options":{"mode":"reject","data":false}})
     );
     assert!(
@@ -292,7 +302,7 @@ async fn remote_controls_forward_typed_responses_and_confirm_shutdown() {
         .unwrap();
     let answer = AgentResponse::Answer {
         text: "yes".into(),
-        data: Some(json!(42)),
+        data: Some(serde_json::value::to_raw_value(&json!(42)).unwrap()),
     };
     let turn = agent
         .respond("question", answer, Default::default())
