@@ -7,9 +7,12 @@ use std::{
 };
 
 use crate::{
+    config::MAX_VCPUS,
     error::{ControlReason, Error, Result},
     events::{Event, EventSender},
 };
+
+const _: () = assert!(MAX_VCPUS as u32 <= u64::BITS);
 
 /// The execution state observed through [`VmControl`](crate::VmControl).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +71,7 @@ impl LifecycleState {
 
     #[cfg(any(test, target_arch = "x86_64"))]
     fn acknowledge(&mut self, epoch: u64, id: u8) {
-        if self.status == VmStatus::Pausing && self.epoch == epoch && id < 64 {
+        if self.status == VmStatus::Pausing && self.epoch == epoch && u32::from(id) < u64::BITS {
             self.acknowledgements |= 1u64 << id;
         }
     }
@@ -134,17 +137,25 @@ impl Lifecycle {
             return Err(invalid());
         }
         let epoch = state.epoch.checked_add(1).ok_or_else(invalid)?;
-        let command = Command::Park(epoch);
-        state.command = Some(command);
+        state.command = Some(Command::Park(epoch));
         if state.status == VmStatus::Created {
             return Ok(());
         }
 
         state.sender().wake();
+        self.finish_pause(state, epoch, timeout)
+    }
+
+    fn finish_pause(
+        &self,
+        state: MutexGuard<'_, LifecycleState>,
+        epoch: u64,
+        timeout: Duration,
+    ) -> Result<()> {
         let (mut state, result) = self.await_pause(state, epoch, timeout);
         // The driver takes the command under this same lock. Once it does,
         // the vCPUs keep parking even if this caller times out.
-        if state.command == Some(command) {
+        if state.command == Some(Command::Park(epoch)) {
             state.command = None;
         }
         result.map_err(|reason| control_error("pause", reason))
@@ -251,7 +262,7 @@ impl Lifecycle {
             }
             _ => {}
         }
-        let all = u64::MAX >> (64 - count);
+        let all = u64::MAX >> (u64::BITS - u32::from(count));
         if state.status == VmStatus::Pausing && state.acknowledgements & all == all {
             state.completed_epoch = state.epoch;
             state.status = VmStatus::Paused;

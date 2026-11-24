@@ -215,18 +215,17 @@ fn pause_timeout_withdraws_only_an_unaccepted_command() {
     assert_eq!(control.status(), VmStatus::Running);
     assert!(events.wait(Some(WAIT)).unwrap().is_none()); // Withdrawn request's wake.
 
-    let driver_state = lifecycle.clone();
-    let pause = thread::spawn(move || driver_state.pause(Duration::from_secs(1)));
-    assert!(events.wait(Some(WAIT)).unwrap().is_none());
+    // Accept the command before taking the caller's timeout path.
+    let epoch = 1;
+    lifecycle.state().command = Some(Command::Park(epoch));
     assert!(lifecycle.drive(1));
     assert_error(
-        pause.join().unwrap(),
+        lifecycle.finish_pause(lifecycle.state(), epoch, Duration::ZERO),
         "pause",
         ControlReason::DeadlineTimeout,
     );
     assert_eq!(control.status(), VmStatus::Pausing);
     assert_error(control.pause(), "pause", ControlReason::InvalidState);
-    let epoch = lifecycle.state().epoch;
     lifecycle.state().acknowledge(epoch, 0);
     lifecycle.drive(1);
     control.wait_paused(Duration::ZERO).unwrap();

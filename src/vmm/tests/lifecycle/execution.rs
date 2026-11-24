@@ -5,7 +5,7 @@ use std::{
     io,
     panic::{self, AssertUnwindSafe},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
@@ -220,6 +220,7 @@ fn pause_capability_uses_the_composed_chipset() {
 enum PauseFault {
     CompleteIo(mpsc::Sender<()>),
     Kick(Arc<AtomicUsize>),
+    TransientKick(Arc<Mutex<Vec<u32>>>),
     NotifyStopped {
         peer_parked: Arc<AtomicBool>,
         kicks: Arc<AtomicUsize>,
@@ -276,14 +277,31 @@ struct FailingCpu {
 }
 
 #[derive(Clone)]
-struct FaultyKick(MockHandle, Option<Arc<AtomicUsize>>);
+struct FaultyKick {
+    handle: MockHandle,
+    id: u32,
+    fault: PauseFault,
+}
 
 impl VcpuHandle for FaultyKick {
     fn kick(&self) -> boxlite_hypervisor::Result<()> {
-        if let Some(kicks) = &self.1 {
-            assert_ne!(kicks.fetch_add(1, Ordering::Relaxed), 0, "test kick panic");
+        match &self.fault {
+            PauseFault::Kick(kicks) | PauseFault::NotifyStopped { kicks, .. } => {
+                assert_ne!(kicks.fetch_add(1, Ordering::Relaxed), 0, "test kick panic");
+            }
+            PauseFault::TransientKick(attempts) => {
+                let mut attempts = attempts.lock().unwrap();
+                attempts.push(self.id);
+                if attempts.len() == 1 {
+                    return Err(boxlite_hypervisor::Error::KickVcpu {
+                        id: self.id,
+                        source: io::ErrorKind::WouldBlock.into(),
+                    });
+                }
+            }
+            PauseFault::CompleteIo(_) => {}
         }
-        self.0.kick()
+        self.handle.kick()
     }
 }
 
@@ -322,13 +340,11 @@ impl Vcpu for FailingCpu {
     }
 
     fn handle(&self) -> Self::Handle {
-        let kicks = match &self.fault {
-            PauseFault::CompleteIo(_) => None,
-            PauseFault::Kick(kicks) | PauseFault::NotifyStopped { kicks, .. } => {
-                Some(Arc::clone(kicks))
-            }
-        };
-        FaultyKick(self.vcpu.handle(), kicks)
+        FaultyKick {
+            handle: self.vcpu.handle(),
+            id: self.id,
+            fault: self.fault.clone(),
+        }
     }
 }
 
@@ -429,6 +445,33 @@ fn pause_kick_panic_releases_vcpus_before_unwinding() {
 }
 
 #[test]
+fn transient_pause_kick_retries_and_allows_resume() {
+    let backend = MockVm::new();
+    let entries = backend.entries();
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let mut vm = faulty_vm(backend, 2, PauseFault::TransientKick(Arc::clone(&attempts)));
+
+    let exit = run_with_control(&mut vm, |control| {
+        wait_until(|| entries.lock().unwrap().len() == 2);
+        control
+            .pause()
+            .expect("transient kick should still allow the VM to pause");
+        assert_eq!(control.status(), VmStatus::Paused);
+        {
+            let kicks = attempts.lock().unwrap();
+            assert!(
+                matches!(kicks.as_slice(), [first, peer, retry] if first != peer && first == retry),
+                "expected a kick for each vCPU followed by a retry, got {kicks:?}"
+            );
+        }
+
+        control.resume().unwrap();
+        wait_until(|| entries.lock().unwrap().len() == 4);
+    });
+    assert_eq!(exit.unwrap(), VmExit::StopRequested);
+}
+
+#[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
 fn kvm_device_less_guest_pauses_resumes_and_stops() {
     const COUNTER: GuestAddress = GuestAddress(0x2000);
@@ -455,6 +498,7 @@ fn kvm_device_less_guest_pauses_resumes_and_stops() {
     vm.control().pause().unwrap();
     let exit = run_with_control(&mut vm, |control| {
         control.wait_paused(WAIT).unwrap();
+        assert_eq!(counter(), 0);
         for _ in 0..3 {
             let previous = counter();
             control.resume().unwrap();
@@ -462,6 +506,9 @@ fn kvm_device_less_guest_pauses_resumes_and_stops() {
             wait_until(|| counter() != previous);
             control.pause().unwrap();
             assert_eq!(control.status(), VmStatus::Paused);
+            let paused = counter();
+            thread::sleep(Duration::from_millis(20));
+            assert_eq!(counter(), paused);
         }
     });
     assert_eq!(exit.unwrap(), VmExit::StopRequested);
