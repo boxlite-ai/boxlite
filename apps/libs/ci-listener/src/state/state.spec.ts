@@ -814,12 +814,15 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await state.recover(lease)).toEqual([replacement])
     })
     it('keeps unknown effects and permanent scopes through owner turnover', async () => {
-      const first = (await state.acquire('first', 100))!
+      const first = await owner()
       await state.commit(first, [
         { key: 'worker/unknown', expected: null, payload: { phase: 'requested', operation: randomUUID() } },
         { key: 'scope/1', expected: null, payload: { organization: 'original' } },
       ])
-      await new Promise((resolve) => setTimeout(resolve, 160))
+      await database.transaction(namespace, async (tx) => {
+        const expiry = (await tx.get('@lease'))!
+        await tx.put({ ...expiry, version: randomUUID(), payload: { until: 0 } }, expiry.version)
+      })
       await expect(state.renew(first, 10_000)).rejects.toBeInstanceOf(LeaseLost)
       const next = (await state.acquire('next', 10_000))!
       expect(next.epoch).toBe(first.epoch + 1)

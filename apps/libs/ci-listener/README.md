@@ -932,10 +932,10 @@ The GitHub runner executes the workflow, and the original Box and runner are rec
 
 ## Build and test
 
-After a Listener test stops its renewal loop, inspect persisted rows through the
-test database snapshot rather than a scheduling lease. That lease can expire
-during shutdown. The 64-job accumulation test explicitly expires it before
-checking all persisted allocation records; live-operation tests still use fenced reads.
+After a Listener test stops its renewal loop, inspect persisted rows through a
+test database snapshot because the lease can expire during shutdown. To test owner
+turnover, commit the initial records under a valid lease, then expire it in test
+storage before checking renewal, takeover and recovery under the new owner.
 
 Build and test from the repository root:
 
