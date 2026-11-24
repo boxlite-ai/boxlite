@@ -321,12 +321,12 @@ jobs:
 
       - name: Checkout release SDK sources for subdomain clients
         if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
-        uses: actions/checkout@v5
-        with:
-          repository: boxlite-ai/boxlite
-          ref: ${{ steps.release_commit.outputs.sha }}
-          path: target/e2e-release
-          persist-credentials: false
+        env:
+          RELEASE_SDK_SHA: ${{ steps.release_commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 https://github.com/boxlite-ai/boxlite.git "$RELEASE_SDK_SHA"
+          git worktree add --detach target/e2e-release "$RELEASE_SDK_SHA"
 
       - name: Require the shared subdomain (dev)
         if: ${{ (inputs.stage || 'dev') == 'dev' }}

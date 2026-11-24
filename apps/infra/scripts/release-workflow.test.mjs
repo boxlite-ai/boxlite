@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -134,9 +134,11 @@ test('release admission checks caller, tag, reviewers and deployment attempt bef
       expected,
     )
   }
-  const checkout = cloud.jobs.e2e.steps.find((step) => step.with?.path === 'target/e2e-release')
+  const checkout = cloud.jobs.e2e.steps.find(
+    (step) => step.name === 'Checkout release SDK sources for subdomain clients',
+  )
   assert.equal(
-    checkout.with.ref,
+    checkout.env?.RELEASE_SDK_SHA,
     '${{ steps.release_commit.outputs.sha }}',
     'release SDK checkout must use the verified commit',
   )
@@ -198,4 +200,57 @@ test('the cloud suite cannot write the default branch cache', () => {
     ['read', 'none'].includes(cloud.jobs.e2e['cache-mode'] || cloud['cache-mode']),
     'E2E needs a read-only cache',
   )
+})
+
+test('release SDK worktree uses the verified commit even when the remote has advanced', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'cloud-sdk-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  git('init', '-q', 'source')
+  const commit = (text) =>
+    git(
+      '-C',
+      'source',
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=fixture@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      '-c',
+      'core.hooksPath=/dev/null',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      text,
+    )
+  commit('published')
+  const sha = git('-C', 'source', 'rev-parse', 'HEAD')
+  commit('later change')
+  git('init', '-q', 'suite')
+  const step = readWorkflow('e2e-cloud').jobs.e2e.steps.find(
+    (s) => s.name === 'Checkout release SDK sources for subdomain clients',
+  )
+  assert.ok(step.run, 'the suite should share its Git object store with the release SDK worktree')
+  const run = (ref) =>
+    spawnSync('bash', ['-c', step.run], {
+      cwd: join(dir, 'suite'),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        RELEASE_SDK_SHA: ref,
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'url.file://' + join(dir, 'source') + '.insteadOf',
+        GIT_CONFIG_VALUE_0: 'https://github.com/boxlite-ai/boxlite.git',
+      },
+    })
+  const missing = run('0'.repeat(40))
+  assert.notEqual(missing.status, 0)
+  const result = run(sha)
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(git('-C', 'suite/target/e2e-release', 'rev-parse', 'HEAD'), sha)
+  const common = (path) => git('-C', path, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+  assert.equal(common('suite/target/e2e-release'), common('suite'))
 })
