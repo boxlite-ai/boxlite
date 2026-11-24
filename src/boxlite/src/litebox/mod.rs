@@ -258,7 +258,21 @@ impl LiteBox {
         options: CloneOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        self.box_backend.clone_box(options, name).await
+        self.box_backend
+            .clone_box(options, name, crate::runtime::backend::CopyPolicy::Local)
+            .await
+    }
+
+    /// Clone through a transport that supports only legacy outbound policy.
+    #[doc(hidden)]
+    pub async fn clone_box_legacy_only(&self, name: Option<String>) -> BoxliteResult<LiteBox> {
+        self.box_backend
+            .clone_box(
+                CloneOptions::default(),
+                name,
+                crate::runtime::backend::CopyPolicy::LegacyOnly,
+            )
+            .await
     }
 
     /// Batch clone: create N clones sharing a single base disk copy.
@@ -276,7 +290,37 @@ impl LiteBox {
 
     /// Export this box as a portable `.boxlite` archive.
     pub async fn export(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive> {
-        self.box_backend.export_box(options, dest).await
+        self.box_backend
+            .export_box(options, dest, crate::runtime::backend::CopyPolicy::Local)
+            .await
+    }
+
+    /// Export through a transport that supports only legacy outbound policy.
+    #[doc(hidden)]
+    pub async fn export_legacy_only(&self, dest: &Path) -> BoxliteResult<BoxArchive> {
+        self.box_backend
+            .export_box(
+                ExportOptions::default(),
+                dest,
+                crate::runtime::backend::CopyPolicy::LegacyOnly,
+            )
+            .await
+    }
+
+    /// Export the finalized snapshot owned by a managed checkpoint.
+    #[doc(hidden)]
+    pub async fn export_managed_checkpoint(
+        &self,
+        dest: &Path,
+        capture: &crate::ManagedCheckpointExport,
+    ) -> BoxliteResult<BoxArchive> {
+        self.box_backend
+            .export_box(
+                ExportOptions::default(),
+                dest,
+                crate::runtime::backend::CopyPolicy::Managed(capture),
+            )
+            .await
     }
 }
 

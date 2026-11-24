@@ -47,6 +47,7 @@ async fn disk_lock_create_provision_stop_shutdown_and_restart_pair_lifetimes() {
             },
             BoxStatus::Stopped,
             None,
+            Default::default(),
         )
         .await
         .unwrap();
@@ -105,7 +106,8 @@ async fn disk_lock_db_insert_failure_rolls_back_create_and_provision() {
                 None,
                 BoxOptions::default(),
                 BoxStatus::Stopped,
-                None
+                None,
+                Default::default(),
             )
             .await
             .is_err()
@@ -146,6 +148,7 @@ async fn disk_lock_b2_failed_allocation_preserves_file_and_reserves_id() {
             BoxOptions::default(),
             BoxStatus::Stopped,
             None,
+            Default::default(),
         )
         .await
         .expect("provision reused the ID reserved after failed disk allocation");
@@ -541,7 +544,7 @@ async fn disk_lock_remove_commits_metadata_despite_directory_and_lifecycle_unlin
 }
 
 #[tokio::test]
-async fn disk_lock_clone_recovers_after_staging_failure_and_tolerates_ref_write_failure() {
+async fn disk_lock_clone_recovers_after_staging_and_ref_write_failures() {
     enable_disk_lock_logs();
     let home = TempDir::new_in("/tmp").unwrap();
     let runtime = RuntimeImpl::new_for_test(options(&home)).unwrap();
@@ -588,10 +591,27 @@ async fn disk_lock_clone_recovers_after_staging_failure_and_tolerates_ref_write_
          BEGIN SELECT RAISE(ABORT, 'injected clone reference failure'); END;",
         )
         .unwrap();
-    let cloned = source.clone_box(Default::default(), None).await.unwrap();
+    let failed = source.clone_box(Default::default(), None).await;
+    assert!(
+        matches!(failed, Err(BoxliteError::Database(message)) if message.contains("injected clone reference failure"))
+    );
+    assert_eq!(runtime.box_manager.all_boxes(true).unwrap().len(), 1);
+    assert_eq!(
+        std::fs::read_dir(runtime.layout.boxes_dir())
+            .unwrap()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_dir(runtime.layout.temp_dir())
+            .unwrap()
+            .count(),
+        0
+    );
     database
         .execute_batch("DROP TRIGGER reject_clone_ref")
         .unwrap();
+    let cloned = source.clone_box(Default::default(), None).await.unwrap();
     let (cloned_config, cloned_state) =
         runtime.box_manager.box_by_id(cloned.id()).unwrap().unwrap();
     let backing = crate::disk::read_backing_file_path(&disk).unwrap().unwrap();
@@ -611,8 +631,10 @@ async fn disk_lock_clone_recovers_after_staging_failure_and_tolerates_ref_write_
             .base_disk_mgr
             .store()
             .dependent_boxes(base.id())
-            .unwrap(),
-        vec![source.id().to_string()]
+            .unwrap()
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([source.id().to_string(), cloned.id().to_string()])
     );
     assert_eq!(cloned_state.status, BoxStatus::Stopped);
     assert_pair(&runtime, cloned.id(), true);

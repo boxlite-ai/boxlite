@@ -26,6 +26,7 @@ export class CheckpointOperation {
   @Column('jsonb') environment: CheckpointEnvironment
   @Column('jsonb') platformEnv: Record<string, string>
   @Column({ type: 'varchar', nullable: true }) nativeId: string | null
+  @Column({ type: 'boolean', default: false }) protectedDisposalConfirmed: boolean
   @Column({ type: 'text', nullable: true }) errorReason: string | null
   @CreateDateColumn({ type: 'timestamptz' }) createdAt: Date
   @UpdateDateColumn({ type: 'timestamptz' }) updatedAt: Date

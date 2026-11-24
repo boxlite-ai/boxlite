@@ -16,7 +16,8 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { DataSource, FindOptionsWhere, In, MoreThanOrEqual, Not, Repository, UpdateResult } from 'typeorm'
+import { And, DataSource, FindOptionsWhere, In, MoreThanOrEqual, Not, Raw, Repository, UpdateResult } from 'typeorm'
+import { requireProtectedCheckpointOwner } from '../stores/protected-checkpoint.store'
 import { Box } from '../entities/box.entity'
 import { Runner } from '../entities/runner.entity'
 import { CreateRunnerInternalDto } from '../dto/create-runner-internal.dto'
@@ -278,6 +279,10 @@ export class RunnerService {
     return runner.region
   }
 
+  async getProtectedCheckpointOwner(id: string) {
+    return requireProtectedCheckpointOwner(this.dataSource.manager, id)
+  }
+
   async findAvailableRunners(params: GetRunnerParams): Promise<Runner[]> {
     const runnerFilter: FindOptionsWhere<Runner> = {
       state: RunnerState.READY,
@@ -294,6 +299,17 @@ export class RunnerService {
 
     if (excludedRunnerIds?.length) {
       runnerFilter.id = Not(In(excludedRunnerIds))
+    }
+    if (params.protectedCheckpoint) {
+      const enrolled = Raw(
+        (id) => `EXISTS (SELECT 1 FROM complete_outbound_runner_enrollment e
+        JOIN complete_outbound_admission a ON a.id = 1 AND a.minimum_release = e.verified_floor
+        WHERE e.runner_id = ${id} AND a.phase = 'open' AND a.api_principal = current_user
+          AND e.expires_at > clock_timestamp() AND e.protected_checkpoint_identity IS NOT NULL
+          AND e.protected_checkpoint_retirement IS NULL)`,
+      )
+      runnerFilter.id = excludedRunnerIds?.length ? And(Not(In(excludedRunnerIds)), enrolled) : enrolled
+      runnerFilter.apiVersion = '2'
     }
 
     if (params.regions?.length) {
@@ -312,7 +328,8 @@ export class RunnerService {
       where: runnerFilter,
     })
 
-    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    runners.sort((a, b) => b.availabilityScore - a.availabilityScore)
+    return params.protectedCheckpoint ? runners : runners.slice(0, 10)
   }
 
   /**
@@ -1033,6 +1050,7 @@ export class GetRunnerParams {
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
   requiresPrivileged?: boolean
+  protectedCheckpoint?: boolean
 }
 
 interface AvailabilityScoreParams {

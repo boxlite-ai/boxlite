@@ -29,7 +29,12 @@ import { BoxMigration } from '../entities/box-migration.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
 import { CheckpointArchiveStore } from '../stores/checkpoint-archive.store'
-import { hasCompleteOutboundControl } from '../stores/outbound-policy.store'
+import {
+  completeOutboundRecord,
+  hasCompleteOutboundControl,
+  lockCompleteOutboundFloor,
+} from '../stores/outbound-policy.store'
+import { requireProtectedCheckpointOwner } from '../stores/protected-checkpoint.store'
 
 @Injectable()
 export class CheckpointService {
@@ -60,6 +65,11 @@ export class CheckpointService {
         await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`checkpoint-quota:${organizationId}`])
         if (name && isUUID(name) && (await manager.exists(Checkpoint, { where: { organizationId, id: name } })))
           throw new ConflictException('Checkpoint name conflicts with an existing checkpoint ID')
+        const locator =
+          (await manager.findOneBy(Box, { organizationId, id: source })) ??
+          (await manager.findOneBy(Box, { organizationId, name: source }))
+        const protectedCopy = locator && (await hasCompleteOutboundControl(manager, locator.id))
+        if (protectedCopy) await lockCompleteOutboundFloor(manager)
         const byId = await manager.findOne(Box, {
           where: { organizationId, id: source },
           lock: { mode: 'pessimistic_write' },
@@ -71,12 +81,9 @@ export class CheckpointService {
             lock: { mode: 'pessimistic_write' },
           }))
         if (!box) throw new NotFoundException('Source box not found')
-        if (await hasCompleteOutboundControl(manager, box.id)) {
-          throw new ConflictException({
-            code: 'complete_policy_required',
-            message: 'Checkpoint capture does not support complete outbound policy',
-          })
-        }
+        const currentProtected = await hasCompleteOutboundControl(manager, box.id)
+        if (currentProtected && (!protectedCopy || locator?.id !== box.id))
+          throw new ConflictException('Source outbound policy changed during checkpoint admission')
         // The parent lock also serializes first use, when no coordination row exists yet.
         const checkpointState =
           (await manager.findOne(BoxCheckpointState, {
@@ -107,6 +114,17 @@ export class CheckpointService {
             })
           : null
         if (!runner) throw new ConflictException('Source runner is not ready for checkpoint jobs')
+        const capture = currentProtected
+          ? await manager
+              .createQueryBuilder(Box, 'box')
+              .addSelect(['box.completeOutboundControl', 'box.completeOutboundGeneration'])
+              .where({ id: box.id })
+              .getOneOrFail()
+          : null
+        const control = capture && completeOutboundRecord(capture)
+        if (capture && (!control?.committed || control.pending || control.finalization))
+          throw new ConflictException('Checkpoint source outbound policy is unresolved')
+        const owner = control ? await requireProtectedCheckpointOwner(manager, runner.id) : null
         if (
           await manager.exists(Job, {
             where: {
@@ -133,12 +151,25 @@ export class CheckpointService {
           arcPath: `${settings.archivePrefix}${organizationId}/${id}/archive.boxlite`,
           environment: captureEnvironment(box),
           archive: null,
+          captureOutbound: control?.committed ?? null,
           errorReason: null,
         })
-        const job = await this.jobs.createJob(manager, JobType.EXPORT_CHECKPOINT, runner.id, ResourceType.BOX, box.id, {
-          checkpointId: id,
-          arcPath: checkpoint.arcPath,
-        })
+        const job = await this.jobs.createJob(
+          manager,
+          control ? JobType.EXPORT_PROTECTED_CHECKPOINT : JobType.EXPORT_CHECKPOINT,
+          runner.id,
+          ResourceType.BOX,
+          box.id,
+          {
+            checkpointId: id,
+            arcPath: checkpoint.arcPath,
+            ...(control && {
+              ...owner,
+              captureOutbound: control.committed,
+              sourceGeneration: capture?.completeOutboundGeneration,
+            }),
+          },
+        )
         checkpoint.exportJobId = job.id
         checkpoint.activeJobId = job.id
         await manager.insert(Checkpoint, checkpoint)
@@ -203,6 +234,20 @@ export class CheckpointService {
         }))
       )
         throw new ConflictException('Checkpoint is being created or used by a Box operation')
+      if (
+        checkpoint.captureOutbound &&
+        (await manager
+          .getRepository(CheckpointOperation)
+          .createQueryBuilder('operation')
+          .innerJoin(Job, 'job', 'job.id = operation."jobId"')
+          .where('operation."checkpointId" = :checkpointId AND job.type = :kind', {
+            checkpointId: checkpoint.id,
+            kind: JobType.IMPORT_PROTECTED_CHECKPOINT,
+          })
+          .andWhere('(job."completedAt" IS NULL OR job."checkpointCleanupRequired")')
+          .getExists())
+      )
+        throw new ConflictException('Checkpoint is held by a protected restore or its cleanup')
       if (
         await manager
           .getRepository(CheckpointOperation)

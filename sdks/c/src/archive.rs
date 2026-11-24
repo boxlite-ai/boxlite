@@ -8,7 +8,9 @@ use std::os::raw::{c_char, c_void};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxliteError, ExportOptions};
+use boxlite::{
+    BoxArchive, BoxliteError, ExportOptions, ManagedCheckpointExport, ManagedCheckpointImport,
+};
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::box_handle::BoxHandle;
@@ -16,6 +18,31 @@ use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error
 use crate::event_queue::{CBoxExportCb, CRuntimeImportCb, OwnedFfiPtr, RuntimeEvent, push_event};
 use crate::runtime::RuntimeHandle;
 use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ArchiveTransport<T> {
+    LegacyOnly,
+    Managed(T),
+}
+
+/// Validate archive metadata before an existing target satisfies legacy migration.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_archive_validate_legacy(
+    archive_path: *const c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    let result = unsafe { parse_required_path(archive_path, "archive_path") }
+        .and_then(|path| BoxArchive::new(path).validate_legacy_manifest());
+    match result {
+        Ok(()) => BoxliteErrorCode::Ok,
+        Err(error) => {
+            let code = error_to_code(&error);
+            unsafe { write_error(out_error, error) };
+            code
+        }
+    }
+}
 
 // use it to prevent the runtime from being dropped while the import task is running.
 // The runtime is cloned into the task,
@@ -55,7 +82,30 @@ pub unsafe extern "C" fn boxlite_box_export(
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    unsafe { export_box(handle, dest, cb, user_data, out_error) }
+    unsafe { export_box(handle, dest, None, cb, user_data, out_error) }
+}
+
+/// Submit an export with the archive transport selected by the local worker.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_export_controlled(
+    handle: *mut CBoxHandle,
+    dest: *const c_char,
+    transport_json: *const c_char,
+    cb: CBoxExportCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        let transport = match parse_transport(transport_json) {
+            Ok(transport) => transport,
+            Err(error) => {
+                let code = error_to_code(&error);
+                write_error(out_error, error);
+                return code;
+            }
+        };
+        export_box(handle, dest, Some(transport), cb, user_data, out_error)
+    }
 }
 
 /// Submit a trusted archive import.
@@ -77,6 +127,39 @@ pub unsafe extern "C" fn boxlite_runtime_import(
             runtime,
             archive_path,
             name_or_null,
+            None,
+            cb,
+            user_data,
+            out_error,
+        )
+    }
+}
+
+/// Submit a local worker import with a legacy or managed checkpoint contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_import_controlled(
+    runtime: *mut CBoxliteRuntime,
+    archive_path: *const c_char,
+    name_or_null: *const c_char,
+    transport_json: *const c_char,
+    cb: CRuntimeImportCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        let transport = match parse_transport(transport_json) {
+            Ok(transport) => transport,
+            Err(error) => {
+                let code = error_to_code(&error);
+                write_error(out_error, error);
+                return code;
+            }
+        };
+        import_box(
+            runtime,
+            archive_path,
+            name_or_null,
+            Some(transport),
             cb,
             user_data,
             out_error,
@@ -87,6 +170,7 @@ pub unsafe extern "C" fn boxlite_runtime_import(
 unsafe fn export_box(
     handle: *mut BoxHandle,
     dest: *const c_char,
+    transport: Option<ArchiveTransport<ManagedCheckpointExport>>,
     cb: CBoxExportCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -112,10 +196,14 @@ unsafe fn export_box(
         let user_data = user_data as usize;
 
         handle_ref.tokio_rt.spawn(async move {
-            let result = lite
-                .export(ExportOptions::default(), &dest)
-                .await
-                .and_then(|archive| archive_path_to_c_string(archive.path()));
+            let result = match transport {
+                None => lite.export(ExportOptions::default(), &dest).await,
+                Some(ArchiveTransport::LegacyOnly) => lite.export_legacy_only(&dest).await,
+                Some(ArchiveTransport::Managed(capture)) => {
+                    lite.export_managed_checkpoint(&dest, &capture).await
+                }
+            }
+            .and_then(|archive| archive_path_to_c_string(archive.path()));
             push_event(
                 &queue,
                 RuntimeEvent::BoxExport {
@@ -135,6 +223,7 @@ unsafe fn import_box(
     runtime: *mut RuntimeHandle,
     archive_path: *const c_char,
     name_or_null: *const c_char,
+    transport: Option<ArchiveTransport<ManagedCheckpointImport>>,
     cb: CRuntimeImportCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -174,9 +263,15 @@ unsafe fn import_box(
         tokio_rt.spawn(async move {
             // Prevent the runtime from being dropped while the import task is running.
             let _runtime_drop_guard = TokioRuntimeDropGuard::new(task_tokio_rt);
-            // Local runtimes intentionally trust caller-managed archives. A
-            // REST server applies its own untrusted-upload policy server-side.
-            let archive = BoxArchive::new(archive_path);
+            let archive = match transport {
+                None => BoxArchive::new(archive_path),
+                Some(ArchiveTransport::LegacyOnly) => {
+                    BoxArchive::from_legacy_transport(archive_path)
+                }
+                Some(ArchiveTransport::Managed(proof)) => {
+                    BoxArchive::from_managed_checkpoint(archive_path, proof)
+                }
+            };
             let result = runtime.import_box(archive, name).await.map(|handle| {
                 let box_id = handle.id().clone();
                 OwnedFfiPtr::new(Box::new(BoxHandle {
@@ -199,6 +294,20 @@ unsafe fn import_box(
 
         BoxliteErrorCode::Ok
     }
+}
+
+unsafe fn parse_transport<T: serde::de::DeserializeOwned>(
+    json: *const c_char,
+) -> Result<ArchiveTransport<T>, BoxliteError> {
+    let value = unsafe { parse_required_string(json, "transport_json")? };
+    if value.len() > 1024 * 1024 {
+        return Err(BoxliteError::InvalidArgument(
+            "archive transport is too large".into(),
+        ));
+    }
+    serde_json::from_str(&value).map_err(|error| {
+        BoxliteError::InvalidArgument(format!("invalid archive transport: {error}"))
+    })
 }
 
 unsafe fn parse_required_path(

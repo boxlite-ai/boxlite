@@ -5,11 +5,16 @@ use std::time::Instant;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use super::archive::{ManagedCheckpointExport, PortableOutboundPolicy, checkpoint_image_pin};
 use super::box_impl::BoxImpl;
+use super::box_impl::outbound::CompleteOutboundControl;
 use super::state::BoxState;
 use crate::disk::BaseDiskKind;
 use crate::disk::constants::filenames as disk_filenames;
 use crate::disk::{BackingFormat, Qcow2Helper};
+use crate::runtime::backend::CopyPolicy;
+use crate::runtime::options::{NetworkSpec, RootfsSpec};
+use crate::runtime::rt_impl::ProvisionedResources;
 use crate::runtime::types::BoxStatus;
 
 // ============================================================================
@@ -17,19 +22,91 @@ use crate::runtime::types::BoxStatus;
 // ============================================================================
 
 impl BoxImpl {
-    fn copy_source_state(&self) -> BoxliteResult<BoxState> {
-        let (state, _, complete) = self.runtime.box_manager.outbound_state(self.id())?;
-        if complete.is_some() {
+    fn copy_source_state(
+        &self,
+        policy: CopyPolicy<'_>,
+    ) -> BoxliteResult<(BoxState, Option<PortableOutboundPolicy>)> {
+        let (state, legacy, complete) = self.runtime.box_manager.outbound_state(self.id())?;
+        let protected = complete.is_some();
+        if protected && matches!(policy, CopyPolicy::LegacyOnly) {
             return Err(BoxliteError::Unsupported(
                 "copy does not support complete outbound policy".into(),
             ));
         }
-        Ok(state)
+        if legacy.is_some_and(|control| control.pending.is_some())
+            || complete
+                .as_ref()
+                .is_some_and(|control| control.pending.is_some())
+        {
+            return Err(BoxliteError::InvalidState(
+                "cannot copy a Box with an unresolved outbound policy change".into(),
+            ));
+        }
+        if let CopyPolicy::Managed(capture) = policy {
+            if complete.as_ref().map(|control| &control.committed) != Some(&capture.snapshot)
+                || self.has_hosted_outbound_owner(false)?
+                || state.status != BoxStatus::Stopped
+                || crate::net::gvproxy::CloudGuardRuntime::from_host()?.is_none()
+            {
+                return Err(BoxliteError::InvalidState(
+                    "managed capture requires the finalized stopped source snapshot".into(),
+                ));
+            }
+            self.verify_checkpoint_image(&state, capture)?;
+        } else if self.has_hosted_outbound_owner(protected)?
+            || (protected && crate::net::gvproxy::CloudGuardRuntime::from_host()?.is_some())
+        {
+            return Err(BoxliteError::Unsupported(
+                "hosted outbound policy copies require managed checkpoint admission".into(),
+            ));
+        }
+        Ok((state, complete.map(|control| control.committed.into())))
     }
 
-    fn options_for_copy(&self) -> BoxliteResult<crate::runtime::options::BoxOptions> {
+    fn verify_checkpoint_image(
+        &self,
+        state: &BoxState,
+        capture: &ManagedCheckpointExport,
+    ) -> BoxliteResult<()> {
+        let RootfsSpec::Image(image) = &self.config.options.rootfs else {
+            return Err(BoxliteError::InvalidArgument(
+                "managed capture requires an OCI image".into(),
+            ));
+        };
+        let source: oci_client::Reference = image
+            .parse()
+            .map_err(|_| BoxliteError::InvalidArgument("invalid source image reference".into()))?;
+        let pinned = checkpoint_image_pin(&capture.pinned_image)?;
+        let digest = state
+            .resolved_image
+            .as_ref()
+            .map(|image| image.manifest_digest.as_str())
+            .or_else(|| source.digest());
+        if source.registry() != pinned.registry()
+            || source.repository() != pinned.repository()
+            || digest != pinned.digest()
+        {
+            return Err(BoxliteError::InvalidState(
+                "checkpoint image pin differs from the source disk image".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn options_for_copy(
+        &self,
+        protected: bool,
+    ) -> BoxliteResult<crate::runtime::options::BoxOptions> {
         let mut options = self.config.options.clone();
-        if let Some(policy) = self.copy_source_state()?.outbound_policy {
+        if protected {
+            options.network = NetworkSpec::Enabled {
+                allow_net: Vec::new(),
+            };
+        } else if let Some(policy) = self
+            .copy_source_state(CopyPolicy::LegacyOnly)?
+            .0
+            .outbound_policy
+        {
             options.network = policy.try_into()?;
         }
         Ok(options)
@@ -39,13 +116,14 @@ impl BoxImpl {
         &self,
         options: crate::runtime::options::CloneOptions,
         name: Option<String>,
+        policy: CopyPolicy<'_>,
     ) -> BoxliteResult<crate::LiteBox> {
         // Single clone delegates to batch clone with count=1.
         let names = match name {
             Some(n) => vec![n],
             None => Vec::new(),
         };
-        let mut clones = self.clone_boxes(options, 1, names).await?;
+        let mut clones = self.clone_boxes(options, 1, names, policy).await?;
         Ok(clones.remove(0))
     }
 
@@ -60,6 +138,7 @@ impl BoxImpl {
         _options: crate::runtime::options::CloneOptions,
         count: usize,
         names: Vec<String>,
+        policy: CopyPolicy<'_>,
     ) -> BoxliteResult<Vec<crate::LiteBox>> {
         if count == 0 {
             return Ok(Vec::new());
@@ -75,7 +154,11 @@ impl BoxImpl {
 
         let t0 = Instant::now();
         self.with_disk_admission(async {
-            self.copy_source_state()?;
+            let (_, portable) = self.copy_source_state(policy)?;
+            let snapshot = match portable {
+                Some(policy) => Some(policy.prepare_local().await?),
+                None => None,
+            };
             let rt = Arc::clone(&self.runtime);
             let src_disks = self.config.box_home.join("disks");
             let src_container = src_disks.join(disk_filenames::CONTAINER_DISK);
@@ -141,11 +224,18 @@ impl BoxImpl {
             // Each clone's disk is a copy of this one, so it runs the same build.
             // Read before the loop: the guard must not be held across an await.
             let resolved_image = self.state.read().resolved_image.clone();
-            let copy_options = self.options_for_copy()?;
+            let copy_options = self.options_for_copy(snapshot.is_some())?;
             let mut clones = Vec::with_capacity(count);
             for (i, staging) in staging_dirs.into_iter().enumerate() {
                 // Keep the TempDir alive until provisioning moves it to the final box home.
                 // On failure, it and all remaining staging dirs are cleaned up on drop.
+                let outbound = snapshot.clone().map(|mut committed| {
+                    committed.revision = crate::net::OutboundRevision::fresh();
+                    CompleteOutboundControl {
+                        committed,
+                        pending: None,
+                    }
+                });
                 let litebox = rt
                     .provision_box(
                         staging.path().to_path_buf(),
@@ -153,22 +243,12 @@ impl BoxImpl {
                         copy_options.clone(),
                         BoxStatus::Stopped,
                         resolved_image.clone(),
+                        ProvisionedResources {
+                            outbound,
+                            base_disk: Some(&layer.id),
+                        },
                     )
                     .await?;
-
-                // Record that this clone depends on the shared base disk.
-                if let Err(e) = rt
-                    .base_disk_mgr
-                    .store()
-                    .add_ref(&layer.id, litebox.id().as_ref())
-                {
-                    tracing::warn!(
-                        clone_id = %litebox.id(),
-                        base_disk_id = %layer.id,
-                        error = %e,
-                        "Failed to record base disk ref for clone"
-                    );
-                }
 
                 clones.push(litebox);
             }
@@ -190,10 +270,11 @@ impl BoxImpl {
         &self,
         _options: crate::runtime::options::ExportOptions,
         dest: &std::path::Path,
+        policy: CopyPolicy<'_>,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         let t0 = Instant::now();
         let admission = Arc::new(self.acquire_disk_admission().await?);
-        self.copy_source_state()?;
+        let (_, outbound) = self.copy_source_state(policy)?;
         let box_home = self.config.box_home.clone();
         let runtime_layout = self.runtime.layout.clone();
 
@@ -215,7 +296,10 @@ impl BoxImpl {
 
         // Checksum, manifest, and archive run with the VM resumed.
         let config_name = self.config.name.clone();
-        let config_options = self.options_for_copy()?;
+        let mut config_options = self.options_for_copy(outbound.is_some())?;
+        if let CopyPolicy::Managed(capture) = policy {
+            config_options.rootfs = RootfsSpec::Image(capture.pinned_image.clone());
+        }
         let box_id_str = self.id().to_string();
         let dest = dest.to_path_buf();
 
@@ -225,6 +309,7 @@ impl BoxImpl {
                 flatten_result,
                 config_name.as_deref(),
                 &config_options,
+                outbound,
                 &box_id_str,
                 &dest,
             )
@@ -291,11 +376,13 @@ fn do_export_finalize(
     flatten: FlattenResult,
     config_name: Option<&str>,
     config_options: &crate::runtime::options::BoxOptions,
+    outbound_policy: Option<PortableOutboundPolicy>,
     box_id_str: &str,
     dest: &std::path::Path,
 ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
     use super::archive::{
-        ArchiveManifest, MANIFEST_FILENAME, archive_version_for_options, build_zstd_tar_archive,
+        ArchiveManifest, ArchiveManifestWithPolicy, MANIFEST_FILENAME,
+        OUTBOUND_POLICY_ARCHIVE_VERSION, archive_version_for_options, build_zstd_tar_archive,
         sha256_file,
     };
 
@@ -321,7 +408,11 @@ fn do_export_finalize(
     };
 
     let manifest = ArchiveManifest {
-        version: archive_version_for_options(config_options),
+        version: if outbound_policy.is_some() {
+            OUTBOUND_POLICY_ARCHIVE_VERSION
+        } else {
+            archive_version_for_options(config_options)
+        },
         box_name: config_name.map(|s| s.to_string()),
         image,
         box_options: Some(config_options.clone()),
@@ -330,8 +421,11 @@ fn do_export_finalize(
         exported_at: chrono::Utc::now().to_rfc3339(),
     };
 
-    let manifest_json = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| BoxliteError::Internal(format!("Failed to serialize manifest: {}", e)))?;
+    let manifest_json = serde_json::to_string_pretty(&ArchiveManifestWithPolicy {
+        manifest: &manifest,
+        outbound_policy: outbound_policy.as_ref(),
+    })
+    .map_err(|e| BoxliteError::Internal(format!("Failed to serialize manifest: {}", e)))?;
     let manifest_path = flatten.temp_dir.path().join(MANIFEST_FILENAME);
     std::fs::write(&manifest_path, manifest_json)?;
 

@@ -75,6 +75,34 @@ Probe destinations can be overridden with `BOXLITE_E2E_EGRESS_ALLOWED_URL`,
 wildcard target must use HTTPS and a subdomain, and the IP target must use an IPv4 literal.
 Use controlled endpoints when available. An unavailable control fails the run.
 
+## GCP complete outbound acceptance
+
+Run on an isolated [qualified GCP pool](../infra/docs/gcp/runners.md#qualify-managed-checkpoint-capture-and-restore)
+with managed checkpoint storage enabled. Set `BOXLITE_E2E_GCP_ALLOWED_URL` and
+`BOXLITE_E2E_GCP_DENIED_URL` to two owned HTTP(S) listeners with explicit ports.
+Use a digest-pinned guest image with Python 3 for these probes.
+
+```bash
+BOXLITE_E2E_GCP_COMPLETE_OUTBOUND=1 make test:rest:e2e AUTH=api-key FILTER=complete_outbound_checkpoint
+```
+
+The checkpoint case verifies both 64-rule lists and a rejected 65th rule,
+overlapping allow and deny rules, stop/start and restore after source removal.
+It compares the API, Runtime and applied readbacks at the committed revision
+and uses the same owned listeners as unrestricted controls.
+
+| Additional stage check | Required observation |
+| --- | --- |
+| IPv4 endpoints and ports | Allowed TCP and UDP reach owned listeners; neighboring ports and protected owned peers receive no traffic. |
+| Native IPv6 | Guest has the expected address and route. Compare allowed and denied TCP and UDP over literal, AAAA, dual-stack and prefix rules. |
+| Reattachment | Reattach a running Box and compare the applied revision and owned peer observations with the pre-reattachment result. |
+| Disconnected checkpoint writer | An expired writer retains its hold until exact instance and work-disk retirement proofs and any required object deletion are verified. |
+| Joint proxy coverage | Repeat the owned-peer cases through CONNECT and SOCKS5 when the BUI-451 proxy path is available. Record unavailable paths. |
+
+Record the API, Runner, Runtime, shim and SDK versions, GCP region, capabilities,
+sanitized commands and owned-listener observations. A missing positive control,
+usable IPv6 pool, or required result leaves the stage acceptance incomplete.
+
 ## Optional prerequisites and outstanding acceptance
 
 For the real browser lane, configure an HTTPS preview endpoint and Chromium:

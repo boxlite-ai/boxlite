@@ -4,6 +4,7 @@
 import { Check, Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDateColumn } from 'typeorm'
 import { Box } from './box.entity'
 import { BoxState } from '../enums/box-state.enum'
+import type { CompleteOutboundSnapshot } from '../runner-adapter/outbound-control'
 
 export type CheckpointState = 'creating' | 'ready' | 'failed' | 'deleting'
 export type CheckpointEnvironment = Pick<
@@ -62,6 +63,7 @@ export class Checkpoint {
   @Column({ type: 'uuid', nullable: true }) activeJobId: string | null
   @Column('jsonb') environment: CheckpointEnvironment
   @Column({ type: 'jsonb', nullable: true }) archive: CheckpointArchive | null
+  @Column({ type: 'jsonb', nullable: true }) captureOutbound: CompleteOutboundSnapshot | null
   @Column({ type: 'text', nullable: true }) errorReason: string | null
   @CreateDateColumn({ type: 'timestamptz' }) createdAt: Date
   @UpdateDateColumn({ type: 'timestamptz' }) updatedAt: Date

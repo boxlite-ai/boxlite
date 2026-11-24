@@ -230,6 +230,14 @@ impl BaseDiskStore {
     /// Idempotent: INSERT OR IGNORE on the composite primary key.
     pub(crate) fn add_ref(&self, base_disk_id: &BaseDiskID, box_id: &str) -> BoxliteResult<()> {
         let conn = self.db.conn();
+        Self::add_ref_on(&conn, base_disk_id, box_id)
+    }
+
+    pub(super) fn add_ref_on(
+        conn: &rusqlite::Connection,
+        base_disk_id: &BaseDiskID,
+        box_id: &str,
+    ) -> BoxliteResult<()> {
         db_err!(conn.execute(
             "INSERT OR IGNORE INTO base_disk_ref (base_disk_id, box_id) VALUES (?1, ?2)",
             rusqlite::params![base_disk_id, box_id],

@@ -86,7 +86,7 @@ func TestCheckpointClientLifecycleRefusesCorruptJournalAndCancelledAdmission(t *
 }
 
 func TestCheckpointClientOrdinaryImportUsesNativePresenceAndCachesSuccess(t *testing.T) {
-	for _, scenario := range []string{"success", "already-present", "lookup-error", "import-error"} {
+	for _, scenario := range []string{"success", "already-present", "already-present-protected", "already-present-v7", "lookup-error", "import-error"} {
 		t.Run(scenario, func(t *testing.T) {
 			imports := 0
 			client := checkpointRESTClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +96,7 @@ func TestCheckpointClientOrdinaryImportUsesNativePresenceAndCachesSuccess(t *tes
 					return
 				}
 				if r.Method == http.MethodGet {
-					if scenario == "already-present" {
+					if strings.HasPrefix(scenario, "already-present") {
 						_, _ = io.WriteString(w, checkpointWireBox("existing", "target", "stopped", "alpine:latest"))
 					} else if scenario == "lookup-error" {
 						w.WriteHeader(http.StatusConflict)
@@ -119,11 +119,29 @@ func TestCheckpointClientOrdinaryImportUsesNativePresenceAndCachesSuccess(t *tes
 				_, _ = io.WriteString(w, checkpointWireBox("accepted", "target", "stopped", "alpine:latest"))
 			})
 			archive := filepath.Join(t.TempDir(), "source.boxlite")
-			if err := os.WriteFile(archive, []byte("archive bytes"), 0600); err != nil {
+			var content bytes.Buffer
+			writer := tar.NewWriter(&content)
+			manifest := []byte(`{"version":3,"image":"alpine:latest","exported_at":"2026-11-24","guest_disk_checksum":"","container_disk_checksum":""}`)
+			switch scenario {
+			case "already-present-protected":
+				manifest = []byte(`{"version":3,"image":"alpine:latest","exported_at":"2026-11-24","guest_disk_checksum":"","container_disk_checksum":"","box_options":{"network":{"Enabled":{"deny_net":[]}}}}`)
+			case "already-present-v7":
+				manifest = []byte(`{"version":7,"image":"alpine:latest","exported_at":"2026-11-24","guest_disk_checksum":"","container_disk_checksum":"sha256:test","box_options":{},"outbound_policy":{"policy":{"mode":"enabled","allow_net":[],"deny_net":[]},"admission":"extended_ipv4"}}`)
+			}
+			if err := writer.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0600, Size: int64(len(manifest))}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writer.Write(manifest); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(archive, content.Bytes(), 0600); err != nil {
 				t.Fatal(err)
 			}
 			err := client.ImportBox(t.Context(), "target", archive)
-			if scenario == "lookup-error" || scenario == "import-error" {
+			if scenario == "lookup-error" || scenario == "import-error" || strings.HasPrefix(scenario, "already-present-") {
 				if err == nil || client.boxes["target"] != nil {
 					t.Fatalf("failed import cached a box: %v", err)
 				}
@@ -134,7 +152,7 @@ func TestCheckpointClientOrdinaryImportUsesNativePresenceAndCachesSuccess(t *tes
 				t.Fatal("accepted native handle was not cached")
 			}
 			wantImports := 1
-			if scenario == "already-present" || scenario == "lookup-error" {
+			if strings.HasPrefix(scenario, "already-present") || scenario == "lookup-error" {
 				wantImports = 0
 			}
 			if imports != wantImports {

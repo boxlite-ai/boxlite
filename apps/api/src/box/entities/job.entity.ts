@@ -22,6 +22,8 @@ import { v4 } from 'uuid'
 @Index(['runnerId', 'status'])
 @Index(['status', 'createdAt'])
 @Index(['resourceType', 'resourceId'])
+@Index('idx_job_protected_checkpoint_claim', { synchronize: false })
+@Index('idx_job_protected_checkpoint_reconcile', { synchronize: false })
 @Index('IDX_UNIQUE_INCOMPLETE_JOB', ['resourceType', 'resourceId', 'runnerId'], {
   unique: true,
   where: `"completedAt" IS NULL`,
@@ -82,6 +84,9 @@ export class Job {
 
   @Column({ type: 'boolean', default: false, select: false })
   completeOutboundReconciling: boolean
+
+  @Column({ type: 'boolean', default: false })
+  checkpointCleanupRequired: boolean
 
   @Column({
     nullable: true,

@@ -1629,6 +1629,8 @@ pub(crate) fn normalize_legacy_ports(ports: &mut Vec<PortSpec>) -> usize {
 pub(crate) enum ArchiveImportPolicy {
     Trusted,
     UntrustedRemote,
+    LegacyOnly,
+    Managed,
 }
 
 /// A portable box archive (`.boxlite` file).
@@ -1639,6 +1641,7 @@ pub(crate) enum ArchiveImportPolicy {
 pub struct BoxArchive {
     path: PathBuf,
     import_policy: ArchiveImportPolicy,
+    managed: Option<crate::ManagedCheckpointImport>,
 }
 
 impl BoxArchive {
@@ -1651,6 +1654,7 @@ impl BoxArchive {
         Self {
             path: path.into(),
             import_policy: ArchiveImportPolicy::Trusted,
+            managed: None,
         }
     }
 
@@ -1665,6 +1669,30 @@ impl BoxArchive {
         Self {
             path: path.into(),
             import_policy: ArchiveImportPolicy::UntrustedRemote,
+            managed: None,
+        }
+    }
+
+    /// Import through an internal transport using the legacy archive contract.
+    #[doc(hidden)]
+    pub fn from_legacy_transport(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            import_policy: ArchiveImportPolicy::LegacyOnly,
+            managed: None,
+        }
+    }
+
+    /// Import a managed checkpoint with a control-plane-owned target policy.
+    #[doc(hidden)]
+    pub fn from_managed_checkpoint(
+        path: impl Into<PathBuf>,
+        managed: crate::ManagedCheckpointImport,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            import_policy: ArchiveImportPolicy::Managed,
+            managed: Some(managed),
         }
     }
 
@@ -1673,8 +1701,18 @@ impl BoxArchive {
         &self.path
     }
 
+    /// Check archive metadata for legacy migration replay without provisioning a Box.
+    #[doc(hidden)]
+    pub fn validate_legacy_manifest(&self) -> BoxliteResult<()> {
+        super::import::validate_legacy_archive_manifest(&self.path)
+    }
+
     pub(crate) fn import_policy(&self) -> ArchiveImportPolicy {
         self.import_policy
+    }
+
+    pub(crate) fn managed_checkpoint(&self) -> Option<&crate::ManagedCheckpointImport> {
+        self.managed.as_ref()
     }
 }
 

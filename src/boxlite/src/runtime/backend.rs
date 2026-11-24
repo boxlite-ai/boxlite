@@ -117,6 +117,13 @@ pub(crate) trait RuntimeBackend: Send + Sync {
     fn shutdown_sync(&self) {}
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum CopyPolicy<'a> {
+    Local,
+    LegacyOnly,
+    Managed(&'a crate::ManagedCheckpointExport),
+}
+
 /// Backend abstraction for individual box operations.
 ///
 /// Local backend is implemented directly by `BoxImpl`.
@@ -196,6 +203,7 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
         &self,
         options: CloneOptions,
         name: Option<String>,
+        policy: CopyPolicy<'_>,
     ) -> BoxliteResult<LiteBox>;
 
     async fn clone_boxes(
@@ -205,7 +213,12 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
         names: Vec<String>,
     ) -> BoxliteResult<Vec<LiteBox>>;
 
-    async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
+    async fn export_box(
+        &self,
+        options: ExportOptions,
+        dest: &Path,
+        policy: CopyPolicy<'_>,
+    ) -> BoxliteResult<BoxArchive>;
 
     /// Replace the guest's SSH configuration (see [`crate::litebox::SshHandle`]).
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>;

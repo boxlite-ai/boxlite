@@ -16,6 +16,59 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type checkpointCleanupStore struct{ transferStore }
+
+func (s *checkpointCleanupStore) Remove(_ context.Context, key string) error {
+	delete(s.uploaded, key)
+	return nil
+}
+
+func TestCheckpointProtectedCleanupFencesDelayedUpload(t *testing.T) {
+	for _, published := range []bool{false, true} {
+		name := "rejected"
+		if published {
+			name = "published"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			artifacts := Artifacts{Root: t.TempDir()}
+			record := mustExport(t, artifacts, reference(), captureBytes("checkpoint image"))
+			store := &checkpointCleanupStore{}
+			authorize := func(context.Context) error { return nil }
+			if _, err := artifacts.UploadAuthorized(ctx, record, store, authorize); err != nil {
+				t.Fatal(err)
+			}
+			directory := filepath.Join(artifacts.Root, record.CheckpointID, record.ExportJobID)
+			clean := func() error { return artifacts.AcknowledgeAuthorized(ctx, record, authorize) }
+			staging := filepath.Join(directory, ".export-interrupted")
+			if !published {
+				if err := os.Mkdir(staging, 0700); err != nil {
+					t.Fatal(err)
+				}
+				clean = func() error { return artifacts.CleanRejected(ctx, record.Reference, store, authorize) }
+			}
+			for range 2 {
+				if err := clean(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, path := range []string{filepath.Join(directory, "archive.boxlite"), staging} {
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("cleanup left %s: %v", path, err)
+				}
+			}
+			restarted := Artifacts{Root: artifacts.Root}
+			if _, err := restarted.UploadAuthorized(ctx, record, store, authorize); err == nil {
+				t.Fatal("delayed upload succeeded after terminal cleanup")
+			}
+			bytes, exists := store.uploaded[record.ArcPath]
+			if exists != published || (published && string(bytes) != "checkpoint image") {
+				t.Fatalf("wrong object state after cleanup: exists=%v, bytes=%q", exists, bytes)
+			}
+		})
+	}
+}
+
 func TestCheckpointArtifactCancelledWaiterPreservesCaptureOwnership(t *testing.T) {
 	artifacts, ref := Artifacts{Root: t.TempDir()}, reference()
 	started, release := make(chan struct{}), make(chan struct{}, 1)

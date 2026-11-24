@@ -8,10 +8,44 @@ import "C"
 
 import (
 	"context"
+	"encoding/json"
 	"runtime/cgo"
 	"strings"
 	"unsafe"
 )
+
+// CheckpointExportPolicy identifies the finalized snapshot and image of a managed capture.
+type CheckpointExportPolicy struct {
+	Snapshot    json.RawMessage `json:"snapshot"`
+	PinnedImage string          `json:"pinned_image"`
+}
+
+// CheckpointImportPolicy identifies the prepared snapshot and platform environment of a restore.
+type CheckpointImportPolicy struct {
+	CheckpointExportPolicy
+	PlatformEnv map[string]string `json:"platform_env"`
+}
+
+// ValidateLegacyArchive checks archive metadata without installing a Box.
+func ValidateLegacyArchive(path string) error {
+	if err := validateArchiveArgument(path, "archive path", false); err != nil {
+		return err
+	}
+	cPath := toCString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	var cError C.CBoxliteError
+	if C.boxlite_archive_validate_legacy(cPath, &cError) != C.Ok {
+		return freeError(&cError)
+	}
+	return nil
+}
+
+func managedArchiveTransport[T any](policy T) (string, error) {
+	encoded, err := json.Marshal(struct {
+		Managed T `json:"managed"`
+	}{Managed: policy})
+	return string(encoded), err
+}
 
 func validateArchiveArgument(value, parameter string, allowEmpty bool) error {
 	if value == "" && !allowEmpty {
@@ -59,6 +93,24 @@ func abandonOwnedResult[T any](result <-chan handleResult[T], handle cgo.Handle,
 // Export never deletes the archive. The caller owns the returned file and is
 // responsible for retaining, moving, or deleting it.
 func (b *Box) Export(ctx context.Context, dest string) (string, error) {
+	return b.exportArchive(ctx, dest, "")
+}
+
+// ExportLegacy exports an archive for a legacy managed transport.
+func (b *Box) ExportLegacy(ctx context.Context, dest string) (string, error) {
+	return b.exportArchive(ctx, dest, `"legacy_only"`)
+}
+
+// ExportManagedCheckpoint exports a finalized managed policy and image with the disk.
+func (b *Box) ExportManagedCheckpoint(ctx context.Context, dest string, policy CheckpointExportPolicy) (string, error) {
+	transport, err := managedArchiveTransport(policy)
+	if err != nil {
+		return "", err
+	}
+	return b.exportArchive(ctx, dest, transport)
+}
+
+func (b *Box) exportArchive(ctx context.Context, dest, transport string) (string, error) {
 	if err := validateArchiveArgument(dest, "export destination", false); err != nil {
 		return "", err
 	}
@@ -84,13 +136,14 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 	handle := registerHandleForDispatch(cgo.NewHandle(result))
 
 	var cError C.CBoxliteError
-	code := C.boxlite_box_export(
-		boxHandle,
-		cDest,
-		C.cbBoxExport(),
-		handleToPtr(handle),
-		&cError,
-	)
+	var code C.enum_BoxliteErrorCode
+	if transport == "" {
+		code = C.boxlite_box_export(boxHandle, cDest, C.cbBoxExport(), handleToPtr(handle), &cError)
+	} else {
+		cTransport := toCString(transport)
+		defer C.free(unsafe.Pointer(cTransport))
+		code = C.boxlite_box_export_controlled(boxHandle, cDest, cTransport, C.cbBoxExport(), handleToPtr(handle), &cError)
+	}
 	unlock()
 	if code != C.Ok {
 		deleteHandleForDispatch(handle)
@@ -130,6 +183,24 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 // Import never consumes or deletes archivePath. The caller owns the archive
 // and is responsible for retaining, moving, or deleting it.
 func (r *Runtime) Import(ctx context.Context, archivePath, name string) (*Box, error) {
+	return r.importArchive(ctx, archivePath, name, "")
+}
+
+// ImportLegacy imports through a legacy managed transport.
+func (r *Runtime) ImportLegacy(ctx context.Context, archivePath, name string) (*Box, error) {
+	return r.importArchive(ctx, archivePath, name, `"legacy_only"`)
+}
+
+// ImportManagedCheckpoint validates a managed archive and persists its prepared target policy.
+func (r *Runtime) ImportManagedCheckpoint(ctx context.Context, archivePath, name string, policy CheckpointImportPolicy) (*Box, error) {
+	transport, err := managedArchiveTransport(policy)
+	if err != nil {
+		return nil, err
+	}
+	return r.importArchive(ctx, archivePath, name, transport)
+}
+
+func (r *Runtime) importArchive(ctx context.Context, archivePath, name, transport string) (*Box, error) {
 	if err := validateArchiveArgument(archivePath, "archive path", false); err != nil {
 		return nil, err
 	}
@@ -156,14 +227,14 @@ func (r *Runtime) Import(ctx context.Context, archivePath, name string) (*Box, e
 	}
 
 	var cError C.CBoxliteError
-	code := C.boxlite_runtime_import(
-		r.handle,
-		cArchivePath,
-		cName,
-		C.cbRuntimeImport(),
-		handleToPtr(handle),
-		&cError,
-	)
+	var code C.enum_BoxliteErrorCode
+	if transport == "" {
+		code = C.boxlite_runtime_import(r.handle, cArchivePath, cName, C.cbRuntimeImport(), handleToPtr(handle), &cError)
+	} else {
+		cTransport := toCString(transport)
+		defer C.free(unsafe.Pointer(cTransport))
+		code = C.boxlite_runtime_import_controlled(r.handle, cArchivePath, cName, cTransport, C.cbRuntimeImport(), handleToPtr(handle), &cError)
+	}
 	if code != C.Ok {
 		deleteHandleForDispatch(handle)
 		return nil, freeError(&cError)

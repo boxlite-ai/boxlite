@@ -936,8 +936,38 @@ Admission starts closed and requires a compatible serving cohort before protecte
 
 #### Checkpoints and drain migration
 
-Cloud refuses checkpoint capture for a protected Box under its source-row lock, including when both rule lists are empty.
-Drain migration selects legacy Boxes, and its exporter and importer recheck protection under the Box lock before enqueuing work.
+Capture locks the stopped source and binds its committed policy to the disk.
+Restore creates a new Box in the checkpoint region after qualifying a Runner.
+The [coordination schema](platform/schema.md#protected-checkpoint-coordination) records the lease and cleanup hold.
+
+```mermaid
+sequenceDiagram
+    participant A as Cloud API
+    participant R as Enrolled Runner
+    participant N as Runtime
+    participant S as Archive storage
+    A->>A: Reserve stopped source and policy
+    R->>A: Claim and authorize export under artifact lock
+    R->>N: Verify source policy and export v7 archive
+    R-->>A: Report committed archive identity
+    R->>A: Claim and authorize upload
+    R->>S: Upload archive
+    R-->>A: Confirm upload for ready checkpoint
+    A->>R: Prepare target revision and required forwarding
+    A->>A: Reserve the qualified target
+    R->>A: Claim and authorize restore under target lock
+    R->>S: Download the recorded archive
+    R->>N: Import and verify persisted target policy
+    R-->>A: Confirm stopped target and exact revision
+    A->>A: Commit policy and release target to startup
+    opt Failure or lease expiry
+        A->>A: Mark job terminal and retain cleanup hold
+        R->>R: Fence writers under the same lock and dispose of output
+        R-->>A: Acknowledge cleanup
+    end
+```
+
+Drain migration checks legacy policy under the source lock and validates the legacy archive before acknowledging an existing target.
 
 #### Hosted replacement and rebuild
 

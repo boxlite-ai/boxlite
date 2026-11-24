@@ -172,6 +172,33 @@ An unexpected inventory swap or changed applied topology retires the live
 epoch. Restart a drained IPv4 Box only after the current inventory and host
 guard provide a fresh startup proof.
 
+### Qualify managed checkpoint capture and restore
+
+Enable checkpoint storage and enroll qualified v2 Runners at the active release
+floor. Record the GCP project, zone, numeric instance ID and work-disk IDs in
+`protected_checkpoint_identity`.
+
+Close admission before rollback and keep the floor until archives and cleanup
+holds drain. The API cancels unclaimed imports and lets bound claims finish.
+
+For a permanently unavailable Runner, record completed instance and disk
+deletions in `protected_checkpoint_retirement`. Retirement and lease revocation
+are ordered with checkpoint work, and the API rechecks lease expiry before
+publishing a receipt. The API matches each deletion to the enrollment and
+verifies object removal for failed captures and uploads.
+
+The API performs object deletion outside the release transaction and rechecks
+the retired writer and archive identity before clearing the hold.
+
+The API rotates eligible checkpoint work between Runner attempts. Failed cleanup
+continues to hold the affected artifact until disposal is confirmed.
+
+Storage attempts have up to 30 minutes for copy work and one minute for
+cleanup. Started native work holds its operation lock through completion.
+
+Record versions and live results from the isolated GCP pool before rollout.
+See the [acceptance matrix](../../../e2e/network-coverage.md#gcp-complete-outbound-acceptance).
+
 ## Verify and recover
 
 Inspect both assignments (only the first for a single-runner stage), including every binary and

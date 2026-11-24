@@ -246,7 +246,10 @@ export class CheckpointJobReceiver {
   }
 }
 
-function validateArchive(value: Record<string, unknown> | null, checkpoint: Checkpoint): CheckpointArchive | null {
+export function validateArchive(
+  value: Record<string, unknown> | null,
+  checkpoint: Checkpoint,
+): CheckpointArchive | null {
   if (
     !checkpoint.exportJobId ||
     !value ||

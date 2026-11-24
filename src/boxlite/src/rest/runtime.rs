@@ -720,6 +720,11 @@ impl RuntimeBackend for RestRuntime {
         archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        if archive.managed_checkpoint().is_some() {
+            return Err(BoxliteError::Unsupported(
+                "managed checkpoint import requires a local Runtime".into(),
+            ));
+        }
         self.client.require_import_enabled().await?;
 
         let archive_bytes = std::fs::read(archive.path()).map_err(|e| {

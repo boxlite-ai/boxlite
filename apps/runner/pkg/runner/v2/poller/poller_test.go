@@ -26,6 +26,7 @@ func TestProtectedCreatesDrainWhileOrdinaryQueueIsBlocked(t *testing.T) {
 	var requests atomic.Int32
 	delivered := make(chan string, queued)
 	ordinary := make(chan struct{}, 1)
+	checkpointClaims := make(chan struct{}, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/jobs":
@@ -48,6 +49,16 @@ func TestProtectedCreatesDrainWhileOrdinaryQueueIsBlocked(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"request": request})
 			delivered <- request.Attempt.JobID
+		case "/api/jobs/protected-checkpoints/claim":
+			if r.Method != http.MethodPost || r.Header.Get("X-BoxLite-Complete-Lease") != lease {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"job": nil})
+			select {
+			case checkpointClaims <- struct{}{}:
+			default:
+			}
 		default:
 			t.Errorf("unexpected Runner API path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -93,6 +104,13 @@ func TestProtectedCreatesDrainWhileOrdinaryQueueIsBlocked(t *testing.T) {
 			}
 		case <-ctx.Done():
 			t.Fatalf("only %d protected jobs arrived while the ordinary queue was blocked", count-1)
+		}
+	}
+	for range 2 {
+		select {
+		case <-checkpointClaims:
+		case <-ctx.Done():
+			t.Fatal("the checkpoint queue stopped polling while the ordinary queue was blocked")
 		}
 	}
 }

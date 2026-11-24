@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, LessThan, In, Not, EntityManager } from 'typeorm'
 import { Job } from '../entities/job.entity'
 import { JobDto, JobStatus, JobType, ResourceType } from '../dto/job.dto'
+import { LEASE_BOUND_JOB_TYPES } from '../enums/job-type.enum'
 import { ResourceTypeForJobType } from '../dto/job-type-map.dto'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
@@ -77,7 +78,7 @@ export class JobService {
 
       // Notify runner via Redis - happens outside transaction
       // If transaction rolls back, notification is harmless (runner will poll and find nothing)
-      if (type !== JobType.CREATE_COMPLETE_OUTBOUND_BOX) await this.notifyRunner(runnerId, job.id)
+      if (!LEASE_BOUND_JOB_TYPES.includes(type)) await this.notifyRunner(runnerId, job.id)
 
       return job
     } catch (error) {
@@ -237,7 +238,7 @@ export class JobService {
       if (!job) {
         throw new NotFoundException(`Job with ID ${jobId} not found`)
       }
-      if (job.type === JobType.CREATE_COMPLETE_OUTBOUND_BOX) {
+      if (LEASE_BOUND_JOB_TYPES.includes(job.type)) {
         throw new ConflictException('Complete outbound jobs require a bound receipt')
       }
 
@@ -282,7 +283,7 @@ export class JobService {
       where: {
         runnerId,
         status: JobStatus.PENDING,
-        type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX),
+        type: Not(In(LEASE_BOUND_JOB_TYPES)),
       },
       order: {
         createdAt: 'ASC',
@@ -292,7 +293,7 @@ export class JobService {
   }
 
   async findJobsForRunner(runnerId: string, status?: JobStatus, page = 1, limit = 100): Promise<PaginatedList<JobDto>> {
-    const whereCondition = { runnerId, type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX), ...(status ? { status } : {}) }
+    const whereCondition = { runnerId, type: Not(In(LEASE_BOUND_JOB_TYPES)), ...(status ? { status } : {}) }
 
     const [jobs, total] = await this.jobRepository.findAndCount({
       where: whereCondition,
@@ -397,7 +398,7 @@ export class JobService {
       const staleJobs = await this.jobRepository.find({
         where: {
           status: JobStatus.IN_PROGRESS,
-          type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX),
+          type: Not(In(LEASE_BOUND_JOB_TYPES)),
           updatedAt: LessThan(threshold),
         },
         take: 500,
@@ -441,7 +442,7 @@ export class JobService {
       where: {
         runnerId,
         status: JobStatus.PENDING,
-        type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX),
+        type: Not(In(LEASE_BOUND_JOB_TYPES)),
       },
       order: {
         createdAt: 'ASC',
@@ -461,7 +462,7 @@ export class JobService {
       {
         id: In(jobs.map((job) => job.id)),
         status: JobStatus.PENDING,
-        type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX),
+        type: Not(In(LEASE_BOUND_JOB_TYPES)),
       },
       {
         status: JobStatus.IN_PROGRESS,

@@ -541,7 +541,10 @@ impl BoxImpl {
             .transpose()
     }
 
-    pub(super) fn has_hosted_outbound_owner(&self, protected: bool) -> BoxliteResult<bool> {
+    pub(in crate::litebox) fn has_hosted_outbound_owner(
+        &self,
+        protected: bool,
+    ) -> BoxliteResult<bool> {
         let Some(incarnation) = self.hosted_outbound_incarnation() else {
             return Ok(false);
         };

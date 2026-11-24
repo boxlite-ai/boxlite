@@ -9,6 +9,44 @@ import boxlite
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
+async def test_complete_outbound_copy_roundtrip(shared_runtime, tmp_path):
+    policy = {
+        "mode": "enabled",
+        "allow_net": ["api.example.test:443"],
+        "deny_net": ["blocked.example.test"],
+    }
+    source = await shared_runtime.create_with_outbound_policy(
+        boxlite.BoxOptions(image="alpine:latest", auto_delete=0),
+        {"mode": "enabled", "deny_net": []},
+    )
+    owned = [source.id]
+    try:
+        await source.start()
+        initial = (await source.network.outbound_policy_status())["persisted"]
+        capture = await source.network.replace_outbound_policy(
+            policy, initial["revision"]
+        )
+        await source.stop()
+        source = await shared_runtime.get(source.id)
+        clone = await source.clone_box()
+        owned.append(clone.id)
+        archive = await source.export(dest=str(tmp_path / "complete.boxlite"))
+        restored = await shared_runtime.import_box(archive)
+        owned.append(restored.id)
+        assert len(set(owned)) == 3
+        for child in (clone, restored):
+            persisted = (await child.network.outbound_policy_status())["persisted"]
+            assert persisted["policy"] == policy
+            assert persisted["revision"] != capture["acknowledged"]["revision"]
+            await child.start()
+            assert (await child.network.outbound_policy_status())["observed"][
+                "snapshot"
+            ] == persisted
+    finally:
+        for box_id in reversed(owned):
+            await shared_runtime.remove(box_id, force=True)
+
+
 async def test_network_policy_live_traffic_and_restart(shared_runtime):
     marker = "boxlite-policy-probe"
 

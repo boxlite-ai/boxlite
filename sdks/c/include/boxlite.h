@@ -1079,6 +1079,10 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
 
+// Validate archive metadata before an existing target satisfies legacy migration.
+enum BoxliteErrorCode boxlite_archive_validate_legacy(const char *archive_path,
+                                                      CBoxliteError *out_error);
+
 // Submit a box export.
 //
 // On success, the callback owns the returned path and must release it with
@@ -1088,6 +1092,14 @@ enum BoxliteErrorCode boxlite_box_export(CBoxHandle *handle,
                                          CBoxExportCb cb,
                                          void *user_data,
                                          CBoxliteError *out_error);
+
+// Submit an export with the archive transport selected by the local worker.
+enum BoxliteErrorCode boxlite_box_export_controlled(CBoxHandle *handle,
+                                                    const char *dest,
+                                                    const char *transport_json,
+                                                    CBoxExportCb cb,
+                                                    void *user_data,
+                                                    CBoxliteError *out_error);
 
 // Submit a trusted archive import.
 //
@@ -1100,6 +1112,15 @@ enum BoxliteErrorCode boxlite_runtime_import(CBoxliteRuntime *runtime,
                                              CRuntimeImportCb cb,
                                              void *user_data,
                                              CBoxliteError *out_error);
+
+// Submit a local worker import with a legacy or managed checkpoint contract.
+enum BoxliteErrorCode boxlite_runtime_import_controlled(CBoxliteRuntime *runtime,
+                                                        const char *archive_path,
+                                                        const char *name_or_null,
+                                                        const char *transport_json,
+                                                        CRuntimeImportCb cb,
+                                                        void *user_data,
+                                                        CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          CBoxliteOptions *opts,

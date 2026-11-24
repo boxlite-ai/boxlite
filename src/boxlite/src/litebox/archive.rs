@@ -3,6 +3,7 @@
 //! Handles `.boxlite` archive files: zstd-compressed tarballs containing
 //! disk images and a JSON manifest.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
@@ -37,8 +38,11 @@ pub(crate) const PUBLISHED_PORTS_ARCHIVE_VERSION: u32 = 5;
 /// Older importers must refuse fractional CPUs they cannot enforce.
 pub(crate) const FRACTIONAL_CPUS_ARCHIVE_VERSION: u32 = 6;
 
+/// Complete outbound policy is mandatory for readers of this format.
+pub(crate) const OUTBOUND_POLICY_ARCHIVE_VERSION: u32 = 7;
+
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = FRACTIONAL_CPUS_ARCHIVE_VERSION;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = OUTBOUND_POLICY_ARCHIVE_VERSION;
 
 /// Pick the archive format an exported box needs.
 ///
@@ -60,6 +64,112 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
     }
 }
 
+/// Outbound state that can be transferred independently of a Box identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PortableOutboundPolicy {
+    pub(crate) policy: crate::net::EffectiveOutboundPolicy,
+    pub(crate) admission: crate::net::OutboundAdmission,
+}
+
+/// Expected committed identity supplied by the checkpoint coordinator.
+#[doc(hidden)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedCheckpointExport {
+    pub snapshot: crate::net::CompleteOutboundSnapshot,
+    pub pinned_image: String,
+}
+
+/// Expected destination identity supplied by the checkpoint coordinator.
+#[doc(hidden)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedCheckpointImport {
+    pub snapshot: crate::net::CompleteOutboundSnapshot,
+    pub pinned_image: String,
+    pub platform_env: BTreeMap<String, String>,
+}
+
+pub(crate) fn checkpoint_image_pin(image: &str) -> BoxliteResult<oci_client::Reference> {
+    let reference: oci_client::Reference = image
+        .parse()
+        .map_err(|_| BoxliteError::InvalidArgument("invalid checkpoint image reference".into()))?;
+    if !reference.digest().is_some_and(|digest| {
+        digest.strip_prefix("sha256:").is_some_and(|hex| {
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+    }) {
+        return Err(BoxliteError::InvalidArgument(
+            "checkpoint requires a SHA-256 pinned image".into(),
+        ));
+    }
+    Ok(reference)
+}
+
+#[derive(Serialize)]
+pub(crate) struct ArchiveManifestWithPolicy<'a> {
+    #[serde(flatten)]
+    pub(crate) manifest: &'a ArchiveManifest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) outbound_policy: Option<&'a PortableOutboundPolicy>,
+}
+
+impl From<crate::net::CompleteOutboundSnapshot> for PortableOutboundPolicy {
+    fn from(snapshot: crate::net::CompleteOutboundSnapshot) -> Self {
+        Self {
+            policy: snapshot.policy,
+            admission: snapshot.admission,
+        }
+    }
+}
+
+impl PortableOutboundPolicy {
+    pub(crate) async fn prepare_local(
+        &self,
+    ) -> BoxliteResult<crate::net::CompleteOutboundSnapshot> {
+        use crate::net::{
+            CompleteOutboundSnapshot, Ipv6LinkPlan, OutboundAdmission, OutboundRevision,
+        };
+
+        if crate::net::gvproxy::CloudGuardRuntime::from_host()?.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "complete outbound policy copies on Cloud require managed checkpoint admission"
+                    .into(),
+            ));
+        }
+        let ipv6 = if self.admission == OutboundAdmission::ExtendedDualStack {
+            if std::env::var_os("BOXLITE_GUEST_DUAL_STACK").as_deref()
+                != Some(std::ffi::OsStr::new("1"))
+            {
+                return Err(BoxliteError::Unsupported(
+                    "this copy requires Guest IPv6 on the destination".into(),
+                ));
+            }
+            Some(Ipv6LinkPlan::local())
+        } else {
+            None
+        };
+        let snapshot = CompleteOutboundSnapshot {
+            policy: self.policy.clone(),
+            revision: OutboundRevision::fresh(),
+            admission: self.admission,
+            ipv6,
+        };
+        snapshot.validate_installed()?;
+        let requirements = snapshot.requirements();
+        if requirements != Default::default() {
+            crate::vmm::controller::probe_outbound_capabilities()
+                .await?
+                .require(requirements)?;
+        }
+        Ok(snapshot)
+    }
+}
+
 /// Archive manifest stored as `manifest.json` inside exported archives.
 ///
 /// v1: plain tar, no checksums
@@ -68,9 +178,10 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v4: `box_options.advanced` carries a custom capability policy
 /// v5: `ports` carry publication semantics (automatic host port, bind IP)
 /// v6: fractional `box_options.cpus` requires host CPU bandwidth enforcement
+/// v7: installs a mandatory complete outbound policy with a new Box
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1 through 6).
+    /// Archive format version.
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -151,7 +262,11 @@ const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Extract an archive, detecting format via magic bytes (zstd or plain tar).
 pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()> {
-    use std::io::Read;
+    unpack_file_members(open_archive_reader(archive_path)?, dest_dir)
+}
+
+pub(crate) fn open_archive_reader(archive_path: &Path) -> BoxliteResult<Box<dyn std::io::Read>> {
+    use std::io::{Read, Seek};
 
     let mut file = std::fs::File::open(archive_path).map_err(|e| {
         BoxliteError::Storage(format!(
@@ -169,23 +284,14 @@ pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteRe
             e
         ))
     })?;
-    drop(file);
-
-    // Re-open for extraction (tar/zstd need the file from the beginning).
-    let file = std::fs::File::open(archive_path).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to reopen archive {}: {}",
-            archive_path.display(),
-            e
-        ))
-    })?;
+    file.rewind()?;
 
     if magic == ZSTD_MAGIC {
         let decoder = zstd::Decoder::new(file)
             .map_err(|e| BoxliteError::Storage(format!("Failed to create zstd decoder: {}", e)))?;
-        unpack_file_members(decoder, dest_dir)
+        Ok(Box::new(decoder))
     } else {
-        unpack_file_members(file, dest_dir)
+        Ok(Box::new(file))
     }
 }
 
@@ -200,11 +306,17 @@ pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteRe
 /// The OCI layer extractor pairs the same two types for the same reason — see
 /// the `EntryType::Regular | EntryType::GNUSparse` arm in
 /// `images/archive/extractor.rs`.
-fn carries_file_contents(entry_type: tar::EntryType) -> bool {
+pub(crate) fn carries_file_contents(entry_type: tar::EntryType) -> bool {
     matches!(
         entry_type,
         tar::EntryType::Regular | tar::EntryType::Continuous | tar::EntryType::GNUSparse
     )
+}
+
+pub(crate) fn is_archive_manifest(path: &Path) -> bool {
+    path.components()
+        .filter(|component| *component != std::path::Component::CurDir)
+        .eq(Path::new(MANIFEST_FILENAME).components())
 }
 
 /// Unpack an archive, accepting only members that carry their own contents.
@@ -227,6 +339,7 @@ fn unpack_file_members<R: std::io::Read>(reader: R, dest_dir: &Path) -> BoxliteR
         .entries()
         .map_err(|e| BoxliteError::Storage(format!("Failed to read archive: {}", e)))?;
 
+    let mut manifest_seen = false;
     for entry in entries {
         let mut entry = entry
             .map_err(|e| BoxliteError::Storage(format!("Failed to read archive member: {}", e)))?;
@@ -241,6 +354,12 @@ fn unpack_file_members<R: std::io::Read>(reader: R, dest_dir: &Path) -> BoxliteR
                 "Invalid archive: member '{}' is {:?}, only files are allowed",
                 name, entry_type
             )));
+        }
+
+        if is_archive_manifest(&entry.path()?) && std::mem::replace(&mut manifest_seen, true) {
+            return Err(BoxliteError::Storage(
+                "Archive has multiple manifests".into(),
+            ));
         }
 
         entry
