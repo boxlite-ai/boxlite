@@ -2328,7 +2328,7 @@ components:
       name: volume_id
       in: path
       required: true
-      description: Server-assigned managed volume identifier
+      description: Server-assigned managed volume identifier. Local servers require the lower-case canonical UUID.
       schema:
         type: string
         minLength: 1
@@ -2864,6 +2864,14 @@ components:
               type: boolean
               description: Server honors `ExecRequest.user`.
               example: true
+            volume_read_only_enabled:
+              type: boolean
+              description: "Whether managed-volume mounts may set `read_only: true`."
+              example: true
+            typed_mounts_enabled:
+              type: boolean
+              description: Whether create-box accepts the typed `mounts` field.
+              example: true
             idempotency_key_lifetime:
               type: string
               description: How long idempotency keys are retained (ISO 8601 duration)
@@ -3347,6 +3355,15 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/VolumeSpec"
+        mounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/MountSpec"
+          description: |
+            Typed mounts for newer callers. `bind` identifies a path on the
+            server's filesystem and is rejected by `boxlite serve`; use a managed
+            volume for the REST security boundary. A request must not send
+            non-empty legacy `volumes` and typed `mounts` together.
         network:
           $ref: "#/components/schemas/NetworkSpec"
           description: |
@@ -3434,13 +3451,48 @@ components:
             Names are case-insensitive, may include the `CAP_` prefix, and may be `ALL`.
           example: [NET_RAW]
 
+    MountSpec:
+      type: object
+      description: |
+        Typed mount declaration. The mount type is explicit instead of inferred
+        from whether the source looks like a path.
+      additionalProperties: false
+      required: [type, source, target]
+      properties:
+        type:
+          type: string
+          enum: [volume, bind]
+          description: Whether `source` names a managed volume or a host path.
+        source:
+          type: string
+          minLength: 1
+          description: |
+            The volume id or name for `type=volume`; the host path for `type=bind`.
+            A REST server treats a bind source as its own filesystem and rejects it.
+        target:
+          type: string
+          pattern: "^/"
+          description: Absolute mount point inside the box.
+        read_only:
+          type: boolean
+          default: false
+          description: >
+            Mount without write access. Supported only when the server advertises
+            `volume_read_only_enabled`.
+        sub_path:
+          type: string
+          description: >
+            Relative subtree inside a `type=volume` source. It must already exist
+            and cannot traverse out through symlinks. Supported only when the
+            server advertises `typed_mounts_enabled`.
+
     VolumeSpec:
       type: object
       description: |
-        Managed volume mounted into a box. Host bind mounts have no
-        representation here: the path would name the server's filesystem, not
-        the caller's, so the only mount source this API accepts is a managed
-        volume.
+        Legacy managed-volume mount. New requests should use `mounts` with
+        `type=volume`; do not send non-empty `volumes` and `mounts` together.
+        Host bind mounts have no representation here because a REST path would
+        name the server's filesystem.
       additionalProperties: false
       required: [managed_volume, guest_path]
       properties:
@@ -3457,10 +3509,9 @@ components:
         read_only:
           type: boolean
           default: false
-          enum: [false]
-          description: |
-            Read-only managed mounts are not implemented yet; `true` is
-            rejected rather than silently downgraded to read-write.
+          description: >
+            Mount without write access. Supported only when the server advertises
+            `volume_read_only_enabled`.
 
     VolumeState:
       type: string
@@ -3485,6 +3536,18 @@ components:
           type: string
           format: date-time
           description: Volume creation timestamp (UTC)
+        updated_at:
+          type: string
+          format: date-time
+          description: >
+            Last update timestamp. Local directory volumes use the creation time.
+        size_bytes:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          description: >
+            Best-effort size. Local directory volumes report null rather than scan
+            the payload synchronously.
 
     CreateVolumeRequest:
       type: object
@@ -3529,6 +3592,13 @@ components:
         error_reason:
           type: string
           description: Failure detail when state is "error"
+        size_bytes:
+          type: [integer, "null"]
+          format: int64
+          minimum: 0
+          description: >
+            Best-effort size. Local directory volumes report null rather than scan
+            the payload synchronously.
 
     ListVolumesResponse:
       type: object

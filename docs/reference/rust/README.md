@@ -980,7 +980,7 @@ The two origins are not interchangeable across runtimes:
 
 | Origin | Local runtime | REST runtime |
 | --- | --- | --- |
-| `VolumeSpec::managed_volume` | rejected — no volume backend | mounted |
+| `VolumeSpec::managed_volume` | mounted | mounted |
 | `VolumeSpec::bind_mount` | mounted | rejected — the path is the server's, not yours |
 
 ### MountSpec
@@ -1018,19 +1018,21 @@ let prefix = MountSpec {
 let bind = MountSpec::bind_mount("/tmp/data", "/data");
 ```
 
-`MountType` parses from and displays as `"volume"` and `"bind"` exactly. Only
-the Rust `BoxOptions` carries a `MountSpec`; no CLI flag, other SDK or REST
-request does yet.
+`MountType` parses from and displays as `"volume"` and `"bind"` exactly. The CLI
+and REST create-box request carry a typed volume `mount`; other SDKs are phased
+in separately.
 `MountSpec::validate` refuses a relative `target`, a missing `source`,
 `sub_path` on a `Bind`, and an empty `sub_path`; create runs it for every mount.
 A runtime refuses the mounts it does not take rather than dropping them; use
 `volumes` where it takes none:
 
-- REST runtimes take no typed mounts yet.
-
-- The local runtime takes no typed mounts yet.
-
 - Importing an archive that carries mounts is not supported yet.
+
+Named REST `get_or_create` preserves name-based reuse for legacy read-write `volumes`; it does not
+verify the requested mount configuration against the existing box. Typed `mounts` and read-only
+mounts require verifiable mount metadata, so the current box response rejects their reuse. Use a
+different name or recreate the box for those requests. Creation and reuse without mounts are
+unaffected.
 
 ### NetworkSpec
 
