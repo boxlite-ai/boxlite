@@ -20,7 +20,8 @@ import { AnalyticsService } from './analytics/services/analytics.service'
 import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.interface'
 import { TypedConfigService } from './config/typed-config.service'
 import { FailedAuthTrackerService } from './auth/failed-auth-tracker.service'
-import { DataSource, MigrationExecutor } from 'typeorm'
+import { DataSource } from 'typeorm'
+import type { MigrationDataSource } from './migrations/migration-data-source'
 import { getOpenApiConfig } from './openapi.config'
 import { AuditInterceptor } from './audit/interceptors/audit.interceptor'
 import { extname, join } from 'node:path'
@@ -111,16 +112,15 @@ async function bootstrap() {
   // Runtime flags for migrations for run and revert migrations
   if (process.argv.length > 2) {
     if (process.argv[2].startsWith('--migration-')) {
-      const dataSource = app.get(DataSource)
+      const dataSource = app.get<MigrationDataSource>(DataSource)
       dataSource.setOptions({ logging: true })
-      const migrationExecutor = new MigrationExecutor(dataSource)
 
       switch (process.argv[2]) {
         case '--migration-run':
-          await migrationExecutor.executePendingMigrations()
+          await dataSource.runBundledMigrations()
           break
         case '--migration-revert':
-          await migrationExecutor.undoLastMigration()
+          await dataSource.undoLastMigration({ transaction: 'all' })
           break
         default:
           Logger.error('Invalid migration flag')

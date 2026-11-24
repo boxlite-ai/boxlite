@@ -886,6 +886,16 @@ organization and host. `registry_credential_prefix_shape` holds a prefix to
 whole path segments, `''` or ending in `/`, so `acme/` cannot match
 `acme-other/app`.
 
+### `outbound_proxy_reference`
+
+The composite foreign key on `(organization_id, box_id)` points to
+`box ("organizationId", id)` and restricts a proxy reference to its Box's organization.
+The immediate unique index `box_organization_id_proxy_idx` supports that key.
+
+The [Registry index repair](../../../../apps/api/src/migrations/pre-deploy/1795000000500-repair-box-organization-proxy-index-migration.ts)
+restores missing or invalid matching indexes even when the original migration is recorded.
+See [migration and rollback behavior](../../../../apps/api/src/migrations/README.md#reverting-migrations).
+
 ### `job`
 
 A unit of work handed to exactly one runner. Optimistic-locked through

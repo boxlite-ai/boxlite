@@ -58,7 +58,21 @@ export class AddOutboundProxyRegistry1795000001000 implements MigrationInterface
   }
 
   async down(runner: QueryRunner): Promise<void> {
+    if (!runner.isTransactionActive) throw new Error('Revert the outbound proxy Registry in a transaction')
     await runner.query(`
+      LOCK TABLE outbound_proxy_reference, outbound_proxy_revision, outbound_proxy_registration,
+        outbound_proxy_key_selector, outbound_proxy_key IN ACCESS EXCLUSIVE MODE;
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM outbound_proxy_reference)
+          OR EXISTS (SELECT 1 FROM outbound_proxy_revision)
+          OR EXISTS (SELECT 1 FROM outbound_proxy_registration)
+          OR EXISTS (SELECT 1 FROM outbound_proxy_key_selector WHERE key_id IS NOT NULL)
+          OR EXISTS (SELECT 1 FROM outbound_proxy_key)
+        THEN
+          RAISE EXCEPTION 'Cannot revert a populated outbound proxy Registry' USING ERRCODE = '55000';
+        END IF;
+      END $$;
       DROP TABLE outbound_proxy_reference;
       ALTER TABLE outbound_proxy_registration DROP CONSTRAINT outbound_proxy_current_fk;
       DROP TABLE outbound_proxy_revision;
