@@ -37,19 +37,23 @@ fn prepare_kvm(
     let prepared = KvmVm::prepare()?;
     let caps = X86MemoryCaps::from_cpuid(prepared.supported_cpuid())
         .map_err(Error::HostMemoryCapability)?;
+    check_gpa_limit(ranges, caps.physical_end)?;
+    Ok(move || KvmVm::from_prepared(prepared))
+}
+
+pub(super) fn check_gpa_limit(ranges: &[(GuestAddress, usize)], physical_end: u64) -> Result<()> {
     // X86_LAYOUT returns ordered ranges with checked end addresses.
     let &(start, size) = ranges.last().expect("validated nonempty RAM");
     let end = start.0 + size as u64;
-    if end > caps.physical_end {
+    if end > physical_end {
         return Err(Error::Snapshot(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "snapshot RAM ends at GPA {end:#x}, beyond KVM exclusive limit {:#x}",
-                caps.physical_end
+                "snapshot RAM ends at GPA {end:#x}, beyond KVM exclusive limit {physical_end:#x}"
             ),
         )));
     }
-    Ok(move || KvmVm::from_prepared(prepared))
+    Ok(())
 }
 
 #[cfg(test)]

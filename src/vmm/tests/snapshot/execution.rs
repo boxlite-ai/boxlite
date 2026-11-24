@@ -53,7 +53,7 @@ fn platform() -> X86VmState {
             X86IrqchipState::pic(1, Default::default()),
             X86IrqchipState::ioapic(Default::default()),
         ],
-        pit: None,
+        pit: Some(Default::default()),
         clock: Default::default(),
     }
 }
@@ -255,10 +255,9 @@ fn with_paused<H: X86Vm, R>(
 }
 
 fn decode(mut bytes: &[u8], memory: &[u8]) -> (Header, MachineState) {
-    let len = bytes.len() as u64;
-    let header = Header::read_from(&mut bytes, len, memory.len() as u64).unwrap();
-    let (state, tail) = postcard::take_from_bytes(bytes).unwrap();
-    assert!(tail.is_empty());
+    let header = Header::read(&mut bytes).unwrap();
+    let state = header.read_machine(&mut bytes).unwrap();
+    assert_eq!(header.ram_len, memory.len() as u64);
     (header, state)
 }
 

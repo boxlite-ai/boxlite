@@ -63,6 +63,7 @@ struct Backend {
     after_vcpus_done: Arc<AtomicBool>,
     create_attempts: Arc<AtomicUsize>,
     hold_last: Mutex<Option<mpsc::Receiver<()>>>,
+    hold_failure: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
 struct Cpu {
@@ -79,6 +80,18 @@ struct Cpu {
 
 fn failure() -> io::Error {
     io::Error::other("injected install failure")
+}
+
+impl Backend {
+    fn platform_failure(&self, operation: &'static str) -> boxlite_hypervisor::Error {
+        if let Some(hold) = self.hold_failure.lock().unwrap().take() {
+            hold.recv_timeout(WAIT).unwrap();
+        }
+        boxlite_hypervisor::Error::VmState {
+            operation,
+            source: failure(),
+        }
+    }
 }
 
 impl boxlite_hypervisor::Vm for Backend {
@@ -137,10 +150,7 @@ impl X86Vm for Backend {
         assert_eq!(state, &machine(COUNT).platform);
         assert_ne!(self.failure, Failure::PlatformPanic, "platform panic");
         if self.failure == Failure::BeforeVcpus {
-            return Err(boxlite_hypervisor::Error::VmState {
-                operation: "restore before vCPUs",
-                source: failure(),
-            });
+            return Err(self.platform_failure("restore before vCPUs"));
         }
         self.before_vcpus_done.store(true, Ordering::SeqCst);
         Ok(())
@@ -152,10 +162,7 @@ impl X86Vm for Backend {
             .unwrap();
         assert_eq!(state, &machine(COUNT).platform);
         if self.failure == Failure::AfterVcpus {
-            return Err(boxlite_hypervisor::Error::VmState {
-                operation: "restore after vCPUs",
-                source: failure(),
-            });
+            return Err(self.platform_failure("restore after vCPUs"));
         }
         self.after_vcpus_done.store(true, Ordering::SeqCst);
         Ok(())
@@ -258,6 +265,7 @@ fn backend(failure: Failure) -> (Backend, mpsc::Receiver<Install>) {
             after_vcpus_done: Arc::new(AtomicBool::new(false)),
             create_attempts: Arc::new(AtomicUsize::new(0)),
             hold_last: Mutex::new(None),
+            hold_failure: Mutex::new(None),
         },
         events,
     )
@@ -363,6 +371,69 @@ fn restore_installs_platform_on_driver_and_vcpus_on_their_owners_before_guest_en
             ));
             assert_eq!(control.status(), VmStatus::Running);
         });
+    }
+}
+
+#[test]
+fn stop_before_all_vcpus_are_ready_skips_final_platform_restore_and_guest_entry() {
+    let (backend, observed) = backend(Failure::None);
+    let (release, hold) = mpsc::channel();
+    *backend.hold_last.lock().unwrap() = Some(hold);
+    let entries = backend.inner.entries();
+    let mut vm = Vm::with_restored_ram(ram(), machine(COUNT), || Ok(backend)).unwrap();
+
+    drive(&mut vm, false, |control, _| {
+        while !matches!(
+            observed.recv_timeout(WAIT).unwrap(),
+            Install::Cpu(id, _) if id == u32::from(COUNT - 1)
+        ) {}
+        control.stop();
+        release.send(()).unwrap();
+    });
+
+    let mut last_ready = false;
+    for event in observed.try_iter() {
+        match event {
+            Install::Notified(id, _) if id == u32::from(COUNT - 1) => last_ready = true,
+            Install::AfterVcpus(_) | Install::Entry => panic!("unexpected event: {event:?}"),
+            _ => {}
+        }
+    }
+    assert!(last_ready);
+    assert!(entries.lock().unwrap().is_empty());
+}
+
+#[test]
+fn stop_wins_over_a_later_platform_restore_failure() {
+    for injected in [Failure::AfterVcpus, Failure::BeforeVcpus] {
+        let (backend, observed) = backend(injected);
+        let (release, hold) = mpsc::channel();
+        *backend.hold_failure.lock().unwrap() = Some(hold);
+        let entries = backend.inner.entries();
+        let mut vm = Vm::with_restored_ram(ram(), machine(COUNT), || Ok(backend)).unwrap();
+
+        drive(&mut vm, false, |control, driver| {
+            loop {
+                match (injected, observed.recv_timeout(WAIT).unwrap()) {
+                    (Failure::BeforeVcpus, Install::BeforeVcpus(owner))
+                    | (Failure::AfterVcpus, Install::AfterVcpus(owner)) => {
+                        assert_eq!(owner, driver);
+                        break;
+                    }
+                    (_, Install::Entry) => panic!("guest entered during platform restore"),
+                    _ => {}
+                }
+            }
+            control.stop();
+            release.send(()).unwrap();
+        });
+
+        assert!(entries.lock().unwrap().is_empty());
+        assert!(
+            !observed
+                .try_iter()
+                .any(|event| matches!(event, Install::Entry))
+        );
     }
 }
 
@@ -751,12 +822,6 @@ fn kvm_split_ram_export_destroy_restore_resume_continues_both_counters() {
     });
 }
 
-fn run_then_pause(control: &VmControl) {
-    control.resume().unwrap();
-    thread::sleep(Duration::from_millis(20));
-    control.pause().unwrap();
-}
-
 #[test]
 #[ignore = "requires /dev/kvm"]
 fn kvm_three_vcpu_export_destroy_restore_resume_preserves_worker_state() {
@@ -768,8 +833,7 @@ fn kvm_three_vcpu_export_destroy_restore_resume_preserves_worker_state() {
     let resumed = SnapshotFiles::new(dir.path(), "resumed");
     drive(&mut source_vm, true, |control, _| {
         control.wait_paused(WAIT).unwrap();
-        run_then_pause(control);
-        control.export(&source.state, &source.memory).unwrap();
+        export_after_progress(control, &source, WAIT, |path| counter(path) > 0);
     });
     drop(source_vm);
 
@@ -786,7 +850,7 @@ fn kvm_three_vcpu_export_destroy_restore_resume_preserves_worker_state() {
             assert_ne!(before.vcpus[i].state.lapic, before.vcpus[j].state.lapic);
         }
     }
-    assert!(counter(&source.memory) > 0);
+    let saved = counter(&source.memory);
     let mut restored = Vm::from_state(&source.state, &source.memory).unwrap();
     drive(&mut restored, true, |control, _| {
         control.wait_paused(WAIT).unwrap();
@@ -803,10 +867,8 @@ fn kvm_three_vcpu_export_destroy_restore_resume_preserves_worker_state() {
             assert_eq!(before.state.cpuid, after.state.cpuid, "vCPU {id} CPUID");
             assert_eq!(before.state.mp_state, after.state.mp_state, "vCPU {id} MP");
         }
-        assert_eq!(counter(&source.memory), counter(&destination.memory));
-        run_then_pause(control);
-        control.export(&resumed.state, &resumed.memory).unwrap();
-        assert!(counter(&resumed.memory) > counter(&source.memory));
+        assert_eq!(counter(&destination.memory), saved);
+        export_after_progress(control, &resumed, WAIT, |path| counter(path) > saved);
     });
 }
 
@@ -1025,7 +1087,7 @@ fn kvm_linux_device_less_export_destroy_restore_resume_makes_progress() {
             !linux_timer_changed(&before.0, &still.0),
             "timer configuration changed without guest entry"
         );
-        before
+        still
     });
     drop(source_vm);
 

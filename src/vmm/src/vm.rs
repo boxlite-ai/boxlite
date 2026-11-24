@@ -365,13 +365,30 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 if matches!(source.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted))
         }
 
+        let exit_from_event = |event| match event {
+            Event::StopRequested => Ok(VmExit::StopRequested),
+            Event::GuestShutdown => Ok(VmExit::GuestShutdown),
+            Event::GuestReset => Ok(VmExit::GuestReset),
+            Event::VcpuFailed(error) | Event::DeviceFailed(error) => Err(error),
+        };
+        let events = self
+            .events
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
         let host_vm = self.host_vm.as_deref().expect("live VM has a host VM");
         let startup = Startup::Boot(&self.boot_regs);
         #[cfg(target_os = "linux")]
         let startup = self.restore.as_deref().map_or(startup, Startup::Restore);
         #[cfg(target_os = "linux")]
-        if let Startup::Restore(machine) = startup {
-            install_platform(|| host_vm.restore_before_vcpus(&machine.platform))?;
+        if let Startup::Restore(machine) = startup
+            && let Err(error) = install_platform(|| host_vm.restore_before_vcpus(&machine.platform))
+        {
+            self.sender.send(Event::VcpuFailed(error));
+            let event = events
+                .wait(Some(std::time::Duration::ZERO))
+                .map_err(Error::EventLoop)?
+                .expect("platform restore failure queued a terminal event");
+            return exit_from_event(event);
         }
 
         self.fresh_vm = false;
@@ -387,10 +404,6 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             kicks: &kicks,
             gate: &gate,
         };
-        let events = self
-            .events
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner);
         let event = thread::scope(|scope| {
             // Release workers before the scope joins them, including on unwind.
             struct StopVcpus<'a, H: VcpuHandle> {
@@ -444,11 +457,20 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 }
             }
             if gate.wait_ready(vcpus.vcpu_count) && !vcpus.sender.is_stopping() {
-                #[cfg(target_os = "linux")]
-                if let Startup::Restore(machine) = vcpus.startup {
-                    install_platform(|| host_vm.restore_after_vcpus(&machine.platform))?;
+                let installed = match vcpus.startup {
+                    Startup::Boot(_) => Ok(()),
+                    #[cfg(target_os = "linux")]
+                    Startup::Restore(machine) => {
+                        install_platform(|| host_vm.restore_after_vcpus(&machine.platform))
+                    }
+                };
+                match installed {
+                    Ok(()) => gate.release(),
+                    Err(error) => {
+                        vcpus.sender.send(Event::VcpuFailed(error));
+                        gate.abort();
+                    }
                 }
-                gate.release();
             }
             let mut pending_kicks = 0u64;
             loop {
@@ -491,12 +513,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 export::drive(vcpus.lifecycle, vcpus.host_vm, &self.ram, self.vcpu_count);
             }
         })?;
-        match event {
-            Event::StopRequested => Ok(VmExit::StopRequested),
-            Event::GuestShutdown => Ok(VmExit::GuestShutdown),
-            Event::GuestReset => Ok(VmExit::GuestReset),
-            Event::VcpuFailed(error) | Event::DeviceFailed(error) => Err(error),
-        }
+        exit_from_event(event)
     }
 
     /// Runs every vCPU on its own thread until the first event ends the VM,

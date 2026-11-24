@@ -13,10 +13,10 @@ use vm_memory::{Bytes, GuestAddress};
 use super::{image, state};
 use crate::{
     Error, Vm, VmStatus,
-    memory::{GuestRam, MMIO_HOLE_START},
+    memory::{GuestRam, MMIO_HOLE_START, X86_LAYOUT},
     mock_vm::{Call, MockVm},
     snapshot::{
-        restore::from_readers,
+        restore::{check_gpa_limit, from_readers},
         state::{MachineState, VcpuRecord},
     },
 };
@@ -148,6 +148,30 @@ fn reject_before_host_prepare(mut reader: impl Read) -> io::Error {
         panic!("expected snapshot error, got {error:?}");
     };
     error
+}
+
+#[test]
+fn kvm_gpa_limit_accounts_for_high_ram_above_the_mmio_hole() {
+    let physical_end = (1 << 32) + PAGE as u64;
+    let ram_len = MMIO_HOLE_START + PAGE as u64;
+    let ranges = X86_LAYOUT.ranges(ram_len).unwrap();
+    check_gpa_limit(&ranges, physical_end).unwrap();
+
+    let ranges = X86_LAYOUT.ranges(ram_len + PAGE as u64).unwrap();
+    assert!(matches!(
+        check_gpa_limit(&ranges, physical_end),
+        Err(Error::Snapshot(error)) if error.kind() == io::ErrorKind::InvalidData
+    ));
+}
+
+#[test]
+fn import_rejects_aligned_ram_length_whose_end_gpa_overflows() {
+    let (mut state, _) = snapshot(1, &machine(1).encode().unwrap());
+    state[16..24].copy_from_slice(&(u64::MAX - 4095).to_le_bytes());
+
+    let error = reject_before_host_prepare(state.as_slice());
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(error.to_string(), "guest RAM end GPA overflows");
 }
 
 #[test]
