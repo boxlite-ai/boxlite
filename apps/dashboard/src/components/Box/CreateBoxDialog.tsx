@@ -14,7 +14,7 @@ import { BRAND, PanelNote } from '@/components/ascii'
 import { Dialog, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
-import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { BoxPriceSummary } from './BoxPriceSummary'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useConfig } from '@/hooks/useConfig'
@@ -264,43 +264,6 @@ function CappedResourcesNote({ items }: { items: { label: string; unit: string; 
         {SUPPORT_EMAIL}
       </a>
     </div>
-  )
-}
-
-// ── Price ───────────────────────────────────────────────────────────────────
-function BoxPriceBreakdown({ quote }: { quote: NonNullable<ReturnType<typeof boxHourlyPrice>> }) {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <AsciiButton size="sm">Price breakdown</AsciiButton>
-      </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="start"
-        aria-label="Price breakdown"
-        className="w-[440px] max-w-[calc(100vw-32px)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
-      >
-        <div className="mb-3 text-body font-medium">Estimated cost per hour</div>
-        <div className="space-y-3">
-          {quote.lines.map((line) => (
-            <div
-              key={line.code}
-              className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 font-mono text-meta"
-            >
-              <span className="min-w-0 flex-1 text-muted-foreground [overflow-wrap:anywhere]">
-                {line.label} · {line.quantity} {line.quantityUnit} × {formatPriceCents(line.unitPriceCents, 6)}/
-                {line.quantityUnit}·hr
-              </span>
-              <span className="tabular-nums text-foreground">{formatPriceCents(line.subtotalCents, 6)}</span>
-            </div>
-          ))}
-        </div>
-        <div className="mt-3 flex items-baseline justify-between gap-3 border-t border-border pt-3 text-body">
-          <span>Total</span>
-          <span className="font-mono">{formatPriceCents(quote.totalCents)} / hr</span>
-        </div>
-      </PopoverContent>
-    </Popover>
   )
 }
 
@@ -1239,23 +1202,26 @@ export const CreateBoxDialog = ({
         </FormDialogBody>
         <DialogFooter className="flex-wrap items-center">
           <div className="mr-auto flex basis-full flex-wrap items-center gap-x-4 gap-y-2 text-left sm:basis-auto">
-            <div>
-              <div className="text-meta text-muted-foreground">Estimated total</div>
-              <div className="font-mono text-em">
-                {!cpuValid || !memoryValid
-                  ? '—'
-                  : !config.billingApiUrl
-                    ? '$0.00'
-                    : selectedQuote
-                      ? formatPriceCents(selectedQuote.totalCents)
+            {cpuValid && memoryValid && config.billingApiUrl && selectedQuote ? (
+              <BoxPriceSummary
+                quote={selectedQuote}
+                spec={{ cpu, memory, disk }}
+                currency={pricesQuery.data?.currency}
+              />
+            ) : (
+              <div>
+                <div className="text-meta text-muted-foreground">Estimated total</div>
+                <div className="font-mono text-em">
+                  {!cpuValid || !memoryValid
+                    ? '—'
+                    : !config.billingApiUrl
+                      ? '$0.00'
                       : pricesQuery.isLoading
                         ? '—'
-                        : 'Unavailable'}{' '}
-                <span className="font-sans text-meta text-muted-foreground">/ hr</span>
+                        : 'Unavailable'}
+                  <span className="font-sans text-meta text-muted-foreground"> / hr</span>
+                </div>
               </div>
-            </div>
-            {cpuValid && memoryValid && config.billingApiUrl && selectedQuote && (
-              <BoxPriceBreakdown quote={selectedQuote} />
             )}
             {!config.billingApiUrl && <span className="text-meta text-muted-foreground">No usage charges</span>}
             {config.billingApiUrl && !selectedQuote && (

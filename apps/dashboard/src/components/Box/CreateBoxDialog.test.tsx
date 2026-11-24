@@ -63,6 +63,8 @@ vi.mock('@/hooks/queries/useImagesQuery', () => ({
   useImagesQuery: () => ({ data: state.catalogImages }),
 }))
 vi.mock('@/hooks/useConfig', () => ({ useConfig: () => state.config }))
+vi.mock('@/hooks/queries/usePlansQuery', () => ({ usePlansQuery: () => ({}) }))
+vi.mock('@/hooks/queries/billingQueries', () => ({ useOwnerPlanQuery: () => ({}) }))
 vi.mock('@/hooks/queries/useUsagePricesQuery', () => ({
   useUsagePricesQuery: () => state.pricesQuery,
 }))

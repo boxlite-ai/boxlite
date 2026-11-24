@@ -11,6 +11,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import Billing from './Billing'
 
+vi.mock('@/components/billing/SubscriptionCancellation', () => ({
+  SubscriptionCancellationProvider: ({ children }: { children: import('react').ReactNode }) => children,
+  SubscriptionCancellationAction: () => null,
+}))
+
 vi.mock('@/hooks/useConfig', () => ({
   useConfig: () => ({ billingApiUrl: 'https://billing.example.test' }),
 }))

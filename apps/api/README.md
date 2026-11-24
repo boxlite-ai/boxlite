@@ -1780,3 +1780,17 @@ Dashboard owns its normalized telemetry display types, independently of the remo
 
 The nullable physical `user.keyPair` column remains for older API instances and rollback; the current entity no longer maps it.
 No user-key data migration runs in this release. `User.publicKeys` and historical audit action identifiers remain unchanged.
+
+## Organization cancellation feedback
+
+The Console uses `PUT /api/organizations/:organizationId/cancellation-feedback` after confirming cancellation through the existing billing API. The endpoint accepts `{ "reasons": ["other"], "intent": null, "note": "My project ended" }` and returns 204 only after updating the organization's nullable `cancellationFeedback` JSONB field.
+
+Reasons are stable IDs; intent is optional, and custom text is limited to 1,000 characters and requires `other`. Unknown fields and empty answers are rejected. The server supplies `submittedBy` and `submittedAt` and stores the last accepted write, replacing the previous object.
+
+JWT authentication, organization access and a current OWNER membership are required, including for administrator accounts. API keys cannot submit feedback. Ordinary entity queries omit the field (`select: false`), and OrganizationDto does not expose it.
+
+Feedback is not a cancellation receipt or subscription history. Writing it never changes a subscription, and a save failure must not reverse a completed cancellation. Authorized database operators can inspect the field using existing restricted database access.
+
+Deploy the additive pre-deploy migration and API before the updated Console. Billing requires no deployment for this feature. Reverting the schema migration drops saved feedback, so retain the column during an application rollback if data must be preserved.
+
+Run `make test:apps:api TEST_FILES=cancellation-feedback` with `CANCELLATION_TEST_DATABASE_URL` pointing at a disposable loopback PostgreSQL database. The integration suite creates an isolated schema and exercises real JWT verification, organization guards, validation and latest-value replacement. It verifies independent reads and persistence after restarting the API and its database connection.

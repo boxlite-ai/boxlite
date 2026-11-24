@@ -457,3 +457,17 @@ describe('queuedChange', () => {
     expect(queuedChange({ ...LIVE_PRO, pendingPlanId: 'starter', status: 'canceled' })).toBeNull()
   })
 })
+
+describe('trial cancellation recovery', () => {
+  it('does not offer unsupported trial reactivation', () => {
+    const trial = {
+      startedAt: LIVE_PRO.cycleFrom,
+      endsAt: LIVE_PRO.cycleTo,
+      conversionState: 'not_attempted' as const,
+      conversionAmountCents: 14900,
+      currency: 'USD' as const,
+    }
+    const scheduled = scheduledChange({ plan: { ...LIVE_PRO, trial, cancelAtPeriodEnd: true }, catalog: CATALOG })
+    expect(scheduled?.keepLabel).toBeNull()
+  })
+})

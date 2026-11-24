@@ -167,12 +167,25 @@ async function makeClient(
       headers,
       config: cfg,
     }
-    if (status >= 200 && status < 300) return response
+    if (!cfg.validateStatus || cfg.validateStatus(status)) return response
     throw new axios.AxiosError(`Request failed with status code ${status}`, undefined, cfg, undefined, response)
   }
   const { ApiClient } = await import('./apiClient')
   return new ApiClient(config, 'tok', onUnauthorized)
 }
+
+it('uses the renewed token for billing requests', async () => {
+  const requests: import('axios').InternalAxiosRequestConfig[] = []
+  const api = await makeClient(vi.fn(), 200, [], requests)
+  api.setAccessToken('renewed-token')
+  await api.billingApi.listPlans()
+  expect(requests[0].headers.Authorization).toBe('Bearer renewed-token')
+})
+
+it.each([204, 401, 403, 503])('preserves HTTP %i when eligibility has no decision', async (status) => {
+  const api = await makeClient(vi.fn(), status)
+  await expect(api.billingApi.getPlanTrialEligibility('org')).rejects.toMatchObject({ cause: { response: { status } } })
+})
 
 describe('ApiClient registration deadline', () => {
   let api: import('./apiClient').ApiClient
@@ -755,4 +768,24 @@ describe('tunnel request boundaries', () => {
     })
     expect(requests).toHaveLength(1)
   })
+})
+
+it('saves cancellation feedback on the selected organization with a bounded PUT', async () => {
+  const requests: any[] = []
+  const api = await makeClient(vi.fn(), 204, undefined, requests)
+  const feedback = { reasons: ['other'], intent: null, note: 'A custom reason' }
+  await api.saveCancellationFeedback('org/one', feedback)
+  expect(requests[0]).toMatchObject({
+    method: 'put',
+    url: '/organizations/org%2Fone/cancellation-feedback',
+    timeout: 10_000,
+  })
+  expect(JSON.parse(requests[0].data)).toEqual(feedback)
+})
+
+it('does not treat an unexpected feedback response as saved', async () => {
+  const api = await makeClient(vi.fn(), 200, '<html>not an API response</html>')
+  await expect(api.saveCancellationFeedback('org', { reasons: ['pricing'], intent: null, note: '' })).rejects.toThrow(
+    'not confirmed',
+  )
 })

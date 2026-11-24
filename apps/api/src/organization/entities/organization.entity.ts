@@ -6,6 +6,7 @@
 
 import { Column, CreateDateColumn, Entity, OneToMany, PrimaryGeneratedColumn, Unique, UpdateDateColumn } from 'typeorm'
 import type { OnboardingDto } from '../dto/onboarding.dto'
+import type { CancellationFeedback } from '../dto/cancellation-feedback'
 import { OrganizationUser } from './organization-user.entity'
 import { OrganizationRole } from './organization-role.entity'
 import { OrganizationInvitation } from './organization-invitation.entity'
@@ -21,6 +22,9 @@ export class Organization {
 
   @Column({ type: 'jsonb', nullable: true })
   onboarding: OnboardingDto | null
+
+  @Column({ type: 'jsonb', nullable: true, select: false })
+  cancellationFeedback: CancellationFeedback | null
 
   @Column()
   name: string

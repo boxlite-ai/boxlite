@@ -1,3 +1,4 @@
+import { subscriptionCancellationHandlers } from './subscription-cancellation-handlers'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -114,7 +115,22 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
   })
 }
 
+function planCatalogHandlers(catalog: () => Plan[]) {
+  return [
+    http.get(`${BILLING_API_URL}/plan`, () => HttpResponse.json(catalog())),
+    http.get(`${BILLING_API_URL}/organization/:organizationId/plan/trial-eligibility`, () => {
+      const hasTrial = billingPreview === 'trial-eligible' && MOCK_PAYMENT_METHODS.some((method) => method.isDefault)
+      const plans = catalog().map((plan) => {
+        const eligible = hasTrial && plan.selfServe && (plan.priceMonthlyCents ?? 0) > 0
+        return { name: plan.name, eligible, durationSeconds: eligible ? 259200 : 0 }
+      })
+      return HttpResponse.json({ plans }, { headers: { 'Cache-Control': 'private, no-store' } })
+    }),
+  ]
+}
+
 export const handlers = [
+  ...subscriptionCancellationHandlers(API_URL, BILLING_API_URL),
   ...resourceStateHandlers(API_URL),
   ...ciHandlers(newUserPreview),
   ...sshHandlers,
@@ -548,9 +564,17 @@ export const handlers = [
       ],
     })
   }),
-  http.get(`${BILLING_API_URL}/plan`, async () => {
-    if (billingPreview === 'subscription-cards') {
-      return HttpResponse.json<Plan[]>([
+  ...planCatalogHandlers(() => {
+    const enterprise: Plan = {
+      id: 'enterprise',
+      name: 'Enterprise',
+      priceMonthlyCents: null,
+      includedQuotaCents: null,
+      concurrencyLimit: null,
+      selfServe: false,
+    }
+    if (billingPreview === 'subscription-cards' || billingPreview === 'trial-eligible') {
+      return [
         {
           id: 'starter',
           name: 'NoSubscription',
@@ -575,12 +599,13 @@ export const handlers = [
           concurrencyLimit: 1000,
           selfServe: true,
         },
-      ])
+        ...(billingPreview === 'trial-eligible' ? [enterprise] : []),
+      ]
     }
     // Mirrors the billing service's own standard-plan catalog (Subscription.md
     // v2 §3). Enterprise carries nulls — the contact-sales card, not missing
     // data — and is not self-serve.
-    return HttpResponse.json<Plan[]>([
+    return [
       {
         id: 'starter',
         name: 'Starter',
@@ -605,15 +630,8 @@ export const handlers = [
         concurrencyLimit: 1_000,
         selfServe: true,
       },
-      {
-        id: 'enterprise',
-        name: 'Enterprise',
-        priceMonthlyCents: null,
-        includedQuotaCents: null,
-        concurrencyLimit: null,
-        selfServe: false,
-      },
-    ])
+      enterprise,
+    ]
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/wallet`, async () => {
     const preview = billingPreview
@@ -677,7 +695,7 @@ export const handlers = [
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
     const preview = billingPreview
-    if (newUserPreview || preview === 'balance-wallet') return HttpResponse.json({})
+    if (newUserPreview || preview === 'balance-wallet' || preview === 'trial-eligible') return HttpResponse.json({})
     const empty = preview === 'balance-empty' || preview === 'balance-wallet-fallback'
     // Mirrors the billing service's own mock seed: pro, a quarter used,
     // pinned mid-cycle so the meter renders deterministically. The real
