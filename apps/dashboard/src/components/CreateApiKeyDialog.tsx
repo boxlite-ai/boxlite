@@ -21,10 +21,11 @@ import {
   IMPLICIT_BOX_READ,
   apiKeyExpirationDate,
 } from '@/lib/api-key-permissions'
+import { ResourcePermission } from '@/lib/resource-permissions'
 import { ApiKeyPermissionsSummary } from './ApiKeyPermissionsSummary'
 
 interface CreateApiKeyDialogProps {
-  availablePermissions: Permission[]
+  availablePermissions: ResourcePermission[]
   apiUrl: string
   className?: string
   organizationId?: string
@@ -66,7 +67,7 @@ function ApiKeyForm({
   const id = useId()
   const [name, setName] = useState('')
   const [expiry, setExpiry] = useState('30')
-  const [selected, setSelected] = useState<Permission[]>([])
+  const [selected, setSelected] = useState<ResourcePermission[]>([])
   const [customize, setCustomize] = useState(false)
   const [presetId, setPresetId] = useState('operate')
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Boxes'])
@@ -180,7 +181,9 @@ function ApiKeyForm({
         <FormDialogBody className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <span className="text-body">Permissions</span>
-            <ApiKeyPermissionsSummary permissions={result.permissions} />
+            <ApiKeyPermissionsSummary
+              permissions={[...(result.permissions ?? []), ...(result.proxyPermissions ?? [])]}
+            />
           </div>
           <div className="flex items-center justify-between gap-3 text-body">
             <span>Expires</span>

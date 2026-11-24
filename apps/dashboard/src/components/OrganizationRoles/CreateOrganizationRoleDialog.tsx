@@ -20,12 +20,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ORGANIZATION_ROLE_PERMISSIONS_GROUPS } from '@/constants/OrganizationPermissionsGroups'
 import { OrganizationRolePermissionGroup } from '@/types/OrganizationRolePermissionGroup'
-import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { ResourcePermission } from '@/lib/resource-permissions'
 import { Plus } from '@/components/ui/icon'
 import React, { useState } from 'react'
 
 interface CreateOrganizationRoleDialogProps {
-  onCreateRole: (name: string, description: string, permissions: OrganizationRolePermissionsEnum[]) => Promise<boolean>
+  onCreateRole: (name: string, description: string, permissions: ResourcePermission[]) => Promise<boolean>
   className?: string
 }
 
@@ -36,7 +36,7 @@ export const CreateOrganizationRoleDialog: React.FC<CreateOrganizationRoleDialog
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [permissions, setPermissions] = useState<OrganizationRolePermissionsEnum[]>([])
+  const [permissions, setPermissions] = useState<ResourcePermission[]>([])
   const [loading, setLoading] = useState(false)
 
   const handleCreateRole = async () => {
@@ -75,7 +75,7 @@ export const CreateOrganizationRoleDialog: React.FC<CreateOrganizationRoleDialog
   }
 
   // Toggle a single permission
-  const handlePermissionToggle = (permission: OrganizationRolePermissionsEnum) => {
+  const handlePermissionToggle = (permission: ResourcePermission) => {
     setPermissions((current) => {
       if (current.includes(permission)) {
         return current.filter((p) => p !== permission)

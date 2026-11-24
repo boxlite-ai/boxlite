@@ -37,7 +37,7 @@ import { StatusSyncModule } from './status-sync/status-sync.module'
 import { OpenFeatureModule } from '@openfeature/nestjs-sdk'
 import { OpenFeaturePostHogProvider } from './common/providers/openfeature-posthog.provider'
 import { LoggerModule } from 'nestjs-pino'
-import { getPinoTransport, swapMessageAndObject } from './common/utils/pino.util'
+import { getPinoRequestOptions, getPinoTransport } from './common/utils/pino.util'
 import { Redis } from 'ioredis'
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis'
 import { RegionModule } from './region/region.module'
@@ -46,6 +46,7 @@ import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
 import { McpModule } from './mcp/mcp.module'
+import { MigrationDataSource, MigrationLockTimeoutError } from './migrations/migration-data-source'
 
 @Module({
   imports: [
@@ -55,13 +56,7 @@ import { McpModule } from './mcp/mcp.module'
         const isProduction = configService.get('production')
         return {
           pinoHttp: {
-            autoLogging: logConfig.requests.enabled,
-            level: logConfig.level,
-            redact: ['req.headers.authorization', 'req.body.turnstileToken'],
-            hooks: {
-              logMethod: swapMessageAndObject,
-            },
-            quietReqLogger: true,
+            ...getPinoRequestOptions(logConfig.requests.enabled, logConfig.level),
             transport: getPinoTransport(isProduction, logConfig),
           },
         }
@@ -73,6 +68,10 @@ import { McpModule } from './mcp/mcp.module'
     }),
     TypeOrmModule.forRootAsync({
       inject: [TypedConfigService],
+      dataSourceFactory: async (options) => {
+        if (!options) throw new Error('Missing API database options')
+        return new MigrationDataSource(options)
+      },
       useFactory: (configService: TypedConfigService) => {
         return {
           type: 'postgres',
@@ -85,6 +84,7 @@ import { McpModule } from './mcp/mcp.module'
           migrations: [join(__dirname, 'migrations/**/*-migration.{ts,js}')],
           migrationsTransactionMode: 'each',
           migrationsRun: configService.get('runMigrations') || !configService.getOrThrow('production'),
+          toRetry: (error: unknown) => !(error instanceof MigrationLockTimeoutError),
           namingStrategy: new CustomNamingStrategy(),
           manualInitialization: configService.get('skipConnections'),
           ssl: configService.get('database.tls.enabled')

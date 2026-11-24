@@ -174,6 +174,12 @@ The new API should read from and write to `display_name` only. The trigger handl
 
 ## Migration Scripts
 
+Run these commands from the `apps/` workspace.
+
+The bundled API's `--migration-run` uses one transaction when all pending migrations use
+the default mode. When a pending migration declares its own mode, the command applies
+the per-migration transaction settings used at API startup.
+
 ### `npm run migration:run:init`
 
 Runs **all migrations** from both pre-deploy and post-deploy folders. Use this for:
@@ -235,8 +241,37 @@ See the [outbound durability contract](../../../../docs/contributing/architectur
 CLI and application startup run pending migrations in `each` mode: each ordinary
 migration has its own transaction, while an explicit `transaction = false` allows
 operations such as concurrent index builds. A later failure leaves earlier completed
-migrations recorded; fix the failure and rerun to resume. The activation facts migration
-still creates its table and backfill atomically.
+migrations recorded. The activation facts migration still creates its table and backfill atomically.
+
+API startup and the migration CLI serialize runs and reverts per PostgreSQL database.
+The session that owns the migration lock reads history, applies DDL, and records each
+migration.
+
+A competing process completes each unsuccessful lock attempt before sleeping and fails
+after 90 seconds of waiting. During the first rollout, fence older migration runners or
+use an isolated database with access restricted to the updated runner.
+
+```mermaid
+sequenceDiagram
+    participant A as First API or CLI
+    participant DB as PostgreSQL
+    participant B as Competing API or CLI
+    A->>DB: Acquire the session lock
+    A->>DB: Read migration history
+    B->>DB: Try to acquire the lock
+    DB-->>B: Busy, statement completes
+    Note over B: Wait outside the database statement
+    A->>DB: Apply DDL and record history
+    A->>DB: Release the lock
+    B->>DB: Acquire the lock and read current history
+```
+
+The outbound proxy Registry checks the unique index on `box ("organizationId", id)`
+before creating its foreign key. An intermediate repair migration also checks databases
+that have already recorded the original index migration.
+
+The repair keeps a usable index and rebuilds a matching invalid index concurrently.
+An unexpected object under the index name stops the migration for inspection.
 
 ```bash
 npm run migration:revert
@@ -244,7 +279,8 @@ npm run migration:revert
 
 This reverts the **last executed migration** from either folder (based on the combined migration history in the database).
 
-When that last migration is `AddAdminUsageWindowIndexes1792470000000`, use:
+When the last migration is `AddAdminUsageWindowIndexes1792470000000` or
+`IndexBoxOrganizationForProxy1795000000000`, use:
 
 ```bash
 npm run migration:revert -- --transaction none
@@ -255,14 +291,27 @@ the migration's `transaction = false`; concurrent index drops require `none`.
 Use the default transactional command for other migrations. If a concurrent index
 build or drop is interrupted, rerun it: valid completed indexes are retained,
 invalid build leftovers are removed and rebuilt, and missing indexes are skipped on drop.
-Serialize migration runners; concurrent DDL still waits for older transactions and
-is not a production capacity guarantee.
+Concurrent DDL still waits for older transactions.
+
+Application rollback must retain the Registry schema and binding protection. A schema
+revert requires a fenced stage and a Runner inventory that confirms no live or uncertain
+bindings.
+
+The Registry revert refuses stored registrations, references, revisions or keys.
+The intermediate repair leaves the index in place when reverted.
+
+On a fresh migration history, the Registry was applied after the intermediate repair
+and reverts first. An existing Registry database records the repair after the Registry
+and therefore reverts the repair first.
+
+Use the nontransactional command above when the original index migration is next in
+the applied history and its dependent foreign key has been removed.
 
 **Important behaviors:**
 
 - Reverts one migration at a time - run multiple times to revert multiple migrations
 - Uses the combined data-source that sees all migrations
-- The revert order follows the execution timestamp, not the folder structure
+- TypeORM reverts the most recent row by migration history ID, regardless of the migration's timestamp
 - Always test revert scripts in development before relying on them in production
 
 **Recommendation:** After reverting, you may need to also revert the corresponding entity changes and regenerate migrations to keep everything in sync.

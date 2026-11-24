@@ -16,6 +16,10 @@
 
 export interface CreateOrganizationRole {
     /**
+     * Outbound proxy permissions
+     */
+    'proxyPermissions'?: Array<CreateOrganizationRoleProxyPermissionsEnum>;
+    /**
      * The name of the role
      */
     'name': string;
@@ -29,6 +33,13 @@ export interface CreateOrganizationRole {
     'permissions': Array<CreateOrganizationRolePermissionsEnum>;
 }
 
+export const CreateOrganizationRoleProxyPermissionsEnum = {
+    WRITE_PROXIES: 'write:proxies',
+    DELETE_PROXIES: 'delete:proxies',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type CreateOrganizationRoleProxyPermissionsEnum = typeof CreateOrganizationRoleProxyPermissionsEnum[keyof typeof CreateOrganizationRoleProxyPermissionsEnum];
 export const CreateOrganizationRolePermissionsEnum = {
     WRITE_REGISTRIES: 'write:registries',
     DELETE_REGISTRIES: 'delete:registries',

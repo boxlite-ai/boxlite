@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { ResourcePermission } from '@/lib/resource-permissions'
 
 export interface OrganizationRolePermissionGroup {
   name: string
-  permissions: OrganizationRolePermissionsEnum[]
+  permissions: ResourcePermission[]
 }

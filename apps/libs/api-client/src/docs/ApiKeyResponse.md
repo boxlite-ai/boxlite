@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**proxyPermissions** | **Array&lt;string&gt;** | Outbound proxy permissions | [optional] [default to undefined]
 **name** | **string** | The name of the API key | [default to undefined]
 **value** | **string** | The API key value | [default to undefined]
 **createdAt** | **Date** | When the API key was created | [default to undefined]
@@ -17,6 +18,7 @@ Name | Type | Description | Notes
 import { ApiKeyResponse } from './api';
 
 const instance: ApiKeyResponse = {
+    proxyPermissions,
     name,
     value,
     createdAt,

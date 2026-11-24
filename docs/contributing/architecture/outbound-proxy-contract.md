@@ -50,6 +50,45 @@ Registry readbacks expose the name, canonical URL, registration revision, and
 control. Registry and outbound readbacks, Guest inputs, ordinary Box options, logs, and
 exports omit it.
 
+### Cloud registry
+
+The registry uses the current organization from the Box API authentication context.
+Members can list and read registrations. Creating or updating one requires
+`write:proxies`, and deleting one requires `delete:proxies`.
+
+Credential submission uses JSON over the REST API. The MCP operation catalog excludes
+credential writes.
+
+API key and organization role requests and responses carry outbound proxy grants in
+the optional `proxyPermissions` array. For example, use `permissions: ["write:boxes"]`
+and `proxyPermissions: ["write:proxies"]` to grant both capabilities. The existing
+`permissions` field retains its published values.
+
+When updating a role, omit `proxyPermissions` to keep its current proxy grants or send
+`[]` to clear them. A role must have at least one permission across both fields.
+
+Cloud stores each accepted revision with its own authenticated credential envelope.
+For example, a successful `PATCH` that returns revision 2 reports what the registry
+accepted. A Box may still hold revision 1.
+
+An active or pending reference protects its exact revision and blocks deletion with `409`.
+
+The API enables the registry with `OUTBOUND_PROXY_REGISTRY_ENABLED=true`.
+Operators supply `OUTBOUND_PROXY_REGISTRY_KEYS` as a deployment secret containing a JSON
+map from key IDs to Base64-encoded 32-byte keys. The API checks that its configured ring
+can read every retained key ID before starting with the registry enabled.
+
+Provision dedicated, unique key material and keep older keys for persisted envelopes and backups.
+Provision the next key to every reader before activation.
+Activate the initial key before submitting credentials to a new registry.
+
+The registry store can activate a key and re-encrypt a revision while preserving
+its identity. It can retire an inactive key after its last envelope is gone.
+
+Enable the feature only on a deployment qualified to fence the previous database
+generation during cutover. Runner credential dispatch and recovery also require
+exact-epoch validation.
+
 | Box input | Required behavior |
 | --- | --- |
 | Create with `proxy` omitted or `null` | Leave the Box unbound. |

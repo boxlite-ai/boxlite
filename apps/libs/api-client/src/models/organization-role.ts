@@ -16,6 +16,10 @@
 
 export interface OrganizationRole {
     /**
+     * Outbound proxy permissions
+     */
+    'proxyPermissions'?: Array<OrganizationRoleProxyPermissionsEnum>;
+    /**
      * Role ID
      */
     'id': string;
@@ -45,6 +49,13 @@ export interface OrganizationRole {
     'updatedAt': Date;
 }
 
+export const OrganizationRoleProxyPermissionsEnum = {
+    WRITE_PROXIES: 'write:proxies',
+    DELETE_PROXIES: 'delete:proxies',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type OrganizationRoleProxyPermissionsEnum = typeof OrganizationRoleProxyPermissionsEnum[keyof typeof OrganizationRoleProxyPermissionsEnum];
 export const OrganizationRolePermissionsEnum = {
     WRITE_REGISTRIES: 'write:registries',
     DELETE_REGISTRIES: 'delete:registries',

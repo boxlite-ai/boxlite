@@ -7,9 +7,10 @@
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 import { OrganizationRole } from '../entities/organization-role.entity'
 import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
+import { BASE_RESOURCE_PERMISSIONS, ProxyPermissionsDto, splitResourcePermissions } from './proxy-permissions.dto'
 
 @ApiSchema({ name: 'OrganizationRole' })
-export class OrganizationRoleDto {
+export class OrganizationRoleDto extends ProxyPermissionsDto {
   @ApiProperty({
     description: 'Role ID',
   })
@@ -27,7 +28,7 @@ export class OrganizationRoleDto {
 
   @ApiProperty({
     description: 'Roles assigned to the user',
-    enum: OrganizationResourcePermission,
+    enum: BASE_RESOURCE_PERMISSIONS,
     isArray: true,
   })
   permissions: OrganizationResourcePermission[]
@@ -52,7 +53,7 @@ export class OrganizationRoleDto {
       id: role.id,
       name: role.name,
       description: role.description,
-      permissions: role.permissions,
+      ...splitResourcePermissions(role.permissions),
       isGlobal: role.isGlobal,
       createdAt: role.createdAt,
       updatedAt: role.updatedAt,

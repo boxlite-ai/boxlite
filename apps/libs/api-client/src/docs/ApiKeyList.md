@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**proxyPermissions** | **Array&lt;string&gt;** | Outbound proxy permissions | [optional] [default to undefined]
 **name** | **string** | The name of the API key | [default to undefined]
 **value** | **string** | The masked API key value | [default to undefined]
 **createdAt** | **Date** | When the API key was created | [default to undefined]
@@ -19,6 +20,7 @@ Name | Type | Description | Notes
 import { ApiKeyList } from './api';
 
 const instance: ApiKeyList = {
+    proxyPermissions,
     name,
     value,
     createdAt,

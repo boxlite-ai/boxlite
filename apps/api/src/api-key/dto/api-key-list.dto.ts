@@ -6,10 +6,15 @@
 
 import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
+import {
+  BASE_RESOURCE_PERMISSIONS,
+  ProxyPermissionsDto,
+  splitResourcePermissions,
+} from '../../organization/dto/proxy-permissions.dto'
 import { ApiKey } from '../api-key.entity'
 
 @ApiSchema({ name: 'ApiKeyList' })
-export class ApiKeyListDto {
+export class ApiKeyListDto extends ProxyPermissionsDto {
   @ApiProperty({
     description: 'The name of the API key',
     example: 'My API Key',
@@ -30,7 +35,7 @@ export class ApiKeyListDto {
 
   @ApiProperty({
     description: 'The list of organization resource permissions assigned to the API key',
-    enum: OrganizationResourcePermission,
+    enum: BASE_RESOURCE_PERMISSIONS,
     isArray: true,
   })
   permissions: OrganizationResourcePermission[]
@@ -56,6 +61,7 @@ export class ApiKeyListDto {
   userId: string
 
   constructor(partial: Partial<ApiKeyListDto>) {
+    super()
     Object.assign(this, partial)
   }
 
@@ -66,7 +72,7 @@ export class ApiKeyListDto {
       name: apiKey.name,
       value: maskedValue,
       createdAt: apiKey.createdAt,
-      permissions: apiKey.permissions,
+      ...splitResourcePermissions(apiKey.permissions),
       lastUsedAt: apiKey.lastUsedAt,
       expiresAt: apiKey.expiresAt,
       userId: apiKey.userId,

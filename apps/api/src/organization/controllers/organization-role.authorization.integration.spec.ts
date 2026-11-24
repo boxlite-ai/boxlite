@@ -228,6 +228,41 @@ describeWithDatabase('Organization role authorization (HTTP and Postgres)', () =
     ).toBe(false)
   })
 
+  it('keeps proxy grants on legacy updates and clears them on an explicit empty array', async () => {
+    const proxyPermissions = [Permission.WRITE_PROXIES]
+    const created = await call('post', undefined, { ...initial, proxyPermissions })
+    expect(created.status).toBe(201)
+    expect(created.data).toMatchObject({ permissions: initial.permissions, proxyPermissions })
+    const roleId = created.data.id
+    await memberships.save({ organizationId: orgA.id, userId: 'member-a', assignedRoles: [{ id: roleId }] })
+
+    const updated = await call('put', roleId, changed)
+    expect(updated.status).toBe(200)
+    expect(updated.data).toMatchObject({ permissions: changed.permissions, proxyPermissions })
+    const member = await userService.findOne(orgA.id, 'member-a')
+    if (!member) throw new Error('Assigned membership must exist after the role update')
+    expect(
+      hasOrganizationResourcePermissions({ role: SystemRole.USER, organizationUser: member }, proxyPermissions),
+    ).toBe(true)
+
+    const cleared = await call('put', roleId, { ...changed, proxyPermissions: [] })
+    expect(cleared.status).toBe(200)
+    expect(cleared.data).not.toHaveProperty('proxyPermissions')
+    expect((await roles.findOneByOrFail({ id: roleId })).permissions).toEqual(changed.permissions)
+  })
+
+  it('allows proxy-only roles and rejects an update that would remove their last grant', async () => {
+    const input = { ...initial, permissions: [], proxyPermissions: [Permission.DELETE_PROXIES] }
+    const created = await call('post', undefined, input)
+    expect(created.status).toBe(201)
+    expect(created.data).toMatchObject({ permissions: [], proxyPermissions: input.proxyPermissions })
+
+    const roleId = created.data.id
+    expect((await call('put', roleId, { ...input, proxyPermissions: null })).status).toBe(400)
+    expect((await call('put', roleId, { ...input, proxyPermissions: [] })).status).toBe(400)
+    expect((await roles.findOneByOrFail({ id: roleId })).permissions).toEqual(input.proxyPermissions)
+  })
+
   describe.each(['update', 'delete'] as const)('%s identifiers', (operation) => {
     it.each([
       ['organization', undefined],

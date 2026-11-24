@@ -22,6 +22,8 @@ var _ MappedNullable = &ApiKeyResponse{}
 
 // ApiKeyResponse struct for ApiKeyResponse
 type ApiKeyResponse struct {
+	// Outbound proxy permissions
+	ProxyPermissions []string `json:"proxyPermissions,omitempty"`
 	// The name of the API key
 	Name string `json:"name"`
 	// The API key value
@@ -57,6 +59,38 @@ func NewApiKeyResponse(name string, value string, createdAt time.Time, permissio
 func NewApiKeyResponseWithDefaults() *ApiKeyResponse {
 	this := ApiKeyResponse{}
 	return &this
+}
+
+// GetProxyPermissions returns the ProxyPermissions field value if set, zero value otherwise.
+func (o *ApiKeyResponse) GetProxyPermissions() []string {
+	if o == nil || IsNil(o.ProxyPermissions) {
+		var ret []string
+		return ret
+	}
+	return o.ProxyPermissions
+}
+
+// GetProxyPermissionsOk returns a tuple with the ProxyPermissions field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ApiKeyResponse) GetProxyPermissionsOk() ([]string, bool) {
+	if o == nil || IsNil(o.ProxyPermissions) {
+		return nil, false
+	}
+	return o.ProxyPermissions, true
+}
+
+// HasProxyPermissions returns a boolean if a field has been set.
+func (o *ApiKeyResponse) HasProxyPermissions() bool {
+	if o != nil && !IsNil(o.ProxyPermissions) {
+		return true
+	}
+
+	return false
+}
+
+// SetProxyPermissions gets a reference to the given []string and assigns it to the ProxyPermissions field.
+func (o *ApiKeyResponse) SetProxyPermissions(v []string) {
+	o.ProxyPermissions = v
 }
 
 // GetName returns the Name field value
@@ -191,6 +225,9 @@ func (o ApiKeyResponse) MarshalJSON() ([]byte, error) {
 
 func (o ApiKeyResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.ProxyPermissions) {
+		toSerialize["proxyPermissions"] = o.ProxyPermissions
+	}
 	toSerialize["name"] = o.Name
 	toSerialize["value"] = o.Value
 	toSerialize["createdAt"] = o.CreatedAt
@@ -243,6 +280,7 @@ func (o *ApiKeyResponse) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "proxyPermissions")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "value")
 		delete(additionalProperties, "createdAt")

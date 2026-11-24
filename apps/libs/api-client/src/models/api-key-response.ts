@@ -16,6 +16,10 @@
 
 export interface ApiKeyResponse {
     /**
+     * Outbound proxy permissions
+     */
+    'proxyPermissions'?: Array<ApiKeyResponseProxyPermissionsEnum>;
+    /**
      * The name of the API key
      */
     'name': string;
@@ -37,6 +41,13 @@ export interface ApiKeyResponse {
     'expiresAt': Date | null;
 }
 
+export const ApiKeyResponseProxyPermissionsEnum = {
+    WRITE_PROXIES: 'write:proxies',
+    DELETE_PROXIES: 'delete:proxies',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type ApiKeyResponseProxyPermissionsEnum = typeof ApiKeyResponseProxyPermissionsEnum[keyof typeof ApiKeyResponseProxyPermissionsEnum];
 export const ApiKeyResponsePermissionsEnum = {
     WRITE_REGISTRIES: 'write:registries',
     DELETE_REGISTRIES: 'delete:registries',
