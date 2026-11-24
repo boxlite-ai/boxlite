@@ -129,6 +129,21 @@ impl LiveState {
 // BOX IMPL
 // ============================================================================
 
+struct StartingGuard<'a>(&'a AtomicBool);
+
+impl<'a> StartingGuard<'a> {
+    fn enter(flag: &'a AtomicBool) -> Self {
+        flag.store(true, Ordering::SeqCst);
+        Self(flag)
+    }
+}
+
+impl Drop for StartingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Box implementation - created immediately, holds config and state.
 ///
 /// VM resources are held in LiveState and lazily initialized on first use.
@@ -142,6 +157,7 @@ pub(crate) struct BoxImpl {
     /// When cancelled (via stop() or runtime shutdown), all operations abort gracefully.
     pub(crate) shutdown_token: CancellationToken,
     auto_removed: AtomicBool,
+    starting: AtomicBool,
 
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
@@ -201,6 +217,7 @@ impl BoxImpl {
             layout,
             shutdown_token,
             auto_removed: AtomicBool::new(false),
+            starting: AtomicBool::new(false),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
@@ -828,8 +845,36 @@ impl BoxImpl {
         ))
     }
 
+    pub(crate) fn is_starting(&self) -> bool {
+        self.starting.load(Ordering::SeqCst)
+    }
+
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
-        match self.with_operation(self.stop_inner()).await {
+        let result = self.with_operation(self.stop_inner()).await;
+        self.normalize_stop_result(result)
+    }
+
+    /// Stop this box only if its refreshed persisted state is still owned by `owner`.
+    ///
+    /// Used by runtime shutdown so ownership is rechecked under the per-box
+    /// lifecycle write lock and a box restarted by another process is left alone.
+    pub(crate) async fn stop_if_owned_by(
+        &self,
+        owner: crate::util::PidRecord,
+    ) -> BoxliteResult<()> {
+        let result = self
+            .with_operation(async {
+                if !self.state.read().is_owned_by(owner) {
+                    return Ok(());
+                }
+                self.stop_inner().await
+            })
+            .await;
+        self.normalize_stop_result(result)
+    }
+
+    fn normalize_stop_result(&self, result: BoxliteResult<()>) -> BoxliteResult<()> {
+        match result {
             Err(BoxliteError::NotFound(_))
                 if (self.auto_removed.load(Ordering::Acquire)
                     || (self.shutdown_token.is_cancelled()
@@ -1443,6 +1488,10 @@ impl BoxImpl {
         // container-start done up front — `ensure_container_started` must not try
         // to run it a second time.
         let adopting_running = state.status == BoxStatus::Running;
+        let _starting = (!adopting_running).then(|| StartingGuard::enter(&self.starting));
+        if !adopting_running && self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped("Runtime is shutting down".into()));
+        }
 
         // Build the box (lock is held)
         // New and restarted VMs remain guarded until DB persistence succeeds.
@@ -1491,6 +1540,10 @@ impl BoxImpl {
                 None
             };
 
+        if !adopting_running {
+            self.abort_start_on_shutdown(&live_state, || cleanup_guard.disarm())?;
+        }
+
         {
             // PidFile is the single source of truth for shim identity
             // (PID + optional starttime fingerprint). The starttime is
@@ -1516,9 +1569,9 @@ impl BoxImpl {
             }
             state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
-            // A box entering Running publishes its PID, status, and `started_at`
-            // timestamp atomically. An adopted Running box is the same lifecycle,
-            // so its existing Some/None value must be preserved.
+            // A box entering Running publishes its PID, status, `started_at`
+            // timestamp, and spawning owner atomically. An adopted Running box
+            // is the same lifecycle, so its existing values must be preserved.
             if !adopting_running {
                 state.mark_started();
             }
@@ -1578,6 +1631,22 @@ impl BoxImpl {
             is_first_start
         );
         Ok(live_state)
+    }
+
+    fn abort_start_on_shutdown(
+        &self,
+        live: &LiveState,
+        disarm_cleanup: impl FnOnce(),
+    ) -> BoxliteResult<()> {
+        if !self.shutdown_token.is_cancelled() {
+            return Ok(());
+        }
+        if let Ok(mut handler) = live.handler.lock() {
+            let _ = handler.stop();
+        }
+        let _ = std::fs::remove_file(self.layout.pid_file_path());
+        disarm_cleanup();
+        Err(BoxliteError::Stopped("Runtime is shutting down".into()))
     }
 }
 
@@ -2561,6 +2630,7 @@ mod tests {
         let mut state = BoxState::new();
         state.status = BoxStatus::Running;
         state.pid = Some(pid);
+        state.mark_started();
         let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
         runtime
             .disk_lock_manager
