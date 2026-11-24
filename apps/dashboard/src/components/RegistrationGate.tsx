@@ -134,6 +134,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
     <SetupLayout
       title={canRegister ? title : 'Let’s try that again'}
       description={canRegister ? description : 'We couldn’t confirm your account. Try again to continue.'}
+      compactFooter={canRegister && Boolean(legal)}
     >
       {message && (
         <p role="alert" className="max-w-md text-body text-destructive">
