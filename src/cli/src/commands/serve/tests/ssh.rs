@@ -453,6 +453,7 @@ async fn serve_over(
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
+        browser_sessions: Default::default(),
     });
     let (base, server) = serve_router(Arc::clone(&state)).await;
     (base, state, server)

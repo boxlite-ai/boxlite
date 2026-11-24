@@ -6,6 +6,11 @@ mdeploy selects the stage's cloud engine, validates its inputs, and applies one 
 
 [Infrastructure index](../README.md) · [Deployment walkthrough](../docs/deployment.md) · [Architecture](../docs/architecture.md)
 
+mdeploy derives API runtime IAM from explicit capabilities. Read
+[API runtime IAM capabilities](../docs/api-runtime-iam.md) before adding an API permission,
+diagnosing Filestore lookup permissions, or deciding whether deployment grants a role
+automatically.
+
 ## Execution path
 
 ```text
@@ -165,10 +170,10 @@ These declarations leave revision labels and all other environments unchanged. S
 GCP workload service accounts keep the `<appShort>-<stage>-<artifact>-run` identity format and the 30-character limit.
 For `stage`, two artifact segments use shorter names:
 
-| Workload | Service account ID | Characters |
-| --- | --- | --- |
-| Collector | `bl-app-stage-otel-run` | 21 |
-| Registry Proxy | `bl-app-stage-registry-run` | 25 |
+| Workload       | Service account ID          | Characters |
+| -------------- | --------------------------- | ---------- |
+| Collector      | `bl-app-stage-otel-run`     | 21         |
+| Registry Proxy | `bl-app-stage-registry-run` | 25         |
 
 Other roles and environments retain their existing IDs. Logical resource names, workload roles and IAM references remain attached to the same account resources.
 Do not rename existing dev/prod accounts: changing an account ID replaces the identity.
@@ -213,7 +218,8 @@ A commit or open PR merge commit is accepted for `dev` and `stage`; both may use
 `prod` requires a published release; release dispatches run from `main`.
 Stage resolves stable tags to their commits and uses SHA-tagged images and a commit Runner build.
 Dev/prod release deployments import the existing version-qualified images from GHCR.
-Commit planning and conditional image/Runner builds share one target Environment approval; commit deployment requires a second approval.
+Commit images and Runner artifacts each have a parallel plan/build matrix leg with isolated checkout and cloud credentials.
+Review both pending preparation jobs as one target Environment batch; commit deployment requires a separate approval.
 Published releases verify, import and deploy within one protected job, requiring one approval.
 The shared image and deployment actions preserve the same artifact and apply checks. Check actual environment reviewers and branch protections separately: source
 configuration is not evidence of the live GitHub settings.

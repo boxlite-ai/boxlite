@@ -259,7 +259,7 @@ fn make(spec: DeviceSpec) -> Fixture {
         device,
         Arc::clone(&interrupt),
         MmioResources {
-            memory,
+            memory: memory.into(),
             sender: events.sender(),
             worker: Arc::clone(&worker) as Arc<dyn WorkerControl>,
         },
@@ -287,7 +287,7 @@ fn try_make(spec: DeviceSpec) -> crate::error::Result<MmioTransport> {
         device,
         interrupt,
         MmioResources {
-            memory,
+            memory: memory.into(),
             sender: events.sender(),
             worker,
         },
@@ -833,7 +833,7 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
                 device,
                 interrupt,
                 MmioResources {
-                    memory,
+                    memory: memory.into(),
                     sender: resources.event_sender(),
                     worker,
                 },
@@ -884,14 +884,14 @@ fn the_transport_claims_a_four_kib_window() {
 }
 
 #[test]
-fn slots_hand_out_consecutive_windows_and_lines_until_exhausted() {
+fn slots_hand_out_consecutive_windows_and_skip_the_rtc_line_until_exhausted() {
     let mut slots = Slots::new();
     for index in 0..Slots::CAPACITY {
         let slot = slots.take().unwrap();
         assert_eq!(slot.base, 0xd000_0000 + u64::from(index) * MMIO_WINDOW_LEN);
-        assert_eq!(slot.gsi, 5 + index);
+        assert_eq!(slot.gsi, if index < 3 { 5 + index } else { 6 + index });
     }
-    assert_eq!(Slots::CAPACITY, 19);
+    assert_eq!(Slots::CAPACITY, 18);
     assert!(matches!(slots.take(), Err(Error::VirtioSlotsExhausted)));
     assert_eq!(
         Error::VirtioSlotsExhausted.to_string(),
@@ -968,9 +968,11 @@ fn add_device_puts_each_device_in_its_own_slot() {
     let events = EventLoop::new().unwrap();
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
     let workers = VirtioWorkers::new(events.sender()).unwrap();
+    let mut controls = crate::control::ControlRegistry::default();
     let ctx = DeviceContext {
-        memory: &memory,
+        memory: &memory.clone().into(),
         workers: &workers,
+        controls: &mut controls,
     };
 
     let mut slots = Slots::new();

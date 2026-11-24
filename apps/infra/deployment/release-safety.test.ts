@@ -659,6 +659,10 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * appear without failing anything.
    */
   const WILDCARD_RESOURCE_STATEMENTS: Array<[string, string]> = [
+    [
+      'DisassociateCredentialIngressInThisRegion',
+      'WAF disassociation requires *; exact action and region are pinned below',
+    ],
     ['BoxLiteAwsControlPlane', 'the control-plane calls SST makes have no resource-level ARNs'],
     ['RunnerCommandStatus', 'SSM command-history APIs are list-shaped and take no resource'],
     ['ReadIamAndAccountMetadata', 'account and IAM reads SST performs before it knows any resource'],
@@ -678,6 +682,14 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * specific API, not of its spelling — a new one has to be added here deliberately.
    */
   const RESOURCELESS_SECRETSMANAGER = ['secretsmanager:ListSecrets', 'secretsmanager:GetRandomPassword']
+
+  assert.deepEqual(findStatement(statements, 'DisassociateCredentialIngressInThisRegion'), {
+    Sid: 'DisassociateCredentialIngressInThisRegion',
+    Effect: 'Allow',
+    Action: 'wafv2:DisassociateWebACL',
+    Resource: '*',
+    Condition: { StringEquals: { 'aws:RequestedRegion': '<REGION>' } },
+  })
 
   for (const [sid] of WILDCARD_RESOURCE_STATEMENTS) {
     const statement = statements.find((candidate: any) => candidate.Sid === sid)
@@ -2071,15 +2083,15 @@ test('every workflow that selects a deployment Environment does so from an allow
         selected || !environment.includes('${{'),
         `${where} selects an Environment through an expression this guard cannot follow: ${environment}`,
       )
-      // A workflow with no dispatch has no dispatcher, and the allowlist exists
-      // to stop one reaching an Environment through a typo. It could not pass
-      // the check either way: `workflow_call` inputs take only boolean, number
-      // and string, so `choice` is a shape a callee cannot declare. What covers
-      // it instead is this same sweep reaching its caller — mdeploy-all binds
-      // the stage from its own allowlisted input. So the rule here is that the
-      // workflow really is unreachable by hand.
+      // Automatic plugin publication has one fixed credential environment.
+      // Reusable deploy workflows inherit an allowlisted stage from their callers.
       const byHand = workflow.on?.workflow_dispatch !== undefined
-      if (!byHand) {
+      if (workflow.on?.workflow_run !== undefined) {
+        assert.deepEqual(Object.keys(workflow.on), ['workflow_run'], `${where} can also be triggered outside its builder`)
+        assert.equal(entry, 'publish-plugins.yml', `${where} is not an allowed automatic publisher`)
+        assert.equal(environment, 'boxlite-plugin-ghcr', `${where} must use the fixed plugin environment`)
+        assert.equal(job.needs, 'verify', `${where} can reach the environment without verifying its build`)
+      } else if (!byHand) {
         assert.ok(
           workflow.on?.workflow_call !== undefined,
           `${where} is reachable by neither dispatch nor call, so nothing can run it`,
@@ -2120,7 +2132,7 @@ test('every workflow that selects a deployment Environment does so from an allow
     // line. Listed here deliberately: the point of pinning the set is that a
     // seventh deploy workflow is a reviewed addition rather than one that
     // appeared.
-    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild.yml', 'mdeploy-all.yml'],
+    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild.yml', 'mdeploy-all.yml', 'publish-plugins.yml'],
     'the swept set no longer matches the deployment workflows',
   )
 })

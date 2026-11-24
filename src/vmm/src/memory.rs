@@ -4,11 +4,11 @@
 //! Backing-memory ownership and guest address layout.
 //!
 //! [`GuestRam`] allocates the RAM a VM uses and registers it with the host
-//! hypervisor. It releases the backing only after every registration has been
-//! removed again: a `GuestRam` dropped while a registration may still exist
-//! leaks the backing instead, so the host VM never references freed memory.
-//! Host-side users of guest memory hold clones of the shared [`Arc`] and go
-//! through vm-memory's volatile access API, never plain references.
+//! hypervisor. It releases the backing once every registration is removed or
+//! the VM and its vCPUs are closed. A `GuestRam` dropped while a registration may
+//! still exist leaks the backing, so the host VM never references freed memory.
+//! Devices hold clones of the shared [`GuestMemoryView`] and load snapshots
+//! for guest access through vm-memory's volatile API.
 
 use std::{io, ptr::NonNull, sync::Arc};
 
@@ -21,34 +21,128 @@ use crate::error::{Error, Result};
 /// (M8) changes this alias rather than every holder.
 pub(crate) type GuestMemoryMmap = vm_memory::GuestMemoryMmap<()>;
 
+/// The replaceable guest memory map host-side users share.
+///
+/// [`GuestAddressSpace::memory`] loads the current snapshot. A caller loads it
+/// once per unit of work, such as one worker event, and drops it before
+/// returning, so a later replacement of the map becomes visible to the next
+/// unit. A held snapshot keeps every region it names mapped until it drops.
+pub(crate) type GuestMemoryView = vm_memory::GuestMemoryAtomic<GuestMemoryMmap>;
+
 /// Bytes per MiB.
 const MIB: u64 = 1 << 20;
 
-/// Guest physical address of the first RAM byte: 0 on x86_64, 2 GiB on arm64,
-/// where the interrupt controller, UART, RTC and device windows sit below RAM.
-#[cfg(target_arch = "x86_64")]
-pub(crate) const RAM_START: u64 = 0;
-#[cfg(target_arch = "aarch64")]
-pub(crate) const RAM_START: u64 = 0x8000_0000;
+/// Alignment of guest RAM ranges, independent of the host page size.
+const GUEST_PAGE_SIZE: u64 = 4 << 10;
 
 /// Where the x86_64 32-bit MMIO hole begins: the VMM design and Firecracker
 /// both reserve the gigabyte below 4 GiB for devices.
-#[cfg(target_arch = "x86_64")]
 pub(crate) const MMIO_HOLE_START: u64 = 0xC000_0000;
+/// End of the x86_64 32-bit MMIO hole and starting GPA of high RAM.
+const MMIO_HOLE_END: u64 = 0x1_0000_0000;
 
-/// Largest `memory_mib` this layout places: the x86_64 RAM below the MMIO
-/// hole. Every architecture keeps the same bound until a later change adds
-/// the x86_64 region above 4 GiB and the arm64 address-space limit.
-pub(crate) const MAX_MEMORY_MIB: u32 = 3072;
+/// Guest RAM starts at `start` and skips the optional half-open MMIO hole.
+#[derive(Debug)]
+pub(crate) struct RamLayout {
+    start: u64,
+    hole: Option<(u64, u64)>,
+}
+
+impl RamLayout {
+    /// Compute the nonempty RAM ranges without allocating guest backing.
+    /// The RAM start, size and any hole endpoints must be guest-page aligned.
+    pub(crate) fn ranges(&self, size: u64) -> io::Result<Vec<(GuestAddress, usize)>> {
+        assert!(self.start.is_multiple_of(GUEST_PAGE_SIZE));
+        assert!(size.is_multiple_of(GUEST_PAGE_SIZE));
+        let (low_len, high) = if let Some((hole_start, hole_end)) = self.hole {
+            assert!(hole_start.is_multiple_of(GUEST_PAGE_SIZE));
+            assert!(hole_end.is_multiple_of(GUEST_PAGE_SIZE));
+            let low_capacity = hole_start
+                .checked_sub(self.start)
+                .filter(|_| hole_start < hole_end)
+                .ok_or_else(|| io::Error::other("invalid guest RAM hole"))?;
+            let high = size.checked_sub(low_capacity).map(|len| (hole_end, len));
+            (size.min(low_capacity), high)
+        } else {
+            (size, None)
+        };
+
+        std::iter::once((self.start, low_len))
+            .chain(high)
+            .filter(|&(_, len)| len != 0)
+            .map(|(start, len)| {
+                start
+                    .checked_add(len)
+                    .ok_or_else(|| io::Error::other("guest RAM end GPA overflows"))?;
+                Ok((
+                    GuestAddress(start),
+                    usize::try_from(len).map_err(io::Error::other)?,
+                ))
+            })
+            .collect()
+    }
+}
+
+#[cfg_attr(
+    not(any(test, target_arch = "x86_64")),
+    expect(dead_code, reason = "Cross-architecture RAM layout test input.")
+)]
+pub(crate) const X86_LAYOUT: RamLayout = RamLayout {
+    start: 0,
+    hole: Some((MMIO_HOLE_START, MMIO_HOLE_END)),
+};
+#[cfg_attr(
+    not(any(test, target_arch = "aarch64")),
+    expect(dead_code, reason = "Cross-architecture RAM layout test input.")
+)]
+// The interrupt controller, UART, RTC and device windows sit below RAM.
+pub(crate) const ARM64_LAYOUT: RamLayout = RamLayout {
+    start: 0x8000_0000,
+    hole: None,
+};
 
 #[cfg(target_arch = "x86_64")]
-const _: () = assert!(RAM_START + MAX_MEMORY_MIB as u64 * MIB <= MMIO_HOLE_START);
+const LAYOUT: RamLayout = X86_LAYOUT;
+#[cfg(target_arch = "aarch64")]
+const LAYOUT: RamLayout = ARM64_LAYOUT;
 
-/// The guest RAM ranges for `memory_mib`: one region at [`RAM_START`].
+/// Guest physical address of the first RAM byte, for layout assertions.
+#[cfg(test)]
+pub(crate) const RAM_START: u64 = LAYOUT.start;
+
+/// The guest RAM ranges for `memory_mib` on the target architecture.
 pub(crate) fn ram_ranges(memory_mib: u32) -> Vec<(GuestAddress, usize)> {
-    // A MiB count fits `usize` on the 64-bit hosts the hypervisor supports.
-    let size = (u64::from(memory_mib) * MIB) as usize;
-    vec![(GuestAddress(RAM_START), size)]
+    // Every u32 MiB count fits in usize on supported 64-bit hosts, and adding
+    // either layout's start or hole cannot overflow the GPA space.
+    LAYOUT
+        .ranges(u64::from(memory_mib) * MIB)
+        .expect("u32 MiB fits the target RAM layout")
+}
+
+/// Checks each nonempty RAM range against an exclusive GPA limit.
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only Linux x86_64 preflights the RAM layout yet.")
+)]
+pub(crate) fn check_ram_end(
+    memory_mib: u32,
+    ranges: &[(GuestAddress, usize)],
+    limit_end: u64,
+    limit_name: &'static str,
+) -> Result<()> {
+    for &(start, len) in ranges.iter().filter(|(_, len)| *len != 0) {
+        let end = start.0.checked_add(len as u64);
+        if end.is_none_or(|end| end > limit_end) {
+            return Err(Error::GuestMemoryAddressLimit {
+                memory_mib,
+                // An overflowing end cannot be represented in the error.
+                end: end.unwrap_or(u64::MAX),
+                limit_end,
+                limit: limit_name,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Query once per reporting device; a failed query must not guess granularity.
@@ -172,9 +266,12 @@ fn interior_pages(start: usize, len: usize, page_size: usize) -> (usize, usize) 
 /// Guest RAM owned by the VMM.
 #[derive(Debug)]
 pub(crate) struct GuestRam {
-    memory: Arc<GuestMemoryMmap>,
-    /// Regions `0..mapped`, in ascending address order, are registered with
-    /// the host VM.
+    memory: GuestMemoryView,
+    /// The boot RAM map. `GuestRam` registers and releases exactly these
+    /// regions, whatever later views add or remove.
+    boot_memory: Arc<GuestMemoryMmap>,
+    /// Regions `0..mapped`, in ascending address order, may still have
+    /// mappings with the host VM.
     mapped: usize,
 }
 
@@ -185,7 +282,7 @@ impl GuestRam {
     /// each region: fresh owned MAP_PRIVATE | MAP_ANONYMOUS mappings, without
     /// files, raw pointers or hugetlb. Distinct live allocations have disjoint
     /// host virtual ranges; this constructor creates no second GPA/HVA view of
-    /// one allocation. Arc clones retain the same mapping. Kernel zero-page
+    /// one allocation. Snapshots retain the same mapping. Kernel zero-page
     /// sharing or COW does not create another VMM mapping. Reporting rejects
     /// other backing kinds instead of extending this ownership contract.
     pub(crate) fn new(ranges: &[(GuestAddress, usize)]) -> Result<Self> {
@@ -195,20 +292,38 @@ impl GuestRam {
                 bytes,
                 source: io::Error::other(source),
             })?;
+        let boot_memory = Arc::new(memory);
         Ok(Self {
-            memory: Arc::new(memory),
+            memory: GuestMemoryView::from(Arc::clone(&boot_memory)),
+            boot_memory,
             mapped: 0,
         })
     }
 
-    /// The shared guest memory every host-side user clones.
-    pub(crate) fn memory(&self) -> &Arc<GuestMemoryMmap> {
+    /// The shared guest memory view every host-side user clones.
+    pub(crate) fn memory(&self) -> &GuestMemoryView {
         &self.memory
+    }
+
+    /// The map used by the boot loader and host VM registrations.
+    pub(crate) fn boot_memory(&self) -> &Arc<GuestMemoryMmap> {
+        &self.boot_memory
+    }
+
+    /// The guest RAM ranges this instance backs, in ascending guest order.
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        expect(dead_code, reason = "Only Linux x86_64 prepares boot data yet.")
+    )]
+    pub(crate) fn ranges(&self) -> impl Iterator<Item = (GuestAddress, usize)> + '_ {
+        self.boot_memory()
+            .iter()
+            .map(|region| (region.start_addr(), region.len() as usize))
     }
 
     /// Each RAM range as the hypervisor registers it, in ascending guest order.
     pub(crate) fn regions(&self) -> impl Iterator<Item = MemoryRegion> + '_ {
-        self.memory.iter().map(|region| MemoryRegion {
+        self.boot_memory().iter().map(|region| MemoryRegion {
             guest_addr: region.start_addr().0,
             // vm-memory rejects a failed mmap, so a region pointer is never null.
             host_addr: NonNull::new(region.as_ptr()).expect("mmap returned a null mapping"),
@@ -216,8 +331,8 @@ impl GuestRam {
         })
     }
 
-    /// Registers every region with `vm`, lowest address first. A failure
-    /// removes the regions registered so far and returns the failure.
+    /// Registers every region with `vm`, lowest address first. On failure,
+    /// attempts to remove any registrations and returns the original error.
     ///
     /// # Panics
     ///
@@ -229,12 +344,18 @@ impl GuestRam {
         for region in &regions {
             // SAFETY: the region is a private anonymous mapping this `GuestRam`
             // owns, and it backs only this guest range. The backing stays
-            // mapped until `unmap` succeeds for every region: `Drop` leaks it
-            // otherwise. Host-side access goes through vm-memory's volatile API
-            // on `memory`, never through Rust references.
+            // mapped until all registrations are removed or the VM and its vCPUs
+            // close. `Drop` leaks it if a registration may still exist. Host-side
+            // access goes through vm-memory's volatile API on `memory`, never
+            // through Rust references.
             if let Err(error) = unsafe { vm.map_memory(region) } {
-                // A failed rollback leaves `mapped` above zero, so `Drop` leaks.
-                let _ = self.unmap(vm);
+                // The backend may keep slices it registered before the failure. Count this
+                // region so the rollback below attempts it too; a failed removal keeps the
+                // backing alive.
+                self.mapped += 1;
+                if let Err(rollback) = self.unmap(vm) {
+                    tracing::warn!(?rollback, "failed to roll back guest RAM mappings");
+                }
                 return Err(error.into());
             }
             self.mapped += 1;
@@ -255,6 +376,16 @@ impl GuestRam {
         }
         Ok(())
     }
+
+    /// Allows the backing to be freed on drop after its host VM has closed.
+    ///
+    /// # Safety
+    ///
+    /// The VM that registered this RAM and all its vCPUs must have been
+    /// dropped, and all host-side users must have stopped accessing the RAM.
+    pub(crate) unsafe fn release_after_vm_close(&mut self) {
+        self.mapped = 0;
+    }
 }
 
 impl Drop for GuestRam {
@@ -262,7 +393,7 @@ impl Drop for GuestRam {
         if self.mapped > 0 {
             // The host VM may still reference the range; leaking beats freeing
             // memory the guest can still write.
-            std::mem::forget(Arc::clone(&self.memory));
+            std::mem::forget(Arc::clone(&self.boot_memory));
         }
     }
 }

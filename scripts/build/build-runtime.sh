@@ -224,46 +224,13 @@ collect_libraries() {
     cd "$PROJECT_ROOT"
 
     # Build boxlite crate to generate OUT_DIR with bundled libraries
-    local build_flag=""
+    local build_flags=()
     if [ "$PROFILE" = "release" ]; then
-        build_flag="--release"
+        build_flags+=(--release)
     fi
 
-    # Build boxlite crate and capture the exact OUT_DIR from cargo's JSON output
-    # This is deterministic - no guessing based on directory names or timestamps
-    local runtime_src=""
-    runtime_src=$(cargo build $build_flag --lib -p boxlite --message-format=json 2>/dev/null | \
-        grep -o '"out_dir":"[^"]*"' | \
-        tail -1 | \
-        cut -d'"' -f4)
-
-    if [ -n "$runtime_src" ]; then
-        runtime_src="$runtime_src/runtime"
-    fi
-
-    # Fallback: if JSON parsing failed, find by modification time (newest first)
-    if [ -z "$runtime_src" ] || [ ! -d "$runtime_src" ]; then
-        local out_dir
-        out_dir=$(cargo metadata --format-version 1 2>/dev/null | \
-            grep -o '"target_directory":"[^"]*"' | \
-            cut -d'"' -f4)
-
-        if [ -z "$out_dir" ]; then
-            out_dir="$PROJECT_ROOT/target"
-        fi
-
-        # Sort by modification time (newest first) to get the most recent build
-        runtime_src=$(find "$out_dir/$PROFILE/build/boxlite-"*/out/runtime -type d -print0 2>/dev/null | \
-            xargs -0 ls -dt 2>/dev/null | head -1)
-    fi
-
-    if [ -z "$runtime_src" ] || [ ! -d "$runtime_src" ]; then
-        print_error "Could not find runtime libraries directory"
-        echo "Expected location: $out_dir/$PROFILE/build/boxlite-*/out/runtime"
-        exit 1
-    fi
-
-    RUNTIME_LIBS_DIR="$runtime_src"
+    RUNTIME_LIBS_DIR=$(bash "$SCRIPT_BUILD_DIR/cargo-runtime-dir.sh" \
+        "${build_flags[@]}" --lib -p boxlite)
     print_success "Found libraries at: $RUNTIME_LIBS_DIR"
 }
 

@@ -1,3 +1,4 @@
+import { subscriptionCancellationHandlers } from './subscription-cancellation-handlers'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -59,6 +60,25 @@ const API_URL = import.meta.env.VITE_API_URL
 const billingPreview = new URLSearchParams(window.location.search).get('preview')
 const newUserPreview = billingPreview === 'new-user' || billingPreview === 'new-user-unfunded'
 
+// Saved cards answer set-default and remove like the billing API: removing the
+// default card promotes the next saved card.
+const MOCK_PAYMENT_METHODS: PaymentMethod[] = [
+  {
+    id: '0f04d55c-7d77-4a19-af78-f4a18b2d5f91',
+    isDefault: true,
+    paymentProviderType: 'stripe',
+    providerMethodId: 'pm_mock_visa',
+    details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
+  },
+  {
+    id: 'bce26ca7-771d-47c4-898c-b73c93fd52a7',
+    isDefault: false,
+    paymentProviderType: 'stripe',
+    providerMethodId: 'pm_mock_mastercard',
+    details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
+  },
+]
+
 // Quickstart's agent handoff waits for a box created after it handed the key
 // over, then for that box enabling inbound access. Static fixtures can reach neither
 // stage, so both are exposed behind a switch that is off by default:
@@ -95,7 +115,22 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
   })
 }
 
+function planCatalogHandlers(catalog: () => Plan[]) {
+  return [
+    http.get(`${BILLING_API_URL}/plan`, () => HttpResponse.json(catalog())),
+    http.get(`${BILLING_API_URL}/organization/:organizationId/plan/trial-eligibility`, () => {
+      const hasTrial = billingPreview === 'trial-eligible' && MOCK_PAYMENT_METHODS.some((method) => method.isDefault)
+      const plans = catalog().map((plan) => {
+        const eligible = hasTrial && plan.selfServe && (plan.priceMonthlyCents ?? 0) > 0
+        return { name: plan.name, eligible, durationSeconds: eligible ? 259200 : 0 }
+      })
+      return HttpResponse.json({ plans }, { headers: { 'Cache-Control': 'private, no-store' } })
+    }),
+  ]
+}
+
 export const handlers = [
+  ...subscriptionCancellationHandlers(API_URL, BILLING_API_URL),
   ...resourceStateHandlers(API_URL),
   ...ciHandlers(newUserPreview),
   ...sshHandlers,
@@ -529,9 +564,17 @@ export const handlers = [
       ],
     })
   }),
-  http.get(`${BILLING_API_URL}/plan`, async () => {
-    if (billingPreview === 'subscription-cards') {
-      return HttpResponse.json<Plan[]>([
+  ...planCatalogHandlers(() => {
+    const enterprise: Plan = {
+      id: 'enterprise',
+      name: 'Enterprise',
+      priceMonthlyCents: null,
+      includedQuotaCents: null,
+      concurrencyLimit: null,
+      selfServe: false,
+    }
+    if (billingPreview === 'subscription-cards' || billingPreview === 'trial-eligible') {
+      return [
         {
           id: 'starter',
           name: 'NoSubscription',
@@ -556,12 +599,13 @@ export const handlers = [
           concurrencyLimit: 1000,
           selfServe: true,
         },
-      ])
+        ...(billingPreview === 'trial-eligible' ? [enterprise] : []),
+      ]
     }
     // Mirrors the billing service's own standard-plan catalog (Subscription.md
     // v2 §3). Enterprise carries nulls — the contact-sales card, not missing
     // data — and is not self-serve.
-    return HttpResponse.json<Plan[]>([
+    return [
       {
         id: 'starter',
         name: 'Starter',
@@ -586,15 +630,8 @@ export const handlers = [
         concurrencyLimit: 1_000,
         selfServe: true,
       },
-      {
-        id: 'enterprise',
-        name: 'Enterprise',
-        priceMonthlyCents: null,
-        includedQuotaCents: null,
-        concurrencyLimit: null,
-        selfServe: false,
-      },
-    ])
+      enterprise,
+    ]
   }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/wallet`, async () => {
     const preview = billingPreview
@@ -609,6 +646,12 @@ export const handlers = [
       usageChargeMultiplier: '1.0000',
     })
   }),
+  http.post(`${API_URL}/organizations/:organizationId/coupon-claims`, async ({ request }) => {
+    const { couponCode } = (await request.json()) as { couponCode: string }
+    return couponCode === 'ACME50'
+      ? HttpResponse.json({ status: 'pending', result: null }, { status: 202 })
+      : HttpResponse.json({ code: 'coupon_not_found', message: 'Coupon not found.' }, { status: 404 })
+  }),
   http.post(`${BILLING_API_URL}/organization/:organizationId/redeem-coupon/:code`, async ({ params }) =>
     params.code === 'ACME50'
       ? HttpResponse.json({ message: 'Coupon ACME50 redeemed: $50.00 added to your wallet' })
@@ -620,22 +663,7 @@ export const handlers = [
     const url = new URL(request.url)
     const page = parseInt(url.searchParams.get('page') || '1', 10)
     const perPage = Math.min(parseInt(url.searchParams.get('perPage') || '20', 10), 100)
-    const paymentMethods: PaymentMethod[] = [
-      {
-        id: '0f04d55c-7d77-4a19-af78-f4a18b2d5f91',
-        isDefault: true,
-        paymentProviderType: 'stripe',
-        providerMethodId: 'pm_mock_visa',
-        details: { brand: 'visa', last4: '4242', expMonth: 8, expYear: 2027 },
-      },
-      {
-        id: 'bce26ca7-771d-47c4-898c-b73c93fd52a7',
-        isDefault: false,
-        paymentProviderType: 'stripe',
-        providerMethodId: 'pm_mock_mastercard',
-        details: { brand: 'mastercard', last4: '4444', expMonth: 12, expYear: 2029 },
-      },
-    ]
+    const paymentMethods = MOCK_PAYMENT_METHODS
     const totalCount = paymentMethods.length
     const totalPages = Math.ceil(totalCount / perPage)
     const start = (page - 1) * perPage
@@ -651,9 +679,23 @@ export const handlers = [
       },
     })
   }),
+  http.post(`${BILLING_API_URL}/organization/:organizationId/payment-methods/:cardId/default`, ({ params }) => {
+    if (!MOCK_PAYMENT_METHODS.some((method) => method.id === params.cardId)) {
+      return new HttpResponse(null, { status: 404 })
+    }
+    for (const method of MOCK_PAYMENT_METHODS) method.isDefault = method.id === params.cardId
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.delete(`${BILLING_API_URL}/organization/:organizationId/payment-methods/:cardId`, ({ params }) => {
+    const index = MOCK_PAYMENT_METHODS.findIndex((method) => method.id === params.cardId)
+    if (index < 0) return new HttpResponse(null, { status: 404 })
+    const [removed] = MOCK_PAYMENT_METHODS.splice(index, 1)
+    if (removed.isDefault && MOCK_PAYMENT_METHODS.length > 0) MOCK_PAYMENT_METHODS[0].isDefault = true
+    return new HttpResponse(null, { status: 204 })
+  }),
   http.get(`${BILLING_API_URL}/organization/:organizationId/plan`, async () => {
     const preview = billingPreview
-    if (newUserPreview || preview === 'balance-wallet') return HttpResponse.json({})
+    if (newUserPreview || preview === 'balance-wallet' || preview === 'trial-eligible') return HttpResponse.json({})
     const empty = preview === 'balance-empty' || preview === 'balance-wallet-fallback'
     // Mirrors the billing service's own mock seed: pro, a quarter used,
     // pinned mid-cycle so the meter renders deterministically. The real

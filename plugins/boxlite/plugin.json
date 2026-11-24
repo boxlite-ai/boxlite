@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "boxlite",
-  "version": "0.1.0",
-  "description": "Skills for building, deploying and updating apps on BoxLite cloud.",
+  "version": "0.2.0",
+  "description": "Run BoxLite with Cloud OAuth, Cloud API key, or an independent local runtime.",
   "author": {
     "name": "BoxLite",
     "url": "https://boxlite.ai"
@@ -10,13 +10,13 @@
   "homepage": "https://docs.boxlite.ai",
   "repository": "https://github.com/boxlite-ai/boxlite",
   "license": "Apache-2.0",
-  "keywords": ["boxlite", "cloud", "deployment", "cli", "skills"],
+  "keywords": ["boxlite", "cloud", "local", "mcp", "skills"],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "BoxLite",
-        "shortDescription": "Build and deploy BoxLite apps",
-        "longDescription": "Build or adapt applications, deploy them on BoxLite cloud boxes, register public HTTPS tunnels, and update or operate their services and storage through the BoxLite CLI.",
+        "shortDescription": "Run cloud or local sandboxes",
+        "longDescription": "Choose Cloud OAuth or Cloud API key through the same BoxLite MCP service, or use an independent local runtime. OAuth is the public-directory connection. API-key setup requires a native host supporting private MCP configuration; Local requires shell execution and virtualization. OAuth cannot create public tunnels. Preserve Box identity and data across updates, inspect failures, and clean up explicit resources.",
         "developerName": "BoxLite",
         "category": "Developer Tools",
         "capabilities": [
@@ -24,13 +24,16 @@
           "Write"
         ],
         "websiteURL": "https://boxlite.ai",
+        "supportURL": "https://boxlite.ai/contact",
+        "privacyPolicyURL": "https://boxlite.ai/legal/privacy",
+        "termsOfServiceURL": "https://boxlite.ai/legal/terms",
         "brandColor": "#111111",
         "composerIcon": "./assets/boxlite-icon.png",
         "logo": "./assets/boxlite-icon.png",
         "defaultPrompt": [
-          "Use BoxLite to build and deploy an application.",
-          "Deploy this project to BoxLite and give me its public URL.",
-          "Update my BoxLite app and verify the same public URL."
+          "Choose how to use BoxLite: Cloud OAuth, Cloud API key, or Local.",
+          "Create a BoxLite cloud Box and run hello using my selected connection.",
+          "Run my project in a local BoxLite sandbox without cloud login."
         ]
       },
       "onboardingSkill": "./skills/boxlite-setup/SKILL.md"

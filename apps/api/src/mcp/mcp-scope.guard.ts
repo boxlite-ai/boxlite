@@ -55,7 +55,7 @@ export function calledOperations(body: unknown): string[] {
   for (const message of [body].flat()) {
     const { method, params } = (message ?? {}) as { method?: unknown; params?: { name?: unknown; arguments?: unknown } }
     if (method !== 'tools/call' || typeof params?.name !== 'string' || CATALOG_READ_TOOLS.has(params.name)) continue
-    if (params.name === 'invoke_api_endpoint') {
+    if (params.name === 'read_api_endpoint' || params.name === 'write_api_endpoint') {
       ids.push(String((params.arguments as { operationId?: unknown } | undefined)?.operationId))
     } else {
       ids.push(params.name)

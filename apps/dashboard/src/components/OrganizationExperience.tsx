@@ -33,16 +33,17 @@ function OrganizationChoices({
   onComplete,
   currentId,
   onBusyChange,
+  leavesPage,
 }: {
   onComplete: () => void
   currentId?: string
   onBusyChange?: (busy: boolean) => void
+  leavesPage?: boolean
 }) {
   const choosing = !currentId
   const { organizations } = useOrganizations()
   const { organizationsApi } = useApi()
   const { user } = useAuth()
-  const { pathname } = useLocation()
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [pending, setPending] = useState<string | null>(null)
@@ -111,8 +112,7 @@ function OrganizationChoices({
             key={org.id}
             onClick={() => {
               if (org.id === currentId) return
-              const listPath = organizationSwitchPath(pathname)
-              if (!choosing && pathname !== listPath) setConfirmId(org.id)
+              if (!choosing && leavesPage) setConfirmId(org.id)
               else void select(org.id)
             }}
             aria-current={currentId === org.id ? 'true' : undefined}
@@ -259,7 +259,8 @@ export function OrganizationGate({ children }: { children: ReactNode }) {
 export function OrganizationSwitcher() {
   const { selectedOrganization } = useSelectedOrganization()
   const { organizations } = useOrganizations()
-  const { pathname } = useLocation()
+  const { pathname, search } = useLocation()
+  const destination = organizationSwitchPath(pathname, search)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const identity = (
@@ -297,7 +298,8 @@ export function OrganizationSwitcher() {
             <OrganizationChoices
               onBusyChange={setBusy}
               currentId={selectedOrganization?.id}
-              onComplete={() => window.location.assign(organizationSwitchPath(pathname))}
+              leavesPage={destination.split('?')[0] !== pathname}
+              onComplete={() => window.location.assign(destination)}
             />
           </PopoverContent>
         </Popover>

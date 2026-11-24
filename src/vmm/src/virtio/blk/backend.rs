@@ -15,7 +15,7 @@ use std::io;
 
 use crate::virtio::EventSource;
 
-/// What the device reports about a disk, fixed once the disk is open.
+/// What the device reports about a disk; only a grow changes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DiskInfo {
     /// The disk size in 512-byte sectors.
@@ -76,8 +76,13 @@ pub(crate) enum SubmitOutcome {
 /// A disk behind the block device. The device serializes every call, so a
 /// backend adds no lock of its own.
 pub(crate) trait DiskBackend: Send {
-    /// The disk's fixed information.
+    /// The disk's current information.
     fn disk_info(&self) -> DiskInfo;
+
+    /// Grows the disk to `bytes`, a multiple of the sector size no smaller
+    /// than the current capacity, and returns the new information. The device
+    /// calls it between requests, never with one in flight.
+    fn resize_grow(&mut self, bytes: u64) -> io::Result<DiskInfo>;
 
     /// Submits `request` under `token`, which is unique among the requests
     /// in flight. A synchronous backend runs the request inline and returns

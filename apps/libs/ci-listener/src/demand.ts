@@ -16,6 +16,7 @@ export interface LabelDemand {
   /** Snapshot fences are transport metadata and are never persisted in the counter payload. */
   key?: string
   version?: string
+  expiresAt?: number
   installationId: number
   accountId: number
   repositoryId: number
@@ -26,7 +27,14 @@ export interface LabelDemand {
   job: { id: number; runId: number }
 }
 const rank = { queued: 0, in_progress: 1, completed: 2 }
-export class DemandUncertain extends Error {}
+export class DemandUncertain extends Error {
+  constructor(
+    message?: string,
+    readonly requiresJobRefresh = false,
+  ) {
+    super(message)
+  }
+}
 export class DemandIdentityConflict extends Error {}
 const labelsFor = (labels: readonly string[]) => [...new Set(labels.map((label) => label.toLowerCase()))].sort()
 export const demandKey = (installation: number, repository: number, labels: readonly string[]) =>

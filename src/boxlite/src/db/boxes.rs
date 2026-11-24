@@ -14,6 +14,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use crate::BaseDiskID;
 use crate::litebox::config::BoxConfig;
 use crate::runtime::id::BoxID;
 use crate::runtime::types::BoxState;
@@ -189,6 +190,24 @@ impl BoxStore {
     /// Uses a transaction to ensure both inserts succeed or neither does.
     /// Follows Podman pattern of explicit transactions for multi-statement operations.
     pub fn save(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+        self.save_impl(config, state, None)
+    }
+
+    pub(crate) fn save_clone(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: &BaseDiskID,
+    ) -> BoxliteResult<()> {
+        self.save_impl(config, state, Some(base_disk_id))
+    }
+
+    fn save_impl(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: Option<&BaseDiskID>,
+    ) -> BoxliteResult<()> {
         let mut conn = self.db.conn();
         let tx = db_err!(conn.transaction())?;
 
@@ -217,6 +236,14 @@ impl BoxStore {
             params![config.id, state.status.as_str(), state.pid, state_json],
         ))?;
 
+        // A clone and its backing-disk dependency become visible together.
+        if let Some(base_disk_id) = base_disk_id {
+            db_err!(tx.execute(
+                "INSERT INTO base_disk_ref (base_disk_id, box_id) VALUES (?1, ?2)",
+                params![base_disk_id, config.id],
+            ))?;
+        }
+
         // Commit transaction
         db_err!(tx.commit())?;
 
@@ -233,6 +260,22 @@ impl BoxStore {
             (Some(c), Some(s)) => Ok(Some((c, s))),
             _ => Ok(None),
         }
+    }
+
+    /// List every persisted box configuration without requiring a state row.
+    pub fn list_configs(&self) -> BoxliteResult<Vec<BoxConfig>> {
+        let conn = self.db.conn();
+        let mut stmt = db_err!(conn.prepare("SELECT json FROM box_config"))?;
+        let rows = db_err!(stmt.query_map([], |row| row.get::<_, String>(0)))?;
+        let mut configs = Vec::new();
+        for row in rows {
+            let json = db_err!(row)?;
+            let config = serde_json::from_str(&json).map_err(|error| {
+                BoxliteError::Database(format!("Failed to deserialize config: {error}"))
+            })?;
+            configs.push(config);
+        }
+        Ok(configs)
     }
 
     /// List all boxes as (config, state) pairs.

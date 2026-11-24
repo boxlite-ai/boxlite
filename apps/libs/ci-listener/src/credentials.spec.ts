@@ -90,6 +90,13 @@ describe('CI shared credential ownership', () => {
   })
   const posts = () => calls.filter((call) => call.path.endsWith('/access_tokens'))
   const deletes = () => calls.filter((call) => call.path === '/installation/token')
+  it('rejects a new isolated reader after its credential owner closes', async () => {
+    await provider.open({ kind: 'jobs', repository: 11 })
+    await provider.close()
+    expect(() => provider.fork('scope/read')).toThrow('closed')
+    expect(posts()).toHaveLength(1)
+    expect(deletes()).toHaveLength(1)
+  })
   it.each(['app', 'pat'] as const)('retires %s locally after deployment takeover', async (kind) => {
     state = new ListenerState(db, namespace, 1)
     await state.activate()
@@ -239,6 +246,36 @@ describe('CI shared credential ownership', () => {
     expect(
       rows.filter((row) => row.key.startsWith('credential/')).map((row) => (row.payload as { phase: string }).phase),
     ).toEqual(['requested'])
+  })
+  it('retains issuance cooldown across replacement reader forks until its exact deadline', async () => {
+    const now = jest.spyOn(Date, 'now').mockImplementation(() => clock),
+      first = provider.fork('scope/read/first')
+    let replacement: ListenerCredentials | undefined
+    try {
+      failIssue = true
+      await expect(first.open({ kind: 'jobs', repository: 11 })).rejects.toMatchObject({ uncertain: true })
+      await first.close()
+      failIssue = false
+      replacement = provider.fork('scope/read/replacement')
+      await expect(replacement.open({ kind: 'jobs', repository: 11 })).rejects.toThrow('deferred')
+      expect(posts()).toHaveLength(1)
+      const otherRepository = await replacement.open({ kind: 'jobs', repository: 12 }),
+        otherPurpose = await replacement.open({ kind: 'repository-runners', repository: 11 })
+      expect(posts()).toHaveLength(3)
+      await otherRepository.close()
+      await otherPurpose.close()
+      clock += 59_999
+      await expect(replacement.open({ kind: 'jobs', repository: 11 })).rejects.toThrow('deferred')
+      expect(posts()).toHaveLength(3)
+      clock++
+      const resumed = await replacement.open({ kind: 'jobs', repository: 11 })
+      expect(resumed.credential.usable).toBe(true)
+      expect(posts()).toHaveLength(4)
+      await resumed.close()
+    } finally {
+      await Promise.all([first.close(), replacement?.close()])
+      now.mockRestore()
+    }
   })
   it('retires a late token response after the provider was closed', async () => {
     let entered!: () => void, release!: () => void

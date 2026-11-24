@@ -11,6 +11,7 @@ import { ReleasePipeline, releaseAssets, releaseReport, sendSlack, slackWebhook 
 
 const snapshot = JSON.parse(readFileSync(new URL('./fixtures/release-v0.13.1-assets.json', import.meta.url), 'utf8'))
 const repo = 'boxlite-ai/boxlite'
+const displayTitle = 'deploy dev · <@requested_by> · <!channel> & review'
 const tag = snapshot.tag_name
 const sha = '6c5855a654beb3ba952faceb9665b5c563770859'
 const webhook = 'https://hooks.slack.com/services/Tfixture/Bfixture/private-fixture-token'
@@ -117,7 +118,8 @@ const cliHarness = (t) => {
       '  const address = new URL(url)',
       '  const body = init.body ? JSON.parse(init.body) : undefined',
       "  appendFileSync(process.env.RELEASE_TEST_REQUESTS, JSON.stringify({ url, method: init.method, body }) + '\\n')",
-      "  if (address.hostname === 'hooks.slack.com') return new Response('ok')",
+      "  if (address.hostname === 'hooks.slack.com') return new Response('ok', { status: Number(process.env.SLACK_TEST_STATUS || 200) })",
+      "  if (address.pathname.endsWith('/actions/runs/10')) return Response.json({ id: 10, display_title: process.env.TEST_TITLE }, { status: Number(process.env.TITLE_TEST_STATUS || 200) })",
       "  if (address.hostname !== 'api.github.com') throw new Error('Unexpected test host')",
       "  if (init.method === 'POST' && address.pathname.endsWith('/dispatches')) {",
       '    return Response.json({ workflow_run_id: body.inputs.stage === "prod" ? 303 : body.inputs.tag ? 202 : 101 })',
@@ -155,6 +157,9 @@ const cliHarness = (t) => {
           ...process.env,
           GITHUB_REPOSITORY: repo,
           GITHUB_RUN_ID: '10',
+          GITHUB_WORKFLOW: 'mbuild-release',
+          GITHUB_ACTOR: 'github-actor',
+          TEST_TITLE: displayTitle,
           GITHUB_OUTPUT: output,
           GITHUB_STEP_SUMMARY: summary,
           TAG: tag,
@@ -196,34 +201,121 @@ test('workflow CLI waits for assets, records child runs, and reports their prod 
     e2e_run_id: '202',
     e2e_result: 'success',
     prod_run_id: '303',
+    phase: 'prod_dispatch',
   })
-  const dispatches = pipeline.requests.filter((request) => request.method === 'POST')
+  const dispatches = pipeline.requests.filter((request) => request.url.endsWith('/dispatches'))
   assert.equal(dispatches.length, 3)
   for (const request of dispatches) assert.equal(request.body.inputs.ref ?? request.body.inputs.tag, tag)
+  const notices = pipeline.requests.filter((request) => request.url === webhook)
+  assert.equal(notices.length, 1)
+  const dev = notices[0]
+  assert.ok(pipeline.requests.indexOf(dev) > pipeline.requests.indexOf(dispatches[0]))
+  assert.ok(pipeline.requests.indexOf(dev) < pipeline.requests.findIndex((r) => r.url.endsWith('/actions/runs/101')))
+  assert.equal(dev.body.blocks.at(-1).elements[0].url, 'https://github.com/' + repo + '/actions/runs/101')
   const report = cli('report', {
     RELEASE_RESULTS: JSON.stringify({ pipeline: { result: 'success', outputs } }),
   })
   assert.equal(report.status, 0, report.stderr)
   assert.match(report.summary, /Prod run: https:\/\/github.com\/boxlite-ai\/boxlite\/actions\/runs\/303/)
-  assert.equal(report.requests.length, 1)
-  const actions = report.requests[0].body.blocks.find((block) => block.type === 'actions')
+  const final = report.requests.find((r) => r.url === webhook)
+  for (const [message, environment] of [
+    [dev.body, 'dev'],
+    [final.body, 'prod'],
+  ]) {
+    const fields = message.blocks.flatMap((b) => b.fields ?? []).filter((f) => f.type === 'plain_text')
+    for (const value of [displayTitle, 'mbuild-release', 'github-actor', environment]) {
+      assert.ok(
+        fields.some((f) => f.text.endsWith('\n' + value)),
+        value,
+      )
+    }
+    assert.ok(fields.some((f) => f.text.startsWith('Phase\n') && f.text.length > 6))
+    assert.ok(!JSON.stringify(message.blocks.filter((b) => !b.fields)).includes('<!channel>'))
+  }
+  const actions = final.body.blocks.find((block) => block.type === 'actions')
   assert.equal(actions.elements[0].url, 'https://github.com/' + repo + '/actions/runs/' + outputs.prod_run_id)
 })
 
 test('workflow CLI rejects invalid configuration without network calls and preserves a failed report summary', (t) => {
   const cli = cliHarness(t)
   for (const [command, overrides, error] of [
-    ['assets', { SLACK_WEBHOOK_URL: '' }, /SLACK_WEBHOOK_URL/],
-    ['unknown', {}, /Expected assets, run, or report/],
+    ['assets', { SLACK_WEBHOOK_URL: 'malformed' }, /SLACK_WEBHOOK_URL/],
+    ['unknown', {}, /Expected assets, run, report, or approval/],
     ['run', { TAG: 'main' }, /TAG must be/],
     ['run', { GH_TOKEN: '' }, /GH_TOKEN is required/],
-    ['report', { SLACK_WEBHOOK_URL: '' }, /SLACK_WEBHOOK_URL/],
+    ['report', { SLACK_WEBHOOK_URL: 'malformed' }, /SLACK_WEBHOOK_URL/],
   ]) {
     const result = cli(command, overrides)
     assert.equal(result.status, 1, result.stderr)
     assert.match(result.stderr, error)
     assert.equal(result.requests.length, 0)
     if (command === 'report') assert.match(result.summary, /release pipeline failed/)
+  }
+})
+
+test('missing release webhook preserves asset checks, all dispatches and the final summary', (t) => {
+  const cli = cliHarness(t)
+  for (const secret of [undefined, '']) {
+    for (const command of ['assets', 'run', 'report']) {
+      const result = cli(command, { SLACK_WEBHOOK_URL: secret })
+      assert.equal(result.status, 0, result.stderr)
+      assert.ok(result.requests.every((r) => r.url.startsWith('https://api.github.com/')))
+      if (command === 'assets') assert.ok(result.requests.some((r) => r.url.includes('/assets?')))
+      if (command === 'run') assert.match(result.output, /prod_run_id=303/)
+      if (command === 'report') assert.match(result.summary, /Release assets/)
+    }
+  }
+})
+
+test('a failed notice or title lookup still follows the dispatched child exactly once', (t) => {
+  const cli = cliHarness(t)
+  for (const overrides of [{ SLACK_TEST_STATUS: '503' }, { TITLE_TEST_STATUS: '403' }]) {
+    const result = cli('run', overrides)
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stdout + result.stderr, /::warning::.*101/)
+    assert.doesNotMatch(result.stdout + result.stderr, /private-fixture-token/)
+    assert.equal(result.requests.filter((r) => r.url === webhook).length, overrides.SLACK_TEST_STATUS ? 1 : 0)
+    assert.equal(
+      result.requests.filter((r) => r.url.endsWith('/mdeploy-all.yml/dispatches') && r.body.inputs.stage === 'dev')
+        .length,
+      1,
+    )
+    assert.match(result.output, /prod_run_id=303/)
+  }
+})
+
+test('deployment CLI identifies the sender, approval batch and current run', (t) => {
+  const cli = cliHarness(t)
+  const env = {
+    GITHUB_WORKFLOW: 'mdeploy-all',
+    DEPLOY_ENVIRONMENT: 'dev',
+    APPROVAL_PHASE: 'Commit preparation approval',
+  }
+  const result = cli('approval', env)
+  assert.equal(result.status, 0, result.stderr)
+  const message = result.requests.find((r) => r.url === webhook).body
+  assert.equal(message.blocks.at(-1).elements[0].url, 'https://github.com/' + repo + '/actions/runs/10')
+  const fields = message.blocks.flatMap((b) => b.fields ?? [])
+  for (const value of [env.GITHUB_WORKFLOW, env.DEPLOY_ENVIRONMENT, env.APPROVAL_PHASE, 'github-actor', displayTitle]) {
+    assert.ok(fields.some((f) => f.type === 'plain_text' && f.text.endsWith('\n' + value)))
+  }
+  const disabled = cli('approval', { ...env, SLACK_WEBHOOK_URL: '' })
+  assert.equal(disabled.status, 0, disabled.stderr)
+  assert.deepEqual(disabled.requests, [])
+})
+
+test('failed and cancelled reports name the interrupted phase without prompting for approval', () => {
+  for (const [results, phase] of [
+    [{ resolve: { result: 'failure' } }, 'Release ref resolution'],
+    [{ publish: { result: 'failure' }, assets: { result: 'skipped' } }, 'Image publication'],
+    [{ assets: { result: 'cancelled' } }, 'Release assets'],
+    [{ pipeline: { result: 'failure', outputs: { phase: 'history' } } }, 'Dev validation history'],
+    [{ pipeline: { result: 'cancelled', outputs: { phase: 'e2e_wait' } } }, 'E2E cloud'],
+    [{ pipeline: { result: 'failure', outputs: { phase: 'prod_reviewers' } } }, 'Prod reviewer verification'],
+  ]) {
+    const { payload, summary } = releaseReport({ repo, tag, runId: '10', results })
+    assert.ok(payload.text.includes(phase) && summary.includes(phase))
+    assert.ok(!payload.blocks.some((b) => b.type === 'actions'))
   }
 })
 
@@ -313,6 +405,7 @@ test('full pipeline dispatches exact child IDs and preserves the release across 
     e2e_run_id: '202',
     e2e_result: 'success',
     prod_run_id: '303',
+    phase: 'prod_dispatch',
   })
   assert.equal(h.waits.length, 1)
   assert.ok(!h.calls.some((call) => call.path.endsWith('/actions/runs/303')))
@@ -332,6 +425,7 @@ test('failed and cancelled dev runs stop before E2E or prod dispatch', async () 
     assert.equal(h.calls.filter((call) => call.method === 'POST').length, 1)
     assert.equal(h.records.dev_run_id, '101')
     assert.equal(h.records.dev_result, conclusion)
+    assert.equal(h.records.phase, 'dev_wait')
   }
 })
 
@@ -361,7 +455,14 @@ test('deployment and E2E deadlines stop dispatching without cancelling children'
 test('uncertain dispatch responses are not retried or replaced with the latest run', async () => {
   for (const response of [new Response(null, { status: 204 }), json({ workflow_run_id: 0 }), json({}, 503)]) {
     const h = harness({ respond: (call) => (call.method === 'POST' ? response.clone() : undefined) })
-    await assert.rejects(h.client.run(), /unknown|valid run ID/)
+    let notified = false
+    await assert.rejects(
+      h.client.run(() => {
+        notified = true
+      }),
+      /unknown|valid run ID/,
+    )
+    assert.equal(notified, false)
     assert.equal(h.calls.filter((call) => call.method === 'POST').length, 1)
     assert.ok(!h.calls.some((call) => call.path.includes('/runs?')))
   }

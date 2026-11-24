@@ -53,6 +53,7 @@ export type ApiCapability =
    * cloud keeps no per-host data disk and is handed none of this.
    */
   | { kind: 'resize-runner-disks' }
+  | { kind: 'read-filestore-instances'; projects: readonly string[] }
 
 /*
  * The two public names, from the one module that composes them.

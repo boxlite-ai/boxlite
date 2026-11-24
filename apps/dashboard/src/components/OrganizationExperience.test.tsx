@@ -275,11 +275,14 @@ describe('Organization experience', () => {
     expect(host.querySelector('output')?.textContent).toBe(path)
     expect(readOrganizationSession('user-a')).toBe('a')
   })
-  it('commits the target session before full document navigation', async () => {
+  it.each([
+    ['/dashboard/boxes?filter=old', '/dashboard/boxes'],
+    ['/dashboard/billing?tab=wallet&code=ACME50', '/dashboard/billing?tab=wallet&code=ACME50'],
+  ])('commits the target session before full document navigation from %s', async (from, to) => {
     saveOrganizationSession('user-a', 'a')
     await act(async () =>
       root.render(
-        <MemoryRouter initialEntries={['/dashboard/boxes?filter=old']}>
+        <MemoryRouter initialEntries={[from]}>
           <OrganizationSwitcher />
         </MemoryRouter>,
       ),
@@ -288,7 +291,7 @@ describe('Organization experience', () => {
     const navigation = mockDocumentNavigation()
     navigation.assign.mockImplementation(() => expect(readOrganizationSession('user-a')).toBe('b'))
     await act(async () => document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')[1].click())
-    expect(navigation.assign).toHaveBeenCalledExactlyOnceWith('/dashboard/boxes')
+    expect(navigation.assign).toHaveBeenCalledExactlyOnceWith(to)
   })
   it('offers document reload and logout recovery with zero organizations', async () => {
     mocks.organizations = []

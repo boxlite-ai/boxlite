@@ -20,16 +20,15 @@ and missing tiers do not change the mapping; unknown names receive no inferred b
 accessible as unspecified, never unsupported. Custom terms are negotiated.
 
 Plans displays the documented names and bonuses with the approved $5 Starter
-price, without adding a monthly cycle or grant cadence. Overview retains real account data. While a subscription
-trial awaits conversion, its monthly price carries a `FREE TRIAL` label with the total hours derived from Commerce's
-trial timestamps. A self-serve action
+price, without adding a monthly cycle or grant cadence. Overview retains real account data. While conversion is
+`not_attempted`, Active Plan shows the remaining trial days and This Cycle uses Commerce's trial timestamps for its
+date range and countdown. A `pending` response keeps the expired trial window in `cycleFrom`/`cycleTo`; a `succeeded`
+response reanchors them to the paid cycle. A self-serve action
 is available only when its catalogue price matches the displayed price; otherwise
 the user can contact support. A Go or Starter catalogue price of 500 cents matches the $5 display and uses
 the existing confirmation route. Any differing price retains the contact
 fallback; the UI does not round or rewrite a server charge. Existing plan IDs
 remain unchanged.
-The table does not activate trials or upcoming features. Trial eligibility is
-presented as documented (3 days with card verification), not an activation CTA.
 Hosted secrets and key management are the same capability per product clarification,
 shown once as Hosted secrets. Undefined
 Funder support and Region support are omitted pending product clarification.
@@ -41,14 +40,24 @@ Browser back/forward and direct links restore the selected tab. Owners can use
 existing current/scheduled/upgrade/downgrade actions. Other members can compare
 public plans but are directed to their organization owner to change a plan.
 For owners with confirmed subscription data, accounts without a live subscription show the zero-priced PAYG tier as current,
-matching Overview, and cannot enter subscription checkout for that tier. Existing
-APIs, charge calculations and paid-plan confirmation routes are unchanged.
+matching Overview, and cannot enter subscription checkout for that tier.
+The upgrade action uses the catalogue plan ID and the existing confirmation route.
 Loading uses a status message; unspecified values include screen-reader text.
 
 Retention is split into its reference point and maximum time after that point:
 PAYG uses overdue time; paid tiers use subscription end. All apply only when
 payment is overdue. These are maximum periods, not guarantees. Log retention
 has no documented duration and is kept separate.
+
+### Free trial offers
+
+Owners see a gold ribbon beside the action on plans with a free trial, for example **Free Trial 3 Days**.
+It fits inside the existing button row and wraps in narrow columns. For this offer, the **Trial eligibility**
+row reads **3 days · card verification required**. Owners can retry from Plans if offers are temporarily unavailable.
+
+| Plan actions | With a three-day trial |
+| --- | --- |
+| ![Starter and Team plan actions](trial-header-before.png) | ![Trial ribbons beside the same actions](trial-header.png) |
 
 ## Validation
 
@@ -58,19 +67,48 @@ plans. Verify unchanged confirmation targets, exact catalogue prices, missing
 facts versus unsupported, and retention reference points. Inspect desktop light
 and dark themes, sticky headers, keyboard focus and narrow horizontal scrolling.
 
+### Scroll overflow regression
+
+The comparison scroll container establishes a positioning containing block. This
+keeps absolute screen-reader labels inside its clipping boundary, so the page
+ends after the documentation link even when the table scrolls internally.
+Keep the hidden caption and unspecified-value text; removing them loses semantics.
+
+With the mock catalogue and expanded sidebar, use CSS viewports 1450×643,
+1160×514 and 966×429 (100%, 125% and 150% equivalents for that initial viewport).
+At 1160×514, scroll outside the table to the page end: the documentation link must
+remain visible rather than scrolling into an empty screen. Focus the table and
+use arrow keys, then scroll to the last row and rightmost column; the feature
+column and plan header remain pinned and Custom remains reachable. Repeat with
+collapsed navigation and both themes.
+
+Browser regression: compare document scrollHeight against the documentation
+link's bottom in document coordinates plus 48px of allowed page padding, or the
+viewport height if larger. Before the fix this failed (1829px versus a content
+bottom of 589px); afterward the same assertion passed (613px). This measures
+rendered overflow rather than checking for a CSS declaration. Browser zoom menus
+and non-Chromium engines were not exercised; the viewport equivalents were.
+
+Screenshots use synthetic mock data at the same 1160×514 CSS viewport:
+[before: blank outer scroll](../../../../docs/contributing/investigations/assets/billing-plan-scroll/before.png),
+[after: bounded outer scroll](../../../../docs/contributing/investigations/assets/billing-plan-scroll/after.png),
+and [light theme: final row and Custom column](../../../../docs/contributing/investigations/assets/billing-plan-scroll/end-light.png).
+
 ## Local preview
 
 `http://127.0.0.1:3198/dashboard/billing?preview=subscription-cards&tab=plans`
 uses the existing mock catalogue matching the supplied screenshot. No real
 checkout or payment is performed by this preview.
 
+Use `/dashboard/billing?preview=trial-eligible&tab=plans` in the mock dashboard to see the Starter
+and Team ribbons for an owner with a default card and no subscription.
+
 ## Source audit (2026-11-17)
 
 - Names: PAYG is the display name replacing for Notion Free; Starter and
   Team use the document names. Prices are 5 and 100, with no inferred period.
 - Bonuses: 20 and 400, no inferred issue frequency, expiry or credit type.
-- Trials: 3 days with card verification on the two paid tiers; no trial activation
-  behavior is added.
+- Trial availability and duration are shown per plan.
 - Box limits: 20/40/1000 total Boxes, 1C·2G·10G / 2C·4G·20G / 16C·32G·100G,
   and 2/4/1000 maximum runtime concurrency. CI sharing is a table row, not a footer.
 - Retention: overdue-only, with the reference point and maximum offset separated.

@@ -2,10 +2,8 @@
 //!
 //! [`VolumeInfo`] is the storage-agnostic view of a volume returned by the
 //! [`VolumeBackend`](crate::runtime::volumes::VolumeBackend) trait and rendered
-//! by the CLI. Volumes are addressed by a server-assigned id (like boxes). The
-//! concrete backend that would populate it is not yet implemented — see
-//! `impl VolumeBackend for LocalRuntime`, which currently returns `Unsupported`
-//! until a managed volume backend is wired up.
+//! by the CLI. Volumes are addressed by a runtime-assigned id (like boxes).
+//! `LocalVolumeStore` persists this metadata beside each volume's payload.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

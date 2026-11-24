@@ -11,6 +11,7 @@ describe('RunnerAdapterV2 createBox', () => {
   it.each([0.125, 0.126, 1.001, 1.5, 16])('preserves %s CPUs in the create job', async (cpu) => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter, { config: { get: () => false } })
     await adapter.init({ id: 'runner-1' } as any)
 
     await adapter.createBox({ id: 'box-cpu', cpu } as any, 'base')
@@ -27,6 +28,7 @@ describe('RunnerAdapterV2 createBox', () => {
   it.each([false, true])('forwards persisted guest privilege %s to the create job', async (privileged) => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter, { config: { get: () => false } })
     await adapter.init({ id: 'runner-1', supportsPrivileged: true } as any)
 
     await adapter.createBox({ id: 'box-1', image: 'base', privileged } as any, 'base')
@@ -44,6 +46,7 @@ describe('RunnerAdapterV2 createBox', () => {
   it.each([undefined, false])('rejects privileged create when runner support is %s', async (supportsPrivileged) => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter, { config: { get: () => false } })
     await adapter.init({ id: 'runner-1', supportsPrivileged } as any)
 
     await expect(adapter.createBox({ id: 'box-1', privileged: true } as any, 'base')).rejects.toThrow(
@@ -55,6 +58,7 @@ describe('RunnerAdapterV2 createBox', () => {
   it('passes secrets through to the CREATE_BOX job payload', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter, { config: { get: () => false } })
     await adapter.init({ id: 'runner-1' } as any)
 
     const box = {
@@ -108,6 +112,7 @@ describe('RunnerAdapterV2 createBox', () => {
   it('sends the image it is handed rather than the one on the box', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter, { config: { get: () => false } })
     await adapter.init({ id: 'runner-1' } as any)
     const pinned = `ghcr.io/boxlite-ai/boxlite-agent-base@sha256:${'a'.repeat(64)}`
 
@@ -126,6 +131,7 @@ describe('RunnerAdapterV2 createBox', () => {
   it('puts the outbound policy in the CREATE_BOX job payload as the enabled flag and entries', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter, { config: { get: () => false } })
     await adapter.init({ id: 'runner-1' } as any)
 
     await adapter.createBox(

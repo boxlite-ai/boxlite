@@ -21,8 +21,17 @@ pub enum Error {
     Filesystem(io::Error),
     /// Binding or configuring the host bridges failed.
     Vsock(io::Error),
-    /// The RAM size is outside `1..=memory::MAX_MEMORY_MIB`.
+    /// An invalid RAM size was requested.
     InvalidMemorySize(u32),
+    /// A guest RAM range extends beyond a host or boot address limit.
+    GuestMemoryAddressLimit {
+        memory_mib: u32,
+        end: u64,
+        limit_end: u64,
+        limit: &'static str,
+    },
+    /// The host's guest-memory capabilities are invalid or insufficient.
+    HostMemoryCapability(io::Error),
     /// Allocating the guest RAM failed.
     AllocateMemory { bytes: u64, source: io::Error },
     /// A host hypervisor operation failed.
@@ -31,8 +40,12 @@ pub enum Error {
     InvalidCommandLine(&'static str),
     /// More disks than `config::MAX_DISKS`.
     InvalidDiskCount(usize),
+    /// A disk control ID is empty or duplicated.
+    InvalidDiskId(String),
     /// Opening a disk image failed.
     OpenDisk { path: PathBuf, source: io::Error },
+    /// Creating the channel that grows a disk failed.
+    DiskControl(io::Error),
     /// Every virtio-mmio window and interrupt line is taken.
     VirtioSlotsExhausted,
     /// Devices claimed resources the chipset cannot give them.
@@ -65,6 +78,8 @@ pub enum Error {
     CreateBalloon(io::Error),
     /// Starting the thread that writes the guest console failed.
     SpawnConsole(io::Error),
+    /// Starting the thread that raises the CMOS RTC alarm failed.
+    SpawnRtcAlarm(io::Error),
     /// Starting the thread of vCPU `vcpu` failed.
     SpawnVcpu { vcpu: u32, source: io::Error },
     /// vCPU `vcpu` exited in a way this host should never report, such as
@@ -83,6 +98,18 @@ impl fmt::Display for Error {
             Self::Filesystem(_) => f.write_str("failed to configure virtio-fs exports"),
             Self::InvalidVcpuCount(count) => write!(f, "invalid vCPU count: {count}"),
             Self::InvalidMemorySize(mib) => write!(f, "invalid memory size: {mib} MiB"),
+            Self::GuestMemoryAddressLimit {
+                memory_mib,
+                end,
+                limit_end,
+                limit,
+            } => write!(
+                f,
+                "guest RAM request of {memory_mib} MiB ends at GPA {end:#x}, beyond {limit} exclusive limit {limit_end:#x}"
+            ),
+            Self::HostMemoryCapability(source) => {
+                write!(f, "guest memory capability check failed: {source}")
+            }
             Self::AllocateMemory { bytes, .. } => {
                 write!(f, "failed to allocate {bytes} bytes of guest RAM")
             }
@@ -91,6 +118,8 @@ impl fmt::Display for Error {
                 write!(f, "invalid kernel command line: {reason}")
             }
             Self::InvalidDiskCount(count) => write!(f, "too many disks: {count}"),
+            Self::InvalidDiskId(id) => write!(f, "empty or duplicate disk ID: {id:?}"),
+            Self::DiskControl(_) => f.write_str("failed to create a disk grow channel"),
             Self::OpenDisk { path, .. } => {
                 write!(f, "failed to open the disk image {}", path.display())
             }
@@ -124,6 +153,7 @@ impl fmt::Display for Error {
             Self::EventLoop(_) => f.write_str("the VM event loop failed"),
             Self::CreateBalloon(_) => f.write_str("failed to create the reporting balloon"),
             Self::SpawnConsole(_) => f.write_str("failed to start the console thread"),
+            Self::SpawnRtcAlarm(_) => f.write_str("failed to start the RTC alarm thread"),
             Self::SpawnVcpu { vcpu, .. } => write!(f, "failed to start vCPU {vcpu}"),
             Self::UnexpectedExit { vcpu, exit } => {
                 write!(f, "vCPU {vcpu} exited unexpectedly: {exit}")
@@ -139,8 +169,10 @@ impl error::Error for Error {
         match self {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
+            | Self::GuestMemoryAddressLimit { .. }
             | Self::InvalidCommandLine(_)
             | Self::InvalidDiskCount(_)
+            | Self::InvalidDiskId(_)
             | Self::VirtioSlotsExhausted
             | Self::ChipsetConflicts(_)
             | Self::LineNotArmed(_)
@@ -150,14 +182,17 @@ impl error::Error for Error {
             | Self::AlreadyRan => None,
             Self::Vsock(source)
             | Self::Filesystem(source)
+            | Self::HostMemoryCapability(source)
             | Self::AllocateMemory { source, .. }
             | Self::OpenDisk { source, .. }
+            | Self::DiskControl(source)
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }
             | Self::WriteBootData { source, .. }
             | Self::SpawnVcpu { source, .. }
             | Self::EventLoop(source)
             | Self::CreateBalloon(source)
+            | Self::SpawnRtcAlarm(source)
             | Self::SpawnConsole(source)
             | Self::VirtioWorker(source) => Some(source),
             Self::Hypervisor(source) => Some(source),

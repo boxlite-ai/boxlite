@@ -9,13 +9,21 @@ let requestedUrl = ''
 let requestedUrls: string[] = []
 let requestedMethod = ''
 let requestedData: unknown
+let requestedTimeout: number | undefined
 function serve(data: unknown | ((url: string) => unknown)): BillingApiClient {
   requestedUrls = []
-  axios.defaults.adapter = (async (cfg: { url?: string; baseURL?: string; method?: string; data?: unknown }) => {
+  axios.defaults.adapter = (async (cfg: {
+    url?: string
+    baseURL?: string
+    method?: string
+    data?: unknown
+    timeout?: number
+  }) => {
     requestedUrl = `${cfg.baseURL ?? ''}${cfg.url ?? ''}`
     requestedUrls.push(requestedUrl)
     requestedMethod = cfg.method ?? ''
     requestedData = cfg.data
+    requestedTimeout = cfg.timeout
     const responseData = typeof data === 'function' ? data(requestedUrl) : data
     return { data: responseData, status: 200, statusText: 'OK', headers: {}, config: cfg }
   }) as never
@@ -104,6 +112,24 @@ describe('getOrganizationPlan', () => {
     const api = serve({})
     const plan = await api.getOrganizationPlan('org-1')
     expect(plan).toBeNull()
+  })
+})
+
+describe('plan trial eligibility', () => {
+  it.each([
+    { plans: [] },
+    {
+      plans: [
+        { name: 'Go', eligible: true, durationSeconds: 5400 },
+        { name: 'Team', eligible: false, durationSeconds: 0 },
+      ],
+    },
+  ])('reads the organization offer list in one GET', async ({ plans }) => {
+    const api = serve({ plans })
+    expect(await api.getPlanTrialEligibility('org-1')).toEqual(plans)
+    expect(requestedUrls).toEqual(['http://billing.test/api/billing/organization/org-1/plan/trial-eligibility'])
+    expect(requestedMethod).toBe('get')
+    expect(requestedData).toBeUndefined()
   })
 })
 
@@ -358,5 +384,47 @@ describe('PR 829 real-data parity: wallet transactions', () => {
     expect(requestedUrl).toBe(
       'http://billing.test/api/billing/organization/org-1/wallet/transactions?page=2&perPage=25',
     )
+  })
+})
+
+describe('saved card actions', () => {
+  it('sets the default card through its own path', async () => {
+    const api = serve(undefined)
+    await expect(api.setDefaultPaymentMethod('org-1', 'card-2')).resolves.toBeUndefined()
+    expect(requestedMethod).toBe('post')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/payment-methods/card-2/default')
+    expect(requestedData).toBeUndefined()
+  })
+
+  it('removes a card with DELETE on the card path', async () => {
+    const api = serve(undefined)
+    await expect(api.removePaymentMethod('org-1', 'card-2')).resolves.toBeUndefined()
+    expect(requestedMethod).toBe('delete')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/payment-methods/card-2')
+  })
+})
+
+describe('subscription cancellation API', () => {
+  it.each([undefined, 10_000])('preserves plan reads with timeout %s', async (timeout) => {
+    const api = serve({})
+    expect(await api.getOrganizationPlan('org-1', timeout)).toBeNull()
+    expect(requestedMethod).toBe('get')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/plan')
+    expect(requestedTimeout).toBe(timeout ?? 0)
+  })
+  it('preserves the existing downgrade request when no timeout is supplied', async () => {
+    const api = serve(undefined)
+    await api.downgradePlan('org-1', 'go')
+    expect(requestedMethod).toBe('post')
+    expect(JSON.parse(requestedData as string)).toEqual({ planId: 'go' })
+    expect(requestedTimeout).toBe(0)
+  })
+  it('reuses downgrade with a null plan and bounds the cancellation request', async () => {
+    const api = serve(undefined)
+    await api.downgradePlan('org-1', null, 15_000)
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/plan/downgrade')
+    expect(requestedMethod).toBe('post')
+    expect(JSON.parse(requestedData as string)).toEqual({ planId: null })
+    expect(requestedTimeout).toBe(15_000)
   })
 })

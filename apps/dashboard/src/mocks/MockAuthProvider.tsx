@@ -29,6 +29,9 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
   const waitForPreview = async () => {
     if (authPreview === 'slow') await new Promise((resolve) => setTimeout(resolve, 2500))
   }
+  const [hideEnvironmentLabel] = useState(
+    () => new URLSearchParams(window.location.search).get('preview') === 'trial-onboarding',
+  )
   const [debugOpen, setDebugOpen] = useState(false)
   const [error, setError] = useState<Error>()
   const removeUser = async () => {
@@ -86,32 +89,34 @@ export function MockAuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={mockAuth}>
       {children}
-      <aside aria-label="Preview environment" className="fixed bottom-4 left-4 z-50 text-meta text-muted-foreground">
-        {debugEnabled ? (
-          <div className="border border-border bg-background p-3">
-            <AsciiButton variant="quiet" size="sm" aria-expanded={debugOpen} onClick={() => setDebugOpen(!debugOpen)}>
-              Developer fixtures
-            </AsciiButton>
-            {debugOpen && (
-              <div className="mt-2 space-y-2">
-                <p>Mock identity — not saved login accounts</p>
-                {MOCK_ACCOUNTS.map((account, index) => (
-                  <AsciiButton
-                    key={account.sub}
-                    size="sm"
-                    className="block w-full"
-                    onClick={() => finishSignIn(index, RoutePath.DASHBOARD)}
-                  >
-                    Load fixture: {account.email}
-                  </AsciiButton>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <span>Preview</span>
-        )}
-      </aside>
+      {!hideEnvironmentLabel && (
+        <aside aria-label="Preview environment" className="fixed bottom-4 left-4 z-50 text-meta text-muted-foreground">
+          {debugEnabled ? (
+            <div className="border border-border bg-background p-3">
+              <AsciiButton variant="quiet" size="sm" aria-expanded={debugOpen} onClick={() => setDebugOpen(!debugOpen)}>
+                Developer fixtures
+              </AsciiButton>
+              {debugOpen && (
+                <div className="mt-2 space-y-2">
+                  <p>Mock identity — not saved login accounts</p>
+                  {MOCK_ACCOUNTS.map((account, index) => (
+                    <AsciiButton
+                      key={account.sub}
+                      size="sm"
+                      className="block w-full"
+                      onClick={() => finishSignIn(index, RoutePath.DASHBOARD)}
+                    >
+                      Load fixture: {account.email}
+                    </AsciiButton>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <span>Preview</span>
+          )}
+        </aside>
+      )}
     </AuthContext.Provider>
   )
 }

@@ -53,6 +53,10 @@ struct TarDownload {
 }
 
 impl RestBox {
+    pub(crate) fn agent_client(&self) -> &ApiClient {
+        &self.client
+    }
+
     pub fn new(client: ApiClient, info: BoxInfo) -> Self {
         Self {
             client,
@@ -76,13 +80,14 @@ impl RestBox {
     }
 
     fn validate_upload(opts: &CopyOptions) -> BoxliteResult<()> {
-        // The HTTP protocol cannot request per-entry skip-if-exists. Refuse
-        // before consuming input so existing guest files cannot be clobbered.
+        // Older runners ignore overwrite=false. Until server support can be
+        // established reliably, retain the SDK's safe refusal before sending
+        // data; blindly forwarding false could silently replace remote files.
         if !opts.overwrite {
             return Err(BoxliteError::Unsupported(
                 "copy_into with overwrite=false is not supported over the REST backend; \
-                 the current upload protocol cannot express per-entry skip-if-exists. \
-                 Use the FFI backend or pre-check the destination before calling."
+                 remote overwrite protection cannot be confirmed. \
+                 Use the local backend for protected copies."
                     .into(),
             ));
         }
@@ -3161,40 +3166,5 @@ mod tests {
         server.await.unwrap();
     }
 
-    /// Agents refuse a REST Box before any request: its tunnels can publish
-    /// the agent's server beyond this host.
-    #[tokio::test]
-    async fn agents_refuse_a_remote_box_before_any_request() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let rest_box = Arc::new(rest_box_for(port, "remote-box"));
-        let agents = crate::Agents::new(rest_box.clone(), rest_box);
-        let bound = Duration::from_secs(5);
-
-        let created = tokio::time::timeout(
-            bound,
-            agents.create("opencode", crate::agents::AgentCreateOptions::default()),
-        )
-        .await
-        .expect("create must not wait on the server")
-        .err();
-        let fetched = tokio::time::timeout(bound, agents.get("ses_test"))
-            .await
-            .expect("get must not wait on the server")
-            .err();
-        // Input a local runtime would reject is still refused for the runtime.
-        let malformed_id = agents.get("not-a-session").await.err();
-        let mut bad_model = crate::agents::AgentCreateOptions::default();
-        bad_model.config.model = Some("no-provider".into());
-        let malformed_model = agents.create("opencode", bad_model).await.err();
-
-        for error in [created, fetched, malformed_id, malformed_model] {
-            assert!(
-                matches!(&error, Some(BoxliteError::Unsupported(message)) if message == "agents require a local runtime"),
-                "{error:?}"
-            );
-        }
-        let connected = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
-        assert!(connected.is_err(), "no request reached the server");
-    }
+    mod agents;
 }

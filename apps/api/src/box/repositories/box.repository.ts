@@ -394,6 +394,7 @@ export class BoxRepository extends BaseRepository<Box> {
       box.assertValid()
       box.enforceInvariants()
       await manager.save(Box, box)
+      await manager.query('DELETE FROM secret_credential WHERE box_id = $1', [box.id])
       return { box, previous }
     })
     this.emitUpdateEvents(changed.box, changed.previous)
@@ -474,6 +475,9 @@ export class BoxRepository extends BaseRepository<Box> {
       const invariantChanges = box.enforceInvariants()
 
       await entityManager.update(Box, id, { ...updateData, ...invariantChanges })
+      if (box.desiredState === BoxDesiredState.DESTROYED) {
+        await entityManager.query('DELETE FROM secret_credential WHERE box_id = $1', [id])
+      }
       box.updatedAt = new Date()
 
       if (previousBox.state !== box.state || previousBox.organizationId !== box.organizationId) {

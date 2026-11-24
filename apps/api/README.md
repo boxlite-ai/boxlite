@@ -111,6 +111,12 @@ and drops a unique schema, requires a loopback database host, and skips without
 `DB_HOST`. It exercises the production authorization guard and repository queries;
 JWT identity setup, rate limiting, and Redis transport use test doubles.
 
+## Organization suspension
+
+Organization access caches organization records as JSON for 10 seconds. On cache reads,
+`suspendedUntil` is restored to a `Date` so temporary suspensions are enforced until their
+deadline on both cached and database reads. A null deadline keeps a suspension indefinite.
+
 ## Registration configuration
 
 Turnstile registration protection is opt-in. Leave `TURNSTILE_SITEKEY` unset or
@@ -196,6 +202,28 @@ Deploy the API after upgrading the package to apply the new list.
 
 Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
 and `make build:apps:api` to validate the production bundle and dependency imports.
+
+## Coupon link claims
+
+`POST /api/organizations/:organizationId/coupon-claims` accepts
+`{ "eventId": "evt_coupon_001", "couponCode": "ABCD-EFGH" }` from a verified
+organization owner. The API sends a `RedeemCouponAfterBindCard` event to
+`POST /internal/organization/:organizationId/billing-events` with a UTC
+`occurredAt`, the supplied event ID, and `data: { "coupon_code": "ABCD-EFGH" }`.
+It checks the current owner membership and uses the organization's stored UUID in the Commerce path.
+
+Set `BILLING_API_URL` to enable claims and `USAGE_EXPORT_TOKEN` to authenticate
+the internal request. The destination defaults to the origin of `BILLING_API_URL`.
+For example, `https://commerce.example/api/billing` sends claims to
+`https://commerce.example/internal/organization/:organizationId/billing-events`.
+`USAGE_EXPORT_URL` overrides that origin and preserves any configured path prefix.
+With `BILLING_API_URL` unset, the endpoint returns HTTP 503 even when both usage export settings are present.
+
+The first accepted delivery returns HTTP 202 with `status: "pending"` and
+`result: null`. Retrying the same event ID reads its current status and saved
+result. Coupon eligibility errors preserve the Commerce status and reason.
+After a timeout, retry the same organization, code and event ID. Registration
+commits before the Dashboard submits a claim.
 
 ## Background lifecycle requests
 
@@ -1727,3 +1755,17 @@ Dashboard owns its normalized telemetry display types, independently of the remo
 
 The nullable physical `user.keyPair` column remains for older API instances and rollback; the current entity no longer maps it.
 No user-key data migration runs in this release. `User.publicKeys` and historical audit action identifiers remain unchanged.
+
+## Organization cancellation feedback
+
+The Console uses `PUT /api/organizations/:organizationId/cancellation-feedback` after confirming cancellation through the existing billing API. The endpoint accepts `{ "reasons": ["other"], "intent": null, "note": "My project ended" }` and returns 204 only after updating the organization's nullable `cancellationFeedback` JSONB field.
+
+Reasons are stable IDs; intent is optional, and custom text is limited to 1,000 characters and requires `other`. Unknown fields and empty answers are rejected. The server supplies `submittedBy` and `submittedAt` and stores the last accepted write, replacing the previous object.
+
+JWT authentication, organization access and a current OWNER membership are required, including for administrator accounts. API keys cannot submit feedback. Ordinary entity queries omit the field (`select: false`), and OrganizationDto does not expose it.
+
+Feedback is not a cancellation receipt or subscription history. Writing it never changes a subscription, and a save failure must not reverse a completed cancellation. Authorized database operators can inspect the field using existing restricted database access.
+
+Deploy the additive pre-deploy migration and API before the updated Console. Billing requires no deployment for this feature. Reverting the schema migration drops saved feedback, so retain the column during an application rollback if data must be preserved.
+
+Run `make test:apps:api TEST_FILES=cancellation-feedback` with `CANCELLATION_TEST_DATABASE_URL` pointing at a disposable loopback PostgreSQL database. The integration suite creates an isolated schema and exercises real JWT verification, organization guards, validation and latest-value replacement. It verifies independent reads and persistence after restarting the API and its database connection.

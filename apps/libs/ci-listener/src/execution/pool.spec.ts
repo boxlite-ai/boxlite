@@ -15,7 +15,7 @@ import { ExecutionJournal } from './journal'
 import { ExecutionScope } from './model'
 import { PoolBackend, WorkerPool } from './pool'
 import { WorkQueue } from './work-queue'
-import { decodeDemand, DemandUncertain, observeDemand } from '../demand'
+import { decodeDemand, DemandUncertain, observeDemand, rebuildQueueSnapshot } from '../demand'
 
 describe('CI shared worker lifecycle', () => {
   const definition: ExecutionScope = {
@@ -192,6 +192,8 @@ describe('CI shared worker lifecycle', () => {
       expect(result.trace).toContain('dockerd')
       expect(result.jit).toBe('dGVzdC1qaXQ=')
       expect(result.jitRemoved).toBe(true)
+      expect(result.dockerEnvironment).toEqual([join(directory, 'runner'), 'runner', 'runner'])
+      expect(result.runnerEnvironment).toEqual(result.dockerEnvironment)
       if (scenario === 'install-success') expect(result.trace).toContain('apt-get:install')
     },
   )
@@ -311,6 +313,341 @@ describe('CI shared worker lifecycle', () => {
   }
   const durableDemands = async () =>
     (await state.recover(lease, 1000, ['demand/'])).map(decodeDemand).sort((a, b) => a.repositoryId - b.repositoryId)
+  it('keeps live idle runners when only partial positive demand was verified', async () => {
+    supplyInventory()
+    const retire = idleRetirement()
+    await tick()
+    await ageRunners()
+    await pool.balance(lease, limits, [], undefined, 'positive' as never)
+    expect(retire).not.toHaveBeenCalled()
+    expect(backend.workers.stop).not.toHaveBeenCalled()
+    expect(runners.size).toBe(1)
+  })
+  it('keeps unsent reservations when a positive subset or an oversized proof cannot establish surplus', async () => {
+    supplyInventory()
+    const capacity = testCapacity({ account: 2, tenant: 2 })
+    await journal.reserve(lease, key, demand, capacity, { labels: settings.labels })
+    await journal.reserve(lease, key, { ...demand, job: 56 }, capacity, { labels: settings.labels })
+    const queue = new WorkQueue(1, () => {})
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    queue.enqueue('held', '1', () => held)
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    try {
+      await pool.balance(lease, capacity, countedDemand(), undefined, 'positive')
+      expect(await journal.used(definition.organization)).toBe(2)
+      const guards = []
+      for (let first = 0; first < 101; first += 50) {
+        const records = await state.commit(
+          lease,
+          Array.from({ length: Math.min(50, 101 - first) }, (_, index) => ({
+            key: 'proof/' + (first + index),
+            expected: null,
+            payload: true,
+          })),
+        )
+        guards.push(...records.map((row) => ({ key: row.key, version: row.version })))
+      }
+      await pool.balance(lease, capacity, [], undefined, true, guards)
+      expect(await journal.used(definition.organization)).toBe(2)
+      expect((await journal.workers(lease, key)).rows.every((row) => !row.value.closing)).toBe(true)
+    } finally {
+      release()
+      await queue.close()
+    }
+  })
+  it.each([false, true])(
+    'limits retained unsent reservations to verified queued demand (async=%s)',
+    async (asynchronous) => {
+      supplyInventory()
+      const capacity = testCapacity({ account: 2, tenant: 2 })
+      await journal.reserve(lease, key, demand, capacity, { labels: settings.labels })
+      await journal.reserve(lease, key, { ...demand, job: 56 }, capacity, { labels: settings.labels })
+      const failures: unknown[] = []
+      const queue = new WorkQueue(1, (error) => failures.push(error))
+      let release!: () => void, completed!: () => void
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const finished = new Promise<void>((resolve) => {
+        completed = resolve
+      })
+      if (asynchronous) {
+        queue.enqueue('barrier', '1', () => held)
+        pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+      }
+      try {
+        await pool.balance(lease, capacity, countedDemand(), undefined, 'positive')
+        if (asynchronous) {
+          queue.enqueue('after-dispatch', '1', async () => completed())
+          release()
+          await finished
+        }
+        expect(failures).toEqual([])
+        expect(backend.workers.create).toHaveBeenCalledTimes(1)
+        expect(await journal.used(definition.organization)).toBe(2)
+        const retained = (await journal.workers(lease, key)).rows
+        expect(retained).toHaveLength(2)
+        expect(retained.every((row) => !row.value.closing)).toBe(true)
+      } finally {
+        release()
+        await queue.close()
+      }
+    },
+  )
+  it('grants retained unsent demand to a healthy reservation after WorkQueue backoff rejects the first', async () => {
+    supplyInventory()
+    const capacity = testCapacity({ account: 2, tenant: 2 })
+    await journal.reserve(lease, key, demand, capacity, { labels: settings.labels })
+    await journal.reserve(lease, key, { ...demand, job: 56 }, capacity, { labels: settings.labels })
+    const [first, second] = (await journal.workers(lease, key)).rows
+    const rejected = new Error('retry this reservation later')
+    const failures: unknown[] = []
+    const queue = new WorkQueue(1, (error) => failures.push(error))
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now())
+    let failed!: () => void, release!: () => void, completed!: () => void
+    const backoffReady = new Promise<void>((resolve) => {
+      failed = resolve
+    })
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const finished = new Promise<void>((resolve) => {
+      completed = resolve
+    })
+    queue.enqueue(first.record.key, 'failed', async () => {
+      throw rejected
+    })
+    queue.enqueue('after-failure', '1', async () => failed())
+    await backoffReady
+    queue.enqueue('barrier', '1', () => held)
+    const enqueue = jest.spyOn(queue, 'enqueue')
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    try {
+      await pool.balance(lease, capacity, countedDemand(), undefined, 'positive')
+      queue.enqueue('after-dispatch', '1', async () => completed())
+      release()
+      await finished
+      expect(failures).toEqual([rejected])
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      expect(backend.workers.create).toHaveBeenCalledWith(expect.objectContaining({ name: second.value.name }))
+      expect(enqueue.mock.calls.filter(([key]) => key === first.record.key)).toHaveLength(1)
+      expect(enqueue.mock.calls.filter(([key]) => key === second.record.key)).toHaveLength(2)
+      expect(await journal.used(definition.organization)).toBe(2)
+      expect((await journal.workers(lease, key)).rows.every((row) => !row.value.closing)).toBe(true)
+    } finally {
+      release()
+      await queue.close()
+      clock.mockRestore()
+    }
+  })
+  it.each([false, true])(
+    'keeps retained unsent reservations unissued when started supply covers demand (async=%s)',
+    async (asynchronous) => {
+      supplyInventory()
+      const capacity = testCapacity({ account: 3, tenant: 3 })
+      await pool.balance(lease, capacity, countedDemand(), undefined, 'positive')
+      await pool.close()
+      await journal.reserve(lease, key, { ...demand, job: 56 }, capacity, { labels: settings.labels })
+      await journal.reserve(lease, key, { ...demand, job: 57 }, capacity, { labels: settings.labels })
+      jest.mocked(backend.workers.create).mockClear()
+      const failures: unknown[] = []
+      const queue = new WorkQueue(1, (error) => failures.push(error))
+      let release!: () => void, completed!: () => void
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const finished = new Promise<void>((resolve) => {
+        completed = resolve
+      })
+      if (asynchronous) {
+        queue.enqueue('barrier', '1', () => held)
+        pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+      }
+      try {
+        await pool.balance(lease, capacity, countedDemand(), undefined, 'positive')
+        if (asynchronous) {
+          queue.enqueue('after-dispatch', '1', async () => completed())
+          release()
+          await finished
+        }
+        expect(failures).toEqual([])
+        expect(backend.workers.create).not.toHaveBeenCalled()
+        expect(await journal.used(definition.organization)).toBe(3)
+        const retained = (await journal.workers(lease, key)).rows
+        expect(retained).toHaveLength(3)
+        expect(retained.every((row) => !row.value.closing)).toBe(true)
+      } finally {
+        release()
+        await queue.close()
+      }
+    },
+  )
+  it('refreshes positive demand once per newly unclaimed busy runner before replacing its supply', async () => {
+    const busy = new Set<string>()
+    supplyInventory(busy)
+    const capacity = testCapacity({ account: 3, tenant: 3 })
+    await pool.balance(lease, capacity, countedDemand(), undefined, 'positive')
+    const first = await allocation()
+    busy.add(first.value.name)
+    await expect(pool.balance(lease, capacity, countedDemand(), undefined, 'positive')).rejects.toMatchObject({
+      requiresJobRefresh: true,
+    })
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    await pool.balance(lease, capacity, countedDemand(), undefined, 'positive')
+    expect(backend.workers.create).toHaveBeenCalledTimes(2)
+    busy.clear()
+    await pool.balance(lease, capacity, countedDemand(), undefined, 'positive')
+    for (const runner of runners.values()) busy.add(runner.name)
+    await expect(pool.balance(lease, capacity, countedDemand(), undefined, 'positive')).rejects.toMatchObject({
+      requiresJobRefresh: true,
+    })
+    expect(backend.workers.create).toHaveBeenCalledTimes(2)
+    expect(backend.workers.stop).not.toHaveBeenCalled()
+  })
+  it.each([false, true])(
+    'refreshes complete queue evidence before replacing newly unclaimed busy supply (reserved=%s)',
+    async (reserved) => {
+      const busy = new Set<string>()
+      supplyInventory(busy)
+      const capacity = testCapacity({ account: 2, tenant: 2 })
+      const snapshot = await rebuildQueueSnapshot(
+        state,
+        lease,
+        { installationId: 1, accountId: 7, repositoryId: 21 },
+        [],
+        [await backend.job(demand)],
+      )
+      const demands = snapshot.demands.map(decodeDemand)
+      const checks = [{ key: snapshot.revision.key, version: snapshot.revision.version }]
+      await pool.balance(lease, capacity, demands, undefined, true, checks)
+      const first = await allocation()
+      if (reserved) await journal.reserve(lease, key, { ...demand, job: 56 }, capacity, { labels: settings.labels })
+      busy.add(first.value.name)
+      jest.mocked(backend.job).mockImplementation(async (notice) => ({
+        ...notice,
+        status: 'in_progress',
+        labels: ['boxlite'],
+        runner: first.value.runner.id,
+      }))
+      await expect(pool.balance(lease, capacity, demands, undefined, true, checks)).rejects.toMatchObject({
+        requiresJobRefresh: true,
+      })
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+      expect(await journal.used(definition.organization)).toBe(reserved ? 2 : 1)
+    },
+  )
+  it('dispatches an existing unsent allocation before waiting for another reservation', async () => {
+    supplyInventory()
+    const capacity = testCapacity({ account: 2, tenant: 2 })
+    const reserved = (await journal.reserve(lease, key, demand, capacity, { labels: settings.labels }))!
+    const queue = new WorkQueue(2, () => {})
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    let entered!: () => void, release!: () => void, created!: () => void
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const dispatched = new Promise<void>((resolve) => {
+      created = resolve
+    })
+    const reserve = journal.reserve.bind(journal)
+    const spy = jest.spyOn(journal, 'reserve').mockImplementation(async (...args) => {
+      entered()
+      await held
+      return reserve(...args)
+    })
+    const create = jest.mocked(backend.workers.create).getMockImplementation()!
+    jest.mocked(backend.workers.create).mockImplementation(async (launch) => {
+      const box = await create(launch)
+      if (launch.name === reserved.value.name) created()
+      return box
+    })
+    const planning = pool.balance(lease, capacity, countedDemand(2), undefined, 'positive')
+    try {
+      await waiting
+      await Promise.race([
+        dispatched,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Existing reservation blocked')), 1000)),
+      ])
+      expect(backend.workers.create).toHaveBeenCalledWith(expect.objectContaining({ name: reserved.value.name }))
+    } finally {
+      release()
+      await planning
+      await queue.close()
+      spy.mockRestore()
+    }
+  })
+  it('rechecks a queue proof deadline after retirement waits in the execution queue', async () => {
+    supplyInventory()
+    idleRetirement()
+    await tick()
+    await ageRunners()
+    const [proof] = await state.commit(lease, [{ key: 'queue-revision/1/21', expected: null, payload: true }])
+    await pool.close()
+    let release!: () => void, completed!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const finished = new Promise<void>((resolve) => {
+      completed = resolve
+    })
+    const queue = new WorkQueue(1, () => {})
+    queue.enqueue('barrier', '1', () => held)
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    const now = Date.now(),
+      clock = jest.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      await pool.balance(lease, limits, [], undefined, true, [
+        Object.assign({ key: proof.key, version: proof.version }, { expiresAt: now + 100 }),
+      ])
+      queue.enqueue('after-retirement', '1', async () => completed())
+      clock.mockReturnValue(now + 101)
+      release()
+      await finished
+      expect(runners.size).toBe(1)
+      expect(backend.workers.stop).not.toHaveBeenCalled()
+      expect((await allocation()).value.effect?.kind).not.toBe('runner-retire')
+    } finally {
+      release()
+      await queue.close()
+      clock.mockRestore()
+    }
+  })
+  it('recovers a stopped Box even when complete retirement proof exceeds 100 checks', async () => {
+    supplyInventory()
+    const retire = idleRetirement()
+    await tick()
+    await ageRunners()
+    for (const box of boxes.values()) box.status = 'stopped'
+    const checks = []
+    for (let offset = 0; offset < 101; offset += 100) {
+      const rows = await state.commit(
+        lease,
+        Array.from({ length: Math.min(100, 101 - offset) }, (_, index) => ({
+          key: `queue-revision/1/${offset + index + 21}`,
+          expected: null,
+          payload: true,
+        })),
+      )
+      checks.push(...rows.map(({ key, version }) => ({ key, version })))
+    }
+    await pool.close()
+    const queue = new WorkQueue(1, () => {})
+    pool = new WorkerPool(journal, key, async () => backend, settings, observe, { queue, wake: () => {} })
+    try {
+      await pool.balance(lease, limits, [], undefined, true, checks)
+      await queue.close()
+    } finally {
+      await queue.close()
+    }
+    expect(retire).not.toHaveBeenCalled()
+    expect(backend.workers.remove).toHaveBeenCalledTimes(1)
+  })
   it('requires an authoritative queue snapshot before expanding counted supply', async () => {
     supplyInventory()
     await expect(pool.balance(lease, limits, countedDemand())).rejects.toBeInstanceOf(DemandUncertain)
@@ -1469,6 +1806,37 @@ describe('CI shared worker lifecycle', () => {
     await finishBox()
     expect((await rows()).allocations.size).toBe(0)
   })
+  it.each(['replace', 'delivered', 'already online'] as const)(
+    'reconciles an interrupted Hosted JIT delivery: %s',
+    async (outcome) => {
+      loseDelivery = true
+      await expect(tick()).rejects.toThrow('lost upload acknowledgement')
+      const { value } = await allocation()
+      Object.assign(boxes.get(value.name)!, { recoverableJit: true })
+      const recoverJit = jest.fn(async () => (outcome === 'replace' ? 'replace' : 'delivered'))
+      Object.assign(backend.workers, { recoverJit })
+      backend.inventory = async () => [
+        {
+          id: value.runner.id!,
+          name: value.name,
+          labels: settings.labels,
+          status: outcome === 'already online' ? 'online' : 'offline',
+          busy: outcome === 'already online',
+        },
+      ]
+      await reconcile()
+      if (outcome === 'replace') {
+        expect((await allocation()).value.closing).toBe(true)
+        expect(backend.workers.stop).toHaveBeenCalledWith(value.name)
+      } else {
+        expect((await allocation()).value.delivery).toBe('done')
+        expect(backend.workers.stop).not.toHaveBeenCalled()
+      }
+      if (outcome === 'already online') expect(recoverJit).not.toHaveBeenCalled()
+      else expect(recoverJit).toHaveBeenCalledWith(value.name, value.effect!.id, undefined)
+      expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
+    },
+  )
   it('does not stop an active Box when the triggering job has completed elsewhere', async () => {
     await tick()
     jest.mocked(backend.job).mockImplementation(async (notice) => ({

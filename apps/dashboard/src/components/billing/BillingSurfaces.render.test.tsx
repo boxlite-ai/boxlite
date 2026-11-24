@@ -58,6 +58,7 @@ beforeAll(() => {
 afterEach(() => {
   act(() => root?.unmount())
   document.body.innerHTML = ''
+  vi.useRealTimers()
 })
 function render(content: ReactNode) {
   const host = document.createElement('div')
@@ -73,6 +74,19 @@ function RouteProbe() {
 }
 
 describe('billing surface contracts', () => {
+  it('uses catalog money for the subscription value comparison', () => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison plans={catalog} />
+      </MemoryRouter>,
+    )
+    expect(host.querySelector('thead')?.textContent).toContain('$149')
+    const quota = [...host.querySelectorAll('tr')].find(
+      (tr) => tr.querySelector('th')?.textContent === 'Included usage value',
+    )
+    expect(quota?.textContent).toContain('$250')
+  })
+
   it('compares documented limits, prices and bonuses without inventing billing cycles', () => {
     const host = render(
       <MemoryRouter>
@@ -82,9 +96,9 @@ describe('billing surface contracts', () => {
     const row = (label: string) =>
       [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === label)!
     expect(host.querySelector('thead')?.textContent).toContain('Starter')
-    expect(host.querySelector('thead')?.textContent).toContain('Starter$5')
+    expect(host.querySelector('thead')?.textContent).toContain('Starter$149')
     expect(host.querySelector('thead')?.textContent).not.toContain('/ month')
-    expect(row('Bonus amount').textContent).toContain('—Not specified$20$400')
+    expect(row('Included usage value').textContent).toContain('$30$250$900')
     expect(row('Max Box size').textContent).toContain('1C · 2G · 10G')
     expect([...row('Max concurrency').querySelectorAll('td')].map((td) => td.textContent)).toEqual([
       '2',
@@ -104,6 +118,33 @@ describe('billing surface contracts', () => {
     expect(row('Key management')).toBeUndefined()
     expect(row('Enterprise SSO').textContent).toContain('Coming soon')
   })
+  it.each([
+    [1, '1 Second'],
+    [3600, '1 Hour'],
+    [5400, '1h 30m'],
+    [86401, '1d 1s'],
+  ])('shows the exact %i-second offer alongside the regular price', (durationSeconds, label) => {
+    const host = render(
+      <MemoryRouter>
+        <PlanComparison
+          plans={[
+            { ...catalog[1], name: 'Starter', priceMonthlyCents: 500 },
+            { ...catalog[2], name: 'Team', priceMonthlyCents: 10000 },
+          ]}
+          trialOffers={[
+            { name: 'Team', eligible: true, durationSeconds },
+            { name: 'Starter', eligible: true, durationSeconds: 259200 },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+    const [, starter, team] = host.querySelectorAll('thead th')
+    expect(starter.textContent).toContain('Free Trial 3 Days')
+    expect(team.textContent).toContain('Team$100')
+    expect(team.textContent).toContain(`Free Trial ${label}`)
+    const row = [...host.querySelectorAll('tr')].find((tr) => tr.cells[0].textContent === 'Trial eligibility')!
+    expect(row.cells[2].textContent).toBe(`${String(label).toLowerCase()} · card verification required`)
+  })
   it('keeps documented benefits attached to named tiers when the catalogue is reordered or incomplete', () => {
     const host = render(
       <MemoryRouter>
@@ -117,7 +158,7 @@ describe('billing surface contracts', () => {
       </MemoryRouter>,
     )
     const headers = host.querySelectorAll('thead th')
-    expect(headers[1].textContent).toContain('Team$100')
+    expect(headers[1].textContent).toContain('Team$499')
     expect(headers[2].textContent).toContain('Pay as you go')
     expect(headers[3].textContent).toContain('Unrecognized$12.34')
     const row = [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === 'Hosted secrets')!
@@ -154,7 +195,7 @@ describe('billing surface contracts', () => {
         <PlanComparison plans={catalog} />
       </MemoryRouter>,
     )
-    for (const label of ['Usage funding', 'Bonus amount', 'Trial eligibility', 'Volumes']) {
+    for (const label of ['Usage funding', 'Trial eligibility', 'Volumes']) {
       const row = [...host.querySelectorAll('tr')].find((tr) => tr.querySelector('th')?.textContent === label)!
       expect(row.querySelector('[aria-hidden="true"]')?.textContent).toBe('—')
       expect(row.querySelector('.sr-only')?.textContent).toBe('Not specified')
@@ -194,7 +235,7 @@ describe('billing surface contracts', () => {
         <RouteProbe />
       </MemoryRouter>,
     )
-    expect(host.querySelector('thead')?.textContent).toContain('Starter$5')
+    expect(host.querySelector('thead')?.textContent).toContain('Starter$149')
     expect(host.querySelectorAll('thead a[href="https://boxlite.ai/contact"]')).toHaveLength(3)
     expect([...host.querySelectorAll('thead button')].every((button) => button.disabled)).toBe(true)
     expect(host.querySelector('output')?.textContent).toBe('/')
@@ -207,7 +248,7 @@ describe('billing surface contracts', () => {
       </MemoryRouter>,
     )
     const starter = host.querySelectorAll('thead th')[1]
-    expect(starter.textContent).toContain('Starter$5')
+    expect(starter.textContent).toContain(`Starter$${priceMonthlyCents / 100}`)
     if (priceMonthlyCents === 500) {
       expect(starter.querySelector('a')).toBeNull()
       const button = starter.querySelector('button')!
@@ -228,7 +269,9 @@ describe('billing surface contracts', () => {
     expect(host.textContent).not.toContain('no subscription')
     expect(host.textContent).not.toContain('FREE TRIAL')
   })
-  it('labels an active subscription trial with its total duration in hours', () => {
+  it('shows the remaining trial time in the active subscription summary', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-04T00:00:00.000Z'))
     const host = render(
       <CycleOverview
         wallet={wallet}
@@ -245,7 +288,9 @@ describe('billing surface contracts', () => {
         catalogPlan={catalog[1]}
       />,
     )
-    expect(host.textContent).toContain('Pro$149/mo(FREE TRIAL for 144 hours)')
+    expect(host.textContent).toContain('Pro$149/mo')
+    expect(host.textContent).toContain('FREE TRIAL')
+    expect(host.textContent).toMatch(/3\s*days\s*left/)
   })
   it('shows grant progress across the summary width and retains plan guidance', () => {
     const host = render(
