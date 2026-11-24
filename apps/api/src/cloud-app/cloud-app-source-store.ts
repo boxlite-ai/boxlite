@@ -8,11 +8,19 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
+import {
+  scanSourceSecrets,
+  SOURCE_CREDENTIAL_HINT,
+  SOURCE_SCAN_VERSION,
+  sourceFileLabel,
+} from '@boxlite-ai/cloud-app-shared'
 import { createHash } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { TypedConfigService } from '../config/typed-config.service'
 import { fail } from './engine/errors'
 import type { AppSourceStore } from './engine/ctx'
+
+const SCAN_VERSION_METADATA = 'boxlite-source-scan-version'
 
 @Injectable()
 export class CloudAppSourceStore implements AppSourceStore {
@@ -45,22 +53,34 @@ export class CloudAppSourceStore implements AppSourceStore {
     return `${this.settings().sourcePrefix}/${appId}/${sha ?? ''}`
   }
 
-  async has(appId: string, sha: string): Promise<boolean> {
+  private async metadata(appId: string, sha: string): Promise<Record<string, unknown> | null> {
     const { sourceBackend, sourceBucket } = this.settings()
     const key = this.key(appId, sha)
-    if (sourceBackend === 'gcs') return (await this.gcs.bucket(sourceBucket).file(key).exists())[0]
     try {
-      await this.s3.send(new HeadObjectCommand({ Bucket: sourceBucket, Key: key }))
-      return true
+      if (sourceBackend === 'gcs') {
+        const [object] = await this.gcs.bucket(sourceBucket).file(key).getMetadata()
+        return object.metadata ?? {}
+      }
+      const object = await this.s3.send(new HeadObjectCommand({ Bucket: sourceBucket, Key: key }))
+      return object.Metadata ?? {}
     } catch (error) {
-      if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) return false
+      const status = error as { code?: number; $metadata?: { httpStatusCode?: number } }
+      if ((sourceBackend === 'gcs' ? status.code : status.$metadata?.httpStatusCode) === 404) return null
       throw error
     }
   }
 
-  async put(appId: string, sha: string, body: Readable, maxBytes: number) {
+  async has(appId: string, sha: string): Promise<boolean> {
+    return (await this.metadata(appId, sha)) !== null
+  }
+
+  async hasScanned(appId: string, sha: string): Promise<boolean> {
+    return (await this.metadata(appId, sha))?.[SCAN_VERSION_METADATA] === SOURCE_SCAN_VERSION
+  }
+
+  async put(appId: string, sha: string, body: Readable, maxBytes: number, file = 'source file') {
     const key = this.key(appId, sha)
-    if (await this.has(appId, sha)) {
+    if (await this.hasScanned(appId, sha)) {
       body.resume()
       return { bytes: 0, deduped: true }
     }
@@ -75,10 +95,19 @@ export class CloudAppSourceStore implements AppSourceStore {
       chunks.push(buffer)
     }
     if (hash.digest('hex') !== sha) throw fail('checksum_mismatch', 'Source content does not match its upload manifest')
+    const kind = await scanSourceSecrets(chunks)
+    if (kind) {
+      const label = sourceFileLabel(file, sha)
+      throw fail('invalid_manifest', `${label} contains ${kind}`, SOURCE_CREDENTIAL_HINT, {
+        errors: [{ file: label, rule: 'secret_file', message: `Contains ${kind}.` }],
+      })
+    }
     const { sourceBackend, sourceBucket } = this.settings()
     const value = Buffer.concat(chunks)
-    if (sourceBackend === 'gcs') await this.gcs.bucket(sourceBucket).file(key).save(value, { resumable: false })
-    else await this.s3.send(new PutObjectCommand({ Bucket: sourceBucket, Key: key, Body: value }))
+    const metadata = { [SCAN_VERSION_METADATA]: SOURCE_SCAN_VERSION }
+    if (sourceBackend === 'gcs')
+      await this.gcs.bucket(sourceBucket).file(key).save(value, { resumable: false, metadata: { metadata } })
+    else await this.s3.send(new PutObjectCommand({ Bucket: sourceBucket, Key: key, Body: value, Metadata: metadata }))
     return { bytes, deduped: false }
   }
 
