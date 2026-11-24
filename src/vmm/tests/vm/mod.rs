@@ -1820,6 +1820,128 @@ fn debug_shows_the_vm_shape_without_its_internals() {
     assert!(format!("{:?}", vm.stop_handle()).starts_with("StopHandle("));
 }
 
+#[test]
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(clippy::unit_arg, reason = "arm64 has no boot registers yet.")
+)]
+fn dropping_vm_closes_disk_control_senders_while_stop_handle_remains() {
+    use std::time::{Duration, Instant};
+
+    use mio::{Events, Interest, Poll, Token};
+
+    use crate::{
+        DiskConfig, DiskFormat, VmStatus,
+        events::Event,
+        virtio::{
+            blk::{device::VirtioBlk, imago::ImagoBackend},
+            mmio::{self, Slots},
+        },
+    };
+
+    fn assert_traits<T: Clone + fmt::Debug + Send + Sync>() {}
+    assert_traits::<super::StopHandle>();
+
+    let directory = tempfile::tempdir().unwrap();
+    let disks: Vec<_> = ["disk-0", "disk-1"]
+        .into_iter()
+        .map(|block_id| {
+            let path = directory.path().join(format!("{block_id}.raw"));
+            std::fs::File::create(&path).unwrap().set_len(4096).unwrap();
+            DiskConfig {
+                block_id: block_id.into(),
+                path,
+                format: DiskFormat::Raw,
+                read_only: false,
+            }
+        })
+        .collect();
+    let mut configuration = config(1, 16);
+    configuration.disks = disks;
+
+    let mut poll = Poll::new().unwrap();
+    let mut sources = Vec::new();
+    let vm = Vm::with_devices(
+        configuration,
+        || Ok(MockVm::new()),
+        |_, _| Ok(BootRegisters::default()),
+        |chipset, ctx, config, _| {
+            let mut slots = Slots::new();
+            for (index, disk) in config.disks.iter().enumerate() {
+                let backend = ImagoBackend::open(&disk.path, disk.format, disk.read_only).unwrap();
+                let controls = ctx.controls.register_disk(&disk.block_id).unwrap();
+                let mut source = controls.event_source().unwrap();
+                poll.registry()
+                    .register(source.as_source(), Token(index), Interest::READABLE)
+                    .unwrap();
+                sources.push(source);
+                let device = Arc::new(Mutex::new(VirtioBlk::new(Box::new(backend), controls)));
+                mmio::add_device(
+                    chipset,
+                    &ctx,
+                    ["virtio-blk0", "virtio-blk1"][index],
+                    slots.take()?,
+                    device,
+                )?;
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    let stop = vm.stop_handle();
+    let stop_clone = stop.clone();
+    assert!(format!("{stop:?}").starts_with("StopHandle("));
+    let control = vm.control();
+
+    let mut events = Events::with_capacity(4);
+    poll.poll(&mut events, Some(Duration::ZERO)).unwrap();
+    assert!(
+        events.is_empty(),
+        "disk control sockets must stay open while the VM is alive"
+    );
+
+    // StopHandle::stop shares the same stop latch as VmControl::stop.
+    assert_eq!(control.status(), VmStatus::Created);
+    stop.stop();
+    assert_eq!(control.status(), VmStatus::Stopping);
+    assert!(vm.sender.is_stopping());
+    control.stop();
+    let mut vm_events = vm.events.lock().unwrap();
+    assert!(matches!(
+        vm_events.wait(Some(Duration::ZERO)).unwrap(),
+        Some(Event::StopRequested)
+    ));
+    assert!(vm_events.wait(Some(Duration::ZERO)).unwrap().is_none());
+    drop(vm_events);
+
+    drop(control);
+    drop(vm);
+
+    // Every disk control sender must close on `drop(vm)` even while StopHandles survive.
+    let mut closed = [false; 2];
+    let deadline = Instant::now() + Duration::from_millis(200);
+    while closed != [true, true] && Instant::now() < deadline {
+        poll.poll(&mut events, Some(Duration::from_millis(20)))
+            .unwrap();
+        for event in &events {
+            if event.is_read_closed() {
+                closed[event.token().0] = true;
+            }
+        }
+    }
+    assert_eq!(
+        closed,
+        [true, true],
+        "disk control sockets stayed open after drop(vm) while StopHandle was held"
+    );
+
+    stop_clone.stop();
+    drop(stop);
+    drop(stop_clone);
+    drop(sources);
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
@@ -1830,6 +1952,32 @@ fn new_names_a_kernel_it_cannot_load() {
         matches!(&error, Error::LoadKernel { path, .. } if path.as_os_str() == "vmlinux"),
         "{error:?}"
     );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+fn new_device_less_stops_before_run_and_rejects_a_second_run() {
+    use crate::{VmExit, VmStatus};
+
+    let directory = tempfile::tempdir().unwrap();
+    let kernel = directory.path().join("kernel.elf");
+    std::fs::write(&kernel, crate::boot::elf::tests::fixture()).unwrap();
+    let mut configuration = config(1, 16);
+    configuration.kernel = kernel;
+
+    let mut vm = Vm::new_device_less(configuration).unwrap();
+    let control = vm.control();
+    assert_eq!(control.status(), VmStatus::Created);
+
+    control.stop();
+    assert_eq!(control.status(), VmStatus::Stopping);
+    assert_eq!(vm.run().unwrap(), VmExit::StopRequested);
+    assert_eq!(control.status(), VmStatus::Exited);
+    assert!(matches!(vm.run(), Err(Error::AlreadyRan)));
+
+    drop(vm);
+    assert_eq!(control.status(), VmStatus::Exited);
 }
 
 /// Two KVM vCPUs through `Vm::run`: vCPU 0 runs a flat guest that pulses the

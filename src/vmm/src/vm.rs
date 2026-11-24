@@ -45,7 +45,7 @@ pub enum VmExit {
 /// Requests a stop from any thread. [`Vm::run`] returns
 /// [`VmExit::StopRequested`] if the stop request is the first terminal event.
 #[derive(Clone, Debug)]
-pub struct StopHandle(VmControl);
+pub struct StopHandle(Arc<Lifecycle>);
 
 impl StopHandle {
     /// Asks the VM to stop and returns without waiting.
@@ -265,7 +265,7 @@ impl<H: HostVm> Vm<H> {
     /// A handle that stops this VM from another thread, even before
     /// [`run`](Self::run) starts.
     pub fn stop_handle(&self) -> StopHandle {
-        StopHandle(self.control())
+        StopHandle(Arc::clone(&self.lifecycle))
     }
 
     /// Controls the VM from another thread.
