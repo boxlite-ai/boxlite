@@ -199,7 +199,11 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
     await dataSource.query(`DELETE FROM "${schemaName}"."box"`)
   })
 
-  it('persists two same-organization creates concurrently under distinct lanes and the shared key', async () => {
+  it.each([
+    { count: 0, limit: 100 },
+    { count: 850, limit: 1000 },
+  ])('persists two same-organization creates concurrently at $count of $limit', async ({ count, limit }) => {
+    if (count > 0) await boxes.insert(Array.from({ length: count }, (_, i) => newBox(`seed-${i}`)))
     const inserted = gate()
     const commit = gate()
     const pids: number[] = []
@@ -218,7 +222,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       return result
     })
     const candidates = [newBox('parallel-a'), newBox('parallel-b')]
-    const requests = candidates.map((candidate) => repository.insert(candidate, 100))
+    const requests = candidates.map((candidate) => repository.insert(candidate, limit))
     const creates = Promise.all(requests)
     try {
       await within(
@@ -226,7 +230,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
         'Two Box INSERTs did not overlap: the first transaction still has not committed',
       )
       // The pool has room for this observer while both writer connections are occupied.
-      expect(await boxes.countBy({ organizationId })).toBe(0)
+      expect(await boxes.countBy({ organizationId })).toBe(count)
       expect(new Set(pids).size).toBe(2)
       const locks = await admissionLocks(dataSource)
       const lanes = pids.map((pid) => {
@@ -250,6 +254,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       insert.mockRestore()
     }
     await expect(creates).resolves.toEqual(candidates)
+    expect(await boxes.countBy({ organizationId })).toBe(count + 2)
     expect(await dataSource.getRepository(BoxLastActivity).count()).toBe(2)
   })
 
@@ -315,48 +320,87 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
     }
   })
 
-  it('uses the common ceiling when a higher-limit writer cycles a lane before a lower-limit count returns', async () => {
+  it('admits higher-limit inserts against their own limit while a lower-limit count is paused', async () => {
     await boxes.insert(Array.from({ length: 92 }, (_, i) => newBox(`seed-${i}`)))
     const counted = gate()
     const releaseCount = gate()
+    const higher = ['higher-limit', 'higher-limit-again'].map((name) => ({
+      candidate: newBox(name),
+      inserted: gate(),
+      commit: gate(),
+    }))
+    let lowerPid: number
     const originalCount = EntityManager.prototype.count
     const count = jest.spyOn(EntityManager.prototype, 'count').mockImplementationOnce(async function (
       this: EntityManager,
       ...args: Parameters<EntityManager['count']>
     ) {
       const result = await originalCount.apply(this, args)
+      const [{ pid }] = await this.query('SELECT pg_backend_pid() AS pid')
+      lowerPid = pid
       counted.open()
       await releaseCount.ready
+      return result
+    })
+    const originalInsert = EntityManager.prototype.insert
+    const insert = jest.spyOn(EntityManager.prototype, 'insert').mockImplementation(async function (
+      this: EntityManager,
+      ...args: Parameters<EntityManager['insert']>
+    ) {
+      const result = await originalInsert.apply(this, args)
+      const attempt = higher.find(({ candidate }) => args[0] === Box && args[1] === candidate)
+      if (attempt) {
+        attempt.inserted.open()
+        await attempt.commit.ready
+      }
       return result
     })
     const low = repository.insert(newBox('lower-limit'), 100)
     const requests = [low]
     try {
       await within(Promise.race([counted.ready, low]), 'Lower-limit writer did not take its count snapshot')
-      await repository.insert(newBox('higher-limit'), 200)
-      // Cycle the process-local lane selector without changing this organization's count.
-      for (let i = 0; i < lastLaneNamespace - firstLaneNamespace; i++) {
-        await repository.insert(newBox(`cycle-${i}`, otherOrganizationId), 200)
+      expect(await boxes.countBy({ organizationId })).toBe(92)
+      let firstHigherLane: number | undefined
+      for (const [i, { candidate, inserted, commit }] of higher.entries()) {
+        const request = repository.insert(candidate, 200)
+        requests.push(request)
+        await within(Promise.race([inserted.ready, request]), `${candidate.name} waited on the lower-limit writer`)
+        const locks = await admissionLocks(dataSource)
+        const shared = locks.filter((lock) => lock.namespace === CREATION_ADMISSION_LOCK_NAMESPACE)
+        const lanes = locks.filter((lock) => lock.namespace !== CREATION_ADMISSION_LOCK_NAMESPACE)
+        expect(shared).toHaveLength(2)
+        expect(lanes).toHaveLength(2)
+        for (const lock of shared) {
+          expect(lock).toMatchObject({ mode: 'ShareLock', granted: true })
+          expect(lanes.filter((lane) => lane.pid === lock.pid)).toEqual([
+            expect.objectContaining({ mode: 'ExclusiveLock', granted: true }),
+          ])
+        }
+        expect(new Set(lanes.map((lane) => lane.namespace)).size).toBe(2)
+        expect(shared.map((lock) => lock.pid)).toContain(lowerPid)
+        const higherLane = lanes.find((lane) => lane.pid !== lowerPid)?.namespace
+        if (i === 0) firstHigherLane = higherLane
+        else expect(higherLane).toBe(firstHigherLane)
+        expect(await boxes.countBy({ organizationId })).toBe(92 + i)
+        commit.open()
+        await request
+        expect(await boxes.countBy({ organizationId })).toBe(93 + i)
+        if (i === 0) {
+          // Reuse the same lane on the second high-limit insert without changing this organization's count.
+          for (let j = 0; j < lastLaneNamespace - firstLaneNamespace; j++) {
+            await repository.insert(newBox(`cycle-${j}`, otherOrganizationId), 200)
+          }
+        }
       }
-      const higherAgain = repository.insert(newBox('higher-limit-again'), 200)
-      requests.push(higherAgain)
-      const locks = await Promise.race([waitForCompatibilityWaiter(dataSource, 'ExclusiveLock'), higherAgain])
-      if (!Array.isArray(locks)) throw new Error('Higher-limit writer committed before the lower-limit writer')
-      const exclusiveWaiter = locks.find(
-        (lock) => lock.namespace === CREATION_ADMISSION_LOCK_NAMESPACE && !lock.granted,
-      )
-      expect(exclusiveWaiter?.mode).toBe('ExclusiveLock')
-      // Fallback cannot queue while holding even its lane from the first transaction.
-      expect(locks.filter((lock) => lock.granted)).toHaveLength(2)
-      expect(locks.some((lock) => lock.pid === exclusiveWaiter?.pid && lock.granted)).toBe(false)
-      expect(await boxes.countBy({ organizationId })).toBe(93)
       releaseCount.open()
-      await Promise.all(requests)
+      await low
       expect(await boxes.countBy({ organizationId })).toBe(95)
     } finally {
       releaseCount.open()
+      for (const { commit } of higher) commit.open()
       await Promise.allSettled(requests)
       count.mockRestore()
+      insert.mockRestore()
     }
   })
 

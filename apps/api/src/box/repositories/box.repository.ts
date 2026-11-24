@@ -52,12 +52,10 @@ const CREATION_ADMISSION_LOCK_TIMEOUT_MS = 5000
 const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
 
 // Cross-version protocol: the original two-int key is the shared/exclusive
-// compatibility barrier. Lane keys and ceilings (100, 200, 400, ...) must also
-// match across all releases that use parallel admission.
+// compatibility barrier. Parallel releases must share the same lane keys and count.
 export const CREATION_ADMISSION_LOCK_NAMESPACE = 0x424f5841 // 'BOXA'
 const CREATION_ADMISSION_FIRST_LANE_NAMESPACE = 0x43525000
 const CREATION_ADMISSION_LANES = 8
-const CREATION_ADMISSION_FIRST_CEILING = 100
 
 // Facts updates hold an organization's facts row for one short statement, so a
 // longer wait means something else holds it. The Box write has already
@@ -318,7 +316,7 @@ export class BoxRepository extends BaseRepository<Box> {
     if (
       singleInsertWithoutCallbacks &&
       Number.isSafeInteger(maxCreatedBoxes) &&
-      maxCreatedBoxes >= CREATION_ADMISSION_FIRST_CEILING
+      maxCreatedBoxes >= CREATION_ADMISSION_LANES
     ) {
       const laneNamespace = CREATION_ADMISSION_FIRST_LANE_NAMESPACE + this.nextCreationLane
       this.nextCreationLane = (this.nextCreationLane + 1) % CREATION_ADMISSION_LANES
@@ -358,20 +356,11 @@ export class BoxRepository extends BaseRepository<Box> {
   }
 
   private hasParallelCreationHeadroom(count: number, max: number): boolean {
-    if (!Number.isSafeInteger(count) || count < 0 || count > max - CREATION_ADMISSION_LANES) return false
-
-    // At the count snapshot, at most one invisible insert per lane (including
-    // ours) can contribute to occupancy: PostgreSQL makes a commit visible
-    // before releasing its lane. While our insert is pending, the visible count
-    // is strictly below our ceiling as long as visible + pending fits under it.
-    // The next approval therefore uses a ceiling no higher than ours and keeps
-    // that bound, even if its request has a higher limit.
-    let ceiling = CREATION_ADMISSION_FIRST_CEILING
-    while (ceiling <= count) {
-      if (ceiling > max / 2) return false // Bound doubling by a safe integer.
-      ceiling *= 2
-    }
-    return count + CREATION_ADMISSION_LANES <= ceiling && ceiling <= max
+    // At the count snapshot, other admitted inserts not yet visible still hold
+    // their lanes: PostgreSQL makes a commit visible before releasing its lane.
+    // Including this insert, at most eight slots are needed beyond the count.
+    // This checks the request's resolved limit at admission, not at commit.
+    return Number.isSafeInteger(count) && count >= 0 && count <= max - CREATION_ADMISSION_LANES
   }
 
   /** Read lifecycle state and ownership in one snapshot, without changing ordinary Box projections. */

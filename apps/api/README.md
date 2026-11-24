@@ -1384,23 +1384,39 @@ separate `READ COMMITTED` statement after locking. Cached Box data cannot admit 
 Older API instances, warm-pool claims, checkpoint restores, and other callback-based
 creates take the original organization lock exclusively.
 
-An ordinary one-Box insert with a safe integer limit of at least 100 takes one of
-8 organization lanes. It then takes the original lock in shared mode.
+To try parallel admission, an ordinary one-Box insert needs a safe integer request
+limit of at least 8.
+It takes one of 8 organization lanes, then takes the original lock in shared mode.
+Parallel admission requires a nonnegative safe integer count and at least 8 slots
+under the request's resolved limit.
 
-The admission check uses the first ceiling (100, 200, 400, …) strictly above
-the count. The insert can commit alongside other lanes if the count plus 8 fits
-under that ceiling and the ceiling is within the request limit.
+At the count snapshot, other admitted inserts that are not yet visible still hold
+their lanes. At most 8 additional slots are needed, including this insert.
 
 Otherwise the first transaction finishes without writing. A new transaction takes the
-exclusive lock and checks the exact limit against a fresh count. Smaller limits take
-that exclusive path directly.
+exclusive lock and checks the exact limit against a fresh count. Limits below 8 and
+limits that are not safe integers take the exclusive path directly.
+
+A limit of 1000 allows parallel admission at 850 or 992 counted Boxes. At 993 the
+exclusive path can still fill the remaining slots. No separate threshold is configured.
+
+Each request's resolved limit is checked at admission, not refreshed at commit. With a
+common resolved limit, concurrent limited creates do not exceed it.
+
+A later request with a higher limit can bring the count above an earlier request's
+lower limit before the earlier request commits. A plan change does not revoke an
+existing admission.
 
 Lock waits share about five seconds; the count and writes retain the connection's
 default lock timeout. Box and last activity still commit together.
 
-Older exclusive-only instances can coexist with parallel-admission instances.
-The lane count, lane key namespaces, and ordered ceilings are a cross-version protocol.
-Do not mix parallel-admission releases with different values without a compatibility transition.
+Older exclusive-only instances still exclude parallel writers on the original key.
+Parallel releases must use that same key, lane namespaces, and lane count. An earlier
+parallel release may fall back sooner, but shares the same eight lanes and does not
+add capacity.
+
+Mix these releases only if the admission-time contract above is acceptable. A mixed
+rollout does not preserve the earlier request's lower limit at its commit.
 
 The partial B-tree `box_creation_quota_idx` on `box("organizationId")` limits the
 count scan to rows outside `error`, `destroying`, `destroyed`, `archiving`, and `archived`.

@@ -139,7 +139,7 @@ describe('BoxRepository creation admission', () => {
     expectAdmissionLock(entityManager, entity.organizationId)
   })
 
-  it.each([99, 100.5, Infinity, Number.MAX_SAFE_INTEGER + 1])('uses the exclusive path for limit %s', async (limit) => {
+  it.each([7, 100.5, Infinity, Number.MAX_SAFE_INTEGER + 1])('uses the exclusive path for limit %s', async (limit) => {
     const { boxRepository, entityManager } = makeRepository()
     const entity = box()
     await boxRepository.insert(entity, limit)
@@ -147,13 +147,17 @@ describe('BoxRepository creation admission', () => {
   })
 
   it.each([
+    { count: 0, limit: 8, attempts: 1 },
+    { count: 1, limit: 8, attempts: 2 },
+    { count: 91, limit: 99, attempts: 1 },
     { count: 92, limit: 100, attempts: 1 },
-    { count: 93, limit: 200, attempts: 2 },
-    { count: 100, limit: 150, attempts: 2 },
-    { count: 100, limit: 200, attempts: 1 },
-    { count: 200, limit: 400, attempts: 1 },
-    { count: Number.MAX_SAFE_INTEGER - 9, limit: Number.MAX_SAFE_INTEGER, attempts: 2 },
-    { count: Number.NaN, limit: 100, attempts: 2 },
+    { count: 93, limit: 100, attempts: 2 },
+    { count: 93, limit: 200, attempts: 1 },
+    { count: 100, limit: 150, attempts: 1 },
+    { count: 992, limit: 1000, attempts: 1 },
+    { count: 993, limit: 1000, attempts: 2 },
+    { count: Number.MAX_SAFE_INTEGER - 8, limit: Number.MAX_SAFE_INTEGER, attempts: 1 },
+    { count: Number.MAX_SAFE_INTEGER - 7, limit: Number.MAX_SAFE_INTEGER, attempts: 2 },
   ])('uses $attempts admission transactions for $count counted of $limit', async ({ count, limit, attempts }) => {
     const { boxRepository, entityManager, transaction } = makeRepository(count)
     await boxRepository.insert(box(), limit)
@@ -163,13 +167,39 @@ describe('BoxRepository creation admission', () => {
     expect(entityManager.insert).toHaveBeenCalledTimes(1)
   })
 
+  it.each([Number.NaN, -1, 12.5, Number.MAX_SAFE_INTEGER + 1])(
+    'recounts under the exclusive lock rather than trusting an invalid parallel count of %s',
+    async (count) => {
+      const { boxRepository, entityManager, transaction } = makeRepository(1000)
+      entityManager.count.mockResolvedValueOnce(count)
+
+      await expect(boxRepository.insert(box(), 1000)).rejects.toBeInstanceOf(BoxCreationLimitExceededError)
+      expect(transaction).toHaveBeenCalledTimes(2)
+      expect(entityManager.count).toHaveBeenCalledTimes(2)
+      expect(entityManager.query.mock.calls[2][0]).toContain('pg_advisory_xact_lock($2')
+      expect(entityManager.query.mock.calls[2][1][1]).toBe(CREATION_ADMISSION_LOCK_NAMESPACE)
+      expect(entityManager.insert).not.toHaveBeenCalled()
+    },
+  )
+
+  it('propagates a parallel count error without retrying or writing', async () => {
+    const { boxRepository, entityManager, transaction } = makeRepository(850)
+    const countError = Object.assign(new Error('canceling count due to lock timeout'), { code: '55P03' })
+    entityManager.count.mockRejectedValueOnce(countError)
+
+    await expect(boxRepository.insert(box(), 1000)).rejects.toBe(countError)
+    expect(transaction).toHaveBeenCalledTimes(1)
+    expect(entityManager.query).toHaveBeenCalledTimes(2)
+    expect(entityManager.insert).not.toHaveBeenCalled()
+  })
+
   it('shares one lock budget across the lane, shared key, and fallback without charging the count', async () => {
-    const { boxRepository, entityManager } = makeRepository(99)
+    const { boxRepository, entityManager } = makeRepository(993)
     const clock = jest.spyOn(performance, 'now')
     for (const ms of [0, 1200, 1200, 3100, 9000, 9001]) clock.mockReturnValueOnce(ms)
 
     try {
-      await boxRepository.insert(box(), 100)
+      await boxRepository.insert(box(), 1000)
       const calls = entityManager.query.mock.calls as Array<[string, [string, number, string]]>
       expect(calls.map(([, params]) => params[0])).toEqual(['5000ms', '3800ms', '1900ms'])
       expect(calls[0][0]).toContain('pg_advisory_xact_lock($2')
