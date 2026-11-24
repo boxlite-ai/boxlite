@@ -14,17 +14,6 @@
 
 ---
 openapi: 3.1.1
-x-boxlite-hosted-request-replay:
-  discovery: capabilities.idempotency_operations
-  lifetime: PT24H
-  implementations: [hosted]
-  excluded: [uploadFiles, downloadFiles, prepareTunnel, attachBox, attachExecution]
-  description: >-
-    Finite JSON and empty-response writes registered by the hosted API are
-    protected when a key is supplied. Reads and organization invitations use
-    their own contracts. Unserved snapshot, clone, export and import operations
-    are not advertised. The shared specification does not grant this capability
-    to boxlite serve or the reference server.
 info:
   title: BoxLite Box API
   version: 0.1.0

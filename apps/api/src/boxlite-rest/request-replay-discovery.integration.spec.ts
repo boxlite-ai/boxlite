@@ -99,11 +99,6 @@ describe('hosted replay discovery and production requests', () => {
     ]
     const operations = registeredIds.map((id) => catalog.get(id)!)
     expect(operations.every((op) => replayPolicy(op.method, op.path, op.webSocket) === 'supported')).toBe(true)
-    expect(box['x-boxlite-hosted-request-replay']).toMatchObject({
-      implementations: ['hosted'],
-      lifetime: 'PT24H',
-      discovery: 'capabilities.idempotency_operations',
-    })
     for (const op of operations) {
       app[op.method as 'post'](op.path.replace(/\{([^}]+)\}/g, ':$1'), (_req, res) => res.end())
       expect(op.inputSchema).toMatchObject({ properties: { 'Idempotency-Key': { type: 'string', format: 'uuid' } } })
