@@ -34,6 +34,14 @@ function syntheticSecretList(manifest: readonly string[], values: Record<string,
 const SYNTHETIC_PROVIDER_TOKEN = 'synthetic-provider-token-for-regression-only'
 const INFRA_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
+// Embedded in child scripts after setup. The parent can interrupt as soon as it sees the final path.
+const PUBLISH_READY_PID = `
+const fs = require('node:fs')
+const pidPath = process.env.SYNTHETIC_PID_PATH
+fs.writeFileSync(pidPath + '.tmp', String(process.pid))
+fs.renameSync(pidPath + '.tmp', pidPath)
+`
+
 function spawnWrapper(args: any, options: any) {
   return spawn(process.execPath, ['--import', 'tsx', 'deployment/sst.ts', ...args], {
     cwd: INFRA_ROOT,
@@ -225,18 +233,17 @@ test('waits for native SST to cancel its detached Pulumi child before the wrappe
     fakeSst,
     `#!/usr/bin/env node
 const { spawn } = require('node:child_process')
-const grandchild = spawn(process.execPath, ['-e', \`
-  const { writeFileSync } = require('node:fs')
-  writeFileSync(process.env.SYNTHETIC_SST_GRANDCHILD_PID_PATH, String(process.pid))
-  process.on('SIGINT', () => process.exit(0))
-  process.on('SIGTERM', () => {})
-  setInterval(() => {}, 1_000)
-\`], { detached: true, stdio: 'ignore', env: process.env })
 process.on('SIGINT', () => {
   grandchild.once('exit', () => process.exit(0))
   grandchild.kill('SIGINT')
 })
 process.on('SIGTERM', () => {})
+const grandchild = spawn(process.execPath, ['-e', \`
+  process.on('SIGINT', () => process.exit(0))
+  process.on('SIGTERM', () => {})
+  ${PUBLISH_READY_PID}
+  setInterval(() => {}, 1_000)
+\`], { detached: true, stdio: 'ignore', env: process.env })
 setInterval(() => {}, 1_000)
 `,
     'utf8',
@@ -250,7 +257,7 @@ setInterval(() => {}, 1_000)
       SST_BIN_PATH: fakeSst,
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
       CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
-      SYNTHETIC_SST_GRANDCHILD_PID_PATH: grandchildPidFile,
+      SYNTHETIC_PID_PATH: grandchildPidFile,
     },
     stdio: 'ignore',
   })
@@ -297,9 +304,9 @@ test('force-stops native SST when repeated termination rejects graceful cancella
     fakeSst,
     `#!/usr/bin/env node
 const { writeFileSync } = require('node:fs')
-writeFileSync(process.env.SYNTHETIC_SST_PID_PATH, String(process.pid))
 process.on('SIGINT', () => writeFileSync(process.env.SYNTHETIC_GRACEFUL_SIGNAL_PATH, 'received'))
 process.on('SIGTERM', () => {})
+${PUBLISH_READY_PID}
 setInterval(() => {}, 1_000)
 `,
     'utf8',
@@ -313,7 +320,7 @@ setInterval(() => {}, 1_000)
       SST_BIN_PATH: fakeSst,
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
       CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
-      SYNTHETIC_SST_PID_PATH: childPidFile,
+      SYNTHETIC_PID_PATH: childPidFile,
       SYNTHETIC_GRACEFUL_SIGNAL_PATH: gracefulSignalFile,
     },
     stdio: 'ignore',
@@ -894,7 +901,6 @@ test('interrupts a pending Runner state export when the wrapper is terminated', 
   await writeFile(
     fakeSst,
     `#!/usr/bin/env node
-const { writeFileSync } = require('node:fs')
 const args = process.argv.slice(2)
 if (args[0] === 'secret' && args[1] === 'list') {
   const NL = String.fromCharCode(10)
@@ -904,10 +910,10 @@ if (args[0] === 'secret' && args[1] === 'list') {
   process.exit(0)
 }
 if (args[0] !== 'state' || args[1] !== 'export') process.exit(99)
-writeFileSync(process.env.SYNTHETIC_SST_PID_PATH, String(process.pid))
 // The wrapper must still terminate a state export that refuses graceful shutdown.
 process.on('SIGTERM', () => {})
 process.on('SIGINT', () => process.exit(0))
+${PUBLISH_READY_PID}
 setInterval(() => {}, 1_000)
 `,
     'utf8',
@@ -921,7 +927,7 @@ setInterval(() => {}, 1_000)
       SST_BIN_PATH: fakeSst,
       CLOUDFLARE_API_TOKEN: 'synthetic-cloudflare-token',
       CLOUDFLARE_DEFAULT_ACCOUNT_ID: 'synthetic-cloudflare-account',
-      SYNTHETIC_SST_PID_PATH: childPidFile,
+      SYNTHETIC_PID_PATH: childPidFile,
     },
     stdio: 'ignore',
   })
@@ -989,10 +995,9 @@ fi
   await writeFile(
     fakeCurl,
     `#!/usr/bin/env node
-const { writeFileSync } = require('node:fs')
-writeFileSync(process.env.SYNTHETIC_CURL_PID_PATH, String(process.pid))
 // The wrapper must reap the preflight even when it refuses graceful shutdown.
 process.on('SIGTERM', () => {})
+${PUBLISH_READY_PID}
 setInterval(() => {}, 1_000)
 `,
     'utf8',
@@ -1010,7 +1015,7 @@ setInterval(() => {}, 1_000)
       IAM_PERMISSIONS_BOUNDARY_STAGE: 'ci',
       OIDC_ISSUER_BASE_URL: 'https://auth.example.test/',
       STACK_DOMAIN: 'ci.example.test',
-      SYNTHETIC_CURL_PID_PATH: curlPidFile,
+      SYNTHETIC_PID_PATH: curlPidFile,
       SYNTHETIC_SST_CALL_PATH: sstCallFile,
     },
     stdio: 'ignore',
