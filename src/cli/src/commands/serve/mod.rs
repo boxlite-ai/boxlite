@@ -4387,6 +4387,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: Default::default(),
         });
         let (base, server) = serve_router(state).await;
         let client = reqwest::Client::new();
@@ -4519,6 +4520,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            agent_turns: Default::default(),
         });
         let (base, server) = serve_router(state).await;
         let remote = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(base.clone()))

@@ -1036,7 +1036,7 @@ async fn agent_rest_routes_forward_a_conversation() {
         .send(
             "hello-null",
             boxlite::agents::AgentSendOptions {
-                data: Some(Value::Null),
+                data: Some(serde_json::value::to_raw_value(&Value::Null).unwrap()),
                 ..Default::default()
             },
         )

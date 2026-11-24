@@ -491,8 +491,10 @@ async fn agents_over_rest_match_local_rust() {
             }
             value
         }
-        let result = normalized_result(agents::records::result(&result), &turn_id);
-        let mut snapshot = agents::records::turn_state(&fetched);
+        let result = serde_json::from_str(agents::records::result(&result).get()).unwrap();
+        let result = normalized_result(result, &turn_id);
+        let mut snapshot: Value =
+            serde_json::from_str(agents::records::turn_state(&fetched).get()).unwrap();
         let object = snapshot.as_object_mut().unwrap();
         assert_eq!(object.remove("id").unwrap(), turn_id);
         assert_eq!(object.remove("agent_id").unwrap(), agent_id);

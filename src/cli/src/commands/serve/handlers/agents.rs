@@ -17,6 +17,7 @@ use boxlite::{Agent, BoxInfo, BoxStatus, BoxliteError};
 use futures::StreamExt;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
 use super::super::{
@@ -57,7 +58,7 @@ struct SendOptions {
     #[serde(default, deserialize_with = "optional_non_null")]
     mode: Option<String>,
     #[serde(default, deserialize_with = "optional_non_null")]
-    data: Option<Value>,
+    data: Option<Box<RawValue>>,
 }
 
 #[derive(Deserialize)]
@@ -77,7 +78,7 @@ struct TextRequest {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RespondRequest {
-    response: Value,
+    response: Box<RawValue>,
 }
 
 #[derive(Default, Deserialize)]
@@ -91,7 +92,9 @@ pub(in crate::commands::serve) struct EventQuery {
 }
 
 fn decode<T: for<'de> Deserialize<'de>>(body: &Bytes) -> Result<T, BoxliteError> {
-    serde_json::from_slice(body).map_err(|error| BoxliteError::InvalidArgument(error.to_string()))
+    Json::<T>::from_bytes(body)
+        .map(|Json(request)| request)
+        .map_err(|error| BoxliteError::InvalidArgument(error.body_text()))
 }
 
 fn empty_body(body: &Bytes) -> Result<(), BoxliteError> {
@@ -480,7 +483,7 @@ pub(in crate::commands::serve) async fn respond(
         Ok(v) => v,
         Err(e) => return error_from_boxlite(&e),
     };
-    let response = match agents::records::parse_response(request.response) {
+    let response = match agents::records::parse_response(request.response.get()) {
         Ok(v) => v,
         Err(e) => return error_from_boxlite(&e),
     };
