@@ -1485,6 +1485,39 @@ func TestStartRejectsRecordedFilestoreWithoutReference(t *testing.T) {
 	}
 }
 
+func TestStartRejectsUnreadableVolumeMountRecord(t *testing.T) {
+	useVolumeMountBasePath(t, t.TempDir())
+	var nativeCalls atomic.Int32
+	c := checkpointRESTClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		nativeCalls.Add(1)
+		http.Error(w, "native box lookup reached", http.StatusInternalServerError)
+	})
+	boxID := "abc123def456"
+	if err := os.MkdirAll(getVolumeMountRecordDir(), 0755); err != nil {
+		t.Fatalf("create record directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(getVolumeMountRecordDir(), boxID+".json"), []byte("not-json"), 0600); err != nil {
+		t.Fatalf("write malformed record: %v", err)
+	}
+	c.testProbeRunner = func(context.Context, string) (bool, error) {
+		return false, errors.New("object-storage fallback must not run")
+	}
+	metadata := map[string]string{
+		"volumes": `[{"volumeId":"vol-a","mountPath":"/data"}]`,
+	}
+
+	_, err := c.Start(context.Background(), boxID, nil, metadata)
+	if err == nil || !strings.Contains(err.Error(), "FILESTORE_VOLUME_RECORD_UNREADABLE") {
+		t.Fatalf("Start returned %v, want an unreadable volume record error", err)
+	}
+	if !isFilestoreVolumePreparationError(err) {
+		t.Fatalf("Start returned an untyped error: %v", err)
+	}
+	if got := nativeCalls.Load(); got != 0 {
+		t.Fatalf("Start made %d native box calls after the unreadable volume record", got)
+	}
+}
+
 func TestStartPreservesObjectStorageMountFallback(t *testing.T) {
 	useVolumeMountBasePath(t, t.TempDir())
 	var nativeCalls atomic.Int32

@@ -646,8 +646,10 @@ filestore volumes), while the reverse order would put filestore creates on
 runners the API does not yet trust. Before replaying start metadata, an upgraded
 runner also checks the Box's persisted mount record. If an old API replica omits
 the Filestore reference, Start fails with `FILESTORE_VOLUME_REFERENCE_MISSING`
-before trying the object-storage fallback or starting the Box. This guard uses
-only the local record, not a GCP lookup or a rollout feature flag. Rolling back
+before trying the object-storage fallback or starting the Box. An unreadable
+mount record fails with `FILESTORE_VOLUME_RECORD_UNREADABLE` instead of guessing
+that the Box has no Filestore mounts. This guard uses only the local record, not
+a GCP lookup or a rollout feature flag. Rolling back
 the runner to a binary without Filestore support remains unsupported while
 Filestore Boxes exist. The dispatch check re-reads the runner row instead of
 trusting an API replica's lookup cache. A rejection logs the Box ID,

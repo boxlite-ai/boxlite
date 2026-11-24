@@ -352,7 +352,11 @@ func isFilestoreVolumePreparationError(err error) bool {
 func (c *Client) rejectRecordedFilestoreFallback(boxID string) error {
 	record, err := c.readBoxVolumeMountRecord(boxID)
 	if err != nil {
-		return nil
+		return &filestoreVolumePreparationError{err: fmt.Errorf(
+			"FILESTORE_VOLUME_RECORD_UNREADABLE: box %s volume mount record could not be read: %w",
+			boxID,
+			err,
+		)}
 	}
 	for _, entry := range record.Entries {
 		if entry.Backend == volumeBackendFilestore {
@@ -366,13 +370,16 @@ func (c *Client) rejectRecordedFilestoreFallback(boxID string) error {
 }
 
 func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {
+	if metadata == nil {
+		return nil
+	}
+	volumesJSON, ok := metadata["volumes"]
+	if !ok {
+		return nil
+	}
 	var volumes []dto.VolumeDTO
-	if metadata != nil {
-		if volumesJSON, ok := metadata["volumes"]; ok {
-			if err := json.Unmarshal([]byte(volumesJSON), &volumes); err != nil {
-				volumes = nil
-			}
-		}
+	if err := json.Unmarshal([]byte(volumesJSON), &volumes); err != nil {
+		volumes = nil
 	}
 	if !hasFilestoreRef(volumes) {
 		if err := c.rejectRecordedFilestoreFallback(boxID); err != nil {
