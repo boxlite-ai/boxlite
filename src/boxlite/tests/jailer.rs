@@ -269,11 +269,13 @@ async fn jailer_shares_single_staged_shim_across_boxes() {
     t.bx.stop().await.unwrap();
     fs::create_dir(&legacy_bin).unwrap();
     fs::write(legacy_bin.join("stale-shim"), b"legacy shim").unwrap();
-    t.bx.start().await.unwrap();
+    let restarted = t.runtime.get(t.bx.id().as_str()).await.unwrap().unwrap();
+    restarted.start().await.unwrap();
     assert!(!legacy_bin.exists());
     assert_eq!(fs::read_dir(cache).unwrap().count(), 1);
     assert_eq!(fs::metadata(shim).unwrap().ino(), inode);
 
+    restarted.stop().await.unwrap();
     second.stop().await.unwrap();
     t.runtime.remove(second.id().as_str(), true).await.unwrap();
 }
