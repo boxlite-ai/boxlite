@@ -808,6 +808,13 @@ test\:rest\:e2e:
 test\:rest\:report:
 	@python3 scripts/test/rest/report.py
 
+# Validate the production server against a real Rust REST client. Run
+# SETUP_DONE=1 make test:e2e:serve:volume after preparing runtime artifacts.
+PHONY_TARGETS += test\:e2e\:serve\:volume
+test\:e2e\:serve\:volume:
+	@echo "🧪 Starting boxlite serve and exercising volume REST CRUD..."
+	@$(MAKE) test:integration:cli FILTER=volume_crud_over_rest
+
 # Validate acceptance-client invocation without a running cloud or VM.
 test\:e2e\:drivers:
 	@cargo test --locked -p boxlite-e2e-rust $(CARGOTEST_FILTER)
