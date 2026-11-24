@@ -695,14 +695,15 @@ nothing mapped.
    keeps every vCPU out of the guest, and a thread that fails to start aborts
    the gate, so no worker waits forever.
 2. Before each guest entry, the worker calls `checkpoint` and checks the stop
-   latch. To park, it completes pending I/O, calls `notify_guest_stopped` on
-   its backend vCPU, and acknowledges the current pause epoch. When it can
-   enter, it runs and hands the exit to
-   `Chipset::dispatch`. `Shutdown` sends `GuestShutdown` and `Reset` sends
-   `GuestReset`; a run error, any other exit, such as `Halted`, which KVM never
-   returns with its in-kernel irqchip, or a panic caught around the worker
-   sends `VcpuFailed`. A worker that sees the latch completes the pending
-   access and returns without sending.
+   latch. To park, it calls `complete_pending_io` and dispatches each returned
+   exit until completion returns `Ok(None)`. It then calls
+   `notify_guest_stopped` and acknowledges the pause epoch if the VM is still
+   live. A terminal exit, error, or concurrent stop skips the acknowledgement.
+   During normal entry and I/O completion, the worker uses `Chipset::dispatch`
+   to serve device accesses. `Shutdown` sends `GuestShutdown` and `Reset` sends
+   `GuestReset`. An error, unexpected exit such as `Halted`, or a panic caught
+   around the worker sends `VcpuFailed`. A worker that sees the stop latch
+   drains pending I/O and preserves the latched outcome.
 3. `EventSender::send` sets the stop latch before it queues, so the vCPU
    that sends, such as the one whose `0xFE` reached the i8042, never enters
    the guest again. `run` takes the first event from the `EventLoop`, opens
@@ -1373,6 +1374,10 @@ at the top of RAM, and stores RFLAGS, CR0, CR3, CR4, EFER, CPUID leaves 1 and
 sparse anonymous `mmap`: the host needs virtual address space for the full
 mapping, and accessed pages still depend on available memory and host memory
 pressure.
+
+The `lifecycle::tests::kvm` tests exercise pause, resume, and stop on device-less
+guests. The split MMIO case pauses after the first read or write fragment and
+checks that the second fragment is handled before the vCPU parks.
 
 The [bus](#buses-lines-and-events) and [chipset](#chipset) tests in `tests::kvm`
 modules need 2 MiB: a flat 32-bit guest writes and reads a test device on the

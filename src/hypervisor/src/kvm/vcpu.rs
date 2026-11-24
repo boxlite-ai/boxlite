@@ -31,7 +31,11 @@ use super::{
     },
     kick::WorkerSignal,
 };
-use crate::{Error, Result, VcpuExit, x86::MAX_SNAPSHOT_MSR_ENTRIES};
+use crate::{
+    Error, Result, VcpuExit,
+    vcpu::{IoCompletion, PendingIo},
+    x86::MAX_SNAPSHOT_MSR_ENTRIES,
+};
 
 /// Number of u32 words in kvm_xsave.region, before its flexible-array tail.
 const XSAVE_REGION_WORDS: usize = 1024;
@@ -409,6 +413,10 @@ impl KvmVcpu {
                 });
             }
         }
+        self.decode_last_exit()
+    }
+
+    fn decode_last_exit(&mut self) -> Result<VcpuExit<'_>> {
         // Reborrow after rust-vmm's exit: its port variants omit the count that
         // distinguishes a single access from a repeated string transfer.
         let run = self.fd.get_kvm_run();
@@ -419,9 +427,10 @@ impl KvmVcpu {
     }
 
     /// Finishes handled I/O without executing another guest instruction.
-    /// A second completion is a no-op; failures retain the pending access.
-    pub fn complete_pending_io(&mut self) -> Result<()> {
-        self.pending_io
+    /// Handle each returned exit and call again until completion returns `None`.
+    pub fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
+        let completion = self
+            .pending_io
             .complete(|| {
                 self.fd.clear_tsc_save_anchor();
                 self.fd.set_kvm_immediate_exit(1);
@@ -432,7 +441,11 @@ impl KvmVcpu {
             .map_err(|source| Error::CompletePendingIo {
                 id: self.id,
                 source,
-            })
+            })?;
+        match completion {
+            IoCompletion::Done => Ok(None),
+            IoCompletion::Exit => self.decode_last_exit().map(Some),
+        }
     }
 
     /// Notifies an enabled KVM pvclock that its vCPU was stopped.
@@ -454,7 +467,7 @@ impl crate::Vcpu for KvmVcpu {
         Self::run(self)
     }
 
-    fn complete_pending_io(&mut self) -> Result<()> {
+    fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
         Self::complete_pending_io(self)
     }
 
@@ -486,27 +499,6 @@ impl crate::X86Vcpu for KvmVcpu {
 
     fn set_boot_registers(&mut self, state: &crate::X86BootRegisters) -> Result<()> {
         Self::set_boot_registers(self, state)
-    }
-}
-
-#[derive(Debug, Default)]
-struct PendingIo(bool);
-
-impl PendingIo {
-    fn complete(&mut self, enter: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
-        if !self.0 {
-            return Ok(());
-        }
-        match enter() {
-            Err(error) if error.raw_os_error() == Some(libc::EINTR) => {
-                self.0 = false;
-                Ok(())
-            }
-            Err(error) => Err(error),
-            Ok(()) => Err(io::Error::other(
-                "KVM_RUN returned an exit during I/O completion",
-            )),
-        }
     }
 }
 
@@ -1833,24 +1825,5 @@ mod tests {
         let elapsed = before_restore.elapsed() + std::time::Duration::from_millis(5);
         let max_cycles = ns_to_tsc_cycles(elapsed.as_nanos() as u64, state.tsc_khz);
         assert!(restored_tsc.wrapping_sub(saved_tsc) <= max_cycles);
-    }
-
-    #[test]
-    fn completion_consumes_pending_io_only_after_interrupted_reentry() {
-        let mut pending = PendingIo::default();
-        pending.complete(|| panic!("no pending I/O")).unwrap();
-        pending.0 = true;
-        let error = pending
-            .complete(|| Err(io::Error::from_raw_os_error(libc::EIO)))
-            .unwrap_err();
-        assert_eq!(error.raw_os_error(), Some(libc::EIO));
-        assert!(pending.0);
-        assert!(pending.complete(|| Ok(())).is_err());
-        assert!(pending.0);
-        pending
-            .complete(|| Err(io::Error::from_raw_os_error(libc::EINTR)))
-            .unwrap();
-        assert!(!pending.0);
-        pending.complete(|| panic!("must not enter twice")).unwrap();
     }
 }

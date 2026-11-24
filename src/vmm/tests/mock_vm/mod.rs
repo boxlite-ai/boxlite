@@ -375,8 +375,8 @@ impl Vcpu for MockVcpu {
         })
     }
 
-    fn complete_pending_io(&mut self) -> Result<()> {
-        Ok(())
+    fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
+        Ok(None)
     }
 
     fn handle(&self) -> MockHandle {

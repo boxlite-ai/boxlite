@@ -3,21 +3,29 @@
 
 use std::{
     fmt::Debug,
+    io,
     sync::{Arc, Barrier, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
+use boxlite_hypervisor::{Vcpu, VcpuExit};
+
 use super::{Command, Lifecycle, VmStatus};
 use crate::{
     ControlReason, DiskConfig, DiskFormat, Error, FsConfig, NetConfig, VmConfig, VmControl,
     VsockConfig,
+    chipset::{Chipset, ChipsetBuilder},
     control::ControlRegistry,
     events::{Event, EventLoop},
+    mock_vm::{MockHandle, MockVm},
+    vcpu::{handle_exit, park_vcpu},
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod execution;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod kvm;
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -34,6 +42,203 @@ fn assert_error(result: crate::Result<()>, operation: &str, reason: ControlReaso
             if *op == operation && *why == reason),
         "{result:?}"
     );
+}
+
+struct StopOnDrop<'a>(&'a VmControl);
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CompletionEnd {
+    Done,
+    Shutdown,
+    Reset,
+    Halted,
+    Error,
+}
+
+struct FragmentCpu {
+    responses: [[u8; 2]; 2],
+    completions: usize,
+    notifications: usize,
+    end: CompletionEnd,
+    before_fragment: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl FragmentCpu {
+    fn new(end: CompletionEnd) -> Self {
+        Self {
+            responses: [[0; 2]; 2],
+            completions: 0,
+            notifications: 0,
+            end,
+            before_fragment: None,
+        }
+    }
+}
+
+impl Vcpu for FragmentCpu {
+    type Handle = MockHandle;
+
+    fn run(&mut self) -> boxlite_hypervisor::Result<VcpuExit<'_>> {
+        Ok(VcpuExit::MmioRead {
+            guest_addr: 0xd000_0ffe,
+            bytes: &mut self.responses[0],
+        })
+    }
+
+    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<Option<VcpuExit<'_>>> {
+        self.completions += 1;
+        match self.completions {
+            1 => {
+                assert_eq!(self.responses[0], [0xff; 2]);
+                if let Some(before_fragment) = self.before_fragment.take() {
+                    before_fragment();
+                }
+                Ok(Some(VcpuExit::MmioRead {
+                    guest_addr: 0xd000_1000,
+                    bytes: &mut self.responses[1],
+                }))
+            }
+            2 => {
+                assert_eq!(self.responses[1], [0xff; 2]);
+                match self.end {
+                    CompletionEnd::Done => Ok(None),
+                    CompletionEnd::Shutdown => Ok(Some(VcpuExit::Shutdown)),
+                    CompletionEnd::Reset => Ok(Some(VcpuExit::Reset)),
+                    CompletionEnd::Halted => Ok(Some(VcpuExit::Halted)),
+                    CompletionEnd::Error => Err(boxlite_hypervisor::Error::CompletePendingIo {
+                        id: 0,
+                        source: io::ErrorKind::PermissionDenied.into(),
+                    }),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn notify_guest_stopped(&mut self) -> boxlite_hypervisor::Result<()> {
+        self.notifications += 1;
+        Ok(())
+    }
+
+    fn handle(&self) -> Self::Handle {
+        unreachable!("the checkpoint does not kick the vCPU")
+    }
+}
+
+fn start_checkpoint(
+    end: CompletionEnd,
+) -> (EventLoop, Arc<Lifecycle>, VmControl, Chipset, FragmentCpu) {
+    let (events, lifecycle, control) = fixture(true);
+    let chipset = ChipsetBuilder::new(Arc::new(MockVm::default()), events.sender())
+        .build()
+        .unwrap();
+    let mut cpu = FragmentCpu::new(end);
+    assert!(
+        handle_exit(&chipset, 0, cpu.run().unwrap())
+            .unwrap()
+            .is_none()
+    );
+    control.pause().unwrap();
+    assert!(lifecycle.begin_run().unwrap());
+    (events, lifecycle, control, chipset, cpu)
+}
+
+#[test]
+fn checkpoint_dispatches_both_split_mmio_fragments_before_pausing() {
+    let (mut events, lifecycle, control, chipset, mut cpu) = start_checkpoint(CompletionEnd::Done);
+    thread::scope(|scope| {
+        let _stop = StopOnDrop(&control);
+        let worker = scope.spawn(|| lifecycle.checkpoint(0, || park_vcpu(&chipset, &mut cpu, 0)));
+
+        assert!(events.wait(Some(WAIT)).unwrap().is_none());
+        assert_eq!(lifecycle.state().acknowledgements, 1);
+        assert!(!lifecycle.drive(1));
+        control.wait_paused(Duration::ZERO).unwrap();
+
+        let resume = scope.spawn(|| control.resume());
+        assert!(events.wait(Some(WAIT)).unwrap().is_none());
+        assert!(!lifecycle.drive(1));
+        resume.join().unwrap().unwrap();
+        assert_eq!(control.status(), VmStatus::Running);
+        assert!(worker.join().unwrap().unwrap().is_none());
+    });
+    assert_eq!(cpu.completions, 2);
+    assert_eq!(cpu.notifications, 1);
+}
+
+#[test]
+fn checkpoint_propagates_terminal_exit_or_error_without_acknowledging() {
+    for end in [
+        CompletionEnd::Shutdown,
+        CompletionEnd::Reset,
+        CompletionEnd::Halted,
+        CompletionEnd::Error,
+    ] {
+        let (_, lifecycle, control, chipset, mut cpu) = start_checkpoint(end);
+        let (finished, result) = mpsc::channel();
+        let outcome = thread::scope(|scope| {
+            let _stop = StopOnDrop(&control);
+            let worker = scope.spawn(|| {
+                let outcome = lifecycle.checkpoint(0, || park_vcpu(&chipset, &mut cpu, 0));
+                finished.send(outcome).unwrap();
+            });
+            let outcome = result
+                .recv_timeout(WAIT)
+                .expect("checkpoint did not return");
+            worker.join().unwrap();
+            assert_eq!(lifecycle.status(), VmStatus::Pausing);
+            outcome
+        });
+        match end {
+            CompletionEnd::Shutdown => assert!(matches!(outcome, Ok(Some(Event::GuestShutdown)))),
+            CompletionEnd::Reset => assert!(matches!(outcome, Ok(Some(Event::GuestReset)))),
+            CompletionEnd::Halted => assert!(matches!(
+                outcome,
+                Err(Error::UnexpectedExit { vcpu: 0, exit }) if exit == "Halted"
+            )),
+            CompletionEnd::Error => assert!(matches!(
+                outcome,
+                Err(Error::Hypervisor(boxlite_hypervisor::Error::CompletePendingIo { id: 0, source }))
+                    if source.kind() == io::ErrorKind::PermissionDenied
+            )),
+            CompletionEnd::Done => unreachable!(),
+        }
+        assert_eq!(cpu.completions, 2);
+        assert_eq!(cpu.notifications, 0);
+        assert_eq!(lifecycle.state().acknowledgements, 0);
+    }
+}
+
+#[test]
+fn stop_during_fragment_completion_skips_the_pause_acknowledgement() {
+    let (mut events, lifecycle, control, chipset, mut cpu) = start_checkpoint(CompletionEnd::Done);
+    let (completing, fragment) = mpsc::channel();
+    let (stopped, stop) = mpsc::channel();
+    let operator = thread::spawn(move || {
+        fragment.recv_timeout(WAIT).unwrap();
+        control.stop();
+        stopped.send(()).unwrap();
+    });
+    cpu.before_fragment = Some(Box::new(move || {
+        completing.send(()).unwrap();
+        stop.recv_timeout(WAIT).unwrap();
+    }));
+    let outcome = lifecycle.checkpoint(0, || park_vcpu(&chipset, &mut cpu, 0));
+    operator.join().unwrap();
+    assert!(outcome.unwrap().is_none());
+    assert_eq!(cpu.completions, 2);
+    assert_eq!(lifecycle.state().acknowledgements, 0);
+    assert_eq!(lifecycle.status(), VmStatus::Stopping);
+    assert!(matches!(
+        events.wait(Some(Duration::ZERO)).unwrap(),
+        Some(Event::StopRequested)
+    ));
 }
 
 #[test]

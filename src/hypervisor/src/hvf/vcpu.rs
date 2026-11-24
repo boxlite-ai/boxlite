@@ -152,8 +152,9 @@ impl HvfVcpu {
 
     /// Finishes a handled access without executing another guest instruction.
     /// A second completion is a no-op; a failure keeps the access pending.
-    pub fn complete_pending_io(&mut self) -> Result<()> {
+    pub fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
         self.finish_pending()
+            .map(|()| None)
             .map_err(|source| Error::CompletePendingIo {
                 id: self.id,
                 source,
@@ -314,7 +315,7 @@ impl crate::Vcpu for HvfVcpu {
         Self::run(self)
     }
 
-    fn complete_pending_io(&mut self) -> Result<()> {
+    fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
         Self::complete_pending_io(self)
     }
 

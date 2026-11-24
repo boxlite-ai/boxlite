@@ -16,16 +16,15 @@ use std::{
 use boxlite_hypervisor::{
     MemoryRegion, Vcpu, VcpuExit, VcpuHandle, X86BootRegisters, X86Vcpu, X86Vm,
 };
-use vm_memory::{Bytes, GuestAddress, GuestAddressSpace};
 
-use super::{WAIT, assert_error};
+use super::{CompletionEnd, FragmentCpu, StopOnDrop, WAIT, assert_error};
 use crate::{
     ControlReason, Error, Vm, VmConfig, VmControl, VmExit, VmStatus,
     bus::BusDevice,
     mock_vm::{Call, MockHandle, MockVcpu, MockVm, Step},
 };
 
-fn config(vcpu_count: u8) -> VmConfig {
+pub(super) fn config(vcpu_count: u8) -> VmConfig {
     VmConfig {
         vcpu_count,
         memory_mib: 1,
@@ -51,7 +50,7 @@ fn bare(backend: MockVm, count: u8) -> Vm<MockVm> {
     .unwrap()
 }
 
-fn wait_until(mut ready: impl FnMut() -> bool) {
+pub(super) fn wait_until(mut ready: impl FnMut() -> bool) {
     let start = Instant::now();
     while !ready() {
         assert!(
@@ -62,7 +61,7 @@ fn wait_until(mut ready: impl FnMut() -> bool) {
     }
 }
 
-fn run_with_control<H: X86Vm>(
+pub(super) fn run_with_control<H: X86Vm>(
     vm: &mut Vm<H>,
     control_vm: impl FnOnce(&VmControl) + Send,
 ) -> crate::Result<VmExit> {
@@ -70,19 +69,46 @@ fn run_with_control<H: X86Vm>(
     thread::scope(|scope| {
         let operator = scope.spawn(|| {
             // Stop even if a test assertion fails while the driver is blocked.
-            struct StopOnDrop<'a>(&'a VmControl);
-            impl Drop for StopOnDrop<'_> {
-                fn drop(&mut self) {
-                    self.0.stop();
-                }
-            }
-
             let stop = StopOnDrop(&control);
             control_vm(stop.0);
         });
         let exit = vm.run();
         operator.join().unwrap();
         exit
+    })
+}
+
+pub(super) struct ExitGate {
+    arrived: mpsc::Sender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+impl ExitGate {
+    pub(super) fn new() -> (Arc<Self>, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (arrived, ready) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        (
+            Arc::new(Self {
+                arrived,
+                release: Mutex::new(resume),
+            }),
+            ready,
+            release,
+        )
+    }
+
+    pub(super) fn wait(&self) {
+        self.arrived.send(()).unwrap();
+        self.release.lock().unwrap().recv_timeout(WAIT).unwrap();
+    }
+}
+
+pub(super) fn pause_at_exit(control: &VmControl, release: mpsc::Sender<()>) -> crate::Result<()> {
+    thread::scope(|scope| {
+        let pause = scope.spawn(|| control.pause());
+        wait_until(|| control.status() == VmStatus::Pausing);
+        release.send(()).unwrap();
+        pause.join().unwrap()
     })
 }
 
@@ -219,6 +245,11 @@ fn pause_capability_uses_the_composed_chipset() {
 #[derive(Clone)]
 enum PauseFault {
     CompleteIo(mpsc::Sender<()>),
+    SplitIo {
+        gate: Arc<ExitGate>,
+        end: CompletionEnd,
+        completions: Arc<AtomicUsize>,
+    },
     Kick(Arc<AtomicUsize>),
     TransientKick(Arc<Mutex<Vec<u32>>>),
     NotifyStopped {
@@ -256,6 +287,10 @@ impl boxlite_hypervisor::Vm for FaultyVm {
             vcpu: self.0.create_vcpu(id)?,
             id,
             fault: self.1.clone(),
+            fragments: match &self.1 {
+                PauseFault::SplitIo { end, .. } => Some(FragmentCpu::new(*end)),
+                _ => None,
+            },
         })
     }
 
@@ -274,6 +309,7 @@ struct FailingCpu {
     vcpu: MockVcpu,
     id: u32,
     fault: PauseFault,
+    fragments: Option<FragmentCpu>,
 }
 
 #[derive(Clone)]
@@ -299,7 +335,7 @@ impl VcpuHandle for FaultyKick {
                     });
                 }
             }
-            PauseFault::CompleteIo(_) => {}
+            PauseFault::CompleteIo(_) | PauseFault::SplitIo { .. } => {}
         }
         self.handle.kick()
     }
@@ -312,15 +348,31 @@ impl Vcpu for FailingCpu {
         if let PauseFault::CompleteIo(entered) = &self.fault {
             entered.send(()).unwrap();
         }
+        if let PauseFault::SplitIo { gate, .. } = &self.fault
+            && let Some(fragments) = &mut self.fragments
+            && fragments.completions == 0
+        {
+            let exit = fragments.run()?;
+            gate.wait();
+            return Ok(exit);
+        }
         self.vcpu.run()
     }
 
-    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<()> {
+    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<Option<VcpuExit<'_>>> {
         if matches!(self.fault, PauseFault::CompleteIo(_)) {
             return Err(boxlite_hypervisor::Error::CompletePendingIo {
                 id: self.id,
                 source: io::Error::other("test I/O completion failure"),
             });
+        }
+        if let PauseFault::SplitIo { completions, .. } = &self.fault
+            && let Some(fragments) = &mut self.fragments
+            && fragments.completions < 2
+        {
+            let exit = fragments.complete_pending_io()?;
+            completions.fetch_add(1, Ordering::Relaxed);
+            return Ok(exit);
         }
         self.vcpu.complete_pending_io()
     }
@@ -472,44 +524,75 @@ fn transient_pause_kick_retries_and_allows_resume() {
 }
 
 #[test]
-#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
-fn kvm_device_less_guest_pauses_resumes_and_stops() {
-    const COUNTER: GuestAddress = GuestAddress(0x2000);
-    let mut memory = None;
-    let mut vm = Vm::with_backend(
-        config(2),
-        boxlite_hypervisor::KvmVm::new,
-        |ram, _| {
-            memory = Some(ram.memory().clone());
-            // lock inc dword ptr [0x2000]; jmp back to the increment.
-            let program = [0xf0, 0xff, 0x05, 0x00, 0x20, 0x00, 0x00, 0xeb, 0xf7];
-            Ok(crate::flat_guest::load(&ram.memory().memory(), &program))
+fn split_mmio_pauses_after_dispatching_the_follow_up_fragment_and_resumes() {
+    let (gate, ready, release) = ExitGate::new();
+    let completions = Arc::new(AtomicUsize::new(0));
+    let backend = MockVm::new();
+    let entries = backend.entries();
+    let mut vm = faulty_vm(
+        backend,
+        1,
+        PauseFault::SplitIo {
+            gate,
+            end: CompletionEnd::Done,
+            completions: Arc::clone(&completions),
         },
-        |_, _| Ok(()),
-    )
-    .unwrap();
-    let memory = memory.unwrap();
-    let counter = || {
-        memory
-            .memory()
-            .load::<u32>(COUNTER, Ordering::Relaxed)
-            .unwrap()
-    };
-    vm.control().pause().unwrap();
-    let exit = run_with_control(&mut vm, |control| {
-        control.wait_paused(WAIT).unwrap();
-        assert_eq!(counter(), 0);
-        for _ in 0..3 {
-            let previous = counter();
-            control.resume().unwrap();
-            assert_eq!(control.status(), VmStatus::Running);
-            wait_until(|| counter() != previous);
-            control.pause().unwrap();
-            assert_eq!(control.status(), VmStatus::Paused);
-            let paused = counter();
-            thread::sleep(Duration::from_millis(20));
-            assert_eq!(counter(), paused);
-        }
+    );
+    let exit = run_with_control(&mut vm, move |control| {
+        ready.recv_timeout(WAIT).unwrap();
+        pause_at_exit(control, release).unwrap();
+        assert_eq!(control.status(), VmStatus::Paused);
+        assert_eq!(completions.load(Ordering::Relaxed), 2);
+        assert!(entries.lock().unwrap().is_empty());
+        control.resume().unwrap();
+        wait_until(|| !entries.lock().unwrap().is_empty());
     });
     assert_eq!(exit.unwrap(), VmExit::StopRequested);
+}
+
+#[test]
+fn terminal_exit_during_split_mmio_completion_ends_the_vm() {
+    let (gate, ready, release) = ExitGate::new();
+    let completions = Arc::new(AtomicUsize::new(0));
+    let mut vm = faulty_vm(
+        MockVm::new(),
+        1,
+        PauseFault::SplitIo {
+            gate,
+            end: CompletionEnd::Reset,
+            completions: Arc::clone(&completions),
+        },
+    );
+    let exit = run_with_control(&mut vm, move |control| {
+        ready.recv_timeout(WAIT).unwrap();
+        assert_error(
+            pause_at_exit(control, release),
+            "pause",
+            ControlReason::TerminalOutcome,
+        );
+    });
+    assert_eq!(exit.unwrap(), VmExit::GuestReset);
+    assert_eq!(completions.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn stop_drains_split_mmio_before_worker_exit() {
+    let (gate, ready, release) = ExitGate::new();
+    let completions = Arc::new(AtomicUsize::new(0));
+    let mut vm = faulty_vm(
+        MockVm::new(),
+        1,
+        PauseFault::SplitIo {
+            gate,
+            end: CompletionEnd::Done,
+            completions: Arc::clone(&completions),
+        },
+    );
+    let exit = run_with_control(&mut vm, move |control| {
+        ready.recv_timeout(WAIT).unwrap();
+        control.stop();
+        release.send(()).unwrap();
+    });
+    assert_eq!(exit.unwrap(), VmExit::StopRequested);
+    assert_eq!(completions.load(Ordering::Relaxed), 2);
 }

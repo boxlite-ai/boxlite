@@ -56,7 +56,7 @@ mod hotplug;
 mod irq;
 pub(crate) mod lifecycle;
 mod memory;
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(test, target_arch = "x86_64"))]
 mod vcpu;
 #[cfg_attr(
     not(test),

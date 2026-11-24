@@ -287,7 +287,7 @@ fn snapshot_defaults_fail_closed_for_an_unsnapshotable_backend() {
         fn run(&mut self) -> crate::Result<VcpuExit<'_>> {
             panic!("unexpected guest entry")
         }
-        fn complete_pending_io(&mut self) -> crate::Result<()> {
+        fn complete_pending_io(&mut self) -> crate::Result<Option<VcpuExit<'_>>> {
             panic!("unexpected I/O completion")
         }
         fn handle(&self) -> Handle {

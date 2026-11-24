@@ -89,12 +89,16 @@ assembly, and persistence.
 
 ### Save
 
-Stop all vCPUs and IRQ producers, then call `Vcpu::complete_pending_io` on each
-vCPU's owning thread. Begin the round with `X86Vm::save_state`, then call
-`X86Vcpu::save_state` once per vCPU on its owning thread. A failed vCPU save can
-be retried in the same round. Finish all vCPU saves before starting another
-round. KVM timers can advance during capture, and PIT restore can lose
-sub-tick timing.
+Keep all vCPUs out of the guest and stop IRQ producers. On each vCPU's owning
+thread, call `Vcpu::complete_pending_io` until it returns `Ok(None)`. Dispatch
+each `Ok(Some(exit))` and release its borrow before the next call. Split MMIO
+can produce multiple exits for one instruction. A terminal exit or completion
+error aborts capture.
+
+Begin the round with `X86Vm::save_state`, then call `X86Vcpu::save_state` once
+per vCPU on its owning thread. A failed vCPU save can be retried in the same
+round. Finish all vCPU saves before starting another round. KVM timers can
+advance during capture, and PIT restore can lose sub-tick timing.
 
 ### Restore
 

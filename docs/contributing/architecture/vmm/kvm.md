@@ -391,7 +391,7 @@ sequenceDiagram
   host_api-->>thread0: KVM_RUN returns EINTR
   %% edge:kvm_12_e5
   host_api-->>thread1: KVM_RUN returns EINTR
-  Note over thread0,host_api: Finish any pending device access with KVM_RUN and immediate_exit set<br/>KVM completes that access without executing another guest instruction
+  Note over thread0,host_api: Complete pending I/O with KVM_RUN and immediate_exit set<br/>Dispatch each follow-up exit and repeat until no I/O remains<br/>The stop latch prevents a pause acknowledgement
   %% edge:kvm_12_e6
   thread0-->>coordinator: Exit loop, join T0
   %% edge:kvm_12_e7

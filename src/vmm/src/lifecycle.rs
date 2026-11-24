@@ -271,24 +271,21 @@ impl Lifecycle {
         false
     }
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(test, target_arch = "x86_64"))]
     pub(crate) fn checkpoint(
         &self,
         id: u8,
-        vcpu: &mut impl boxlite_hypervisor::Vcpu,
-    ) -> Result<()> {
+        mut park: impl FnMut() -> Result<Option<Event>>,
+    ) -> Result<Option<Event>> {
         if !self.device_less {
-            return Ok(());
+            return Ok(None);
         }
         let mut state = self.state();
         while matches!(state.status, VmStatus::Pausing | VmStatus::Paused) && !state.is_terminal() {
             let epoch = state.epoch;
             drop(state);
-            vcpu.complete_pending_io()?;
-            match vcpu.notify_guest_stopped() {
-                Err(boxlite_hypervisor::Error::ConfigureVcpu { source, .. })
-                    if source.kind() == std::io::ErrorKind::Unsupported => {}
-                result => result?,
+            if let Some(event) = park()? {
+                return Ok(Some(event));
             }
             state = self.state();
             if !state.is_terminal() {
@@ -304,7 +301,7 @@ impl Lifecycle {
                 })
                 .unwrap_or_else(PoisonError::into_inner);
         }
-        Ok(())
+        Ok(None)
     }
 
     #[cfg(any(test, target_arch = "x86_64"))]

@@ -3,6 +3,9 @@
 
 //! The vCPU contract, and the handle other threads use to kick a vCPU.
 
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+use std::io;
+
 use crate::{Result, VcpuExit};
 
 /// A vCPU, bound to the thread that created it.
@@ -19,11 +22,12 @@ pub trait Vcpu {
     /// Completes a handled MMIO or port access without executing another
     /// guest instruction, before stopping the vCPU or saving its state.
     ///
-    /// The caller first supplies any read response and releases the exit's
-    /// borrowed buffer. With no pending access this succeeds without entering
-    /// the guest. Successful completion consumes the pending access, so a
-    /// subsequent call does not complete it twice.
-    fn complete_pending_io(&mut self) -> Result<()>;
+    /// Supply any read response and release the exit's borrowed buffer before
+    /// calling. `Ok(Some(exit))` reports another exit from the same instruction,
+    /// such as a split MMIO fragment, a read-modify-write phase, or a terminal
+    /// exit. Handle it, release its borrow, and call again until `Ok(None)`.
+    /// `Ok(None)` means no I/O remains and repeat calls are no-ops.
+    fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>>;
 
     /// Notifies the guest that its clock was interrupted, while stopped on
     /// the owning thread. An unused guest clock is a successful no-op; backends
@@ -45,6 +49,37 @@ pub trait Vcpu {
 }
 
 #[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+#[derive(Debug, Default)]
+pub(crate) struct PendingIo(pub(crate) bool);
+
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum IoCompletion {
+    Done,
+    Exit,
+}
+
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+impl PendingIo {
+    pub(crate) fn complete(
+        &mut self,
+        enter: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<IoCompletion> {
+        if !self.0 {
+            return Ok(IoCompletion::Done);
+        }
+        match enter() {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                self.0 = false;
+                Ok(IoCompletion::Done)
+            }
+            Err(error) => Err(error),
+            Ok(()) => Ok(IoCompletion::Exit),
+        }
+    }
+}
+
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
 pub(crate) fn kvmclock_ctrl_result(result: std::io::Result<()>) -> std::io::Result<()> {
     match result {
         // KVM's kvm_set_guest_paused returns EINVAL when pv_time is inactive.
@@ -63,9 +98,12 @@ pub trait VcpuHandle: Clone + Send + Sync {
 }
 
 #[cfg(test)]
+#[path = "../tests/vcpu/mod.rs"]
+mod pending_io_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
 
     #[test]
     fn kvmclock_inactive_pvclock_is_a_noop() {
@@ -93,7 +131,7 @@ mod tests {
                 unreachable!()
             }
 
-            fn complete_pending_io(&mut self) -> Result<()> {
+            fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
                 unreachable!()
             }
 
