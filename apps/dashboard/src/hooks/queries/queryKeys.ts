@@ -45,6 +45,8 @@ export const queryKeys = {
     },
 
     plan: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'plan'] as const,
+    trialEligibility: (organizationId: string, subject?: string) =>
+      [...queryKeys.organization.plan(organizationId), 'trial-eligibility', subject] as const,
     wallet: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'wallet'] as const,
   },
   user: {

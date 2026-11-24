@@ -41,6 +41,11 @@ export function PlanSection({ onViewPlans }: { onViewPlans?: () => void }) {
 
   return (
     <div className="flex flex-col gap-8">
+      {authenticatedUserOrganizationMember && !isOwner && (
+        <p className="text-body text-muted-foreground">
+          Only an organization owner can view billing details or manage the subscription.
+        </p>
+      )}
       {isError ? (
         <Panel className="flex flex-col items-center gap-3 px-[22px] py-10">
           <span className="font-sans text-body text-foreground">Oops, something went wrong</span>

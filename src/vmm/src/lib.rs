@@ -53,11 +53,8 @@ mod events;
 )]
 mod hotplug;
 #[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Only tests use part of this API, and only Linux x86_64 adds devices yet."
-    )
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only Linux x86_64 adds devices yet.")
 )]
 mod irq;
 mod memory;
@@ -92,6 +89,8 @@ pub use config::{
 pub use control::VmControl;
 pub use error::{Error, Result};
 pub use memory::ReclaimPolicy;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use virtio::fs::{AggregateFs, Share, insert_aggregate, lookup_aggregate};
 pub use vm::{StopHandle, Vm, VmExit};
 
 /// A recording hypervisor backend shared by the crate's unit tests. Test

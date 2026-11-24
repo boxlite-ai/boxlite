@@ -1779,6 +1779,121 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
     assert_eq!(vm.run().unwrap(), VmExit::GuestReset);
 }
 
+/// Exercises the production composition and boot loader at the disk limit;
+/// the backend is mocked, but none of the attached devices are test doubles.
+/// Eight disks, the balloon and the aggregate filesystem fill the slots up
+/// to and across the RTC's line, so every virtio GSI must land past GSI 8.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn rtc_coexists_with_max_disks_balloon_and_aggregate_filesystem() {
+    use boxlite_hypervisor::VcpuExit;
+    use linux_loader::loader::bootparam::boot_params;
+    use vm_memory::{Bytes, GuestAddress};
+
+    use crate::{
+        config::{DiskConfig, DiskFormat, MAX_DISKS},
+        devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES},
+        x86_boot_layout::PageSize,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let kernel = directory.path().join("kernel.elf");
+    std::fs::write(&kernel, crate::boot::elf::tests::fixture()).unwrap();
+    let disks: Vec<_> = (0..MAX_DISKS)
+        .map(|index| {
+            let block_id = format!("disk-{index}");
+            let path = directory.path().join(&block_id);
+            std::fs::File::create(&path).unwrap().set_len(4096).unwrap();
+            DiskConfig {
+                block_id,
+                path,
+                format: DiskFormat::Raw,
+                read_only: false,
+            }
+        })
+        .collect();
+    let mut configuration = config(1, 2);
+    configuration.kernel = kernel;
+    configuration.cmdline = "console=ttyS0".into();
+    configuration.disks = disks;
+    configuration.filesystem = Some(crate::FsConfig {
+        tag: "aggregate-test".into(),
+        shares: vec![crate::FsShareConfig {
+            name: "BoxLiteShared".into(),
+            path: directory.path().to_owned(),
+            read_only: false,
+        }],
+    });
+    let (writer, mut console) =
+        ConsoleWorker::spawn(Box::new(io::sink()), DEFAULT_QUEUE_BYTES).unwrap();
+    let leaf = PageSize::Mib.checked(false).unwrap();
+    let vm = Vm::with_devices(
+        configuration,
+        || Ok(MockVm::new()),
+        |ram, config| crate::boot::prepare(ram, config, leaf).map(|setup| setup.boot_regs),
+        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+    )
+    .expect("real RTC and all configured virtio devices must compose without conflicts");
+
+    let memory = vm.ram.memory().memory();
+    let params: boot_params = memory.read_obj(GuestAddress(vm.boot_regs.rsi)).unwrap();
+    let mut line = vec![0; params.hdr.cmdline_size as usize];
+    memory
+        .read_slice(&mut line, GuestAddress(params.hdr.cmd_line_ptr.into()))
+        .unwrap();
+    let line = std::ffi::CStr::from_bytes_with_nul(&line)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let (announcements, _) = line.split_once("console=ttyS0").unwrap();
+    let announcements: Vec<_> = announcements.split_whitespace().collect();
+    assert_eq!(announcements.len(), MAX_DISKS + 2);
+    let gsis = [5, 6, 7, 9, 10, 11, 12, 13, 14, 15];
+    let chipset = vm.chipset.as_ref().unwrap();
+    for (index, argument) in announcements.iter().enumerate() {
+        let base = 0xd000_0000 + index as u64 * 0x1000;
+        assert_eq!(
+            *argument,
+            format!("virtio_mmio.device=4K@{base:#x}:{}", gsis[index])
+        );
+        let read = |offset, bytes: &mut [u8]| {
+            assert!(
+                chipset
+                    .dispatch(VcpuExit::MmioRead {
+                        guest_addr: base + offset,
+                        bytes,
+                    })
+                    .is_none()
+            );
+        };
+        let mut id = [0; 4];
+        read(8, &mut id);
+        assert_eq!(
+            u32::from_le_bytes(id),
+            if index < MAX_DISKS {
+                2
+            } else if index == MAX_DISKS {
+                5
+            } else {
+                26
+            }
+        );
+    }
+    // Register D's valid-RAM bit identifies the real CMOS device at its ports.
+    chipset.dispatch(VcpuExit::IoOut {
+        port: 0x70,
+        bytes: &[0x0d],
+    });
+    let mut status = [0];
+    chipset.dispatch(VcpuExit::IoIn {
+        port: 0x71,
+        bytes: &mut status,
+    });
+    assert_eq!(status, [0x80]);
+    drop(vm);
+    console.finish();
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
