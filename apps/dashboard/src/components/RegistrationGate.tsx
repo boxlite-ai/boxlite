@@ -90,7 +90,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
         setEmailError(error)
       } else if (error instanceof RegistrationError) {
         setMessage(error.message)
-        if (error.code === 'legal_version_mismatch') {
+        if (error.code === 'consent_required' || error.code === 'legal_version_mismatch') {
           setAcceptedLegal(null)
           await registrationConfig.refetch()
         }

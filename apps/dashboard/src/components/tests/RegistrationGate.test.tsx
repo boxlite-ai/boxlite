@@ -148,6 +148,18 @@ describe('RegistrationGate', () => {
     expect(businessMount).not.toHaveBeenCalled()
   })
 
+  it('refreshes a Turnstile-only form when registration starts requiring consent', async () => {
+    const fetchConfig = vi.fn().mockResolvedValueOnce(widgetConfig).mockResolvedValue({ ...widgetConfig, legal })
+    api.register.mockRejectedValueOnce(new RegistrationError('Accept the terms to continue registration', 'consent_required'))
+    await render(fetchConfig)
+    expect(document.querySelector('[role="checkbox"]')).toBeNull()
+    await click('Complete challenge')
+    await click('Create account')
+    expect(fetchConfig).toHaveBeenCalledTimes(2)
+    expect(document.querySelector('[role="checkbox"]')?.getAttribute('aria-checked')).toBe('false')
+    expect(button('Continue').disabled).toBe(true)
+  })
+
   it('refreshes changed terms and requires the user to tick again after a version mismatch', async () => {
     const fetchConfig = vi
       .fn()
