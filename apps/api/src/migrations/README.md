@@ -235,17 +235,21 @@ npm run migration:revert
 
 This reverts the **last executed migration** from either folder (based on the combined migration history in the database).
 
-When that last migration is `AddAdminUsageWindowIndexes1792470000000`, use:
+When the last applied migration declares `transaction = false` and reverts with
+concurrent DDL, use:
 
 ```bash
 npm run migration:revert -- --transaction none
 ```
 
+For example, `AddAdminUsageWindowIndexes1792470000000` and
+`AddBoxCreationQuotaIndex1795478400000` both drop their indexes concurrently.
 TypeORM 0.3.31 starts a transaction for `undoLastMigration` in `each` mode despite
-the migration's `transaction = false`; concurrent index drops require `none`.
-Use the default transactional command for other migrations. If a concurrent index
-build or drop is interrupted, rerun it: valid completed indexes are retained,
-invalid build leftovers are removed and rebuilt, and missing indexes are skipped on drop.
+the migration's `transaction = false`. Use the default command for transactional
+migrations.
+
+Rerun an interrupted concurrent index build or drop. A retry keeps valid indexes,
+rebuilds invalid builds, and skips missing indexes on drop.
 Serialize migration runners; concurrent DDL still waits for older transactions and
 is not a production capacity guarantee.
 
