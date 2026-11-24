@@ -8,7 +8,6 @@ export type Vars = {
   app: AppRow
   actor: string
   env: EnvRow
-  boxTokenHash: string
 }
 
 export const sha256hex = (s: string | Buffer): string => createHash('sha256').update(s).digest('hex')
@@ -73,10 +72,9 @@ export function requireBoxToken(store: Store): MiddlewareHandler<{ Variables: Va
   return async (c, next) => {
     const token = bearer(c.req.header('authorization'))
     if (!token) throw fail('unauthenticated', 'missing box token')
-    const hash = sha256hex(token)
     const row = await store.get<{ env_id: string }>(
       'SELECT env_id FROM box_tokens WHERE hash = ? AND revoked_at IS NULL',
-      hash,
+      sha256hex(token),
     )
     const env = row ? await store.envById(row.env_id) : undefined
     const app = env ? await store.appById(env.app_id) : undefined
@@ -84,7 +82,6 @@ export function requireBoxToken(store: Store): MiddlewareHandler<{ Variables: Va
     c.set('env', env)
     c.set('app', app)
     c.set('actor', 'supervisor')
-    c.set('boxTokenHash', hash)
     await next()
   }
 }
