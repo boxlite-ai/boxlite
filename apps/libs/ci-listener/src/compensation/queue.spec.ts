@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DataSource } from 'typeorm'
 import { ExecutionScope } from '../execution/model'
-import { LeaseLost, StateCorrupt, StateDatabase } from '../state/database'
+import { LeaseLost, StateConflict, StateCorrupt, StateDatabase } from '../state/database'
 import { PostgresStateDatabase, postgresStateTable } from '../state/postgres'
 import { SqliteStateDatabase } from '../state/sqlite'
 import { ExecutionLease, ListenerState } from '../state/store'
@@ -275,6 +275,33 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         },
       ])
       await expect(queue.publish(claim, [candidate], ['boxlite'])).rejects.toBeInstanceOf(StateCorrupt)
+    })
+    it('retries adding labels to an existing job notice without losing the original notice', async () => {
+      await sync()
+      const claim = await owner()
+      const candidate = job()
+      const notice = { installationId: 1, accountId: 7, repositoryId: claim.repository, job: { id: 55, runId: 33 } }
+      const [original] = await state.ingest([{ key: 'notice/1/55', expected: null, payload: notice }])
+      const conflicting: StateDatabase = {
+        transaction: (ns, work, mode) =>
+          database.transaction(
+            ns,
+            (tx) =>
+              work({
+                ...tx,
+                put: (row, version) =>
+                  row.key === original.key && version === original.version
+                    ? Promise.resolve(false)
+                    : tx.put(row, version),
+              }),
+            mode,
+          ),
+      }
+      const competing = new ListenerState(conflicting, namespace).scans()
+      await expect(competing.publish(claim, [candidate], ['boxlite'])).rejects.toBeInstanceOf(StateConflict)
+      expect(await state.read([original.key])).toEqual([original])
+      await queue.publish(claim, [candidate], ['boxlite'])
+      expect((await state.read([original.key]))[0].payload).toEqual({ ...notice, labels: candidate.labels })
     })
     it('shares installation backoff while another installation proceeds', async () => {
       await sync(scope(1, [21, 22]))

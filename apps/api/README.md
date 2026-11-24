@@ -713,11 +713,15 @@ CI and recovery acceptance are still pending.
 ### JIT Box deletion and capacity recovery
 
 Hosted worker recovery checks the recorded Box ID and organization before
-interpreting its lifecycle state. Platform soft deletion renames the Box; a
-confirmed `DESTROYED` record for that original ID releases its physical capacity
+interpreting its lifecycle state. V2 polling reads jobs by the globally unique
+Box ID, preferring an incomplete job to the latest terminal result.
+A destroy callback applies while the Box is marked for deletion.
+
+Platform soft deletion renames the Box. A confirmed `DESTROYED` record for that original ID releases its physical capacity
 even after the rename. Pending deletion retains capacity until confirmation.
+
 Unknown IDs, conflicting ledgers, foreign organizations and renamed live Boxes
-remain denied. Confirmed Box absence makes its physical capacity available; the
+remain denied. After confirmed Box absence releases physical capacity, the
 allocation remains recorded until the original runner cleanup also finishes.
 A successful CI job alone does not prove that cleanup finished.
 
@@ -1488,35 +1492,30 @@ A denied or stale callback rolls back both rows. Commerce limits still apply;
 providing the callback forces fresh Box creation.
 
 Cleanup uses the known original Box ID and scope, even after admission is revoked.
-A missing ownership record is an error. Only absence of the known original Box row
-or a confirmed destroyed state permits the shared controller to mark it absent;
-failed destruction does not. Physical capacity returns after original Box absence
-is confirmed. Runner cleanup debt and its original allocation identity remain until
+A missing ownership record is an error.
+
+For a created Box, the native adapter
+requires the original ID and organization on a row in the `DESTROYED` state
+before returning physical capacity. A missing row leaves destruction unconfirmed.
+
+Runner cleanup debt and its original allocation identity remain until
 GitHub runner absence is confirmed. An elapsed timeout or a completed notice does not prove
 a running Box is idle.
 
-The shared [label-capacity scheduler](../libs/ci-listener/README.md#label-capacity-scheduling)
-counts queued demand and compatible starting/idle supply. Busy runners retain Box
-quota but no longer exclusively cover their trigger jobs. Actual job observations
-support recovery, while new reservations use independent allocation identities.
-Hosted PostgreSQL and standalone SQLite use this shared implementation.
+Every hosted installation uses GitHub Scale Set messages. A signed job webhook discovers new resource labels automatically.
 
-Fresh webhook counts cannot authorize more Boxes: potential capacity changes
-first rebuild the complete current GitHub queue for the original runner scope.
-Incomplete refreshes defer changes while known stopped resources still clean up.
-Surplus online idle workers follow the shared
-[retirement protocol](../libs/ci-listener/README.md#surplus-idle-retirement), including
-the registration grace, exact unregister acknowledgement and original-Box absence
-checks. Pending `runner-retire` effects survive takeover and make older state
-readers fail closed; consult that section before deployment or rollback.
+The elected owner reserves the organization's quota before acquiring an offer and starts the Box when GitHub reports assigned demand. [Shared scheduling protocol](../libs/ci-listener/README.md#github-runner-scale-sets)
 
-The controller recovers historical allocations alongside new capacity demand.
+The controller reconciles its set allocations alongside new capacity demand.
 Transient journal initialization failures retry through the existing session
 loop. An unexpectedly stopped hosted scheduler rejects new webhook ingress
 instead of acknowledging work that this replica cannot schedule.
+
 One ordinary cleanup failure does not skip other workers; an absent Box's pending
 runner cleanup does not hold physical capacity. Query failures retain capacity
-until the original outcome is known. Lease loss, corrupt/conflicting state, abort
+until the original outcome is known.
+
+Lease loss, corrupt/conflicting state, abort
 and pending credential retirement stop further work. These rules match standalone
 Listener Boxes and recover from the existing PostgreSQL journal after restart.
 
@@ -1582,8 +1581,12 @@ cleanup using the original App. Delivery recovery keeps separate App checkpoints
 | `CI_GITHUB_ORG_APP_CLIENT_SECRET`                                | Optional Organization App OAuth secret reference for legacy browser grants                                                     |
 | `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                              |
 | `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                        |
-| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                         |
+| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/boxlite-ai/boxlite-jitbox:latest` / `boxlite-ci-runner`. Set `CI_WORKER_IMAGE` to select a different image. |
 | `CI_SCHEDULER_GENERATION`                                        | Positive deployment generation; mdeploy uses `GITHUB_RUN_ID` or an explicit per-deploy override, never process startup time    |
+
+The default JitBox image includes GNU Make for Linux x86-64 jobs. After an
+organization first boots the tag, its image catalog pins the digest. To adopt a
+later build published under the same tag, update the organization's catalog tag.
 
 Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. Use the
 `boxlite` workflow label for configured defaults, or
@@ -1672,10 +1675,7 @@ source; in-memory queues are bounded execution indexes, not another service.
 
 Scope planners use eight concurrent I/O positions and allocation consumers use
 32. These management budgets are separate from organization/Commerce limits.
-Repository observation versions fence delayed retirement tasks, including demand
-found by an authoritative scan without a webhook. Before enabling this protocol,
-drain older webhook writers that cannot advance these observation versions.
-No CI-state reset is required. See [queue and shutdown contracts](../libs/ci-listener/README.md#asynchronous-allocation-queue).
+Scale Set target versions fence delayed allocation and retirement tasks. [Queue and shutdown contracts](../libs/ci-listener/README.md#asynchronous-allocation-queue)
 
 ### Hosted CI management
 

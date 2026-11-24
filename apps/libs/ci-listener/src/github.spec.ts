@@ -19,6 +19,20 @@ describe('CI shared GitHub transport', () => {
     ).rejects.toMatchObject({ uncertain: false })
     expect(global.fetch).not.toHaveBeenCalled()
   })
+  it.each(['GET', 'DELETE'] as const)('preserves the superseded scan reason only for reads: %s', async (method) => {
+    const controller = new AbortController()
+    global.fetch = jest.fn(
+      (_url, options) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = options?.signal as AbortSignal
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+    ) as typeof fetch
+    const pending = githubRequest({ url: 'https://api.github.com/user', method, signal: controller.signal })
+    controller.abort(new Error('scan superseded'))
+    if (method === 'GET') await expect(pending).rejects.toBe(controller.signal.reason)
+    else await expect(pending).rejects.toMatchObject({ uncertain: true })
+  })
   it('signs a fresh five-minute App JWT with the supplied identity', () => {
     const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })
     const first = createGitHubAppJwt('app-client', keys.privateKey, 1_800_000_000_000).split('.')

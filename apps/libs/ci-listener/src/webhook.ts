@@ -3,7 +3,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { ListenerState } from './state/store'
 import { Json, StateConflict, StateCorrupt } from './state/database'
 import { parseResourceLabels } from './resource-labels'
-import { DemandIdentityConflict, JobObservation, observeDemand } from './demand'
+import { JobIdentityConflict, JobObservation, recordJobObservation } from './job-observation'
 
 export interface WakeHint {
   installationId: number
@@ -177,7 +177,8 @@ export class ListenerInbox {
     }
     if (
       !['workflow_job', 'installation', 'installation_repositories'].includes(event) ||
-      (event === 'workflow_job') !== (hint.job !== null)
+      (event === 'workflow_job') !== (hint.job !== null) ||
+      (event === 'workflow_job' && !observation)
     )
       throw new WebhookError(400, 'Unsupported notification event')
     // Revalidate even internal callers: compensation and HTTP hosts share this boundary.
@@ -232,9 +233,9 @@ export class ListenerInbox {
         throw new WebhookError(409, 'Job identity conflicts with a previous notification')
       let changes
       try {
-        changes = observation && hint.job ? await observeDemand(tx, hint, observation) : []
+        changes = observation && hint.job ? await recordJobObservation(tx, hint, observation) : []
       } catch (error) {
-        if (error instanceof DemandIdentityConflict) throw new WebhookError(409, error.message)
+        if (error instanceof JobIdentityConflict) throw new WebhookError(409, error.message)
         throw error
       }
       await tx.write([
@@ -249,15 +250,15 @@ export class ListenerInbox {
           },
         },
         ...changes,
-        ...(notice && (!observation || observation.status === 'queued')
+        ...(notice && observation?.status === 'queued' && changes.length
           ? [
               {
                 key: notice,
                 expected: priorNotice?.version ?? null,
-                payload: { ...hint, ...(observation ? { counted: true } : {}) } as unknown as Json,
+                payload: { ...hint, labels: [...observation.labels] } as unknown as Json,
               },
             ]
-          : notice && priorNotice
+          : notice && priorNotice && observation?.status !== 'queued'
             ? [{ key: notice, expected: priorNotice.version }]
             : []),
       ])
