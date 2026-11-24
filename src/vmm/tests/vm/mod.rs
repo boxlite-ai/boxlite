@@ -1038,7 +1038,7 @@ mod lifecycle {
     use std::{sync::mpsc, thread, time::Duration};
 
     use super::{config, *};
-    use crate::{VmExit, bus::BusDevice, mock_vm::Step};
+    use crate::{VmExit, VmStatus, bus::BusDevice, mock_vm::Step};
 
     /// Runs `vm` on another thread and fails the test instead of hanging when
     /// the run never returns.
@@ -1079,21 +1079,16 @@ mod lifecycle {
             let call_log = host_vm.call_log();
             let region = vm.ram.regions().next().expect("one RAM region");
             let expected_memory = [Call::map(&region), Call::unmap(&region)];
+            let drops = log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|call| matches!(call, Call::DropVcpu { .. }))
+                .count();
+            assert_eq!(drops, 2);
+            assert_eq!(memory_calls(&log.lock().unwrap()), expected_memory[..1]);
             drop(vm);
-            let calls = log.lock().unwrap().clone();
-            let first_unmap = calls
-                .iter()
-                .position(|call| matches!(call, Call::Unmap { .. }))
-                .unwrap();
-            let drops: Vec<_> = calls
-                .iter()
-                .enumerate()
-                .filter(|(_, call)| matches!(call, Call::DropVcpu { .. }))
-                .map(|(index, _)| index)
-                .collect();
-            assert_eq!(drops.len(), 2, "{calls:?}");
-            assert!(drops.iter().all(|&index| index < first_unmap), "{calls:?}");
-            assert_eq!(memory_calls(&calls), expected_memory);
+            assert_eq!(memory_calls(&log.lock().unwrap()), expected_memory);
             assert_eq!(memory_calls(&call_log.ioctl_calls()), expected_memory);
         }
     }
@@ -1147,29 +1142,106 @@ mod lifecycle {
         );
     }
 
+    /// A guest write that holds a vCPU inside the run until the test releases it.
+    struct HeldWrite {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl BusDevice for HeldWrite {
+        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+
+        fn write(&mut self, _offset: u64, _data: &[u8]) {
+            self.entered.send(()).unwrap();
+            self.release.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+    }
+
     #[test]
-    fn a_stop_from_another_thread_ends_the_run() {
-        let vm = mock(2, MockVm::new());
-        let stop = vm.stop_handle();
-        let stopping = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            stop.stop();
-        });
+    fn external_control_observes_the_lifecycle_and_can_stop_execution() {
+        for stop in [true, false] {
+            const DEVICE: u64 = 0xd000_0000;
+            let (entered, in_guest_exit) = mpsc::channel();
+            let (release, released) = mpsc::channel();
+            let backend = MockVm::with_scripts(vec![vec![
+                Step::Write {
+                    addr: DEVICE,
+                    byte: 1,
+                },
+                Step::Shutdown,
+            ]]);
+            let mut vm = Vm::with_backend(
+                config(1, 16),
+                || Ok(backend),
+                |_, _| Ok(BootRegisters::default()),
+                |chipset, _| {
+                    chipset.add("held-write", |resources| {
+                        resources.mmio(DEVICE, 1);
+                        Ok(HeldWrite {
+                            entered,
+                            release: released,
+                        })
+                    })
+                },
+            )
+            .unwrap();
+            let control = vm.control();
+            assert_eq!(control.status(), VmStatus::Created);
+            let (done, finished) = mpsc::channel();
+            let driver = thread::spawn(move || done.send((vm.run(), vm)).unwrap());
 
-        let (exit, _) = run(vm);
+            in_guest_exit.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(control.status(), VmStatus::Running);
+            let other = control.clone();
+            let (expected, observer) = if stop {
+                other.stop();
+                assert_eq!(control.status(), VmStatus::Stopping);
+                (VmExit::StopRequested, Some(control))
+            } else {
+                drop(control);
+                (VmExit::GuestShutdown, None)
+            };
+            drop(other);
+            release.send(()).unwrap();
 
-        assert_eq!(exit.unwrap(), VmExit::StopRequested);
-        stopping.join().unwrap();
+            let (exit, vm) = finished.recv_timeout(Duration::from_secs(10)).unwrap();
+            driver.join().unwrap();
+            assert_eq!(exit.unwrap(), expected);
+            assert_eq!(
+                observer.unwrap_or_else(|| vm.control()).status(),
+                VmStatus::Exited
+            );
+        }
     }
 
     #[test]
     fn a_stop_before_the_run_ends_it_at_once() {
-        let vm = mock(2, MockVm::new());
-        vm.stop_handle().stop();
+        for use_control in [true, false] {
+            let backend = MockVm::new();
+            let entries = backend.entries();
+            let log = backend.log();
+            let vm = mock(2, backend);
+            let control = vm.control();
+            if use_control {
+                control.stop();
+            } else {
+                vm.stop_handle().stop();
+            }
+            assert_eq!(control.status(), VmStatus::Stopping);
 
-        let (exit, _) = run(vm);
+            let (exit, mut vm) = run(vm);
 
-        assert_eq!(exit.unwrap(), VmExit::StopRequested);
+            assert_eq!(exit.unwrap(), VmExit::StopRequested);
+            assert_eq!(control.status(), VmStatus::Exited);
+            assert!(entries.lock().unwrap().is_empty());
+            assert!(
+                !log.lock().unwrap().iter().any(|call| matches!(
+                    call,
+                    Call::SetCpuFeatures { .. } | Call::DropVcpu { .. }
+                ))
+            );
+            assert!(matches!(vm.run(), Err(Error::AlreadyRan)));
+        }
     }
 
     #[test]
@@ -1647,8 +1719,9 @@ mod lifecycle {
                 let mut vm = bare(config(1, 16), || Ok(backend)).unwrap();
                 let runtime = Arc::new(StuckRuntime::default());
                 vm.workers = Some(VirtioWorkers::with_runtime(runtime.clone()));
+                let control = vm.control();
 
-                let (exit, vm) = run(vm);
+                let (exit, mut vm) = run(vm);
 
                 let error = exit.unwrap_err();
                 if clean {
@@ -1663,7 +1736,10 @@ mod lifecycle {
                         "{error:?}"
                     );
                 }
+                assert_eq!(control.status(), super::VmStatus::Stopping);
+                assert!(matches!(vm.run(), Err(Error::AlreadyRan)));
                 drop(vm);
+                assert_eq!(control.status(), super::VmStatus::Exited);
                 assert_eq!(runtime.shutdowns.load(Ordering::SeqCst), 2);
                 let calls = log.lock().unwrap().clone();
                 assert!(calls.iter().any(|call| matches!(call, Call::Map { .. })));
@@ -1673,6 +1749,26 @@ mod lifecycle {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn device_less_control_observes_stop_and_drop_and_rejects_disk_resize() {
+    for stop_before_drop in [false, true] {
+        let vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();
+        let control = vm.control();
+        assert_eq!(control.status(), crate::VmStatus::Created);
+        let error = control
+            .resize_disk("data", 1024, std::time::Duration::ZERO)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(error.to_string(), "no disk \"data\"");
+        if stop_before_drop {
+            control.stop();
+            assert_eq!(control.status(), crate::VmStatus::Stopping);
+        }
+        drop(vm);
+        assert_eq!(control.status(), crate::VmStatus::Exited);
     }
 }
 
@@ -1724,6 +1820,128 @@ fn debug_shows_the_vm_shape_without_its_internals() {
     assert!(format!("{:?}", vm.stop_handle()).starts_with("StopHandle("));
 }
 
+#[test]
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(clippy::unit_arg, reason = "arm64 has no boot registers yet.")
+)]
+fn dropping_vm_closes_disk_control_senders_while_stop_handle_remains() {
+    use std::time::{Duration, Instant};
+
+    use mio::{Events, Interest, Poll, Token};
+
+    use crate::{
+        DiskConfig, DiskFormat, VmStatus,
+        events::Event,
+        virtio::{
+            blk::{device::VirtioBlk, imago::ImagoBackend},
+            mmio::{self, Slots},
+        },
+    };
+
+    fn assert_traits<T: Clone + fmt::Debug + Send + Sync>() {}
+    assert_traits::<super::StopHandle>();
+
+    let directory = tempfile::tempdir().unwrap();
+    let disks: Vec<_> = ["disk-0", "disk-1"]
+        .into_iter()
+        .map(|block_id| {
+            let path = directory.path().join(format!("{block_id}.raw"));
+            std::fs::File::create(&path).unwrap().set_len(4096).unwrap();
+            DiskConfig {
+                block_id: block_id.into(),
+                path,
+                format: DiskFormat::Raw,
+                read_only: false,
+            }
+        })
+        .collect();
+    let mut configuration = config(1, 16);
+    configuration.disks = disks;
+
+    let mut poll = Poll::new().unwrap();
+    let mut sources = Vec::new();
+    let vm = Vm::with_devices(
+        configuration,
+        || Ok(MockVm::new()),
+        |_, _| Ok(BootRegisters::default()),
+        |chipset, ctx, config, _| {
+            let mut slots = Slots::new();
+            for (index, disk) in config.disks.iter().enumerate() {
+                let backend = ImagoBackend::open(&disk.path, disk.format, disk.read_only).unwrap();
+                let controls = ctx.controls.register_disk(&disk.block_id).unwrap();
+                let mut source = controls.event_source().unwrap();
+                poll.registry()
+                    .register(source.as_source(), Token(index), Interest::READABLE)
+                    .unwrap();
+                sources.push(source);
+                let device = Arc::new(Mutex::new(VirtioBlk::new(Box::new(backend), controls)));
+                mmio::add_device(
+                    chipset,
+                    &ctx,
+                    ["virtio-blk0", "virtio-blk1"][index],
+                    slots.take()?,
+                    device,
+                )?;
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    let stop = vm.stop_handle();
+    let stop_clone = stop.clone();
+    assert!(format!("{stop:?}").starts_with("StopHandle("));
+    let control = vm.control();
+
+    let mut events = Events::with_capacity(4);
+    poll.poll(&mut events, Some(Duration::ZERO)).unwrap();
+    assert!(
+        events.is_empty(),
+        "disk control sockets must stay open while the VM is alive"
+    );
+
+    // StopHandle::stop shares the same stop latch as VmControl::stop.
+    assert_eq!(control.status(), VmStatus::Created);
+    stop.stop();
+    assert_eq!(control.status(), VmStatus::Stopping);
+    assert!(vm.sender.is_stopping());
+    control.stop();
+    let mut vm_events = vm.events.lock().unwrap();
+    assert!(matches!(
+        vm_events.wait(Some(Duration::ZERO)).unwrap(),
+        Some(Event::StopRequested)
+    ));
+    assert!(vm_events.wait(Some(Duration::ZERO)).unwrap().is_none());
+    drop(vm_events);
+
+    drop(control);
+    drop(vm);
+
+    // Every disk control sender must close on `drop(vm)` even while StopHandles survive.
+    let mut closed = [false; 2];
+    let deadline = Instant::now() + Duration::from_millis(200);
+    while closed != [true, true] && Instant::now() < deadline {
+        poll.poll(&mut events, Some(Duration::from_millis(20)))
+            .unwrap();
+        for event in &events {
+            if event.is_read_closed() {
+                closed[event.token().0] = true;
+            }
+        }
+    }
+    assert_eq!(
+        closed,
+        [true, true],
+        "disk control sockets stayed open after drop(vm) while StopHandle was held"
+    );
+
+    stop_clone.stop();
+    drop(stop);
+    drop(stop_clone);
+    drop(sources);
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
@@ -1734,6 +1952,32 @@ fn new_names_a_kernel_it_cannot_load() {
         matches!(&error, Error::LoadKernel { path, .. } if path.as_os_str() == "vmlinux"),
         "{error:?}"
     );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+fn new_device_less_stops_before_run_and_rejects_a_second_run() {
+    use crate::{VmExit, VmStatus};
+
+    let directory = tempfile::tempdir().unwrap();
+    let kernel = directory.path().join("kernel.elf");
+    std::fs::write(&kernel, crate::boot::elf::tests::fixture()).unwrap();
+    let mut configuration = config(1, 16);
+    configuration.kernel = kernel;
+
+    let mut vm = Vm::new_device_less(configuration).unwrap();
+    let control = vm.control();
+    assert_eq!(control.status(), VmStatus::Created);
+
+    control.stop();
+    assert_eq!(control.status(), VmStatus::Stopping);
+    assert_eq!(vm.run().unwrap(), VmExit::StopRequested);
+    assert_eq!(control.status(), VmStatus::Exited);
+    assert!(matches!(vm.run(), Err(Error::AlreadyRan)));
+
+    drop(vm);
+    assert_eq!(control.status(), VmStatus::Exited);
 }
 
 /// Two KVM vCPUs through `Vm::run`: vCPU 0 runs a flat guest that pulses the

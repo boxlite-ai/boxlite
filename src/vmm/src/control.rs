@@ -1,24 +1,39 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Host operations routed to devices by their configured IDs.
+//! Runtime controls for a VM.
 
 use std::{collections::HashMap, io, sync::Arc, time::Duration};
 
-use crate::MemoryStatus;
-use crate::virtio::blk::control::{self, Controls, DiskSender};
+use crate::{
+    MemoryStatus,
+    lifecycle::{Lifecycle, VmStatus},
+    virtio::blk::control::{self, Controls, DiskSender},
+};
 
 mod memory;
 pub(crate) use memory::{MemoryRequest, MemoryRequests};
 
 /// Controls a VM from any thread without exposing its devices.
+/// Dropping a control handle has no effect on execution.
 #[derive(Clone, Debug)]
 pub struct VmControl {
     disks: Arc<HashMap<String, DiskSender>>,
     memory: Option<memory::MemorySender>,
+    lifecycle: Arc<Lifecycle>,
 }
 
 impl VmControl {
+    /// Returns the current lifecycle state.
+    pub fn status(&self) -> VmStatus {
+        self.lifecycle.status()
+    }
+
+    /// Requests a stop, including before execution starts, without waiting for exit.
+    pub fn stop(&self) {
+        self.lifecycle.stop();
+    }
+
     /// Grows the named writable disk to `bytes`, returning its capacity.
     /// The target must be sector aligned and no smaller than its current
     /// capacity. Actual growth notifies the guest; the current size is a no-op.
@@ -91,10 +106,11 @@ impl ControlRegistry {
         Ok(controls)
     }
 
-    pub(crate) fn finish(self) -> VmControl {
+    pub(crate) fn finish(self, lifecycle: Arc<Lifecycle>) -> VmControl {
         VmControl {
             disks: Arc::new(self.disks),
             memory: self.memory,
+            lifecycle,
         }
     }
 

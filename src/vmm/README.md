@@ -2,19 +2,26 @@
 
 BoxLite's native VMM. On Linux x86_64, `Vm::new` validates the machine
 configuration, creates the KVM VM with legacy devices and a reporting balloon,
-registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
-`StopHandle` stops it, and returns how the VM ended (see [Lifecycle](#lifecycle)).
+registers guest RAM, and loads the kernel and boot data. `Vm::run` runs the
+vCPUs until the guest powers off, resets, or a `VmControl` requests a stop.
+It returns how the VM ended (see [Lifecycle](#lifecycle)).
 `Error` wraps `boxlite_hypervisor::Error` with its cause chain intact. The
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `VmControl`, `Error`
-and `Result` are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
-carries; M2's engine adapter consumes that API and inspects the error's host
-cause.
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `VmControl`, `VmStatus`,
+`StopHandle`, `ControlReason`, `Error`, and `Result` are public. So are
+`BusKind` and `Conflict`, which `Error::ChipsetConflicts` carries.
 `Vm::new(config, console)` adds COM1, the CMOS RTC, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
+
+On Linux x86_64, the crate-internal `#[cfg(test)]` helper
+`Vm::new_device_less(config)` loads the kernel and optional initramfs into a
+KVM VM with an empty userspace chipset and no console worker. KVM still creates
+the in-kernel irqchip and PIT. Configuring disks, filesystem, vsock, network,
+virtio console, or `hotplug_mib` (virtio-mem) returns `Error::Control` with
+`ControlReason::UnsupportedDevice` before KVM opens.
 
 ```text
 boxlite-vmm
@@ -27,7 +34,9 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `control` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam |
+| `control` | `VmControl` provides runtime controls for VM status, stop requests, and disk resize by configured ID |
+| `lifecycle` | `Lifecycle` coordinates the one-shot run with the shared stop latch |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -634,6 +643,20 @@ socket and guest-memory tests; real-guest qualification remains separate.
 
 ## Lifecycle
 
+`Vm::run(&mut self)` blocks on the thread that owns the VM. Call
+`vm.control()` before the run and pass clones of the `VmControl` to threads
+that need to read `status()`, request `stop()`, or call
+[`resize_disk()`](#virtio-block-device). Dropping the clones has no effect
+on execution. A VM created with the device-less test helper returns
+`InvalidInput` for disk resize because its registry is empty.
+
+| `VmStatus` | Meaning |
+| --- | --- |
+| `Created` | The VM is ready for its first run. |
+| `Running` | The driver has started the run, including vCPU setup. |
+| `Stopping` | A stop was requested or the driver is handling a terminal event. |
+| `Exited` | The run finished teardown, or the owner dropped the VM. |
+
 `Vm::run` runs on x86_64, against any backend that implements
 `boxlite_hypervisor::X86Vm`; unit tests drive it on the mock backend. Before
 it registers any RAM, `Vm::with_backend` builds the `Chipset` from the
@@ -671,9 +694,16 @@ becomes `Error::VirtioDevice`, while an error that ended the VM stays the result
 `Drop` retries an incomplete join and keeps RAM registered while workers still
 run; a quiesce failure after joining still permits RAM unmapping.
 
-`Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
-thread, even before `run` starts. A VM runs once: a second `run` fails with
-`AlreadyRan`, since its latch stays set and its vCPUs already exist.
+`VmControl::stop` and `StopHandle::stop` share the stop latch and return
+without waiting. A stop requested before the first run skips vCPU creation,
+performs cleanup, and returns `Ok(VmExit::StopRequested)` on successful cleanup.
+A second run returns `Error::AlreadyRan`.
+
+`run` publishes `Exited` after joining the vCPUs, shutting down the virtio
+workers, and finishing the console. A worker join timeout leaves the status at
+`Stopping` until the VM is dropped. RAM stays mapped after `run`.
+Dropping the VM handles RAM teardown and publishes `Exited` to surviving
+controls, including when the VM never ran.
 
 ## Long-mode entry
 
@@ -757,7 +787,7 @@ are built from. `Vm` owns the chipset they form.
 - **Events.** A device ends the VM by sending `Event::GuestReset` or
   `Event::DeviceFailed` through an `EventSender`, which never blocks or
   panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`
-  poller. vCPU workers and `StopHandle` send the other events. An event sent
+  poller. vCPU workers and lifecycle controls send the other events. An event sent
   after the loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
   the oldest event, or `None` at its timeout, and rechecks the queue every
   second in case a wake-up was lost. Every event ends the VM; the VMM never

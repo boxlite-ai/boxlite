@@ -3,7 +3,7 @@
 
 //! BoxLite's native VMM. [`Vm::new`] validates a [`VmConfig`], creates the
 //! host VM, registers guest RAM and loads the kernel; [`Vm::run`] runs every
-//! vCPU until the guest powers off or resets, or a [`StopHandle`] stops it.
+//! vCPU until the guest powers off or resets, or a [`VmControl`] stops it.
 //!
 //! The VMM owns the guest machine and delegates host operations to
 //! `boxlite-hypervisor`. BoxLite runtime integration belongs in its engine adapter.
@@ -54,6 +54,7 @@ mod hotplug;
     expect(dead_code, reason = "Only Linux x86_64 adds devices yet.")
 )]
 mod irq;
+pub(crate) mod lifecycle;
 mod memory;
 #[cfg(target_arch = "x86_64")]
 mod vcpu;
@@ -85,7 +86,8 @@ pub use config::{
 };
 pub use control::VmControl;
 pub use devices::mem::MemoryStatus;
-pub use error::{Error, Result};
+pub use error::{ControlReason, Error, Result};
+pub use lifecycle::VmStatus;
 pub use memory::ReclaimPolicy;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use virtio::fs::{AggregateFs, Share, insert_aggregate, lookup_aggregate};
