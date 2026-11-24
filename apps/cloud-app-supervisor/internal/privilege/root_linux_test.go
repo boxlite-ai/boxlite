@@ -269,23 +269,13 @@ func (f *fakeCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			`for p in $(ls /proc | grep -E "^[0-9]+$"); do if grep -q %[2]s /proc/$p/environ 2>/dev/null; then echo "TOKEN-IN $p"; fi; done; `+
 			`if sudo -n true 2>/dev/null; then echo SUDO-ALLOWED; else echo SUDO-DENIED; fi; `+
 			`echo "SERVICE UID=$(id -u) HOME=$HOME USER=$USER PATH=$PATH DB=${DATABASE_URL:+set} TOKEN=${BOXLITE_BOX_TOKEN:-none}"; echo PROBE-DONE; exec sleep 600`, RootDir, boxToken)
-		response := map[string]any{
+		json.NewEncoder(w).Encode(map[string]any{
 			"spec": map[string]any{"app": "t", "environment": "main", "version": 1, "deployment": 1,
-				"runtime":  map[string]any{"image": "node", "size": "small", "build": []string{`test "$THEME" = light && test -z "${DATABASE_URL+x}${APP_TOKEN+x}" || exit 1; echo BUILD UID=$(id -u) HOME=$HOME; touch built-by-$(id -un)`}},
+				"runtime":  map[string]any{"image": "node", "size": "small", "build": []string{"echo BUILD UID=$(id -u) HOME=$HOME; touch built-by-$(id -un)"}},
 				"services": []map[string]any{{"name": "worker", "command": probe}}},
 			"deployment": 1, "forward_secret": fwdSecret, "control_secret": ctlSecret,
 			"env": map[string]string{"DATABASE_URL": dbSecret}, "snapshot": map[string]string{"id": "snap_1"},
-		}
-		switch r.URL.Query().Get("phase") {
-		case "boot":
-			response["box"] = "test-box"
-		case "build":
-			response["phase"] = "build"
-			response["env"] = map[string]string{"THEME": "light"}
-		case "runtime":
-			response["phase"] = "runtime"
-		}
-		json.NewEncoder(w).Encode(response)
+		})
 	case "/sv/v1/snapshots/snap_1":
 		w.Write(snapshot(f.t))
 	case "/sv/v1/logs":

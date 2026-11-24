@@ -4,19 +4,11 @@ import { AddCloudAppPlatform1793780100000 } from '../../migrations/pre-deploy/17
 import { EncryptionService } from '../../encryption/encryption.service'
 import { Store, type Deployment, now } from './db'
 import { AddAppBoxOwnership1794500000000 } from '../../migrations/pre-deploy/1794500000000-add-app-box-ownership-migration'
-import { TrackLegacyBuildSource1795507200000 } from '../../migrations/pre-deploy/1795507200000-track-legacy-build-source-migration'
 import { DropAppBoxPointer1794500001000 } from '../../migrations/post-deploy/1794500001000-drop-app-box-pointer-migration'
 import Redis from 'ioredis'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CloudAppService } from '../cloud-app.service'
 import { DomainCountLimitReachedError } from '../../box/errors/domain.error'
-import { sha256hex } from './auth'
-import type { Ctx } from './ctx'
-import { HttpError } from './errors'
-import { SupervisorLink } from './orchestrator/supervisor-link'
-import { Resources } from './resources'
-import { svRoutes } from './routes/sv'
-import type { Spec } from './spec'
 
 async function migrateBoxOwnership(runner: QueryRunner, schema: string) {
   await runner.query(`CREATE TABLE ${schema}.box (id text PRIMARY KEY, "organizationId" uuid)`)
@@ -48,7 +40,6 @@ describeDatabase('Cloud App PostgreSQL repository', () => {
       username: process.env.DB_USERNAME,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
-      extra: { options: `-c search_path=${schema},public` },
     }).initialize()
     await dataSource.query(`CREATE SCHEMA ${schema}`)
     await dataSource.query(`CREATE TABLE ${schema}.organization (id UUID PRIMARY KEY)`)
@@ -65,10 +56,6 @@ describeDatabase('Cloud App PostgreSQL repository', () => {
           ),
       } as never)
       await migrateBoxOwnership(runner, schema)
-      await new TrackLegacyBuildSource1795507200000().up({
-        query: (sql: string) => runner.query(sql.replaceAll('cloud_app.', `${schema}.`)),
-      } as QueryRunner)
-      await runner.query(`ALTER TABLE ${schema}.box ADD COLUMN env jsonb, ADD COLUMN "desiredState" text`)
     } finally {
       await runner.release()
     }
@@ -169,173 +156,6 @@ describeDatabase('Cloud App PostgreSQL repository', () => {
       live_at: null,
     }
   }
-
-  function supervisorRoutes() {
-    const ctx = {
-      store: a,
-      config: { supervisorUrl: 'https://supervisor.example.test' },
-      origins: { envUrl: async () => 'https://app.example.test' },
-      bus: { publish: jest.fn() },
-    } as unknown as Ctx
-    ctx.resources = new Resources(ctx)
-    const link = new SupervisorLink(ctx)
-    ctx.orchestrator = { onSupervisorStatus: link.report.bind(link) } as unknown as Ctx['orchestrator']
-    const routes = svRoutes(ctx)
-    routes.onError((err, c) => {
-      if (err instanceof HttpError) return c.json(err.toBody(), err.status as 400)
-      throw err
-    })
-    return routes
-  }
-
-  test('recovery binds both projections to the active Box and its committed Spec', async () => {
-    const appId = 'app_recovery'
-    const envId = `env_${appId}`
-    await app(a, appId)
-    const source = await a.insertDeployment(
-      { ...deployment(), status: 'superseded', spec_version: 1, snapshot_id: 'source', release: 1 },
-      envId,
-    )
-    const live = await a.insertDeployment(
-      { ...deployment(), kind: 'apply', status: 'live', spec_version: 2, release: source.number },
-      envId,
-    )
-    const sourceSpec = {
-      version: 1,
-      deployment: source.number,
-      variables: { THEME: 'light' },
-      runtime: { image: 'node', size: 'small' },
-      volumes: [],
-    } as unknown as Spec
-    await a.insertSpec(envId, sourceSpec)
-    await a.insertSpec(envId, { ...sourceSpec, version: 2, deployment: live.number, variables: { THEME: 'dark' } })
-    await a.updateEnv(envId, {
-      active_box_id: 'recovery-box',
-      box_image: 'node',
-      box_size: 'small',
-      live_deployment: live.number,
-      requested_deployment: live.number,
-    })
-    const provisioned = 'synthetic-provisioned-token'
-    const replacement = 'synthetic-replacement-token'
-    await dataSource.query(
-      `INSERT INTO ${schema}.box (id, "organizationId", app_id, environment_id, env, "desiredState")
-       VALUES ($1, $2, $3, $4, $5, 'started')`,
-      ['recovery-box', orgA, appId, envId, { BOXLITE_BOX_TOKEN: provisioned }],
-    )
-    for (const token of [provisioned, replacement]) {
-      await a.run('INSERT INTO box_tokens (hash, env_id, created_at) VALUES (?, ?, ?)', sha256hex(token), envId, now())
-    }
-    const routes = supervisorRoutes()
-    for (const [phase, theme] of [
-      ['build', 'light'],
-      ['runtime', 'dark'],
-    ]) {
-      const request = (token: string) =>
-        routes.request(`/v1/spec?phase=${phase}&operation=${live.number}&version=2&box=recovery-box`, {
-          headers: { authorization: `Bearer ${token}` },
-        })
-      expect((await request(replacement)).status).toBe(409)
-      const response = await request(provisioned)
-      expect(response.status).toBe(200)
-      expect(await response.json()).toMatchObject({ phase, deployment: source.number, env: { THEME: theme } })
-    }
-  })
-
-  test.each(['/sv/v1/spec', '/api/internal/apps/sv/v1/spec'])(
-    'a legacy publish holds source authorization until the cached wake reports its Spec conflict (%s)',
-    async (specPath) => {
-      const appId = 'app_legacy'
-      const envId = `env_${appId}`
-      await app(a, appId)
-      const live = await a.insertDeployment({ ...deployment(), status: 'live', spec_version: 1 }, envId)
-      const next = await a.insertDeployment(
-        { ...deployment(), status: 'building', spec_version: 2, snapshot_id: 'snap', box_id: 'legacy-box' },
-        envId,
-      )
-      await a.insertSpec(envId, { version: 1, deployment: live.number } as Spec)
-      await a.insertSpec(envId, { version: 2, deployment: next.number } as Spec)
-      await a.run(
-        "INSERT INTO snapshots (app_id, id, manifest, files, bytes, created_at) VALUES (?, 'snap', '[]', 0, 0, ?)",
-        appId,
-        now(),
-      )
-      await a.updateEnv(envId, {
-        active_box_id: 'legacy-box',
-        live_deployment: live.number,
-        requested_deployment: next.number,
-      })
-      await a.updateDeployment(envId, next.number, { legacy_source: 'authorized' })
-      const token = 'synthetic-legacy-token'
-      await a.run('INSERT INTO box_tokens (hash, env_id, created_at) VALUES (?, ?, ?)', sha256hex(token), envId, now())
-      const routes = supervisorRoutes()
-      const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
-      const request = (path: string) => routes.request(path, { headers })
-      const report = (status: object) =>
-        routes.request('/v1/status', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ deployment: next.number, ...status }),
-        })
-
-      const projection = await request('/v1/spec')
-      expect(projection.status).toBe(200)
-      const snapshotUrl = new URL((await projection.json()).snapshot.url)
-      const snapshotPath = snapshotUrl.pathname.replace('/sv/', '/') + snapshotUrl.search
-      const download = await request(snapshotPath)
-      expect(download.status).toBe(200)
-      expect((await download.arrayBuffer()).byteLength).toBeGreaterThan(0)
-      expect((await a.deployment(envId, next.number))?.legacy_source).toBe('read')
-      const early = await request('/v1/spec')
-      expect(early.status).toBe(409)
-
-      expect((await report({ phase: 'built' })).status).toBe(200)
-      await a.updateEnv(envId, { requested_deployment: live.number })
-      expect((await request('/v1/spec')).status).toBe(409)
-      expect((await request(snapshotPath)).status).toBe(409)
-      expect(
-        (await report({ phase: 'failed', step: 'spec', error: `GET ${specPath}: HTTP 409: ${await early.text()}` }))
-          .status,
-      ).toBe(200)
-      expect((await a.deployment(envId, next.number))?.legacy_source).toBe('ended')
-      expect(
-        await a.get('SELECT status FROM supervisor_status WHERE env_id = ? AND release = ?', envId, next.number),
-      ).toMatchObject({ status: { phase: 'built' } })
-      const settled = await request('/v1/spec')
-      expect(settled.status).toBe(200)
-      expect(await settled.json()).toMatchObject({ deployment: null, snapshot: null })
-
-      const conflict = `GET ${specPath}: HTTP 409: {"error":{"code":"conflict"}}`
-      expect((await report({ phase: 'failed', step: 'spec', error: conflict })).status).toBe(200)
-      expect(
-        await a.get('SELECT status FROM supervisor_status WHERE env_id = ? AND release = ?', envId, next.number),
-      ).toMatchObject({ status: { phase: 'failed', error: conflict } })
-    },
-  )
-
-  test('a cached wake cannot complete or overwrite an apply activation for the same release', async () => {
-    const envId = 'env_app_activation'
-    await app(a, 'app_activation')
-    const release = await a.insertDeployment({ ...deployment(), status: 'live' }, envId)
-    const apply = await a.insertDeployment(
-      { ...deployment(), kind: 'apply', status: 'starting', spec_version: 2, release: release.number },
-      envId,
-    )
-    await a.updateEnv(envId, { live_deployment: release.number, requested_deployment: apply.number })
-    const env = (await a.envById(envId))!
-    const publish = jest.fn()
-    const link = new SupervisorLink({ store: a, bus: { publish }, timing: { activateMs: 1000 } } as unknown as Ctx)
-    const cachedWake = { deployment: release.number, phase: 'live' } as const
-    const activation = { operation: apply.number, spec_version: 2 }
-    await link.report(env, cachedWake)
-    await link.report(env, { ...cachedWake, ...activation, spec_version: 1 })
-    expect(publish).not.toHaveBeenCalled()
-    const matching = { ...cachedWake, ...activation }
-    await link.report(env, matching)
-    await link.report(env, cachedWake)
-    expect(publish).toHaveBeenCalledTimes(1)
-    await expect(link.waitLive(envId, release.number, undefined, activation)).resolves.toEqual(matching)
-  })
 
   test('concurrent deployments allocate distinct numbers and idempotent replays reuse a row', async () => {
     await app(a, 'app_queue')
@@ -472,7 +292,6 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
         },
         blobs: {
           has: async () => false,
-          hasScanned: async () => false,
           put: async () => ({ bytes: 0, deduped: false }),
           read: () => {
             throw new Error('source not requested')

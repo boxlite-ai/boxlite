@@ -119,67 +119,6 @@ test('check reports errors as JSON with exit 7 and never touches the network', a
   assert.equal(human.lines.at(-1), '2 errors, 0 warnings')
 })
 
-test('source preflight blocks check, plan and deploy before making an API request', async () => {
-  const token = `ghp_${'Qa1'.repeat(12)}`
-  const dir = await project(root, {
-    'boxlite.toml': BASE_TOML,
-    '.boxlite/link.json': linkJson(),
-    'config.txt': token,
-  })
-  const { agent } = mockApi()
-  for (const args of [
-    ['check'],
-    ['check', '--online'],
-    ['plan'],
-    ['deploy', '--dry-run'],
-    ['deploy', '-m', 'fixture'],
-  ]) {
-    const result = await cli([...args, '--json'], { cwd: dir, dispatcher: agent })
-    assert.equal(result.code, 7, args.join(' '))
-    assert.equal((result.stdout + result.stderr).includes(token), false)
-    const error = JSON.parse(result.stderr).error
-    assert.equal(error.code, 'invalid_manifest')
-    assert.ok(
-      error.errors.some((e: { file: string; rule: string }) => e.file === 'config.txt' && e.rule === 'secret_file'),
-    )
-  }
-})
-
-for (const encoding of ['literal', 'escaped']) {
-  test(`invalid config diagnostics omit ${encoding} credentials in human and JSON output`, async () => {
-    const token = `ghp_${'Qa1'.repeat(12)}`
-    const value = encoding === 'literal' ? token : `\\u0067${token.slice(1)}`
-    const dir = await project(root, { 'boxlite.toml': `${BASE_TOML}\n[secrets]\nAPI_KEY = "${value}"\n` })
-    for (const args of [['check'], ['check', '--json']]) {
-      const result = await cli(args, { cwd: dir })
-      const output = result.stdout + result.stderr
-      assert.equal(result.code, 7)
-      assert.equal(output.includes(token), false)
-      assert.equal(output.includes(value), false)
-      assert.ok(output.includes('invalid_secret_ref'))
-    }
-  })
-}
-
-test('TOML syntax errors report the credential type and line without echoing the value', async () => {
-  const token = `ghp_${'Qa1'.repeat(12)}`
-  const source = `${BASE_TOML}[secrets]\nAPI_KEY = ${token}\n`
-  const dir = await project(root, { 'boxlite.toml': source })
-  const human = await cli(['check'], { cwd: dir })
-  assert.equal(human.code, 7)
-  assert.match(human.lines[0]!, /boxlite\.toml:10\s+toml_syntax\s+.*GitHub token/)
-  assert.equal((human.stdout + human.stderr).includes(token), false)
-
-  const json = await cli(['check', '--json'], { cwd: dir })
-  assert.equal(json.code, 7)
-  const [error] = JSON.parse(json.stderr).error.errors
-  assert.equal(error.rule, 'toml_syntax')
-  assert.equal(error.file, 'boxlite.toml')
-  assert.equal(error.line, 10)
-  assert.match(error.message, /GitHub token/)
-  assert.equal((json.stdout + json.stderr).includes(token), false)
-})
-
 test('plan prints the PRD layout, exits 9 when stale, and --force proceeds', async () => {
   const dir = await project(root, {
     'boxlite.toml': `${BASE_TOML}[database]\n[variables]\nLOG_LEVEL = "info"\n`,

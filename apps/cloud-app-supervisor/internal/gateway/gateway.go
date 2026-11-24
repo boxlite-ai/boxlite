@@ -46,7 +46,7 @@ type Ops interface {
 	Health() api.HealthResponse
 	Deploy(deployment int) error
 	Activate(deployment int) error
-	Rollback(deployment int, target api.ActivationTarget) error
+	Rollback(deployment int) error
 	Restart(service string) error
 	Logs(source string, tail int) []api.LogLine
 }
@@ -259,9 +259,9 @@ func (g *Server) control(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, g.ops.Health())
 	case "deploy":
-		g.deploymentCall(w, r, func(n int, _ api.ActivationTarget) error { return g.ops.Deploy(n) })
+		g.deploymentCall(w, r, g.ops.Deploy)
 	case "activate":
-		g.deploymentCall(w, r, func(n int, _ api.ActivationTarget) error { return g.ops.Activate(n) })
+		g.deploymentCall(w, r, g.ops.Activate)
 	case "rollback":
 		g.deploymentCall(w, r, g.ops.Rollback)
 	case "restart":
@@ -313,13 +313,12 @@ func (g *Server) control(w http.ResponseWriter, r *http.Request) {
 }
 
 // deploymentCall handles the three {"deployment":N} → 202 endpoints.
-func (g *Server) deploymentCall(w http.ResponseWriter, r *http.Request, fn func(int, api.ActivationTarget) error) {
+func (g *Server) deploymentCall(w http.ResponseWriter, r *http.Request, fn func(int) error) {
 	if !allow(w, r, http.MethodPost) {
 		return
 	}
 	var body struct {
 		Deployment int `json:"deployment"`
-		api.ActivationTarget
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": err.Error()})
@@ -329,11 +328,7 @@ func (g *Server) deploymentCall(w http.ResponseWriter, r *http.Request, fn func(
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": "deployment must be a positive integer"})
 		return
 	}
-	if (body.Operation != 0 || body.SpecVersion != 0) && (body.Operation <= 0 || body.SpecVersion <= 0) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request", "message": "operation and spec_version must both be positive"})
-		return
-	}
-	switch err := fn(body.Deployment, body.ActivationTarget); {
+	switch err := fn(body.Deployment); {
 	case errors.Is(err, api.ErrBusy):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "deploy_in_progress"})
 	case errors.Is(err, api.ErrNotBuilt):

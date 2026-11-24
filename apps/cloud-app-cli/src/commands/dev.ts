@@ -106,7 +106,7 @@ function runBuild(ctx: Ctx, manifest: Manifest, env: NodeJS.ProcessEnv): Promise
 }
 
 async function dev(ctx: Ctx, opts: { as?: string; build?: boolean; dbPort?: string }): Promise<void> {
-  const checked = await requireCheck(ctx, 'warn')
+  const checked = await requireCheck(ctx)
   const manifest = checked.manifest
   const { env: remote, database } = await (await ctx.appApi()).devEnv()
   const { DATABASE_URL: _never, ...vars } = remote
