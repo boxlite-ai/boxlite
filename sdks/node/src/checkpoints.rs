@@ -20,7 +20,14 @@ impl ValidateNapiValue for JsCheckpointOptions {}
 impl FromNapiValue for JsCheckpointOptions {
     unsafe fn from_napi_value(env: sys::napi_env, value: sys::napi_value) -> Result<Self> {
         // SAFETY: napi provides an environment and value from the same JS call.
-        let object = unsafe { Object::from_napi_value(env, value)? };
+        let value = unsafe { Unknown::from_napi_value(env, value)? };
+        if value.get_type()? != ValueType::Object || value.is_array()? {
+            return Err(map_err(BoxliteError::InvalidArgument(
+                "checkpoint options must be an object".into(),
+            )));
+        }
+        // SAFETY: the value has been checked to be an object.
+        let object: Object = unsafe { value.cast()? };
         // Read through Option so both an omitted property and null select the default.
         let kind = object.get::<Option<String>>("kind")?.flatten();
         Ok(Self { kind })

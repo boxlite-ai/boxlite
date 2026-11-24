@@ -94,6 +94,14 @@ test("checkpoint native REST calls preserve configuration inheritance and result
   try {
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const runtime = JsBoxlite.rest(new BoxliteRestOptions({ url }));
+    for (const options of ["full", [], 123]) {
+      await expect(async () =>
+        runtime.checkpoints.create("source-1", null, options as never),
+      ).rejects.toSatisfy(
+        (err: unknown) => errorCode(err) === "invalid_argument",
+      );
+    }
+    expect(requests).toEqual([]);
     await expect(async () =>
       runtime.checkpoints.create("source-1", null, { kind: "bogus" as never }),
     ).rejects.toSatisfy(

@@ -90,7 +90,10 @@ export class CheckpointService {
         if (box.volumes?.length || box.secrets?.length)
           throw new BadRequestException('Checkpoints with volumes or secrets are not supported')
         if (await manager.exists(BoxMigration, { where: { boxId: box.id, state: Not(BoxMigrationState.COMPLETED) } })) {
-          throw new ConflictException('Checkpoint source is migrating')
+          throw new ConflictException({
+            message: 'Checkpoint source is migrating',
+            code: 'invalid_state',
+          })
         }
         const runner = box.runnerId
           ? await manager.findOneBy(Runner, {
@@ -111,7 +114,10 @@ export class CheckpointService {
             },
           })
         ) {
-          throw new ConflictException('Source box already has an unfinished job')
+          throw new ConflictException({
+            message: 'Source box already has an unfinished job',
+            code: 'invalid_state',
+          })
         }
         if ((await manager.countBy(Checkpoint, { organizationId })) >= settings.maxPerOrganization)
           throw new ConflictException('Checkpoint limit reached')

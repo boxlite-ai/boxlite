@@ -1251,7 +1251,10 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await dataSource
       .getRepository(BoxMigration)
       .insert({ boxId: box.id, state: BoxMigrationState.PENDING_EXPORT, arcPath: '', updatedAt: box.updatedAt })
-    await expect(service.create(organizationId, box.id)).rejects.toMatchObject({ status: 409 })
+    await expect(service.create(organizationId, box.id)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'invalid_state' }),
+    })
     expect(await jobs.count()).toBe(0)
     expect(await checkpoints.count()).toBe(0)
     expect(await boxes.findOneByOrFail({ id: box.id }).then(withCheckpointState)).toMatchObject({
@@ -1268,7 +1271,10 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await jobs.insert(
       new Job({ type: JobType.START_BOX, runnerId: runner.id, resourceType: ResourceType.BOX, resourceId: box.id }),
     )
-    await expect(service.create(organizationId, box.id)).rejects.toMatchObject({ status: 409 })
+    await expect(service.create(organizationId, box.id)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'invalid_state' }),
+    })
     expect(await checkpoints.count()).toBe(0)
     expect(await jobs.count()).toBe(1)
   })
