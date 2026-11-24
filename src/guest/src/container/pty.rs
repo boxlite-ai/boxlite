@@ -7,12 +7,13 @@ use libcontainer::workload::{
     Executor, ExecutorError, ExecutorSetEnvsError, ExecutorValidationError,
 };
 use std::collections::HashMap;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 
 #[derive(Clone)]
 pub(super) struct PtyExecutor {
     pub inner: Box<dyn Executor>,
     pub config: Option<PtyConfig>,
+    pub timeout_group_socket: Option<RawFd>,
 }
 
 impl Executor for PtyExecutor {
@@ -28,7 +29,13 @@ impl Executor for PtyExecutor {
     }
 
     fn validate(&self, spec: &Spec) -> Result<(), ExecutorValidationError> {
-        self.inner.validate(spec)
+        self.inner.validate(spec)?;
+        if let Some(socket) = self.timeout_group_socket {
+            // Youki has created the session and has not started the workload.
+            // This process can pin its own group before the reaper can see it.
+            super::zygote::send_timeout_group(socket);
+        }
+        Ok(())
     }
 
     fn setup_envs(&self, envs: HashMap<String, String>) -> Result<(), ExecutorSetEnvsError> {

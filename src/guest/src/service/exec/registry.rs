@@ -558,7 +558,7 @@ impl ExecutionRegistry {
         tokio::spawn(async move {
             registry.ensure_lifecycle_manager().await;
             let exit = state.wait_exit(&execution_id).await;
-            state.cancel_timeout_task().await;
+            state.finish_timeout_task().await;
             let output = state.wait_terminal_output_summary().await;
             let snapshot = TerminalSnapshot { exit, output };
             let retained_bytes = state.retained_output_bytes().await;
@@ -796,6 +796,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: None,
+                truncated: false,
             },
         };
         assert!(registry.retain("sleep-one", snapshot.clone(), 0).await);
@@ -874,6 +875,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: None,
+                truncated: false,
             },
         };
 
@@ -909,6 +911,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: None,
+                truncated: false,
             },
         };
         registry
@@ -945,44 +948,6 @@ mod release_tests {
     }
 
     #[tokio::test]
-    async fn terminal_observer_cancels_timeout_when_leader_exits_before_pipe_eof() {
-        let registry = ExecutionRegistry::new();
-        let (_stdin_peer, stdin) = pipe().unwrap();
-        let (stdout, stdout_peer) = pipe().unwrap();
-        let (stderr, stderr_peer) = pipe().unwrap();
-        drop(stderr_peer);
-        let state = ExecutionState::new_for_test(
-            ExecHandle::new(Pid::from_raw(11_009), stdin, stdout, Some(stderr))
-                .expect("test pipe must register with Tokio"),
-            ExitSlot::settled(ExitStatus::Code(0)),
-        );
-        let timeout_task = tokio::spawn(std::future::pending());
-        let timeout_abort = timeout_task.abort_handle();
-        state.set_timeout_task(timeout_task).await;
-
-        registry
-            .register("leader-exited-pipe-open".into(), state)
-            .await;
-        registry.observe_terminal(
-            "leader-exited-pipe-open".into(),
-            registry.get("leader-exited-pipe-open").await.unwrap(),
-        );
-
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while !timeout_abort.is_finished() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("leader exit must cancel its timeout before output EOF");
-        assert!(matches!(
-            registry.lookup("leader-exited-pipe-open").await,
-            Some(ExecutionLookup::Live(_))
-        ));
-        drop(stdout_peer);
-    }
-
-    #[tokio::test]
     async fn expired_retained_entries_become_tombstones_then_expire() {
         let registry = ExecutionRegistry::new();
         let snapshot = TerminalSnapshot {
@@ -1001,6 +966,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: None,
+                truncated: false,
             },
         };
         registry
@@ -1038,6 +1004,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: None,
+                truncated: false,
             },
         };
         for index in 0..=MAX_RETAINED_ENTRIES {
@@ -1074,6 +1041,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: None,
+                truncated: false,
             },
         };
         registry
@@ -1113,6 +1081,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: None,
+                truncated: false,
             },
         };
         for index in 0..=1024 {
@@ -1148,6 +1117,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: Some(diagnostic),
+                truncated: false,
             },
         };
         registry
@@ -1193,6 +1163,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: Some("stdout reader failed".into()),
+                truncated: false,
             },
         };
         registry
@@ -1297,6 +1268,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: None,
+                truncated: false,
             },
         };
         registry.register("live".into(), live.clone()).await;
@@ -1419,6 +1391,7 @@ mod release_tests {
                     total_bytes: 0,
                 },
                 reader_failure: None,
+                truncated: false,
             },
         }
     }

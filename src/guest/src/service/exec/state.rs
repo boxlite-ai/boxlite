@@ -2,6 +2,7 @@ use crate::service::exec::error::ExecutionError;
 use crate::service::exec::exec_handle::ExecHandle;
 use crate::service::exec::output::{OutputManager, OutputTerminalSummary};
 use crate::service::exec::process_instance::ProcessInstance;
+use crate::service::exec::timeout::TimeoutTask;
 use boxlite_shared::ExecOutput;
 use futures::{Stream, StreamExt as _};
 use std::os::unix::io::AsRawFd;
@@ -32,7 +33,7 @@ struct Inner {
     /// Abort handles for stdin forwarding tasks that may own the taken stdin FD.
     input_tasks: Vec<AbortHandle>,
     output_task: Option<JoinHandle<()>>,
-    timeout_task: Option<JoinHandle<()>>,
+    timeout_task: Option<TimeoutTask>,
     /// Set once ephemeral callers explicitly release this execution's resources.
     released: bool,
     /// Optional init health checker for the container this exec runs in.
@@ -311,6 +312,7 @@ impl ExecutionState {
     pub(crate) async fn wait_terminal_output_summary(&self) -> OutputTerminalSummary {
         let output = self.inner.lock().await.output.clone();
         let summary = output.wait_terminal_summary().await;
+        tracing::debug!(truncated = summary.truncated, "execution output finalized");
         let sealed = output.seal().await;
         debug_assert!(sealed, "terminal output must be sealable after its summary");
         summary
@@ -326,7 +328,20 @@ impl ExecutionState {
         output.retained_bytes().await
     }
 
-    pub(crate) async fn set_timeout_task(&self, task: JoinHandle<()>) {
+    pub(super) async fn start_timeout(
+        &self,
+        target: super::timeout::TimeoutTarget,
+        exec_id: String,
+        timeout: std::time::Duration,
+    ) {
+        let output = self.inner.lock().await.output.clone();
+        self.set_timeout_task(super::timeout::start_timeout_watcher(
+            target, exec_id, timeout, output,
+        ))
+        .await;
+    }
+
+    pub(super) async fn set_timeout_task(&self, task: TimeoutTask) {
         let task_to_abort = {
             let mut inner = self.inner.lock().await;
             if inner.released {
@@ -338,16 +353,14 @@ impl ExecutionState {
             }
         };
         if let Some(task) = task_to_abort {
-            task.abort();
-            let _ = task.await;
+            task.finish().await;
         }
     }
 
-    pub(crate) async fn cancel_timeout_task(&self) {
+    pub(super) async fn finish_timeout_task(&self) {
         let task = self.inner.lock().await.timeout_task.take();
         if let Some(task) = task {
-            task.abort();
-            let _ = task.await;
+            task.finish().await;
         }
     }
 
@@ -547,11 +560,10 @@ impl ExecutionState {
             task.abort();
             let _ = task.await;
         }
+        output.cut_off().await;
         if let Some(task) = timeout_task {
-            task.abort();
-            let _ = task.await;
+            task.finish().await;
         }
-        output.shutdown_drains().await;
         if self.shutdown_managed {
             if let Some(reaper) = crate::reaper::REAPER.get() {
                 reaper.release_slot(&self.exit);
@@ -743,7 +755,9 @@ mod release_tests {
     async fn release_aborts_the_timeout_task() {
         let (state, _tracked_fds, _peers) = state_with_tracked_handle();
         let task = tokio::spawn(std::future::pending::<()>());
-        state.set_timeout_task(task).await;
+        state
+            .set_timeout_task(TimeoutTask::without_group_for_test(task))
+            .await;
 
         assert!(state.release_resources().await);
     }
@@ -1119,3 +1133,7 @@ mod idle_reader_regression {
         state.release_resources().await;
     }
 }
+
+#[cfg(test)]
+#[path = "tests/timeout_output.rs"]
+mod timeout_output_tests;

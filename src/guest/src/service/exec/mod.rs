@@ -414,18 +414,25 @@ async fn spawn_execution(
 
     let spawned_at = std::time::Instant::now();
 
-    let (state, pid, process) = match spawn_with_executor(server, &req, &execution_id, ssh_workload)
-        .await?
+    let (state, pid, timeout_target) = match spawn_with_executor(
+        server,
+        &req,
+        &execution_id,
+        ssh_workload,
+    )
+    .await?
     {
         SpawnedExecution::Rejected(rejection) => (
             state::ExecutionState::rejected(rejection, req.tty.is_some()).await,
             0,
             None,
         ),
-        SpawnedExecution::Process(child, container_ref) => {
+        SpawnedExecution::Process(mut child, container_ref) => {
             let leader_pid = child.pid();
             let pid = leader_pid.as_raw() as u32;
             let process = process_instance::ProcessInstance::capture(leader_pid);
+            let timeout_target = (req.timeout_ms > 0)
+                .then(|| timeout::TimeoutTarget::from_spawn(process, child.take_timeout_group()));
             if process.is_none() {
                 warn!(execution_id = %execution_id, pid, "failed to capture process identity; signals will be skipped");
             }
@@ -441,7 +448,7 @@ async fn spawn_execution(
                 }
                 None => state::ExecutionState::new(child, exit, process),
             };
-            (state, pid, process)
+            (state, pid, timeout_target)
         }
     };
     let state = state.with_metadata(boxlite_shared::ExecutionInfo {
@@ -476,13 +483,14 @@ async fn spawn_execution(
     }
 
     // Step 3: Start timeout watcher (if requested)
-    if req.timeout_ms > 0 && pid != 0 {
-        let timeout_task = timeout::start_timeout_watcher(
-            timeout::TimeoutTarget::new(process),
-            execution_id.clone(),
-            std::time::Duration::from_millis(req.timeout_ms),
-        );
-        state.set_timeout_task(timeout_task).await;
+    if let Some(target) = timeout_target {
+        state
+            .start_timeout(
+                target,
+                execution_id.clone(),
+                std::time::Duration::from_millis(req.timeout_ms),
+            )
+            .await;
     }
 
     if reservation.is_some() {
@@ -1109,6 +1117,7 @@ mod container_id_path_tests {
                             total_bytes: 0,
                         },
                         reader_failure: None,
+                        truncated: false,
                     },
                 },
             )
@@ -1189,6 +1198,7 @@ mod container_id_path_tests {
                             total_bytes: 0,
                         },
                         reader_failure: Some("stdout reader failed".into()),
+                        truncated: false,
                     },
                 },
             )
