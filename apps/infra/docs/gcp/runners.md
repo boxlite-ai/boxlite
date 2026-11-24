@@ -149,7 +149,8 @@ when the deployed topology confirms that the group is absent.
 
 Use `topology_sha256` to pin the applied network state. The host guard reads the
 Linux routes, policy rules, nftables ruleset, and legacy IPv4 and IPv6 NAT
-tables.
+tables. Route lifetimes and firewall packet and byte counts are excluded from
+the fingerprint.
 
 The operator attests that these sources cover the pool's routing and
 translation and lists the affected CIDRs in the inventory. An unreadable
