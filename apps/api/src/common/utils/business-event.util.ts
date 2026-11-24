@@ -29,8 +29,15 @@ export type BusinessEventName =
   | 'cloud.feature.use'
 
 export interface BusinessEventFeature {
-  name: 'ssh' | 'tunnel' | 'ci' | 'custom_image'
-  evidence: 'authenticated_session' | 'established_connection' | 'successful_request' | 'executed_job' | 'started_image'
+  name: 'ssh' | 'tunnel' | 'ci' | 'custom_image' | 'checkpoint'
+  evidence:
+    | 'authenticated_session'
+    | 'established_connection'
+    | 'successful_request'
+    | 'executed_job'
+    | 'started_image'
+    | 'archive_ready'
+    | 'box_restored'
   source: 'runner' | 'proxy' | 'api'
 }
 

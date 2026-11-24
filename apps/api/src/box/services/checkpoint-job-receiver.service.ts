@@ -5,6 +5,8 @@ import { Injectable, Logger, Optional } from '@nestjs/common'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { DataSource } from 'typeorm'
+import { v5 } from 'uuid'
+import { recordBusinessEvent } from '../../common/utils/business-event.util'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { Checkpoint, CheckpointArchive } from '../entities/checkpoint.entity'
@@ -46,7 +48,7 @@ export class CheckpointJobReceiver {
     }
     let source: Box | null = null
     let queuedUpload: Job | null = null
-    await this.dataSource.transaction(async (manager) => {
+    const ready = await this.dataSource.transaction(async (manager) => {
       // The persisted job is authoritative. A delayed caller must not replace
       // current terminal metadata or advance a different checkpoint operation.
       const job = await manager.findOneBy(Job, { id: notification.id })
@@ -118,7 +120,15 @@ export class CheckpointJobReceiver {
         checkpoint.activeJobId = null
       }
       await manager.save(Checkpoint, checkpoint)
+      if (checkpoint.state === 'ready') return { job, checkpoint }
     })
+    if (ready)
+      this.recordCheckpointUse(
+        ready.job,
+        ready.checkpoint.organizationId,
+        ready.checkpoint.sourceBoxId,
+        'archive_ready',
+      )
     if (queuedUpload) {
       try {
         await this.redis.lpush(runnerJobQueueKey(queuedUpload.runnerId), queuedUpload.id)
@@ -128,6 +138,29 @@ export class CheckpointJobReceiver {
       }
     }
     if (source) this.cache.invalidate(source)
+  }
+
+  // Only committed job receipts supply both the occurrence time and a replay-stable identity.
+  private recordCheckpointUse(
+    job: Job,
+    organizationId: string,
+    boxId: string,
+    evidence: 'archive_ready' | 'box_restored',
+  ): void {
+    if (!(job.completedAt instanceof Date) || !Number.isFinite(job.completedAt.getTime())) return
+    try {
+      recordBusinessEvent({
+        name: 'cloud.feature.use',
+        outcome: 'success',
+        organizationId,
+        correlationId: boxId,
+        occurredAt: job.completedAt,
+        eventId: v5('boxlite:checkpoint:' + evidence + ':' + job.id, v5.URL),
+        feature: { name: 'checkpoint', evidence, source: 'api' },
+      })
+    } catch {
+      this.logger.warn('Checkpoint usage capture failed')
+    }
   }
 
   /** Commit only the owned import receipt; report its logical outcome after commit. */
@@ -209,6 +242,8 @@ export class CheckpointJobReceiver {
     })
     if (changed) {
       recordBoxJobOutcome('box.create', changed.outcome, changed.box, changed.job)
+      if (changed.outcome === JobStatus.COMPLETED)
+        this.recordCheckpointUse(changed.job, changed.box.organizationId, changed.box.id, 'box_restored')
       this.cache.invalidate(changed.box)
       if (changed.previousState !== changed.box.state)
         this.events?.emit(

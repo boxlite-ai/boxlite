@@ -314,7 +314,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
         )
         await receiver.handleJobCompletion(job)
         await receiver.reconcile()
-        expect(observed).toEqual([
+        expect(observed.filter((event) => event['event.name'] === 'box.create')).toEqual([
           expect.objectContaining({
             'event.name': 'box.create',
             'event.outcome': outcome === 'success' ? 'success' : 'exception',
@@ -325,6 +325,21 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
             'event.id': expect.any(String),
           }),
         ])
+        const uses = observed.filter((event) => event['event.name'] === 'cloud.feature.use')
+        expect(uses).toEqual(
+          outcome === 'success'
+            ? [
+                expect.objectContaining({
+                  'feature.name': 'checkpoint',
+                  'feature.evidence': 'box_restored',
+                  'organization.id': organizationId,
+                  'correlation.id': admitted.id,
+                  'event.timestamp': job.completedAt!.toISOString(),
+                }),
+              ]
+            : [],
+        )
+        if (uses.length) expect(uses[0]['event.id']).not.toBe(observed[0]['event.id'])
         expect(await boxes.findOneByOrFail({ id: admitted.id })).toMatchObject({
           state: outcome === 'success' ? BoxState.STOPPED : BoxState.ERROR,
         })
@@ -333,6 +348,34 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       }
     },
   )
+
+  it('records archive readiness only after an owned upload succeeds, once across replay', async () => {
+    const box = await source()
+    const checkpoint = await service.create(organizationId, box.id, 'ready-evidence')
+    const observed: Readonly<Record<string, string>>[] = []
+    const dispose = subscribeBusinessEvents((event) => {
+      if (event['event.name'] === 'cloud.feature.use') observed.push(event)
+    })
+    try {
+      await finish(checkpoint.exportJobId!, archive(checkpoint))
+      expect(observed).toEqual([])
+      const uploading = await service.get(organizationId, checkpoint.id)
+      const job = await finish(uploading.activeJobId!, archive(checkpoint))
+      await receiver.handleJobCompletion(job)
+      expect(observed).toEqual([
+        expect.objectContaining({
+          'feature.name': 'checkpoint',
+          'feature.evidence': 'archive_ready',
+          'correlation.id': box.id,
+          'organization.id': organizationId,
+          'event.timestamp': job.completedAt!.toISOString(),
+        }),
+      ])
+      expect(observed[0]['user.id']).toBeUndefined()
+    } finally {
+      dispose()
+    }
+  })
 
   it('prefers the exact Box ID over a colliding name during capture', async () => {
     const target = await source('exact-source')

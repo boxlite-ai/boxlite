@@ -20,6 +20,12 @@ const NONCE_TTL_MS = 30_000
 /** Nonce → caller. One map per process: a nonce never leaves this process and its own socket. */
 const callers = new Map<string, { caller: AuthContextType; expiresAt: number }>()
 
+const delegatedRequests = new WeakSet<Request>()
+
+export function isDelegatedMcpRequest(request: Request): boolean {
+  return delegatedRequests.has(request)
+}
+
 function take(nonce: unknown): AuthContextType | undefined {
   if (typeof nonce !== 'string') return undefined
   const entry = callers.get(nonce)
@@ -35,6 +41,7 @@ passport.use(MCP_DELEGATION_STRATEGY, {
     const caller = take(req.headers[MCP_DELEGATION_HEADER])
     // fail() without a challenge lets passport try the next strategy.
     if (caller) {
+      delegatedRequests.add(req)
       this.success(caller)
     } else {
       this.fail()

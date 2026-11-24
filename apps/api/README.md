@@ -929,7 +929,7 @@ See PostHog's [aggregations](https://posthog.com/docs/sql/aggregations) and
 ### Cloud feature-use evidence
 
 `cloud.feature.use` reports accepted SSH authentication, successful preview forwarding,
-established tunnels, execution on a managed CI runner and successful starts with tenant-owned images.
+established tunnels, execution on a managed CI runner, successful starts with tenant-owned images and committed checkpoint use.
 It uses `cloud_metrics_schema='1'` and the same occurrence UUID/time in PostHog and OTLP logs.
 
 | Feature      | Evidence boundary                                                                                                           | Excluded evidence                                                           |
@@ -938,6 +938,7 @@ It uses `cloud_metrics_schema='1'` and the same occurrence UUID/time in PostHog 
 | Tunnel       | Accepted CONNECT with a Runner connection, HTTP 101, or guest HTTP 2xx/3xx                                                  | Tunnel preparation, authorization failures, failed upstream requests        |
 | CI           | Signed GitHub running/completed observation with `started_at`, matched to its scoped JIT allocation by Runner ID and name | Worker creation, queued jobs, external runners, ambiguous assignments       |
 | Custom image | Successful create/start job with stored `imageIsOrgOwned=true`                                                              | Admission alone, failed jobs, curated images, unknown historical provenance |
+| Checkpoint | Archive upload committed as ready (`archive_ready`), or an owned import receipt committed as completed (`box_restored`) | Create clicks, queued exports, failed or cancelled imports and replay |
 
 Feature attributes are `feature.name`, `feature.evidence` and `feature.source`.
 `correlation.id` is the Box ID; no login, key, command, URL, repository name or workflow name is emitted.
@@ -1005,6 +1006,27 @@ The query has not run against a live PostHog project. Supply the eligible cohort
 For time-aligned operation success, join requested and terminal `cloud.box.*` occurrences on `operation.id`,
 filter `operation.requested_at` into the reporting window, and disclose the terminal observation cutoff.
 A timeout stays a timeout; a missing terminal remains unobserved.
+
+### Cloud API product operations
+
+Use `cloud.api.operation` for finished Cloud API requests. Select `properties['api.operation']` for the action, `properties['http.status_class']` for `2xx`, `4xx` or `5xx`, and `properties['client.source']` for attribution. For example, filter on `image.alias.create` and `2xx` to count successful alias requests across the supported clients. Each completed HTTP attempt counts separately, including client retries.
+
+| Product | Actions measured |
+| --- | --- |
+| Boxes, executions, files | Create, delete, start, stop, recover, request an attach ticket, start/signal/kill an execution, upload/download files |
+| Network, SSH, tunnels | Update inbound/outbound settings, configure/enable/disable SSH, prepare/revoke a tunnel |
+| Checkpoints | Request capture, delete, create a Box from a checkpoint (`checkpoint.restore`) |
+| Images, registries, volumes | Add/remove an alias, remove an image, create/update/delete credentials, create/delete a volume |
+| Domains | Claim, bind, unbind; create, verify, prepare, advance or delete a custom domain |
+| CI | Start/cancel a connection flow, select/complete an installation, update/remove a connection, change CI settings |
+| Onboarding and billing actions | Rename an organization, save onboarding, create/copy a quickstart handoff, submit a coupon claim or cancellation feedback. Only the operation and HTTP result are captured. |
+| Organization infrastructure | Create/update/delete a region, rotate its proxy key, create/delete one's own API key, open the webhook portal |
+
+Both v1 route spellings and the equivalent Console routes use the same action where available. The shared native SDK and CLI report `sdk`, the Dashboard reports `dashboard`, and verified in-process tool delegation reports `mcp`. Client source is descriptive; unmarked or unrecognized clients are `unattributed`.
+
+The HTTP response must finish after the guards verify the actor's organization membership. The request admission time anchors the consent check for the member and the org creator. A full queue, disabled analytics or early disconnect drops the measurement. The listener does no network or database work that the handler must await.
+
+Status polling, terminal resize frames, credential introspection and local-only SDK calls produce no operation rows. File and execution requests contribute at most one row per finished HTTP response, regardless of stream size. Use `cloud.feature.use` for committed checkpoint outcomes, an actual SSH session or tunnel traffic; the HTTP rows measure different stages and should not be summed with click or feature events.
 
 ### Querying Activity in PostHog
 

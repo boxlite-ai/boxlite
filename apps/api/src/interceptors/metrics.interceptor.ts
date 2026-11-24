@@ -6,6 +6,7 @@
 
 import { Injectable, NestInterceptor, ExecutionContext, CallHandler, Logger } from '@nestjs/common'
 import { Observable } from 'rxjs'
+import { observeCloudApiOperation } from './cloud-api-operation'
 import { tap } from 'rxjs/operators'
 import { AnalyticsService } from '../analytics/services/analytics.service'
 import { Request } from 'express'
@@ -59,6 +60,7 @@ export class MetricsInterceptor implements NestInterceptor {
 
     const request = context.switchToHttp().getRequest()
     const startTime = Date.now()
+    observeCloudApiOperation(request, context.switchToHttp().getResponse(), this.analytics, startTime)
 
     return next.handle().pipe(
       tap({
@@ -424,8 +426,6 @@ export class MetricsInterceptor implements NestInterceptor {
     })
   }
 
-  // Delete is the catalog's only mutation — an image enters it by being used,
-  // not by being created — so it is the only event there is to capture.
   private captureDeleteImage(props: CommonCaptureProps, idOrRef: string) {
     this.capture('api_image_deleted', props, 'api_image_deletion_failed', {
       image_id_or_ref: idOrRef,

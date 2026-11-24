@@ -16,9 +16,12 @@ import type { INestApplication } from '@nestjs/common'
 import { ConflictException } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import type { AddressInfo } from 'net'
+import { request as httpRequest } from 'node:http'
+import { once } from 'node:events'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { TypedConfigService } from '../config/typed-config.service'
+import { BoxliteImageController } from '../boxlite-rest/boxlite-image.controller'
 import { ImageController } from '../image/controllers/image.controller'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -54,14 +57,14 @@ const CONFIG: Record<string, string> = {
  */
 describe('MetricsInterceptor', () => {
   let app: INestApplication
-  let catalog: { delete: jest.Mock }
+  let catalog: { delete: jest.Mock; deleteAlias: jest.Mock }
 
   beforeEach(async () => {
     mockCapture.mockReset()
-    catalog = { delete: jest.fn().mockResolvedValue(undefined) }
+    catalog = { delete: jest.fn().mockResolvedValue(undefined), deleteAlias: jest.fn().mockResolvedValue(undefined) }
 
     const moduleRef = await Test.createTestingModule({
-      controllers: [ImageController, OrganizationController],
+      controllers: [ImageController, OrganizationController, BoxliteImageController],
       providers: [
         AnalyticsService,
         { provide: AnalyticsConsentService, useValue: grantedAnalyticsConsent },
@@ -89,7 +92,12 @@ describe('MetricsInterceptor', () => {
       .overrideGuard(CombinedAuthGuard)
       .useValue({
         canActivate: (context: any) => {
-          context.switchToHttp().getRequest().user = {
+          const req = context.switchToHttp().getRequest()
+          req.user = {
+            role: 'user',
+            organizationUser: req.get('x-test-member')
+              ? { userId: 'user-1', organizationId: ORGANIZATION.id }
+              : undefined,
             userId: 'user-1',
             organizationId: ORGANIZATION.id,
             organization: ORGANIZATION,
@@ -129,6 +137,82 @@ describe('MetricsInterceptor', () => {
 
   afterEach(async () => {
     await app?.close()
+  })
+
+  it.each(['/api/images', '/api/v1/images', '/api/v1/default/images'])(
+    'tracks removal of an alias through %s with only bounded properties',
+    async (base) => {
+      const address = app.getHttpServer().address() as AddressInfo
+      const response = await fetch(`http://127.0.0.1:${address.port}${base}/private-image/aliases/private-tag`, {
+        method: 'DELETE',
+        headers: { 'x-test-member': '1', 'x-boxlite-source': 'sdk' },
+      })
+      expect(response.status).toBe(204)
+      expect(catalog.deleteAlias).toHaveBeenCalledWith(ORGANIZATION, 'private-image', 'private-tag')
+      expect(mockCapture).toHaveBeenCalledTimes(1)
+      expect(mockCapture.mock.calls[0][0].properties).toEqual({
+        'api.operation': 'image.alias.delete',
+        'client.source': 'sdk',
+        'http.status_class': '2xx',
+      })
+    },
+  )
+
+  it('returns the alias response while its PostHog transfer is pending', async () => {
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    mockCapture.mockImplementationOnce(() => pending)
+    try {
+      const address = app.getHttpServer().address() as AddressInfo
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/images/ref/aliases/tag`, {
+        method: 'DELETE',
+        headers: { 'x-test-member': '1' },
+      })
+      expect(response.status).toBe(204)
+      expect(mockCapture).toHaveBeenCalledTimes(1)
+    } finally {
+      finish()
+    }
+  })
+
+  it('drops an interrupted response even when the alias operation later succeeds', async () => {
+    let admitted!: () => void
+    let complete!: () => void
+    const entered = new Promise<void>((resolve) => {
+      admitted = resolve
+    })
+    const pending = new Promise<void>((resolve) => {
+      complete = resolve
+    })
+    catalog.deleteAlias.mockImplementationOnce(() => {
+      admitted()
+      return pending
+    })
+    const server = app.getHttpServer()
+    const incoming = once(server, 'request')
+    const req = httpRequest({
+      port: (server.address() as AddressInfo).port,
+      hostname: '127.0.0.1',
+      path: '/api/images/ref/aliases/tag',
+      method: 'DELETE',
+      headers: { 'x-test-member': '1' },
+    })
+    req.on('error', () => {}) // Destroying the client connection reports ECONNRESET.
+    req.end()
+    const [, response] = await incoming
+    const closed = once(response, 'close')
+    try {
+      await entered
+      req.destroy()
+      await closed
+    } finally {
+      complete()
+    }
+    // Drain the handler microtasks before observing analytics.
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(mockCapture).not.toHaveBeenCalled()
   })
 
   const deleteImage = async (encodedRef: string): Promise<Response> => {
