@@ -91,7 +91,8 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 impl Vm<boxlite_hypervisor::KvmVm> {
     /// Builds a KVM VM with an empty chipset and no console worker.
     /// Rejects userspace device configuration before opening KVM.
-    pub fn new_device_less(config: VmConfig) -> Result<Self> {
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn new_device_less(config: VmConfig) -> Result<Self> {
         use crate::boot;
 
         config.validate_device_less()?;

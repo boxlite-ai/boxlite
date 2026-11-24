@@ -327,7 +327,7 @@ pub(crate) struct Chipset {
 
 impl Chipset {
     /// Whether the chipset contains any userspace devices.
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn is_empty(&self) -> bool {
         self._devices.is_empty()
     }

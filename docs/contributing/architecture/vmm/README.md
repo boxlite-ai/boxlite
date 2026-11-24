@@ -487,7 +487,7 @@ engine adapter calls it from
 
 ```rust
 let mut vm = Vm::new(config, console)?;
-let control = vm.control(); // Clone for lifecycle or disk operations.
+let control = vm.control(); // Clone for runtime control.
 let exit = vm.run()?;       // Blocks on the thread that owns the VM.
 ```
 
@@ -497,9 +497,9 @@ serial output through a bounded queue; `run` waits up to one second for the
 sink to take the rest, and bytes it never takes are counted as dropped and
 logged.
 
-The driver holds exclusive access to `Vm` throughout `run`. The backend-independent
-`VmControl` shares lifecycle state and disk senders. External threads use
-`status()`, `stop()`, and `resize_disk()` without holding the VM itself.
+The driver holds exclusive access to `Vm` throughout `run`. `VmControl`
+provides backend-independent runtime controls. External threads use `status()`,
+`stop()`, and `resize_disk()` without holding the VM itself.
 `StopHandle::stop` uses the same latch.
 
 `VmStatus` starts at `Created`, advances to `Running` as the driver starts,
@@ -513,8 +513,9 @@ finishes the console, and publishes `Exited`. A worker join timeout leaves
 the VM in `Stopping` until drop. The VM owns the RAM mappings until drop,
 which also publishes `Exited` if the VM was never run.
 
-Linux x86_64 also supports `Vm::new_device_less(config)`, which shares KVM
-preflight, RAM registration, and kernel and initramfs loading with `Vm::new`.
+On Linux x86_64, the crate-internal `#[cfg(test)]` helper
+`Vm::new_device_less(config)` shares KVM preflight, RAM registration, and
+kernel and initramfs loading with `Vm::new`.
 It builds an empty chipset and starts no console worker. Configuring disks,
 filesystem, vsock, network, virtio console, or `hotplug_mib` (virtio-mem)
 returns `Error::Control` with `ControlReason::UnsupportedDevice` before KVM

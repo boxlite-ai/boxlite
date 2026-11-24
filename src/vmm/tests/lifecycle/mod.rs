@@ -28,12 +28,19 @@ fn stop_latches_one_event_and_is_idempotent_after_exit() {
     control.stop();
     control.clone().stop();
     assert_eq!(control.status(), VmStatus::Stopping);
+    assert!(!lifecycle.state().run_claimed);
     assert!(sender.is_stopping());
     assert!(matches!(
         events.wait(Some(Duration::ZERO)).unwrap(),
         Some(Event::StopRequested)
     ));
     assert!(events.wait(Some(Duration::ZERO)).unwrap().is_none());
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        assert!(matches!(lifecycle.begin_run(), Ok(false)));
+        assert!(matches!(lifecycle.begin_run(), Err(Error::AlreadyRan)));
+    }
 
     lifecycle.mark_exited();
     control.stop();

@@ -1,7 +1,7 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Lifecycle and disk controls for a VM.
+//! Runtime controls for a VM.
 
 use std::{collections::HashMap, io, sync::Arc, time::Duration};
 

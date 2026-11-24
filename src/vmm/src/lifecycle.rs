@@ -21,21 +21,11 @@ pub enum VmStatus {
     Exited,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum State {
-    Created,
-    // A pre-start stop still allows the first run to perform cleanup.
-    StoppedBeforeRun,
-    #[cfg(target_arch = "x86_64")]
-    Running,
-    #[cfg(target_arch = "x86_64")]
-    Stopping,
-    Exited,
-}
-
 #[derive(Debug)]
 struct LifecycleState {
-    phase: State,
+    status: VmStatus,
+    #[cfg(any(test, target_arch = "x86_64"))]
+    run_claimed: bool,
     sender: Option<EventSender>,
 }
 
@@ -48,7 +38,9 @@ impl Lifecycle {
     pub(crate) fn new(sender: EventSender) -> Self {
         Self {
             state: Mutex::new(LifecycleState {
-                phase: State::Created,
+                status: VmStatus::Created,
+                #[cfg(any(test, target_arch = "x86_64"))]
+                run_claimed: false,
                 sender: Some(sender),
             }),
         }
@@ -59,58 +51,45 @@ impl Lifecycle {
     }
 
     pub(crate) fn status(&self) -> VmStatus {
-        match self.state().phase {
-            State::Created => VmStatus::Created,
-            #[cfg(target_arch = "x86_64")]
-            State::Running => VmStatus::Running,
-            State::StoppedBeforeRun => VmStatus::Stopping,
-            #[cfg(target_arch = "x86_64")]
-            State::Stopping => VmStatus::Stopping,
-            State::Exited => VmStatus::Exited,
-        }
+        self.state().status
     }
 
     pub(crate) fn stop(&self) {
         let mut state = self.state();
-        let stopping = match state.phase {
-            State::Created => State::StoppedBeforeRun,
-            #[cfg(target_arch = "x86_64")]
-            State::Running => State::Stopping,
-            _ => return,
-        };
+        if !matches!(state.status, VmStatus::Created | VmStatus::Running) {
+            return;
+        }
         let Some(sender) = &state.sender else {
             return;
         };
         // Serialize setting the vCPU stop latch with admitting the first run.
         sender.send(Event::StopRequested);
-        state.phase = stopping;
+        state.status = VmStatus::Stopping;
     }
 
     /// Claims the run and returns whether to start the vCPUs.
     #[cfg(target_arch = "x86_64")]
     pub(crate) fn begin_run(&self) -> Result<bool> {
         let mut state = self.state();
-        match state.phase {
-            State::Created => {
-                state.phase = State::Running;
-                Ok(true)
-            }
-            State::StoppedBeforeRun => {
-                state.phase = State::Stopping;
-                Ok(false)
-            }
-            _ => Err(Error::AlreadyRan),
+        if state.run_claimed || state.status == VmStatus::Exited {
+            return Err(Error::AlreadyRan);
         }
+        state.run_claimed = true;
+        if state.status == VmStatus::Stopping {
+            return Ok(false);
+        }
+        state.status = VmStatus::Running;
+        Ok(true)
     }
 
     #[cfg(target_arch = "x86_64")]
     pub(crate) fn mark_stopping(&self) {
-        self.state().phase = State::Stopping;
+        self.state().status = VmStatus::Stopping;
     }
 
     pub(crate) fn mark_exited(&self) {
         let mut state = self.state();
-        state.phase = State::Exited;
+        state.status = VmStatus::Exited;
         drop(state.sender.take());
     }
 }

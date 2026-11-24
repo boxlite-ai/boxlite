@@ -16,11 +16,12 @@ lifecycle API, memory layout, buses, interrupts, and threads.
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
 
-On Linux x86_64, `Vm::new_device_less(config)` loads the kernel and optional
-initramfs into a KVM VM with an empty userspace chipset and no console worker.
-KVM still creates the in-kernel irqchip and PIT. Configuring disks, filesystem,
-vsock, network, virtio console, or `hotplug_mib` (virtio-mem) returns
-`Error::Control` with `ControlReason::UnsupportedDevice` before KVM opens.
+On Linux x86_64, the crate-internal `#[cfg(test)]` helper
+`Vm::new_device_less(config)` loads the kernel and optional initramfs into a
+KVM VM with an empty userspace chipset and no console worker. KVM still creates
+the in-kernel irqchip and PIT. Configuring disks, filesystem, vsock, network,
+virtio console, or `hotplug_mib` (virtio-mem) returns `Error::Control` with
+`ControlReason::UnsupportedDevice` before KVM opens.
 
 ```text
 boxlite-vmm
@@ -34,7 +35,7 @@ boxlite-vmm
 | Module | Responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam |
-| `control` | `VmControl` exposes lifecycle status, stop requests, and disk resize by configured ID |
+| `control` | `VmControl` provides runtime controls for VM status, stop requests, and disk resize by configured ID |
 | `lifecycle` | `Lifecycle` coordinates the one-shot run with the shared stop latch |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
@@ -646,8 +647,8 @@ socket and guest-memory tests; real-guest qualification remains separate.
 `vm.control()` before the run and pass clones of the `VmControl` to threads
 that need to read `status()`, request `stop()`, or call
 [`resize_disk()`](#virtio-block-device). Dropping the clones has no effect
-on execution. A device-less VM returns `InvalidInput` for disk resize because
-its registry is empty.
+on execution. A VM created with the device-less test helper returns
+`InvalidInput` for disk resize because its registry is empty.
 
 | `VmStatus` | Meaning |
 | --- | --- |

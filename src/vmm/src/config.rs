@@ -108,7 +108,7 @@ pub struct NetConfig {
 }
 
 impl VmConfig {
-    #[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+    #[cfg(test)]
     pub(crate) fn validate_device_less(&self) -> Result<()> {
         if !self.disks.is_empty()
             || self.filesystem.is_some()
