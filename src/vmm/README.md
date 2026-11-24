@@ -47,7 +47,28 @@ boxlite-vmm
 The Linux x86_64 native engine composes disks, reporting balloon, aggregate
 virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
 The adapter maps the runtime specification into `VmConfig`; optional devices
-are omitted when not requested. Disk order remains `vda` (container) then
+are omitted when not requested.
+
+The aggregate virtio-fs device is runtime-extensible: `insert_aggregate`
+publishes a live device by tag when it enters the transport, and
+`lookup_aggregate` returns its filesystem to host-side consumers. VM shutdown
+removes the registration, rejects mutations through cached handles, and clears
+the guest session. Device drop performs the same cleanup if shutdown did not run.
+Retained filesystem handles pin export roots until their final reference drops.
+`AggregateFs::register_fd` registers directory descriptors, and `remove` retires
+per-directory exports.
+A retired export's name stops resolving while its in-use nodes, handles and
+in-flight requests retain their backend; a re-registered name has a new identity
+and independent read-only policy.
+Registration validates that the supplied descriptor refers to a directory;
+host read/write permissions are checked by the kernel for each operation.
+A writable export may modify an existing writable file in a non-writable
+directory, while creating files there still fails with EACCES. The export's
+read-only policy separately rejects mutations with EROFS.
+Guest LOOKUP and accepted READDIRPLUS entries retain root inodes independently
+of open handles. FORGET releases those references; rejected READDIRPLUS entries
+and plain READDIR create no persistent lookup ownership.
+Disk order remains `vda` (container) then
 `vdb` (read-only guest root). The guest runs as PID 1, reports readiness over
 vsock and receives aggregate mount instructions before container startup.
 Linux arm64 and macOS arm64 remain separate M2 qualification gates; x86_64

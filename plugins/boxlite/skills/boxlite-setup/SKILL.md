@@ -55,6 +55,16 @@ Follow [local setup](../boxlite/references/local.md) and verify the runtime on t
 Never request cloud login or call cloud tools; disable the unused cloud connection if the host attempts automatic connection.
 A web-only host cannot provide Local mode: explain the missing capability and preserve the choice.
 
+## File transfer prerequisites
+
+Cloud file transfer needs Python 3.9+ and host shell/filesystem access.
+Claude Code must load the marketplace plugin's registered upload and download tools in the current session.
+
+Use the [file workflow](../boxlite/references/cloud.md#files) to select an existing Codex or Claude MCP connection.
+The selected host owns credentials and sends MCP requests; the helper handles local bytes and host-control messages only.
+
+If no programmatic transport is available for that connection, report file transfer unavailable without changing authentication or asking the model to copy base64.
+
 ## Continue the task
 
 Report the selected mode, connection or runtime home, and observed setup check; keep sensitive account details private.

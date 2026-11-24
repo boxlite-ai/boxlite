@@ -3,7 +3,15 @@
   "mcpServers": {
     "boxlite": {
       "type": "streamable-http",
-      "url": "https://api.boxlite.ai/mcp"
+      "url": "https://api.boxlite.ai/mcp",
+      "extensions": {
+        "com.openai": {
+          "auth": {
+            "type": "oauth",
+            "client": {"mode": "cimd"}
+          }
+        }
+      }
     }
   }
 }

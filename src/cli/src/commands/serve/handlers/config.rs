@@ -15,6 +15,8 @@ pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
             export_enabled: true,
             import_enabled: true,
             exec_user_enabled: true,
+            volume_read_only_enabled: true,
+            typed_mounts_enabled: true,
         },
     })
 }
@@ -33,5 +35,12 @@ mod tests {
     #[tokio::test]
     async fn config_does_not_advertise_local_checkpoints() {
         assert!(!get_config().await.0.capabilities.checkpoints_enabled);
+    }
+
+    #[tokio::test]
+    async fn config_advertises_volume_mount_support() {
+        let capabilities = get_config().await.0.capabilities;
+        assert!(capabilities.volume_read_only_enabled);
+        assert!(capabilities.typed_mounts_enabled);
     }
 }

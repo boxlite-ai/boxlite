@@ -31,6 +31,7 @@ import { ImageAdmissionService } from '../image/services/image-admission.service
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
+import { AddSecretCredential1794873600000 } from '../migrations/pre-deploy/1794873600000-add-secret-credential-migration'
 import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/1793700000000-add-ci-listener-state-migration'
 
 const integration = process.env.DB_HOST ? describe : describe.skip
@@ -97,6 +98,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     const query = db.createQueryRunner()
     try {
       await new AddCiListenerState1793700000000().up(query)
+      await new AddSecretCredential1794873600000().up(query)
     } finally {
       await query.release()
     }
@@ -171,7 +173,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
   })
   beforeEach(async () => {
     await db.query(
-      'TRUNCATE ci_listener_state,ci_installation_binding,"user",organization_user,box,box_last_activity,box_checkpoint_state',
+      'TRUNCATE ci_listener_state,ci_installation_binding,"user",organization_user,box,box_last_activity,box_checkpoint_state,secret_credential',
     )
     await db.query(
       `INSERT INTO ci_installation_binding VALUES($1,1,'github.com',$2,10,20,'owner','User',$3,$4,true,true,'ready')`,

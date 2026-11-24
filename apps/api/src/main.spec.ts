@@ -39,6 +39,9 @@ jest.mock('./common/utils/app-mode', () => ({
 jest.mock('./boxlite-rest/boxlite-ws-proxy.service', () => ({ BoxliteWsProxyService: class {} }))
 jest.mock('./mcp/mcp.controller', () => ({ mcpStrategy: {} }))
 jest.mock('./mcp/mcp-auth-metadata', () => ({ MCP_ROOT_ROUTES: [] }))
+jest.mock('./box/controllers/secret-credential.controller', () => ({
+  SECRET_CREDENTIAL_PATH: 'internal/v1/credentials/introspect',
+}))
 jest.mock('./mcp/mcp-body', () => ({ useApiBodyParsers: jest.fn() }))
 jest.mock('./mcp/mcp-tools', () => ({ McpTools: class {} }))
 jest.mock('./mcp/mcp-routes', () => ({ servedOperations: () => [] }))
@@ -104,6 +107,9 @@ describe('API bootstrap listener', () => {
     require('./main')
     await new Promise<void>((resolve) => setImmediate(resolve))
     expect(listen).toHaveBeenCalledWith(3300, host || '0.0.0.0')
+    expect(app.setGlobalPrefix).toHaveBeenCalledWith('api', {
+      exclude: ['internal/v1/credentials/introspect'],
+    })
     expect(httpServer.requestTimeout).toBe(0)
     expect(service.start).toHaveBeenCalledTimes(1)
     expect(listen.mock.invocationCallOrder[0]).toBeLessThan(service.start.mock.invocationCallOrder[0])

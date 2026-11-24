@@ -178,6 +178,7 @@ impl LocalVolumeStore {
     pub(crate) fn list(&self) -> BoxliteResult<Vec<VolumeInfo>> {
         self.with_registry_lock(false, || {
             let mut volumes = Vec::new();
+            let mut names = std::collections::HashSet::new();
             for entry in self.canonical_entries()? {
                 let id = entry
                     .file_name()
@@ -185,7 +186,15 @@ impl LocalVolumeStore {
                     .unwrap_or_default()
                     .to_owned();
                 match self.read_info(&entry) {
-                    Ok(info) => volumes.push(info),
+                    Ok(info) => {
+                        if !names.insert(info.name.clone()) {
+                            return Err(BoxliteError::MetadataError(format!(
+                                "duplicate volume name {:?} in local store",
+                                info.name
+                            )));
+                        }
+                        volumes.push(info);
+                    }
                     Err(error) => {
                         tracing::warn!(volume_id = %id, %error, "Skipping invalid local volume");
                     }
@@ -1591,6 +1600,11 @@ mod tests {
             .create(Some("another"))
             .expect_err("duplicate metadata names must fail creation");
         assert!(matches!(error, BoxliteError::MetadataError(_)), "{error:?}");
+        let error = runtime
+            .local_volume_store
+            .list()
+            .expect_err("list must not hide duplicate volume names");
+        assert!(matches!(error, BoxliteError::MetadataError(_)), "{error:?}");
         let options = BoxOptions {
             volumes: vec![VolumeSpec::managed_volume("duplicate", "/workspace")],
             ..Default::default()
@@ -1601,6 +1615,34 @@ mod tests {
             .err()
             .expect("a duplicate name must not select an arbitrary volume");
         assert!(matches!(error, BoxliteError::MetadataError(_)), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn named_volume_cannot_shadow_a_canonical_id() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let existing = runtime.local_volume_store.create(None).unwrap();
+
+        let error = runtime
+            .local_volume_store
+            .create(Some(&existing.id))
+            .expect_err("a canonical UUID must not become a volume name");
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert_eq!(
+            runtime
+                .local_volume_store
+                .resolve_selector(&existing.id, VolumeReferenceMode::Selector)
+                .unwrap()
+                .id,
+            existing.id
+        );
     }
 
     #[tokio::test]

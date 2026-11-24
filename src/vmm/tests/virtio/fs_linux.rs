@@ -5,7 +5,8 @@
 use std::ffi::{CStr, CString, OsString};
 use std::fs::{self, File};
 use std::io::{self, Cursor, Read, Write};
-use std::os::unix::ffi::OsStringExt;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{FileExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
@@ -20,12 +21,17 @@ use crate::virtio::fs::filesystem::{
     Context, Entry, Extensions, FileSystem, FsOptions, GetxattrReply, ListxattrReply, OpenOptions,
     SetattrValid, ZeroCopyReader, ZeroCopyWriter,
 };
-use crate::virtio::fs::linux::passthrough::PassthroughFs;
+use crate::virtio::fs::linux::passthrough::{PassthroughFs, openat_beneath};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     static OMIT_MOUNT_ID: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static BEFORE_STATX: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn before_next_statx(callback: impl FnOnce() + 'static) {
+    BEFORE_STATX.with(|hook| *hook.borrow_mut() = Some(Box::new(callback)));
 }
 
 // Interpose only in the test binary, preserving real host results except for a
@@ -38,6 +44,13 @@ unsafe extern "C" fn host_statx(
     mask: libc::c_uint,
     out: *mut libc::statx,
 ) -> libc::c_int {
+    let hook = BEFORE_STATX
+        .try_with(|hook| hook.borrow_mut().take())
+        .ok()
+        .flatten();
+    if let Some(hook) = hook {
+        hook();
+    }
     // SAFETY: forward the libc ABI arguments unchanged to the Linux syscall.
     let result = unsafe { libc::syscall(libc::SYS_statx, dirfd, path, flags, mask, out) };
     if result == 0 && OMIT_MOUNT_ID.try_with(|omit| omit.get()).unwrap_or(false) {
@@ -1001,8 +1014,8 @@ fn missing_statx_mount_identity_rejects_construction_and_lookup() {
     );
 }
 
-fn in_unprivileged_xattr_child() -> bool {
-    const CHILD: &str = "BOXLITE_FS_XATTR_ACCESS_CHILD";
+pub(super) fn in_unprivileged_child() -> bool {
+    const CHILD: &str = "BOXLITE_FS_ACCESS_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let name = std::thread::current().name().unwrap().to_owned();
         let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1029,7 +1042,7 @@ fn in_unprivileged_xattr_child() -> bool {
 
 #[test]
 fn xattr_writes_on_write_only_files_preserve_reads_directories_and_symlink_safety() {
-    if !in_unprivileged_xattr_child() {
+    if !in_unprivileged_child() {
         return;
     }
     let directory = Directory::new();
@@ -1078,7 +1091,7 @@ fn xattr_writes_on_write_only_files_preserve_reads_directories_and_symlink_safet
 
 #[test]
 fn xattr_writes_on_unreadable_directories_remain_bound_after_name_replacement() {
-    if !in_unprivileged_xattr_child() {
+    if !in_unprivileged_child() {
         return;
     }
     let directory = Directory::new();
@@ -1110,4 +1123,67 @@ fn xattr_writes_on_unreadable_directories_remain_bound_after_name_replacement() 
         fs.getxattr(ctx(), replacement, c"user.write", 0),
         libc::ENODATA,
     );
+}
+
+#[test]
+fn directory_range_confines_walks_to_the_shared_subtree() {
+    use std::os::unix::fs::symlink;
+
+    let dir = Directory::new();
+    fs::write(dir.0.join("plain"), b"inside").unwrap();
+    symlink("/etc/passwd", dir.0.join("escape")).unwrap();
+    symlink("plain", dir.0.join("within")).unwrap();
+    let root = File::open(&dir.0).unwrap();
+    let fd = root.as_raw_fd();
+    let plain = &CString::new("plain").unwrap();
+    let parent = &CString::new("..").unwrap();
+    let escape = &CString::new("escape").unwrap();
+    let within = &CString::new("within").unwrap();
+
+    // Reads and writes beneath the directory succeed.
+    let mut plain_file =
+        openat_beneath(fd, plain, libc::O_RDWR, 0).expect("in-range open must succeed");
+    plain_file.write_all(b"!").unwrap();
+    // The single byte replaces the first character: the write landed on the
+    // host file beneath the directory.
+    assert_eq!(fs::read(dir.0.join("plain")).unwrap(), b"!nside");
+    // Internal symlink targets still resolve while they stay beneath.
+    let mut within_file =
+        openat_beneath(fd, within, libc::O_RDONLY, 0).expect("internal symlink must resolve");
+    let mut buf = String::new();
+    within_file.read_to_string(&mut buf).unwrap();
+    assert_eq!(buf, "!nside");
+    // Parent traversal and escape symlinks are rejected outright.
+    error(openat_beneath(fd, parent, libc::O_PATH, 0), libc::EXDEV);
+    error(openat_beneath(fd, escape, libc::O_RDONLY, 0), libc::EXDEV);
+}
+
+#[test]
+fn from_dir_fd_validates_type_and_defers_permissions_to_operations() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !in_unprivileged_child() {
+        return;
+    }
+    let dir = Directory::new();
+    let regular = File::create(dir.0.join("regular")).unwrap();
+    error(PassthroughFs::from_dir_fd(regular), libc::ENOTDIR);
+
+    let delivered = File::open(&dir.0).unwrap();
+    let fs = PassthroughFs::from_dir_fd(delivered).unwrap();
+    let entry = fs.lookup(ctx(), 1, c"regular").unwrap();
+    assert!(entry.attr.st_mode & libc::S_IFMT == libc::S_IFREG);
+
+    // O_PATH pins the directory without granting traversal rights.
+    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o000)).unwrap();
+    let path = CString::new(dir.0.as_os_str().as_bytes()).unwrap();
+    // SAFETY: a plain O_PATH open of a NUL-terminated path we own.
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH) };
+    assert!(fd >= 0);
+    // SAFETY: open returned a fresh owned descriptor.
+    let unreadable = unsafe { File::from_raw_fd(fd) };
+    let backend = PassthroughFs::from_dir_fd(unreadable).unwrap();
+    let denied = backend.lookup(ctx(), 1, c"regular");
+    fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o700)).unwrap();
+    error(denied, libc::EACCES);
 }

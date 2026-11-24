@@ -77,6 +77,43 @@ A single box cannot mount the same canonical volume id more than once, even unde
 targets, or read-only modes. This is rejected with `InvalidArgument`. Different boxes may still
 mount the same id independently.
 
+### REST and `boxlite serve`
+
+The REST API exposes the same volume lifecycle:
+
+```bash
+curl -X POST -H 'Content-Type: application/json' -d '{"name":"workspace"}' \
+  http://127.0.0.1:7860/v1/volumes
+curl http://127.0.0.1:7860/v1/volumes
+curl http://127.0.0.1:7860/v1/volumes/<volume-id>
+curl -X DELETE 'http://127.0.0.1:7860/v1/volumes/<volume-id>?force=true'
+```
+
+Get and remove use the canonical id. Create-box mounts may use either id or name:
+
+```bash
+curl -X POST -H 'Content-Type: application/json' -d @request.json \
+  http://127.0.0.1:7860/v1/boxes
+```
+
+```json
+{
+  "image": "alpine:latest",
+  "mounts": [{
+    "type": "volume",
+    "source": "workspace",
+    "target": "/workspace",
+    "read_only": true,
+    "sub_path": "team/backend"
+  }]
+}
+```
+
+The legacy `volumes` array is still accepted, but a request cannot contain both non-empty
+`volumes` and `mounts`. REST does not accept host bind mounts: a path in a REST request names the
+server filesystem, not the caller filesystem. Create the volume on the server and mount it by id or
+name instead.
+
 ### Lifecycle, clone, and import
 
 Every persisted box configuration that references a volume prevents its deletion, including

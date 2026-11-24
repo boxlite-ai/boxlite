@@ -5,6 +5,8 @@
  */
 
 import { Module } from '@nestjs/common'
+import { SecretCredentialService } from './services/secret-credential.service'
+import { SecretCredentialController } from './controllers/secret-credential.controller'
 import { DataSource } from 'typeorm'
 import { BoxController } from './controllers/box.controller'
 import { BoxService } from './services/box.service'
@@ -111,6 +113,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     ]),
   ],
   controllers: [
+    SecretCredentialController,
     BoxController,
     RunnerController,
     PreviewController,
@@ -120,6 +123,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     CustomDomainMaintenanceController,
   ],
   providers: [
+    SecretCredentialService,
     SecretServerClient,
     CheckpointService,
     CheckpointArchiveStore,

@@ -1,7 +1,7 @@
 # Shared cloud operations
 
 Both cloud authentication modes use `https://api.boxlite.ai/mcp`, the same discovered tools, and this workflow.
-Only the credential and its granted permissions differ; never use BoxLite CLI or shell HTTP for these operations.
+Only the credential and its granted permissions differ. Lifecycle and execution use native MCP; the packaged file helper calls the existing MCP file tools programmatically.
 
 ## Create and execute
 
@@ -28,13 +28,66 @@ For incomplete output, retain the execution ID and inspect `getExecution`; never
 
 ## Files
 
-`uploadFiles` takes a base64 tar archive and destination; `downloadFiles` returns an archive.
-Exclude credentials, `.env*`, `.git`, private plugin state, caches, and persistent data unless explicitly requested.
-Reject unreviewed symlinks and special files in deployment sources.
+Use Python 3.9+ on the host and the exact configured MCP connection name and Box ID.
+Supply absolute paths on both ends. Keep archive bytes inside the transfer tools.
 
-Stay within discovered limits, currently 8 MiB of archive bytes; do not echo large base64 payloads to the user.
-Upload into a fresh, uniquely named release directory to keep application releases separate from persistent data.
-Small text files can use bounded execution with explicit argv; `read_file`, `write_file`, and `list_dir` are not BoxLite MCP tools.
+### Claude Code
+
+Use the BoxLite marketplace plugin's tools from the current session. For example:
+
+| Tool | Arguments |
+| --- | --- |
+| `mcp__boxlite__upload` | `{"connection":"boxlite-api","box_id":"BOX_ID","local_source":"/home/user/report.csv","remote_destination":"/workspace/report.csv"}` |
+| `mcp__boxlite__download` | `{"connection":"boxlite-api","box_id":"BOX_ID","remote_source":"/workspace/report.csv","local_destination":"/home/user/new-download"}` |
+
+Claude applies its current permission mode and rules to the requested operation, connection, Box and paths.
+Configure tool rules on these two transfer tools. An authorized directory transfer covers its contents.
+
+After authorization, the plugin runs Python for local archive I/O and calls the selected connection's `uploadFiles` or `downloadFiles` directly.
+Claude receives a short receipt. Claude Code can retain large downloads in its private session storage.
+
+The worker accepts a saved result only when it can identify a single matching download on this connection in the current session during the call. If the transfer tools or selected connection are unavailable, report that to the user.
+
+### Codex
+
+Use the packaged helper with the selected server in the Codex app-server configuration.
+Resolve `SKILL_DIR` to this installed skill.
+
+```sh
+python3 SKILL_DIR/scripts/transfer.py --host codex --server SELECTED_SERVER upload --box BOX_ID --source /absolute/reviewed-source --destination /workspace/new-release
+python3 SKILL_DIR/scripts/transfer.py --host codex --server SELECTED_SERVER download --box BOX_ID --source /workspace/new-release/. --destination /absolute/new-download
+```
+
+### Transfer results
+
+A successful transfer returns a receipt with `status: completed`. The Codex command also exits with code zero.
+
+Upload requires the existing server's `HTTP 204` acknowledgment; an empty or unexpected tool result leaves completion unknown.
+It makes one file-tool call and does not download files again or compute a checksum.
+
+For HTTP 403, check the selected connection's permissions. BoxLite Cloud requires `write:boxes` for both uploads and downloads.
+
+Invalid arguments, missing resources and Box state conflicts have specific messages. If a download exceeds the MCP response limit of 8 MiB, select fewer or smaller files.
+
+The helper never retries, changes credentials or leaves a transfer-ticket cache; after a failure, inspect possible destination effects before a new attempt.
+
+Uploads include the selected directory’s contents, including hidden files. Symbolic links travel as links, preserving their target text.
+
+Codex and Claude stop an upload before calling MCP if its tar archive would exceed 8 MiB, including headers and padding. This limit applies before Base64 encoding.
+
+Downloads preserve GNU sparse files from the Box. The helper writes the stored data ranges and recreates holes without imposing a limit on the file's logical size.
+
+Downloads require a new local directory, an existing parent and a filesystem that supports atomic directory placement.
+The helper writes with private permissions and places the directory at the requested path only after the full archive has been written.
+
+If the parent moved during placement, the helper reports that the download was written and the requested path changed.
+
+A guest source ending in `/.` downloads directory contents. Other paths retain the directory name.
+
+A single-file upload can name a destination file and follows the server's overwrite behavior.
+Uploads and downloads preserve only the owner's read, write and execute bits (`mode & 0700`). Downloads apply these permissions after writing the regular or sparse file.
+
+Guest mount paths such as `/tmp` may not support file transfer. Use a suitable rootfs path such as `/workspace`.
 
 ## Deploy and update
 

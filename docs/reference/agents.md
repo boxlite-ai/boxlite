@@ -33,8 +33,9 @@ and `SimpleBox`. Each SDK retains its error conventions.
 ### Failure contract
 
 Rust, Python, Node.js, the CLI and C calls on a local runtime run the operations listed in
-[OpenCode on a local runtime](#opencode-on-a-local-runtime). Go and remote
-runtimes return unsupported errors before agent execution.
+[OpenCode on a local runtime](#opencode-on-a-local-runtime). Rust and C can also use
+these operations over the Box REST API. Go returns unsupported errors before
+agent execution.
 
 | SDK | Error behavior |
 |---|---|
@@ -60,8 +61,8 @@ Rust, Python, Node.js, the CLI and C calls on a local runtime forward agents to 
 nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
 configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
 environment. Another OpenCode version fails with `Unsupported` once its service
-answers, or with `Execution` when it lacks the `opencode service` commands. Remote
-runtimes and Go return `Unsupported`. `agent.id()` returns the `ses_…`
+answers, or with `Execution` when it lacks the `opencode service` commands. Go
+returns `Unsupported`. `agent.id()` returns the `ses_…`
 session ID that `agents.get` accepts, including from another process.
 
 ```text
@@ -102,7 +103,7 @@ read receives it. Plain `next()` has no per-read cancellation.
 | `agents.get` | Reads a session by its `ses_…` ID, starting the service again after a Box restart |
 | `agent.send` | Admits the text with `queue` delivery under a BoxLite-chosen `msg_…` ID. A lost response is retried once with that ID; a second failure is a `Network` error naming the ID to read with `get_turn` |
 | `agent.get_turn`, `turn.state` | `get_turn` reads the turn now, among the newest 1,000 messages of the session (older turns, and IDs of messages that are not inputs, are `NotFound`); `turn.state` returns the snapshot taken when the handle was obtained. A turn is `queued` in the inbox; `running` or `waiting_input` until its run records an outcome; `completed`, `failed` or `cancelled` from that outcome; `unknown` when its execution was cut off and a later run took the next input |
-| `turn.wait` | Polls every 500 ms. A timeout, or an `unknown` turn, returns `InvalidState` and never interrupts |
+| `turn.wait` | Polls every 500 ms. A timeout, an `unknown` turn, or a completed, cancelled or failed turn without a recorded result returns `InvalidState`; it never interrupts |
 | `agent.events` | Live events of the session and of subagent sessions created while the stream is open; `cursor` is `None` and `after` is rejected. Events of the session itself that name an input in OpenCode's `inboxID` carry it as `turn_id`; subagent events have none. Opening the stream fails with `Network` after 30 s without a response. The stream ends with one error, after any events that arrived before it: `Network` when the native stream ends or fails, `Internal` for an event that is not UTF-8 JSON or a subagent session ID that OpenCode would not mint, `ResourceExhausted` for an event over 1 MiB or a 1,001st subagent session |
 | `agent.config`, `agent.capabilities` | The session model; the operations above, with unknown limits as `None` |
 
@@ -195,12 +196,21 @@ These records define SDK data types. The
 [REST design](../contributing/investigations/2026-10-28-agent-rest-api-design.md)
 maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
-headers. The OpenAPI contract specifies nine agent HTTP operations, retry-key forwarding,
-SSE events, and HTTP 204 close/interrupt responses. Runtime routes and the REST
-client are unavailable. The OpenAPI components
-define strict request objects and additive response records, including fractional
-retention durations; implementations must validate known response fields while
-accepting additional server fields.
+headers. The Rust REST client forwards create, snapshot, turn, and control calls
+to an existing server. Response config accepts additional fields and validates
+known types; request config rejects unknown fields. Close and interrupt require
+HTTP 204. The remote `requests()` method is unsupported. The Rust client opens agent and turn SSE streams before returning, ignores
+comment heartbeats, validates parent IDs, and bounds event size and buffering.
+On an OpenCode agent subscription, a subagent event carries the subscribed
+agent's ID in the outer `agent_id` field. Its native payload identifies the
+child session, and its outer `turn_id` is null.
+After 30 seconds without stream data (two heartbeat intervals), the client reports
+a network error and closes the subscription. Dropping the stream releases the
+connection without cancelling the turn. Agent writes return redirects as errors
+and make one attempt. A turn result is valid for `wait()` only when its status
+matches a `completed`, `failed`, or `cancelled` turn snapshot. An `unknown`
+turn returns `InvalidState` even when the server includes a result.
+Server handlers are unavailable.
 
 ### Go JSON mapping
 

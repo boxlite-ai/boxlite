@@ -581,7 +581,8 @@ There are no automatic transfer retries or redirects. Transfer, authentication,
 timeout, and invalid-response failures return HTTP 503 with
 `code: secret_store_unavailable` before any box insertion; plaintext fallback is
 never attempted. Logs contain box ID, count, result, and latency, without bodies
-or upstream errors. A later insert failure can leave encrypted orphan secrets.
+or upstream errors. A later insert failure can leave encrypted orphan secrets;
+bounded cleanup requires the separate [lifecycle contract tracked in #2865](https://github.com/boxlite-ai/boxlite/issues/2865).
 
 Enable only on staging after the BUI-1385 credential handoff is deployed in an
 all-v2 environment. Flipping this flag does not migrate existing inline boxes or
@@ -590,6 +591,69 @@ of unsupported stored representations and v0 dispatch.
 
 Design: [API forwarding](https://github.com/boxlite-ai/boxlite/issues/2736) and
 [Secret Server write contract](https://github.com/boxlite-ai/boxlite/issues/2626).
+
+### One-time secret credentials (staging)
+
+With `SECRET_SERVER_ENABLED=true`, v2 CREATE_BOX sends a `secretCredential`
+containing a `bxsc_` token and `expiresAt`; its `secrets` array contains metadata
+without values. The token uses 32 random bytes and expires 15 minutes after issue.
+Boxes without secrets receive no credential. START_BOX reuses runtime state.
+
+The `secret_credential` table stores SHA-256 of the complete token, bound to the
+runner, Box, organization, and granted secret IDs. The job payload temporarily
+stores the bearer token; COMPLETED and FAILED updates remove it in the same
+transaction. Run migration `1794873600000` before deploying the API.
+
+`POST /internal/v1/credentials/introspect` accepts `{token, runner_id}`.
+One conditional PostgreSQL UPDATE checks the runner, expiry and unused state
+while consuming the credential. Success returns `active`, `credential_id`,
+`runner_id`, `box_id`, `organization_id`, `grants: [{secret_id}]`, and `expires_at`.
+Invalid requests return only `{active:false}`; a wrong runner does not consume
+the credential. A second valid request is inactive and logs the credential ID
+as a replay warning. Recording logical Box deletion revokes its credentials in
+that same transaction, including deletion during checkpoint recovery. Physical
+deletion also cascades to credentials. Issuance locks the Box row and checks its
+runner, organization and deletion state, so deletion cannot leave a newly issued
+credential behind. Credential insertion and CREATE_BOX job insertion share one
+transaction; a rejected duplicate job leaves no extra credential. The `box_id`
+index bounds revocation and foreign-key cascade lookups to the target Box.
+
+Transactional job creation writes only to PostgreSQL. CREATE_BOX, checkpoint
+export/import, and Box migration callers notify the runner after successful
+commit, when its job is visible and Box locks are released. Rollback sends no
+notification. Redis notification is best effort; failure or a process crash
+between commit and notification leaves a durable job for fallback polling.
+Nontransactional job creation notifies after its insert commits.
+
+The route has no caller authentication in this MVP and is excluded from OpenAPI.
+GCP's external backend denies decoded internal namespace paths using Cloud Armor; only the
+private backend passes the exact root route without adding `/api`.
+AWS's public ALB denies internal paths with WAF, including dashboard origin traffic.
+Both policies match decoded, lowercase `^(?:/api)?/internal(?:/|$)` paths, preserving
+public Box routes such as `/api/v1/boxes/internal/start`. Reconcile the AWS bootstrap
+deploy policy before rollout so it can manage the stage's credential ingress ACL.
+Local deployments must keep the listener on a private or loopback network.
+These policies must deploy before enabling Secret Server.
+
+Before merge, verify public rejection on API and dashboard hosts, including `/api`
+aliases, mixed case, encoded paths and spoofed Host headers; verify private
+redemption of a fresh token. Local tests do not establish deployed isolation.
+Observe staging queue delays before rollout: delays beyond 15 minutes fail creation.
+
+The credential expiry limits redemption, not the lifetime of an already fetched
+secret. A token that expires before redemption fails creation; there is no reissue
+or fetch retry. START_BOX after stop/resume reuses the existing local runtime
+configuration; it does not fetch updated secret values or issue another credential.
+This requires successful initial fetch and retained runtime state. This API change
+alone does not implement Runner-side fetching. Checkpoint creation rejects Boxes
+with secrets, so backup/restore through that API is unsupported for them. V2
+recoverBox is also unsupported; these paths must not be described as secret refresh.
+
+V0 creation and recovery reject references,
+and reject any secrets while the flag is enabled. V2 rejects inline secrets when
+enabled and references when disabled; migrate inline Boxes explicitly before rollout.
+Never log bearer tokens, hashes or grants. Caller authentication and expiration
+cleanup remain outside this MVP; see [design #2735](https://github.com/boxlite-ai/boxlite/issues/2735).
 
 ### Hosted routes
 

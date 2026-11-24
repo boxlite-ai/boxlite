@@ -130,3 +130,44 @@ test('a failing AWS call surfaces the CLI stderr rather than a generic failure',
   }
   await assert.rejects(invoke(run), (error: any) => error instanceof AwsBootstrapError && /AccessDenied: nope/.test(error.message))
 })
+
+test('AWS bootstrap reconciles stage-scoped credential ACL permissions', async () => {
+  let policy: any
+  await bootstrapAws({
+    repo: 'boxlite-ai/boxlite',
+    stage: 'dev',
+    accountId: '123456789012',
+    region: 'us-west-2',
+    log: () => {},
+    run: async (_command, args) => {
+      if (args[0] === 'iam' && args[1] === 'put-role-policy') {
+        policy = JSON.parse(args[args.indexOf('--policy-document') + 1])
+      }
+      return { code: 0, stdout: args[1] === 'list-policy-versions' ? '{"Versions":[]}' : '{}', stderr: '' }
+    },
+  })
+  for (const action of [
+    'CreateWebACL',
+    'GetWebACL',
+    'UpdateWebACL',
+    'DeleteWebACL',
+    'AssociateWebACL',
+    'GetWebACLForResource',
+    'ListResourcesForWebACL',
+    'ListTagsForResource',
+    'TagResource',
+    'UntagResource',
+  ]) {
+    const statements = policy.Statement.filter(
+      (s: any) => s.Effect === 'Allow' && ([] as string[]).concat(s.Action).includes(`wafv2:${action}`),
+    )
+    assert.ok(statements.length, `missing wafv2:${action}`)
+    assert.deepEqual(
+      statements.flatMap((s: any) => s.Resource),
+      ['arn:aws:wafv2:us-west-2:123456789012:regional/webacl/boxlite-dev-internal-routes/*'],
+    )
+  }
+  const detach = policy.Statement.find((s: any) => s.Action === 'wafv2:DisassociateWebACL')
+  assert.equal(detach.Resource, '*')
+  assert.deepEqual(detach.Condition, { StringEquals: { 'aws:RequestedRegion': 'us-west-2' } })
+})

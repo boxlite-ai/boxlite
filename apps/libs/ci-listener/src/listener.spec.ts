@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ExecutionJournal } from './execution/journal'
-import { ExecutionScope, decodeScope, scopeKey } from './execution/model'
+import { ExecutionScope, decodeAllocation, decodeScope, scopeKey } from './execution/model'
 import { Listener, ListenerBackend, ListenerHost } from './listener'
 import { JitRegistration } from './runners'
 import { WorkerPool } from './execution/pool'
@@ -508,7 +508,16 @@ describe('CI shared Listener orchestration', () => {
     }
     await runUntil(created.promise)
     expect(create).toHaveBeenCalledTimes(64)
-    expect((await inspectJournal(state, lease)).allocations.size).toBe(64)
+    // The listener has stopped renewing; post-shutdown assertions must tolerate expiry.
+    await db.transaction(namespace, async (tx) => {
+      const expiry = (await tx.get('@lease', true))!
+      await tx.put({ ...expiry, version: randomUUID(), payload: { until: 0 } }, expiry.version)
+    })
+    const allocations = await db.transaction(namespace, async (tx) =>
+      (await tx.page('', 65, 'worker/')).map((row) => decodeAllocation(row.payload)),
+    )
+    expect(allocations).toHaveLength(64)
+    expect(new Set(allocations.map((row) => row.name)).size).toBe(64)
   })
   it('reuses each of 64 same-run notice verifications across twelve scheduler pumps', async () => {
     const pumped = deferred()
