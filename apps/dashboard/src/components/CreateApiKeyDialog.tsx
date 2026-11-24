@@ -56,7 +56,7 @@ export function CreateApiKeyDialog(props: CreateApiKeyDialogProps) {
 }
 
 function ApiKeyForm({
-  availablePermissions,
+  availablePermissions: grantedPermissions,
   organizationId,
   organizationName,
   permissionsStatus = 'ready',
@@ -80,9 +80,19 @@ function ApiKeyForm({
   const initialized = useRef(false)
   const generation = useRef(0)
   const pending = useRef(false)
+  const availablePermissions = [...new Set(API_KEY_PERMISSION_GROUPS.flatMap((group) => group.permissions))].filter(
+    (permission) => grantedPermissions.includes(permission),
+  )
   const permissionsSignature = [...availablePermissions].sort().join(',')
-  const preset = API_KEY_ACCESS_PRESETS.find((item) => item.id === presetId)
   const invalid = selected.filter((permission) => !availablePermissions.includes(permission))
+  const selectedAvailable = availablePermissions.filter((permission) => selected.includes(permission))
+  const allSelected =
+    permissionsStatus === 'ready' &&
+    availablePermissions.length > 0 &&
+    selectedAvailable.length === availablePermissions.length &&
+    invalid.length === 0
+  const effectivePresetId = presetId === 'all' && !allSelected ? 'custom' : presetId
+  const preset = API_KEY_ACCESS_PRESETS.find((item) => item.id === effectivePresetId)
   const canSubmit = Boolean(
     organizationId &&
     name.trim() &&
@@ -238,9 +248,16 @@ function ApiKeyForm({
           <fieldset className="space-y-2" disabled={submitting} aria-describedby={`${id}-permission-help`}>
             <legend className="form-field-label mb-2">Access</legend>
             <Select
-              value={presetId}
+              value={effectivePresetId}
               disabled={submitting || permissionsStatus !== 'ready'}
               onValueChange={(value) => {
+                if (value === 'all') {
+                  if (permissionsStatus !== 'ready' || !availablePermissions.length) return
+                  setPresetId(value)
+                  setSelected([...availablePermissions])
+                  setCustomize(false)
+                  return
+                }
                 if (value === 'custom') {
                   setPresetId(value)
                   setCustomize(true)
@@ -275,15 +292,25 @@ function ApiKeyForm({
                     </SelectItem>
                   )
                 })}
+                <SelectItem value="all" disabled={!availablePermissions.length}>
+                  All available permissions
+                </SelectItem>
                 <SelectItem value="custom">Custom access</SelectItem>
               </SelectContent>
             </Select>
             <p id={id + '-permission-help'} className="text-body text-muted-foreground">
-              {preset?.description ?? 'Choose specific operations for this key.'}
+              {effectivePresetId === 'all'
+                ? 'Selects every permission you can currently grant in this organization.'
+                : (preset?.description ?? 'Choose specific operations for this key.')}
             </p>
             <div className="flex items-center justify-between gap-3">
               <span className="text-meta text-muted-foreground" aria-live="polite">
-                {selected.length} permission{selected.length === 1 ? '' : 's'} selected
+                {permissionsStatus === 'ready' && (
+                  <>
+                    {selectedAvailable.length}/{availablePermissions.length} permissions selected
+                    {allSelected && <span className="block">All available permissions selected</span>}
+                  </>
+                )}
               </span>
               <AsciiButton
                 type="button"
@@ -319,6 +346,7 @@ function ApiKeyForm({
                     (p) => availablePermissions.includes(p) || selected.includes(p),
                   )
                   if (!options.length) return null
+                  const availableOptions = options.filter((p) => availablePermissions.includes(p))
                   return (
                     <details
                       key={group.name}
@@ -335,9 +363,12 @@ function ApiKeyForm({
                     >
                       <summary className="cursor-pointer text-body font-medium py-1 focus-visible:outline focus-visible:outline-2">
                         {group.name}
-                        <span className="ml-2 text-meta font-normal text-muted-foreground">
-                          {options.filter((p) => selected.includes(p)).length} selected
-                        </span>
+                        {permissionsStatus === 'ready' && (
+                          <span className="ml-2 text-meta font-normal text-muted-foreground">
+                            {availableOptions.filter((p) => selected.includes(p)).length}/{availableOptions.length}{' '}
+                            selected
+                          </span>
+                        )}
                       </summary>
                       <fieldset className="space-y-3 pt-3" aria-label={group.name}>
                         {options.map((permission) => (
