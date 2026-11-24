@@ -106,7 +106,7 @@ async function checkSnapshot(job: Job, manifest: Manifest, files: SnapshotFile[]
       mkdirSync(dirname(dest), { recursive: true })
       await pipeline(job.ctx.blobs.read(job.app.id, f.sha256), createWriteStream(dest))
     }
-    const result = await Promise.resolve(checkLocal(dir, manifest))
+    const result = await checkLocal(dir, manifest, { sourceCredentials: 'warn' })
     for (const w of result.warnings) await job.log(`warning: ${w.message}`)
     if (!result.ok || result.errors.length) {
       throw fail(

@@ -90,6 +90,43 @@ test('checkProject reports a missing boxlite.toml', async () => {
   assert.equal(result.errors[0]?.rule, 'missing_manifest')
 })
 
+test('checkProject rejects credentials across upload read boundaries and accepts ignored and harmless files', async () => {
+  const token = `ghp_${'Qa1'.repeat(12)}`
+  const root = await project({
+    'boxlite.toml': BASE_TOML,
+    'config.txt': `${' '.repeat(17 * 64 * 1024 - 2)}${token}`,
+    '.env.local': token,
+    'ordinary.txt': `BUILD_TEST_TARGET and bxl_app_ are documentation. a0_test_${'Q'.repeat(39)} is a near match.`,
+  })
+  await writeFile(join(root, 'image.bin'), Buffer.from([0, 1, 255, 16]))
+  await writeFile(join(root, 'platform.bin'), Buffer.from(`\0a0_test_${'Q'.repeat(40)}\0`))
+  const { result } = await checkProject(root, 'main')
+  assert.equal(result.ok, false)
+  assert.deepEqual(
+    result.errors.map(({ file, rule }) => [file, rule]),
+    [
+      ['config.txt', 'secret_file'],
+      ['platform.bin', 'secret_file'],
+    ],
+  )
+  assert.ok(result.errors[0]?.message.includes('GitHub'))
+  assert.equal(JSON.stringify(result).includes(token), false)
+})
+
+test('checkProject hides credential-shaped filenames in scanner and migration diagnostics', async () => {
+  const token = `ghp_${'Qa1'.repeat(12)}`
+  const root = await project({
+    'boxlite.toml': `${BASE_TOML}[database]\n`,
+    [`migrations/${token}.sql`]: 'select 1;',
+  })
+  const { result } = await checkProject(root, 'main')
+  assert.equal(JSON.stringify(result).includes(token), false)
+  assert.deepEqual(
+    result.errors.map(({ rule }) => rule),
+    ['migration_name', 'secret_file'],
+  )
+})
+
 test('checkLocal flags secret-looking content, missing static dir, bad migrations', async () => {
   const toml = 'name = "crm"\n[runtime]\nimage = "node"\n[[service]]\nname = "site"\nstatic = "public/"\n[database]\n'
   const root = await project({
@@ -107,12 +144,17 @@ test('checkLocal flags secret-looking content, missing static dir, bad migration
   assert.equal(result.ok, false)
   assert.deepEqual(
     result.errors.map((e) => `${e.file}:${e.rule}`),
-    ['boxlite.toml:path_missing', 'migrations/0001_init.sql:migration_duplicate', 'migrations/init.sql:migration_name'],
+    [
+      'boxlite.toml:path_missing',
+      'migrations/0001_init.sql:migration_duplicate',
+      'migrations/init.sql:migration_name',
+      'config/aws.txt:secret_file',
+      'keys/server.key:secret_file',
+    ],
   )
-  const secrets = result.warnings.filter((w) => w.rule === 'secret_file').map((w) => w.message)
-  assert.equal(secrets.length, 2)
-  assert.match(secrets[0]!, /config\/aws\.txt .*AWS access key/)
-  assert.match(secrets[1]!, /keys\/server\.key .*private key and is not excluded/)
+  const secrets = result.errors.filter((e) => e.rule === 'secret_file')
+  assert.match(secrets[0]!.message, /AWS access key/)
+  assert.match(secrets[1]!.message, /private key/)
 })
 
 test('static path missing is only a warning when a build step will produce it', async () => {

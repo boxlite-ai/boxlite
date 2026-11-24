@@ -10,6 +10,14 @@ Select the App with `--app <name>`, an existing `.boxlite/link.json`, or `BOXLIT
 `deploy` commands.
 `boxlite-app docs` includes the Agent guide and command reference offline.
 
+`check`, `plan`, and `deploy` reject recognized credentials in included source paths or file contents.
+Remove the credential, rename the file, or exclude it in `.boxliteignore`. Use App or organization
+secrets for runtime credentials.
+
+The upload API enforces the same rules and requests older files again when they need a scan.
+If an upload reports missing files after a server upgrade, rerun
+`boxlite-app deploy` to start a fresh upload. Previously verified files are reused.
+
 Build and test from the repository root:
 
 ```sh

@@ -10,7 +10,13 @@ async function check(ctx: Ctx, opts: { online?: boolean }): Promise<void> {
   const checked = await checkProject(ctx.cwd, ctx.envName)
   let result: CheckResult = checked.result
 
-  if (opts.online && checked.manifest && checked.upload && checked.source !== null) {
+  if (
+    opts.online &&
+    checked.manifest &&
+    checked.upload &&
+    checked.source !== null &&
+    !result.errors.some((e) => e.rule === 'secret_file')
+  ) {
     const plan = await (
       await ctx.appApi()
     ).plan(

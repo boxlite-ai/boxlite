@@ -1,6 +1,7 @@
 import {
   checkProject,
   MicrocloudError,
+  type CheckLocalOptions,
   type CheckResult,
   type Manifest,
   type MigrationFile,
@@ -35,8 +36,11 @@ export function invalidManifestError(result: CheckResult, printed = false): Micr
 }
 
 /** Runs the local checks; prints warnings, and throws `invalid_manifest` (exit 7) on errors. */
-export async function requireCheck(ctx: Ctx): Promise<CheckedProject> {
-  const checked = await checkProject(ctx.cwd, ctx.envName)
+export async function requireCheck(
+  ctx: Ctx,
+  sourceCredentials?: CheckLocalOptions['sourceCredentials'],
+): Promise<CheckedProject> {
+  const checked = await checkProject(ctx.cwd, ctx.envName, { sourceCredentials })
   if (!checked.result.ok || !checked.manifest || !checked.upload || checked.source === null) {
     if (!ctx.json) for (const line of checkLines(checked.result)) ctx.out.line(line)
     throw invalidManifestError(checked.result, !ctx.json)
@@ -54,7 +58,7 @@ export async function requireCheck(ctx: Ctx): Promise<CheckedProject> {
 /** The local project when it is valid, else null; for commands that only use it to sharpen output. */
 export async function readLocalProject(ctx: Ctx): Promise<CheckedProject | null> {
   try {
-    const checked = await checkProject(ctx.cwd, ctx.envName)
+    const checked = await checkProject(ctx.cwd, ctx.envName, { sourceCredentials: 'warn' })
     if (!checked.manifest || !checked.upload || checked.source === null) return null
     return {
       manifest: checked.manifest,
