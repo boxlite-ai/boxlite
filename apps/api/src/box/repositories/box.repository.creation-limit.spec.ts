@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { performance } from 'node:perf_hooks'
 import { FindOperator } from 'typeorm'
-import { BoxRepository } from './box.repository'
+import { BoxRepository, CREATION_ADMISSION_LOCK_NAMESPACE } from './box.repository'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import {
@@ -67,7 +68,7 @@ function expectAdmissionLock(entityManager: ReturnType<typeof makeEntityManager>
   const [sql, params] = lockCalls[0] as [string, unknown[]]
   expect(sql.indexOf("set_config('lock_timeout', $1, true)")).toBeLessThan(sql.indexOf('pg_advisory_xact_lock($2'))
   expect(sql.lastIndexOf('reset_val')).toBeGreaterThan(sql.indexOf('pg_advisory_xact_lock($2'))
-  expect(params).toEqual(['5000ms', expect.any(Number), organizationId])
+  expect(params).toEqual(['5000ms', CREATION_ADMISSION_LOCK_NAMESPACE, organizationId])
 }
 
 describe('BoxRepository creation admission', () => {
@@ -78,8 +79,9 @@ describe('BoxRepository creation admission', () => {
     const onPersist = jest.fn().mockResolvedValue(undefined)
     const afterInsert = jest.fn().mockResolvedValue(undefined)
 
-    await boxRepository.insert(entity, 2, onPersist, initialize, afterInsert)
+    await boxRepository.insert(entity, 100, onPersist, initialize, afterInsert)
 
+    expectAdmissionLock(entityManager, entity.organizationId)
     expect(initialize).toHaveBeenCalledWith(entityManager)
     expect(onPersist).toHaveBeenCalledWith(entityManager, entity)
     expect(afterInsert).toHaveBeenCalledWith(entityManager)
@@ -120,6 +122,79 @@ describe('BoxRepository creation admission', () => {
       BoxState.ARCHIVING,
       BoxState.ARCHIVED,
     ])
+  })
+
+  it.each(['onPersist', 'initialize', 'afterInsert'])('keeps a create with just %s exclusive', async (callback) => {
+    const { boxRepository, entityManager } = makeRepository()
+    const entity = box()
+    const persist = jest.fn().mockResolvedValue(undefined)
+    await boxRepository.insert(
+      entity,
+      100,
+      callback === 'onPersist' ? persist : undefined,
+      callback === 'initialize' ? persist : undefined,
+      callback === 'afterInsert' ? persist : undefined,
+    )
+    expect(persist).toHaveBeenCalledTimes(1)
+    expectAdmissionLock(entityManager, entity.organizationId)
+  })
+
+  it.each([99, 100.5, Infinity, Number.MAX_SAFE_INTEGER + 1])('uses the exclusive path for limit %s', async (limit) => {
+    const { boxRepository, entityManager } = makeRepository()
+    const entity = box()
+    await boxRepository.insert(entity, limit)
+    expectAdmissionLock(entityManager, entity.organizationId)
+  })
+
+  it.each([
+    { count: 92, limit: 100, attempts: 1 },
+    { count: 93, limit: 200, attempts: 2 },
+    { count: 100, limit: 150, attempts: 2 },
+    { count: 100, limit: 200, attempts: 1 },
+    { count: 200, limit: 400, attempts: 1 },
+    { count: Number.MAX_SAFE_INTEGER - 9, limit: Number.MAX_SAFE_INTEGER, attempts: 2 },
+    { count: Number.NaN, limit: 100, attempts: 2 },
+  ])('uses $attempts admission transactions for $count counted of $limit', async ({ count, limit, attempts }) => {
+    const { boxRepository, entityManager, transaction } = makeRepository(count)
+    await boxRepository.insert(box(), limit)
+    expect(transaction).toHaveBeenCalledTimes(attempts)
+    expect(entityManager.query).toHaveBeenCalledTimes(attempts + 1)
+    expect(entityManager.count).toHaveBeenCalledTimes(attempts)
+    expect(entityManager.insert).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares one lock budget across the lane, shared key, and fallback without charging the count', async () => {
+    const { boxRepository, entityManager } = makeRepository(99)
+    const clock = jest.spyOn(performance, 'now')
+    for (const ms of [0, 1200, 1200, 3100, 9000, 9001]) clock.mockReturnValueOnce(ms)
+
+    try {
+      await boxRepository.insert(box(), 100)
+      const calls = entityManager.query.mock.calls as Array<[string, [string, number, string]]>
+      expect(calls.map(([, params]) => params[0])).toEqual(['5000ms', '3800ms', '1900ms'])
+      expect(calls[0][0]).toContain('pg_advisory_xact_lock($2')
+      expect(calls[0][1][1]).toBe(0x43525000)
+      expect(calls[1][0]).toContain('pg_advisory_xact_lock_shared($2')
+      expect(calls[1][1][1]).toBe(CREATION_ADMISSION_LOCK_NAMESPACE)
+      expect(calls[2][0]).toContain('pg_advisory_xact_lock($2')
+      expect(calls[2][1][1]).toBe(CREATION_ADMISSION_LOCK_NAMESPACE)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('does not start another lock wait once the admission budget is exhausted', async () => {
+    const { boxRepository, entityManager, transaction } = makeRepository()
+    const clock = jest.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(5000)
+
+    try {
+      await expect(boxRepository.insert(box(), 100)).rejects.toBeInstanceOf(BoxCreationAdmissionUnavailableError)
+      expect(entityManager.query).toHaveBeenCalledTimes(1)
+      expect(entityManager.count).not.toHaveBeenCalled()
+      expect(transaction).toHaveBeenCalledTimes(1)
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   it('rejects at the limit before persistence or post-commit side effects', async () => {
@@ -179,12 +254,12 @@ describe('BoxRepository creation admission', () => {
     expect(entityManager.insert).not.toHaveBeenCalled()
   })
 
-  it('propagates a lock timeout raised while persisting instead of reporting admission contention', async () => {
+  it.each([3, 100])('propagates a persistence lock timeout at limit %d as the original error', async (limit) => {
     const { boxRepository, entityManager } = makeRepository(0)
     const rowLockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
     entityManager.insert.mockRejectedValue(rowLockTimeout)
 
-    const error = await boxRepository.insert(box(), 3).catch((caught) => caught)
+    const error = await boxRepository.insert(box(), limit).catch((caught) => caught)
 
     expect(error).not.toBeInstanceOf(BoxCreationAdmissionUnavailableError)
     expect(error).toBe(rowLockTimeout)

@@ -35,6 +35,7 @@ import {
 @Index('box_runnerid_idx', ['runnerId'])
 @Index('box_runner_state_idx', ['runnerId', 'state'])
 @Index('box_organizationid_idx', ['organizationId'])
+@Index('box_creation_quota_idx', { synchronize: false })
 @Index('box_app_environment_idx', ['organizationId', 'appId', 'environmentId'])
 @Check(
   'box_app_owner',
