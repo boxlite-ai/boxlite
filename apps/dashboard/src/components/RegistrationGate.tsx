@@ -163,7 +163,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
           {legal && (
             <Button
               variant="quiet"
-              className="mx-auto mt-2 flex w-fit"
+              className="mt-2 h-10 w-full"
               disabled={submitting}
               onClick={() => navigate(RoutePath.LOGOUT, { replace: true })}
             >
