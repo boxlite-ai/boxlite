@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -120,12 +121,27 @@ func checkStatus(resp *http.Response) error {
 
 // Spec fetches GET /sv/v1/spec.
 func (c *Client) Spec(ctx context.Context) (*api.SpecResponse, error) {
+	return c.PhaseSpec(ctx, "", nil)
+}
+
+// PhaseSpec requests a build, runtime, or boot projection. Recovery pins the live identity on both fetches.
+func (c *Client) PhaseSpec(ctx context.Context, phase string, recovery *api.RecoveryTarget) (*api.SpecResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	req, err := c.request(ctx, http.MethodGet, "/sv/v1/spec", nil)
 	if err != nil {
 		return nil, err
 	}
+	query := req.URL.Query()
+	if phase != "" {
+		query.Set("phase", phase)
+	}
+	if recovery != nil {
+		query.Set("operation", strconv.Itoa(recovery.Operation))
+		query.Set("version", strconv.Itoa(recovery.SpecVersion))
+		query.Set("box", recovery.Box)
+	}
+	req.URL.RawQuery = query.Encode()
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err

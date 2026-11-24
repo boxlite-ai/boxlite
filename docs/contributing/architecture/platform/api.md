@@ -210,6 +210,17 @@ in the configured GCS/S3 bucket. Neon remains the application database provider,
 
 Volume file operations from the CLI and Console start the Box if it is asleep.
 
+Deployed builds receive `[variables]` and the App's BoxLite identifiers. Services
+also receive resolved `[secrets]` and the managed `DATABASE_URL` when configured.
+
+Supervisor protocol 2 supports ordinary publishes and cold wake from a complete
+release directory. Live configuration changes, rollback and missing release
+recovery require protocol 3.
+
+Recovery verifies that the Box token belongs to the active Box and reuses the
+source of the live release. The Supervisor starts services only after receiving
+an explicit runtime response for the selected Spec.
+
 ```mermaid
 sequenceDiagram
     participant Client as CLI or Console
