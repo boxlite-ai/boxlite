@@ -1,5 +1,5 @@
 use super::{ControlMount, MountState};
-use crate::vmm::vmm_socket::{ControlOp, ControlReply, MAX_FRAME};
+use crate::vmm::vmm_socket::{ControlOp, ControlReply, MAX_MOUNT_BODY};
 use boxlite_vmm::lookup_aggregate;
 use std::fs::File;
 use std::io;
@@ -94,7 +94,7 @@ impl Registry {
                 // counter includes JSON escaping without copying existing records.
                 let cost = record_cost(&mount)?;
                 let envelope = br#"{"Ok":{"mounts":[]}}"#.len();
-                if self.list_bytes + cost + envelope > MAX_FRAME as usize {
+                if self.list_bytes + cost + envelope > MAX_MOUNT_BODY {
                     return Err(errno(libc::ENOSPC));
                 }
                 // Reserve memory before publication so the remaining record insertion
