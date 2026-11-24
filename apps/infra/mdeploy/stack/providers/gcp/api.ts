@@ -78,15 +78,15 @@ const CLOUD_SQL_VOLUME = 'cloudsql'
  *
  * The first rule also passes the MCP endpoint and its RFC 9728 metadata, the
  * routes `apps/api` keeps outside the prefix (`MCP_ROOT_ROUTES`) so that the
- * public URL is the OAuth resource. Exact matches, so every other root path
- * still gains `/api`.
+ * public URL is the OAuth resource. Each balancer can add exact root paths
+ * that its backend also serves without the prefix.
  *
  * `prefixMatch: '/'` rather than a `/*` path rule: a path rule's wildcard is
  * documented only after a non-empty prefix, and a rewrite replaces exactly the
  * portion that matched — so `/` becomes `/api/` and `/boxes` becomes
  * `/api/boxes`.
  */
-export const apiPrefixRouteRules = (service: $util.Input<string>) => [
+export const apiPrefixRouteRules = (service: $util.Input<string>, ...extraMatches: { fullPathMatch: string }[]) => [
   {
     priority: 1,
     matchRules: [
@@ -94,6 +94,7 @@ export const apiPrefixRouteRules = (service: $util.Input<string>) => [
       { prefixMatch: '/api/' },
       { fullPathMatch: '/mcp' },
       { fullPathMatch: '/.well-known/oauth-protected-resource/mcp' },
+      ...extraMatches,
     ],
     service,
   },
@@ -845,14 +846,9 @@ export const gcpApiProvider =
         {
           name: API_PATH_MATCHER,
           defaultService: internalBackend.id,
-          routeRules: [
-            {
-              priority: 0,
-              matchRules: [{ fullPathMatch: '/internal/v1/credentials/introspect' }],
-              service: internalBackend.id,
-            },
-            ...apiPrefixRouteRules(internalBackend.id),
-          ],
+          routeRules: apiPrefixRouteRules(internalBackend.id, {
+            fullPathMatch: '/internal/v1/credentials/introspect',
+          }),
         },
       ],
     })
