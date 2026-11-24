@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from 'react-oidc-context'
 import { useNavigate } from 'react-router-dom'
@@ -17,6 +17,7 @@ import { SetupLayout } from './SetupLayout'
 import LoadingFallback from './LoadingFallback'
 import { Turnstile } from './Turnstile'
 import { Button } from './ui/button'
+import { Checkbox } from './ui/checkbox'
 
 export function RegistrationGate({ children }: { children: ReactNode }) {
   const api = useApi()
@@ -32,6 +33,7 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
   const [submitting, setSubmitting] = useState(false)
   const [admitted, setAdmitted] = useState(false)
   const pending = useRef(false)
+  const consentCheckboxId = useId()
   const identity = user?.profile.sub
   const legalKey = legal
     ? JSON.stringify([legal.tosVersion, legal.privacyVersion, legal.tosUrl, legal.privacyUrl])
@@ -144,18 +146,18 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
       {canRegister ? (
         <div className="grid gap-4">
           {legal && (
-            <label className="flex items-start gap-2.5 text-left text-body text-muted-foreground">
-              <input
-                type="checkbox"
+            <div className="flex items-start gap-2.5 text-left text-body text-muted-foreground">
+              <Checkbox
+                id={consentCheckboxId}
                 checked={accepted}
-                onChange={(event) => setAcceptedLegal(event.target.checked ? legalKey : null)}
+                onCheckedChange={(checked) => setAcceptedLegal(checked === true ? legalKey : null)}
                 disabled={submitting}
-                className="mt-1 size-4 shrink-0 accent-foreground"
+                className="mt-1"
               />
-              <span>
+              <label htmlFor={consentCheckboxId}>
                 I agree to the <LegalDocumentLinks legal={legal} acknowledge />.
-              </span>
-            </label>
+              </label>
+            </div>
           )}
           {turnstile?.sitekey && <Turnstile key={challenge} {...turnstile} onToken={setToken} />}
           <div className="grid gap-2">

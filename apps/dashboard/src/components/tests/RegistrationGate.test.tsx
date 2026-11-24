@@ -124,10 +124,12 @@ describe('RegistrationGate', () => {
     await render(fetchConfig)
     expect(fetchConfig).toHaveBeenCalledTimes(1)
     expect(widgetMount).not.toHaveBeenCalled()
-    const checkbox = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!
-    expect(checkbox.checked).toBe(false)
+    const checkbox = document.querySelector<HTMLButtonElement>('[role="checkbox"]')!
+    expect(checkbox.getAttribute('aria-checked')).toBe('false')
     expect(button('Continue').disabled).toBe(true)
-    await act(async () => checkbox.click())
+    await act(async () => checkbox.labels![0].click())
+    expect(checkbox.getAttribute('aria-checked')).toBe('true')
+    expect(checkbox.querySelector('[data-slot="checkbox-indicator"]')).not.toBeNull()
     api.userApi.getAuthenticatedUser.mockResolvedValue(userResponse)
     await click('Continue')
     expect(api.register).toHaveBeenCalledWith(undefined, {
@@ -157,10 +159,10 @@ describe('RegistrationGate', () => {
       new RegistrationError('Review the current terms and try again', 'legal_version_mismatch'),
     )
     await render(fetchConfig)
-    await act(async () => document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="checkbox"]')!.click())
     await click('Continue')
     expect(fetchConfig).toHaveBeenCalledTimes(2)
-    expect(document.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false)
+    expect(document.querySelector('[role="checkbox"]')?.getAttribute('aria-checked')).toBe('false')
     expect(document.querySelector('a[href="https://example.com/updated-terms"]')).not.toBeNull()
     expect(button('Continue').disabled).toBe(true)
   })
