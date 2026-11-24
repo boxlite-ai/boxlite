@@ -82,7 +82,7 @@ async function localChecks(ctx: Ctx, r: Report): Promise<Awaited<ReturnType<type
 
   let checked: Awaited<ReturnType<typeof checkProject>> | null = null
   try {
-    checked = await checkProject(ctx.cwd, ctx.envName, { sourceCredentials: 'warn' })
+    checked = await checkProject(ctx.cwd, ctx.envName)
   } catch (e) {
     r.problem('manifest', {
       severity: 'error',

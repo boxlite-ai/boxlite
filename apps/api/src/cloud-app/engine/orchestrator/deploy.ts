@@ -69,7 +69,7 @@ export async function runDeploy(job: Job, sv: SupervisorLink): Promise<number> {
   await job.step(
     'build',
     async () => {
-      await store.updateDeployment(env.id, n, { box_id: env.active_box_id, legacy_source: 'authorized' })
+      await store.updateDeployment(env.id, n, { box_id: env.active_box_id })
       await store.updateEnv(env.id, { requested_deployment: n })
       job.setRelease(n)
       await sv.forget(env.id, n)
@@ -106,7 +106,7 @@ async function checkSnapshot(job: Job, manifest: Manifest, files: SnapshotFile[]
       mkdirSync(dirname(dest), { recursive: true })
       await pipeline(job.ctx.blobs.read(job.app.id, f.sha256), createWriteStream(dest))
     }
-    const result = await checkLocal(dir, manifest, { sourceCredentials: 'warn' })
+    const result = await Promise.resolve(checkLocal(dir, manifest))
     for (const w of result.warnings) await job.log(`warning: ${w.message}`)
     if (!result.ok || result.errors.length) {
       throw fail(

@@ -52,26 +52,16 @@ export class Resources {
     return (env.access_override ?? (await this.currentSpec(env))?.access ?? 'private') as 'private' | 'org' | 'public'
   }
 
-  private async platformEnv(app: AppRow, env: EnvRow): Promise<Record<string, string>> {
-    return {
-      BOXLITE_APP_URL: await this.appUrl(app.name, env.name),
-      BOXLITE_ENV: env.name,
-      BOXLITE_APP: app.name,
-    }
-  }
-
-  async buildEnv(app: AppRow, env: EnvRow, spec?: Spec): Promise<Record<string, string>> {
-    const out = { ...(await this.platformEnv(app, env)), ...spec?.variables }
-    delete out.DATABASE_URL
-    return out
-  }
-
   /**
    * The process env the supervisor gives every service (contracts §2.2): platform vars, the
    * env's DATABASE_URL, [variables], and [secrets] resolved from the CP's org secret table.
    */
   async runtimeEnv(app: AppRow, env: EnvRow, spec: Spec | undefined): Promise<Record<string, string>> {
-    const out = await this.platformEnv(app, env)
+    const out: Record<string, string> = {
+      BOXLITE_APP_URL: await this.appUrl(app.name, env.name),
+      BOXLITE_ENV: env.name,
+      BOXLITE_APP: app.name,
+    }
     if (spec?.database && env.db_url) out.DATABASE_URL = env.db_url
     Object.assign(out, spec?.variables ?? {})
     for (const [name, ref] of Object.entries(spec?.secrets ?? {})) {
@@ -109,8 +99,8 @@ export class Resources {
     return await this.boxes.waitForSupervisor(env, log)
   }
 
-  async ensureRunning(envId: string, log: Logger, signal?: AbortSignal, minimumProtocol?: number): Promise<EnvRow> {
-    return await this.boxes.ensureRunning(envId, log, signal, minimumProtocol)
+  async ensureRunning(envId: string, log: Logger, signal?: AbortSignal): Promise<EnvRow> {
+    return await this.boxes.ensureRunning(envId, log, signal)
   }
 
   async deleteVolumes(app: AppRow, env: EnvRow): Promise<void> {

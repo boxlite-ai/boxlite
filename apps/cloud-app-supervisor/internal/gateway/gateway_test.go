@@ -25,7 +25,6 @@ type fakeOps struct {
 	restarted                       []string
 	deployErr, activateErr          error
 	rollbackErr, restartErr         error
-	rollbackTarget                  api.ActivationTarget
 }
 
 func (f *fakeOps) Health() api.HealthResponse {
@@ -33,11 +32,7 @@ func (f *fakeOps) Health() api.HealthResponse {
 }
 func (f *fakeOps) Deploy(n int) error   { f.deployed = append(f.deployed, n); return f.deployErr }
 func (f *fakeOps) Activate(n int) error { f.activated = append(f.activated, n); return f.activateErr }
-func (f *fakeOps) Rollback(n int, target api.ActivationTarget) error {
-	f.rolledBack = append(f.rolledBack, n)
-	f.rollbackTarget = target
-	return f.rollbackErr
-}
+func (f *fakeOps) Rollback(n int) error { f.rolledBack = append(f.rolledBack, n); return f.rollbackErr }
 func (f *fakeOps) Restart(s string) error {
 	f.restarted = append(f.restarted, s)
 	return f.restartErr
@@ -263,15 +258,6 @@ func TestControlEndpoints(t *testing.T) {
 	rec, body = do(t, g, http.MethodPost, "/.boxlite/sv/rollback", `{"deployment":1}`, ctl())
 	if rec.Code != http.StatusNotFound || body["error"] != "not_found_release" {
 		t.Fatalf("rollback missing: %d %s", rec.Code, rec.Body.String())
-	}
-	ops.rollbackErr = nil
-	rec, _ = do(t, g, http.MethodPost, "/.boxlite/sv/rollback", `{"deployment":1,"operation":9}`, ctl())
-	if rec.Code != http.StatusBadRequest || len(ops.rolledBack) != 1 {
-		t.Fatalf("partial rollback activation identity: %d", rec.Code)
-	}
-	rec, _ = do(t, g, http.MethodPost, "/.boxlite/sv/rollback", `{"deployment":1,"operation":9,"spec_version":7}`, ctl())
-	if rec.Code != http.StatusAccepted || ops.rollbackTarget != (api.ActivationTarget{Operation: 9, SpecVersion: 7}) {
-		t.Fatalf("rollback activation identity: %d %+v", rec.Code, ops.rollbackTarget)
 	}
 	rec, _ = do(t, g, http.MethodPost, "/.boxlite/sv/deploy", `{"deployment":0}`, ctl())
 	if rec.Code != http.StatusBadRequest {

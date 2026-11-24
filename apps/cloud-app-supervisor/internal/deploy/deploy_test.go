@@ -40,15 +40,6 @@ var (
 	reaperOnce   sync.Once
 )
 
-func testReaper() *proc.Reaper {
-	// One per process so concurrent Wait4(-1) loops cannot steal exit statuses.
-	reaperOnce.Do(func() {
-		sharedReaper = proc.NewReaper()
-		go sharedReaper.Run(context.Background())
-	})
-	return sharedReaper
-}
-
 // TestMain doubles as the test service: when SV_TEST_HELPER=http is set the
 // test binary runs a tiny HTTP server on $PORT instead of the tests. This keeps
 // the suite free of external tools (no python, no nc).
@@ -76,15 +67,13 @@ func helperServer() {
 // ---- fake control plane ----------------------------------------------------
 
 type fakeCP struct {
-	mu                  sync.Mutex
-	specs               map[int]api.SpecResponse
-	current             int
-	snapshots           map[string][]byte
-	statuses            []api.Status
-	lines               []api.LogLine
-	srv                 *httptest.Server
-	rejectRecoveryPhase string
-	nextRecoveryRuntime func(*api.SpecResponse)
+	mu        sync.Mutex
+	specs     map[int]api.SpecResponse
+	current   int
+	snapshots map[string][]byte
+	statuses  []api.Status
+	lines     []api.LogLine
+	srv       *httptest.Server
 }
 
 func newFakeCP(t *testing.T, ln net.Listener) *fakeCP {
@@ -112,25 +101,6 @@ func (f *fakeCP) handle(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			http.Error(w, "no spec", http.StatusNotFound)
 			return
-		}
-		phase := r.URL.Query().Get("phase")
-		if r.URL.Query().Has("operation") && phase == f.rejectRecoveryPhase {
-			f.rejectRecoveryPhase = ""
-			http.Error(w, `{"error":{"code":"conflict"}}`, http.StatusConflict)
-			return
-		}
-		switch phase {
-		case "boot":
-			spec.Box = "test-box"
-		case "build":
-			spec.Phase = "build"
-			spec.Env = map[string]string{"THEME": spec.Env["THEME"]}
-		case "runtime":
-			spec.Phase = "runtime"
-			if r.URL.Query().Has("operation") && f.nextRecoveryRuntime != nil {
-				f.nextRecoveryRuntime(&spec)
-				f.nextRecoveryRuntime = nil
-			}
 		}
 		json.NewEncoder(w).Encode(spec)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/sv/v1/snapshots/"):
@@ -259,7 +229,13 @@ func newHarness(t *testing.T, stateDir string, fake *fakeCP) *harness {
 	shipper := cp.NewShipper(client)
 	go shipper.Run(ctx)
 	hub := logs.NewHub(shipper.Emit)
-	reaper := testReaper()
+	// One reaper per process, as in production: two Wait4(-1) loops would
+	// steal each other's exit statuses.
+	reaperOnce.Do(func() {
+		sharedReaper = proc.NewReaper()
+		go sharedReaper.Run(context.Background())
+	})
+	reaper := sharedReaper
 
 	mgr := New(Options{
 		CP: client, Hub: hub, Store: store, Reaper: reaper, Version: "test",
@@ -286,7 +262,7 @@ func (h *harness) spec(n int, tag string, build []string, services []api.Service
 		Deployment:    n,
 		ForwardSecret: secret,
 		ControlSecret: ctlSecret,
-		Env:           map[string]string{"SV_TEST_HELPER": "http", "RELEASE_TAG": tag, "DATABASE_URL": "postgres://db/" + tag, "APP_TOKEN": "synthetic", "THEME": "light"},
+		Env:           map[string]string{"SV_TEST_HELPER": "http", "RELEASE_TAG": tag, "DATABASE_URL": "postgres://db/" + tag},
 		Snapshot:      api.Snapshot{ID: fmt.Sprintf("snap_%d", n)},
 	}
 }
@@ -387,10 +363,7 @@ func TestDeployActivateRollbackLifecycle(t *testing.T) {
 
 	// --- #1 arrives through boot (2.4 step 6): nothing on disk, the spec names
 	// #1, so the supervisor builds and activates it back to back.
-	fake.set(h.spec(1, "one", []string{
-		`test "$THEME" = light && test -z "${DATABASE_URL+x}${APP_TOKEN+x}" && echo built > built.txt`,
-		"echo build-out; echo build-err 1>&2",
-	}, helperServices()),
+	fake.set(h.spec(1, "one", []string{"echo built > built.txt", "echo build-out; echo build-err 1>&2"}, helperServices()),
 		map[string]string{"README.md": "one"})
 	h.mgr.Boot(context.Background())
 	live := fake.waitPhase(t, 1, api.PhaseLive)
@@ -516,25 +489,21 @@ func TestDeployActivateRollbackLifecycle(t *testing.T) {
 		t.Fatal("current must still be releases/2")
 	}
 
-	// --- rollback operation #5 reuses release #1 with a new runtime spec ---
+	// --- rollback to #1 with a fresh env from the control plane ---
 	fake.mu.Lock()
-	rollback := h.spec(1, "rollback", nil, helperServices())
-	rollback.Spec.Deployment = 5
-	rollback.Spec.Version = 5
-	fake.specs[fake.current] = rollback
+	s4 := fake.specs[4]
+	s4.Env["DATABASE_URL"] = "postgres://db/migrated"
+	fake.specs[4] = s4
 	fake.mu.Unlock()
 	if code, body := h.deploymentCall("rollback", 42); code != 404 || body["error"] != "not_found_release" {
 		t.Fatalf("rollback unknown: %d %v", code, body)
 	}
-	if code, _, _ := h.call(http.MethodPost, "/.boxlite/sv/rollback", `{"deployment":1,"operation":5,"spec_version":5}`); code != 202 {
+	if code, _ := h.deploymentCall("rollback", 1); code != 202 {
 		t.Fatal("rollback #1")
 	}
 	fake.waitPhase(t, 1, api.PhaseLive)
 	h.mgr.Wait()
-	if status := fake.last(1); status.Operation != 5 || status.SpecVersion != 5 || status.Phase != api.PhaseLive {
-		t.Fatalf("rollback status does not acknowledge the activation: %+v", status)
-	}
-	if got := h.body("/"); got != "hello from web tag=rollback db=postgres://db/rollback" {
+	if got := h.body("/"); got != "hello from web tag=four db=postgres://db/migrated" {
 		t.Fatalf("rollback must run release #1 with the control plane's current env: %q", got)
 	}
 	if currentLink(t, h.store) != "releases/1" || h.health().Deployment != 1 {
@@ -713,48 +682,6 @@ func TestStaticRelease(t *testing.T) {
 	}
 }
 
-func TestBootRetriesRecoveryAfterSpecConflict(t *testing.T) {
-	for _, phase := range []string{"build", "runtime"} {
-		t.Run(phase, func(t *testing.T) {
-			fake := newFakeCP(t, nil)
-			fake.mu.Lock()
-			fake.rejectRecoveryPhase = phase
-			fake.mu.Unlock()
-			h := newHarness(t, t.TempDir(), fake)
-			services := []api.Service{{Name: "site", Static: "dist/"}}
-			fake.set(h.spec(1, "recovered", nil, services), map[string]string{"dist/index.html": "recovered"})
-			h.mgr.Boot(context.Background())
-			waitUntil(t, "recovery after a Spec conflict", func() bool { return h.health().Deployment == 1 })
-			if got := h.body("/"); got != "recovered" {
-				t.Fatalf("recovered page: %q", got)
-			}
-		})
-	}
-}
-
-func TestBootRequiresPinnedRuntimeProjection(t *testing.T) {
-	for name, change := range map[string]func(*api.SpecResponse){
-		"unqualified": func(spec *api.SpecResponse) { spec.Phase = "" },
-		"wrong Spec":  func(spec *api.SpecResponse) { spec.Spec.Version++ },
-	} {
-		t.Run(name, func(t *testing.T) {
-			fake := newFakeCP(t, nil)
-			fake.mu.Lock()
-			fake.nextRecoveryRuntime = change
-			fake.mu.Unlock()
-			h := newHarness(t, t.TempDir(), fake)
-			services := []api.Service{{Name: "site", Static: "dist/"}}
-			fake.set(h.spec(1, "recovered", nil, services), map[string]string{"dist/index.html": "recovered"})
-			h.mgr.Boot(context.Background())
-			fake.waitPhase(t, 1, api.PhaseLive)
-			want := []string{"building", "built", "failed", "building", "built", "starting", "live"}
-			if got := fake.phases(1); !slices.Equal(got, want) {
-				t.Fatalf("recovery phases = %v, want %v", got, want)
-			}
-		})
-	}
-}
-
 func TestBootWithoutControlPlaneThenReconcile(t *testing.T) {
 	stateDir := t.TempDir()
 
@@ -851,7 +778,7 @@ func TestServiceEnvToolPathsAndCA(t *testing.T) {
 }
 
 func TestServiceEnvComposition(t *testing.T) {
-	m := New(Options{BaseEnv: []string{"PATH=/bin", "PORT=9", "HOME=/h", "DATABASE_URL=inherited"}})
+	m := New(Options{BaseEnv: []string{"PATH=/bin", "PORT=9", "HOME=/h"}})
 	rel := state.Release{Deployment: 3, Spec: api.Spec{Environment: "staging"}, Env: map[string]string{"DATABASE_URL": "x", "HOME": "/override"}}
 	got := strings.Join(m.serviceEnv(rel, "/r/3", "web", 20001), "\n")
 	for _, want := range []string{"BOXLITE_ENV=staging", "BOXLITE_SERVICE=web", "DATABASE_URL=x", "HOME=/override", "PATH=/r/3/node_modules/.bin:/h/.local/bin:/bin", "PORT=20001"} {
@@ -862,15 +789,9 @@ func TestServiceEnvComposition(t *testing.T) {
 	if strings.Contains(got, "PORT=9") {
 		t.Fatal("inherited PORT must not leak")
 	}
-	dir := t.TempDir()
-	rel.Env = map[string]string{"THEME": "light"}
-	build := m.serviceEnv(rel, dir, "", 0)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	command := `test "$THEME" = light && test -z "${PORT+x}${BOXLITE_SERVICE+x}${DATABASE_URL+x}${APP_TOKEN+x}"`
-	code, err := proc.RunAs(ctx, testReaper(), logs.NewHub(nil), api.SourceBuild, rel.Deployment, dir, command, build, nil)
-	if err != nil || code != 0 {
-		t.Fatalf("build child received unexpected environment: exit %d, error %v", code, err)
+	build := strings.Join(m.serviceEnv(rel, "/r/3", "", 0), "\n")
+	if strings.Contains(build, "PORT=") || strings.Contains(build, "BOXLITE_SERVICE=") {
+		t.Fatalf("build env must have no PORT/BOXLITE_SERVICE:\n%s", build)
 	}
 }
 

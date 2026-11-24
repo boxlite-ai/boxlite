@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { sourceFileLabel } from './redact'
 import { MIGRATION_FILE_RE, type CheckError, type Manifest } from './types'
 
 /** One migration file as sent in the `migrations` field of `/plan` and `/deployments` bodies. */
@@ -39,12 +38,12 @@ export async function readMigrations(projectDir: string, manifest: Manifest): Pr
   const files: MigrationFile[] = []
   for (const name of names) {
     const m = MIGRATION_FILE_RE.exec(name)
-    const file = sourceFileLabel(`${dir}${name}`)
+    const file = `${dir}${name}`
     if (!m) {
       errors.push({
         file,
         rule: 'migration_name',
-        message: `migration files must be named NNNN_name.sql (4+ digits): ${sourceFileLabel(name)}`,
+        message: `migration files must be named NNNN_name.sql (4+ digits): ${name}`,
       })
       continue
     }
@@ -54,7 +53,7 @@ export async function readMigrations(projectDir: string, manifest: Manifest): Pr
       errors.push({
         file,
         rule: 'migration_duplicate',
-        message: `migration number ${m[1]} is used by both ${sourceFileLabel(dup)} and ${sourceFileLabel(name)}`,
+        message: `migration number ${m[1]} is used by both ${dup} and ${name}`,
       })
       continue
     }

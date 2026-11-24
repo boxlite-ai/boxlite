@@ -51,8 +51,7 @@ const (
 //
 //	1  (no `version` field) one gateway secret for everything, runs as boxlite
 //	2  forward/control secret split, supervisor runs as root, services as boxlite
-//	3  separate build and runtime Spec, with pinned recovery and activation
-const ProtocolVersion = 3
+const ProtocolVersion = 2
 
 // Errors the deploy manager returns to the gateway, which maps them to HTTP codes.
 var (
@@ -201,19 +200,6 @@ type SpecResponse struct {
 	ControlSecret string            `json:"control_secret"`
 	Env           map[string]string `json:"env"`
 	Snapshot      Snapshot          `json:"snapshot"`
-	Phase         string            `json:"phase"`
-	Box           string            `json:"box"`
-	Retry         bool              `json:"retry"`
-}
-
-type ActivationTarget struct {
-	Operation   int `json:"operation,omitempty"`
-	SpecVersion int `json:"spec_version,omitempty"`
-}
-
-type RecoveryTarget struct {
-	ActivationTarget
-	Box string
 }
 
 // Secrets returns the forward and control secrets.
@@ -241,7 +227,6 @@ type LogLine struct {
 
 // Status is the body of POST /sv/v1/status.
 type Status struct {
-	ActivationTarget
 	Deployment int             `json:"deployment"`
 	Phase      string          `json:"phase"`
 	Step       string          `json:"step,omitempty"`

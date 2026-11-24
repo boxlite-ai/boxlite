@@ -174,7 +174,6 @@ export interface Deployment {
   release: number | null
   box_id: string | null
   built: boolean
-  legacy_source?: 'authorized' | 'read' | 'ended' | null
   restore_point: string | null
   live_at: string | null
   cancel_requested?: boolean

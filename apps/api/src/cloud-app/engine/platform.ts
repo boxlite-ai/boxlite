@@ -32,7 +32,6 @@ export const BOX_CMD = ['sh', '-c', BOX_CMD_BOOT, 'microcloud-boot', BOX_CMD_ROO
 
 /** The supervisor wire protocol this CP speaks (contracts §2.3); a Box reporting less is refused. */
 export const SUPERVISOR_PROTOCOL = 2
-export const PHASED_SUPERVISOR_PROTOCOL = 3
 
 export const MAX_SNAPSHOT_BYTES = 200 * 1024 * 1024
 export const MAX_FILE_BYTES = 50 * 1024 * 1024

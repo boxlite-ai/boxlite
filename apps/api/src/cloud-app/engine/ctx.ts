@@ -26,13 +26,11 @@ export interface AppBoxes {
 }
 export interface AppSourceStore {
   has(appId: string, sha: string): Promise<boolean>
-  hasScanned(appId: string, sha: string): Promise<boolean>
   put(
     appId: string,
     sha: string,
     body: import('node:stream').Readable,
     maxBytes: number,
-    file?: string,
   ): Promise<{ bytes: number; deduped: boolean }>
   read(appId: string, sha: string): import('node:stream').Readable
   deleteApp(appId: string): Promise<void>

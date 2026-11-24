@@ -8,7 +8,7 @@ import { pad } from '../output.js'
 import { runPlan } from './plan.js'
 
 async function apply(ctx: Ctx, opts: { force?: boolean; message?: string }): Promise<void> {
-  const { checked, plan } = await runPlan(ctx, opts.force === true, 'warn')
+  const { checked, plan } = await runPlan(ctx, opts.force === true)
   const changes = plan.changes ?? []
   const applicable = changes.filter((c) => c.kind !== 'online_only')
   if (applicable.length === 0) {

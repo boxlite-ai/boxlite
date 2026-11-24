@@ -6,16 +6,7 @@ export { checkLocal, checkProject, formatBytes, type CheckLocalOptions, type Pro
 export { DEFAULT_IGNORES, IGNORE_FILES, createIgnore, loadIgnore, type IgnoreMatcher } from './ignore'
 export { buildUploadManifest, sha256File, isSecretFileName } from './upload'
 export { readMigrations, nextMigrationName, type MigrationFile, type MigrationsRead } from './migrations'
-export {
-  redact,
-  MASKED,
-  secretKindIn,
-  scanSourceSecrets,
-  sourceSecretKindIn,
-  sourceFileLabel,
-  SOURCE_SCAN_VERSION,
-  SOURCE_CREDENTIAL_HINT,
-} from './redact'
+export { redact, MASKED, secretKindIn } from './redact'
 export { buildWarnings, type BuildWarning } from './build-warnings'
 export { secretNameFor } from './diagnose'
 export {
