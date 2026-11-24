@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import crypto from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import { FindOperator } from 'typeorm'
 import { BoxRepository, CREATION_ADMISSION_LOCK_NAMESPACE } from './box.repository'
@@ -54,6 +55,15 @@ function box(organizationId = '11111111-1111-4111-8111-111111111111'): Box {
   entity.osUser = 'boxlite'
   entity.pending = true
   return entity
+}
+
+function mockAdmissionLanes(...lanes: number[]) {
+  const { randomInt } = crypto
+  return jest.spyOn(crypto, 'randomInt').mockImplementation((...args: unknown[]) => {
+    // Preserve other uses of crypto, including Box ID generation.
+    const lane = args.length === 1 && args[0] === 8 ? lanes.shift() : undefined
+    return lane ?? Reflect.apply(randomInt, crypto, args)
+  })
 }
 
 function responseCode(error: BoxCreationLimitExceededError | BoxCreationAdmissionUnavailableError): string {
@@ -193,8 +203,29 @@ describe('BoxRepository creation admission', () => {
     expect(entityManager.insert).not.toHaveBeenCalled()
   })
 
+  it('uses the selected random lane for each create, including repeated lanes', async () => {
+    const { boxRepository, entityManager } = makeRepository()
+    const random = mockAdmissionLanes(7, 0, 7)
+
+    try {
+      const entities = [box(), box(), box()]
+      for (const entity of entities) await boxRepository.insert(entity, 100)
+
+      const laneCalls = entityManager.query.mock.calls.filter(([sql]) => sql.includes('pg_advisory_xact_lock($2'))
+      expect(laneCalls.map(([, params]) => params.slice(1))).toEqual([
+        [0x43525007, entities[0].organizationId],
+        [0x43525000, entities[1].organizationId],
+        [0x43525007, entities[2].organizationId],
+      ])
+      expect(random.mock.calls.filter(([max]) => max === 8)).toHaveLength(3)
+    } finally {
+      random.mockRestore()
+    }
+  })
+
   it('shares one lock budget across the lane, shared key, and fallback without charging the count', async () => {
     const { boxRepository, entityManager } = makeRepository(993)
+    const random = mockAdmissionLanes(0)
     const clock = jest.spyOn(performance, 'now')
     for (const ms of [0, 1200, 1200, 3100, 9000, 9001]) clock.mockReturnValueOnce(ms)
 
@@ -210,6 +241,7 @@ describe('BoxRepository creation admission', () => {
       expect(calls[2][1][1]).toBe(CREATION_ADMISSION_LOCK_NAMESPACE)
     } finally {
       clock.mockRestore()
+      random.mockRestore()
     }
   })
 

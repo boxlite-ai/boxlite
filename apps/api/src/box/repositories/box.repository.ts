@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { randomInt } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import { DataSource, EntityManager, FindOneOptions, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
@@ -81,7 +82,6 @@ type AdmissionLockBudget = { remainingMs: number }
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
   private readonly logger = new Logger(BoxRepository.name)
-  private nextCreationLane = 0
 
   /** Bound background lookups without inheriting waits from the query cache. */
   async findOne({ lockTimeoutMs, ...options }: FindOneOptions<Box> & { lockTimeoutMs?: number }): Promise<Box | null> {
@@ -318,8 +318,7 @@ export class BoxRepository extends BaseRepository<Box> {
       Number.isSafeInteger(maxCreatedBoxes) &&
       maxCreatedBoxes >= CREATION_ADMISSION_LANES
     ) {
-      const laneNamespace = CREATION_ADMISSION_FIRST_LANE_NAMESPACE + this.nextCreationLane
-      this.nextCreationLane = (this.nextCreationLane + 1) % CREATION_ADMISSION_LANES
+      const laneNamespace = CREATION_ADMISSION_FIRST_LANE_NAMESPACE + randomInt(CREATION_ADMISSION_LANES)
       const admitted = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
         // Take the lane first so lane waiters do not hold the shared barrier.
         await this.acquireCreationAdmissionLock(manager, organizationId, budget, laneNamespace)

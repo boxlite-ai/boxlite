@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { randomUUID } from 'node:crypto'
+import crypto, { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DataSource, EntityManager, Repository } from 'typeorm'
 import { IsolationLevel } from 'typeorm/driver/types/IsolationLevel'
@@ -24,6 +24,15 @@ const organizationId = randomUUID()
 const otherOrganizationId = randomUUID()
 const firstLaneNamespace = 0x43525000
 const lastLaneNamespace = firstLaneNamespace + 7
+
+function mockAdmissionLanes(...lanes: number[]) {
+  const { randomInt } = crypto
+  return jest.spyOn(crypto, 'randomInt').mockImplementation((...args: unknown[]) => {
+    // Preserve other uses of crypto, including Box ID generation.
+    const lane = args.length === 1 && args[0] === 8 ? lanes.shift() : undefined
+    return lane ?? Reflect.apply(randomInt, crypto, args)
+  })
+}
 
 function gate() {
   let open!: () => void
@@ -222,6 +231,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       return result
     })
     const candidates = [newBox('parallel-a'), newBox('parallel-b')]
+    const random = mockAdmissionLanes(0, 7)
     const requests = candidates.map((candidate) => repository.insert(candidate, limit))
     const creates = Promise.all(requests)
     try {
@@ -242,16 +252,14 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
           mode: 'ShareLock',
           granted: true,
         })
-        const lane = own.find((lock) => lock.mode === 'ExclusiveLock')?.namespace
-        expect(lane).toBeGreaterThanOrEqual(firstLaneNamespace)
-        expect(lane).toBeLessThanOrEqual(lastLaneNamespace)
-        return lane
+        return own.find((lock) => lock.mode === 'ExclusiveLock')?.namespace
       })
-      expect(new Set(lanes).size).toBe(2)
+      expect(new Set(lanes)).toEqual(new Set([firstLaneNamespace, lastLaneNamespace]))
     } finally {
       commit.open()
       await Promise.allSettled(requests)
       insert.mockRestore()
+      random.mockRestore()
     }
     await expect(creates).resolves.toEqual(candidates)
     expect(await boxes.countBy({ organizationId })).toBe(count + 2)
@@ -285,6 +293,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       }
       return result
     })
+    const random = mockAdmissionLanes(0, 7)
     const first = repository.insert(newBox('first-shared'), 100)
     const requests: Promise<unknown>[] = [first]
     try {
@@ -317,6 +326,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       await Promise.allSettled(requests)
       count.mockRestore()
       insert.mockRestore()
+      random.mockRestore()
     }
   })
 
@@ -355,6 +365,8 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       }
       return result
     })
+    // Reuse the same lane for both higher-limit writes while the lower-limit writer is paused.
+    const random = mockAdmissionLanes(0, 7, 7)
     const low = repository.insert(newBox('lower-limit'), 100)
     const requests = [low]
     try {
@@ -385,12 +397,6 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
         commit.open()
         await request
         expect(await boxes.countBy({ organizationId })).toBe(93 + i)
-        if (i === 0) {
-          // Reuse the same lane on the second high-limit insert without changing this organization's count.
-          for (let j = 0; j < lastLaneNamespace - firstLaneNamespace; j++) {
-            await repository.insert(newBox(`cycle-${j}`, otherOrganizationId), 200)
-          }
-        }
       }
       releaseCount.open()
       await low
@@ -401,6 +407,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       await Promise.allSettled(requests)
       count.mockRestore()
       insert.mockRestore()
+      random.mockRestore()
     }
   })
 
@@ -410,6 +417,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       ...dataSource.options,
       extra: { ...dataSource.options.extra, max, connectionTimeoutMillis: 1000 },
     }).initialize()
+    const random = mockAdmissionLanes(0, 7)
     try {
       const repo = new BoxRepository(narrowPool, { emit: jest.fn() } as never, { invalidateOrgId } as never)
       const results = await Promise.allSettled([
@@ -423,6 +431,7 @@ describeIfDatabase('BoxRepository creation admission (integration, real Postgres
       expect(await dataSource.getRepository(BoxLastActivity).count()).toBe(1)
       expect(await admissionLocks(dataSource)).toEqual([])
     } finally {
+      random.mockRestore()
       await narrowPool.destroy()
     }
   })

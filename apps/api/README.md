@@ -1386,7 +1386,9 @@ creates take the original organization lock exclusively.
 
 To try parallel admission, an ordinary one-Box insert needs a safe integer request
 limit of at least 8.
-It takes one of 8 organization lanes, then takes the original lock in shared mode.
+It randomly selects one of 8 organization lanes without checking whether it is free.
+It locks that lane, then takes the original lock in shared mode.
+
 Parallel admission requires a nonnegative safe integer count and at least 8 slots
 under the request's resolved limit.
 
