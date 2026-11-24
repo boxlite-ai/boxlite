@@ -1,6 +1,7 @@
 /** Deployment kind `rollback`: a copy of #N's spec, an optional database restore, and a switch to #N's release; plus the rollback checks. */
 import type { EnvRow } from '../db'
 import type { Ctx } from '../ctx'
+import { PHASED_SUPERVISOR_PROTOCOL } from '../platform'
 import type { Spec } from '../spec'
 import { StepFailure, type Job } from './job'
 import { serviceSummary } from './steps'
@@ -15,6 +16,8 @@ export async function runRollback(job: Job, sv: SupervisorLink): Promise<number>
     throw new StepFailure('check', `deployment #${to} has no release to roll back to`)
   const targetSpec = (await store.spec(job.envId, target.spec_version))!
   const release = target.release
+  const log = (line: string) => job.log(line)
+  await resources.ensureRunning(job.envId, log, job.signal, PHASED_SUPERVISOR_PROTOCOL)
 
   if (job.dep.request.with_database) {
     const ts = await restoreTimestampFor(job.ctx, job.envId, to)
@@ -56,24 +59,29 @@ export async function runRollback(job: Job, sv: SupervisorLink): Promise<number>
     },
   }
   await store.insertSpec(env.id, spec)
-  await store.updateDeployment(env.id, job.dep.number, { spec_version: version, snapshot_id: target.snapshot_id })
+  await store.updateDeployment(env.id, job.dep.number, {
+    spec_version: version,
+    snapshot_id: target.snapshot_id,
+    release,
+  })
   await job.log(`spec v${version} written (copy of v${target.spec_version} from #${to})`)
   await job.checkCancelled()
 
   await job.step(
     'start',
     async () => {
-      await resources.ensureRunning(env.id, async (l) => await job.log(l), job.signal)
+      const box = await resources.ensureRunning(env.id, log, job.signal, PHASED_SUPERVISOR_PROTOCOL)
+      const activation = { operation: job.dep.number, spec_version: version }
       await store.updateEnv(env.id, { requested_deployment: job.dep.number })
       job.setRelease(release, true)
-      await sv.forget(env.id, release)
+      await sv.forget(env.id, activation.operation)
       await sv.call(
         'start',
         release,
-        async () => await supervisor.rollback(env.box_url!, env.control_secret, release),
+        async () => await supervisor.rollback(box.box_url!, box.control_secret, release, activation),
         job.signal,
       )
-      return await sv.waitLive(env.id, release, job.signal)
+      return await sv.waitLive(env.id, release, job.signal, activation)
     },
     { status: 'starting', detail: `switch to release #${release}`, done: (s) => serviceSummary(s, targetSpec) },
   )

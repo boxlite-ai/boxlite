@@ -171,11 +171,15 @@ export class BoxProvisioner {
    * Waits until the env's supervisor answers health with the control secret. 403 (no secrets until
    * the supervisor's first /sv/v1/spec) and connection errors mean "not ready yet".
    *
-   * Every Box runs wire protocol 2 since the 2026-10-21 rollout, and a Box downloads the current
-   * supervisor on every start, so the CP no longer restarts old ones. A supervisor that still
-   * reports an older protocol means the CP serves an old build: that is refused, not worked around.
+   * A Box downloads the current Supervisor on start. Operations that need phase-aware activation
+   * require its protocol before changing configuration or the database.
    */
-  async waitForSupervisor(env: EnvRow, log: Logger, signal?: AbortSignal): Promise<void> {
+  async waitForSupervisor(
+    env: EnvRow,
+    log: Logger,
+    signal?: AbortSignal,
+    minimum = SUPERVISOR_PROTOCOL,
+  ): Promise<void> {
     const { supervisor, timing } = this.ctx
     const deadline = Date.now() + timing.supervisorReadyMs
     const readinessTimeout = AbortSignal.timeout(timing.supervisorReadyMs)
@@ -197,11 +201,11 @@ export class BoxProvisioner {
       const remaining = deadline - Date.now()
       if (remaining <= 0) break
       if (version !== undefined) {
-        if (version >= SUPERVISOR_PROTOCOL) return
+        if (version >= minimum) return
         throw fail(
           'deploy_failed',
-          `Box ${env.active_box_id} runs supervisor protocol ${version}; this control plane needs ${SUPERVISOR_PROTOCOL}`,
-          'check that SV_BIN_DIR on the control plane holds the current supervisor build, then deploy again',
+          `Box ${env.active_box_id} runs supervisor protocol ${version}; this operation needs ${minimum}`,
+          'restart the Box to load the current Supervisor, then try again',
         )
       }
       await sleep(Math.min(timing.pollMs, remaining))
@@ -215,7 +219,7 @@ export class BoxProvisioner {
   }
 
   /** For apply/rollback: the existing Box must be up (no recreation), started if it auto-stopped. */
-  async ensureRunning(envId: string, log: Logger, signal?: AbortSignal): Promise<EnvRow> {
+  async ensureRunning(envId: string, log: Logger, signal?: AbortSignal, minimumProtocol?: number): Promise<EnvRow> {
     const { store, boxlite } = this.ctx
     const env = (await store.envById(envId))!
     if (!env.active_box_id || !env.box_url)
@@ -233,7 +237,7 @@ export class BoxProvisioner {
       await boxlite.startBox(box.id)
       this.waker.noteWake(box.id)
     }
-    await this.waitForSupervisor(env, log, signal)
+    await this.waitForSupervisor(env, log, signal, minimumProtocol)
     return env
   }
 }

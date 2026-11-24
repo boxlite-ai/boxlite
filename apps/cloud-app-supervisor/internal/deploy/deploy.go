@@ -165,7 +165,7 @@ func (m *Manager) Deploy(n int) error {
 		})
 		return nil
 	}
-	m.spawn(func(ctx context.Context) { m.build(ctx, n) })
+	m.spawn(func(ctx context.Context) { m.build(ctx, n, nil) })
 	return nil
 }
 
@@ -178,12 +178,12 @@ func (m *Manager) Activate(n int) error {
 		m.release()
 		return api.ErrNotBuilt
 	}
-	m.spawn(func(ctx context.Context) { m.activate(ctx, n, "activate") })
+	m.spawn(func(ctx context.Context) { m.activate(ctx, n, "activate", api.ActivationTarget{}, nil) })
 	return nil
 }
 
 // Rollback re-activates an older release that is still on disk.
-func (m *Manager) Rollback(n int) error {
+func (m *Manager) Rollback(n int, target api.ActivationTarget) error {
 	if err := m.acquire(); err != nil {
 		return err
 	}
@@ -191,7 +191,7 @@ func (m *Manager) Rollback(n int) error {
 		m.release()
 		return api.ErrNoRelease
 	}
-	m.spawn(func(ctx context.Context) { m.activate(ctx, n, "rollback") })
+	m.spawn(func(ctx context.Context) { m.activate(ctx, n, "rollback", target, nil) })
 	return nil
 }
 
@@ -251,26 +251,51 @@ func (m *Manager) Boot(ctx context.Context) {
 	m.spawnNoLock(m.reconcile)
 }
 
-// reconcile fetches the spec until the control plane answers, then builds and
-// activates any deployment newer than the current one.
+type recoveryAttempt struct {
+	target api.RecoveryTarget
+	retry  bool
+}
+
+func (m *Manager) specForPhase(ctx context.Context, phase string, recovery *recoveryAttempt) (*api.SpecResponse, error) {
+	if recovery == nil {
+		return m.o.CP.PhaseSpec(ctx, phase, nil)
+	}
+	resp, err := m.o.CP.PhaseSpec(ctx, phase, &recovery.target)
+	var conflict *cp.HTTPError
+	recovery.retry = errors.As(err, &conflict) && conflict.Status == http.StatusConflict
+	return resp, err
+}
+
+// reconcile restores a committed release missing locally, using the same live identity for both projections.
 func (m *Manager) reconcile(ctx context.Context) {
+	var attempted api.RecoveryTarget
 	for attempt := 0; ; attempt++ {
-		resp, err := m.o.CP.Spec(ctx)
+		resp, err := m.o.CP.PhaseSpec(ctx, "boot", nil)
 		if err == nil {
 			m.adoptSecrets(resp)
 			cur := m.currentDeployment()
-			m.o.Hub.Systemf(cur, api.LevelInfo, "boot: control plane reachable; spec names deployment #%d, current is #%d", resp.Deployment, cur)
-			if resp.Deployment > cur {
-				if err := m.acquire(); err != nil {
-					return // the control plane already drove a deploy through the gateway
-				}
-				m.spawn(func(ctx context.Context) {
-					if m.build(ctx, resp.Deployment) {
-						m.activate(ctx, resp.Deployment, "deploy")
-					}
-				})
+			cached := m.o.Store.Get().Current
+			intact := resp.Deployment == cached && m.o.Store.ReleaseExists(cached)
+			if !resp.Retry && (resp.Deployment <= cur || intact || resp.Box == "" || resp.Spec.Version <= 0 || resp.Spec.Deployment <= 0) {
+				return
 			}
-			return
+			identity := api.RecoveryTarget{
+				ActivationTarget: api.ActivationTarget{Operation: resp.Spec.Deployment, SpecVersion: resp.Spec.Version},
+				Box:              resp.Box,
+			}
+			if !resp.Retry && identity != attempted && m.acquire() == nil {
+				attempted = identity
+				recovery := recoveryAttempt{target: identity}
+				started := m.build(ctx, resp.Deployment, &recovery) &&
+					m.activate(ctx, resp.Deployment, "recover", api.ActivationTarget{}, &recovery)
+				m.release()
+				if started {
+					return
+				}
+				if recovery.retry {
+					attempted = api.RecoveryTarget{}
+				}
+			}
 		}
 		if ctx.Err() != nil {
 			return
@@ -279,7 +304,7 @@ func (m *Manager) reconcile(ctx context.Context) {
 		// through this call (before the first deploy the control plane answers
 		// 200 with spec null, which ends the loop above), so until it succeeds
 		// the control plane cannot reach /.boxlite/sv/* at all.
-		if attempt == 0 || attempt%12 == 0 {
+		if err != nil && (attempt == 0 || attempt%12 == 0) {
 			var he *cp.HTTPError
 			switch {
 			case errors.As(err, &he) && (he.Status == http.StatusUnauthorized || he.Status == http.StatusForbidden):
@@ -327,12 +352,16 @@ func (m *Manager) Wait() { m.wg.Wait() }
 // ---- the procedure -----------------------------------------------------------
 
 // build runs steps 1–3 of 2.4 and reports built or failed.
-func (m *Manager) build(ctx context.Context, n int) bool {
+func (m *Manager) build(ctx context.Context, n int, recovery *recoveryAttempt) bool {
 	hub := m.o.Hub
 	hub.Systemf(n, api.LevelInfo, "deploy #%d: fetching spec", n)
-	resp, err := m.o.CP.Spec(ctx)
+	resp, err := m.specForPhase(ctx, "build", recovery)
 	if err != nil {
 		m.fail(ctx, n, "spec", err, nil)
+		return false
+	}
+	if resp.Phase != "build" || (resp.Snapshot.ID == "" && resp.Snapshot.URL == "") {
+		m.fail(ctx, n, "spec", errors.New("the control plane did not authorize a build projection with source"), nil)
 		return false
 	}
 	if resp.Deployment != n {
@@ -348,6 +377,12 @@ func (m *Manager) build(ctx context.Context, n int) bool {
 		return false
 	}
 	m.adoptSecrets(resp)
+	if recovery != nil && m.o.Store.Get().Current == n {
+		if err := m.o.Store.Update(func(st *state.State) { st.Current, st.SpecVersion = 0, 0 }); err != nil {
+			m.fail(ctx, n, "extract", fmt.Errorf("detach missing release: %w", err), nil)
+			return false
+		}
+	}
 
 	// One deadline for download, extraction and every build step: a stalled
 	// download must not hold the deploy slot (and so 409 every later deploy)
@@ -418,36 +453,44 @@ func (m *Manager) build(ctx context.Context, n int) bool {
 
 // activate runs steps 4–5 of 2.4 for a built release and reports live or
 // failed. kind is "deploy", "activate" or "rollback" and only affects logs.
-func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
+func (m *Manager) activate(ctx context.Context, n int, kind string, target api.ActivationTarget, recovery *recoveryAttempt) bool {
 	hub := m.o.Hub
+	fail := func(step string, err error, tail []string) { m.failFor(ctx, n, step, err, tail, target) }
 	st := m.o.Store.Get()
 	relp := st.Release(n)
 	if relp == nil || !m.o.Store.ReleaseExists(n) {
-		m.fail(ctx, n, "start", api.ErrNotBuilt, nil)
+		fail("start", api.ErrNotBuilt, nil)
 		return false
 	}
 	rel := *relp
 	hub.Systemf(n, api.LevelInfo, "%s #%d: fetching spec", kind, n)
 
-	// The environment may have changed since the build (DATABASE_URL after
-	// migrations, rotated secrets), so the release always starts with the
-	// control plane's current env. The services and build recipe stay those
-	// of the release itself unless the spec is for this very deployment.
-	resp, err := m.o.CP.Spec(ctx)
+	// Activation takes its services and credentials from the selected runtime Spec.
+	resp, err := m.specForPhase(ctx, "runtime", recovery)
 	if err != nil {
-		m.fail(ctx, n, "spec", err, nil)
+		fail("spec", err, nil)
+		return false
+	}
+	expected := target
+	if recovery != nil {
+		expected = recovery.target.ActivationTarget
+	}
+	if resp.Phase != "runtime" || resp.Deployment != n || (expected.Operation != 0 &&
+		(resp.Spec.Deployment != expected.Operation || resp.Spec.Version != expected.SpecVersion)) {
+		if recovery != nil {
+			recovery.retry = true
+		}
+		fail("spec", errors.New("the control plane returned a different activation target"), nil)
 		return false
 	}
 	forward, control := resp.Secrets()
 	m.o.Gate.SetSecrets(forward, control)
-	if resp.Deployment == n {
-		if err := resp.Spec.Validate(); err != nil {
-			m.fail(ctx, n, "spec", err, nil)
-			return false
-		}
-		rel.Spec = resp.Spec
-		rel.SpecVersion = resp.Spec.Version
+	if err := resp.Spec.Validate(); err != nil {
+		fail("spec", err, nil)
+		return false
 	}
+	rel.Spec = resp.Spec
+	rel.SpecVersion = resp.Spec.Version
 	rel.Env = resp.Env
 	if err := m.o.Store.Update(func(st *state.State) {
 		st.ForwardSecret, st.ControlSecret = forward, control
@@ -459,13 +502,13 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 	}
 
 	if ctx.Err() != nil {
-		m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), nil)
+		fail("start", m.why(ctx, ctx, ctx.Err()), nil)
 		return false
 	}
-	m.report(ctx, api.Status{Deployment: n, Phase: api.PhaseStarting})
+	m.report(ctx, api.Status{Deployment: n, Phase: api.PhaseStarting, ActivationTarget: target})
 	group, err := m.startGroup(rel, m.livePort())
 	if err != nil {
-		m.fail(ctx, n, "start", err, nil)
+		fail("start", err, nil)
 		return false
 	}
 	if exp := group.Exposed(); exp != nil {
@@ -477,9 +520,9 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 			// Kill the candidate; the old release never stopped serving.
 			group.Stop(2 * time.Second)
 			if ctx.Err() != nil {
-				m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), tail)
+				fail("start", m.why(ctx, ctx, ctx.Err()), tail)
 			} else {
-				m.fail(ctx, n, "start", healthFailure(exp.Status(), exp.Name(), exp.Config().Health, m.o.HealthBudget), tail)
+				fail("start", healthFailure(exp.Status(), exp.Name(), exp.Config().Health, m.o.HealthBudget), tail)
 			}
 			return false
 		}
@@ -491,16 +534,16 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 		tail := m.serviceTail(name, n)
 		group.Stop(2 * time.Second)
 		if ctx.Err() != nil {
-			m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), tail)
+			fail("start", m.why(ctx, ctx, ctx.Err()), tail)
 		} else {
-			m.fail(ctx, n, "start", fmt.Errorf("service %s %s within %s of starting", name, st, m.o.SettleWindow), tail)
+			fail("start", fmt.Errorf("service %s %s within %s of starting", name, st, m.o.SettleWindow), tail)
 		}
 		return false
 	}
 	if ctx.Err() != nil {
 		// Cancelled while the candidate came up: it never takes traffic.
 		group.Stop(2 * time.Second)
-		m.fail(ctx, n, "start", m.why(ctx, ctx, ctx.Err()), nil)
+		fail("start", m.why(ctx, ctx, ctx.Err()), nil)
 		return false
 	}
 
@@ -528,7 +571,7 @@ func (m *Manager) activate(ctx context.Context, n int, kind string) bool {
 		hub.Systemf(n, api.LevelInfo, "%s #%d: pruned old release(s) %v", kind, n, removed)
 	}
 	hub.Systemf(n, api.LevelInfo, "%s #%d: live", kind, n)
-	m.report(ctx, api.Status{Deployment: n, Phase: api.PhaseLive, Services: group.Statuses()})
+	m.report(ctx, api.Status{Deployment: n, Phase: api.PhaseLive, Services: group.Statuses(), ActivationTarget: target})
 	return true
 }
 
@@ -635,9 +678,6 @@ func (m *Manager) serviceEnv(rel state.Release, dir, name string, port int) []st
 	for k, v := range rel.Env {
 		env[k] = v
 	}
-	if u, ok := rel.Env["DATABASE_URL"]; ok {
-		env["DATABASE_URL"] = withRootCert(u)
-	}
 	if _, ok := env["BOXLITE_ENV"]; !ok && rel.Spec.Environment != "" {
 		env["BOXLITE_ENV"] = rel.Spec.Environment
 	}
@@ -645,6 +685,11 @@ func (m *Manager) serviceEnv(rel state.Release, dir, name string, port int) []st
 	delete(env, "BOXLITE_SERVICE")
 	if name != "" {
 		env["BOXLITE_SERVICE"] = name
+		if u, ok := rel.Env["DATABASE_URL"]; ok {
+			env["DATABASE_URL"] = withRootCert(u)
+		}
+	} else {
+		delete(env, "DATABASE_URL")
 	}
 	if port > 0 {
 		env["PORT"] = strconv.Itoa(port)
@@ -872,8 +917,12 @@ func (m *Manager) serviceTail(name string, n int) []string {
 
 // fail logs and reports a failed phase. The live release is never touched.
 func (m *Manager) fail(ctx context.Context, n int, step string, err error, tail []string) {
+	m.failFor(ctx, n, step, err, tail, api.ActivationTarget{})
+}
+
+func (m *Manager) failFor(ctx context.Context, n int, step string, err error, tail []string, target api.ActivationTarget) {
 	m.o.Hub.Systemf(n, api.LevelError, "deployment #%d failed at step %s: %v (previous release stays live)", n, step, err)
-	m.report(ctx, api.Status{Deployment: n, Phase: api.PhaseFailed, Step: step, Error: err.Error(), LogTail: tail})
+	m.report(ctx, api.Status{Deployment: n, Phase: api.PhaseFailed, Step: step, Error: err.Error(), LogTail: tail, ActivationTarget: target})
 }
 
 // report posts a status with a short retry; the control plane also learns the

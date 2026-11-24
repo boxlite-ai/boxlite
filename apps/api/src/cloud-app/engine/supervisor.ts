@@ -14,8 +14,13 @@ export interface ServiceState {
   memory_bytes?: number | null
 }
 
+export interface ActivationTarget {
+  operation: number
+  spec_version: number
+}
+
 /** What the supervisor reports on POST /sv/v1/status. */
-export interface SupervisorStatus {
+export interface SupervisorStatus extends Partial<ActivationTarget> {
   deployment: number
   phase: 'building' | 'built' | 'starting' | 'live' | 'failed'
   step?: string
@@ -98,7 +103,7 @@ export interface SupervisorClient {
   /** Start release N's services, health-gate, flip traffic; reports `starting` then `live|failed`. */
   activate(boxUrl: string, secret: string, release: number): Promise<void>
   /** Re-start onto an existing release dir (no build); same health gate as activate. */
-  rollback(boxUrl: string, secret: string, release: number): Promise<void>
+  rollback(boxUrl: string, secret: string, release: number, target: ActivationTarget): Promise<void>
   restart(boxUrl: string, secret: string, service: string | null): Promise<void>
   logs(boxUrl: string, secret: string, source: string | null, tail: number): Promise<unknown>
 }
@@ -141,12 +146,12 @@ export class HttpSupervisorClient implements SupervisorClient {
     })
   }
 
-  async rollback(boxUrl: string, secret: string, release: number): Promise<void> {
+  async rollback(boxUrl: string, secret: string, release: number, target: ActivationTarget): Promise<void> {
     await requestJson('supervisor', {
       method: 'POST',
       url: `${boxUrl}/.boxlite/sv/rollback`,
       headers: await this.headers(boxUrl, secret),
-      body: { deployment: release },
+      body: { deployment: release, ...target },
       timeoutMs: 30_000,
     })
   }
