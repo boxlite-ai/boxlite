@@ -39,6 +39,7 @@ impl BoxImpl {
             let backend = self.protected_bridge();
             let current = self.protected_outbound_durable(&record, attempt)?;
             let mut retired_attempt = None;
+            let inspect = matches!(&request.command, ProtectedRouteOperation::Inspect);
             match request.command {
                 ProtectedRouteOperation::Inspect => {}
                 ProtectedRouteOperation::Prepare { update } => {
@@ -130,12 +131,26 @@ impl BoxImpl {
                 .as_ref()
                 .ok_or_else(|| conflict("Missing protected epoch"))?;
             let durable = self.protected_outbound_durable(&record, attempt)?;
-            let installed = self.protected_installed(&backend, attempt).await.ok();
+            let (installed, diagnostic) = self
+                .protected_observation(&backend, attempt)
+                .await
+                .map_or((None, None), |(snapshot, code)| (Some(snapshot), code));
+            let proxy_diagnostic = if inspect
+                && durable.binding.is_some()
+                && installed.as_ref() == Some(&durable)
+                && record.outbound.pending.is_none()
+                && record.outbound.unbind_settlement.is_none()
+            {
+                diagnostic
+            } else {
+                None
+            };
             Ok(ProtectedRouteReceipt {
                 runner_id: request.runner_id,
                 epoch: request.epoch,
                 durable,
                 installed,
+                proxy_diagnostic,
                 pending_attempt: record
                     .outbound
                     .pending
@@ -406,6 +421,14 @@ impl BoxImpl {
         backend: &GvproxyBackend,
         attempt: &ProtectedBootAttempt,
     ) -> BoxliteResult<ProtectedRouteSnapshot> {
+        Ok(self.protected_observation(backend, attempt).await?.0)
+    }
+
+    async fn protected_observation(
+        &self,
+        backend: &GvproxyBackend,
+        attempt: &ProtectedBootAttempt,
+    ) -> BoxliteResult<(ProtectedRouteSnapshot, Option<String>)> {
         let owner = self.verify_protected_owner(attempt)?;
         let expected = attempt
             .gate_id()
@@ -428,10 +451,14 @@ impl BoxImpl {
                 "Installed protected outbound identity is unconfirmed",
             ));
         }
-        Ok(ProtectedRouteSnapshot {
-            snapshot: observed.status.snapshot,
-            binding: observed.binding,
-        })
+        let diagnostic = observed.diagnostic_code().map(str::to_owned);
+        Ok((
+            ProtectedRouteSnapshot {
+                snapshot: observed.status.snapshot,
+                binding: observed.binding,
+            },
+            diagnostic,
+        ))
     }
 }
 

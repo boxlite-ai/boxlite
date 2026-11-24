@@ -342,6 +342,577 @@ pytest apps/e2e/cases/ -v --timeout=120
 For CI, use the stage-specific secrets below. No local bootstrap, Postgres,
 or runner services are needed — the remote stack provides everything.
 
+## Managed outbound proxy acceptance
+
+Run this group against an isolated Cloud organization with managed outbound
+enabled and placement restricted to one enrolled HTTPS V0 Runner. Use the SDK,
+CLI, API, Runner, and Runtime from the build under test. The Guest image needs
+Python 3, `curl`, and trust for the HTTPS probe target.
+
+Run the [probe target](fixtures/managed_outbound_target.py) on a separate owned
+host. Pass `--bind`, `--port`, `--udp-port`, `--cert`, `--key`, and
+`--observations` with a new private file for each run.
+
+Allow connections from the test Runner and proxy exits, and make the live
+observations file readable by the test process. The target records the socket
+peer, marker, and receive time, plus Host and SNI for HTTPS.
+
+For the REST credentials use the profile or API-key settings above. Set
+`BOXLITE_E2E_MANAGED_INVENTORY_TOKEN` to the enrolled Runner's Cloud inventory
+credential and `BOXLITE_E2E_MANAGED_RUNNER_KEY` to the Runner API credential.
+
+Configure a PostgreSQL service with read-only access to the test Box epoch and
+binding. Runner inspection remains the source of installed and durable state.
+
+Pass `--managed-outbound-config` an absolute path to a JSON file with these fields.
+
+| Field | Value |
+| --- | --- |
+| `api_origin`, `organization_prefix` | Exact HTTPS API origin and dedicated organization routing prefix. |
+| `runner_origin`, `runner_id`, `inventory_url` | Runner HTTPS origin and UUID, plus its authenticated Cloud inventory endpoint ending in `/api/box/for-runner`. |
+| `postgres_service` | Local `psql` service name for the isolated Cloud database. |
+| `target_origin`, `target_tcp_ip`, `target_log`, `direct_source` | Owned HTTPS origin and its numeric IPv4 destination, local path to the observations file, and the Runner's direct source IP at the target. |
+| `target_udp_ip`, `target_udp_port` | Owned IPv4 address and port of the target's datagram listener. |
+| `workload_secret_file` | Private file on the test controller containing the same synthetic workload token supplied to the HTTPS target. Required by the credentials case. |
+| `dns` | Pinned DoH and Runner DNS observers for the DNS path cases. See the DNS fixture instructions below. |
+| `tcp_faults` | Dedicated business TCP fault listeners and two packet capture logs. See the TCP fault instructions below. |
+| `external_udp` | Direct DNS and HTTP/3 endpoints with their application and packet logs. See the external UDP instructions below. |
+| `udp_unbind` | The delayed reply release directory and independent unlisted UDP target. |
+| `protected_target` | Separately observed private HTTPS target for the connector address policy check. |
+| `deployment` | Fault controller executable and the second enrolled Runner for lifecycle acceptance. See Deployment lifecycle below. |
+| `variants` | Entries for `http-anonymous`, `http-credential`, `https-anonymous`, `https-credential`, `socks5-anonymous`, and `socks5-credential`. |
+
+Each variant contains `endpoint`, `source`, and `proxy_log`. Use the canonical
+proxy URL for `endpoint`, omitting credentials and any explicit default port.
+Set `source` to the IP the target sees and use a separate local `proxy_log` file
+for each listener.
+
+Credential variants specify a private `credential_file` with synthetic
+`username` and `password` strings. The BoxLite CLI reads these from stdin.
+
+Start the [recording proxy](fixtures/managed_outbound_proxy.py) on each fixture
+exit, with one listener per variant. Set `--variant` to the config entry name,
+provide `--bind`, `--port`, and `--observations`, and repeat `--client` for the
+Runner's allowed source addresses. Repeat `--destination` for the owned target
+and pinned DoH IPv4 socket addresses.
+
+For HTTPS variants, supply `--cert` and
+`--key` for the registered DNS name and a chain trusted by the Runner. For
+credential variants, pass the fixture credential file with `--credential`.
+
+Use two distinct proxy exits for rotation and reserve the destination tuples
+for one acceptance run. Synchronize clocks on the controller, proxy exits,
+and target. Make the live observation files readable to the test process.
+
+The proxy records a successful CONNECT only after the real listener
+has negotiated the expected authentication and opened the permitted upstream
+socket. The record includes the selected auth mode, TLS SNI or offered SOCKS5
+methods where applicable, and the exact numeric destination. It omits
+credential values and tunnel payloads.
+
+```bash
+make test:rest:e2e AUTH=api-key \
+  PYTEST_FILTER='-m managed_outbound --managed-outbound-config=/path/to/config.json'
+```
+
+Each case registers its endpoint, creates an explicit managed unbound control
+and a bound Box, and compares the observed sources for two Guest clients. Both
+Boxes must be on the configured Runner and produce an exact authenticated
+installed revision before and after the probe.
+
+A bound HTTPS probe requires
+one matching first-hop CONNECT before the target receives its marker. A direct
+probe requires the window to contain no CONNECT to that target. The cases also
+check that an in-use registration cannot be deleted, then verify the direct
+route after confirmed unbind.
+
+Rotation verifies a new registry and policy revision on both Boxes, fresh
+traffic on the new exit, and HTTP 412 for the stale policy write. A TCP
+connection held across rotation must keep its original exit and target
+connection ID with no new CONNECT.
+
+Both Boxes share a 120-second confirmation window, and the held connection
+resumes before the stale-write and fresh-traffic checks. The Guest probe has
+270 seconds for the whole exchange. The recording proxy and HTTPS target each
+keep an idle tunnel open for 300 seconds.
+
+The UDP cases bracket the blocked probe with successful unbound echoes and
+check the target log for ingress. The cutover case also sends from an existing
+Guest UDP socket before binding and after authenticated confirmation of the new
+revision. Use the Runtime UDP link tests for timing evidence about frames
+already queued during the switch.
+
+For the UDP unbind case, start the permitted UDP target with `--udp-release-dir`
+pointing to a private directory shared with the acceptance controller. The
+controller creates an empty marker file there after confirmed unbind.
+
+The target sends a delayed reply from its UDP socket to the saved old peer and
+logs the send. The Guest checks the still-open old socket before opening a
+fresh source port and probing both the listed and unlisted addresses.
+
+| `udp_unbind` field | Value |
+| --- | --- |
+| `release_dir` | Controller path to the same writable directory seen by the permitted UDP fixture. |
+| `unlisted_address`, `unlisted_port`, `unlisted_log` | Separate owned IPv4 outside the permitted CIDR, its UDP echo port, and its live target log. |
+| `unlisted_capture_log`, `unlisted_capture_address` | Independent `udp` packet capture log and optional interface-local IP for that tuple. |
+
+Both UDP listeners must observe the configured direct Runner source in their
+positive controls. Use a separate unbound Box to reach the unlisted listener
+before and after the denial. Its packet capture must show no ingress during
+the test Box's refused request.
+
+The legacy client case sends a policy-only write using the current ETag and
+expects HTTP 409. It checks the policy and authenticated binding. After using
+the SDK to unbind, it confirms the same allowlist still permits the literal
+HTTPS target on the direct route.
+
+For the credentials case, pass the target `--workload-secret-file` with the
+same synthetic token as the controller. Use a private file on each host with
+one token of 16 to 256 URL-safe characters, and choose unique synthetic proxy
+credentials. The HTTPS target compares the bearer header in memory and records
+the boolean result alongside the route evidence.
+
+The Guest receives a probe script and harmless request values. The controller
+requires a completion marker and nonempty records from the Guest environment,
+selected readable files, and process inputs. It checks those records and both
+command streams for the synthetic values.
+
+The target must match on the injection path and reject the missing- and
+wrong-header controls. It returns only the case marker to the Guest.
+
+For the Registry permission case, set `BOXLITE_E2E_MANAGED_WORKER_PROFILE` to
+an API-key profile in the isolated organization that lacks `write:proxies` and
+`delete:proxies`. Set `BOXLITE_E2E_MANAGED_FOREIGN_PROFILE` to a profile with
+both grants and `write:boxes` and `delete:boxes` in a separate isolated
+organization on the same stage.
+
+Both identities must be able to read their own scope. Denied writes must leave
+the owner's registration intact, and the worker's denied create must leave no
+entry.
+
+Managed create must reject both an unknown registration and a registration
+owned by the other organization. The SDK must report rejection with HTTP 404
+and no Box ID, and the caller's Box list must omit the attempted name.
+
+### Cloud DNS observations
+
+Install the [DNS fixture](fixtures/managed_outbound_dns.py) on the owned DoH
+and direct DNS observer hosts. Start `doh` with `--bind`, `--port`, `--zone`,
+`--a`, `--aaaa`, `--observations`, `--cert`, and `--key`, and repeat `--client`
+for the allowed proxy exits. Set `--a` to the business target's IPv4 and start
+the HTTPS target on port 443 with a Guest-trusted certificate for the test
+zone's wildcard names.
+
+Run the same fixture in `direct` mode on an isolated resolver endpoint with
+the same zone and addresses and a separate log. Route the Runner's system
+resolver queries for the test zone and registered proxy names through this
+observer, with caching disabled for those names. Pass `--client` for the
+forwarder's source, and repeat `--bootstrap NAME IPV4` for the healthy and
+stalled proxy listeners' DNS records.
+
+Pin the trusted HTTPS `/dns-query` URI and numeric `IP:port` in the enrolled
+Runner slot's `dohUrl` and `dohAddress` settings. Run a separate HTTPS
+anonymous recording proxy with `--fault stall` and `--fault-destination` set
+to that tuple. Use the JSON configuration below, with live log paths on the
+test controller and synchronized clocks across the observers.
+
+| `dns` field | Value |
+| --- | --- |
+| `url`, `address`, `zone` | The exact pinned DoH URI, its bare IPv4 address, and the owned DNS test zone. |
+| `guest_business_ip`, `answer_ipv6` | An owned IPv4 distinct from the DoH and business targets, and the IPv6 answer configured in both DNS observers. |
+| `doh_log`, `runner_log`, `runner_source` | Live DoH and direct DNS logs, and the expected source at the direct observer. |
+| `stalled_proxy` | Dedicated HTTPS anonymous listener with `endpoint`, `source`, and `proxy_log`. |
+
+The ordinary `https-anonymous` listener needs a hostname and must allow the
+pinned DoH tuple and the business target. The inspected probe opens a socket
+to `guest_business_ip` and supplies the marked hostname in SNI and Host.
+The tracked CONNECT and target request must use the address returned by DoH.
+
+The Gateway UDP and TCP probes issue individual A and AAAA requests to the
+Guest DNS gateway.
+
+Run a successful DNS control before and after each fault. The resolver and
+proxy logs must distinguish a stalled CONNECT, a stalled DoH response, and a
+wrong DNS transaction ID. The Runner observer must see the unbound and
+bootstrap controls and record zero bound workload queries.
+
+Faults must finish within the five-second resolver budget plus measured
+control time, allowing up to two seconds of overhead.
+
+Each fault runs with an empty TCP diagnostic and with a seeded TCP failure on
+the same installation. Keep port 1 on the owned DoH IPv4 outside both proxy
+listeners' allowed destination lists (port 2 if the DoH service uses port 1).
+The seed must fail at proxy negotiation, and subsequent DNS-only work must
+leave the public TCP diagnostic unchanged.
+
+### Cloud external UDP protocols
+
+Run the [DNS fixture](fixtures/managed_outbound_dns.py) in `direct` mode on an
+owned external DNS socket with the same test zone and answers as the DoH
+fixture. Allow the Runner source via `--client` and use a dedicated log for
+this listener. The direct DNS probe sends a marked UDP query to this socket.
+
+Run a trusted HTTP/3 endpoint with separate JSON access logs on another
+owned UDP socket. The Guest image needs [curl with HTTP/3 support](https://curl.se/docs/http3.html),
+and the endpoint must return the request path for `GET /probe/<marker>`.
+This example uses [Caddy's JSON access log](https://caddyserver.com/docs/caddyfile/directives/log).
+
+```caddyfile
+h3.acceptance.example:443 {
+    tls /path/to/guest-trusted.crt /path/to/guest-trusted.key
+    log {
+        output file /path/to/quic-access.jsonl
+        format json
+    }
+    respond /probe/* "{http.request.uri.path}"
+}
+```
+
+Run the [packet observer](fixtures/managed_outbound_capture.c) in `live` mode
+with `udp` for each of the two exact socket tuples. Each blocked attempt is
+bracketed by successful application requests and captured packets from an
+unbound Box. The bound probe must fail, the captured window must contain no
+target ingress, and both Boxes must retain their installed revisions.
+
+| `external_udp` field | Value |
+| --- | --- |
+| `dns_address`, `dns_port`, `dns_log` | Dedicated external DNS IPv4 and UDP port, plus its live application log. |
+| `quic_origin`, `quic_address`, `quic_log` | Trusted HTTPS origin, configured IPv4, and live Caddy JSON access log for the HTTP/3 endpoint. |
+| `dns_capture_log`, `quic_capture_log` | Independent live packet observation logs for the two UDP destination tuples. |
+| `dns_capture_address`, `quic_capture_address` | Optional interface-local IPv4 addresses when NAT maps the public endpoints to other addresses. |
+
+### Cloud business TCP faults
+
+Allow the owned HTTPS business tuple on the healthy `https-anonymous` and
+`https-credential` listeners. Start two additional anonymous HTTPS listeners
+with `--fault stall` and `--fault malformed` for that tuple. Each listener
+needs its own endpoint and observation log.
+
+Reserve a separate closed TCP port on an owned proxy host, with the isolated
+Runner permitted to reach that port. Use the host's TCP reset as evidence of
+transport refusal. Provide a private credential file with different synthetic
+values for the authentication rejection case.
+
+Compile the [capture observer](fixtures/managed_outbound_capture.c) on each
+capture host with its libpcap development headers. Run `live` with capture
+permission on the interface that carries the isolated test traffic. Use the
+addresses visible on that interface and export the private JSONL logs to the
+test controller in append order.
+
+```bash
+cc -std=c11 apps/e2e/fixtures/managed_outbound_capture.c -lpcap -o managed-outbound-capture
+./managed-outbound-capture live INTERFACE syn TARGET_IPV4 TARGET_PORT target-syn.jsonl
+./managed-outbound-capture live INTERFACE rst CLOSED_PROXY_IPV4 CLOSED_PORT proxy-rst.jsonl RUNNER_SOURCE_IPV4
+```
+
+| `tcp_faults` field | Value |
+| --- | --- |
+| `syn_log`, `syn_capture_address` | Live target SYN log and optional interface-local target address if NAT changes the configured `target_tcp_ip`. |
+| `refused_endpoint`, `refused_log`, `refused_peer` | Registry URL for the reserved closed port, its live RST log, and the Runner source IPv4 visible to the proxy host. |
+| `refused_capture_address` | Optional interface-local IPv4 if NAT changes the closed endpoint address on the capture host. |
+| `stalled_proxy`, `malformed_proxy` | Objects with each dedicated listener's `endpoint`, `source`, and `proxy_log`. |
+| `bad_credentials` | Private JSON credential file on the controller with deliberately different username or password. |
+| `bridge_log_dir` | Private live mirror of the isolated Runner's test Box directories, with daily logs at `<box_id>/logs/boxlite-shim.log.*`. Enable `gvproxy=trace` in the shim's `RUST_LOG`. |
+| `anonymous_listener_address` | IPv4 address the Runner dials for the `https-anonymous` proxy, which can differ from its exit `source`. The isolated proxy hostname must resolve to this single A record and have no AAAA record during the literal refusal cases. |
+| `negotiation` | TLS and SOCKS5 fixtures described below. |
+
+The capture records packet timestamps and reports when it has drained the
+queue. A missing checkpoint, a gap, or capture drops fail the observation.
+Reserve the target tuple for one acceptance case at a time so the positive
+controls and failed attempt can be correlated by time.
+
+The Guest uses one literal-address HTTPS attempt and measures its elapsed
+time. The controller checks the fault-specific proxy evidence, the target's
+SYN window bracketed by successful controls, and the same installed revision
+after the failure. It compares the diagnostic in the Box's shim log with a
+separate check for a fresh typed code from the public outbound status.
+
+The literal allowlist refusal case reuses the healthy anonymous HTTPS proxy
+and SYN capture. A Box whose allowlist excludes the target must record a
+Runtime refusal for that address and port. Its probe window must contain
+zero CONNECTs and zero target SYNs.
+
+The two literal refusal cases calibrate the shim connect trace with the
+closed-port control. The healthy proxy probes must record dials to its ingress
+IPv4. The refused probe must record zero dials to the proxy or target tuple.
+
+The protected-address case uses a separate owned RFC1918 HTTPS target reachable
+by the unbound Runner path. Configure `protected_target` with `address`, `origin`,
+`source`, `target_log`, `capture_log`, and an optional interface-local
+`capture_address`. Give both Boxes the same allowlist, which explicitly includes
+the private address, the public HTTPS control, and the closed-port control.
+
+Use a certificate trusted by the Guest for the private target and start the
+independent SYN capture on its ingress. Configure the HTTPS recording proxy
+with `--observe-tls` and both exact destination tuples.
+
+The bound Box must reach the public controls and refuse the private request
+before any proxy TLS selection or CONNECT. The private target stays reachable
+through the direct control.
+
+Enable `--observe-tls` on the healthy `https-anonymous` listener and the
+untrusted listener. Point `negotiation.wrong_name_endpoint` to an alias on the
+healthy listener's port that its certificate does not cover. The fixture
+records the same leaf fingerprint on the healthy and wrong-name attempts.
+
+Use a separate `negotiation.untrusted_proxy` object with `endpoint`, `source`,
+`proxy_log`, `certificate_file` and `ca_file`. The certificate must match the
+untrusted listener's DNS name and verify with the supplied fixture CA. Keep
+that CA outside the Runner trust store, and use the supplied leaf on the
+listener whose selection fingerprint will be compared.
+
+Configure `negotiation.downgrade_proxy` with `endpoint`, `source` and
+`proxy_log` for a separate `socks5-credential` listener started with
+`--fault socks-downgrade`. It answers the password-only greeting with the
+no-auth selection and records whether the client closes before sending more
+data.
+
+```bash
+BOXLITE_E2E_TEST_PCAP=1 make test:rest:e2e PYTEST_FILTER='-k managed_packet_capture'
+```
+
+### Deployment lifecycle
+
+Use two enrolled HTTPS V0 Runners dedicated to the test organization and the
+independent target SYN observer described above. Restrict initial placement to
+the primary Runner and make the second Runner available for reassignment.
+
+The PostgreSQL service also needs read access to `outbound_proxy_reference`. Keep
+the target and Runner observation clocks synchronized with the controller.
+
+Set `deployment.controller` to the absolute path of the isolated deployment's
+executable fault controller. Set `deployment.replacement_runner` with
+`runner_id`, `runner_origin` and `inventory_url` for the second Runner. Supply
+`BOXLITE_E2E_REPLACEMENT_INVENTORY_TOKEN` and
+`BOXLITE_E2E_REPLACEMENT_RUNNER_KEY` through the test environment.
+
+The controller reads one JSON object from stdin and writes one JSON object
+to stdout. Each request specifies `action`, `run_id`, `organization` and the
+two Runner IDs. Echo `action` and `run_id` in every response.
+
+Run these faults in a dedicated acceptance deployment. Observe public create
+requests, Runner ingress, and V2 job dispatch before arming a fault. Return
+only records for the requested run and restore placement, forwarding rules
+and any suspended reconciliation in `cleanup`.
+
+| Action | Deployment controller behavior and evidence |
+| --- | --- |
+| `arm-create` | Scope the fault to `name`. For `http-only-v0` or `v2-only`, give that organization exactly one eligible placement candidate of the requested kind and return `candidate_runner_id`. Leave the enrolled control Runners visible to their observers. |
+| `arm-create` with `drop-public-reply` | Allow exactly one complete upstream create through bootstrap. Close the public client connection after the upstream 201, before forwarding any response bytes. Observe all public POSTs for that name. |
+| `arm-create` with `reset-first-runner-reply` or `reset-all-runner-replies` | Deliver the exact stopped placeholder create on each Runner ingress. Reset the Cloud connection after the successful allocation but before sending response bytes, either once or on all four ingresses. |
+| `arm-create` with `hold-first-runner-reply` | Deliver the stopped placeholder create and keep its successful reply held beyond the public 30-second deadline. The public observer records that the Runner request remains active when Cloud sends 408. |
+| `finish-held-create` | End the held Runner request with HTTP 422 and wait for it to leave the fault relay. Record that status on the same create event. `cleanup` must also release the hold after a failed assertion. |
+| `create-evidence` | Drain the public, Runner and V2 observers for `name` through the current barrier, including the terminal public response. Return `name`, `public_ready`, `public_posts` and cumulative Runner evidence. Include the incompatible candidate in `ready` when present. |
+| `stage-v2-restart` | Move only the isolated Box assignment from the primary to the V2 candidate and return `candidate_runner_id`. Keep the recorded epoch, binding and pins, and restore the original assignment in `cleanup`. |
+| `seed-warm-pool` | Arrange one claimable warm Box matching `image` and the ordinary create shape on the primary Runner. Return its `box_id` and begin recording the managed create for the requested `name`. The subsequent ordinary create must be able to adopt that warm Box. |
+| `drop-prepare-reply` | For the requested `box_id`, deliver managed `prepare` and discard the successful Runner reply. Return a prompt upstream transport failure on each prepare until resumed. Pass through inspections. |
+| `resume-prepare` | Restore prepare replies for the requested Box so Cloud's reconciliation worker can apply the existing pending update. |
+| `observe-box` | Start a fresh lossless Runner dispatch window immediately before the settled conditional write. |
+| `arm-apply-evidence` | Forward the real Apply. For `lost-exact` and `lost-pending`, discard its reply and promptly fail the Cloud request to the Runner. Keep Inspect exact for `lost-exact`. For `lost-pending`, make Cloud-facing Inspect retain this attempt's pending marker over the candidate. For `wrong-proxy-revision` or `wrong-epoch`, modify the Apply reply and consistently obstruct exact Cloud-facing Inspect until resumed. |
+| `resume-apply-evidence` | Restore original forwarding and let Cloud reconcile the same pending attempt. |
+| `drop-inspect-reply` | Start a fresh evidence window, allow the Cloud-side `inspect` to reach the Runner, and return a prompt failure without forwarding its authenticated receipt. Leave direct acceptance readback available. |
+| `arm-delete-404` / `await-delete-404` | Pass the real seal, fail the exact retirement calls before delivery, and reply to fallback ordinary stop with 404. Wait for the refusal sequence to finish. Cleanup restores normal forwarding and lets the admitted deletion finish. |
+| `arm-recovery` | Arm the fault for the exact `box_id` and `old_epoch`. For `missing-retire-reply` and `irreconcilable-seal`, arrange a durable pending update and pin before reassignment. |
+| `reassign` | Trigger the real Cloud reassignment from the primary Runner to the replacement. |
+| `await-recovery-barrier` | For `missing-retire-reply`, deliver retirement but withhold exact replies. For `irreconcilable-seal`, return the mismatched sealed revision before forwarding exact retirement. For `held-release`, wait for the replacement bootstrap receipt and hold release before delivery. |
+| `probe-held-guest` | Execute the bounded target probe in the actual replacement Guest via the Runner. Return `box_id`, `runner_id`, `epoch`, the supplied `marker` and `completed: true` once the Guest has exited the probe. |
+| `release-recovery` and `await-recovery-settled` | Resume delivery only for the supplied `epoch` and `generation`. Wait until Cloud publishes the settled replacement. |
+| `evidence` | Drain both live, lossless Runner observers through the named `barrier`. Return the observer Runner IDs in `ready` and ordered, Box-scoped `events`. |
+| `cleanup` | Disarm this run, restore its Runner traffic and clean up controller-owned fixture state. The test then deletes its Boxes and registrations through the normal APIs. |
+
+```mermaid
+sequenceDiagram
+    participant Test as Acceptance test
+    participant Cloud
+    participant Relay as Fault controller
+    participant Runner as HTTPS V0 Runner
+    Test->>Relay: Arm held reply
+    Test->>Cloud: Create bound Box
+    Cloud->>Relay: Create stopped placeholder
+    Relay->>Runner: Forward create
+    Runner-->>Relay: Return allocated Box
+    Note over Relay,Cloud: Controller keeps the Runner request open
+    Cloud-->>Test: Public deadline returns 408 with Box ID
+    Test->>Runner: Confirm the same stopped placeholder
+    Test->>Relay: Finish held create
+    Relay-->>Cloud: End Runner request with 422
+```
+
+Each Runner event contains `runner_id`, `box_id`, `operation`, and booleans
+`delivered`, `reply_forwarded` and `credential_present`. Use operation names
+`create`, `bootstrap`, `prepare`, `apply`, `retire` and `release-gate` for the
+corresponding V0 requests. Include `attempt_id` on prepare and bootstrap
+events and `epoch` and `generation` on release events.
+
+On create, set `stopped_placeholder` only for a credential-free stopped placeholder request
+with a successful upstream allocation. Record `reply_fault` as
+`reset-before-response` or `held` when that fault applies.
+
+The create observer returns redacted `public_posts` entries with `box_id`,
+integer `status`, and `reply_forwarded`. Omit the Box ID when placement failed.
+Record `runner_request_active` at the public response boundary for the held
+case.
+
+Include any mutating dispatch seen on an incompatible Runner or in its
+V2 job queue. The deletion observer uses `stop` with `response_status: 404`
+and `remove-retired` for protected removal. Leave payloads and credential
+values out of all evidence.
+
+Apply evidence includes the `attempt_id` from the exact delivered Apply.
+For forwarded replies used as proof, `reply` reports the redacted `epoch`,
+`policy_revision`, `registration_id`, `registration_revision` as a string,
+and `pending_attempt` as a string or null. Keep direct authenticated Runner
+reads outside the reply fault so the test can distinguish installed state from
+what reached Cloud.
+
+The legacy-write case waits for the original API request to return
+`outbound_application_unconfirmed` and release its Box lock. It then sends the
+legacy write while Cloud and Runner still record the pending attempt. It also
+sends the same stale `If-Match` against both states and checks the respective
+412 and 409 responses, persistent references and dispatch evidence.
+
+The pytest cases independently read the stored assignment and references,
+authenticate Runner receipts and check target ingress. A missing observer,
+stale receipt or unconfirmed cleanup fails the case.
+
+```bash
+make test:rest:e2e PYTEST_FILTER='-k managed_proxy_deployment --managed-outbound-config /absolute/path/managed-outbound.json'
+```
+
+### Network boundary observers
+
+Set `--private-a` to the owned `protected_target.address` on both DNS fixture
+listeners. Probes use unique `private-<marker>.<zone>` names. The direct
+subject permits the hostname and public IPv4, while bound subjects also
+explicitly permit the private IPv4 in `allow_net` to exercise the connector.
+
+A separate unbound Box has the explicit private rule and proves the target
+and capture work.
+
+The fault controller attaches `start-connect-trace` to the exact attested
+Box shim and epoch on the primary Runner. Wait for all shim threads to be
+traced before returning, and keep the trace complete across thread creation
+through the requested `connect-evidence` window.
+
+Run `strace -ff -ttt -e trace=connect -o <private-prefix> -p <shim-pid>`.
+Use the [connect decoder](fixtures/managed_outbound_connect.py) to extract the
+exact IPv4 tuple, including mapped attempts and failed calls.
+
+`connect-evidence` echoes `runner_id`, `box_id`, `epoch`, `address`, and `port`. It returns
+`from_ns`, `through_ns`, `complete`, and `attempts` only after draining through
+`completed_ns`. Verify coverage independently of whether attempts exist.
+
+Omit payloads and unscoped calls. The tests calibrate the tracer against
+the owned closed port and its RST observer before requiring zero direct calls.
+
+Use `arm-udp-writer` and `await-udp-writer` for the exact Box, epoch and echo
+`marker` on the Linux Guest link of the build under test. `completed` waits
+for a full host-side write while the Guest probe still waits for instructions.
+`queued` holds the marked frame before writer admission, and `partial` lets
+the peer read the four-byte header while stalling the payload.
+
+On `release-udp-writer`, wait for the actual generation seal, then let the
+queued frame proceed or close the partial link.
+
+```mermaid
+sequenceDiagram
+    participant Test as Acceptance test
+    participant Cloud
+    participant Writer as Guest-link writer
+    participant Guest
+    Test->>Writer: Arm the marked old frame
+    Test->>Guest: Start the UDP probe
+    alt Completed
+        Writer->>Guest: Write header and payload before seal
+    else Queued
+        Note over Writer: Hold before writer admission
+    else Partial
+        Writer->>Guest: Write header and hold payload
+    end
+    Test->>Cloud: Replace outbound policy
+    Cloud->>Writer: Seal the previous generation
+    Test->>Writer: Release after seal
+    alt Queued
+        Note over Writer: Drop the queued frame
+    else Partial
+        Writer-->>Guest: Close the incomplete link
+    end
+    Cloud-->>Test: Confirm or retain the prior revision
+```
+
+`udp-writer-evidence` reports `runner_id`, `box_id`, `epoch`, `marker`,
+`phase`, `complete`, nonempty `generation`, and `old_writes_after_seal` from
+the scoped observation. Include `queued_ns`, `sealed_ns`, `write_started_ns`,
+`write_completed_ns`, `declared_bytes`, `accepted_bytes` for payload bytes,
+and `header_bytes` separately. Include `frame_dropped: true` for the queued
+frame, and `closed_ns`, `peer_payload_bytes: 0`, and `outcome: uncertain` for
+the partial frame.
+
+Use null for write timestamps of events that did not occur.
+
+`arm-dhcp` starts an independent capture on the bound Box's Guest-facing
+interface. `renew-dhcp` triggers one renewal in that Guest without changing
+its lease or default route and waits for delivery.
+
+Return `runner_id`, `box_id`, `epoch`, `complete`, and the matched `request`
+and `ack`. Each record contains `type`, integer `xid`, `client` MAC,
+`address`, and `time_ns`. The ACK also includes
+`server` and `received_by_guest`.
+
+Both records come from the current renewal. Capture loss or a mismatched
+transaction fails the test.
+
+### Local failure rehearsal
+
+The recording proxy accepts `--fault stall` or `--fault malformed` for one
+allowlisted `--fault-destination` on an HTTP or HTTPS listener. The fixture
+records that CONNECT at the listener and leaves all other permitted destinations
+available. Sending the wrong Basic credential produces a 407 and a redacted
+authentication rejection record.
+
+```bash
+make test:rest:e2e FILTER=managed_outbound_harness
+make test:unit:gvproxy GOTEST_FILTER="-count=1 -v -run 'Test(ManagedDNSFaults|GatewayDNS|ProxyDNS|ProxyConnector)'"
+```
+
+The managed DNS test exercises gateway UDP and TCP and the business hostname
+resolver through a recording CONNECT peer and a TLS DoH service. It covers a
+stalled CONNECT, a stalled DoH response, and a mismatched DNS transaction ID.
+It checks that each fault reaches the expected listener, leaves the installed
+route confirmed, and makes no direct lookup or dial.
+
+Deployed fault acceptance also needs target-side TCP initiation and Runner-side
+DNS observations. For business TCP faults, collect the required category from
+the public outbound status or SDK and report an absent category as a failed
+release check. The local bridge results establish only the Runtime behavior.
+
+### Runner admission and recovery rehearsal
+
+Run the protected Runner adapter and outbound store suites against a private
+loopback PostgreSQL instance. They cover refusal before Box persistence on
+HTTP-only V0 and V2-only placement. They also check that a stopped Box with
+a V0 proxy binding cannot dispatch a legacy V2 job.
+
+```bash
+make test:apps:api TEST_FILES='protected-runner.spec.ts|outbound-policy.store.integration.spec.ts'
+```
+
+The adapter fixture drops one or all placeholder replies on the HTTPS
+connection. Each request keeps the same Box ID, and bootstrap and credential
+loading wait for an accepted placeholder reply. The Runner's native
+`TestIntegrationCreateBoxIdempotentOnReplay` checks that the repeated request
+adopts the existing stopped container.
+
+The recovery fixture holds both proxy references while the old Runner's
+retirement or durable state is unconfirmed. After exact retirement, it holds
+the new gate release and verifies pending public status with unknown readback.
+The resumed action must finish the original launch and report the exact
+installed policy after releasing its generation.
+
+The hosted run still needs the documented Runner-specific HTTP diagnostics
+and the Guest-side held-gate traffic observations. Keep the control-plane
+and native test results with the corresponding Cloud evidence.
+
 ## Subdomain acceptance
 
 `cases/test_subdomain.py` exercises Python async/sync, Node, Go, C, Rust and

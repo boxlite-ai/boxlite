@@ -81,8 +81,25 @@ export class OutboundPolicyStore {
   async read(id: string, organizationId: string): Promise<Box> {
     const runner = this.dataSource.createQueryRunner('master')
     try {
-      return await this.find(runner.manager, id, organizationId, false)
+      return await this.find(runner.manager, id, organizationId)
     } finally {
+      await runner.release()
+    }
+  }
+
+  async readForDiagnostic(id: string, organizationId: string): Promise<Box | undefined> {
+    const runner = this.dataSource.createQueryRunner('master')
+    try {
+      await runner.startTransaction()
+      await runner.query('LOCK TABLE box IN ROW SHARE MODE NOWAIT')
+      const box = await this.find(runner.manager, id, organizationId, 'pessimistic_read')
+      await runner.commitTransaction()
+      return box
+    } catch (error) {
+      if (error instanceof NotFoundException || (error as { code?: string }).code === '55P03') return undefined
+      throw error
+    } finally {
+      if (runner.isTransactionActive) await runner.rollbackTransaction()
       await runner.release()
     }
   }
@@ -96,7 +113,7 @@ export class OutboundPolicyStore {
     try {
       await runner.startTransaction('REPEATABLE READ')
       await runner.query('SET TRANSACTION READ ONLY')
-      const result = await read(await this.find(runner.manager, id, organizationId, false), runner.manager)
+      const result = await read(await this.find(runner.manager, id, organizationId), runner.manager)
       await runner.commitTransaction()
       return result
     } finally {
@@ -116,7 +133,7 @@ export class OutboundPolicyStore {
       await runner.connect()
       await runner.startTransaction()
       await runner.query("SET LOCAL lock_timeout = '5s'")
-      const box = await this.find(runner.manager, id, organizationId, true)
+      const box = await this.find(runner.manager, id, organizationId, 'pessimistic_write')
       const result = await operation({
         box,
         manager: runner.manager,
@@ -162,12 +179,18 @@ export class OutboundPolicyStore {
     }
   }
 
-  private async find(manager: EntityManager, id: string, organizationId: string, lock: boolean): Promise<Box> {
+  private async find(
+    manager: EntityManager,
+    id: string,
+    organizationId: string,
+    lock?: 'pessimistic_read' | 'pessimistic_write',
+  ): Promise<Box> {
     const query = manager
       .createQueryBuilder(Box, 'box')
       .addSelect('box.outboundControl')
       .where('box.id = :id AND box.organizationId = :organizationId', { id, organizationId })
-    if (lock) query.setLock('pessimistic_write')
+    if (lock) query.setLock(lock)
+    if (lock === 'pessimistic_read') query.setOnLocked('nowait')
     const box = await query.getOne()
     if (!box) throw new NotFoundException('Box not found')
     persistedOutbound(box)

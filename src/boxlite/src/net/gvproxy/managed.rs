@@ -74,4 +74,49 @@ pub(crate) struct ManagedProxyStatus {
     pub(crate) binding: Option<ManagedProxyIdentity>,
     pub(crate) recovery_gate: Option<ManagedRecoveryGate>,
     pub(crate) capabilities: Vec<String>,
+    pub(crate) proxy_diagnostic: Option<serde_json::Value>,
+}
+
+impl ManagedProxyStatus {
+    pub(crate) fn diagnostic_code(&self) -> Option<&str> {
+        match self.proxy_diagnostic.as_ref()?.as_str()? {
+            code @ ("proxy_unreachable"
+            | "proxy_auth_failed"
+            | "proxy_handshake_failed"
+            | "proxy_timeout") => Some(code),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ManagedProxyStatus;
+    use serde_json::json;
+
+    #[test]
+    fn protected_outbound_diagnostic_does_not_change_snapshot_decoding() {
+        let snapshot = json!({
+            "policy": {"mode": "enabled", "allow_net": []},
+            "revision": "fixture-policy",
+            "application_state": "confirmed",
+            "binding": {"registration_id": "proxy", "registration_revision": "2", "epoch": "fixture-epoch"},
+            "capabilities": ["managed-proxy-v1"],
+        });
+        let old: ManagedProxyStatus = serde_json::from_value(snapshot.clone()).unwrap();
+        for (value, expected) in [
+            (json!("proxy_timeout"), Some("proxy_timeout")),
+            (json!({"code": "proxy_timeout"}), None),
+            (json!("future_error"), None),
+            (json!(null), None),
+        ] {
+            let mut body = snapshot.clone();
+            body["proxy_diagnostic"] = value;
+            let decoded: ManagedProxyStatus = serde_json::from_value(body).unwrap();
+            assert_eq!(decoded.status, old.status);
+            assert_eq!(decoded.binding, old.binding);
+            assert_eq!(decoded.diagnostic_code(), expected);
+        }
+        assert_eq!(old.diagnostic_code(), None);
+    }
 }

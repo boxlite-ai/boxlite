@@ -1,12 +1,18 @@
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createServer as createHttpServer, ServerResponse } from 'node:http'
 import { createServer, Server } from 'node:https'
 import { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Context } from '../../common/context/context'
 import { Runner } from '../entities/runner.entity'
 import { Box } from '../entities/box.entity'
+import { BoxService } from '../services/box.service'
 import { RunnerService } from '../services/runner.service'
+import { BoxStateWaiterService } from '../services/box-state-waiter.service'
+import { BoxState } from '../enums/box-state.enum'
+import { BoxliteBoxController } from '../../boxlite-rest/boxlite-box.controller'
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
 import { ProtectedBootKey } from './protected-runner'
 
@@ -23,6 +29,10 @@ describe('Protected Runner TLS and placement', () => {
   let trustedKey: Buffer
   let healthCalls: number
   let volumeRestarts: boolean
+  let bootstrapReply: unknown
+  let managedDiagnostic: unknown
+  let dropPlaceholderReplies: number
+  let holdPlaceholderReply: ((response: ServerResponse) => void) | undefined
   const received: { path: string; body: any }[] = []
   const boxId = '597da250-c3f6-4276-a0c2-25657a8fdeda'
   const bootPath = `/v1/boxes/${boxId}/network/outbound/bootstrap`
@@ -90,21 +100,23 @@ describe('Protected Runner TLS and placement', () => {
         request.headers['x-boxlite-runner-id'] === runnerId
       ) {
         response.end(
-          JSON.stringify({
-            runner_id: runnerId,
-            version: 1,
-            operations: [
-              'start',
-              'receipt',
-              'retire',
-              'release-gate',
-              'seal-gate',
-              'managed-route',
-              'unbound-start',
-              'remove-retired',
-              ...(volumeRestarts ? ['restart-volumes'] : []),
-            ],
-          }),
+          JSON.stringify(
+            bootstrapReply ?? {
+              runner_id: runnerId,
+              version: 1,
+              operations: [
+                'start',
+                'receipt',
+                'retire',
+                'release-gate',
+                'seal-gate',
+                'managed-route',
+                'unbound-start',
+                'remove-retired',
+                ...(volumeRestarts ? ['restart-volumes'] : []),
+              ],
+            },
+          ),
         )
       } else if (
         request.method === 'POST' &&
@@ -123,6 +135,15 @@ describe('Protected Runner TLS and placement', () => {
         request.on('end', () => {
           const body = JSON.parse(incoming)
           received.push({ path: request.url!, body })
+          if (request.url === '/boxes' && dropPlaceholderReplies > 0) {
+            dropPlaceholderReplies--
+            response.destroy()
+            return
+          }
+          if (request.url === '/boxes' && holdPlaceholderReply) {
+            holdPlaceholderReply(response)
+            return
+          }
           if (request.url?.endsWith('/managed-route')) {
             const route = {
               binding: null,
@@ -137,6 +158,7 @@ describe('Protected Runner TLS and placement', () => {
                   epoch: 'fixture-epoch',
                   durable: route,
                   installed: route,
+                  proxy_diagnostic: managedDiagnostic,
                   pending_attempt: null,
                   unbind_settlement: 'unbind-attempt',
                   rollback: null,
@@ -182,6 +204,10 @@ describe('Protected Runner TLS and placement', () => {
   beforeEach(() => {
     healthCalls = 0
     volumeRestarts = false
+    bootstrapReply = undefined
+    managedDiagnostic = undefined
+    dropPlaceholderReplies = 0
+    holdPlaceholderReply = undefined
     received.length = 0
     server.setSecureContext({ key: trustedKey, cert: trusted })
   })
@@ -201,6 +227,18 @@ describe('Protected Runner TLS and placement', () => {
     await expect(runner.supportsProtectedBootstrap(true, true)).resolves.toBe(false)
     volumeRestarts = true
     await expect(runner.supportsProtectedBootstrap(true, true)).resolves.toBe(true)
+  })
+
+  it.each([
+    ['missing operations', { runner_id: runnerId, version: 1, operations: ['start'] }, 'unsupported'],
+    ['bad operation shape', { runner_id: runnerId, version: 1, operations: [null] }, 'unverified'],
+    ['wrong identity', { runner_id: 'different-runner', version: 1, operations: [] }, 'unverified'],
+    ['wrong protocol', { runner_id: runnerId, version: 2, operations: [] }, 'unverified'],
+  ])('classifies authenticated capability evidence with %s', async (_case, reply, expected) => {
+    enroll(trusted)
+    bootstrapReply = reply
+    const runner = await adapter(record())
+    await expect(runner.protectedBootstrapCapability(true)).resolves.toBe(expected)
   })
 
   it('uses the deployment CA in the normal V0 health path and rejects untrusted TLS', async () => {
@@ -249,6 +287,63 @@ describe('Protected Runner TLS and placement', () => {
     expect(factory.create).not.toHaveBeenCalledWith(higher[0])
   })
 
+  it.each([
+    ['runner_proxy_tls_unsupported', ['0', '2']],
+    ['runner_proxy_unsupported', ['2']],
+  ])('refuses an incompatible placement with %s without probing', async (code, versions) => {
+    const runners = versions.map((apiVersion) => record({ apiVersion, apiUrl: 'http://localhost:8080' }))
+    const create = jest.fn(adapter)
+    const service = new RunnerService(
+      { find: jest.fn().mockResolvedValue(runners) } as any,
+      { create } as any,
+      {} as any,
+      {} as any,
+      { getOrThrow: () => 1 } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    )
+
+    await expect(service.getRandomAvailableRunner({ requiresProtectedProxyBootstrap: true })).rejects.toMatchObject({
+      status: 503,
+      response: { code: 'outbound_create_rejected' },
+      diagnostic: code,
+    })
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('keeps the generic capacity error if any candidate is inconclusive', async () => {
+    enroll(trusted)
+    bootstrapReply = { runner_id: 'not-the-enrolled-runner', version: 1, operations: [] }
+    const service = Object.create(RunnerService.prototype) as RunnerService
+    Object.assign(service, {
+      runnerRepository: { find: async () => [record({ apiVersion: '2' }), record()] },
+      runnerAdapterFactory: { create: adapter },
+      configService: { getOrThrow: () => 1 },
+    })
+    await expect(service.getRandomAvailableRunner({ requiresProtectedProxyBootstrap: true })).rejects.toMatchObject({
+      status: 400,
+      response: 'No available runners',
+    })
+  })
+
+  it.each([
+    [undefined, undefined],
+    [{ code: 'proxy_timeout' }, undefined],
+    ['future_error', undefined],
+    ['proxy_timeout', 'proxy_timeout'],
+  ])('decodes optional Runner diagnostic %p independently of installed evidence', async (wire, expected) => {
+    enroll(trusted)
+    managedDiagnostic = wire
+    const chosen = await adapter(record())
+    const receipt = await chosen.managedOutbound(boxId, 'fixture-epoch', { operation: 'inspect' })
+    expect(receipt.installed).toEqual(receipt.durable)
+    expect(receipt.installed?.snapshot.revision).toBe('live-revision')
+    if (expected) expect(receipt.proxy_diagnostic).toBe(expected)
+    else expect(receipt).not.toHaveProperty('proxy_diagnostic')
+  })
+
   it('only loads the credential after the selected Runner proves bootstrap capability', async () => {
     enroll(trusted)
     const box = { id: boxId, runnerId, mem: 1, outboundEnabled: true } as Box
@@ -294,6 +389,173 @@ describe('Protected Runner TLS and placement', () => {
       outcome: 'retired',
     })
   })
+
+  it.each(['http-only V0', 'V2-only'])(
+    'refuses a credential-free managed create with %s placement before persistence or dispatch',
+    async (mode) => {
+      let plainRequests = 0
+      const plain = createHttpServer((_request, response) => {
+        plainRequests++
+        response.writeHead(500).end()
+      })
+      await new Promise<void>((resolve) => plain.listen(0, '127.0.0.1', resolve))
+      const env = process.env.OUTBOUND_PROXY_REGISTRY_ENABLED
+      process.env.OUTBOUND_PROXY_REGISTRY_ENABLED = 'true'
+      try {
+        const candidate = record({
+          apiVersion: mode === 'V2-only' ? '2' : '0',
+          apiUrl: `http://127.0.0.1:${(plain.address() as AddressInfo).port}`,
+        })
+        const factory = { create: jest.fn(adapter) }
+        const candidates = jest.fn().mockResolvedValue([candidate])
+        const runnerService = Object.create(RunnerService.prototype) as RunnerService
+        Object.assign(runnerService, {
+          runnerRepository: { find: candidates },
+          runnerAdapterFactory: factory,
+          configService: { getOrThrow: () => 1 },
+        })
+        const insert = jest.fn()
+        const seed = jest.fn()
+        const spendColdPullBudget = jest.fn()
+        const service = Object.create(BoxService.prototype) as BoxService
+        Object.assign(service, {
+          runnerService,
+          regionService: { findOne: async () => ({ id: 'isolated-region' }) },
+          organizationService: {
+            isNestedVirtualizationEnabled: async () => false,
+            assertOrganizationIsNotSuspended: jest.fn(),
+          },
+          organizationBoxLimits: { resolve: async () => ({ maxCpuPerBox: 0, maxMemoryPerBox: 0, maxDiskPerBox: 0 }) },
+          imageAdmissionService: { assert: async () => undefined, spendColdPullBudget },
+          imageResolverService: { resolve: async () => ({ ref: 'alpine', isOrgOwned: true }) },
+          outboundBootstrap: { resolveName: async () => ({ credential_configured: false }), seed },
+          boxRepository: { insert },
+        })
+        await expect(
+          service.create(
+            { name: 'isolated-box', image: 'alpine' } as never,
+            { id: 'fixture-org', defaultRegionId: 'isolated-region' } as never,
+            Context.user(),
+            { outboundProxy: 'existing-registry-name' },
+          ),
+        ).rejects.toMatchObject({
+          status: 503,
+          response: { code: 'outbound_create_rejected' },
+          diagnostic: mode === 'V2-only' ? 'runner_proxy_unsupported' : 'runner_proxy_tls_unsupported',
+        })
+        expect(candidates).toHaveBeenCalledTimes(1)
+        expect(factory.create).not.toHaveBeenCalled()
+        expect(insert).not.toHaveBeenCalled()
+        expect(seed).not.toHaveBeenCalled()
+        expect(spendColdPullBudget).not.toHaveBeenCalled()
+        expect(plainRequests).toBe(0)
+        expect(received).toHaveLength(0)
+      } finally {
+        if (env === undefined) delete process.env.OUTBOUND_PROXY_REGISTRY_ENABLED
+        else process.env.OUTBOUND_PROXY_REGISTRY_ENABLED = env
+        plain.closeAllConnections()
+        await new Promise<void>((resolve) => plain.close(() => resolve()))
+      }
+    },
+  )
+
+  it.each([1, 4])('preserves placeholder identity when %d Runner replies are lost', async (lost) => {
+    enroll(trusted)
+    dropPlaceholderReplies = lost
+    const chosen = await adapter(record())
+    const box = { id: boxId, runnerId, mem: 1, outboundEnabled: true } as Box
+    const key: ProtectedBootKey = {
+      runner_id: runnerId,
+      attempt_id: 'retry-attempt',
+      registration_id: 'fixture-registration',
+      registration_revision: '1',
+      policy: { revision: 'fixture-policy', policy: { mode: 'enabled', allow_net: [] } },
+    }
+    const loadRoute = jest.fn(async () => ({
+      scheme: 'https' as const,
+      host: 'fixture-proxy.example',
+      port: 443,
+      credential: { username: 'fixture-user', password: 'fixture-proxy-secret' },
+    }))
+    const creation = chosen.createProtectedBox(box, 'alpine', key, loadRoute)
+    if (lost === 1) {
+      await expect(creation).resolves.toEqual({ key, epoch: 'fixture-epoch', outcome: 'confirmed' })
+      expect(loadRoute).toHaveBeenCalledTimes(1)
+      expect(received.map(({ path }) => path)).toEqual(['/boxes', '/boxes', bootPath])
+      expect(received.at(-1)?.body.key).toEqual(key)
+    } else {
+      await expect(creation).rejects.toThrow()
+      expect(loadRoute).not.toHaveBeenCalled()
+      expect(received.map(({ path }) => path)).toEqual(['/boxes', '/boxes', '/boxes', '/boxes'])
+    }
+    expect(dropPlaceholderReplies).toBe(0)
+    const placeholders = received.filter(({ path }) => path === '/boxes').map(({ body }) => body)
+    for (const body of placeholders) {
+      expect(body).toEqual(placeholders[0])
+      expect(body).toMatchObject({ id: boxId, skipStart: true, outboundEnabled: false })
+      expect(JSON.stringify(body)).not.toContain('fixture-proxy-secret')
+    }
+  })
+
+  it('returns the admitted Box after the public wait while the first Runner reply is still held', async () => {
+    enroll(trusted)
+    const entered = new Promise<ServerResponse>((resolve) => {
+      holdPlaceholderReply = resolve
+    })
+    const chosen = await adapter(record())
+    const box = { id: boxId, runnerId, mem: 1, state: BoxState.CREATING, outboundEnabled: true } as Box
+    const key: ProtectedBootKey = {
+      runner_id: runnerId,
+      attempt_id: 'held-reply-attempt',
+      registration_id: 'fixture-registration',
+      registration_revision: '1',
+      policy: { revision: 'fixture-policy', policy: { mode: 'enabled', allow_net: [] } },
+    }
+    const loadRoute = jest.fn()
+    const runnerCall = chosen.createProtectedBox(box, 'alpine', key, loadRoute)
+    const settled = jest.fn()
+    const cleanup = runnerCall.then(settled, settled)
+    const boxService = {
+      create: jest.fn().mockResolvedValue(box),
+      findOneByIdOrName: jest.fn().mockResolvedValue(box),
+      toBoxDto: jest.fn().mockResolvedValue({}),
+    }
+    const subscriber = { on: jest.fn(), subscribe: jest.fn().mockResolvedValue(1), quit: jest.fn() }
+    const waiter = new BoxStateWaiterService(boxService as never, { duplicate: () => subscriber } as never)
+    const route = new BoxliteBoxController(
+      boxService as never,
+      waiter,
+      { resolveMaxCreatedBoxes: jest.fn() } as never,
+      {} as never,
+    )
+    let held: ServerResponse | undefined
+    try {
+      held = await Promise.race([
+        entered,
+        runnerCall.then(() => Promise.reject(new Error('Runner returned before its placeholder reply was held'))),
+      ])
+      const started = performance.now()
+      await expect(
+        route.createBox(
+          { organization: { id: 'fixture-org' } } as never,
+          { image: 'alpine', network: { outbound: { mode: 'enabled', proxy: 'fixture-proxy' } } } as never,
+          Context.user(),
+        ),
+      ).rejects.toMatchObject({ status: 408, response: { code: 'outbound_create_admitted', boxId } })
+      expect(performance.now() - started).toBeGreaterThanOrEqual(29_900)
+      expect(settled).not.toHaveBeenCalled()
+      expect(loadRoute).not.toHaveBeenCalled()
+      expect(received.map(({ path }) => path)).toEqual(['/boxes'])
+      expect(received[0].body).toMatchObject({ id: boxId, skipStart: true, outboundEnabled: false })
+      expect(boxService.create).toHaveBeenCalledTimes(1)
+    } finally {
+      held?.writeHead(422, { 'Content-Type': 'application/json' }).end('{"message":"fixture end"}')
+      await cleanup
+      await waiter.onModuleDestroy()
+    }
+    expect(settled).toHaveBeenCalledTimes(1)
+    expect(received.map(({ path }) => path)).toEqual(['/boxes'])
+  }, 45_000)
 
   it('requires exact epoch, generation and gate state in the enrolled Runner receipt', async () => {
     enroll(trusted)

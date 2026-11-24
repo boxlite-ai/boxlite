@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -127,8 +128,18 @@ func (r *proxyDNSResolver) query(ctx context.Context, query *dns.Msg) (*dns.Msg,
 // detaches its dial goroutine, so it receives only the already opened tunnel.
 func (r *proxyDNSResolver) exchange(ctx context.Context, query *dns.Msg) (_ *dns.Msg, err error) {
 	defer func() {
-		if canceled := ctx.Err(); err != nil && canceled != nil {
+		if err == nil {
+			return
+		}
+		if canceled := ctx.Err(); canceled != nil {
 			err = canceled
+			return
+		}
+		// The socket can reach its deadline before the lookup context reports it.
+		deadline, bounded := ctx.Deadline()
+		if errors.Is(err, proxyTimeout) ||
+			(errors.Is(err, os.ErrDeadlineExceeded) && bounded && !time.Now().Before(deadline)) {
+			err = context.DeadlineExceeded
 		}
 	}()
 	if query.Response || query.Opcode != dns.OpcodeQuery || len(query.Question) != 1 {

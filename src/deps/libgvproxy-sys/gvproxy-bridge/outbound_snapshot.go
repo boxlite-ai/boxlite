@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync/atomic"
 
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -64,6 +65,7 @@ func (s *outboundSnapshot) configureResolution(work *dnsLookupWork) {
 	if s.proxyDNS != nil {
 		dialer.resolve = s.proxyDNS.lookupIP
 		dialer.connect = s.proxyDNS.connect
+		dialer.diagnostic = new(atomic.Pointer[proxyFailure])
 	} else {
 		resolve := dialer.resolve
 		dialer.resolve = func(ctx context.Context, name string) ([]net.IP, error) {

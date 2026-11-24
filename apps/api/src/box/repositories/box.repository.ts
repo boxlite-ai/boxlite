@@ -6,6 +6,7 @@
 
 import { DataSource, EntityManager, FindOneOptions, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
+import { Runner } from '../entities/runner.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Checkpoint } from '../entities/checkpoint.entity'
@@ -16,6 +17,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { BoxConflictError } from '../errors/box-conflict.error'
+import { ProxyPlacementError } from '../errors/proxy-placement.error'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { BaseRepository } from '../../common/repositories/base.repository'
@@ -486,6 +488,9 @@ export class BoxRepository extends BaseRepository<Box> {
         throw new BoxConflictError()
       }
 
+      if (box.state === BoxState.STOPPED && updateData.desiredState === BoxDesiredState.STARTED && box.runnerId) {
+        await this.assertManagedStartSupported(entityManager, box.id)
+      }
       const previousBox = { ...box }
 
       Object.assign(box, updateData)
@@ -509,8 +514,24 @@ export class BoxRepository extends BaseRepository<Box> {
     return updatedBox
   }
 
+  private async assertManagedStartSupported(manager: EntityManager, id: string): Promise<void> {
+    // The caller holds the Box write lock. Read the protected binding and
+    // current assignment together, including metadata hidden from normal reads.
+    const boundToV2 = await manager
+      .createQueryBuilder(Box, 'box')
+      .innerJoin(Runner, 'runner', 'runner.id = box.runnerId')
+      .where('box.id = :id AND runner.apiVersion = :version', { id, version: '2' })
+      .andWhere(
+        `(box."outboundControl" #>> '{managed,binding,registration_id}' IS NOT NULL
+          OR box."outboundControl" #>> '{bootstrap,key,registration_id}' IS NOT NULL)`,
+      )
+      .getExists()
+    if (boundToV2) throw new ProxyPlacementError('runner_proxy_unsupported', 'start')
+  }
+
   /**
    * Conditionally transitions a stable stopped Box into a start intent.
+   * Rejects an unsupported managed start while holding the Box lock.
    * @throws DB errors other than lock-timeout (not wrapped) — caller decides
    *   whether to swallow.
    */
@@ -524,6 +545,21 @@ export class BoxRepository extends BaseRepository<Box> {
         // literal), hence the interpolation.
         await entityManager.query(`SET LOCAL lock_timeout = '${PROXY_START_LOCK_TIMEOUT_MS}ms'`)
 
+        const box = await entityManager.findOne(Box, {
+          select: { id: true, runnerId: true },
+          where: {
+            id: boxId,
+            organizationId,
+            pending: false,
+            state: BoxState.STOPPED,
+            desiredState: BoxDesiredState.STOPPED,
+          },
+          lock: { mode: 'pessimistic_write' },
+          loadEagerRelations: false,
+        })
+        if (!box) return null
+        if (box.runnerId) await this.assertManagedStartSupported(entityManager, box.id)
+
         const result = await entityManager
           .createQueryBuilder()
           .update(Box)
@@ -532,11 +568,7 @@ export class BoxRepository extends BaseRepository<Box> {
             desiredState: BoxDesiredState.STARTED,
             updatedAt: new Date(),
           })
-          .where('id = :id', { id: boxId })
-          .andWhere('"organizationId" = :org', { org: organizationId })
-          .andWhere('pending = false')
-          .andWhere('state = :s', { s: BoxState.STOPPED })
-          .andWhere('"desiredState" = :d', { d: BoxDesiredState.STOPPED })
+          .where('id = :id', { id: box.id })
           .returning('*')
           .execute()
 

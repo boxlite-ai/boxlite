@@ -57,6 +57,8 @@ export type ProtectedBootRoute = {
 
 export type ProtectedBootReceipt = { key: ProtectedBootKey; epoch: string | null; outcome: 'confirmed' | 'retired' }
 
+export type ProtectedBootCapability = 'supported' | 'unsupported' | 'unverified'
+
 export interface ProtectedBootControl {
   supportsProtectedBootstrap(recovery?: boolean, volumeRestart?: boolean): Promise<boolean>
   prepareProtectedBox(

@@ -4,14 +4,52 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ArgumentsHost, HttpStatus, NotFoundException, RequestTimeoutException } from '@nestjs/common'
+import {
+  ArgumentsHost,
+  HttpStatus,
+  NotFoundException,
+  RequestTimeoutException,
+  ServiceUnavailableException,
+} from '@nestjs/common'
 import { AllExceptionsFilter } from './all-exceptions.filter'
 import { RunnerApiError } from '../box/errors/runner-api-error'
 import { BoxCreationAdmissionUnavailableError } from '../box/errors/box-creation-limit.error'
 import { BoxPreparingImageTimeoutError } from '../box/errors/box-preparing-image-timeout.error'
 import { BoxProgressPhase } from '../box/enums/box-progress-phase.enum'
+import { ProxyPlacementError } from '../box/errors/proxy-placement.error'
 
 describe('AllExceptionsFilter', () => {
+  it('only publishes the diagnostic on the public placement response', async () => {
+    const json = jest.fn()
+    const status = jest.fn().mockReturnValue({ json })
+    const filter = new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never)
+    const hostFor = (path: string) =>
+      ({
+        switchToHttp: () => ({
+          getResponse: () => ({ status, getHeader: jest.fn() }),
+          getRequest: () => ({ path, url: path }),
+        }),
+      }) as ArgumentsHost
+    const placement = new ProxyPlacementError('runner_proxy_tls_unsupported', 'create')
+
+    await filter.catch(placement, hostFor('/api/v1/boxes'))
+    expect(json.mock.lastCall?.[0]).toMatchObject({
+      statusCode: 503,
+      code: 'outbound_create_rejected',
+      diagnostic: { code: 'runner_proxy_tls_unsupported' },
+    })
+    expect(json.mock.lastCall?.[0]).not.toHaveProperty('boxId')
+
+    await filter.catch(placement, hostFor('/api/v1/organizations/org/boxes'))
+    expect(json.mock.lastCall?.[0]).not.toHaveProperty('diagnostic')
+
+    await filter.catch(
+      new ServiceUnavailableException({ message: 'Generic error', diagnostic: { code: 'private' } }),
+      hostFor('/api/v1/boxes'),
+    )
+    expect(json.mock.lastCall?.[0]).not.toHaveProperty('diagnostic')
+  })
+
   it.each(['box-1', undefined, '', 123, { id: 'box-1' }])('only forwards a valid timeout Box ID: %p', async (boxId) => {
     const json = jest.fn()
     const status = jest.fn().mockReturnValue({ json })

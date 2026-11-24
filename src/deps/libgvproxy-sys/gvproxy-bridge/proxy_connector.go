@@ -24,9 +24,29 @@ const (
 	proxyTimeout         proxyFailure = "proxy_timeout"
 )
 
-// A candidate refusal keeps the same public diagnostic as other handshake
-// failures. The by-name dialer can advance only on this explicit outcome.
+// The by-name dialer advances on local address skips and explicit remote
+// refusals. Both retain the legacy handshake error for existing callers.
 var errProxyCandidate = fmt.Errorf("%w", proxyHandshakeFailed)
+var errProxyRemoteCandidate = fmt.Errorf("%w", errProxyCandidate)
+
+// This wrapper marks an error after the first-hop dial was invoked.
+type proxyDialFailure struct{ cause error }
+
+func (e proxyDialFailure) Error() string { return e.cause.Error() }
+func (e proxyDialFailure) Unwrap() error { return e.cause }
+
+func businessProxyDiagnostic(err error) proxyFailure {
+	var dialFailure proxyDialFailure
+	if !errors.As(err, &dialFailure) {
+		return ""
+	}
+	if errors.Is(err, errProxyRemoteCandidate) {
+		return proxyUnreachable
+	}
+	var code proxyFailure
+	errors.As(err, &code)
+	return code
+}
 
 type proxyCredentials struct {
 	username string
@@ -124,12 +144,15 @@ func (cfg proxyConnectorConfig) connect(ctx context.Context, dial dialFunc, targ
 	}
 
 	endpoint := netip.AddrPortFrom(cfg.endpoint.Addr().Unmap(), cfg.endpoint.Port())
+	if err := proxySetupError(ctx, nil); err != nil {
+		return nil, err
+	}
 	socket, err := dial(ctx, "tcp", endpoint.String())
 	if err != nil {
 		if socket != nil {
 			_ = socket.Close()
 		}
-		return nil, proxySetupError(ctx, proxyUnreachable)
+		return nil, proxyDialFailure{proxySetupError(ctx, proxyUnreachable)}
 	}
 	raw := withJoinedClose(socket)
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
@@ -145,7 +168,7 @@ func (cfg proxyConnectorConfig) connect(ctx context.Context, dial dialFunc, targ
 	}
 	if err = proxySetupError(ctx, err); err != nil {
 		_ = raw.Close()
-		return nil, err
+		return nil, proxyDialFailure{err}
 	}
 	// Close the owned socket directly. TLS close-notify can block on a proxy
 	// that stopped reading.

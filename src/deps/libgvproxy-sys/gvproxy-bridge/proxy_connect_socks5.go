@@ -81,7 +81,7 @@ func readSOCKS5Reply(conn io.Reader) error {
 	case 0:
 		return nil
 	case 4, 5: // Host unreachable or connection refused for this destination.
-		return errProxyCandidate
+		return errProxyRemoteCandidate
 	default:
 		return proxyHandshakeFailed
 	}

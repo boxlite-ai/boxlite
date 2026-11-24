@@ -91,6 +91,18 @@ E2E_AUTO_DELETE_SECONDS = 600
 E2E_BOX_NAME_PREFIX = "e2e-"
 
 
+def pytest_addoption(parser):
+    parser.addoption("--managed-outbound-config", metavar="FILE",
+                     help="enable managed proxy acceptance against an isolated deployment")
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--managed-outbound-config") is None:
+        for item in items:
+            if item.get_closest_marker("managed_outbound"):
+                item.add_marker(pytest.mark.skip(reason="requires --managed-outbound-config"))
+
+
 def e2e_box_name() -> str:
     return f"{E2E_BOX_NAME_PREFIX}{uuid.uuid4().hex[:10]}"
 

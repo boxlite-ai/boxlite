@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	logrus "github.com/sirupsen/logrus"
@@ -61,11 +62,12 @@ type upstreamDial func(ctx context.Context) (net.Conn, error)
 // egressDialer owns controlled resolution and one selected transport. Configure
 // its seams before publishing it to forwarders; flows retain that instance.
 type egressDialer struct {
-	filter    *AllowNetFilter // an IP/CIDR rule may re-admit an address unroutableEgress refuses
-	boxSubnet *net.IPNet      // the virtual network itself is never a by-name destination
-	resolve   resolveFunc
-	dial      dialFunc
-	connect   connectFunc // nil selects the direct socket dialer
+	filter     *AllowNetFilter // an IP/CIDR rule may re-admit an address unroutableEgress refuses
+	boxSubnet  *net.IPNet      // the virtual network itself is never a by-name destination
+	resolve    resolveFunc
+	dial       dialFunc
+	connect    connectFunc // nil selects the direct socket dialer
+	diagnostic *atomic.Pointer[proxyFailure]
 }
 
 func newEgressDialer(filter *AllowNetFilter, subnet string) (*egressDialer, error) {
@@ -115,7 +117,9 @@ func (d *egressDialer) byAddress(target egressTarget) upstreamDial {
 	return func(ctx context.Context) (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(ctx, upstreamDialTimeout)
 		defer cancel()
-		return d.dialTarget(ctx, "tcp", target)
+		conn, err := d.dialTarget(ctx, "tcp", target)
+		d.recordDiagnostic(ctx, businessProxyDiagnostic(err))
+		return conn, err
 	}
 }
 
@@ -149,6 +153,7 @@ func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.C
 		return nil, err
 	}
 	var lastErr error
+	var diagnostic proxyFailure
 	for i, ip := range ips {
 		if errors.Is(lastErr, errProxyCandidate) && proxySetupError(ctx, nil) != nil {
 			break
@@ -168,6 +173,9 @@ func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.C
 			return conn, nil
 		}
 		lastErr = err
+		if code := businessProxyDiagnostic(err); code != "" {
+			diagnostic = code
+		}
 		var failure proxyFailure
 		if !errors.Is(err, errProxyCandidate) && errors.As(err, &failure) {
 			break
@@ -176,7 +184,14 @@ func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.C
 	if errors.Is(lastErr, errProxyCandidate) {
 		lastErr = proxySetupError(ctx, lastErr)
 	}
+	d.recordDiagnostic(ctx, diagnostic)
 	return nil, fmt.Errorf("dial %s:%d: %w", target.Hostname, target.Port, lastErr)
+}
+
+func (d *egressDialer) recordDiagnostic(ctx context.Context, code proxyFailure) {
+	if d.diagnostic != nil && code != "" && ctx.Err() != context.Canceled {
+		d.diagnostic.Store(&code)
+	}
 }
 
 // minCandidateDialWindow is net/dial.go's saneMinimum and means the same

@@ -24,6 +24,11 @@ const testDNSResolverName = "resolver.example.net"
 
 func startProxyDNSFixture(t *testing.T, handler http.Handler) (*proxyDNSResolver, *atomic.Int32) {
 	t.Helper()
+	return startProxyDNSFixtureWithConnect(t, handler, nil)
+}
+
+func startProxyDNSFixtureWithConnect(t *testing.T, handler http.Handler, admitConnect func(*http.Request) bool) (*proxyDNSResolver, *atomic.Int32) {
+	t.Helper()
 	dnsTLS, roots := proxyTestTLS(t, newTestCA(t), testDNSResolverName)
 	resolver := httptest.NewUnstartedServer(handler)
 	resolver.TLS = dnsTLS
@@ -35,6 +40,9 @@ func startProxyDNSFixture(t *testing.T, handler http.Handler) (*proxyDNSResolver
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect || r.RequestURI != resolverAddress.String() {
 			http.Error(w, "wrong tunnel target", http.StatusForbidden)
+			return
+		}
+		if admitConnect != nil && !admitConnect(r) {
 			return
 		}
 		upstream, err := net.Dial("tcp", resolver.Listener.Addr().String())
@@ -387,4 +395,41 @@ func writeFixtureDNSReply(w http.ResponseWriter, reply *dns.Msg) {
 
 func fixtureDNSHeader(name string, recordType uint16) dns.RR_Header {
 	return dns.RR_Header{Name: name, Rrtype: recordType, Class: dns.ClassINET, Ttl: 60}
+}
+
+type proxyDNSDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (ctx proxyDNSDeadlineContext) Deadline() (time.Time, bool) {
+	return ctx.deadline, true
+}
+
+func TestProxyDNSSocketDeadlineBeforeContextCancellation(t *testing.T) {
+	var requests atomic.Int32
+	release := make(chan struct{})
+	defer close(release)
+	resolver, _ := startProxyDNSFixture(t, http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+		requests.Add(1)
+		select {
+		case <-req.Context().Done():
+		case <-release:
+		}
+	}))
+	// The socket reaches the deadline before the lookup's cancellation is visible.
+	guard, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	ctx := proxyDNSDeadlineContext{Context: guard, deadline: time.Now().Add(2 * time.Second)}
+	question := new(dns.Msg).SetQuestion("service.example.net.", dns.TypeA)
+	_, err := resolver.exchange(ctx, question)
+	if ctx.Err() != nil {
+		t.Fatal("expected the socket to time out before the context canceled")
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("expected one HTTPS resolver request, got %d", requests.Load())
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected lookup deadline after the resolver stalled, got %v", err)
+	}
 }

@@ -26,7 +26,7 @@ function makeQueryBuilder(execute: jest.Mock) {
 // over repository.manager) and the cache-invalidation hook are exercised here.
 function makeRepository(execute: jest.Mock) {
   const query = jest.fn().mockResolvedValue(undefined)
-  const findOne = jest.fn()
+  const findOne = jest.fn().mockResolvedValue({ id: 'box-1', runnerId: null })
   const queryBuilder = makeQueryBuilder(execute)
   // create() hydrates the RETURNING * raw row into a Box; the stub echoes the
   // row back so return-shape assertions stay on the same object.
@@ -93,7 +93,7 @@ const startedRow = {
 describe('BoxRepository.conditionalStartForProxy', () => {
   it('bounds the row-lock wait with a lock_timeout before the UPDATE', async () => {
     const execute = jest.fn().mockResolvedValue({ raw: [startedRow] })
-    const { repo, query, create } = makeRepository(execute)
+    const { repo, query, create, findOne } = makeRepository(execute)
 
     const updated = await repo.conditionalStartForProxy('box-1', 'org-1')
 
@@ -104,10 +104,21 @@ describe('BoxRepository.conditionalStartForProxy', () => {
     // The fix's core: the transaction sets a per-statement lock_timeout so a
     // contended row aborts at the DB instead of pinning the connection.
     expect(query).toHaveBeenCalledWith(expect.stringContaining('SET LOCAL lock_timeout'))
-    // ...and it must be armed BEFORE the UPDATE runs — otherwise the UPDATE
-    // could block on the row lock with no bound. Assert call order, not just
-    // presence.
-    expect(query.mock.invocationCallOrder[0]).toBeLessThan(execute.mock.invocationCallOrder[0])
+    expect(findOne).toHaveBeenCalledWith(
+      Box,
+      expect.objectContaining({
+        where: {
+          id: 'box-1',
+          organizationId: 'org-1',
+          pending: false,
+          state: BoxState.STOPPED,
+          desiredState: BoxDesiredState.STOPPED,
+        },
+        lock: { mode: 'pessimistic_write' },
+      }),
+    )
+    expect(query.mock.invocationCallOrder[0]).toBeLessThan(findOne.mock.invocationCallOrder[0])
+    expect(findOne.mock.invocationCallOrder[0]).toBeLessThan(execute.mock.invocationCallOrder[0])
   })
 
   // Lock wait exceeded lock_timeout (SQLSTATE 55P03): the row is being

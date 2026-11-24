@@ -143,6 +143,8 @@ pub struct ProtectedRouteReceipt {
     pub epoch: OutboundRevision,
     pub durable: ProtectedRouteSnapshot,
     pub installed: Option<ProtectedRouteSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_diagnostic: Option<String>,
     pub pending_attempt: Option<OutboundRevision>,
     pub unbind_settlement: Option<OutboundRevision>,
     pub rollback: Option<ProtectedRouteRollback>,

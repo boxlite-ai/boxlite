@@ -27,6 +27,7 @@ import { RunnerApiError } from '../errors/runner-api-error'
 import {
   checkedBootReceipt,
   enrolledRunnerAgent,
+  ProtectedBootCapability,
   ProtectedBootControl,
   ProtectedBootKey,
   ProtectedBootRoute,
@@ -265,7 +266,11 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   }
 
   async supportsProtectedBootstrap(recovery = false, volumeRestart = false): Promise<boolean> {
-    if (!this.bootstrapApi) return false
+    return (await this.protectedBootstrapCapability(recovery, volumeRestart)) === 'supported'
+  }
+
+  async protectedBootstrapCapability(recovery = false, volumeRestart = false): Promise<ProtectedBootCapability> {
+    if (!this.bootstrapApi) return 'unverified'
     try {
       const { data } = await this.bootstrapApi.get('/v1/outbound-proxy/bootstrap', { timeout: 3000 })
       const required = recovery
@@ -281,14 +286,17 @@ export class RunnerAdapterV0 implements RunnerAdapter {
           ]
         : ['start', 'receipt', 'retire']
       if (volumeRestart) required.push('restart-volumes')
-      return (
-        data.runner_id === this.runner.id &&
-        data.version === 1 &&
-        Array.isArray(data.operations) &&
-        required.every((operation) => data.operations.includes(operation))
-      )
+      if (
+        data.runner_id !== this.runner.id ||
+        data.version !== 1 ||
+        !Array.isArray(data.operations) ||
+        !data.operations.every((operation: unknown) => typeof operation === 'string')
+      ) {
+        return 'unverified'
+      }
+      return required.every((operation) => data.operations.includes(operation)) ? 'supported' : 'unsupported'
     } catch {
-      return false
+      return 'unverified'
     }
   }
 

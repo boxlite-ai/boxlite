@@ -321,6 +321,11 @@ paths:
         before Box admission. The code outbound_create_admitted identifies a
         startup error after admission. Use its Box ID to inspect the existing
         Box. An unclassified failure can leave admission unknown.
+
+        A Cloud placement refusal for an incompatible Runner returns HTTP 503
+        with `code: outbound_create_rejected`, no Box ID, and
+        `diagnostic.code` of `runner_proxy_tls_unsupported` or
+        `runner_proxy_unsupported`.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -474,6 +479,8 @@ paths:
         Initializes the VM and starts its main command. A running VM can have
         an unstarted container; this call starts it. It is not a read-only check.
         Transitions: configured → running, stopped → running.
+        A stopped proxy-bound Box assigned to a V2 Runner returns 503 with
+        `runner_proxy_unsupported` in `diagnostic.code` before scheduling start.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -488,6 +495,8 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/stop:
     parameters:
@@ -3233,6 +3242,14 @@ components:
           type: string
           enum: [authenticated, unknown]
           description: Unknown means the Runtime snapshot could not be confirmed for this assignment.
+        diagnostic:
+          type: object
+          description: Last observed terminal business TCP proxy error for the current confirmed installation.
+          required: [code]
+          properties:
+            code:
+              type: string
+              enum: [proxy_auth_failed, proxy_unreachable, proxy_timeout, proxy_handshake_failed]
 
     OutboundProxyIdentity:
       anyOf:

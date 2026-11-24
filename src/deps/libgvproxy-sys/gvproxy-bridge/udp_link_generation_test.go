@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -54,15 +55,25 @@ func TestGuestLinkPartialWritePreventsGenerationConfirmation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = link.Close(); _ = guest.Close() })
 	generation := newUDPLinkGeneration()
-	written := make(chan error, 1)
+	payload := []byte("complete frame")
+	frame := binary.BigEndian.AppendUint32(nil, uint32(len(payload)))
+	frame = append(frame, payload...)
+	type writeResult struct {
+		accepted int
+		err      error
+	}
+	written := make(chan writeResult, 1)
 	go func() {
-		_, err := link.WriteGuestFrame([]byte("complete frame"), generation)
-		written <- err
+		accepted, err := link.WriteGuestFrame(frame, generation)
+		written <- writeResult{accepted, err}
 	}()
 	_ = guest.SetReadDeadline(time.Now().Add(time.Second))
-	header := make([]byte, 2)
+	header := make([]byte, 4)
 	if _, err := io.ReadFull(guest, header); err != nil {
 		t.Fatal(err)
+	}
+	if got := binary.BigEndian.Uint32(header); got != uint32(len(payload)) {
+		t.Fatalf("declared payload length = %d, want %d", got, len(payload))
 	}
 	generation.seal()
 	blocked, cancelBlocked := context.WithCancel(context.Background())
@@ -79,9 +90,9 @@ func TestGuestLinkPartialWritePreventsGenerationConfirmation(t *testing.T) {
 		t.Fatalf("partial frame allowed confirmation: %v", err)
 	}
 	select {
-	case err := <-written:
-		if err == nil {
-			t.Fatal("partial write succeeded")
+	case result := <-written:
+		if result.err == nil || result.accepted != len(header) {
+			t.Fatalf("partial write accepted %d bytes with error %v", result.accepted, result.err)
 		}
 	case <-ctx.Done():
 		t.Fatal("closing the guest link did not interrupt its write")
