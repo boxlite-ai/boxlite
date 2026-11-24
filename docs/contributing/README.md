@@ -38,6 +38,8 @@ Dated root-cause analyses and design studies, newest first.
 
 - 2026-11-23 · [Create Box subscription value](investigations/2026-11-23-create-box-subscription-value.md): catalog-derived subscription savings beside the PAYG estimate, billing-state rules, and draft-preserving plan access.
 
+- 2026-11-20 · [Go execution startup cancellation](investigations/2026-11-20-go-execution-startup-cancellation.md): caller cancellation, late-handle cleanup and native VM verification.
+
 - 2026-11-19 · [Trial discovery in Welcome](investigations/2026-11-19-trial-discovery-preview.md): frontend onboarding study, mock boundaries, direct completion and full walkthrough screenshots.
 
 - 2026-11-13 · [Runner data-disk performance scaling](investigations/2026-11-13-runner-data-disk-performance-scaling.md): expansion raises provisioned IOPS/throughput proportionally, clipped to the per-disk ceiling; capacity never waits for performance.

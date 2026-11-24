@@ -9,7 +9,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"runtime/cgo"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -214,22 +216,65 @@ func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult
 }
 
 // StartExecution starts a command and returns a streaming execution handle.
-//
-// boxlite_box_exec is synchronous on the C side; once it returns, we
-// register stream callbacks (which post events into the runtime queue).
-func (b *Box) StartExecution(_ context.Context, name string, args []string, opts *ExecutionOptions) (*Execution, error) {
+// If ctx ends during startup, StartExecution returns its error and releases
+// any execution the native call returns later. The context covers startup.
+func (b *Box) StartExecution(ctx context.Context, name string, args []string, opts *ExecutionOptions) (*Execution, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	b.runtime.ensureDrainRunning()
-
-	cCmd := toCString(name)
-	defer C.free(unsafe.Pointer(cCmd))
-
-	cArgs, argc := toCStringArray(args)
-	defer freeCStringArray(cArgs, argc)
 
 	cfg := ExecutionOptions{}
 	if opts != nil {
 		cfg = *opts
 	}
+	handle, err := b.submitExecutionWithContext(ctx, name, args, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return b.executionWithCallbacks(handle, cfg)
+}
+
+func (b *Box) submitExecutionWithContext(ctx context.Context, name string, args []string, cfg ExecutionOptions) (*C.CExecutionHandle, error) {
+	if ctx.Done() == nil {
+		return b.submitExecution(ctx, name, args, cfg)
+	}
+
+	// Native submission can outlive this call. Snapshot caller-owned inputs
+	// before sharing them with the worker.
+	args = slices.Clone(args)
+	cfg.Env = maps.Clone(cfg.Env)
+	type submission struct {
+		handle *C.CExecutionHandle
+		err    error
+	}
+	submitted := make(chan submission)
+	go func() {
+		handle, err := b.submitExecution(ctx, name, args, cfg)
+		select {
+		case submitted <- submission{handle: handle, err: err}:
+		case <-ctx.Done():
+			// Without a receiver, the worker still owns the handle. Freeing
+			// an owned execution attempts to terminate and reap its command.
+			if handle != nil {
+				C.boxlite_execution_free(handle)
+			}
+		}
+	}()
+	select {
+	case result := <-submitted:
+		return result.handle, result.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (b *Box) submitExecution(ctx context.Context, name string, args []string, cfg ExecutionOptions) (*C.CExecutionHandle, error) {
+	cCmd := toCString(name)
+	defer C.free(unsafe.Pointer(cCmd))
+
+	cArgs, argc := toCStringArray(args)
+	defer freeCStringArray(cArgs, argc)
 
 	envPairs, envCount := envMapToCStringArray(cfg.Env)
 	defer freeCStringArray(envPairs, envCount)
@@ -278,13 +323,16 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 	if err != nil {
 		return nil, err
 	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	code := C.boxlite_box_exec(boxHandle, &cCommand, &handle, &cerr)
-	unlock()
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
 
-	return b.executionWithCallbacks(handle, cfg)
+	return handle, nil
 }
 
 // executionWithCallbacks shares stream and exit ownership across exec/attach.
