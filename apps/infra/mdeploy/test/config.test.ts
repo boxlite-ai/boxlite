@@ -28,6 +28,28 @@ const valid = {
 const parse = (overrides: Record<string, unknown> = {}) =>
   parseDeployConfig('/repo/apps/infra/mdeploy.config.json', JSON.stringify({ ...valid, ...overrides }))
 
+test('API minimum instances accepts nonnegative integers and may be omitted', () => {
+  assert.equal(parse().api, undefined)
+  assert.equal(parse({ api: {} }).api?.minInstances, undefined)
+  for (const minInstances of [0, 5]) {
+    assert.equal(parse({ api: { minInstances } }).api?.minInstances, minInstances)
+  }
+  for (const minInstances of [-1, 1.5, '5', null]) {
+    assert.throws(() => parse({ api: { minInstances } }), /minInstances must be a whole number/)
+  }
+  assert.throws(() => parse({ api: { minInstance: 5 } }), /does not take minInstance/)
+})
+
+test('API instance sizing validates CPU and memory together', () => {
+  for (const instance of [{ cpu: 1, memoryMiB: 512 }, { cpu: 8, memoryMiB: 32768 }]) {
+    assert.deepEqual(parse({ api: { instance } }).api?.instance, instance)
+  }
+  for (const instance of [{ cpu: 2 }, { memoryMiB: 2048 }, { cpu: 3, memoryMiB: 2048 },
+    { cpu: 1, memoryMiB: 4097 }, { cpu: 4, memoryMiB: 1024 }, { cpu: 2, memoryMiB: '2048' }]) {
+    assert.throws(() => parse({ api: { instance } }), DeployConfigError)
+  }
+})
+
 test('runner configuration accepts an optional data disk while preserving required fields and bounds', () => {
   assert.deepEqual(parse().runners, valid.runners)
   const runners = { ...valid.runners, size: '2xlarge', machineTypes: { medium: 'n4-standard-8', '2xlarge': 'n4d-standard-64' } }
