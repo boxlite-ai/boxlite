@@ -247,7 +247,8 @@ impl PartialEq for X86IrqchipState {
 /// KVM_SET_XSAVE restores x87, SSE and enabled extended state from `xsave`.
 /// The image also carries the dedicated FPU capture and owned CPUID/MSR arrays.
 /// Capture probes KVM's advertised MSRs plus the 28 writable MTRRs, IA32_XSS,
-/// IA32_DEBUGCTLMSR and the SGX launch key hashes when CPUID exposes SGX_LC.
+/// and IA32_DEBUGCTLMSR. Capture and restore gate SGX launch key hashes on
+/// SGX_LC and IA32_PERF_CAPABILITIES on PDCM and a nonzero PMU version in CPUID.
 /// It excludes MTRRcap, Hyper-V's
 /// `0x4000_0000..=0x4000_01ff` window and the x2APIC range carried by `lapic`.
 /// MCE bank configuration via KVM_X86_SETUP_MCE is outside this interface.
@@ -255,9 +256,10 @@ impl PartialEq for X86IrqchipState {
 /// When KVM exposes KVM_VCPU_TSC_OFFSET, vCPUs share a host TSC reference per
 /// frequency at the VM clock capture and restore points. The resulting offsets
 /// preserve their relative TSC skew. Legacy kernels use direct TSC MSR access.
-/// Restore writes TSC_ADJUST, TSC, the async page-fault interrupt vector,
-/// ordinary MSRs, IA32_FEATURE_CONTROL, TSC_DEADLINE, then RTIT_CTL. APICv requires
-/// the host kernel fix `9cfec6d097c6` or its backport for LAPIC transfer.
+/// Restore writes TSC_ADJUST and TSC first. The async page-fault interrupt
+/// vector and IA32_PERF_CAPABILITIES precede ordinary MSRs, followed by
+/// IA32_FEATURE_CONTROL, TSC_DEADLINE, then RTIT_CTL. APICv requires the host
+/// kernel fix `9cfec6d097c6` or its backport for LAPIC transfer.
 ///
 /// Requires completed userspace I/O and a stopped vCPU. Nested virtualization,
 /// Hyper-V SynIC, guest-debug configuration, VM clock/irqchip/PIT state and RAM

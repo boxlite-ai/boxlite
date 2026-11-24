@@ -782,7 +782,7 @@ impl KvmVcpu {
             let mut msrs = snapshot_msrs(&self.fd, base_msr_indices)?;
             msrs.extend(snapshot_msrs(
                 &self.fd,
-                extra_cpuid_gated_msr_indices(cpuid),
+                &extra_cpuid_gated_msr_indices(cpuid),
             )?);
             if msrs.len() > MAX_SNAPSHOT_MSR_ENTRIES {
                 return Err(io::Error::other("snapshot MSR count exceeds the limit"));
@@ -829,8 +829,9 @@ impl KvmVcpu {
     /// and APIC base. LAPIC precedes MSRs so its timer setup cannot clobber the
     /// saved TSC deadline. TSC_ADJUST precedes the TSC offset. The async page-fault
     /// interrupt vector precedes its enable MSR, and SGX launch key hashes precede
-    /// IA32_FEATURE_CONTROL. MSRs (including XSS/XFD) precede XCRS/XSAVE. KVM_SET_XSAVE
-    /// restores the authoritative x87, SSE and extended state.
+    /// IA32_FEATURE_CONTROL. IA32_PERF_CAPABILITIES precedes the other PMU MSRs.
+    /// MSRs (including XSS/XFD) precede XCRS/XSAVE. KVM_SET_XSAVE restores the
+    /// authoritative x87, SSE and extended state.
     /// Debug/REGS follow mode setup, MP state and events are last (LAPIC/SREGS
     /// can change pending events).
     ///
@@ -849,7 +850,7 @@ impl KvmVcpu {
             if state.tsc_khz == 0 {
                 return Err(invalid("TSC frequency must be nonzero"));
             }
-            validate_restore_msrs(&state.msrs)?;
+            validate_restore_msrs(&state.msrs, &state.cpuid)?;
             let xsave_size = self.xsave_size()?;
             self.has_tsc_offset()?;
             let mut xsave = Self::xsave_buffer(xsave_size)?;
@@ -1355,6 +1356,40 @@ mod tests {
             matches!(error, Error::ConfigureVcpu { operation: "save CPU state", ref source, .. }
             if source.kind() == io::ErrorKind::InvalidInput && source.to_string() == "invalid CPUID count")
         );
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn snapshot_round_trips_with_guest_pmu_disabled() {
+        for (clear_pmu, clear_pdcm) in [(true, false), (true, true), (false, true)] {
+            let (platform, state) = {
+                let vm = KvmVm::new().unwrap();
+                let mut cpuid = vm.supported_cpuid().to_vec();
+                for entry in &mut cpuid {
+                    match entry.leaf {
+                        1 if clear_pdcm => entry.ecx &= !(1 << 15),
+                        0xa if clear_pmu => entry.eax &= !0xff,
+                        7 if !entry.subleaf_required || entry.subleaf == 0 => {
+                            entry.ecx &= !(1 << 7); // SHSTK is outside the snapshot contract.
+                        }
+                        _ => {}
+                    }
+                }
+                let mut cpu = vm.create_vcpu(0).unwrap();
+                cpu.set_cpu_features(&cpuid, &[]).unwrap();
+                (vm.save_state().unwrap(), cpu.save_state().unwrap())
+            };
+            assert!(
+                state.msrs.iter().all(|entry| entry.index != 0x345),
+                "captured IA32_PERF_CAPABILITIES (clear_pmu={clear_pmu}, clear_pdcm={clear_pdcm})"
+            );
+
+            let vm = KvmVm::new().unwrap();
+            vm.restore_before_vcpus(&platform).unwrap();
+            let mut cpu = vm.create_vcpu(0).unwrap();
+            cpu.restore_state(&state).unwrap();
+            vm.restore_after_vcpus(&platform).unwrap();
+        }
     }
 
     #[test]

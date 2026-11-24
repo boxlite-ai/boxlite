@@ -18,6 +18,7 @@ pub(super) const MSR_IA32_TSC: u32 = 0x10;
 const MSR_IA32_FEAT_CTL: u32 = 0x3a;
 const MSR_IA32_TSC_ADJUST: u32 = 0x3b;
 const MSR_MTRR_CAP: u32 = 0xfe;
+const MSR_IA32_PERF_CAPABILITIES: u32 = 0x345;
 const MSR_IA32_RTIT_CTL: u32 = 0x570;
 pub(super) const MSR_IA32_TSC_DEADLINE: u32 = 0x6e0;
 const MSR_IA32_DEBUGCTLMSR: u32 = 0x1d9;
@@ -126,11 +127,26 @@ fn is_excluded_msr(index: u32) -> bool {
     matches!(index, MSR_MTRR_CAP | 0x800..=0xbff | 0x4000_0000..=0x4000_01ff)
 }
 
-pub(super) fn validate_restore_msrs(entries: &[kvm_msr_entry]) -> io::Result<()> {
+pub(super) fn validate_restore_msrs(
+    entries: &[kvm_msr_entry],
+    cpuid: &[kvm_cpuid_entry2],
+) -> io::Result<()> {
     if let Some(entry) = entries.iter().find(|entry| is_excluded_msr(entry.index)) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("MSR index {:#x} is excluded from snapshots", entry.index),
+        ));
+    }
+    if let Some(entry) = entries.iter().find(|entry| match entry.index {
+        MSR_IA32_PERF_CAPABILITIES => !cpuid_supports_perf_capabilities(cpuid),
+        index => SGX_LC_MSRS.contains(&index) && !cpuid_supports_sgx_lc(cpuid),
+    }) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "MSR index {:#x} is incompatible with snapshot CPUID",
+                entry.index
+            ),
         ));
     }
     Ok(())
@@ -143,7 +159,10 @@ pub(super) fn build_snapshot_msr_indices(kvm_advertised: &[u32]) -> Arc<[u32]> {
         .chain(SUPPLEMENTAL_SNAPSHOT_MSRS)
         .copied()
         .filter(|&index| {
-            !is_excluded_msr(index) && !SGX_LC_MSRS.contains(&index) && seen.insert(index)
+            !is_excluded_msr(index)
+                && !SGX_LC_MSRS.contains(&index)
+                && index != MSR_IA32_PERF_CAPABILITIES
+                && seen.insert(index)
         })
         .collect()
 }
@@ -165,6 +184,8 @@ pub(super) fn order_msrs_for_restore(entries: &[kvm_msr_entry]) -> RestoreMsrPla
         match entry.index {
             MSR_IA32_TSC_ADJUST => plan.before_tsc.push(entry),
             MSR_IA32_TSC => plan.tsc = Some(entry),
+            // PERF_CAPABILITIES can refresh the masks used to validate PMU MSRs.
+            MSR_IA32_PERF_CAPABILITIES => plan.after_tsc.push(entry),
             MSR_KVM_ASYNC_PF_INT => plan.after_tsc.push(entry),
             // The interrupt vector must be installed before the enable bit.
             MSR_KVM_ASYNC_PF_EN => ordinary.push(entry),
@@ -337,15 +358,15 @@ pub(super) fn snapshot_cpuid(entries: &[kvm_cpuid_entry2]) -> io::Result<CpuId> 
     CpuId::from_entries(entries).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
 }
 
-fn cpuid_leaf7_subleaf0(entries: &[kvm_cpuid_entry2]) -> Option<&kvm_cpuid_entry2> {
+fn cpuid_leaf_subleaf0(entries: &[kvm_cpuid_entry2], leaf: u32) -> Option<&kvm_cpuid_entry2> {
     entries.iter().find(|entry| {
-        entry.function == 7
+        entry.function == leaf
             && (entry.flags & KVM_CPUID_FLAG_SIGNIFCANT_INDEX == 0 || entry.index == 0)
     })
 }
 
 pub(super) fn validate_snapshot_cpuid_features(entries: &[kvm_cpuid_entry2]) -> io::Result<()> {
-    if cpuid_leaf7_subleaf0(entries).is_some_and(|entry| entry.ecx & (1 << 7) != 0) {
+    if cpuid_leaf_subleaf0(entries, 7).is_some_and(|entry| entry.ecx & (1 << 7) != 0) {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "CET shadow stack (SHSTK) state cannot be snapshotted",
@@ -354,12 +375,26 @@ pub(super) fn validate_snapshot_cpuid_features(entries: &[kvm_cpuid_entry2]) -> 
     Ok(())
 }
 
-pub(super) fn extra_cpuid_gated_msr_indices(cpuid: &[kvm_cpuid_entry2]) -> &'static [u32] {
-    if cpuid_leaf7_subleaf0(cpuid).is_some_and(|entry| entry.ecx & (1 << 30) != 0) {
-        SGX_LC_MSRS
-    } else {
-        &[]
+fn cpuid_supports_sgx_lc(cpuid: &[kvm_cpuid_entry2]) -> bool {
+    cpuid_leaf_subleaf0(cpuid, 7).is_some_and(|entry| entry.ecx & (1 << 30) != 0)
+}
+
+fn cpuid_supports_perf_capabilities(cpuid: &[kvm_cpuid_entry2]) -> bool {
+    // KVM can return the host value even when the guest lacks PDCM or a PMU.
+    // Require both PDCM and a nonzero architectural PMU version for restore.
+    cpuid_leaf_subleaf0(cpuid, 1).is_some_and(|entry| entry.ecx & (1 << 15) != 0)
+        && cpuid_leaf_subleaf0(cpuid, 0xa).is_some_and(|entry| entry.eax & 0xff != 0)
+}
+
+pub(super) fn extra_cpuid_gated_msr_indices(cpuid: &[kvm_cpuid_entry2]) -> Vec<u32> {
+    let mut indices = Vec::new();
+    if cpuid_supports_sgx_lc(cpuid) {
+        indices.extend_from_slice(SGX_LC_MSRS);
     }
+    if cpuid_supports_perf_capabilities(cpuid) {
+        indices.push(MSR_IA32_PERF_CAPABILITIES);
+    }
+    indices
 }
 
 #[cfg(test)]
@@ -453,10 +488,13 @@ mod tests {
     fn restore_rejects_excluded_msrs() {
         for index in [0xfe, 0x800, 0xbff, 0x4000_0000, 0x4000_01ff] {
             assert_eq!(
-                validate_restore_msrs(&[kvm_msr_entry {
-                    index,
-                    ..Default::default()
-                }])
+                validate_restore_msrs(
+                    &[kvm_msr_entry {
+                        index,
+                        ..Default::default()
+                    }],
+                    &[],
+                )
                 .unwrap_err()
                 .kind(),
                 io::ErrorKind::InvalidInput
@@ -466,7 +504,47 @@ mod tests {
             index,
             ..Default::default()
         });
-        assert!(validate_restore_msrs(&allowed).is_ok());
+        assert!(validate_restore_msrs(&allowed, &[]).is_ok());
+    }
+
+    #[test]
+    fn restore_validates_cpuid_gated_msrs() {
+        let cpuid = [
+            kvm_cpuid_entry2 {
+                function: 1,
+                ecx: 1 << 15,
+                ..Default::default()
+            },
+            kvm_cpuid_entry2 {
+                function: 0xa,
+                eax: 1,
+                ..Default::default()
+            },
+            kvm_cpuid_entry2 {
+                function: 7,
+                ecx: 1 << 30,
+                ..Default::default()
+            },
+        ];
+        let perf_cases = [&cpuid[2..], &cpuid[..1], &cpuid[1..2]]
+            .map(|unsupported| (0x345, &cpuid[..2], unsupported));
+        let sgx_cases = SGX_LC_MSRS
+            .iter()
+            .map(|&index| (index, &cpuid[2..], &cpuid[..2]));
+        for (index, supported, unsupported) in perf_cases.into_iter().chain(sgx_cases) {
+            let msrs = [kvm_msr_entry {
+                index,
+                ..Default::default()
+            }];
+            assert!(validate_restore_msrs(&msrs, supported).is_ok());
+            assert_eq!(
+                validate_restore_msrs(&msrs, unsupported)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidInput,
+                "MSR index {index:#x}"
+            );
+        }
     }
 
     #[test]
@@ -523,6 +601,62 @@ mod tests {
     }
 
     #[test]
+    fn perf_capabilities_requires_pdcm_and_a_nonzero_pmu_version() {
+        for pdcm in [false, true] {
+            for pmu_version in [None, Some(0), Some(1)] {
+                let mut cpuid = vec![kvm_cpuid_entry2 {
+                    function: 1,
+                    ecx: u32::from(pdcm) << 15,
+                    ..Default::default()
+                }];
+                if let Some(version) = pmu_version {
+                    cpuid.push(kvm_cpuid_entry2 {
+                        function: 0xa,
+                        eax: (1 << 8) | version,
+                        ..Default::default()
+                    });
+                }
+                let expected: &[u32] = if pdcm && pmu_version == Some(1) {
+                    &[0x345]
+                } else {
+                    &[]
+                };
+                assert_eq!(extra_cpuid_gated_msr_indices(&cpuid), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn perf_capabilities_and_sgx_launch_hashes_follow_cpuid_index_flags() {
+        let mut cpuid = [
+            kvm_cpuid_entry2 {
+                function: 1,
+                ecx: 1 << 15,
+                ..Default::default()
+            },
+            kvm_cpuid_entry2 {
+                function: 0xa,
+                eax: 1,
+                ..Default::default()
+            },
+            kvm_cpuid_entry2 {
+                function: 7,
+                ecx: 1 << 30,
+                ..Default::default()
+            },
+        ];
+        let combined = [0x8c, 0x8d, 0x8e, 0x8f, 0x345];
+        for leaf in [0, 1] {
+            cpuid[leaf].flags = KVM_CPUID_FLAG_SIGNIFCANT_INDEX;
+            assert_eq!(extra_cpuid_gated_msr_indices(&cpuid), combined);
+            cpuid[leaf].index = 1;
+            assert_eq!(extra_cpuid_gated_msr_indices(&cpuid), SGX_LC_MSRS);
+            cpuid[leaf].flags = 0;
+            assert_eq!(extra_cpuid_gated_msr_indices(&cpuid), combined);
+        }
+    }
+
+    #[test]
     fn restore_orders_async_pf_and_sgx_dependencies() {
         let ordered = [
             MSR_KVM_ASYNC_PF_INT,
@@ -574,8 +708,8 @@ mod tests {
     }
 
     #[test]
-    fn build_snapshot_msr_indices_excludes_advertised_sgx_launch_hashes() {
-        let advertised = [0x8c, 0x8d, 0x8e, 0x8f];
+    fn build_snapshot_msr_indices_excludes_cpuid_gated_msrs() {
+        let advertised = [0x8c, 0x8d, 0x8e, 0x8f, 0x345];
         let indices = build_snapshot_msr_indices(&advertised);
         for index in advertised {
             assert!(!indices.contains(&index), "shared MSR index {index:#x}");
@@ -654,6 +788,17 @@ mod tests {
         assert!(plan.before_tsc.is_empty());
         assert!(plan.tsc.is_none());
         assert!(plan.after_tsc.is_empty());
+    }
+
+    #[test]
+    fn restore_orders_perf_capabilities_before_pmu_msrs() {
+        let entries = [0x38f, 0x3f1, 0x186, 0x345].map(|index| kvm_msr_entry {
+            index,
+            ..Default::default()
+        });
+        let plan = order_msrs_for_restore(&entries);
+        assert!(plan.before_tsc.is_empty());
+        assert_eq!(plan.after_tsc, [3, 0, 1, 2].map(|pos| entries[pos]));
     }
 
     #[test]
