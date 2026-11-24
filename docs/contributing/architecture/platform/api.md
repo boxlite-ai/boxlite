@@ -615,7 +615,15 @@ that same transaction, including deletion during checkpoint recovery. Physical
 deletion also cascades to credentials. Issuance locks the Box row and checks its
 runner, organization and deletion state, so deletion cannot leave a newly issued
 credential behind. Credential insertion and CREATE_BOX job insertion share one
-transaction; a rejected duplicate job leaves no extra credential.
+transaction; a rejected duplicate job leaves no extra credential. The `box_id`
+index bounds revocation and foreign-key cascade lookups to the target Box.
+
+Transactional job creation writes only to PostgreSQL. CREATE_BOX, checkpoint
+export/import, and Box migration callers notify the runner after successful
+commit, when its job is visible and Box locks are released. Rollback sends no
+notification. Redis notification is best effort; failure or a process crash
+between commit and notification leaves a durable job for fallback polling.
+Nontransactional job creation notifies after its insert commits.
 
 The route has no caller authentication in this MVP and is excluded from OpenAPI.
 GCP's external backend denies decoded internal namespace paths using Cloud Armor; only the

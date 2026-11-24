@@ -6,6 +6,8 @@ import { BoxService } from './box.service'
 import { JobService } from './job.service'
 import { Job } from '../entities/job.entity'
 import { RunnerAdapterV2 } from '../runner-adapter/runnerAdapter.v2'
+import { JobType } from '../enums/job-type.enum'
+import { ResourceType } from '../enums/resource-type.enum'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
@@ -170,5 +172,103 @@ import { Context } from '../../common/context/context'
       await deletion.release()
       await issuing
     }
+  })
+  it.each([true, false])('notifies after job visibility and Box lock release with credentials=%s', async (enabled) => {
+    let atNotification: { jobs: number; boxLocked: boolean } | undefined
+    const jobs = new JobService(
+      db.getRepository(Job),
+      {
+        lpush: async () => {
+          const observer = db.createQueryRunner()
+          await observer.startTransaction()
+          try {
+            const [{ count }] = await observer.query('SELECT count(*)::int FROM job')
+            let boxLocked = false
+            try {
+              await observer.query('SELECT id FROM box WHERE id = $1 FOR UPDATE NOWAIT', [box.id])
+            } catch (error) {
+              if (error.code !== '55P03') throw error
+              boxLocked = true
+            }
+            atNotification = { jobs: count, boxLocked }
+          } finally {
+            await observer.rollbackTransaction()
+            await observer.release()
+          }
+        },
+      } as any,
+      {} as any,
+    )
+    const adapter = new RunnerAdapterV2(repository, db.getRepository(Job), jobs)
+    Object.assign(adapter, { config: { get: () => enabled }, credentials })
+    await adapter.init({ id: binding.runnerId } as any)
+    await adapter.createBox(
+      { ...box, secrets: enabled ? [{ secretId: binding.secretIds[0], name: 'test' }] : [] } as any,
+      'base',
+    )
+    expect(await db.getRepository(Job).count()).toBe(1)
+    expect(atNotification).toEqual({ jobs: 1, boxLocked: false })
+  })
+
+  it('revokes by box_id without scanning unrelated credentials', async () => {
+    await credentials.issue(binding)
+    const other = Object.assign(new Box('us', 'other'), box, {
+      id: new Box('us', 'other').id,
+      name: 'other',
+      authToken: randomUUID(),
+    })
+    await db.getRepository(Box).save(other)
+    await db.query(
+      `INSERT INTO secret_credential(token_hash,runner_id,box_id,organization_id,grants,expires_at)
+      SELECT decode(md5(i::text),'hex'),$1,$2,$3,'[]'::jsonb,now()+interval '15 minutes'
+      FROM generate_series(1,10000) i`,
+      [binding.runnerId, other.id, binding.organizationId],
+    )
+    await db.query('ANALYZE secret_credential')
+    const qr = db.createQueryRunner()
+    await qr.startTransaction()
+    try {
+      const rows = await qr.query(
+        'EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) DELETE FROM secret_credential WHERE box_id=$1',
+        [box.id],
+      )
+      const scan = rows[0]['QUERY PLAN'][0].Plan.Plans[0]
+      expect(scan['Actual Rows']).toBe(1)
+      expect(scan['Node Type']).not.toBe('Seq Scan')
+    } finally {
+      await qr.rollbackTransaction()
+      await qr.release()
+    }
+  })
+  it('does not notify when a transaction rolls back after job insertion', async () => {
+    const lpush = jest.fn()
+    const jobs = new JobService(db.getRepository(Job), { lpush } as any, {} as any)
+    await expect(
+      db.transaction(async (manager) => {
+        await jobs.createJob(manager, JobType.CREATE_BOX, binding.runnerId, ResourceType.BOX, box.id)
+        throw new Error('rollback after insert')
+      }),
+    ).rejects.toThrow('rollback after insert')
+    expect(await db.getRepository(Job).count()).toBe(0)
+    expect(lpush).not.toHaveBeenCalled()
+  })
+  it('retains a discoverable committed job when Redis notification fails', async () => {
+    const jobs = new JobService(
+      db.getRepository(Job),
+      {
+        lpush: jest.fn().mockRejectedValue(new Error('Redis unavailable')),
+        del: jest.fn(),
+      } as any,
+      {} as any,
+    )
+    const adapter = new RunnerAdapterV2(repository, db.getRepository(Job), jobs)
+    Object.assign(adapter, { config: { get: () => true }, credentials })
+    await adapter.init({ id: binding.runnerId } as any)
+    await adapter.createBox({ ...box, secrets: [{ secretId: binding.secretIds[0], name: 'test' }] } as any, 'base')
+    const polled = await jobs.pollJobs(binding.runnerId)
+    expect(polled).toHaveLength(1)
+    expect(polled[0].resourceId).toBe(box.id)
+    expect(await db.getRepository(Job).count()).toBe(1)
+    expect((await db.query('SELECT id FROM secret_credential')).length).toBe(1)
   })
 })

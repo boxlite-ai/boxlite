@@ -189,7 +189,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     }
 
     if (enabled && secrets.length) {
-      await this.jobRepository.manager.transaction(async (manager) => {
+      const job = await this.jobRepository.manager.transaction(async (manager) => {
         const secretCredential = await this.credentials.issue(
           {
             runnerId: this.runner.id,
@@ -199,11 +199,12 @@ export class RunnerAdapterV2 implements RunnerAdapter {
           },
           manager,
         )
-        await this.jobService.createJob(manager, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, {
+        return this.jobService.createJob(manager, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, {
           ...payload,
           secretCredential,
         })
       })
+      await this.jobService.notifyRunner(job.runnerId, job.id)
     } else {
       await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
     }

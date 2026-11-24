@@ -86,7 +86,10 @@ describeDatabase('Secret credentials with real PostgreSQL and HTTP', () => {
   })
 
   it('issues from v2 refs with only hash stored and consumes exactly once over HTTP', async () => {
-    const jobs = { createJob: jest.fn() }
+    const jobs = {
+      createJob: jest.fn().mockResolvedValue({ id: 'job', runnerId: binding.runnerId }),
+      notifyRunner: jest.fn(),
+    }
     const adapter = new RunnerAdapterV2({} as any, { manager: db.manager } as any, jobs as any)
     Object.assign(adapter, { config: { get: () => true }, credentials: service })
     await adapter.init({ id: binding.runnerId } as any)

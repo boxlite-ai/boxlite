@@ -14,6 +14,7 @@ export class AddSecretCredential1794873600000 implements MigrationInterface {
       used_at timestamptz,
       CHECK (expires_at > issued_at)
     )`)
+    await queryRunner.query('CREATE INDEX secret_credential_box_idx ON secret_credential(box_id)')
     await queryRunner.query('CREATE INDEX secret_credential_expires_idx ON secret_credential(expires_at)')
   }
 

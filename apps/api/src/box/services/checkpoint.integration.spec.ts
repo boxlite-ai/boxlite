@@ -70,6 +70,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   const archiveStore = { remove: jest.fn() }
   let settings: { archivePrefix?: string; maxPerOrganization: number; enabled?: boolean }
   const cache = { invalidate: jest.fn() }
+  const jobNotifications: { visible: boolean; boxUnlocked: boolean }[] = []
   const uploadNotifications = { lpush: jest.fn() }
 
   beforeAll(async () => {
@@ -113,7 +114,28 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     boxes = dataSource.getRepository(Box)
     states = dataSource.getRepository(BoxCheckpointState)
     jobs = dataSource.getRepository(Job)
-    const jobService = new JobService(jobs, { lpush: jest.fn().mockResolvedValue(1) } as any, {} as any)
+    const jobService = new JobService(
+      jobs,
+      {
+        lpush: async (_queue: string, id: string) => {
+          const observed = await jobs.findOneBy({ id })
+          let boxUnlocked = false
+          if (observed) {
+            const observer = dataSource.createQueryRunner()
+            await observer.startTransaction()
+            try {
+              await observer.query('SELECT id FROM box WHERE id = $1 FOR UPDATE NOWAIT', [observed.resourceId])
+              boxUnlocked = true
+            } finally {
+              await observer.rollbackTransaction()
+              await observer.release()
+            }
+          }
+          jobNotifications.push({ visible: !!observed, boxUnlocked })
+        },
+      } as any,
+      {} as any,
+    )
     const config = { get: (key: string) => (key === 'checkpoint' ? settings : undefined) } as ConfigService
     service = new CheckpointService(dataSource, config, jobService, cache as any, archiveStore as never)
     receiver = new CheckpointJobReceiver(
@@ -145,6 +167,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   })
 
   beforeEach(async () => {
+    jobNotifications.length = 0
     uploadNotifications.lpush.mockReset().mockResolvedValue(1)
     await dataSource.query(
       `TRUNCATE TABLE "${schema}"."checkpoint_operation", "${schema}"."checkpoint", "${schema}"."job", "${schema}"."box", "${schema}"."runner", "${schema}"."image", "${schema}"."registry_credential" CASCADE`,
@@ -238,6 +261,15 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await finish(uploading.activeJobId!, archive(checkpoint))
     return service.get(organizationId, checkpoint.id)
   }
+
+  it('notifies checkpoint export and import only after their transactions commit', async () => {
+    const checkpoint = await readyCheckpoint()
+    await recovery.createBox(organization, checkpoint.id, 'notification-target', undefined)
+    expect(jobNotifications).toEqual([
+      { visible: true, boxUnlocked: true },
+      { visible: true, boxUnlocked: true },
+    ])
+  })
 
   it('preserves exact MiB through checkpoint capture and new-Box recovery', async () => {
     const original = await source('memory-source')

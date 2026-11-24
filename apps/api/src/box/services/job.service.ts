@@ -36,7 +36,8 @@ export class JobService {
 
   /**
    * Create a job within the provided transaction manager
-   * If manager is null, uses the default repository (for non-transactional operations)
+   * With a manager, the transaction owner must call notifyRunner after commit.
+   * With null, insertion commits before this method notifies the runner.
    * @template T The JobType enum value - ensures compile-time type safety for resourceType and payload
    */
   async createJob<T extends JobType>(
@@ -73,9 +74,7 @@ export class JobService {
 
       this.logger.debug(`Created job ${job.id} of type ${type} for ${contextInfo} on runner ${runnerId}`)
 
-      // Notify runner via Redis - happens outside transaction
-      // If transaction rolls back, notification is harmless (runner will poll and find nothing)
-      await this.notifyRunner(runnerId, job.id)
+      if (!manager) await this.notifyRunner(runnerId, job.id)
 
       return job
     } catch (error) {
@@ -97,7 +96,8 @@ export class JobService {
     }
   }
 
-  private async notifyRunner(runnerId: string, jobId: string): Promise<void> {
+  /** Best-effort wake-up for a committed job; polling recovers missed notifications. */
+  async notifyRunner(runnerId: string, jobId: string): Promise<void> {
     try {
       await this.redis.lpush(runnerJobQueueKey(runnerId), jobId)
       this.logger.debug(`Notified runner ${runnerId} about job ${jobId} via Redis`)
