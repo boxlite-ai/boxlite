@@ -16,7 +16,7 @@ import { recordConsoleTabSelection } from '@/hooks/useConsoleAnalytics'
 const http = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn() }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ axiosInstance: http }) }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
-  useSelectedOrganization: () => ({ selectedOrganization: { id: 'organization' } }),
+  useSelectedOrganization: () => ({ selectedOrganization: { id: organizationId } }),
 }))
 vi.mock('react-oidc-context', () => ({
   useAuth: () => ({ isAuthenticated: true, user: { profile: { sub: 'person' } } }),
@@ -28,6 +28,7 @@ vi.mock('@/hooks/useConfig', () => ({
 let root: Root
 let host: HTMLDivElement
 let client: QueryClient
+let organizationId: string
 let allowed: boolean | null
 const pause = () => new Promise<void>((r) => setTimeout(r, 5))
 
@@ -61,12 +62,14 @@ async function click(name: string, role = 'button') {
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   vi.resetAllMocks()
+  organizationId = 'organization'
   allowed = null
   http.get.mockImplementation(async () => ({
     data: { allowed, enabledFrom: allowed ? new Date(0).toISOString() : null },
   }))
   http.put.mockImplementation(async (_path, choice) => {
     allowed = choice.allowed
+    return { data: { allowed, version: 1, decidedAt: new Date().toISOString() } }
   })
   http.post.mockResolvedValue({})
   host = document.createElement('div')
@@ -134,7 +137,7 @@ it('honors an existing grant on the first admitted view and skips failed prefere
   expect(http.post).toHaveBeenCalledTimes(1)
 })
 
-it('keeps the UI usable and local collection off when withdrawal cannot be confirmed', async () => {
+it('keeps the confirmed grant active when a withdrawal fails and allows a retry', async () => {
   allowed = true
   await mount()
   const alreadySent = http.post.mock.calls.length
@@ -142,10 +145,55 @@ it('keeps the UI usable and local collection off when withdrawal cannot be confi
   await click('Product analytics', 'switch')
   expect(getByRole(host, 'alert').textContent).toContain('Could not confirm your preference')
   await click('Private project name')
-  expect(http.post).toHaveBeenCalledTimes(alreadySent)
+  expect(http.post).toHaveBeenCalledTimes(alreadySent + 1)
+  expect(getByRole(host, 'switch', { name: 'Product analytics' }).getAttribute('aria-checked')).toBe('true')
   await click('Product analytics', 'switch')
   expect(getByRole(host, 'switch', { name: 'Product analytics' }).getAttribute('aria-checked')).toBe('false')
   expect(queryByRole(host, 'alert')).toBeNull()
+})
+
+it('collects until withdrawal succeeds and stops across cached organizations on acknowledgement', async () => {
+  allowed = true
+  await mount()
+  http.post.mockClear()
+
+  const withdrawal = Promise.withResolvers<void>()
+  http.put.mockImplementationOnce(async () => {
+    await withdrawal.promise
+    allowed = false
+    return { data: { allowed, version: 1, decidedAt: new Date().toISOString() } }
+  })
+  await click('Product analytics', 'switch')
+  await click('Private project name')
+  expect(http.post).toHaveBeenCalledTimes(1)
+
+  organizationId = 'other-org'
+  await mount()
+  const beforeWithdrawal = http.post.mock.calls.length
+
+  // Hold a GET started under the old grant across the acknowledged withdrawal.
+  const oldRead = Promise.withResolvers<void>()
+  http.get.mockImplementationOnce(async () => {
+    await oldRead.promise
+    return { data: { allowed: true, enabledFrom: new Date(0).toISOString() } }
+  })
+  await act(async () => {
+    void client.invalidateQueries()
+    await pause()
+  })
+  await act(async () => {
+    withdrawal.resolve()
+    await pause()
+    oldRead.resolve()
+    await pause()
+  })
+  expect(getByRole(host, 'switch', { name: 'Product analytics' }).getAttribute('aria-checked')).toBe('false')
+  await click('Private project name')
+
+  organizationId = 'organization'
+  await mount()
+  await click('Private project name')
+  expect(http.post).toHaveBeenCalledTimes(beforeWithdrawal)
 })
 
 it('can retry after a failed preference read and keeps a saved refusal off', async () => {

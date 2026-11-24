@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI. SPDX-License-Identifier: AGPL-3.0 */
 import { createContext, useContext, useRef, useState, type ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from 'react-oidc-context'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
@@ -47,8 +47,8 @@ function AccountPreference({
   children: ReactNode
 }) {
   const api = useApi()
+  const queryClient = useQueryClient()
   const [saving, setSaving] = useState(false)
-  const [locallyOff, setLocallyOff] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const writing = useRef(false)
   const query = useQuery({
@@ -62,19 +62,27 @@ function AccountPreference({
     refetchOnMount: 'always',
   })
   const allowed = query.data?.allowed
-  useConsoleAnalytics(organizationId, !saving && !locallyOff && !query.isError ? query.data?.enabledFrom : null)
+  useConsoleAnalytics(organizationId, query.isError ? null : query.data?.enabledFrom)
 
   const save = async (next: boolean) => {
     if (writing.current) return
     writing.current = true
     setSaving(true)
     setSaveError(null)
-    if (!next) setLocallyOff(true)
     try {
-      await api.axiosInstance.put('/analytics/consent', { allowed: next, version: analyticsNoticeVersion })
-      const result = await query.refetch()
-      if (result.isError) throw result.error
-      setLocallyOff(false)
+      const { data: decision } = await api.axiosInstance.put<AnalyticsPreference>('/analytics/consent', {
+        allowed: next,
+        version: analyticsNoticeVersion,
+      })
+      const accountQueries = { queryKey: ['product-analytics', sub] }
+      // Discard consent reads that started before the decision was saved.
+      await queryClient.cancelQueries(accountQueries)
+      if (decision.allowed === false) {
+        queryClient.setQueriesData<ConsolePreference>(accountQueries, { ...decision, enabledFrom: null })
+      } else {
+        // A personal grant still needs the organization's creator grant.
+        await queryClient.invalidateQueries(accountQueries)
+      }
     } catch {
       setSaveError('Could not confirm your preference. Check your connection and try again.')
     } finally {
