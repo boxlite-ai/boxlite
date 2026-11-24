@@ -87,7 +87,7 @@ async fn recovered_main_wait_uses_exit_file_without_changing_auxiliary_status() 
     let address = listener.local_addr().expect("execution guest address");
     let incoming = tonic::transport::server::TcpIncoming::from_listener(listener, true, None)
         .expect("configure execution guest listener");
-    let mut fixture = running_box_for_start_test_with_live(Arc::clone(&gate), |live| {
+    let mut fixture = running_box_for_start_test_with_live(Arc::clone(&gate), |_, live| {
         live.guest_session = GuestSession::new(BoxTransport::tcp(address.port()));
     })
     .await;

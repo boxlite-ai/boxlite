@@ -18,6 +18,8 @@ mod network;
 pub(crate) mod ports;
 #[doc(hidden)]
 pub mod protected_boot;
+#[doc(hidden)]
+pub mod protected_outbound;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
 mod ssh;
@@ -147,6 +149,32 @@ impl LiteBox {
     #[doc(hidden)]
     pub async fn has_protected_boot(&self) -> BoxliteResult<bool> {
         self.protected_backend()?.has_protected_boot().await
+    }
+
+    /// Change the gate for an exact protected boot through the local Runner.
+    #[doc(hidden)]
+    pub async fn change_protected_boot_gate(
+        &self,
+        request: protected_boot::ProtectedGateRequest,
+        seal: bool,
+    ) -> BoxliteResult<protected_boot::ProtectedGateReceipt> {
+        let action = if seal {
+            crate::net::gvproxy::RecoveryGateAction::Seal
+        } else {
+            crate::net::gvproxy::RecoveryGateAction::Release
+        };
+        self.protected_backend()?
+            .change_protected_gate(request, action)
+            .await
+    }
+
+    /// Apply or read the complete managed route over the local Runner boundary.
+    #[doc(hidden)]
+    pub async fn protected_outbound(
+        &self,
+        request: protected_outbound::ProtectedRouteRequest,
+    ) -> BoxliteResult<protected_outbound::ProtectedRouteReceipt> {
+        self.protected_backend()?.protected_outbound(request).await
     }
 
     fn protected_backend(&self) -> BoxliteResult<Arc<box_impl::BoxImpl>> {

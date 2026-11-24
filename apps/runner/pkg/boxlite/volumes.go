@@ -124,6 +124,10 @@ func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID strin
 	if err := json.Unmarshal([]byte(volumesJSON), &volumes); err != nil {
 		return nil
 	}
+	return c.ensureBoxVolumeMounts(ctx, boxID, volumes)
+}
+
+func (c *Client) ensureBoxVolumeMounts(ctx context.Context, boxID string, volumes []dto.VolumeDTO) error {
 	if len(volumes) == 0 {
 		return nil
 	}

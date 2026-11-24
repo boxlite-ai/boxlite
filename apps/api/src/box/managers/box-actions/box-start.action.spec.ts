@@ -282,3 +282,48 @@ describe('BoxStartAction image dispatch', () => {
     expect(createBox).toHaveBeenCalledWith(box, 'quay.io/acme/app:v1', expect.any(Object), false)
   })
 })
+
+describe('BoxStartAction previous Runner cleanup', () => {
+  it.each(['missing inventory', '404 from destroy'])('preserves protected ownership with %s', async (failure) => {
+    const box = new Box('region-1', 'replacement')
+    box.runnerId = 'new-runner'
+    box.prevRunnerId = 'old-runner'
+    box.state = BoxState.STARTING
+    box.desiredState = BoxDesiredState.STARTED
+    box.pending = true
+
+    const findPreviousRunner = jest.fn(async () => (failure === 'missing inventory' ? null : { id: box.prevRunnerId }))
+    const destroyBox = jest.fn().mockRejectedValue({ statusCode: 404 })
+    const update = jest.fn(async (_id: string, input: { updateData: Partial<Box> }) => {
+      Object.assign(box, input.updateData)
+      return box
+    })
+    const cleanupPreviousRunner = jest.fn(async () => undefined)
+    const lockCode = new LockCode('lock-previous-runner')
+    const action = new BoxStartAction(
+      {
+        findOneOrFail: jest.fn(async () => ({ id: box.runnerId, state: RunnerState.READY })),
+        findOne: findPreviousRunner,
+      } as any,
+      {
+        create: jest.fn(async (runner: Runner) =>
+          runner.id === box.runnerId ? { boxInfo: async () => ({ state: BoxState.STARTED }) } : { destroyBox },
+        ),
+      } as any,
+      { update, cleanupPreviousRunner } as any,
+      {} as any,
+      {} as any,
+      { getCode: jest.fn(async () => lockCode) } as any,
+      {} as any,
+      {} as any,
+    )
+
+    await action.run(box, lockCode)
+
+    expect(box.state).toBe(BoxState.STARTED)
+    expect(box.prevRunnerId).toBe('old-runner')
+    expect(destroyBox).not.toHaveBeenCalled()
+    expect(findPreviousRunner).not.toHaveBeenCalled()
+    expect(cleanupPreviousRunner).toHaveBeenCalledWith(box, expect.any(Function))
+  })
+})

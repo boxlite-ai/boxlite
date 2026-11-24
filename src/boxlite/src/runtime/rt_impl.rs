@@ -1115,6 +1115,68 @@ impl RuntimeImpl {
 
     /// Caller holds the box's entity lock, if the box has one.
     pub(crate) fn remove_box_locked(&self, id: &BoxID, force: bool) -> BoxliteResult<()> {
+        self.remove_box_with_retirement(id, force, None)
+    }
+
+    pub(crate) fn remove_retired_protected(
+        &self,
+        selector: &BoxID,
+        request: &crate::litebox::protected_boot::ProtectedRemoveRequest,
+    ) -> BoxliteResult<crate::litebox::protected_boot::ProtectedBootReceipt> {
+        use crate::litebox::protected_boot::ProtectedBootOutcome;
+        let matches = |receipt: &crate::litebox::protected_boot::ProtectedBootReceipt| {
+            receipt.outcome == ProtectedBootOutcome::Retired
+                && receipt.key == request.key
+                && receipt.epoch == request.epoch
+        };
+        let runner_name = request.runner_box_name.as_ref().map(BoxID::as_str);
+        if let Some(receipt) = self
+            .box_manager
+            .protected_retirements(selector, runner_name)?
+            .into_iter()
+            .find(matches)
+        {
+            return Ok(receipt);
+        }
+        let id = self
+            .box_manager
+            .lookup_exact_box_id(selector)?
+            .ok_or_else(|| {
+                BoxliteError::InvalidState("Exact protected retirement is unknown".into())
+            })?;
+        crate::litebox::box_impl::BoxImpl::try_with_operation(self, &id, || {
+            let protection = self
+                .box_manager
+                .protected_boot(&id)?
+                .filter(|record| {
+                    record.active.is_none()
+                        && record.removable_attempt.as_ref() == Some(&request.key.attempt_id)
+                })
+                .ok_or_else(|| {
+                    BoxliteError::InvalidState("Exact protected retirement is required".into())
+                })?;
+            let receipt = protection
+                .retired
+                .iter()
+                .find(|receipt| matches(receipt))
+                .cloned()
+                .ok_or_else(|| {
+                    BoxliteError::InvalidState("Exact protected retirement is unknown".into())
+                })?;
+            self.remove_box_with_retirement(&id, false, Some((&protection, runner_name)))?;
+            Ok(receipt)
+        })
+    }
+
+    fn remove_box_with_retirement(
+        &self,
+        id: &BoxID,
+        force: bool,
+        retired: Option<(
+            &crate::litebox::protected_boot::ProtectedBootState,
+            Option<&str>,
+        )>,
+    ) -> BoxliteResult<()> {
         tracing::debug!(box_id = %id, force = force, "RuntimeInnerImpl::remove_box called");
 
         // Try to get box from database first
@@ -1137,7 +1199,9 @@ impl RuntimeImpl {
                     "box {id} has a disk operation in progress; retry removal"
                 ))
             })?;
-            return self.remove_box_holding_admissions(id, force, config, state, lock_id);
+            return self.remove_box_with_retirement_holding_admissions(
+                id, force, config, state, lock_id, retired,
+            );
         }
 
         // Box not in database - check in-memory cache
@@ -1215,7 +1279,22 @@ impl RuntimeImpl {
         state: BoxState,
         lock_id: crate::lock::LockId,
     ) -> BoxliteResult<()> {
-        if self.box_manager.protected_boot(id)?.is_some() {
+        self.remove_box_with_retirement_holding_admissions(id, force, config, state, lock_id, None)
+    }
+
+    fn remove_box_with_retirement_holding_admissions(
+        &self,
+        id: &BoxID,
+        force: bool,
+        config: BoxConfig,
+        state: BoxState,
+        lock_id: crate::lock::LockId,
+        retired: Option<(
+            &crate::litebox::protected_boot::ProtectedBootState,
+            Option<&str>,
+        )>,
+    ) -> BoxliteResult<()> {
+        if retired.is_none() && self.box_manager.protected_boot(id)?.is_some() {
             return Err(BoxliteError::InvalidState(
                 "Protected bootstrap records require coordinated removal".into(),
             ));
@@ -1260,7 +1339,12 @@ impl RuntimeImpl {
         }
 
         // Remove from BoxManager (database-first)
-        self.box_manager.remove_box(id)?;
+        if let Some((retired, runner_name)) = retired {
+            self.box_manager
+                .remove_protected_box(id, retired, runner_name)?;
+        } else {
+            self.box_manager.remove_box(id)?;
+        }
 
         // 1. Remove all base disk refs for this box (returns affected base IDs for GC)
         let affected_base_ids = self
@@ -2007,6 +2091,14 @@ impl super::backend::RuntimeBackend for LocalRuntime {
 
     async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
         self.0.remove(id_or_name, force)
+    }
+
+    async fn remove_retired_protected(
+        &self,
+        id: &crate::BoxID,
+        request: &crate::litebox::protected_boot::ProtectedRemoveRequest,
+    ) -> BoxliteResult<crate::litebox::protected_boot::ProtectedBootReceipt> {
+        self.0.remove_retired_protected(id, request)
     }
 
     async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {

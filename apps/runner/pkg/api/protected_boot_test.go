@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/boxlite-ai/runner/pkg/api/middlewares"
@@ -16,6 +17,39 @@ type unreadBody struct{ t *testing.T }
 func (b unreadBody) Read([]byte) (int, error) {
 	b.t.Error("request body was read before transport authority was established")
 	return 0, io.EOF
+}
+
+type trackedBootBody struct {
+	io.Reader
+	read bool
+}
+
+func (b *trackedBootBody) Read(p []byte) (int, error) {
+	b.read = true
+	return b.Reader.Read(p)
+}
+
+func TestProtectedBootAcceptsCloudBoxIdentifier(t *testing.T) {
+	cfg := ProtectedBootConfig{
+		RunnerID: "8137cc0d-5d3f-43b8-aa32-b9304740269e",
+		DoHURL:   "https://resolver.example.com/dns-query", DoHAddress: "1.1.1.1:443",
+	}
+	engine := gin.New()
+	registerProtectedBoot(engine.Group("/", middlewares.AuthMiddleware("test-token")), cfg, 0, true)
+	for _, boxID := range []string{"aB0cD1eF2gH3", "597da250-c3f6-4276-a0c2-25657a8fdeda", "invalid!id"} {
+		t.Run(boxID, func(t *testing.T) {
+			body := &trackedBootBody{Reader: strings.NewReader(`{`)}
+			req := httptest.NewRequest(http.MethodPost, "https://runner.example.com/v1/boxes/"+boxID+"/network/outbound/bootstrap", body)
+			req.Header.Set("Authorization", "Bearer test-token")
+			req.Header.Set("X-BoxLite-Runner-Id", cfg.RunnerID)
+			res := httptest.NewRecorder()
+			engine.ServeHTTP(res, req)
+			wantRead := boxID != "invalid!id"
+			if res.Code != http.StatusBadRequest || body.read != wantRead {
+				t.Fatalf("HTTP status %d, read body %t, want %d and %t", res.Code, body.read, http.StatusBadRequest, wantRead)
+			}
+		})
+	}
 }
 
 func TestProtectedBootRejectsBeforeReadingRoute(t *testing.T) {

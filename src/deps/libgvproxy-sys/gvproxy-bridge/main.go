@@ -178,24 +178,25 @@ type DNSZone struct {
 // GvproxyConfig is the bridge startup wire object. Network settings mirror
 // Rust's GvproxyConfig; OutboundRevision is optional control-plane metadata.
 type GvproxyConfig struct {
-	SocketPath       string         `json:"socket_path"`
-	Subnet           string         `json:"subnet"`
-	GatewayIP        string         `json:"gateway_ip"`
-	GatewayMac       string         `json:"gateway_mac"`
-	GuestIP          string         `json:"guest_ip"`
-	HostIP           string         `json:"host_ip"`
-	GuestMac         string         `json:"guest_mac"`
-	MTU              uint16         `json:"mtu"`
-	DNSZones         []DNSZone      `json:"dns_zones"`
-	DNSSearchDomains []string       `json:"dns_search_domains"`
-	Debug            bool           `json:"debug"`
-	CaptureFile      *string        `json:"capture_file,omitempty"`
-	AllowNet         []string       `json:"allow_net,omitempty"`
-	OutboundDisabled bool           `json:"outbound_disabled,omitempty"`
-	OutboundRevision string         `json:"outbound_revision,omitempty"`
-	Secrets          []SecretConfig `json:"secrets,omitempty"`
-	CACertPEM        string         `json:"ca_cert_pem,omitempty"`
-	CAKeyPEM         string         `json:"ca_key_pem,omitempty"`
+	SocketPath       string          `json:"socket_path"`
+	Subnet           string          `json:"subnet"`
+	GatewayIP        string          `json:"gateway_ip"`
+	GatewayMac       string          `json:"gateway_mac"`
+	GuestIP          string          `json:"guest_ip"`
+	HostIP           string          `json:"host_ip"`
+	GuestMac         string          `json:"guest_mac"`
+	MTU              uint16          `json:"mtu"`
+	DNSZones         []DNSZone       `json:"dns_zones"`
+	DNSSearchDomains []string        `json:"dns_search_domains"`
+	Debug            bool            `json:"debug"`
+	CaptureFile      *string         `json:"capture_file,omitempty"`
+	AllowNet         []string        `json:"allow_net,omitempty"`
+	OutboundDisabled bool            `json:"outbound_disabled,omitempty"`
+	OutboundRevision string          `json:"outbound_revision,omitempty"`
+	RecoveryGate     *recoveryGateID `json:"recovery_gate,omitempty"`
+	Secrets          []SecretConfig  `json:"secrets,omitempty"`
+	CACertPEM        string          `json:"ca_cert_pem,omitempty"`
+	CAKeyPEM         string          `json:"ca_key_pem,omitempty"`
 	// ControlSocketPath, when set, binds gvproxy's ServicesMux (dynamic port
 	// forwarding / DNS / DHCP leases / stats / cam) to a host unix socket the
 	// boxlite core dials. Empty => the services API is not exposed.
@@ -354,6 +355,14 @@ func startGvproxy(config GvproxyConfig, managed *managedNetworkStartup) (int64, 
 // prepareGuestSocket lets the socket lifecycle tests hold a real writer at
 // the final handoff while exercising the same owner on both host platforms.
 func startGvproxyOnTransport(config GvproxyConfig, managed *managedNetworkStartup, protocol types.Protocol, prepareGuestSocket func(net.Conn) net.Conn) (int64, error) {
+	if gate := config.RecoveryGate; gate != nil {
+		if managed == nil || config.ControlSocketPath == "" || !gate.valid() {
+			return -1, fmt.Errorf("recovery gate requires managed networking and host control")
+		}
+		if managed.route != nil && managed.route.Binding != nil && managed.route.Binding.Epoch != gate.Epoch {
+			return -1, fmt.Errorf("recovery gate epoch differs from the launch binding")
+		}
+	}
 	// Reject a bad rate limit outright rather than letting part of it apply.
 	if err := config.RateLimit.Validate(); err != nil {
 		logrus.WithError(err).Error("Invalid gvproxy rate limit config")
@@ -549,7 +558,7 @@ func startGvproxyOnTransport(config GvproxyConfig, managed *managedNetworkStartu
 			return
 		}
 		if managed != nil {
-			gateway, err = policy.installManagedNetwork(ctx, work, route)
+			gateway, err = policy.installManagedNetwork(ctx, work, route, config.RecoveryGate)
 			if err != nil {
 				initErr <- fmt.Errorf("initialize managed network: %w", err)
 				return
@@ -584,6 +593,7 @@ func startGvproxyOnTransport(config GvproxyConfig, managed *managedNetworkStartu
 				mux.Handle("/network/outbound", policy)
 				mux.Handle(outboundStatusPath, policy)
 				mux.Handle(outboundSnapshotPath, policy)
+				mux.Handle(outboundRecoveryGatePath, policy)
 				if gateway != nil {
 					mux.Handle("/services/dns/all", gateway)
 					mux.Handle("/services/dns/add", gateway)

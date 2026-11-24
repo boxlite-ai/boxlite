@@ -6,13 +6,29 @@ import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { RunnerState } from '../enums/runner-state.enum'
+import { LockCode } from '../common/redis-lock.provider'
+import { BoxStartAction } from '../managers/box-actions/box-start.action'
+import { DONT_SYNC_AGAIN, SYNC_AGAIN } from '../managers/box-actions/box.action'
 import { AddOutboundControl1794888000000 } from '../../migrations/pre-deploy/1794888000000-add-outbound-control-migration'
+import { IndexBoxOrganizationForProxy1795000000000 } from '../../migrations/pre-deploy/1795000000000-index-box-organization-for-proxy-migration'
+import { AddOutboundProxyRegistry1795000001000 } from '../../migrations/pre-deploy/1795000001000-add-outbound-proxy-registry-migration'
+import { ExtendOutboundProxyRuntimeState1795153000000 } from '../../migrations/pre-deploy/1795153000000-extend-outbound-proxy-runtime-state-migration'
 import { OutboundCommitUnknown, OutboundPolicyStore, outboundRecord, persistedOutbound } from './outbound-policy.store'
 import { PostgresCommitProxy } from './tests/postgres-commit-proxy'
 import { Runner } from '../entities/runner.entity'
 import { RunnerOutboundControl, OutboundSnapshot } from '../runner-adapter/outbound-control'
 import { OutboundPolicyCoordinator } from '../services/outbound-policy.coordinator'
 import { BoxRepository } from '../repositories/box.repository'
+import { ProxyCredentialCipher } from '../outbound-proxy/proxy-credential-cipher'
+import { ProxyRegistryStore } from '../outbound-proxy/proxy-registry.store'
+import { ManagedCommand, ManagedReceipt } from '../runner-adapter/protected-outbound'
+import { ProtectedBootKey, ProtectedBootReceipt } from '../runner-adapter/protected-runner'
+import { ManagedOutboundBootstrap } from '../services/managed-outbound-bootstrap'
+import { ManagedOutboundCoordinator } from '../services/managed-outbound.coordinator'
+import { RunnerAdapter } from '../runner-adapter/runnerAdapter'
+import { BoxService } from '../services/box.service'
+import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `outbound_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -48,7 +64,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema,
-      entities: [Box, BoxLastActivity],
+      entities: [Box, BoxLastActivity, Runner],
       synchronize: false,
       entitySkipConstructor: true,
       ssl: false as const,
@@ -58,6 +74,16 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     await primary.query(`CREATE SCHEMA "${schema}"`)
     ownsSchema = true
     await primary.synchronize()
+    await primary.query('CREATE TABLE organization (id uuid PRIMARY KEY)')
+    await primary.query('INSERT INTO organization VALUES ($1)', [org])
+    const migration = primary.createQueryRunner()
+    try {
+      await new IndexBoxOrganizationForProxy1795000000000().up(migration)
+      await new AddOutboundProxyRegistry1795000001000().up(migration)
+      await new ExtendOutboundProxyRuntimeState1795153000000().up(migration)
+    } finally {
+      await migration.release()
+    }
     proxy = new PostgresCommitProxy(options.host, options.port)
     const port = await proxy.start()
     transport = await new DataSource({
@@ -150,6 +176,551 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     http.closeAllConnections()
     await new Promise<void>((resolve) => http.close(() => resolve()))
     jest.restoreAllMocks()
+  })
+
+  it('reserves before bound startup and promotes on exact readback before releasing the gate', async () => {
+    const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+    const bootstrap = new ManagedOutboundBootstrap(primary, registry)
+    const name = `proxy-${randomUUID()}`
+    await registry.create(org, { name, url: 'socks5://proxy.example.com' })
+    await primary.transaction(async (manager) => {
+      Object.assign(box, { state: BoxState.UNKNOWN, pending: true })
+      await manager.update(Box, box.id, { state: BoxState.UNKNOWN, pending: true })
+      await bootstrap.seed(manager, box, name)
+    })
+    const getPins = () =>
+      primary.query('SELECT kind, revision, runtime_epoch FROM outbound_proxy_reference WHERE box_id = $1', [box.id])
+    expect(await getPins()).toEqual([{ kind: 'pending', revision: 1, runtime_epoch: null }])
+    let attested: ProtectedBootReceipt | undefined
+    const epoch = 'protected-first-epoch'
+    const start = jest.fn(async (_id: string, key: ProtectedBootKey, route: unknown) => {
+      expect(route).toMatchObject({ scheme: 'socks5', host: 'proxy.example.com', port: 1080 })
+      expect(outboundRecord(await store.read(box.id, org)).bootstrap.claim).toBeDefined()
+      expect(await getPins()).toEqual([{ kind: 'pending', revision: 1, runtime_epoch: null }])
+      attested = { key, epoch, outcome: 'confirmed' }
+      throw new Error('Lost initial start receipt')
+    })
+    const release = jest.fn(async () => {
+      expect(await getPins()).toEqual([{ kind: 'committed', revision: 1, runtime_epoch: epoch }])
+      expect(outboundRecord(await store.read(box.id, org)).managed.epoch).toBe(epoch)
+    })
+    const adapter = {
+      protectedBootstrap: {
+        supportsProtectedBootstrap: async () => true,
+        prepareProtectedBox: jest.fn(),
+        startProtectedBox: start,
+        readProtectedBoot: async () => attested,
+        changeProtectedBootGate: release,
+      },
+    } as unknown as RunnerAdapter
+    const placeholder = { image: 'test/image', metadata: {}, nested: false }
+    expect(await bootstrap.start(box, adapter, placeholder)).toBe('pending')
+    expect(release).not.toHaveBeenCalled()
+    expect(await bootstrap.start(box, adapter, placeholder)).toBe('ready')
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(outboundRecord(await store.read(box.id, org)).bootstrap).toBeUndefined()
+  })
+
+  it('resumes a stopped Box action after the managed gate release was committed', async () => {
+    const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+    const bootstrap = new ManagedOutboundBootstrap(primary, registry)
+    const volumes = [{ volumeId: 'durable-volume', mountPath: '/data', subpath: 'logs' }]
+    await primary.getRepository(Box).update(box.id, { state: BoxState.STOPPED, pending: false, volumes })
+    const scheduled = await bootstrap.legacyRestartIntent(box)
+    expect(scheduled?.bootstrap?.restart).toBe(true)
+    await store.locked(box.id, org, ({ write }) => write(scheduled))
+    await primary.getRepository(Box).update(box.id, { desiredState: BoxDesiredState.STARTED, pending: true })
+    const epoch = 'released-restart-epoch'
+    const key = scheduled.bootstrap.key
+    const confirmed = { key, epoch, outcome: 'confirmed' }
+    const start = jest.fn().mockResolvedValue(confirmed)
+    const release = jest.fn().mockResolvedValue(undefined)
+    const read = jest.fn().mockResolvedValue({ ...confirmed, epoch: 'stale-epoch' })
+    const startBox = jest.fn()
+    const capabilities = jest.fn(async (_recovery: boolean, volumeRestart: boolean) => !volumeRestart)
+    const adapter = {
+      startBox,
+      boxInfo: jest.fn().mockResolvedValue({ state: BoxState.STARTED }),
+      protectedBootstrap: {
+        supportsProtectedBootstrap: capabilities,
+        startProtectedBox: start,
+        changeProtectedBootGate: release,
+        readProtectedBoot: read,
+      },
+    } as unknown as RunnerAdapter
+    const cache = { invalidate: jest.fn(), invalidateOrgId: jest.fn() }
+    const repository = new BoxRepository(primary, { emit: jest.fn() } as never, cache as never)
+    const interrupted = new Error('worker interrupted before updating the Box state')
+    jest.spyOn(repository, 'update').mockRejectedValueOnce(interrupted)
+    const lock = new LockCode('restart')
+    const action = new BoxStartAction(
+      { findOneOrFail: jest.fn().mockResolvedValue({ id: runnerId, state: RunnerState.READY }) } as never,
+      { create: jest.fn().mockResolvedValue(adapter) } as never,
+      repository,
+      { findOne: jest.fn().mockResolvedValue(undefined) } as never,
+      {} as never,
+      { getCode: jest.fn().mockResolvedValue(lock) } as never,
+      {} as never,
+      {} as never,
+      bootstrap,
+    )
+
+    expect(await action.run(await store.read(box.id, org), lock)).toBe(DONT_SYNC_AGAIN)
+    expect(outboundRecord(await store.read(box.id, org)).bootstrap.claim).toBeUndefined()
+    expect(start).not.toHaveBeenCalled()
+
+    capabilities.mockResolvedValue(true)
+    await expect(action.run(await store.read(box.id, org), lock)).rejects.toThrow(interrupted)
+    const afterRelease = await store.read(box.id, org)
+    expect(afterRelease.state).toBe(BoxState.STOPPED)
+    expect(outboundRecord(afterRelease).bootstrap).toBeUndefined()
+    expect(outboundRecord(afterRelease).managed.epoch).toBe(epoch)
+    expect(await action.run(afterRelease, lock)).toBe(DONT_SYNC_AGAIN)
+    expect((await store.read(box.id, org)).state).toBe(BoxState.STOPPED)
+
+    read.mockResolvedValue(confirmed)
+    const retry = await action.run(await store.read(box.id, org), lock)
+    const starting = await store.read(box.id, org)
+    expect(starting.state).toBe(BoxState.STARTING)
+    expect(retry).toBe(SYNC_AGAIN)
+    expect(read).toHaveBeenLastCalledWith(box.id, key, epoch)
+    expect(await action.run(starting, lock)).toBe(DONT_SYNC_AGAIN)
+    expect((await store.read(box.id, org)).state).toBe(BoxState.STARTED)
+    expect(startBox).not.toHaveBeenCalled()
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledWith(box.id, key, null, scheduled.bootstrap.generation, true, volumes)
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('drives bind, registry rotation and explicit unbind through one durable Cloud coordinator', async () => {
+    const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+    const managedCoordinator = new ManagedOutboundCoordinator(primary, registry)
+    const name = `proxy-${randomUUID()}`
+    await registry.create(org, { name, url: 'https://proxy.example.com' })
+    const epoch = 'managed-epoch'
+    await store.locked(box.id, org, ({ write }) =>
+      write({ version: 1, revision: live.revision, managed: { runnerId, epoch, binding: null } }),
+    )
+    let runtime: ManagedReceipt = {
+      runner_id: runnerId,
+      epoch,
+      durable: { snapshot: live, binding: null },
+      installed: { snapshot: live, binding: null },
+      pending_attempt: null,
+      unbind_settlement: null,
+      rollback: null,
+      retired_attempt: null,
+    }
+    const agent = jest.fn(async (_epoch: string, command: ManagedCommand) => {
+      expect(_epoch).toBe(epoch)
+      if (command.operation === 'prepare') {
+        const managed = outboundRecord(await store.read(box.id, org)).managed
+        expect(managed.pending).toEqual(command.update)
+        expect(managed.claim).toBeUndefined()
+        runtime.pending_attempt = command.update.attempt_id
+      } else if (command.operation === 'apply') {
+        const managed = outboundRecord(await store.read(box.id, org)).managed
+        expect(managed.claim).toBeDefined()
+        expect(managed.pending.attempt_id).toBe(command.attempt_id)
+        expect(command.route?.binding ?? null).toEqual(managed.pending.candidate.binding)
+        expect(command.predecessor_route?.binding ?? null).toEqual(managed.pending.predecessor.binding)
+        runtime = {
+          ...runtime,
+          durable: managed.pending.candidate,
+          installed: managed.pending.candidate,
+          pending_attempt: null,
+          unbind_settlement: command.route === null ? command.attempt_id : null,
+        }
+      } else if (command.operation === 'settle_unbind') {
+        expect(outboundRecord(await store.read(box.id, org)).managed.unbindRelease.attemptId).toBe(command.attempt_id)
+        runtime.unbind_settlement = null
+      }
+      return { ...runtime }
+    })
+    const protectedControl = async (b: Box) => Object.assign(await control(b), { managed: agent })
+    const policy = { mode: 'enabled' as const, allow_net: ['packages.example.com'] }
+    await expect(
+      managedCoordinator.replace(box.id, org, policy, 'foreign-or-unknown', protectedControl),
+    ).rejects.toMatchObject({ status: 404 })
+    await expect(
+      managedCoordinator.replace(box.id, org, policy, name, protectedControl, () => false),
+    ).rejects.toMatchObject({ status: 412 })
+    expect(agent.mock.calls.some(([, command]) => command.operation === 'apply')).toBe(false)
+    const bound = await managedCoordinator.replace(box.id, org, policy, name, protectedControl)
+    expect(outboundRecord(bound).managed.binding.registration_revision).toBe('1')
+    await registry.update(org, name, { url: 'https://replacement.example.com', credential: null })
+    const duringRollout = await managedCoordinator.status(box.id, org, protectedControl)
+    expect(duringRollout.proxy).toEqual({
+      desired: { name, revision: 2 },
+      committed: { name, revision: 1 },
+      pending: null,
+      installed: { policy_revision: persistedOutbound(bound).revision, proxy: { name, revision: 1 } },
+      runtime_readback: 'authenticated',
+    })
+    const stale = await managedCoordinator.status(box.id, org, async (b) =>
+      Object.assign(await control(b), { managed: async () => ({ ...runtime, epoch: 'stale' }) }),
+    )
+    expect(stale.proxy.installed).toBeNull()
+    expect(stale.proxy.runtime_readback).toBe('unknown')
+    const offline = Array.from({ length: 32 }, () =>
+      Object.assign(new Box('local', randomUUID()), {
+        organizationId: org,
+        osUser: 'boxlite',
+        labels: {},
+        runnerId,
+        state: BoxState.STARTED,
+        desiredState: BoxDesiredState.STARTED,
+        pending: false,
+        outboundControl: {
+          version: 1 as const,
+          revision: live.revision,
+          managed: {
+            runnerId,
+            epoch: 'offline-epoch',
+            binding: null,
+            unbindRelease: { attemptId: 'offline-unbind', revision: live.revision },
+          },
+        },
+      }),
+    )
+    const boxes = primary.getRepository(Box)
+    await boxes.insert(offline)
+    try {
+      for (const { id, outboundControl } of offline) {
+        await store.locked(id, org, ({ write }) => write(outboundControl, undefined, new Date(1)))
+      }
+      const attempted = new Set<string>()
+      const errors = await managedCoordinator.poll(async (claimed) => {
+        attempted.add(claimed.id)
+        if (claimed.id !== box.id) throw new Error('offline Runner')
+        return protectedControl(claimed)
+      })
+      expect(attempted.has(box.id)).toBe(true)
+      expect(attempted.size).toBeLessThanOrEqual(16)
+      expect(errors).toBe(attempted.size - 1)
+    } finally {
+      await boxes.delete(offline.map(({ id }) => id))
+    }
+    const rotated = await store.read(box.id, org)
+    expect(outboundRecord(rotated).managed.binding.registration_revision).toBe('2')
+    expect(persistedOutbound(rotated).policy).toEqual(policy)
+    await managedCoordinator.replace(box.id, org, policy, null, protectedControl)
+    expect(outboundRecord(await store.read(box.id, org)).managed.binding).toBeNull()
+    expect(outboundRecord(await store.read(box.id, org)).managed.unbindRelease).toBeUndefined()
+    await expect(registry.remove(org, name)).resolves.toBeUndefined()
+  })
+
+  it('settles due outbound work when PostgreSQL has only one connection available', async () => {
+    const options = primary.options as PostgresConnectionOptions
+    const limited = await new DataSource({
+      ...options,
+      poolSize: 1,
+      extra: { ...options.extra, connectionTimeoutMillis: 500 },
+    }).initialize()
+    const originalEnabled = process.env.OUTBOUND_PROXY_REGISTRY_ENABLED
+    try {
+      const runner = Object.assign(
+        new Runner({
+          region: 'local',
+          name: 'protected-runner',
+          apiKey: 'fixture',
+          apiVersion: '0',
+          apiUrl: 'https://runner.test',
+        }),
+        { id: runnerId },
+      )
+      await primary.getRepository(Runner).insert(runner)
+      const epoch = 'single-connection-epoch'
+      const durable = { snapshot: persistedOutbound(box), binding: null }
+      await store.locked(box.id, org, ({ write }) =>
+        write(
+          {
+            version: 1,
+            revision: durable.snapshot.revision,
+            managed: {
+              runnerId,
+              epoch,
+              binding: null,
+              unbindRelease: { attemptId: 'unbind', revision: live.revision },
+            },
+          },
+          undefined,
+          new Date(1),
+        ),
+      )
+      const registry = new ProxyRegistryStore(limited, new ProxyCredentialCipher(undefined), true)
+      const service = Object.create(BoxService.prototype) as BoxService
+      Object.assign(service, {
+        outboundCoordinator: new ManagedOutboundCoordinator(limited, registry),
+        runnerService: { findOne: (id: string) => limited.getRepository(Runner).findOneBy({ id }) },
+        runnerAdapterFactory: {
+          create: async () => ({
+            managedOutbound: async (): Promise<ManagedReceipt> => ({
+              runner_id: runnerId,
+              epoch,
+              durable,
+              installed: durable,
+              pending_attempt: null,
+              unbind_settlement: null,
+              rollback: null,
+              retired_attempt: null,
+            }),
+          }),
+        },
+        logger: { warn: jest.fn() },
+      })
+      process.env.OUTBOUND_PROXY_REGISTRY_ENABLED = 'true'
+      await service.reconcileManagedOutbound()
+      expect(outboundRecord(await store.read(box.id, org)).managed.unbindRelease).toBeUndefined()
+    } finally {
+      if (originalEnabled === undefined) delete process.env.OUTBOUND_PROXY_REGISTRY_ENABLED
+      else process.env.OUTBOUND_PROXY_REGISTRY_ENABLED = originalEnabled
+      await limited.destroy()
+    }
+  })
+
+  it('retains the previous assignment through failed termination proof and restarts with the exact pinned version', async () => {
+    const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+    const bootstrap = new ManagedOutboundBootstrap(primary, registry)
+    const name = `proxy-${randomUUID()}`
+    await registry.create(org, { name, url: 'https://old-proxy.example.com' })
+    const epoch = 'old-epoch'
+    const baseline = await registry.reserveBootstrapReference(
+      {
+        organizationId: org,
+        boxId: box.id,
+        runnerId,
+        attemptId: 'old-start-attempt',
+      },
+      name,
+    )
+    await registry.confirmBootstrapReference(baseline, epoch)
+    const key: ProtectedBootKey = {
+      runner_id: runnerId,
+      attempt_id: baseline.attemptId,
+      registration_id: baseline.registrationId,
+      registration_revision: '1',
+      policy: live,
+    }
+    const binding = { epoch, registration_id: baseline.registrationId, registration_revision: '1' }
+    const current = { snapshot: live, binding }
+    await store.locked(box.id, org, ({ write }) =>
+      write({
+        version: 1,
+        revision: live.revision,
+        managed: { epoch, runnerId, binding, launch: { key, generation: 'old-gate' } },
+      }),
+    )
+    const replacement = randomUUID()
+    Object.assign(box, { runnerId: replacement, prevRunnerId: runnerId, state: BoxState.STARTING, pending: true })
+    await primary.getRepository(Box).update(box.id, {
+      runnerId: replacement,
+      prevRunnerId: runnerId,
+      state: BoxState.STARTING,
+      pending: true,
+    })
+    await registry.update(org, name, { url: 'https://newer-proxy.example.com', credential: null })
+    const exact = { key, epoch, outcome: 'retired' }
+    const terminate = jest.fn().mockResolvedValue({ ...exact, epoch: 'unknown-epoch' })
+    const remove = jest.fn(async () => {
+      expect(outboundRecord(await store.read(box.id, org)).managed.retirement).toMatchObject({
+        terminated: true,
+        resolved: true,
+      })
+      return exact
+    })
+    const old = {
+      stopBox: jest.fn(),
+      protectedBootstrap: {
+        sealProtectedEpoch: jest.fn().mockResolvedValue({
+          durable: current,
+          installed: current,
+          pending: null,
+          rollback: null,
+          unbind_settlement: null,
+          ordinary_pending: false,
+        }),
+        retireProtectedBoot: terminate,
+        removeRetiredEpoch: remove,
+      },
+    } as unknown as RunnerAdapter
+    expect(await bootstrap.retire(box, old, 'previous')).toBe(false)
+    expect((await store.read(box.id, org)).prevRunnerId).toBe(runnerId)
+    expect(remove).not.toHaveBeenCalled()
+    await expect(registry.retireRevision(org, name, 1)).rejects.toMatchObject({ status: 409 })
+    terminate.mockResolvedValue(exact)
+    expect(await bootstrap.retire(box, old, 'previous')).toBe(true)
+    expect((await store.read(box.id, org)).prevRunnerId).toBeNull()
+    expect(remove).toHaveBeenCalledWith(box.id, key, epoch)
+    const nextEpoch = 'replacement-epoch'
+    const start = jest.fn(async (_id: string, next: ProtectedBootKey, route: unknown) => {
+      expect(route).toMatchObject({ host: 'old-proxy.example.com' })
+      expect(next.registration_revision).toBe('1')
+      return { key: next, epoch: nextEpoch, outcome: 'confirmed' }
+    })
+    const release = jest.fn(async () => {
+      const [pin] = await primary.query(
+        'SELECT revision, runtime_epoch FROM outbound_proxy_reference WHERE box_id = $1',
+        [box.id],
+      )
+      expect(pin).toEqual({ revision: 1, runtime_epoch: nextEpoch })
+    })
+    const adapter = {
+      protectedBootstrap: {
+        supportsProtectedBootstrap: async () => true,
+        prepareProtectedBox: jest.fn(),
+        startProtectedBox: start,
+        changeProtectedBootGate: release,
+      },
+    } as unknown as RunnerAdapter
+    expect(await bootstrap.start(box, adapter, { image: 'test/image', metadata: {}, nested: false })).toBe('ready')
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(outboundRecord(await store.read(box.id, org)).managed.epoch).toBe(nextEpoch)
+  })
+
+  it('adopts an exact same-epoch rollback token atomically with release of only the abandoned pin', async () => {
+    const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+    const name = `proxy-${randomUUID()}`
+    await registry.create(org, { name, url: 'https://proxy.example.com' })
+    const owner = { organizationId: org, boxId: box.id, runnerId, runtimeEpoch: 'test-epoch' }
+    const baseline = await registry.reserveBootstrapReference({ ...owner, attemptId: 'boot' }, name)
+    await registry.confirmBootstrapReference(baseline, owner.runtimeEpoch)
+    await registry.update(org, name, { url: 'https://new-proxy.example.com', credential: null })
+    const abandoned = await registry.reserveReference({ ...owner, attemptId: 'failed-attempt' }, name)
+    const binding = (reference: typeof baseline | typeof abandoned) => ({
+      epoch: owner.runtimeEpoch,
+      registration_id: reference.registrationId,
+      registration_revision: String(reference.revision),
+    })
+    const predecessor = { snapshot: live, binding: binding(baseline) }
+    const pending = {
+      attempt_id: abandoned.attemptId,
+      predecessor,
+      candidate: { snapshot: candidate, binding: binding(abandoned) },
+    }
+    const restored = { ...predecessor, snapshot: { ...live, revision: 'restored-after-failure' } }
+    await store.locked(box.id, org, async ({ write }) => {
+      await write(
+        {
+          version: 1,
+          revision: live.revision,
+          managed: { runnerId, epoch: owner.runtimeEpoch, binding: predecessor.binding, pending },
+        },
+        undefined,
+        new Date(),
+      )
+    })
+    const proof: ManagedReceipt = {
+      runner_id: runnerId,
+      epoch: owner.runtimeEpoch,
+      durable: restored,
+      installed: restored,
+      pending_attempt: null,
+      unbind_settlement: null,
+      rollback: { failed: pending, restored },
+      retired_attempt: null,
+    }
+    const claimed = await Promise.all([store.claimManagedWork(), store.claimManagedWork()])
+    expect(claimed.flat().filter(({ id }) => id === box.id)).toEqual([{ id: box.id, organizationId: org }])
+    const managed = jest.fn().mockResolvedValue({ ...proof, epoch: 'stale-epoch' })
+    const managedCoordinator = new OutboundPolicyCoordinator(store, async (record) =>
+      Object.assign(await control(record), { managed }),
+    )
+    const replace = () => managedCoordinator.replace(box.id, org, candidate.policy)
+    await expect(replace()).rejects.toMatchObject({ status: 409 })
+    expect(outboundRecord(await store.read(box.id, org)).managed.pending).toEqual(pending)
+    await expect(registry.retireRevision(org, name, baseline.revision)).rejects.toMatchObject({ status: 409 })
+    managed.mockResolvedValue(proof)
+    await expect(replace()).rejects.toMatchObject({ status: 409 })
+    const settled = await store.read(box.id, org)
+    expect(persistedOutbound(settled)).toEqual(restored.snapshot)
+    expect(outboundRecord(settled).managed).toEqual({
+      runnerId,
+      epoch: owner.runtimeEpoch,
+      binding: predecessor.binding,
+    })
+    const pins = await primary.query('SELECT kind, revision FROM outbound_proxy_reference WHERE box_id = $1', [box.id])
+    expect(pins).toEqual([{ kind: 'committed', revision: baseline.revision }])
+    const [work] = await primary.query('SELECT "outboundControlDueAt" FROM box WHERE id = $1', [box.id])
+    expect(work.outboundControlDueAt).toBeNull()
+    expect(writes).toHaveLength(0)
+  })
+
+  it('commits unbind before releasing its write fence, including a lost release receipt', async () => {
+    const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+    const name = `proxy-${randomUUID()}`
+    await registry.create(org, { name, url: 'https://proxy.example.com' })
+    const epoch = 'unbind-epoch'
+    const baseline = await registry.reserveBootstrapReference(
+      {
+        organizationId: org,
+        boxId: box.id,
+        runnerId,
+        attemptId: 'boot-unbind',
+      },
+      name,
+    )
+    await registry.confirmBootstrapReference(baseline, epoch)
+    const binding = { epoch, registration_id: baseline.registrationId, registration_revision: '1' }
+    const pending = {
+      attempt_id: 'pending-unbind',
+      predecessor: { binding, snapshot: live },
+      candidate: { binding: null, snapshot: candidate },
+    }
+    await store.locked(box.id, org, async ({ write }) => {
+      await write(
+        {
+          version: 1,
+          revision: live.revision,
+          managed: { runnerId, epoch, binding, pending },
+        },
+        undefined,
+        new Date(),
+      )
+    })
+    const receipt: ManagedReceipt = {
+      epoch,
+      runner_id: runnerId,
+      durable: pending.candidate,
+      installed: pending.candidate,
+      pending_attempt: null,
+      unbind_settlement: pending.attempt_id,
+      rollback: null,
+      retired_attempt: null,
+    }
+    const managed = jest.fn(async (_epoch: string, command: { operation: string }) => {
+      if (command.operation === 'settle_unbind') {
+        receipt.unbind_settlement = null
+        throw new Error('Lost settlement receipt')
+      }
+      return { ...receipt }
+    })
+    const managedCoordinator = new OutboundPolicyCoordinator(store, async (record) =>
+      Object.assign(await control(record), { managed }),
+    )
+    const replace = () => managedCoordinator.replace(box.id, org, { mode: 'enabled', allow_net: [] })
+    live = candidate
+
+    await expect(replace()).rejects.toMatchObject({ status: 409 })
+    expect(managed).toHaveBeenCalledTimes(1)
+    expect(outboundRecord(await store.read(box.id, org)).managed.unbindRelease).toEqual({
+      attemptId: pending.attempt_id,
+      revision: candidate.revision,
+    })
+    await expect(replace()).rejects.toMatchObject({ status: 409 })
+    expect(managed).toHaveBeenCalledWith(epoch, {
+      operation: 'settle_unbind',
+      attempt_id: pending.attempt_id,
+      revision: candidate.revision,
+    })
+    expect(outboundRecord(await store.read(box.id, org)).managed.unbindRelease).toBeDefined()
+    expect(writes).toHaveLength(0)
+
+    await replace()
+    expect(outboundRecord(await store.read(box.id, org)).managed).toEqual({ runnerId, epoch, binding: null })
+    expect(writes).toHaveLength(1)
+    await expect(registry.remove(org, name)).resolves.toBeUndefined()
   })
 
   it('expands and reverts the actual schema without rewriting existing policy', async () => {
@@ -464,6 +1035,92 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       await primary.query(`DROP FUNCTION "${schema}".reject_disabled_publication()`)
     }
   }
+
+  it.each(['applied', 'lost'] as const)(
+    'handles %s restoration after a managed Cloud publication fails',
+    async (outcome) => {
+      const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+      const managed = new ManagedOutboundCoordinator(primary, registry)
+      const name = `proxy-${randomUUID()}`
+      const epoch = 'managed-cloud-restoration'
+      await registry.create(org, { name, url: 'https://predecessor.example.com' })
+      await store.locked(box.id, org, ({ write }) =>
+        write({ version: 1, revision: live.revision, managed: { runnerId, epoch, binding: null } }),
+      )
+      let snapshot: ManagedReceipt['durable'] = { snapshot: live, binding: null }
+      let prepared: Extract<ManagedCommand, { operation: 'prepare' }>['update'] | undefined
+      const delivered: string[] = []
+      const peer = async (_epoch: string, command: ManagedCommand): Promise<ManagedReceipt> => {
+        if (command.operation === 'prepare' || command.operation === 'prepare_restore') {
+          if (command.operation === 'prepare_restore') {
+            expect(command.failed.candidate).toEqual(snapshot)
+            expect(outboundRecord(await store.read(box.id, org)).managed.restoration).toEqual(command.update)
+            expect(
+              await primary.query(
+                'SELECT kind, revision FROM outbound_proxy_reference WHERE box_id = $1 ORDER BY kind',
+                [box.id],
+              ),
+            ).toEqual([
+              { kind: 'committed', revision: 1 },
+              { kind: 'pending', revision: 1 },
+              { kind: 'retained', revision: 2 },
+            ])
+          }
+          prepared = command.update
+        }
+        if (command.operation === 'apply') {
+          expect(prepared.attempt_id).toBe(command.attempt_id)
+          delivered.push(command.route.host)
+          if (delivered.length === 3 && outcome === 'lost') throw new Error('Controlled restoration loss')
+          snapshot = prepared.candidate
+          prepared = undefined
+        }
+        return {
+          runner_id: runnerId,
+          epoch,
+          durable: snapshot,
+          installed: snapshot,
+          pending_attempt: prepared?.attempt_id ?? null,
+          unbind_settlement: null,
+          rollback: null,
+          retired_attempt: null,
+        }
+      }
+      const protectedControl = async (b: Box) => Object.assign(await control(b), { managed: peer })
+      const original = await managed.replace(box.id, org, live.policy, name, protectedControl)
+      await registry.update(org, name, { url: 'https://candidate.example.com' })
+      await refuseDisabledPublication(async () => {
+        await expect(managed.replace(box.id, org, candidate.policy, name, protectedControl)).rejects.toThrow(
+          'fixture refused disabled publication',
+        )
+      })
+      expect(delivered).toEqual(['predecessor.example.com', 'candidate.example.com', 'predecessor.example.com'])
+      const settled = await store.read(box.id, org)
+      if (outcome === 'lost') {
+        expect(persistedOutbound(settled)).toEqual(persistedOutbound(original))
+        expect(outboundRecord(settled).managed.restoration.candidate.binding.registration_revision).toBe('1')
+        await registry.update(org, name, { url: 'https://newer.example.com' })
+        await managed.advance(box.id, org, protectedControl)
+        expect(delivered).toHaveLength(3)
+        expect(
+          await primary.query('SELECT kind, revision FROM outbound_proxy_reference WHERE box_id = $1 ORDER BY kind', [
+            box.id,
+          ]),
+        ).toEqual([
+          { kind: 'committed', revision: 1 },
+          { kind: 'pending', revision: 1 },
+          { kind: 'retained', revision: 2 },
+        ])
+        return
+      }
+      expect(persistedOutbound(settled)).toEqual(snapshot.snapshot)
+      expect(persistedOutbound(settled).revision).not.toBe(persistedOutbound(original).revision)
+      expect(outboundRecord(settled).managed.binding.registration_revision).toBe('1')
+      expect(
+        await primary.query('SELECT kind, revision FROM outbound_proxy_reference WHERE box_id = $1', [box.id]),
+      ).toEqual([{ kind: 'committed', revision: 1 }])
+    },
+  )
 
   it('reserves a fresh restoration before dispatch after an actual PostgreSQL publication failure', async () => {
     onApply = async (next) => {

@@ -2,6 +2,7 @@ import { BadRequestException, HttpException, ServiceUnavailableException } from 
 import { Runner } from '../entities/runner.entity'
 import { validateNetworkAllowList } from '../utils/network-validation.util'
 import { OutboundPolicy } from './network-policy'
+import type { ManagedCommand, ManagedReceipt } from './protected-outbound'
 
 export type OutboundSnapshot = { revision: string; policy: OutboundPolicy }
 export type OutboundPhase = 'pending' | 'confirmed' | 'uncertain'
@@ -15,6 +16,7 @@ export type OutboundStatus = {
 export interface OutboundControl {
   status(): Promise<OutboundStatus>
   replace(expected: string, candidate: OutboundSnapshot): Promise<'applied' | 'precondition_failed'>
+  managed?: (epoch: string, command: ManagedCommand) => Promise<ManagedReceipt>
 }
 
 export function validOutboundRevision(value: unknown): value is string {
@@ -65,6 +67,7 @@ export class RunnerOutboundControl implements OutboundControl {
   constructor(
     private readonly runner: Runner,
     boxId: string,
+    readonly managed?: (epoch: string, command: ManagedCommand) => Promise<ManagedReceipt>,
   ) {
     const endpoint = runner.apiUrl || runner.proxyUrl
     if (!endpoint) throw new ServiceUnavailableException('Runner has no control endpoint')
