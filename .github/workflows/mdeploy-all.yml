@@ -675,17 +675,25 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-latest
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+      DEPLOY_REF: ${{ inputs.ref || github.sha }}
+      DEPLOY_RESULT: ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result == 'success') && 'success' || 'failure' }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Send deployment outcome
+      - name: Send release deployment outcome
+        if: inputs.release_sha || inputs.stage == 'prod'
         continue-on-error: true
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets[(inputs.release_sha || inputs.stage == 'prod') && 'SLACK_WEBHOOK_URL' || 'SLACK_DEV_DEPLOYMENT_WEBHOOK_URL'] }}
-          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
-          DEPLOY_REF: ${{ inputs.ref || github.sha }}
-          DEPLOY_RESULT: ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result == 'success') && 'success' || 'failure' }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: node apps/infra/scripts/release-pipeline.mjs result
+      - name: Send standalone dev or stage deployment outcome
+        if: ${{ !inputs.release_sha && inputs.stage != 'prod' }}
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}
         run: node apps/infra/scripts/release-pipeline.mjs result
 
   e2e:

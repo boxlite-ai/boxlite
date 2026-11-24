@@ -38,8 +38,20 @@ test('release dev approval uses only the release webhook', () => {
 const expression = (value) => value.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
 
 test('standalone and release applies choose exactly one channel, including an unset release webhook', () => {
-  const step = rollout.jobs.result.steps.at(-1)
-  const channel = new Function('inputs', 'secrets', 'return ' + expression(step.env.SLACK_WEBHOOK_URL))
+  const job = rollout.jobs.result
+  const steps = job.steps.filter((step) => step.run?.endsWith('release-pipeline.mjs result'))
+  for (const step of steps) {
+    assert.match(
+      expression(step.env.SLACK_WEBHOOK_URL),
+      /^secrets\.(SLACK_WEBHOOK_URL|SLACK_DEV_DEPLOYMENT_WEBHOOK_URL)$/,
+      'each result step must read one named secret',
+    )
+  }
+  const channel = (inputs, secrets) => {
+    const selected = steps.filter((step) => new Function('inputs', 'return ' + expression(step.if))(inputs))
+    assert.equal(selected.length, 1)
+    return new Function('secrets', 'return ' + expression(selected[0].env.SLACK_WEBHOOK_URL))(secrets)
+  }
   const secrets = { SLACK_WEBHOOK_URL: 'release', SLACK_DEV_DEPLOYMENT_WEBHOOK_URL: 'dev' }
   for (const [stage, sha, expected] of [
     ['dev', '', 'dev'],
@@ -53,7 +65,7 @@ test('standalone and release applies choose exactly one channel, including an un
   assert.equal(channel({ stage: 'dev', release_sha: 'sha' }, { ...secrets, SLACK_WEBHOOK_URL: '' }), '')
   assert.match(rollout.jobs.result.if, /inputs\.apply/)
   assert.equal(release.jobs.dev.secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL, undefined)
-  const outcome = new Function('needs', 'return ' + expression(step.env.DEPLOY_RESULT))
+  const outcome = new Function('needs', 'return ' + expression(job.env.DEPLOY_RESULT))
   for (const [version, plan, deploy, expected] of [
     ['v1.2.3', 'success', 'skipped', 'success'],
     ['', 'success', 'failure', 'failure'],
