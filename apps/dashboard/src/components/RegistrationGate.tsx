@@ -161,7 +161,12 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
             {submitting ? 'Creating account…' : legal ? 'Continue' : 'Create account'}
           </Button>
           {legal && (
-            <Button variant="ghost" disabled={submitting} onClick={() => navigate(RoutePath.LOGOUT, { replace: true })}>
+            <Button
+              variant="quiet"
+              className="mx-auto mt-2 flex w-fit"
+              disabled={submitting}
+              onClick={() => navigate(RoutePath.LOGOUT, { replace: true })}
+            >
               Cancel
             </Button>
           )}
