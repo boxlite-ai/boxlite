@@ -170,13 +170,13 @@ jobs:
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
   report:
-    name: Report failed release checks
+    name: Report release failure
     needs:
       - resolve
       - publish
       - check
       - dev
-    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-ci' && needs.dev.result == 'skipped' }}
+    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-ci' && needs.dev.result != 'success' }}
     permissions:
       contents: read
       actions: read
@@ -185,7 +185,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Report release checks
+      - name: Report release failure to Slack
         env:
           TAG: ${{ inputs.tag }}
           RELEASE_RESULTS: ${{ toJSON(needs) }}

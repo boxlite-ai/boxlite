@@ -3,6 +3,10 @@ name: E2E cloud
 run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format(' using {0}', inputs.tag) || '' }}
 'on':
   workflow_call:
+    outputs:
+      release_result:
+        description: Outcome of the release acceptance suite
+        value: ${{ jobs.e2e.outputs.release_result }}
     inputs:
       release_sha:
         description: Exact tagged commit deployed by release acceptance.
@@ -95,18 +99,36 @@ jobs:
     if: ${{ contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    cache-mode: read
+    outputs:
+      release_result: ${{ steps.acceptance.outputs.result }}
     steps:
-      - name: Verify the deployed release before acceptance
-        if: inputs.deployment_attempt
+      - name: Resolve the published SDK commit
+        id: release_commit
+        if: inputs.deployment_attempt || (inputs.tag && (inputs.stage || 'dev') == 'dev')
         env:
           DEPLOYMENT_ATTEMPT: ${{ inputs.deployment_attempt }}
           RELEASE_SHA: ${{ inputs.release_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          [[ "$DEPLOYMENT_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] ||
-            { echo '::error::Repeat dev deployment before rerunning release E2E'; exit 1; }
-          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)
-          test "$sha" = "$RELEASE_SHA"
+          sha=$(gh api "repos/boxlite-ai/boxlite/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] ||
+            { echo '::error::GitHub did not return a full release commit SHA'; exit 1; }
+          if [[ -n "$DEPLOYMENT_ATTEMPT" ]]; then
+            [[ "$DEPLOYMENT_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] ||
+              { echo '::error::Repeat dev deployment before rerunning release E2E'; exit 1; }
+            [[ "$sha" == "$RELEASE_SHA" ]] ||
+              { echo '::error::Release tag differs from the dev deployment'; exit 1; }
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - name: Simulate cloud E2E
         run: 'echo "SHADOW: cloud E2E"'
+      - name: Summarize release acceptance
+        id: acceptance
+        if: always() && inputs.deployment_attempt
+        env:
+          E2E_RESULT: ${{ job.status }}
+        run: |
+          echo "result=$E2E_RESULT" >> "$GITHUB_OUTPUT"
+          echo "Dev cloud E2E for $RELEASE_TAG — $E2E_RESULT" >> "$GITHUB_STEP_SUMMARY"

@@ -39,7 +39,10 @@ run-name: '[SHADOW] ${{ inputs.apply && ''deploy'' || ''preview'' }} ${{ inputs.
     outputs:
       accepted_attempt:
         description: Release deployment attempt that passed cloud acceptance
-        value: ${{ jobs.report.outputs.accepted_attempt }}
+        value: ${{ jobs.e2e.outputs.release_result == 'success' && jobs.plan.outputs.deployment_attempt || '' }}
+      e2e_result:
+        description: Dev cloud acceptance outcome for release failure reporting
+        value: ${{ jobs.e2e.outputs.release_result }}
   workflow_dispatch:
     inputs:
       requested_by:
@@ -327,6 +330,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
           APPROVAL_PHASE: Release deployment approval
+          ACCEPTED_TAG: ${{ inputs.stage == 'prod' && inputs.accepted_attempt && inputs.ref || '' }}
         run: node apps/infra/scripts/release-pipeline.mjs approval
   plan:
     name: Simulated deployment (${{ inputs.stage }})
@@ -407,17 +411,25 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-latest
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
+      DEPLOY_REF: ${{ inputs.ref || github.sha }}
+      DEPLOY_RESULT: ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result == 'success') && 'success' || 'failure' }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Send deployment outcome
+      - name: Send release deployment outcome
+        if: inputs.release_sha || inputs.stage == 'prod'
         continue-on-error: true
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets[(inputs.release_sha || inputs.stage == 'prod') && 'SLACK_WEBHOOK_URL' || 'SLACK_DEV_DEPLOYMENT_WEBHOOK_URL'] }}
-          DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
-          DEPLOY_REF: ${{ inputs.ref || github.sha }}
-          DEPLOY_RESULT: ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result == 'success') && 'success' || 'failure' }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: node apps/infra/scripts/release-pipeline.mjs result
+      - name: Send standalone dev or stage deployment outcome
+        if: ${{ !inputs.release_sha && inputs.stage != 'prod' }}
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}
         run: node apps/infra/scripts/release-pipeline.mjs result
   e2e:
     name: Dev release E2E
@@ -434,36 +446,3 @@ jobs:
       release_sha: ${{ needs.resolve.outputs.sha }}
       tag: ${{ inputs.ref }}
       deployment_attempt: ${{ needs.plan.outputs.deployment_attempt || 'missing' }}
-  report:
-    name: Report dev acceptance
-    needs:
-      - resolve
-      - plan
-      - e2e
-    if: always() && inputs.release_sha && inputs.stage == 'dev'
-    permissions:
-      contents: read
-      actions: read
-    runs-on: ubuntu-latest
-    outputs:
-      accepted_attempt: ${{ steps.accepted.outputs.attempt }}
-    steps:
-      - id: accepted
-        if: needs.plan.result == 'success' && needs.e2e.result == 'success'
-        env:
-          DEPLOYMENT_ATTEMPT: ${{ needs.plan.outputs.deployment_attempt }}
-        run: |
-          test "$DEPLOYMENT_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
-          echo "attempt=$DEPLOYMENT_ATTEMPT" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v5
-        if: always()
-        with:
-          persist-credentials: false
-      - name: Publish E2E result
-        if: always()
-        continue-on-error: true
-        env:
-          TAG: ${{ inputs.ref }}
-          RELEASE_RESULTS: ${{ toJSON(needs) }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: node apps/infra/scripts/release-pipeline.mjs report
