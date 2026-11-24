@@ -397,6 +397,14 @@ mod tests {
         {
             Err(tonic::Status::unimplemented("not used by these tests"))
         }
+
+        async fn detach(
+            &self,
+            _: tonic::Request<boxlite_shared::ContainerDetachRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ContainerDetachResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
     }
 
     fn bootstrap_for_version_gate() -> GuestBootstrapConfig {

@@ -46,8 +46,9 @@ boxlite-vmm
 
 The Linux x86_64 native engine composes disks, reporting balloon, aggregate
 virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
-The adapter maps the runtime specification into `VmConfig`; optional devices
-are omitted when not requested.
+The adapter maps the runtime specification into `VmConfig`. It creates an
+empty aggregate filesystem when there are no initial shares, so directory
+delivery remains available after boot. Network and vsock remain optional.
 
 The aggregate virtio-fs device is runtime-extensible: `insert_aggregate`
 publishes a live device by tag when it enters the transport, and
@@ -76,6 +77,59 @@ results alone do not establish complete M2 acceptance.
 Neither new crate depends on `boxlite-shared`; the release workflow publishes
 `boxlite-hypervisor`, then `boxlite-vmm`, before `boxlite`, now that the engine
 adapter depends on `boxlite-vmm`.
+
+## Host directory delivery
+
+On Linux x86_64 native Boxes, the host delivers directory descriptors to the
+shim on `vmm.sock`. The host-only socket uses mode `0600`. Mount requests also
+check the peer UID. Each connection carries one version 1 request and reply,
+with a four-byte little-endian length and up to 64 KiB of JSON. Registration
+accepts one directory FD via `SCM_RIGHTS`. Guest RPCs use `box.sock`.
+
+```mermaid
+sequenceDiagram
+    participant Host as Host client
+    participant Shim as Shim on vmm.sock
+    participant FS as Aggregate virtio-fs
+    participant Guest as Guest agent on box.sock
+    Host->>Shim: Register with directory FD
+    Shim->>FS: Publish directory export
+    Shim-->>Host: Preparing record
+    Host->>Guest: Mount(export key, device tag, destination, mode)
+    Guest-->>Host: Mount complete
+    Host->>Shim: Set state Mounted
+```
+
+Registration reserves a target, allocates an export identity, and publishes a
+`Preparing` record before replying. A new connection can query the record if
+the reply is lost. List admission accounts for serialized JSON bytes,
+including escaping and later state changes.
+
+The kernel queues connections for the serial control thread. The client has
+one deadline for connect, queue wait, and I/O, including time behind a disk
+resize. The frame reader owns received descriptors before validating the
+request, so rejection releases them.
+
+Aggregate Mount and Detach reject containers whose capability bounding set
+includes `CAP_SYS_ADMIN`, before any namespace or mount mutation. The configured
+capabilities are preserved; ordinary containers retain directory delivery.
+
+Guest `Mount` resolves the export beneath the mounted aggregate root and binds
+it into the running container namespace. `Detach` lazily unmounts only the
+matching export incarnation and actual kernel mount identity. Open file and
+directory references survive detach; repeating an old detach does not remove a
+replacement. Descendant mounts must be detached first. A detach received before
+its corresponding mount retains a tombstone that rejects that delayed mount.
+
+Run `make test:unit:rust FILTER=vmm_socket` for frame and record checks.
+Run `make test:integration:vmm:mount-delivery` with a compatible `VMM_KERNEL`
+to register, attach, and retire a directory through the native shim and guest.
+
+The host control client is blocking and belongs in `spawn_blocking` when used
+from async code. Its caller must mark an incarnation `Detaching` before requesting
+guest detach, acknowledge that detach before retiring the export, and retain recovery ownership when outcomes
+are uncertain. The public `box.mounts()` facade and runtime transaction
+coordinator are a separate layer above these delivery primitives.
 
 ## Virtio network device
 

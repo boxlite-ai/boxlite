@@ -5,20 +5,33 @@
 //! host-only (mode 0600, never bridged into guest vsock) and at a fixed path,
 //! so a runtime that restarts can still reach a running box. Each connection
 //! carries one request and one response: a 4-byte little-endian length, then
-//! a JSON object of at most [`MAX_FRAME`] bytes. Requests name [`VERSION`];
-//! a shim answers any other version, or an operation its engine lacks, with
-//! [`ControlError::Unsupported`].
+//! a JSON object of at most [`MAX_FRAME`] bytes. Native directory registration
+//! carries one open directory via `SCM_RIGHTS`. Requests name [`VERSION`].
 
-use std::io::{self, Read, Write};
+use std::fs::File;
+use std::io;
+#[cfg(test)]
+use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+use super::controller::mount_control::{ControlMount, MountState};
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+use std::time::Instant;
+
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+mod transport;
+
 /// The protocol version a request names.
 pub(crate) const VERSION: u32 = 1;
 /// The largest frame either side accepts.
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+pub(crate) const MAX_FRAME: u32 = 64 * 1024;
+#[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
 const MAX_FRAME: u32 = 4096;
 /// How long the shim waits for a request or a reply write.
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
@@ -40,6 +53,18 @@ pub(crate) struct ControlRequest {
 pub(crate) enum ControlOp {
     /// Grows the disk with the configured `block_id` to `bytes`.
     ResizeDisk { block_id: String, bytes: u64 },
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    RegisterMount {
+        source: String,
+        target: String,
+        read_only: bool,
+    },
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    ListMounts,
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    SetMountState { export: String, state: MountState },
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    RemoveMount { export: String },
 }
 
 /// The shim's answer.
@@ -51,6 +76,12 @@ pub(crate) type ControlResponse = Result<ControlReply, ControlError>;
 pub(crate) enum ControlReply {
     /// The disk's size in bytes after the operation.
     DiskSize(u64),
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    MountRegistered(ControlMount),
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    Mounts(Vec<ControlMount>),
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    MountUpdated,
 }
 
 /// Why an operation failed.
@@ -63,28 +94,35 @@ pub(crate) enum ControlError {
     InvalidInput(String),
     #[error("{0}")]
     Failed(String),
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    #[error("mount control errno {0}")]
+    Mount(i32),
 }
 
 /// Binds `path` (replacing a stale socket), makes it owner-only, and serves
 /// each connection on a `vmm-control` thread with `handle`.
 pub(crate) fn serve(
     path: &Path,
-    handle: impl Fn(ControlOp) -> ControlResponse + Send + 'static,
+    handle: impl FnMut(ControlOp, Option<File>) -> ControlResponse + Send + 'static,
 ) -> io::Result<()> {
     if std::fs::symlink_metadata(path).is_ok() {
         std::fs::remove_file(path)?;
     }
     let listener = UnixListener::bind(path)?;
     restrict_to_owner(path)?;
+    // SAFETY: `geteuid` has no preconditions.
+    let owner = unsafe { libc::geteuid() };
     std::thread::Builder::new()
         .name("vmm-control".into())
-        .spawn(move || serve_connections(listener.incoming(), handle, std::thread::sleep))?;
+        .spawn(move || serve_connections(listener.incoming(), owner, handle, std::thread::sleep))?;
     Ok(())
 }
 
+/// `owner` is the uid whose mount control requests this shim accepts.
 fn serve_connections(
     incoming: impl Iterator<Item = io::Result<UnixStream>>,
-    handle: impl Fn(ControlOp) -> ControlResponse,
+    owner: libc::uid_t,
+    mut handle: impl FnMut(ControlOp, Option<File>) -> ControlResponse,
     mut sleep: impl FnMut(Duration),
 ) {
     use io::ErrorKind::{ConnectionAborted, Interrupted};
@@ -115,27 +153,96 @@ fn serve_connections(
                 continue;
             }
         };
-        if let Err(error) = answer(stream, &handle) {
+        if let Err(error) = answer(stream, owner, &mut handle) {
             tracing::debug!(%error, "control connection ended");
         }
     }
 }
 
 fn answer(
-    mut stream: UnixStream,
-    handle: &impl Fn(ControlOp) -> ControlResponse,
+    stream: UnixStream,
+    owner: libc::uid_t,
+    handle: &mut impl FnMut(ControlOp, Option<File>) -> ControlResponse,
 ) -> io::Result<()> {
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(IO_TIMEOUT))?;
-    let response = match serde_json::from_slice::<ControlRequest>(&read_frame(&mut stream)?) {
-        Ok(request) if request.version == VERSION => handle(request.op),
+    // The resize path of other platforms has no peer check.
+    #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
+    let _ = owner;
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    let (frame, file) = transport::receive_frame(&stream, Instant::now() + IO_TIMEOUT)?;
+    #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
+    let (mut stream, frame, file) = {
+        let mut stream = stream;
+        stream.set_read_timeout(Some(IO_TIMEOUT))?;
+        stream.set_write_timeout(Some(IO_TIMEOUT))?;
+        let frame = read_frame(&mut stream)?;
+        (stream, frame, None)
+    };
+    let response = match serde_json::from_slice::<ControlRequest>(&frame) {
+        Ok(request) if request.version == VERSION => {
+            #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+            let checked = check_request(&stream, owner, &request.op, file.is_some());
+            #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
+            let checked = Ok(());
+            checked.and_then(|()| handle(request.op, file))
+        }
         Ok(request) => Err(ControlError::Unsupported(format!(
             "protocol version {}",
             request.version
         ))),
         Err(error) => Err(ControlError::InvalidInput(error.to_string())),
     };
-    write_frame(&mut stream, &serde_json::to_vec(&response)?)
+    let reply = serde_json::to_vec(&response)?;
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    return transport::send_frame(&stream, &reply, None, Instant::now() + IO_TIMEOUT);
+    #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
+    write_frame(&mut stream, &reply)
+}
+
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+fn check_request(
+    stream: &UnixStream,
+    owner: libc::uid_t,
+    op: &ControlOp,
+    has_fd: bool,
+) -> Result<(), ControlError> {
+    let register = matches!(op, ControlOp::RegisterMount { .. });
+    if has_fd != register {
+        return Err(ControlError::Mount(libc::EINVAL));
+    }
+    if !matches!(op, ControlOp::ResizeDisk { .. })
+        && !transport::same_user(stream, owner)
+            .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap_or(libc::EIO)))?
+    {
+        return Err(ControlError::Mount(libc::EPERM));
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn exchange(
+    path: &Path,
+    op: ControlOp,
+    directory: Option<&File>,
+    timeout: Duration,
+) -> io::Result<ControlResponse> {
+    use std::os::fd::AsRawFd;
+
+    let deadline = Instant::now() + timeout;
+    let stream = transport::connect(path, deadline)?;
+    let request = ControlRequest {
+        version: VERSION,
+        op,
+    };
+    let frame = serde_json::to_vec(&request)?;
+    transport::send_frame(&stream, &frame, directory.map(AsRawFd::as_raw_fd), deadline)?;
+    let (reply, attached) = transport::receive_frame(&stream, deadline)?;
+    if attached.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "descriptor in control reply",
+        ));
+    }
+    Ok(serde_json::from_slice(&reply)?)
 }
 
 /// Sends `request` to the shim at `path` and waits up to `timeout` for the
@@ -153,6 +260,7 @@ pub(crate) fn request(
     Ok(serde_json::from_slice(&read_frame(&mut stream)?)?)
 }
 
+#[cfg(test)]
 fn read_frame(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
     let mut length = [0u8; 4];
     stream.read_exact(&mut length)?;
@@ -168,6 +276,7 @@ fn read_frame(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
     Ok(frame)
 }
 
+#[cfg(test)]
 fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> io::Result<()> {
     let length = u32::try_from(frame.len())
         .ok()

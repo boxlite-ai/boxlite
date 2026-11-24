@@ -24,9 +24,15 @@ service Container {
   rpc Start(ContainerStartRequest) returns (ContainerStartResponse);
 
   // Bind a folder of the container's share into the running container,
-  // read-only, without restarting it. The mount joins the container's own
-  // mount namespace, so every process in it sees the folder.
+  // without restarting it. Legacy share delivery is read-only; aggregate
+  // exports carry their mode and unique incarnation. The mount joins the
+  // container's own mount namespace, so every process there sees it.
   rpc Mount(ContainerMountRequest) returns (ContainerMountResponse);
+
+  // Detach a runtime-mounted directory with MNT_DETACH: the destination
+  // leaves the container's mount table while file descriptors opened before
+  // the detach keep working. Runtime directory delivery only.
+  rpc Detach(ContainerDetachRequest) returns (ContainerDetachResponse);
 }
 
 // Guest agent management
@@ -368,15 +374,34 @@ message ContainerMountRequest {
   string container_id = 1;
   // Folder name in this container's share, one path component, never a path:
   // /run/boxlite/shared/containers/{container_id}/volumes/{source}
+  // Only for legacy share delivery; aggregate delivery leaves it empty.
   string source = 2;
   // Absolute path inside the container. Missing directories are created; one
   // that has entries is refused, so no image content is hidden.
   string destination = 3;
-  // Must be true: writable mounts are refused.
+  // Legacy delivery must set it. Aggregate delivery uses it as the guest
+  // bind mode only: whether the container may write the entries is decided
+  // by the export's read-only policy in the host backend.
   bool read_only = 4;
+  // Aggregate delivery (M6): the export key beneath the aggregate root
+  // registered for device_tag. One path component, never a path; when set,
+  // source must be empty.
+  string export_key = 5;
+  // The virtio-fs device whose aggregate root holds the export.
+  string device_tag = 6;
 }
 
 message ContainerMountResponse {}
+
+message ContainerDetachRequest {
+  string container_id = 1;
+  // Absolute path inside the container of a runtime-mounted directory.
+  string destination = 2;
+  // Runtime mount incarnation; retries never detach a replacement.
+  string export_key = 3;
+}
+
+message ContainerDetachResponse {}
 
 message ContainerStartResponse {
   oneof result {
