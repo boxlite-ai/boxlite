@@ -277,16 +277,14 @@ impl GuestService for GuestServer {
                 "resize requires /dev/vda and a positive sector-aligned capacity",
             ));
         }
-        let guard = self.init_state.clone().lock_owned().await;
-        if !guard.initialized || self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        let initialized = self.init_state.lock().await.initialized;
+        if !initialized || self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(Status::failed_precondition(
                 "guest must be initialized and running",
             ));
         }
-        // Own the serialization guard beyond RPC cancellation: resize2fs must
-        // finish before another request can start a second filesystem grow.
+        // Let resize2fs finish and be reaped even if the RPC is cancelled.
         tokio::spawn(async move {
-            let _guard = guard;
             let device = Path::new("/dev/vda");
             let metadata = tokio::fs::symlink_metadata(device).await.map_err(|error| {
                 Status::failed_precondition(format!("root disk unavailable: {error}"))

@@ -298,9 +298,9 @@ async fn online_resize_allows_other_execs_to_exit() {
         disk_size_gb: Some(20),
     });
     tokio::pin!(resize);
-    let wait = tokio::select! {
+    let (exec_wait, ssh_disable) = tokio::select! {
         result = &mut resize => panic!("resize returned before reaching the gate: {result:?}"),
-        wait = async {
+        concurrent = async {
             tokio::time::timeout(Duration::from_secs(10), async {
                 while !gate.join("started").exists() {
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -309,21 +309,33 @@ async fn online_resize_allows_other_execs_to_exit() {
             .await
             .expect("resize2fs never reached the gate");
             stdin.write_all(b"exit\n").await.unwrap();
-            tokio::time::timeout(Duration::from_secs(3), exec.wait()).await
-        } => wait,
+            let ssh = bx.ssh();
+            let deadline = Duration::from_secs(3);
+            tokio::join!(
+                tokio::time::timeout(deadline, exec.wait()),
+                tokio::time::timeout(deadline, ssh.disable()),
+            )
+        } => concurrent,
     };
     // Release the fixture, finish the real ext4 resize, and stop even on regression.
     std::fs::write(gate.join("release"), b"").unwrap();
-    let grown = resize.await.unwrap();
-    bx.stop().await.unwrap();
-    runtime.remove(bx.id().as_str(), true).await.unwrap();
-    assert_eq!(grown.disk_size_gb, 20);
+    let grown = resize.await;
+    let stopped = bx.stop().await;
+    let removed = runtime.remove(bx.id().as_str(), true).await;
+    assert_eq!(grown.unwrap().disk_size_gb, 20);
+    stopped.unwrap();
+    removed.unwrap();
     assert_eq!(
-        wait.expect("exec exit was blocked while resize2fs was running")
+        exec_wait
+            .expect("exec exit was blocked while resize2fs was running")
             .unwrap()
             .exit_code,
         23
     );
+    let status = ssh_disable
+        .expect("SSH disable was blocked while resize2fs was running")
+        .expect("disable SSH while resize2fs is running");
+    assert!(!status.enabled);
 }
 
 #[tokio::test]
