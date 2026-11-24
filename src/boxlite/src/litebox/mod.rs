@@ -12,6 +12,7 @@ mod crash_report;
 mod exec;
 mod executions;
 mod init;
+pub(crate) mod live_snapshot;
 pub(crate) mod local_snapshot;
 mod manager;
 mod network;

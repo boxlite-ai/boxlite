@@ -175,6 +175,22 @@
                 ]
             },
             {
+                "syscall": "setsockopt",
+                "comment": "Set the receive timeout on the host VMM control stream",
+                "args": [
+                    { "index": 1, "type": "dword", "op": "eq", "val": 1, "comment": "SOL_SOCKET" },
+                    { "index": 2, "type": "dword", "op": "eq", "val": 20, "comment": "SO_RCVTIMEO" }
+                ]
+            },
+            {
+                "syscall": "setsockopt",
+                "comment": "Set the send timeout on the host VMM control stream",
+                "args": [
+                    { "index": 1, "type": "dword", "op": "eq", "val": 1, "comment": "SOL_SOCKET" },
+                    { "index": 2, "type": "dword", "op": "eq", "val": 21, "comment": "SO_SNDTIMEO" }
+                ]
+            },
+            {
                 "syscall": "fcntl",
                 "comment": "Used by snapshotting, drive patching and rescanning",
                 "args": [

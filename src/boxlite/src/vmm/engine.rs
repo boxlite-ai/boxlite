@@ -51,6 +51,11 @@ impl VmmConfig {
 pub(crate) trait VmmInstanceImpl {
     /// Transfer control to the Box and run until it exits.
     fn enter(self: Box<Self>) -> BoxliteResult<()>;
+
+    #[cfg(feature = "krun")]
+    fn take_disk_snapshot(&mut self) -> Option<super::krun::snapshot::SnapshotHandle> {
+        None
+    }
 }
 
 /// A configured VMM instance ready to be executed.
@@ -63,6 +68,11 @@ pub struct VmmInstance {
 }
 
 impl VmmInstance {
+    #[cfg(feature = "krun")]
+    pub(crate) fn take_disk_snapshot(&mut self) -> Option<super::krun::snapshot::SnapshotHandle> {
+        self.inner.take_disk_snapshot()
+    }
+
     /// Create a new VmmInstance from an engine-specific implementation.
     #[allow(dead_code)] // Used by engine implementations (e.g., krun) behind feature gates
     pub(crate) fn new(inner: Box<dyn VmmInstanceImpl>) -> Self {

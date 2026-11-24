@@ -3,7 +3,22 @@
 //! This crate provides raw, unsafe bindings to the libkrun C library.
 //! For a safe, idiomatic Rust API, use the higher-level wrapper in the boxlite crate.
 
-use std::os::raw::c_char;
+use std::ffi::{c_char, c_void};
+
+#[repr(C)]
+pub struct DiskFileIdentity {
+    pub device: u64,
+    pub inode: u64,
+}
+
+#[repr(C)]
+pub struct DiskSnapshotCommand {
+    pub operation: u32,
+    pub transaction: *const c_char,
+    pub backing_path: *const c_char,
+    pub source: DiskFileIdentity,
+    pub overlay: DiskFileIdentity,
+}
 
 // Log constants from libkrun.h
 pub const KRUN_LOG_TARGET_DEFAULT: i32 = 0;
@@ -92,6 +107,13 @@ extern "C" {
         disk_format: u32,
         read_only: bool,
     ) -> i32;
+    pub fn krun_enable_disk_snapshot(
+        context: u32,
+        block_id: *const c_char,
+        output: *mut *const c_void,
+    ) -> i32;
+    pub fn krun_disk_snapshot(handle: *const c_void, command: *const DiskSnapshotCommand) -> i32;
+    pub fn krun_free_disk_snapshot(handle: *const c_void);
     pub fn krun_add_net_unixstream(
         ctx_id: u32,
         c_path: *const c_char,

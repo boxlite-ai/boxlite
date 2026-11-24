@@ -22,6 +22,27 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::db_err;
 
+struct RequireLiveSnapshotRecovery;
+
+impl Migration for RequireLiveSnapshotRecovery {
+    fn source_version(&self) -> i32 {
+        10
+    }
+
+    fn target_version(&self) -> i32 {
+        11
+    }
+
+    fn description(&self) -> &str {
+        "Require a runtime that can recover live disk snapshots"
+    }
+
+    fn run(&self, _conn: &Connection, _home_dir: Option<&Path>) -> BoxliteResult<()> {
+        // The version record prevents an older runtime from bypassing journal recovery.
+        Ok(())
+    }
+}
+
 /// A single database migration step.
 pub(crate) trait Migration {
     /// Source version this migration upgrades FROM.
@@ -83,5 +104,6 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(v7_to_v8::RenameNetworkSpec),
         Box::new(v8_to_v9::PreservePublishedPorts),
         Box::new(v9_to_v10::DropAmbiguousEmptyCapabilities),
+        Box::new(RequireLiveSnapshotRecovery),
     ]
 }

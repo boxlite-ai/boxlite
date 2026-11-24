@@ -23,13 +23,10 @@ pub mod guest_binary;
 pub mod guest_check;
 #[cfg(feature = "krun")]
 pub mod krun;
+pub(crate) mod live_snapshot;
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub mod native;
 pub mod registry;
-#[cfg(any(
-    test,
-    all(feature = "native", target_os = "linux", target_arch = "x86_64")
-))]
 pub(crate) mod vmm_socket;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};

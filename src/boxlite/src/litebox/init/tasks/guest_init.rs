@@ -346,6 +346,13 @@ mod tests {
             Ok(tonic::Response::new(boxlite_shared::ShutdownResponse {}))
         }
 
+        async fn sync_clock(
+            &self,
+            _: tonic::Request<boxlite_shared::SyncClockRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::SyncClockResponse>, tonic::Status> {
+            Err(tonic::Status::unimplemented("test guest clock sync"))
+        }
+
         async fn quiesce(
             &self,
             _: tonic::Request<boxlite_shared::QuiesceRequest>,

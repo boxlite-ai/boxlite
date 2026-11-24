@@ -435,6 +435,7 @@ pub struct Jailer<S: Sandbox> {
     pub(crate) additional_path_access: Vec<PathAccess>,
     /// Whether the shim runs a network backend and needs its AF_UNIX endpoints.
     pub(crate) network_backend_enabled: bool,
+    pub(crate) live_disk_snapshot: bool,
 }
 
 impl<S: Sandbox> Jail for Jailer<S> {
@@ -596,6 +597,23 @@ impl<S: Sandbox> Jailer<S> {
     /// Delegates to [`build_path_access`] for granular filesystem rules.
     fn context(&self) -> SandboxContext<'_> {
         let mut paths = build_path_access(&self.layout, &self.volumes, &self.mounts);
+        if self.live_disk_snapshot {
+            #[cfg(target_os = "linux")]
+            {
+                let disk = self.layout.disk_path();
+                let rootfs = self.layout.guest_rootfs_disk_path();
+                // Bind the directory so renames are visible to a running block backend.
+                paths.retain(|entry| entry.path != disk && entry.path != rootfs);
+                paths.push(PathAccess {
+                    path: self.layout.disks_dir(),
+                    writable: true,
+                });
+            }
+            paths.push(PathAccess {
+                path: self.layout.snapshots_dir(),
+                writable: false,
+            });
+        }
         paths.extend_from_slice(&self.additional_path_access);
         let unix_sockets = if self.layout.sockets_dir().exists() {
             let sockets = self.layout.sockets();
@@ -612,6 +630,9 @@ impl<S: Sandbox> Jailer<S> {
             };
             let mut bind = vec![sockets.box_sock()];
             let mut connect = vec![sockets.ready_sock()];
+            if self.live_disk_snapshot {
+                bind.push(sockets.vmm_sock());
+            }
             if self.network_backend_enabled {
                 bind.extend([
                     net_backend.clone(),

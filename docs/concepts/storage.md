@@ -42,6 +42,25 @@ configuration references that id. See [Mounting volumes](../guides/volumes.md).
 - Snapshot support
 - Shared base images across Boxes
 
+## Disk snapshots
+
+On a running local libkrun box, snapshot creation drains and flushes the container disk
+and switches future writes to a new QCOW2 layer. The guest keeps running in the same VM
+with its RAM. The snapshot captures the disk at a crash-consistent point.
+
+For example, write and sync a file, create a snapshot, then overwrite the file. Stop
+the box before restoring the snapshot. The next boot reads the original contents.
+
+Online creation requires a supported shim and a single filesystem with exclusive
+renames. If a backing chain may have another writer or the layout is unsupported,
+stop the box before creating the snapshot.
+
+The runtime journal records which layer to use if creation is interrupted. If
+recovery cannot finish, the runtime rejects execution access and stop requests
+before altering the VM lifecycle. Preserve the box directory and its snapshot files.
+
+For database compatibility and journal locations, see [File formats](../reference/file-formats.md#home-directory).
+
 ## File copy conflicts
 
 With `CopyOptions::no_overwrite()`, local copies add new files into existing

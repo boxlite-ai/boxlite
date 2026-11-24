@@ -34,6 +34,7 @@ pub struct JailerBuilder {
     detach: bool,
     additional_path_access: Vec<PathAccess>,
     network_backend_enabled: bool,
+    live_disk_snapshot: bool,
 }
 
 impl Default for JailerBuilder {
@@ -55,6 +56,7 @@ impl JailerBuilder {
             detach: false,
             additional_path_access: Vec::new(),
             network_backend_enabled: false,
+            live_disk_snapshot: false,
         }
     }
 
@@ -310,6 +312,11 @@ impl JailerBuilder {
         self
     }
 
+    pub(crate) fn with_live_disk_snapshot(mut self, enabled: bool) -> Self {
+        self.live_disk_snapshot = enabled;
+        self
+    }
+
     /// Build with the platform-default sandbox.
     ///
     /// On Linux: [`BwrapSandbox`](super::sandbox::BwrapSandbox)
@@ -359,6 +366,7 @@ impl JailerBuilder {
             detach: self.detach,
             additional_path_access: self.additional_path_access,
             network_backend_enabled: self.network_backend_enabled,
+            live_disk_snapshot: self.live_disk_snapshot,
         })
     }
 }

@@ -550,21 +550,47 @@ impl Qcow2Helper {
         backing_format: BackingFormat,
         virtual_size: u64,
     ) -> BoxliteResult<()> {
+        // Get absolute path for backing file
+        let backing = backing_path.canonicalize().map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to canonicalize backing path {}: {}",
+                backing_path.display(),
+                e
+            ))
+        })?;
+        Self::write_cow_child_header_at(child_path, &backing, backing_format, virtual_size, false)
+    }
+
+    /// Create a transaction-owned overlay before its backing reaches the final path.
+    pub(crate) fn write_snapshot_overlay(
+        child_path: &Path,
+        backing: &Path,
+        virtual_size: u64,
+    ) -> BoxliteResult<()> {
+        if !backing.is_absolute() || backing.to_str().is_none() {
+            return Err(BoxliteError::Storage(
+                "snapshot backing path must be absolute UTF-8".into(),
+            ));
+        }
+        Self::write_cow_child_header_at(
+            child_path,
+            backing,
+            BackingFormat::Qcow2,
+            virtual_size,
+            true,
+        )
+    }
+
+    fn write_cow_child_header_at(
+        child_path: &Path,
+        backing: &Path,
+        backing_format: BackingFormat,
+        virtual_size: u64,
+        exclusive: bool,
+    ) -> BoxliteResult<()> {
         use std::io::Write;
 
-        // Get absolute path for backing file
-        let backing_str = backing_path
-            .canonicalize()
-            .map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to canonicalize backing path {}: {}",
-                    backing_path.display(),
-                    e
-                ))
-            })?
-            .to_string_lossy()
-            .to_string();
-
+        let backing_str = backing.to_string_lossy();
         let backing_bytes = backing_str.as_bytes();
         let backing_len = backing_bytes.len() as u32;
 
@@ -706,18 +732,20 @@ impl Qcow2Helper {
         }
 
         // Write to file
-        let mut file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(child_path)
-            .map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to create child disk {}: {}",
-                    child_path.display(),
-                    e
-                ))
-            })?;
+        let mut options = OpenOptions::new();
+        options.write(true);
+        if exclusive {
+            options.create_new(true);
+        } else {
+            options.create(true).truncate(true);
+        }
+        let mut file = options.open(child_path).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to create child disk {}: {}",
+                child_path.display(),
+                e
+            ))
+        })?;
 
         file.write_all(&header).map_err(|e| {
             BoxliteError::Storage(format!(
@@ -1063,7 +1091,7 @@ pub fn set_backing_file_path(qcow2_path: &Path, new_backing: &Path) -> BoxliteRe
 }
 
 /// Maximum depth for backing chain walks (prevents infinite loops from circular refs).
-const MAX_BACKING_CHAIN_DEPTH: usize = 8;
+pub(crate) const MAX_BACKING_CHAIN_DEPTH: usize = 8;
 
 /// Walk a qcow2 backing chain, returning all backing file paths.
 ///

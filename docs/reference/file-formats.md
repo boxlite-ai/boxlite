@@ -10,7 +10,8 @@ BoxLite keeps boxes, images, and its database under its home directory, `~/.boxl
 │   └── {box-id}/
 │       ├── disks/             # disk.qcow2 (container disk), guest-rootfs.qcow2
 │       ├── snapshots/         # {name}/disk.qcow2 for each snapshot
-│       ├── .snapshot_pending  # Crash-recovery marker while a snapshot runs
+│       ├── .snapshot_pending  # Crash-recovery marker for stopped disk snapshots
+│       ├── .live-snapshot.json # Durable decision for an in-progress online pivot
 │       ├── sockets/           # Unix sockets: control, guest ready, network
 │       ├── shared/            # Files shared with the guest over virtio-fs
 │       ├── mounts/            # Host side of shared/ (isolate_mounts, Linux)
@@ -106,6 +107,19 @@ BoxLite keeps box configuration and state (`box_config`, `box_state`), the image
 per-box configuration files.
 
 **Location:** `~/.boxlite/db/boxlite.db`
+
+Database compatibility version 11 prevents older runtimes from opening a home
+that can contain a live disk snapshot journal. Restore a pre-upgrade backup or
+use a separate runtime home to run an older version.
+
+If snapshot registration reports a persistent conflict, preserve the box's
+`.live-snapshot.json` journal, disks and database together. Collect the box,
+snapshot and transaction IDs from the error for recovery. Keep the committed
+overlay and the existing snapshot row intact while the conflict is unresolved.
+
+After the disk and database decisions settle, the runtime records completion
+before removing the journal. If the completed journal reappears after a crash,
+recovery removes the marker without changing disk layers or snapshot rows.
 
 **Tools:**
 ```bash

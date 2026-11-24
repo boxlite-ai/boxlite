@@ -12,7 +12,26 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::box_impl::BoxImpl;
 use crate::litebox::snapshot_mgr::{SnapshotInfo, validate_snapshot_name};
+use crate::litebox::state::BoxStatus;
 use crate::runtime::options::SnapshotOptions;
+
+pub(crate) const LIVE_SNAPSHOT_JOURNAL: &str = ".live-snapshot.json";
+
+pub(crate) fn has_live_snapshot_journal(home: &Path) -> bool {
+    match std::fs::symlink_metadata(home.join(LIVE_SNAPSHOT_JOURNAL)) {
+        Ok(_) => true,
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+pub(crate) fn require_resolved_snapshot(home: &Path) -> BoxliteResult<()> {
+    if has_live_snapshot_journal(home) {
+        return Err(BoxliteError::InvalidState(
+            "live disk snapshot recovery must finish before this operation".into(),
+        ));
+    }
+    Ok(())
+}
 
 pub(crate) struct LocalSnapshotBackend {
     inner: Arc<BoxImpl>,
@@ -29,9 +48,37 @@ impl LocalSnapshotBackend {
         _opts: SnapshotOptions,
     ) -> BoxliteResult<SnapshotInfo> {
         validate_snapshot_name(name)?;
+        let backend = Self::new(self.inner.clone());
+        let name = name.to_owned();
+        // Once admitted, the transaction owns its guards independently of the API caller.
+        let (deadline, watch_deadline) = tokio::sync::oneshot::channel();
+        let mut transaction =
+            tokio::spawn(async move { backend.create_admitted(&name, deadline).await });
+        let result = tokio::select! {
+            result = &mut transaction => result,
+            deadline = watch_deadline => {
+                if let Ok(deadline) = deadline {
+                    tokio::time::timeout_at(deadline, &mut transaction).await.map_err(|_| {
+                        BoxliteError::Storage("live snapshot deadline expired; any pending transaction will be recovered".into())
+                    })?
+                } else {
+                    transaction.await
+                }
+            }
+        };
+        result.map_err(|error| {
+            BoxliteError::Internal(format!("snapshot transaction task failed: {error}"))
+        })?
+    }
+
+    async fn create_admitted(
+        &self,
+        name: &str,
+        deadline: tokio::sync::oneshot::Sender<tokio::time::Instant>,
+    ) -> BoxliteResult<SnapshotInfo> {
         let t0 = Instant::now();
         self.inner
-            .with_disk_admission(async {
+            .with_disk_admission(self.inner.with_operation(async {
                 let box_id = self.inner.id().as_str();
                 let snap_mgr = &self.inner.runtime.snapshot_mgr;
 
@@ -43,31 +90,33 @@ impl LocalSnapshotBackend {
                     )));
                 }
 
-                // Write crash-recovery marker before moving disks (point of no return).
-                let box_home = &self.inner.config.box_home;
-                let disks_dir = box_home.join("disks");
-                let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
-                let pending_marker = box_home.join(".snapshot_pending");
-                let snapshot_dir = box_home.join("snapshots").join(name);
-                let marker_data = serde_json::json!({
-                    "snapshot_dir": snapshot_dir.to_string_lossy(),
-                    "container_disk": container_disk.to_string_lossy(),
-                });
-                std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
-                    BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
-                })?;
-
-                // Quiesce VM for point-in-time snapshot consistency.
-                let result = self
-                    .inner
-                    .with_quiesce_async(async { snap_mgr.create(box_home, name, box_id) })
-                    .await;
-
-                // Remove marker on success.
-                let _ = std::fs::remove_file(&pending_marker);
-
-                let info = result?;
-
+                let status = self.inner.state.read().status;
+                let info = match status {
+                    BoxStatus::Running
+                        if self.inner.config.engine_kind == crate::vmm::VmmKind::Libkrun =>
+                    {
+                        super::live_snapshot::create(&self.inner, name, deadline).await?
+                    }
+                    BoxStatus::Running
+                    | BoxStatus::Paused
+                    | BoxStatus::Stopping
+                    | BoxStatus::Unknown => {
+                        return Err(BoxliteError::InvalidState(format!(
+                            "cannot create a disk snapshot while the box is {status}"
+                        )));
+                    }
+                    _ => {
+                        let home = &self.inner.config.box_home;
+                        if crate::util::PidFileReader::at(home.join("shim.pid")).process_identity()
+                            != crate::util::ProcessIdentity::Absent
+                        {
+                            return Err(BoxliteError::InvalidState(
+                                "disk snapshot requires a stopped shim".into(),
+                            ));
+                        }
+                        self.create_offline(name, box_id)?
+                    }
+                };
                 tracing::info!(
                     box_id = %self.inner.id(),
                     snapshot = %name,
@@ -75,10 +124,33 @@ impl LocalSnapshotBackend {
                     elapsed_ms = t0.elapsed().as_millis() as u64,
                     "Created snapshot"
                 );
-
                 Ok(info)
-            })
+            }))
             .await
+    }
+
+    fn create_offline(&self, name: &str, box_id: &str) -> BoxliteResult<SnapshotInfo> {
+        // Write crash-recovery marker before moving disks (point of no return).
+        let box_home = &self.inner.config.box_home;
+        let disks_dir = box_home.join("disks");
+        let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
+        let pending_marker = box_home.join(".snapshot_pending");
+        let snapshot_dir = box_home.join("snapshots").join(name);
+        let marker_data = serde_json::json!({
+            "snapshot_dir": snapshot_dir.to_string_lossy(),
+            "container_disk": container_disk.to_string_lossy(),
+        });
+        std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
+        })?;
+
+        let result = self
+            .inner
+            .runtime
+            .snapshot_mgr
+            .create(box_home, name, box_id);
+        let _ = std::fs::remove_file(&pending_marker);
+        result
     }
 
     async fn snapshot_list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {
