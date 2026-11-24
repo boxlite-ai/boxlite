@@ -1,15 +1,13 @@
 use super::{ControlMount, MountState};
 use crate::vmm::vmm_socket::{ControlOp, ControlReply, MAX_FRAME};
-use boxlite_vmm::{AggregateFs, lookup_aggregate};
+use boxlite_vmm::lookup_aggregate;
 use std::fs::File;
 use std::io;
 use std::path::{Component, Path};
-use std::sync::{Arc, Weak};
 
 #[derive(Default)]
 pub(crate) struct Registry {
     next: u64,
-    filesystem: Option<Weak<AggregateFs>>,
     mounts: Vec<ControlMount>,
     list_bytes: usize,
 }
@@ -31,8 +29,9 @@ fn record_cost(mount: &ControlMount) -> io::Result<usize> {
     }
     let mut counter = Counter(0);
     serde_json::to_writer(&mut counter, mount)?;
-    // Reserve a comma per record (one extra is harmless) and the longest state.
-    Ok(counter.0 + 1 + usize::from(mount.state == MountState::Mounted) * 2)
+    // Reserve a comma per record (one extra is harmless). `Preparing` is as
+    // long as the record ever serializes: `Detaching` matches it, `Mounted` is shorter.
+    Ok(counter.0 + 1)
 }
 
 fn normalize_target(target: &str) -> io::Result<String> {
@@ -56,25 +55,13 @@ fn normalize_target(target: &str) -> io::Result<String> {
 }
 
 impl Registry {
-    fn live(&mut self, tag: &str) -> io::Result<Arc<AggregateFs>> {
-        let live = lookup_aggregate(tag)?;
-        if let Some(previous) = &self.filesystem {
-            if !Weak::ptr_eq(previous, &Arc::downgrade(&live)) {
-                return Err(errno(libc::ENODEV));
-            }
-        } else {
-            self.filesystem = Some(Arc::downgrade(&live));
-        }
-        Ok(live)
-    }
-
     pub(crate) fn request(
         &mut self,
         tag: &str,
         request: ControlOp,
         directory: Option<File>,
     ) -> io::Result<ControlReply> {
-        let filesystem = self.live(tag)?;
+        let filesystem = lookup_aggregate(tag)?;
         match request {
             ControlOp::RegisterMount {
                 source,
@@ -114,17 +101,6 @@ impl Registry {
                     .map_err(|_| errno(libc::ENOMEM))?;
                 self.next = next;
                 filesystem.register_fd(mount.export.clone(), directory, read_only)?;
-                // A replacement published during registration must never inherit this
-                // server's records. Roll back only the export created in the old FS.
-                if !Arc::ptr_eq(
-                    &filesystem,
-                    &lookup_aggregate(tag).inspect_err(|_| {
-                        let _ = filesystem.remove(&mount.export);
-                    })?,
-                ) {
-                    filesystem.remove(&mount.export)?;
-                    return Err(errno(libc::ENODEV));
-                }
                 self.mounts.push(mount.clone());
                 self.list_bytes += cost;
                 Ok(ControlReply::MountRegistered(mount))
