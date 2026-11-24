@@ -444,10 +444,11 @@ async fn exchange_http(
     };
     tokio::pin!(exchange);
     // Drive the connection within this exchange so canceling it closes the socket.
+    // Drop the socket at completion because the peer may already have closed.
     tokio::select! {
         biased;
         reply = &mut exchange => reply,
-        result = connection => {
+        result = connection.without_shutdown() => {
             result.map_err(io::Error::other)?;
             exchange.await
         }

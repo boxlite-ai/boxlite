@@ -39,10 +39,12 @@ fn owner_uid() -> libc::uid_t {
     unsafe { libc::geteuid() }
 }
 
+fn set_response_timeout(stream: &UnixStream) {
+    // Darwin can reject timeout changes after the peer disconnects.
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+}
+
 fn read_http(mut stream: &UnixStream) -> String {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
     let mut response = String::new();
     if let Err(error) = stream.read_to_string(&mut response) {
         // Rejecting a request can close the socket with unread input.
@@ -56,6 +58,7 @@ fn read_http(mut stream: &UnixStream) -> String {
 
 fn raw_http(path: &Path, method: &str, route: &str, body: &[u8]) -> String {
     let client = UnixStream::connect(path).unwrap();
+    set_response_timeout(&client);
     write_http(&client, method, route, body);
     read_http(&client)
 }
@@ -113,9 +116,67 @@ async fn a_request_reaches_the_handler_and_its_answer_returns() {
     );
 }
 
+#[tokio::test]
+async fn client_returns_reply_when_socket_shutdown_would_fail() {
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    struct ShutdownFails(tokio::net::UnixStream);
+
+    impl AsyncRead for ShutdownFails {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.0).poll_read(cx, buf)
+        }
+    }
+
+    impl AsyncWrite for ShutdownFails {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Pin::new(&mut self.0).poll_write(cx, bytes)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.0).poll_flush(cx)
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            // Darwin can report ENOTCONN when the peer already closed.
+            Poll::Ready(Err(io::ErrorKind::NotConnected.into()))
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vmm.sock");
+    serve(&path, echo_resize).unwrap();
+    let stream = tokio::net::UnixStream::connect(&path).await.unwrap();
+
+    let reply = timeout(
+        TEST_TIMEOUT,
+        exchange_http(
+            TokioIo::new(ShutdownFails(stream)),
+            RESIZE_PATH,
+            GROW.to_vec(),
+            MAX_BODY,
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(reply, Ok(ControlReply::DiskSize(4096)));
+}
+
 #[test]
 fn accept_recovers_from_temporary_errors_with_bounded_backoff() {
     let (client, stream) = UnixStream::pair().unwrap();
+    set_response_timeout(&client);
     write_http(&client, "POST", RESIZE_PATH, GROW);
 
     let accept_error = |errno| Err(io::Error::from_raw_os_error(errno));
@@ -169,6 +230,7 @@ fn request_size_and_read_deadlines_are_bounded() {
     .unwrap();
 
     let mut headers = UnixStream::connect(&path).unwrap();
+    set_response_timeout(&headers);
     let mut request = format!("POST {RESIZE_PATH} HTTP/1.1\r\nHost: vmm\r\nX-Pad: ").into_bytes();
     request.resize(HTTP_BUFFER, b'x');
     headers.write_all(&request).unwrap();
@@ -183,6 +245,7 @@ fn request_size_and_read_deadlines_are_bounded() {
     assert!(reply.starts_with("HTTP/1.1 200 "), "{reply}");
 
     let mut blocked = UnixStream::connect(&path).unwrap();
+    set_response_timeout(&blocked);
     blocked
         .write_all(b"POST /v1/resize-disk HTTP/1.1\r\nHost: vmm\r\nContent-Length: 50\r\n\r\n{")
         .unwrap();
@@ -216,6 +279,7 @@ fn only_complete_first_requests_dispatch_when_clients_disconnect_before_accept()
         .unwrap();
     drop(partial);
     let client = UnixStream::connect(&path).unwrap();
+    set_response_timeout(&client);
     write_http(&client, "POST", RESIZE_PATH, GROW);
 
     let mut submitted = Vec::new();
@@ -298,6 +362,7 @@ fn resize_requires_a_block_id_and_rejects_index_only_requests() {
 fn a_framed_client_cannot_dispatch_to_an_http_shim() {
     let body = br#"{"version":1,"op":"resize_disk","block_id":"container","bytes":4096}"#;
     let (mut client, stream) = UnixStream::pair().unwrap();
+    set_response_timeout(&client);
     client
         .write_all(&[&(body.len() as u32).to_le_bytes(), body.as_slice()].concat())
         .unwrap();
