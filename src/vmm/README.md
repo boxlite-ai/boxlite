@@ -37,6 +37,7 @@ boxlite-vmm
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam |
 | `control` | `VmControl` provides runtime controls for VM status, pause, resume, export, stop, and `resize_disk` by configured ID |
 | `lifecycle` | `Lifecycle` coordinates the one-shot run, pause epochs, the control mailbox, and the shared stop latch |
+| `snapshot` | Captures and exports machine state and raw guest RAM for paused device-less VMs on Linux x86_64 |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -750,12 +751,15 @@ The driver saves platform state first. If it succeeds, each parked vCPU
 saves its state on its owning thread. The driver collects all replies
 and sorts the vCPU records by ID before writing either file.
 
-Export creates two files with mode `0600` and keeps them after both flushes
-succeed. An existing target, including reuse of the state path for memory,
-returns `Error::Snapshot` with `AlreadyExists`. On failure, export removes
-its new files whose paths still match the open files' device and inode.
-Capture and I/O failures leave a live VM paused. A terminal event before
-commit returns `TerminalOutcome`.
+Export creates two files with mode `0600`. It skips `fsync`, and dropping the
+files ignores delayed `close(2)` errors. `Ok(())` provides no guarantee of
+power-loss durability. An existing target, including reuse of the state path
+for memory, returns `Error::Snapshot` with `AlreadyExists`.
+
+Callers must have exclusive use of both target paths during export. Failure
+cleanup is best-effort and attempts to unlink a path only if its device and
+inode still match the open file. Capture and I/O failures leave a live VM
+paused. A terminal state at the final lifecycle check yields `TerminalOutcome`.
 
 The state file starts with a 32-byte little-endian header with the magic
 `BXLVMST1`, followed by Postcard machine state with vCPU records in ID order.

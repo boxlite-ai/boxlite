@@ -5,6 +5,7 @@ use std::{
     fs, io,
     marker::PhantomData,
     os::unix::fs::PermissionsExt,
+    path::Path,
     rc::Rc,
     sync::{Mutex, mpsc},
     thread::{self, ThreadId},
@@ -14,6 +15,7 @@ use std::{
 use super::{image::Header, state::MachineState};
 use crate::{
     ControlReason, Error, Vm, VmControl, VmExit, VmStatus,
+    events::EventLoop,
     lifecycle::Lifecycle,
     mock_vm::{MockHandle, MockVcpu, MockVm},
 };
@@ -587,6 +589,24 @@ fn export_holds_the_slot_during_platform_capture_and_reply_survives_resume() {
             ControlReason::InvalidState,
         );
     });
+}
+
+#[test]
+fn export_reports_terminal_state_before_unsupported_devices() {
+    let events = EventLoop::new().unwrap();
+    let lifecycle = Lifecycle::new(events.sender(), false);
+    let state_path = Path::new("state");
+    let memory_path = Path::new("memory");
+
+    expect_export_error(
+        lifecycle.submit_export(state_path, memory_path),
+        ControlReason::UnsupportedDevice,
+    );
+    lifecycle.stop();
+    expect_export_error(
+        lifecycle.submit_export(state_path, memory_path),
+        ControlReason::InvalidState,
+    );
 }
 
 #[test]

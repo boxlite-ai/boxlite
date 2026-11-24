@@ -67,7 +67,7 @@ struct LifecycleState {
     #[cfg(any(test, target_arch = "x86_64"))]
     run_claimed: bool,
     sender: Option<EventSender>,
-    /// Exclusive slot, retained through export result commit.
+    /// Exclusive slot, retained through the final export terminal check.
     command: Option<Command>,
     epoch: u64,
     completed_epoch: u64,
@@ -196,11 +196,14 @@ impl Lifecycle {
         memory_path: &Path,
     ) -> Result<mpsc::Receiver<Result<()>>> {
         let mut state = self.state();
-        if state.is_terminal() || state.status != VmStatus::Paused || state.command.is_some() {
+        if state.is_terminal() {
             return Err(control_error("export", ControlReason::InvalidState));
         }
         if !self.device_less {
             return Err(control_error("export", ControlReason::UnsupportedDevice));
+        }
+        if state.status != VmStatus::Paused || state.command.is_some() {
+            return Err(control_error("export", ControlReason::InvalidState));
         }
         let (reply, result) = mpsc::channel();
         state.command = Some(Command::Export(Request {
@@ -271,13 +274,13 @@ impl Lifecycle {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn finish_export(&self, result: Result<[NewFileWriter<'_>; 2]>) -> Result<()> {
         let mut state = self.state();
-        let result = if state.is_terminal() {
-            Err(export_terminated())
-        } else {
-            result.map(|files| files.into_iter().for_each(NewFileWriter::commit))
-        };
+        let terminal = state.is_terminal();
         state.command = None;
-        result
+        drop(state);
+        if terminal {
+            return Err(export_terminated());
+        }
+        result.map(|files| files.into_iter().for_each(NewFileWriter::commit))
     }
 
     pub(crate) fn wait_paused(&self, timeout: Duration) -> Result<()> {

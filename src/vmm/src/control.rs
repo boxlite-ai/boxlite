@@ -48,7 +48,13 @@ impl VmControl {
     }
 
     /// Exports a paused device-less VM on Linux x86_64 to new state and raw RAM files.
-    /// Both files are created with mode `0600` and kept only if the export succeeds.
+    /// Both files are created with mode `0600`.
+    /// Export skips `fsync`, and dropping the files ignores delayed `close(2)` errors.
+    /// `Ok(())` provides no guarantee of power-loss durability.
+    ///
+    /// Callers must have exclusive use of both target paths during export. Failure
+    /// cleanup is best-effort and attempts to unlink a path only if its device and
+    /// inode still match the open file.
     pub fn export(
         &self,
         state_path: impl AsRef<Path>,

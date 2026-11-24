@@ -602,10 +602,15 @@ state. The memory file contains raw RAM from offset zero in `ram.ranges()`
 order, skipping `[3 GiB, 4 GiB)`. Its length equals the header's RAM length.
 
 The driver creates both files exclusively with mode `0600`, checks for stop
-between chunks of up to 1 MiB, and commits after both flushes succeed.
-A terminal event before commit yields `TerminalOutcome`. Cleanup checks the
-device and inode against each open file before unlinking its path. Existing
-targets return `AlreadyExists` and retain their contents.
+between chunks of up to 1 MiB, and releases the control slot at the final
+lifecycle check. A terminal state at that check yields `TerminalOutcome`.
+The driver skips `fsync`, and dropping the files ignores delayed `close(2)`
+errors. `Ok(())` provides no guarantee of power-loss durability.
+
+Callers must have exclusive use of both target paths during export. Failure
+cleanup is best-effort and attempts to unlink a path only if its device and
+inode still match the open file. Existing targets return `AlreadyExists` and
+retain their contents.
 
 ### Where the engine plugs in (M2)
 
