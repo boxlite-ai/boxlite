@@ -116,7 +116,7 @@ For an intentional manual deployment, use the [deployment runbook](deployment.md
 
 ### Validation and recovery boundaries
 
-Keep release tags and assets immutable. The reusable rollout verifies the published SHA, and E2E checks the tag before testing.
+Keep release tags and assets immutable. The reusable rollout verifies the published SHA. Dev E2E resolves the published tag and checks out the SDK sources at the exact commit deployed to dev.
 The dev rollout holds the same stage concurrency group as standalone deployments through the acceptance test.
 The prod approval uses the prod group, so another dev deployment can proceed while reviewers consider prod.
 

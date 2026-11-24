@@ -132,7 +132,7 @@ test('cloud release clients preserve source defaults and stage coverage', () => 
   const validate = steps.find((step: any) => step.name === 'Validate client release')
   assert.ok(steps.indexOf(validate) < steps.indexOf(configure))
   const checkout = steps.find((step: any) => step.name === 'Checkout release SDK sources for subdomain clients')
-  assert.equal(checkout.with.ref, '${{ inputs.release_sha || inputs.tag }}')
+  assert.equal(checkout.with.ref, '${{ steps.release_commit.outputs.sha }}')
   assert.equal(checkout.with['persist-credentials'], false)
   assert.equal(checkout.with.path, 'target/e2e-release')
 })

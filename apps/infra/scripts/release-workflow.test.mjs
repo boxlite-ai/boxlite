@@ -118,17 +118,33 @@ test('release admission checks caller, tag, reviewers and deployment attempt bef
   const applyGuard = rollout.jobs.plan.steps.find((step) => step.name === 'Require acceptance from this attempt')
   assert.notEqual(run(applyGuard.run, { ACCEPTED_ATTEMPT: '1' }), 0)
   const cloud = readWorkflow('e2e-cloud')
-  const e2eGuard = cloud.jobs.e2e.steps.find((step) => step.name === 'Verify the deployed release before acceptance')
+  const e2eGuard = cloud.jobs.e2e.steps.find((step) => step.env?.DEPLOYMENT_ATTEMPT)
   for (const [attempt, sha, expected] of [
     ['2', base.RELEASE_SHA, 0],
     ['1', base.RELEASE_SHA, 1],
-    ['2', 'moved', 1],
+    ['2', 'b'.repeat(40), 1],
   ]) {
     assert.equal(
-      run(e2eGuard.run, { DEPLOYMENT_ATTEMPT: attempt, REVIEWERS: sha, RELEASE_TAG: base.VERSION }),
+      run(e2eGuard.run, {
+        DEPLOYMENT_ATTEMPT: attempt,
+        REVIEWERS: sha,
+        RELEASE_TAG: base.VERSION,
+        GITHUB_OUTPUT: join(dir, 'outputs'),
+      }),
       expected,
     )
   }
+  const checkout = cloud.jobs.e2e.steps.find((step) => step.with?.path === 'target/e2e-release')
+  assert.equal(
+    checkout.with.ref,
+    '${{ steps.release_commit.outputs.sha }}',
+    'release SDK checkout must use the verified commit',
+  )
+  const outputs = join(dir, 'standalone-outputs')
+  const standalone = { DEPLOYMENT_ATTEMPT: '', RELEASE_SHA: '', RELEASE_TAG: base.VERSION, GITHUB_OUTPUT: outputs }
+  assert.notEqual(run(e2eGuard.run, { ...standalone, REVIEWERS: base.VERSION }), 0)
+  assert.equal(run(e2eGuard.run, { ...standalone, REVIEWERS: base.RELEASE_SHA }), 0)
+  assert.equal(readFileSync(outputs, 'utf8'), 'sha=' + base.RELEASE_SHA + '\n')
 })
 
 test('build-only never enters deployment, checks, or reporting; failed E2E cannot stamp acceptance', () => {

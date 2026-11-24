@@ -278,18 +278,6 @@ jobs:
       # commit under test. A stage pinned to an older box image needs this.
       BOXLITE_E2E_IMAGE: ${{ inputs.image || '' }}
     steps:
-      - name: Verify the deployed release before acceptance
-        if: inputs.deployment_attempt
-        env:
-          DEPLOYMENT_ATTEMPT: ${{ inputs.deployment_attempt }}
-          RELEASE_SHA: ${{ inputs.release_sha }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          [[ "$DEPLOYMENT_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] ||
-            { echo '::error::Repeat dev deployment before rerunning release E2E'; exit 1; }
-          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)
-          test "$sha" = "$RELEASE_SHA"
       - uses: actions/checkout@v5
         with:
           # On a call, the commit the caller deployed. On a dispatch,
@@ -299,17 +287,37 @@ jobs:
           persist-credentials: false
 
       - name: Validate client release
-        if: ${{ inputs.tag != '' }}
+        if: inputs.tag || inputs.deployment_attempt
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci/install-e2e-release.sh validate
+
+      - name: Resolve the published SDK commit
+        id: release_commit
+        if: inputs.deployment_attempt || (inputs.tag && (inputs.stage || 'dev') == 'dev')
+        env:
+          DEPLOYMENT_ATTEMPT: ${{ inputs.deployment_attempt }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha=$(gh api "repos/boxlite-ai/boxlite/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] ||
+            { echo '::error::GitHub did not return a full release commit SHA'; exit 1; }
+          if [[ -n "$DEPLOYMENT_ATTEMPT" ]]; then
+            [[ "$DEPLOYMENT_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] ||
+              { echo '::error::Repeat dev deployment before rerunning release E2E'; exit 1; }
+            [[ "$sha" == "$RELEASE_SHA" ]] ||
+              { echo '::error::Release tag differs from the dev deployment'; exit 1; }
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Checkout release SDK sources for subdomain clients
         if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
         uses: actions/checkout@v5
         with:
           repository: boxlite-ai/boxlite
-          ref: ${{ inputs.release_sha || inputs.tag }}
+          ref: ${{ steps.release_commit.outputs.sha }}
           path: target/e2e-release
           persist-credentials: false
 
