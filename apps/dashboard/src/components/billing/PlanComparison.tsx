@@ -1,7 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
 import { Fragment, type CSSProperties, type ReactNode } from 'react'
-import { OrganizationPlan, Plan } from '@/billing-api'
+import type { OrganizationPlan, Plan, PlanTrialEligibility } from '@/billing-api'
 import { AsciiButton } from '@/components/ascii'
 import { planCardCta } from '@/components/billing/planChange'
 import { PLAN_BENEFITS, PLAN_PRESENTATION, planTierIndex } from '@/components/billing/planBenefits'
@@ -9,6 +9,7 @@ import { BOXLITE_CONTACT_URL, BOXLITE_SUBSCRIPTION_DOCS_URL } from '@/constants/
 import { RoutePath } from '@/enums/RoutePath'
 import { generatePath, useNavigate } from 'react-router-dom'
 import './PlanComparison.css'
+import { subscriptionValue, formatUsageMultiple } from '@/lib/subscription-value'
 
 const currency = (cents: number) =>
   new Intl.NumberFormat('en-US', {
@@ -19,6 +20,25 @@ const currency = (cents: number) =>
   }).format(cents / 100)
 const CELL = 'border-b border-border px-4 py-2.5 text-left align-top font-normal'
 const LABEL = `${CELL} sticky left-0 z-10 bg-background text-muted-foreground`
+
+function formatTrialDuration(seconds: number) {
+  const units = [
+    [86400, 'Day', 'd'],
+    [3600, 'Hour', 'h'],
+    [60, 'Minute', 'm'],
+    [1, 'Second', 's'],
+  ] as const
+  const parts: string[] = []
+  let remaining = seconds
+  for (const [size, name, suffix] of units) {
+    const count = Math.floor(remaining / size)
+    if (!count) continue
+    if (count * size === seconds) return `${count} ${name}${count === 1 ? '' : 's'}`
+    parts.push(`${count}${suffix}`)
+    remaining %= size
+  }
+  return parts.join(' ')
+}
 
 function UnspecifiedValue() {
   return (
@@ -47,10 +67,16 @@ export function PlanComparison({
   plans,
   organizationPlan,
   canManage = true,
+  subscriptionAction,
+  trialOffers,
+  checkingTrials = false,
 }: {
   plans: Plan[]
   organizationPlan?: OrganizationPlan | null
   canManage?: boolean
+  subscriptionAction?: ReactNode
+  trialOffers?: PlanTrialEligibility[]
+  checkingTrials?: boolean
 }) {
   const navigate = useNavigate()
   // No live subscription is wallet-funded PAYG, as in the account Overview.
@@ -63,6 +89,21 @@ export function PlanComparison({
   const currentPriceCents = plans.find((plan) => plan.id === currentId)?.priceMonthlyCents ?? null
   const columnCount = plans.length + 2
   const custom = <td className={`${CELL} text-muted-foreground`}>By agreement</td>
+  const durations = new Map<string, string | null>()
+  for (const offer of trialOffers ?? []) {
+    if (offer.eligible === false) durations.set(offer.name, null)
+    else if (offer.eligible === true && Number.isSafeInteger(offer.durationSeconds) && offer.durationSeconds > 0) {
+      durations.set(offer.name, formatTrialDuration(offer.durationSeconds))
+    }
+  }
+
+  function trialDetails(name: string) {
+    if (checkingTrials) return 'Checking eligibility…'
+    const duration = durations.get(name)
+    if (duration === null) return 'Not eligible'
+    if (!duration) return <UnspecifiedValue />
+    return <>{duration.toLowerCase()} · card verification required</>
+  }
 
   if (!plans.length) {
     return (
@@ -108,6 +149,7 @@ export function PlanComparison({
               {plans.map((plan) => {
                 const index = planTierIndex(plan.name)
                 const presentation = PLAN_PRESENTATION[index]
+                const trialDuration = durations.get(plan.name)
                 const priceMatches = !presentation || plan.priceMonthlyCents === presentation.priceCents
                 const cta =
                   plan.id === currentId
@@ -124,33 +166,41 @@ export function PlanComparison({
                         <span>{presentation?.name ?? plan.name}</span>
                         {index !== 0 && (
                           <span className="font-mono text-em font-normal text-foreground">
-                            {presentation
-                              ? currency(presentation.priceCents)
-                              : plan.priceMonthlyCents == null
-                                ? 'Custom'
-                                : currency(plan.priceMonthlyCents)}
+                            {plan.priceMonthlyCents == null ? 'Custom' : currency(plan.priceMonthlyCents)}
                           </span>
                         )}
                       </div>
-                      {!priceMatches && canManage && !cta.disabled ? (
-                        <a
-                          href={BOXLITE_CONTACT_URL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex h-8 items-center justify-center border border-border px-3 text-meta hover:border-border-selected focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          Contact us ↗
-                        </a>
-                      ) : (
-                        <AsciiButton
-                          className="h-8 w-auto px-3"
-                          variant={cta.disabled ? 'quiet' : 'secondary'}
-                          disabled={!canManage || cta.disabled}
-                          onClick={() => navigate(generatePath(RoutePath.BILLING_PLAN_CHANGE, { planId: plan.id }))}
-                        >
-                          {canManage ? cta.label : 'Owner managed'}
-                        </AsciiButton>
-                      )}
+                      <div className="flex w-full items-center gap-1.5">
+                        {!priceMatches && canManage && !cta.disabled ? (
+                          <a
+                            href={BOXLITE_CONTACT_URL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex h-8 shrink-0 items-center justify-center whitespace-nowrap border border-border px-3 text-meta hover:border-border-selected focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            Contact us ↗
+                          </a>
+                        ) : (
+                          <AsciiButton
+                            className="h-8 w-auto px-3"
+                            variant={cta.disabled ? 'quiet' : 'secondary'}
+                            disabled={!canManage || cta.disabled}
+                            onClick={() => navigate(generatePath(RoutePath.BILLING_PLAN_CHANGE, { planId: plan.id }))}
+                          >
+                            {canManage ? cta.label : 'Owner managed'}
+                          </AsciiButton>
+                        )}
+                        {trialDuration && (
+                          <span className="plan-trial-space">
+                            <span className="plan-trial-ribbon" title={`Free Trial ${trialDuration}`}>
+                              <span className="plan-trial-face">
+                                Free Trial <span>{trialDuration}</span>
+                              </span>
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                      {canManage && plan.id === currentId && subscriptionAction}
                     </div>
                   </th>
                 )
@@ -188,12 +238,29 @@ export function PlanComparison({
               ))}
               {custom}
             </ComparisonRow>
-            <ComparisonRow label="Bonus amount">
+            <ComparisonRow label="Included usage value">
               {plans.map((plan) => {
-                const bonusCents = PLAN_PRESENTATION[planTierIndex(plan.name)]?.bonusCents
+                const includedCents = plan.includedQuotaCents
                 return (
                   <td key={plan.id} className={CELL}>
-                    {bonusCents != null ? currency(bonusCents) : <UnspecifiedValue />}
+                    {includedCents === null ? (
+                      'Unlimited'
+                    ) : includedCents != null ? (
+                      currency(includedCents)
+                    ) : (
+                      <UnspecifiedValue />
+                    )}
+                  </td>
+                )
+              })}
+              {custom}
+            </ComparisonRow>
+            <ComparisonRow label="Usage per dollar">
+              {plans.map((plan) => {
+                const value = subscriptionValue(plan)
+                return (
+                  <td key={plan.id} className={CELL}>
+                    {value ? `${formatUsageMultiple(value.usageMultiple)}× PAYG` : <UnspecifiedValue />}
                   </td>
                 )
               })}
@@ -202,14 +269,10 @@ export function PlanComparison({
             <ComparisonRow label="Trial eligibility">
               {plans.map((plan) => (
                 <td key={plan.id} className={CELL}>
-                  {planTierIndex(plan.name) === 1 || planTierIndex(plan.name) === 2 ? (
-                    '3-day free trial · card verification required'
-                  ) : (
-                    <UnspecifiedValue />
-                  )}
+                  {trialDetails(plan.name)}
                 </td>
               ))}
-              {custom}
+              <td className={`${CELL} text-muted-foreground`}>{trialDetails('Enterprise')}</td>
             </ComparisonRow>
             {PLAN_BENEFITS.map((group) => (
               <Fragment key={group.title}>
@@ -236,6 +299,10 @@ export function PlanComparison({
           </tbody>
         </table>
       </div>
+      <p className="mt-4 text-body text-muted-foreground">
+        Monthly fees and included usage come from the current plan catalog. The effective cost assumes the full
+        allowance is used; unused allowance expires. Additional usage is charged at PAYG rates.
+      </p>
       <a
         href={BOXLITE_SUBSCRIPTION_DOCS_URL}
         target="_blank"

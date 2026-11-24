@@ -8,14 +8,14 @@ import { all, interpolate, isSecret, output, secret, type Input, type Output } f
 // Dynamic loading keeps tooling checks independent of SST's generated ambient declarations.
 const deployModule = new URL('./deploy.ts', import.meta.url).href
 // Await the Output promise so synthesis errors reject instead of leaving the fixture pending.
-const resolved = <T>(value: Input<T>): Promise<T> =>
-  (output(value) as Output<T> & { promise(): Promise<T> }).promise()
+const resolved = <T>(value: Input<T>): Promise<T> => (output(value) as Output<T> & { promise(): Promise<T> }).promise()
 
 async function synthesize(
   environment: Record<string, string | undefined> = {},
   credential: string | null = 'stored-turnstile-secret',
 ) {
   const services = new Map<string, Record<string, any>>()
+  const resources = new Map<string, Record<string, any>>()
   const secrets = new Map<string, { value: Output<string>; fallback: string | undefined }>()
   const pending: Input<unknown>[] = []
   const globals = globalThis as unknown as Record<string, unknown>
@@ -28,6 +28,7 @@ async function synthesize(
     name: Output<string>
     arn: Output<string>
     constructor(name: string, args: Record<string, any> = {}) {
+      resources.set(name, args)
       this.id = output(`${name}-id`)
       this.name = output<string>(args.name ?? name)
       this.arn = output(`arn:aws:iam::123456789012:role/${name}`)
@@ -37,7 +38,7 @@ async function synthesize(
   class Secret {
     value: Output<string>
     constructor(name: string, fallback?: string) {
-      const value = name === 'TURNSTILE_SECRET_KEY' ? credential ?? undefined : `stored-${name}`
+      const value = name === 'TURNSTILE_SECRET_KEY' ? (credential ?? undefined) : `stored-${name}`
       const resolvedValue = value ?? fallback
       if (resolvedValue === undefined) throw new Error(`Missing SST secret: ${name}`)
       this.value = secret(resolvedValue)
@@ -46,11 +47,14 @@ async function synthesize(
   }
   class Service {
     url: Output<string>
-    nodes: { taskRole: { arn: Output<string> } }
+    nodes: { taskRole: { arn: Output<string> }; loadBalancer: { arn: Output<string> } }
     constructor(name: string, args: Record<string, any>) {
       services.set(name, args)
       this.url = output(`https://${name.toLowerCase()}.example.com/`)
-      this.nodes = { taskRole: { arn: output(`arn:aws:iam::123456789012:role/${name}`) } }
+      this.nodes = {
+        taskRole: { arn: output(`arn:aws:iam::123456789012:role/${name}`) },
+        loadBalancer: { arn: output(`arn:aws:elasticloadbalancing:region:account:loadbalancer/${name}`) },
+      }
     }
   }
   class Vpc extends Resource {
@@ -70,9 +74,15 @@ async function synthesize(
     password = secret('database-password')
     database = output('boxlite')
   }
-  class Redis extends Database { override port = output(6379) }
-  class RandomPassword { result = secret('generated-password') }
-  class Router { route() {} }
+  class Redis extends Database {
+    override port = output(6379)
+  }
+  class RandomPassword {
+    result = secret('generated-password')
+  }
+  class Router {
+    route() {}
+  }
   const replacements = {
     $app: { name: 'boxlite', stage: 'dev' },
     $cli: { paths: { root: new URL('..', import.meta.url).pathname } },
@@ -83,11 +93,17 @@ async function synthesize(
     random: { RandomPassword },
     command: { local: { Command: Resource } },
     aws: {
+      wafv2: { WebAcl: Resource, WebAclAssociation: Resource },
       getCallerIdentity: async () => ({ accountId: '123456789012' }),
       getCallerIdentityOutput: () => ({ accountId: output('123456789012') }),
       getRegionOutput: () => ({ name: output('ap-southeast-1') }),
       iam: { Role: Resource, RolePolicy: Resource, RolePolicyAttachment: Resource, InstanceProfile: Resource },
-      ec2: { VpcEndpoint: Resource, SecurityGroup: Resource, Instance: Resource, getAmi: async () => ({ id: 'ami-test' }) },
+      ec2: {
+        VpcEndpoint: Resource,
+        SecurityGroup: Resource,
+        Instance: Resource,
+        getAmi: async () => ({ id: 'ami-test' }),
+      },
     },
     sst: {
       Secret,
@@ -116,6 +132,10 @@ async function synthesize(
     await deployStack()
     const api = services.get('Api')
     assert.ok(api, 'deployStack must construct the API service')
+    assert.equal(
+      await resolved(resources.get('ApiInternalRoutePolicyAssociation')?.resourceArn),
+      'arn:aws:elasticloadbalancing:region:account:loadbalancer/Api',
+    )
     return { environment: api.environment, secrets }
   } finally {
     try {

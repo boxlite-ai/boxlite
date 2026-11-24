@@ -26,6 +26,7 @@ describe('Runner V0 internal nesting wire contract', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     try {
       const adapter = new RunnerAdapterV0()
+      Object.assign(adapter, { config: { get: () => false } })
       const runner = new Runner({
         region: 'local',
         name: 'test',

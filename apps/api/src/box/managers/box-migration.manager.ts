@@ -10,6 +10,7 @@ import { DataSource, EntityManager, FindOptionsWhere, IsNull, Not } from 'typeor
 import { setTimeout } from 'timers/promises'
 
 import { RedisLockProvider } from '../common/redis-lock.provider'
+import { Job } from '../entities/job.entity'
 import { Box } from '../entities/box.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
@@ -287,6 +288,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
     }
 
     let submitted = false
+    let job: Job | undefined
     try {
       // Resolved BEFORE the transaction opens, never inside it. The import's
       // resolver asks the scheduler for a target runner, which is a query: from
@@ -324,7 +326,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
           return false
         }
 
-        await this.jobService.createJob(
+        job = await this.jobService.createJob(
           entityManager,
           jobType,
           target.runnerId,
@@ -336,6 +338,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
         this.logger.log(`Submitted ${jobType} for box ${box.id} to runner ${target.runnerId}`)
         return true
       })
+      if (submitted && job) await this.jobService.notifyRunner(job.runnerId, job.id)
     } catch (error) {
       this.logger.error(`Error submitting ${jobType} for box ${migration.boxId}:`, error)
     } finally {

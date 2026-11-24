@@ -23,3 +23,9 @@ export type Plan = {
   concurrencyLimit: number | null
   selfServe: boolean
 }
+
+export type PlanTrialEligibility = {
+  name: string
+  eligible: boolean
+  durationSeconds: number
+}

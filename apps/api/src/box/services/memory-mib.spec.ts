@@ -82,6 +82,7 @@ describe('Cloud MiB allocation regression', () => {
 
   it('passes exact GiB to V0 create and recovery', async () => {
     const adapter = new RunnerAdapterV0()
+    Object.assign(adapter, { config: { get: () => false } })
     const create = jest.fn().mockResolvedValue({ data: {} })
     const recover = jest.fn().mockResolvedValue(undefined)
     Object.assign(adapter, { boxApiClient: { create, recover } })
@@ -95,6 +96,7 @@ describe('Cloud MiB allocation regression', () => {
   it('passes exact GiB to V2 create jobs', async () => {
     const createJob = jest.fn().mockResolvedValue(undefined)
     const adapter = new RunnerAdapterV2({} as never, {} as never, { createJob } as never)
+    Object.assign(adapter, { config: { get: () => false } })
     await adapter.init({ id: 'runner-memory' } as never)
     await adapter.createBox(Object.assign(new Box('us'), { mem: 1, memoryMib: 300 }), 'alpine:latest')
     expect(createJob.mock.calls[0][5].memoryQuota).toBe(300 / 1024)

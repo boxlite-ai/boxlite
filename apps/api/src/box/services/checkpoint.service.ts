@@ -141,6 +141,7 @@ export class CheckpointService {
         sourceBox = box
         return checkpoint
       })
+      await this.jobs.notifyRunner(checkpoint.sourceRunnerId, checkpoint.exportJobId!)
       if (sourceBox) this.cache.invalidate(sourceBox)
       return checkpoint
     } catch (error) {
