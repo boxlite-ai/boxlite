@@ -121,6 +121,10 @@ run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format
 
 on:
   workflow_call:
+    outputs:
+      release_result:
+        description: Outcome of the release acceptance suite
+        value: ${{ jobs.e2e.outputs.release_result }}
     inputs:
       release_sha:
         description: Exact tagged commit deployed by release acceptance.
@@ -263,6 +267,9 @@ jobs:
     if: ${{ contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    cache-mode: read
+    outputs:
+      release_result: ${{ steps.acceptance.outputs.result }}
     env:
       # Precedence: a dispatch input overrides for one run; otherwise the
       # repo variable is the configured stack; otherwise the built-in
@@ -567,3 +574,12 @@ jobs:
             pytest-identities.xml
             pytest-catalog.xml
           if-no-files-found: ignore
+
+      - name: Summarize release acceptance
+        id: acceptance
+        if: always() && inputs.deployment_attempt
+        env:
+          E2E_RESULT: ${{ job.status }}
+        run: |
+          echo "result=$E2E_RESULT" >> "$GITHUB_OUTPUT"
+          echo "Dev cloud E2E for $RELEASE_TAG — $E2E_RESULT" >> "$GITHUB_STEP_SUMMARY"

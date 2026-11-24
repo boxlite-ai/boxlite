@@ -43,8 +43,7 @@ Open **Actions → mbuild-release**:
 
 ```text
 Publish GHCR images → check release assets → approve and deploy dev → dev E2E
-  → report the E2E result to #release
-  → on success, review and approve prod → deploy prod
+  → E2E passed + request prod review in one #release message → approve and deploy prod
 ```
 
 The publisher reads the tagged commit's artifact declaration and builds its current four images:
@@ -72,7 +71,7 @@ Open the original `mbuild-release` run for both Environment approvals, deploymen
 The release calls `mdeploy-all` for dev and prod with the published tag, its exact commit, `api+runner`, apply and confirmation enabled.
 Dev calls `e2e-cloud` with the release tag and dev test keys. A failing or skipped acceptance test prevents promotion.
 
-The E2E report appears in the GitHub summary and, when configured, in Slack before prod approval.
+The E2E outcome appears in the GitHub summary. The prod review message includes successful dev acceptance and a button to review the deployment. Failed acceptance sends a separate report to #release.
 A configured reviewer on the prod Environment must approve the protected rollout.
 The release run stays open until the production deployment finishes. Each stage imports the verified image digests from GHCR.
 
@@ -80,11 +79,11 @@ The release run stays open until the production deployment finishes. Each stage 
 
 | Event | Destination |
 | --- | --- |
-| Release dev approval, deployment result and E2E report | #release via `SLACK_WEBHOOK_URL` |
-| Prod approval and deployment result | #release via `SLACK_WEBHOOK_URL` |
+| Release dev approval, deployment result and failed acceptance | #release via `SLACK_WEBHOOK_URL` |
+| Prod approval (including dev E2E success on releases) and deployment result | #release via `SLACK_WEBHOOK_URL` |
 | Standalone dev approval and dev/stage deployment results | Dev Slack via `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` |
 
-Each deployment result names its environment, ref and outcome and includes a button opening the run.
+Each deployment result names its environment, ref and outcome. Failed deployments, asset checks and acceptance reports include a **View run logs** button for the originating run.
 A preview skips deployment notifications. An unset webhook skips its channel.
 A malformed release webhook fails the asset check. GitHub retains the E2E summary if Slack delivery fails.
 

@@ -22,7 +22,7 @@ test('release deployment is a native dependency in the publisher run', () => {
   assert.ok(release.jobs.prod.needs.includes('dev'))
   assert.equal(rollout.jobs.e2e.uses, './.github/workflows/e2e-cloud.yml')
   assert.ok(rollout.jobs.e2e.needs.includes('plan'))
-  assert.ok(rollout.jobs.report.needs.includes('e2e'))
+  assert.equal(rollout.jobs.report, undefined, 'successful acceptance must not allocate a report runner')
 })
 
 test('release dev approval uses only the release webhook', () => {
@@ -151,11 +151,51 @@ test('build-only never enters deployment, checks, or reporting; failed E2E canno
   for (const id of ['check', 'dev', 'prod', 'report']) assert.match(release.jobs[id].if, /!inputs\['build-only'\]/)
   assert.equal(rollout.concurrency.group, 'mdeploy-all-${{ inputs.stage }}')
   assert.notEqual(release.concurrency.group, rollout.concurrency.group)
-  const accepted = rollout.jobs.report.steps.find((step) => step.id === 'accepted')
-  const permitted = new Function('needs', 'return ' + accepted.if)
+  const outputs = rollout.on.workflow_call.outputs
+  const stamp = new Function('jobs', 'return ' + expression(outputs.accepted_attempt.value))
+  for (const result of ['failure', 'cancelled', 'skipped', 'success']) {
+    assert.equal(
+      stamp({
+        plan: { result: 'success', outputs: { deployment_attempt: '2' } },
+        e2e: { outputs: { release_result: result } },
+      }),
+      result === 'success' ? '2' : '',
+    )
+  }
+  assert.equal(outputs.e2e_result.value, '${{ jobs.e2e.outputs.release_result }}')
+  const cloud = readWorkflow('e2e-cloud')
+  assert.equal(cloud.on.workflow_call.outputs.release_result.value, '${{ jobs.e2e.outputs.release_result }}')
+  assert.equal(cloud.jobs.e2e.outputs.release_result, '${{ steps.acceptance.outputs.result }}')
+  const summary = cloud.jobs.e2e.steps.at(-1)
+  assert.equal(summary.id, 'acceptance')
+  assert.equal(summary.if, 'always() && inputs.deployment_attempt')
+  assert.equal(summary.env.E2E_RESULT, '${{ job.status }}')
+  const fallback = new Function('github', 'inputs', 'needs', 'always', 'return ' + expression(release.jobs.report.if))
   for (const result of ['failure', 'cancelled', 'skipped', 'success'])
-    assert.equal(permitted({ plan: { result: 'success' }, e2e: { result } }), result === 'success')
-  assert.ok(rollout.jobs.report.if.includes('always()'))
-  assert.equal(rollout.jobs.report.steps.at(-1)['continue-on-error'], true)
+    assert.equal(
+      fallback({ ref: 'refs/heads/main' }, { 'build-only': false }, { dev: { result } }, () => true),
+      result !== 'success',
+    )
   assert.match(release.jobs.prod.if, /needs\.dev\.outputs\.accepted_attempt != ''/)
+})
+
+test('only a prod approval after dev acceptance carries the E2E success', () => {
+  const notice = rollout.jobs.resolve.steps.find((step) => step.name === 'Notify release reviewers')
+  assert.ok(notice.env.ACCEPTED_TAG, 'prod approval must include the accepted tag')
+  const accepted = new Function('inputs', 'return ' + expression(notice.env.ACCEPTED_TAG))
+  for (const [stage, attempt, expected] of [
+    ['dev', '', ''],
+    ['prod', '', ''],
+    ['prod', '2', 'v1.2.3'],
+  ]) {
+    assert.equal(accepted({ stage, accepted_attempt: attempt, ref: 'v1.2.3' }), expected)
+  }
+})
+
+test('the cloud suite cannot write the default branch cache', () => {
+  const cloud = readWorkflow('e2e-cloud')
+  assert.ok(
+    ['read', 'none'].includes(cloud.jobs.e2e['cache-mode'] || cloud['cache-mode']),
+    'E2E needs a read-only cache',
+  )
 })

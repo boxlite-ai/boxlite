@@ -248,17 +248,46 @@ test('Slack payloads are JSON, while HTTP and transport failures do not expose w
   }
 })
 
-test('E2E report records its actual result and links to the current release before prod approval', (t) => {
+test('prod review combines dev E2E success with the approval button; failed acceptance has its own report', (t) => {
   const cli = cliHarness(t)
-  for (const outcome of ['success', 'failure', 'cancelled', 'skipped']) {
-    const results = { resolve: { result: 'success' }, plan: { result: 'success' }, e2e: { result: outcome } }
+  const approval = cli('approval', {
+    DEPLOY_ENVIRONMENT: 'prod',
+    APPROVAL_PHASE: 'Release deployment approval',
+    ACCEPTED_TAG: tag,
+  })
+  const messages = approval.requests.filter((req) => req.url === webhook)
+  assert.equal(messages.length, 1)
+  assert.match(messages[0].body.text, /dev E2E passed/i)
+  assert.ok(messages[0].body.text.includes(tag))
+  const button = messages[0].body.blocks.at(-1).elements[0]
+  assert.equal(button.text.text, 'Review prod deployment')
+  assert.equal(button.url, 'https://github.com/' + repo + '/actions/runs/10')
+  for (const outcome of ['failure', 'cancelled', 'skipped']) {
+    const results = {
+      resolve: { result: 'success' },
+      publish: { result: 'success' },
+      check: { result: 'success' },
+      dev: { result: 'failure', outputs: { e2e_result: outcome } },
+    }
     const response = cli('report', { RELEASE_RESULTS: JSON.stringify(results) })
     assert.equal(response.status, 0, response.stderr)
     assert.ok(response.summary.includes('| E2E cloud | ' + outcome + ' |'))
     const message = response.requests.find((req) => req.url === webhook).body
     assert.equal(message.blocks.at(-1).elements[0].url, 'https://github.com/' + repo + '/actions/runs/10')
+    assert.equal(message.blocks.at(-1).elements[0].text.text, 'View run logs')
     assert.ok(message.blocks.some((block) => block.fields?.some((field) => field.text === 'E2E cloud\n' + outcome)))
   }
+  const preflight = cli('report', {
+    RELEASE_RESULTS: JSON.stringify({
+      resolve: { result: 'success' },
+      publish: { result: 'success' },
+      check: { result: 'failure' },
+      dev: { result: 'skipped' },
+    }),
+  })
+  const preflightButton = preflight.requests.find((r) => r.url === webhook).body.blocks.at(-1).elements[0]
+  assert.equal(preflightButton.text.text, 'View run logs')
+  assert.equal(preflightButton.url, 'https://github.com/' + repo + '/actions/runs/10')
   const missing = cli('report', { SLACK_WEBHOOK_URL: '' })
   assert.equal(missing.status, 0)
   assert.deepEqual(missing.requests, [])
@@ -273,6 +302,10 @@ test('deployment success and failure notifications link to the run and render th
     const response = cli('result', { DEPLOY_ENVIRONMENT: 'stage', DEPLOY_REF: '#123', DEPLOY_RESULT: result })
     assert.equal(response.status, 0, response.stderr)
     const message = response.requests.find((req) => req.url === webhook).body
+    assert.equal(
+      message.blocks.at(-1).elements[0].text.text,
+      result === 'failure' ? 'View run logs' : 'View deployment run',
+    )
     assert.equal(message.text, 'stage deployment: ' + result)
     assert.deepEqual(message.blocks.at(-2).text, { type: 'plain_text', text: 'Ref: #123' })
     assert.equal(message.blocks.at(-1).elements[0].url, 'https://github.com/' + repo + '/actions/runs/10')

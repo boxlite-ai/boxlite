@@ -29,7 +29,7 @@ RELEASE (release event)                 build-runtime · build-c · build-node �
                                         mbuild-release-on-release ──▶ mbuild-release
                                           GHCR images + required release assets ready
                                             ──▶ mdeploy-all (dev) ──▶ e2e-cloud (dev, release tag)
-                                            ──▶ Slack E2E report ──▶ approved mdeploy-all (prod), in the release run
+                                            ──▶ dev E2E result + prod review in Slack ──▶ approved mdeploy-all (prod), in the release run
                                         apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
@@ -70,7 +70,7 @@ own.
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: main suite, identity and isolated catalog lanes on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
 | `mdeploy-all.yml` | dispatch, `workflow_call` | yes | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
 | `mbuild.yml` | `workflow_call` | call-only | Reusable wrapper for the shared stage-image action; mdeploy-all invokes it in its image preparation leg |
-| `mbuild-release.yml` | dispatch | — | Publishes GHCR images, waits for required release assets, runs dev deployment and E2E, reports to Slack, then runs the approved prod deployment in the same run; `build-only=true` selects publication only |
+| `mbuild-release.yml` | dispatch | — | Publishes GHCR images, waits for required release assets, runs dev deployment and E2E, combines E2E success and prod review in Slack, then runs the approved prod deployment in the same run; `build-only=true` selects publication only |
 | `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` using its default full pipeline |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |

@@ -153,25 +153,23 @@ const runButton = (repo, runId, label) => ({
 
 export const releaseReport = ({ repo, tag, runId, results }) => {
   const release = VERSION.test(tag) ? tag : '(invalid release tag)'
-  const stages = Object.hasOwn(results, 'e2e')
-    ? [
-        ['resolve', 'Release ref'],
-        ['plan', 'Dev deployment'],
-        ['e2e', 'E2E cloud'],
-      ]
-    : [
-        ['resolve', 'Release ref'],
-        ['publish', 'Image publication'],
-        ['check', 'Release assets'],
-      ]
-  const rows = stages.map(([job, label]) => [label, results[job]?.result ?? 'not started'])
+  const rows = [
+    ['Release ref', results.resolve?.result],
+    ['Image publication', results.publish?.result],
+    ['Release assets', results.check?.result],
+  ].map(([label, result]) => [label, result ?? 'not started'])
+  if (results.dev && results.dev.result !== 'skipped') {
+    const e2e = results.dev.outputs?.e2e_result
+    if (!e2e || e2e === 'skipped') rows.push(['Dev deployment and acceptance', results.dev.result])
+    if (e2e) rows.push(['E2E cloud', e2e])
+  }
   const stopped = rows.find(([, result]) => result !== 'success')
-  const phase = stopped?.[0] ?? 'Dev acceptance'
-  const title = stopped ? release + ': ' + phase + ' — ' + stopped[1] : release + ': dev E2E passed'
+  const phase = stopped?.[0] ?? 'Release'
+  const title = release + ': ' + phase + ' — ' + (stopped?.[1] ?? 'stopped')
   const blocks = [
     { type: 'header', text: { type: 'plain_text', text: title } },
     { type: 'section', fields: rows.map(([key, value]) => ({ type: 'plain_text', text: key + '\n' + value })) },
-    runButton(repo, runId, 'View release run'),
+    runButton(repo, runId, 'View run logs'),
   ]
   const summary =
     '## ' +
@@ -268,14 +266,17 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
           blocks: [
             { type: 'header', text: { type: 'plain_text', text: title } },
             { type: 'section', text: { type: 'plain_text', text: 'Ref: ' + ref } },
-            runButton(repo, runId, 'View deployment run'),
+            runButton(repo, runId, result === 'failure' ? 'View run logs' : 'View deployment run'),
           ],
         },
       })
     } else if (process.argv[2] === 'approval') {
-      const { DEPLOY_ENVIRONMENT, APPROVAL_PHASE, GITHUB_RUN_ID } = process.env
+      const { DEPLOY_ENVIRONMENT, APPROVAL_PHASE, GITHUB_RUN_ID, ACCEPTED_TAG } = process.env
+      const title = ACCEPTED_TAG
+        ? ACCEPTED_TAG + ': dev E2E passed · review prod deployment'
+        : 'Deployment review requested'
       try {
-        await notifyApproval(GITHUB_RUN_ID, DEPLOY_ENVIRONMENT, APPROVAL_PHASE, 'Deployment review requested')
+        await notifyApproval(GITHUB_RUN_ID, DEPLOY_ENVIRONMENT, APPROVAL_PHASE, title)
       } catch {
         console.warn('::warning::Deployment approval notice failed. Review this run in GitHub.')
       }

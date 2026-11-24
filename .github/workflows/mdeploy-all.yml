@@ -32,7 +32,10 @@ on:
     outputs:
       accepted_attempt:
         description: Release deployment attempt that passed cloud acceptance
-        value: ${{ jobs.report.outputs.accepted_attempt }}
+        value: ${{ jobs.e2e.outputs.release_result == 'success' && jobs.plan.outputs.deployment_attempt || '' }}
+      e2e_result:
+        description: Dev cloud acceptance outcome for release failure reporting
+        value: ${{ jobs.e2e.outputs.release_result }}
   workflow_dispatch:
     inputs:
       requested_by:
@@ -409,6 +412,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
           APPROVAL_PHASE: Release deployment approval
+          ACCEPTED_TAG: ${{ inputs.stage == 'prod' && inputs.accepted_attempt && inputs.ref || '' }}
         run: node apps/infra/scripts/release-pipeline.mjs approval
 
   # Each commit artifact plans/builds on its own runner; releases use one apply leg.
@@ -713,34 +717,3 @@ jobs:
       BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
       BOXLITE_DEV_P2_API_KEY: ${{ secrets.BOXLITE_DEV_P2_API_KEY }}
       BOXLITE_DEV_P2_READONLY_API_KEY: ${{ secrets.BOXLITE_DEV_P2_READONLY_API_KEY }}
-
-  report:
-    name: Report dev acceptance
-    needs: [resolve, plan, e2e]
-    if: always() && inputs.release_sha && inputs.stage == 'dev'
-    permissions:
-      contents: read
-      actions: read
-    runs-on: ubuntu-latest
-    outputs:
-      accepted_attempt: ${{ steps.accepted.outputs.attempt }}
-    steps:
-      - id: accepted
-        if: needs.plan.result == 'success' && needs.e2e.result == 'success'
-        env:
-          DEPLOYMENT_ATTEMPT: ${{ needs.plan.outputs.deployment_attempt }}
-        run: |
-          test "$DEPLOYMENT_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
-          echo "attempt=$DEPLOYMENT_ATTEMPT" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v5
-        if: always()
-        with:
-          persist-credentials: false
-      - name: Publish E2E result
-        if: always()
-        continue-on-error: true
-        env:
-          TAG: ${{ inputs.ref }}
-          RELEASE_RESULTS: ${{ toJSON(needs) }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: node apps/infra/scripts/release-pipeline.mjs report
