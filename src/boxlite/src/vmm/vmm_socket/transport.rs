@@ -175,37 +175,38 @@ pub(super) fn receive_exact(
             return Err(timed_out(error));
         }
         let mut invalid = false;
-        unsafe {
-            let mut header = libc::CMSG_FIRSTHDR(&msg);
-            while !header.is_null() {
-                let length = (*header).cmsg_len as usize;
-                let base = libc::CMSG_LEN(0) as usize;
-                if length < base {
-                    invalid = true;
-                    break;
-                }
-                if (*header).cmsg_level == libc::SOL_SOCKET
-                    && (*header).cmsg_type == libc::SCM_RIGHTS
-                {
-                    let count = (length - base) / size_of::<RawFd>();
-                    for index in 0..count {
-                        let fd = std::ptr::read_unaligned(
-                            libc::CMSG_DATA(header).cast::<RawFd>().add(index),
-                        );
-                        // Own each descriptor even when this frame will be rejected.
-                        let received = File::from_raw_fd(fd);
-                        if file.is_some() {
-                            invalid = true;
-                        } else {
-                            *file = Some(received);
-                        }
-                    }
-                    invalid |= !(length - base).is_multiple_of(size_of::<RawFd>());
-                } else {
-                    invalid = true;
-                }
-                header = libc::CMSG_NXTHDR(&msg, header);
+        // SAFETY: recvmsg populated msg and its aligned control buffer.
+        let (mut header, base) = unsafe { (libc::CMSG_FIRSTHDR(&msg), libc::CMSG_LEN(0) as usize) };
+        while !header.is_null() {
+            // SAFETY: this header was returned by the walk over the live buffer.
+            let cmsg = unsafe { &*header };
+            let length = cmsg.cmsg_len;
+            #[cfg(target_env = "musl")]
+            let length = length as usize;
+            if length < base {
+                invalid = true;
+                break;
             }
+            if cmsg.cmsg_level == libc::SOL_SOCKET && cmsg.cmsg_type == libc::SCM_RIGHTS {
+                let count = (length - base) / size_of::<RawFd>();
+                // SAFETY: the kernel initialized this header and its payload.
+                let data = unsafe { libc::CMSG_DATA(header) }.cast::<RawFd>();
+                for index in 0..count {
+                    // SAFETY: each full FD fits in the payload. recvmsg transferred
+                    // ownership, including descriptors from a rejected frame.
+                    let received = unsafe { File::from_raw_fd(data.add(index).read_unaligned()) };
+                    if file.is_some() {
+                        invalid = true;
+                    } else {
+                        *file = Some(received);
+                    }
+                }
+                invalid |= !(length - base).is_multiple_of(size_of::<RawFd>());
+            } else {
+                invalid = true;
+            }
+            // SAFETY: header belongs to msg's live, kernel-populated buffer.
+            header = unsafe { libc::CMSG_NXTHDR(&msg, header) };
         }
         if invalid || msg.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0 {
             return Err(io::Error::new(

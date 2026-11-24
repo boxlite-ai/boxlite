@@ -85,6 +85,9 @@ fn bind_mount_source(mount: &BindMount) -> BoxliteResult<BindMountSource<'_>> {
     }
 }
 
+/// Byte width of the tag field in the virtio-fs device configuration.
+const VIRTIO_FS_TAG_LEN: usize = 36;
+
 /// What a `Container.Mount` request delivers, after validation.
 #[derive(Debug)]
 enum MountSource {
@@ -136,12 +139,12 @@ fn checked_mount(request: &ContainerMountRequest) -> Result<(MountSource, PathBu
             )));
         }
         if request.device_tag.is_empty()
-            || request.device_tag.len() > 36
+            || request.device_tag.len() > VIRTIO_FS_TAG_LEN
             || request.device_tag.contains('\0')
         {
-            return Err(Status::invalid_argument(
-                "aggregate delivery requires a device tag of 1..=36 bytes",
-            ));
+            return Err(Status::invalid_argument(format!(
+                "aggregate delivery requires a device tag of 1..={VIRTIO_FS_TAG_LEN} bytes"
+            )));
         }
         MountSource::Aggregate {
             device_tag: request.device_tag.clone(),

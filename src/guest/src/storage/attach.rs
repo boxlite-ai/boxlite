@@ -26,6 +26,7 @@ use std::io;
 use std::num::NonZeroU64;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -144,14 +145,57 @@ impl Target {
         Ok(Self { pid, namespace })
     }
 
-    fn namespace_id(&self) -> Option<NonZeroU64> {
+    fn namespace_id(&self) -> BoxliteResult<NonZeroU64> {
         let mut id = 0u64;
         // SAFETY: the namespace descriptor is owned and the ioctl writes one u64.
-        if unsafe { libc::ioctl(self.namespace.as_raw_fd(), libc::NS_GET_MNTNS_ID, &mut id) } == 0 {
-            NonZeroU64::new(id)
-        } else {
-            None
+        if unsafe { libc::ioctl(self.namespace.as_raw_fd(), libc::NS_GET_MNTNS_ID, &mut id) } != 0 {
+            return Err(BoxliteError::Unsupported(format!(
+                "read runtime mount namespace ID: {}",
+                io::Error::last_os_error()
+            )));
         }
+        NonZeroU64::new(id)
+            .ok_or_else(|| BoxliteError::Unsupported("runtime mount namespace ID is zero".into()))
+    }
+
+    fn check_runtime_owner(&self) -> BoxliteResult<()> {
+        // SAFETY: NS_GET_USERNS reads the namespace FD and returns a new FD.
+        let owner = unsafe { libc::ioctl(self.namespace.as_raw_fd(), libc::NS_GET_USERNS) };
+        if owner < 0 {
+            return Err(BoxliteError::Unsupported(format!(
+                "read runtime mount namespace owner: {}",
+                io::Error::last_os_error()
+            )));
+        }
+        // SAFETY: the successful ioctl transferred ownership of this descriptor.
+        let owner = unsafe { File::from_raw_fd(owner) };
+        let metadata_error =
+            |error| BoxliteError::Storage(format!("read user namespace identity: {error}"));
+        let owner = owner.metadata().map_err(metadata_error)?;
+        let agent = std::fs::metadata("/proc/self/ns/user").map_err(metadata_error)?;
+        if (owner.dev(), owner.ino()) != (agent.dev(), agent.ino()) {
+            return Err(BoxliteError::Unsupported(
+                "runtime mounts require a mount namespace owned by the guest agent's user namespace"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_namespace(&self, recorded: Option<NonZeroU64>) -> BoxliteResult<NonZeroU64> {
+        let id = self.namespace_id()?;
+        if recorded != Some(id) {
+            return Err(BoxliteError::InvalidState(format!(
+                "mount namespace changed for container process {}",
+                self.pid
+            )));
+        }
+        Ok(id)
+    }
+
+    fn check_current_namespace(&self, id: NonZeroU64) -> BoxliteResult<()> {
+        Self::open(self.pid)?.check_namespace(Some(id))?;
+        Ok(())
     }
 }
 
@@ -185,7 +229,9 @@ impl Attacher {
                     "mount incarnation has been detached".into(),
                 ));
             };
+            let namespace_id = target.check_namespace(record.namespace_id)?;
             self.check_runtime(target, destination, Mode::Verify(tree.id))?;
+            target.check_current_namespace(namespace_id)?;
             return Ok(RuntimeAttach {
                 added: false,
                 confirmation: Ok(()),
@@ -200,21 +246,23 @@ impl Attacher {
                 "destination already has a runtime mount".into(),
             ));
         }
-        let namespace_id = target.namespace_id();
-        let (tree, confirmation) = self.attach_tree(source, target, destination, read_only)?;
+        target.check_runtime_owner()?;
+        let namespace_id = target.namespace_id()?;
+        let (tree, confirmation) =
+            self.attach_tree(source, target, destination, read_only, Some(namespace_id))?;
         self.runtime.insert(
             key.to_owned(),
             RuntimeMount {
                 source: source.to_owned(),
                 destination: destination.to_owned(),
                 read_only,
-                namespace_id,
+                namespace_id: Some(namespace_id),
                 tree: Some(tree),
             },
         );
         Ok(RuntimeAttach {
             added: true,
-            confirmation,
+            confirmation: confirmation.and_then(|()| target.check_current_namespace(namespace_id)),
         })
     }
 
@@ -255,25 +303,19 @@ impl Attacher {
                 "detach runtime descendants first".into(),
             ));
         }
-        let id = self
-            .runtime
-            .get(key)
-            .expect("checked incarnation")
-            .tree
-            .as_ref()
-            .expect("attached tree")
-            .id;
+        let record = &self.runtime[key];
+        let namespace_id = target.check_namespace(record.namespace_id)?;
+        let id = record.tree.as_ref().expect("attached tree").id;
         if let Err(error) = self.check_runtime(target, destination, Mode::Detach(id)) {
-            let record = &self.runtime[key];
-            let tree = record.tree.as_ref().expect("attached tree");
+            let tree = self.runtime[key].tree.as_ref().expect("attached tree");
             // A different tree at the path does not prove the original was detached.
-            let absent = record.namespace_id.is_some_and(|namespace_id| {
-                matches!(tree.is_mounted_in(namespace_id.get()), Ok(false))
-            });
+            let absent = matches!(tree.is_mounted_in(namespace_id.get()), Ok(false));
             if !absent {
                 return Err(error);
             }
         }
+        // The helper's namespace FD can outlive init's membership in it.
+        target.check_current_namespace(namespace_id)?;
         let record = self.runtime.get_mut(key).expect("checked incarnation");
         record.tree = None;
         Ok(true)
@@ -291,7 +333,7 @@ impl Attacher {
         destination: &Path,
         read_only: bool,
     ) -> BoxliteResult<()> {
-        let (_, confirmation) = self.attach_tree(source, target, destination, read_only)?;
+        let (_, confirmation) = self.attach_tree(source, target, destination, read_only, None)?;
         confirmation
     }
 
@@ -301,6 +343,7 @@ impl Attacher {
         target: &Target,
         destination: &Path,
         read_only: bool,
+        runtime_namespace: Option<NonZeroU64>,
     ) -> BoxliteResult<(MountedTree, BoxliteResult<()>)> {
         validate_destination(destination)?;
         if self
@@ -313,19 +356,26 @@ impl Attacher {
             ));
         }
         self.reap_straggler()?;
-        let tree = clone_detached(source, read_only)?;
+        let fd = clone_detached(source, read_only)?;
         // A mount keeps its ID when it moves, so the installed mount is identified
         // before anything is published in the container.
-        let id = mount_identity(tree.as_raw_fd()).map_err(|code| {
+        let id = mount_identity(fd.as_raw_fd()).map_err(|code| {
             BoxliteError::Storage(format!(
                 "statx detached tree: {}",
                 io::Error::from_raw_os_error(code)
             ))
         })?;
+        let tree = MountedTree { fd, id };
+        if let Some(namespace_id) = runtime_namespace {
+            // Probe the recovery query against the detached tree before publishing it.
+            tree.is_mounted_in(namespace_id.get()).map_err(|error| {
+                BoxliteError::Unsupported(format!("runtime mount recovery unavailable: {error}"))
+            })?;
+        }
         let components = components(destination)?;
         let child = Child::spawn(
             &target.namespace,
-            Some(&tree),
+            Some(&tree.fd),
             &components,
             Stall::No,
             Mode::Attach,
@@ -345,7 +395,6 @@ impl Attacher {
                 )));
             }
         };
-        let tree = MountedTree { fd: tree, id };
         if after_go && report.stage.is_none() {
             // The child has exited, but it may have moved this tree before exiting.
             return Ok((tree, report.into_result(target.pid, destination)));
@@ -1286,6 +1335,37 @@ mod tests {
 
     #[test]
     #[ignore = "needs root in a private mount namespace: make test:guest-perms"]
+    fn privileged_detach_refuses_a_different_namespace() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("marker"), b"original").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("mount");
+        let mut attacher = Attacher::default();
+        {
+            let original = NamespaceHolder::spawn();
+            let target = Target::open(original.pid).unwrap();
+            attacher
+                .attach_runtime("original", source.path(), &target, &destination, false)
+                .and_then(RuntimeAttach::confirmed)
+                .unwrap();
+            assert_eq!(
+                fs::read(original.view(&destination).join("marker")).unwrap(),
+                b"original"
+            );
+        }
+
+        let other = NamespaceHolder::spawn();
+        let target = Target::open(other.pid).unwrap();
+        let result = attacher.detach_runtime("original", &target, &destination);
+        assert!(
+            matches!(result, Err(BoxliteError::InvalidState(_))),
+            "{result:?}"
+        );
+        assert!(attacher.runtime_attached("original"));
+    }
+
+    #[test]
+    #[ignore = "needs root in a private mount namespace: make test:guest-perms"]
     fn privileged_incarnation_replay_and_replacement_are_safe() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"runtime").unwrap();
@@ -1354,7 +1434,7 @@ mod tests {
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
         let (tree, confirmation) = Attacher::default()
-            .attach_tree(source.path(), &target, &destination, false)
+            .attach_tree(source.path(), &target, &destination, false, None)
             .unwrap();
         confirmation.unwrap();
         let parts = components(&destination).unwrap();
@@ -1580,7 +1660,7 @@ mod tests {
         fs::rename(&ancestor, &renamed).unwrap();
         // A different attacher models a mount installed outside this registry.
         let (replacement_tree, confirmation) = Attacher::default()
-            .attach_tree(replacement.path(), &target, &destination, false)
+            .attach_tree(replacement.path(), &target, &destination, false, None)
             .unwrap();
         confirmation.unwrap();
         assert_ne!(replacement_tree.id, id);

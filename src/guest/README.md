@@ -24,15 +24,13 @@ root publication starts; failed publication unwinds them without replacing a
 previous registration. Committing initialization keeps the roots available for
 later RPCs.
 
-Aggregate Mount and Detach require a container whose resolved capability bounding
-set excludes `CAP_SYS_ADMIN`. The guest rejects other containers with gRPC
-`UNIMPLEMENTED` before opening their namespace or modifying mount state. The
-capability policy applies to both init and exec, so a workload cannot acquire
-mount-administration rights later through exec or file capabilities. Configured
-privileges remain intact; legacy read-only share delivery keeps its contract.
-This boundary prevents workload-created covering mounts between identity
-validation and unmount. Supporting mount-administrative workloads requires
-additional synchronization outside this delivery layer.
+Aggregate Mount and Detach require a container whose capability bounding set
+excludes `CAP_SYS_ADMIN`. Aggregate Mount also requires that the target mount
+namespace belong to the guest agent's user namespace. The agent rejects
+unsupported targets before publishing a mount. Mount replay and Detach must
+refer to the recorded namespace. If init has switched namespaces, the agent
+reports a failed precondition and retains the record. Legacy share delivery is
+read-only.
 
 The agent clones the export with `open_tree`, applies recursive read-only flags
 when requested, and moves the clone into the running container's mount namespace
@@ -63,11 +61,16 @@ the Detach requests the host has issued; each holds a key, a path, and two flags
 Mount and Detach hold the same per-container write lock through syscall execution
 and bookkeeping, in an owned task that survives RPC caller cancellation.
 
-When the mount helper exits without reporting its result after being told to
-proceed, the agent returns the confirmation error and retains the mount identity
-and destination. A later detach can remove that tree by its original identity.
-If the detach result is uncertain, the agent uses `statmount` to check whether
-that tree is absent from its original namespace before clearing the record.
+Aggregate Mount checks that the kernel supports mount namespace IDs and the
+`statmount` recovery query before publishing a mount. If the helper's final
+report is lost, the agent returns an error and retains the mount identity and
+destination. Detach verifies any still-present tree at its original path in
+the recorded namespace. If an ancestor was renamed before Detach opened the
+destination, restore the original path to retry.
+
+After a lost detach report, the agent clears the record once `statmount`
+confirms absence in the same namespace. If that query is unavailable or fails,
+the record and destination remain reserved.
 
 These are lower-level delivery operations. The caller coordinates guest
 acknowledgment with host export retirement and reconciles unknown RPC outcomes.

@@ -5,6 +5,9 @@ use std::fs::File;
 use std::io;
 use std::path::{Component, Path};
 
+/// Maximum length in bytes of a source or target path in a mount request.
+const MAX_PATH_BYTES: usize = 4096;
+
 #[derive(Default)]
 pub(crate) struct Registry {
     next: u64,
@@ -35,7 +38,7 @@ fn record_cost(mount: &ControlMount) -> io::Result<usize> {
 }
 
 fn normalize_target(target: &str) -> io::Result<String> {
-    if target.len() > 4096 || target.contains('\0') || !target.starts_with('/') {
+    if target.len() > MAX_PATH_BYTES || target.contains('\0') || !target.starts_with('/') {
         return Err(errno(libc::EINVAL));
     }
     let mut components = Vec::new();
@@ -69,7 +72,7 @@ impl Registry {
                 read_only,
             } => {
                 let directory = directory.ok_or_else(|| errno(libc::EINVAL))?;
-                if source.is_empty() || source.len() > 4096 || source.contains('\0') {
+                if source.is_empty() || source.len() > MAX_PATH_BYTES || source.contains('\0') {
                     return Err(errno(libc::EINVAL));
                 }
                 let target = normalize_target(&target)?;
