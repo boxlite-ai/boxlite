@@ -14,23 +14,30 @@ when finished; cancellation of a read preserves its pending event for the next r
 
 ## Managed checkpoints
 
-Checkpoint settings must be omitted, including explicit defaults such as
-`detach=False`, `tty=False`, or `advanced=AdvancedBoxOptions(privileged=False)`.
+When creating a box from a checkpoint, omit execution settings, including
+explicit defaults such as `detach=False`, `tty=False`, or
+`advanced=AdvancedBoxOptions(privileged=False)`.
 Explicit empty `env`, `volumes`, `ports`, or `secrets` lists also reject.
 Omitted collection arguments default to `None` and normalize to empty lists;
 ordinary image creation continues accepting empty lists.
 
-A checkpoint is a source for a new box, like an image: pass it to the ordinary
-create call. The checkpoint handle only manages checkpoints. Archive import is a
-separate operation for local `.boxlite` files and is unchanged. The CLI form is
+Pass a checkpoint to the ordinary create call to use it as the source for a new
+box. The checkpoint handle manages checkpoint archives. Archive import loads
+local `.boxlite` files. The CLI form for creating a box from a checkpoint is
 `boxlite create --checkpoint ID [--name NAME]`.
 
-The source must be stopped before `create`; stop it and wait for `stopped` first.
-Checkpoint creation rejects other states and never stops the source automatically.
+`CheckpointOptions(kind="disk")` captures a stopped, idle source and is the
+default. `CheckpointOptions(kind="full")` captures disk and memory from a
+running source. Before requesting full capture, the SDK checks that the REST
+server advertises `memory_checkpoints_enabled`.
 
-On REST runtimes, `runtime.checkpoints` exposes async `create(source, name=None)`, `list()`,
-`get(key)` and `remove(key, force=False)`. `SyncBoxlite.checkpoints` exposes the same
-operations synchronously. These independent archives survive source deletion.
+On REST runtimes, `runtime.checkpoints` exposes async
+`create(source, name=None, options=None)`, `list()`, `get(key)`, and
+`remove(key, force=False)`. `SyncBoxlite.checkpoints` exposes the same operations
+synchronously. Checkpoints survive source deletion. `CheckpointInfo.kind` is
+`"disk"`, `"full"`, or `"unknown"` for an unrecognized server kind.
+`CheckpointInfo.memory_size_bytes` is `None` when omitted by the server and
+preserves a reported zero.
 
 ```python
 checkpoint = await runtime.checkpoints.create("source", "dev-base")

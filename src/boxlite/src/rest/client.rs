@@ -836,6 +836,16 @@ impl ApiClient {
         )
     }
 
+    pub async fn require_memory_checkpoints_enabled(&self) -> BoxliteResult<()> {
+        let config = self.fetch_config().await?;
+        ensure_capability(
+            "full checkpoint",
+            config
+                .capabilities
+                .and_then(|caps| caps.memory_checkpoints_enabled),
+        )
+    }
+
     pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
         let config = self.get_config().await?;
         let capabilities = config.capabilities.ok_or_else(|| {

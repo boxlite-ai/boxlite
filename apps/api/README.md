@@ -268,18 +268,25 @@ Coverage runs bypass the cache.
 
 ## Checkpoint capture
 
-`POST /api/v1/checkpoints` accepts `source_box_id` and an optional `name`.
+`POST /api/v1/checkpoints` accepts `source_box_id`, an optional `name` and an optional
+`kind` of `disk` or `full`. Omission selects `disk`. Explicit `null` returns HTTP 400.
+`full` returns HTTP 400 with `code: "unsupported"`.
+
 `GET /api/v1/checkpoints` and `GET /api/v1/checkpoints/{id-or-name}` read the
-organization's records. The routes also accept the existing organization path
-prefix. Capture requires Box write permission; reads require organization
-membership, following the existing Box read policy. List/detail responses omit stored environment values and
-internal object locations.
+organization's records. Create, list and detail responses include `kind: "disk"`.
+List and detail responses omit stored environment values and internal object locations.
+
+The routes also accept the organization path prefix. Capture requires Box write
+permission, and reads require organization membership under the Box read policy.
+`GET /v1/config` (hosted at `/api/v1/config`) reports
+`capabilities.memory_checkpoints_enabled: false`.
 
 Checkpoint operations stay outside the MCP OAuth allowlist, like export/import.
 The `checkpoints` collection name is reserved and cannot be claimed as an application subdomain.
 
 A source must be stopped and idle on a ready v2 runner, without volumes or secrets.
-Stop the Box and wait for `stopped` before capture; other states return `409`.
+Stop the Box and wait for `stopped` before capture. A source state mismatch
+returns HTTP 409 with `code: "invalid_state"`.
 Checkpoint capture never stops the source automatically or uses hot export.
 Creating a checkpoint takes the source's `BOX` job slot
 until native export completes. The completion transaction clears its checkpoint

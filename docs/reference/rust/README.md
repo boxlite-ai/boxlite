@@ -17,6 +17,10 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [BoxliteRuntime](#boxliteruntime)
   - [ImageHandle](#imagehandle)
   - [RegistryHandle](#registryhandle)
+  - [CheckpointHandle](#checkpointhandle)
+  - [CheckpointOptions](#checkpointoptions)
+  - [CheckpointKind](#checkpointkind)
+  - [CheckpointInfo](#checkpointinfo)
   - [BoxliteOptions](#boxliteoptions)
 - [Box Handle](#box-handle)
   - [LiteBox](#litebox)
@@ -103,6 +107,7 @@ let runtime = BoxliteRuntime::default_runtime();
 | `metrics` | `async fn metrics(&self) -> RuntimeMetrics` | Get runtime-wide metrics |
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
+| `checkpoints` | `fn checkpoints(&self) -> CheckpointHandle` | Get the handle for managed checkpoints |
 
 Local `remove()` returns `InvalidState` while a disk operation is busy or the disk
 lock file is missing. Retry busy removal after the operation finishes. For a
@@ -220,6 +225,62 @@ for login in registries.list().await? {
 }
 registries.remove(&login.id).await?;
 ```
+
+### CheckpointHandle
+
+Use `runtime.checkpoints()` to manage checkpoint archives. On a local runtime,
+operations with valid arguments return `Unsupported`. A REST runtime sends the
+same capture request for default and explicit `Disk` options. `Disk` requires a
+stopped source box. `Full` requires a running source box and checks
+`memory_checkpoints_enabled` with a live `GET /v1/config` before each
+`POST /checkpoints`. If the capability is missing or disabled, the client returns
+`Unsupported` before the POST. The client verifies that the HTTP 201 response
+echoes `kind: "full"`, even while the checkpoint is creating. If the response
+does not confirm full capture, `Unsupported` includes the returned checkpoint ID.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `create` | `async fn create(&self, source: &str, name: Option<String>) -> BoxliteResult<CheckpointInfo>` | Create a disk checkpoint from a stopped box by ID or name |
+| `create_with_options` | `async fn create_with_options(&self, source: &str, name: Option<String>, options: CheckpointOptions) -> BoxliteResult<CheckpointInfo>` | Create a checkpoint with the requested kind |
+| `list` | `async fn list(&self) -> BoxliteResult<Vec<CheckpointInfo>>` | List managed checkpoints across all pages |
+| `get` | `async fn get(&self, key: &str) -> BoxliteResult<CheckpointInfo>` | Get checkpoint metadata by ID or name |
+| `remove` | `async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()>` | Remove a checkpoint by ID or name. `force` suppresses `NotFound` only |
+
+```rust
+use boxlite::{CheckpointKind, CheckpointOptions};
+
+let checkpoints = runtime.checkpoints();
+let checkpoint = checkpoints
+    .create_with_options(
+        "source-box",
+        Some("backup".into()),
+        CheckpointOptions { kind: Some(CheckpointKind::Disk) },
+    )
+    .await?;
+```
+
+### CheckpointOptions
+
+The `kind: Option<CheckpointKind>` field defaults to `None`, which selects disk
+capture. REST sends the same request for `None` and `Some(CheckpointKind::Disk)`.
+
+### CheckpointKind
+
+| Variant | Meaning |
+|---------|---------|
+| `Disk` | Disk data only. The default kind |
+| `Full` | Disk data, guest memory, and VM state |
+| `Unknown` | An unrecognized kind reported by a server. Creation returns `InvalidArgument` for this variant |
+
+### CheckpointInfo
+
+Checkpoint metadata includes the ID, name, source box ID, creation time, archive
+size, state, and optional error reason. In JSON, an omitted `kind` decodes to
+`Disk`.
+
+`memory_size_bytes: Option<u64>` reports the archived guest memory size when
+available. An omitted size decodes to `None` and a reported zero to `Some(0)`.
+Serialization omits `kind` for `Disk` and `memory_size_bytes` for `None`.
 
 ### BoxliteOptions
 

@@ -33,6 +33,8 @@ import type {
 export type {
   CheckpointHandle,
   CheckpointInfo,
+  CheckpointKind,
+  CheckpointOptions,
   Domain,
   DomainHandle,
   DomainList,

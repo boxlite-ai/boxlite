@@ -1,13 +1,56 @@
-//! Managed disk archives, independent of the source box and its snapshots.
+//! Managed checkpoint archives, independent of the source box and its snapshots.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::sync::Arc;
 
 use crate::{BoxliteError, BoxliteResult};
 
-/// Metadata for a checkpoint whose complete archive has been published.
+/// Contents of a checkpoint archive.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckpointKind {
+    /// Disk data only.
+    #[default]
+    Disk,
+    /// Disk data, guest memory, and VM state.
+    Full,
+    /// An unrecognized kind reported by the server.
+    #[serde(other)]
+    Unknown,
+}
+
+impl CheckpointKind {
+    pub fn is_disk(&self) -> bool {
+        *self == Self::Disk
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Disk => "disk",
+            Self::Full => "full",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl fmt::Display for CheckpointKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Options for checkpoint creation.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CheckpointOptions {
+    /// Requested archive kind. `None` selects a disk checkpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<CheckpointKind>,
+}
+
+/// Metadata for a managed checkpoint and its archive state.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CheckpointInfo {
     pub id: String,
@@ -19,6 +62,11 @@ pub struct CheckpointInfo {
     pub state: CheckpointState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "CheckpointKind::is_disk")]
+    pub kind: CheckpointKind,
+    /// Archived guest memory size in bytes, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_size_bytes: Option<u64>,
 }
 
 /// Ready means the entire archive is available, including upload on REST.
@@ -38,13 +86,18 @@ pub enum CheckpointState {
 )]
 #[async_trait]
 pub(crate) trait CheckpointBackend: Send + Sync {
-    async fn create(&self, source: &str, name: Option<String>) -> BoxliteResult<CheckpointInfo>;
+    async fn create(
+        &self,
+        source: &str,
+        name: Option<String>,
+        options: CheckpointOptions,
+    ) -> BoxliteResult<CheckpointInfo>;
     async fn list(&self) -> BoxliteResult<Vec<CheckpointInfo>>;
     async fn get(&self, key: &str) -> BoxliteResult<CheckpointInfo>;
     async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()>;
 }
 
-/// Checkpoint management through a REST server; local runtimes return Unsupported.
+/// Checkpoint management through a REST server. Local runtimes return `Unsupported`.
 ///
 /// Using a checkpoint is a box operation: create a box from one with
 /// `RootfsSpec::Checkpoint`.
@@ -53,8 +106,8 @@ pub struct CheckpointHandle {
     backend: Option<Arc<dyn CheckpointBackend>>,
 }
 
-impl std::fmt::Debug for CheckpointHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for CheckpointHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CheckpointHandle").finish_non_exhaustive()
     }
 }
@@ -64,11 +117,26 @@ impl CheckpointHandle {
         Self { backend }
     }
 
-    /// Ask the REST server to capture a stopped source box.
+    /// Create a disk checkpoint of a stopped source box.
     pub async fn create(
         &self,
         source: &str,
         name: Option<String>,
+    ) -> BoxliteResult<CheckpointInfo> {
+        self.create_with_options(source, name, CheckpointOptions::default())
+            .await
+    }
+
+    /// Create a checkpoint with the requested options.
+    ///
+    /// REST sends the legacy request without `kind` for disk capture. For full
+    /// capture, it checks the server's live capability before posting and
+    /// requires the response to confirm `kind: full`.
+    pub async fn create_with_options(
+        &self,
+        source: &str,
+        name: Option<String>,
+        options: CheckpointOptions,
     ) -> BoxliteResult<CheckpointInfo> {
         if source.is_empty() || source.contains('\0') {
             return Err(BoxliteError::InvalidArgument(
@@ -78,7 +146,12 @@ impl CheckpointHandle {
         if let Some(name) = &name {
             checked_name(name)?;
         }
-        self.backend()?.create(source, name).await
+        if options.kind == Some(CheckpointKind::Unknown) {
+            return Err(BoxliteError::InvalidArgument(
+                "unknown checkpoint kind".into(),
+            ));
+        }
+        self.backend()?.create(source, name, options).await
     }
 
     pub async fn list(&self) -> BoxliteResult<Vec<CheckpointInfo>> {
