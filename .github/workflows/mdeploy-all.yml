@@ -1,34 +1,41 @@
-# Build commits for dev/stage; import existing GHCR releases for dev/prod.
-# Stage treats a stable tag as a commit reference and builds SHA-tagged artifacts.
+# Simulation for the release workflow.
 name: mdeploy-all
-
-# Everything a person scanning the Actions list needs to tell two runs apart:
-# what it does, to which stage, from which ref, and how much of the stage it
-# touches. The ref is shown as typed, because its shape is what decided the
-# rest — `v1.2.3`, `#1570` and a SHA each read as the line they select.
-#
-# The title is rendered before any job starts, so it can only use `inputs`.
-# `resolve` writes the same thing in words, once it has read them.
-run-name: >-
-  ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }} ·
-  ${{ inputs.ref || github.sha }} · ${{ inputs.components }}${{ inputs.requested_by != '' && inputs.request_id != '' && format(' · @{0} · {1}', inputs.requested_by, inputs.request_id) || '' }}
-
-on:
+run-name: '[SHADOW] ${{ inputs.apply && ''deploy'' || ''preview'' }} ${{ inputs.stage }} · ${{ inputs.ref || github.sha }} · ${{ inputs.components }}${{ inputs.requested_by != '''' && inputs.request_id != '''' && format('' · @{0} · {1}'', inputs.requested_by, inputs.request_id) || '''' }}'
+'on':
   workflow_call:
     inputs:
-      stage: { required: true, type: string }
-      ref: { required: true, type: string }
-      release_sha: { required: true, type: string }
-      accepted_attempt: { required: false, type: string }
-      components: { required: true, type: string }
-      apply: { required: true, type: boolean }
-      confirm: { required: true, type: boolean }
+      stage:
+        required: true
+        type: string
+      ref:
+        required: true
+        type: string
+      release_sha:
+        required: true
+        type: string
+      accepted_attempt:
+        required: false
+        type: string
+      components:
+        required: true
+        type: string
+      apply:
+        required: true
+        type: boolean
+      confirm:
+        required: true
+        type: boolean
     secrets:
-      SLACK_WEBHOOK_URL: { required: false }
-      SLACK_DEV_DEPLOYMENT_WEBHOOK_URL: { required: false }
-      BOXLITE_DEV_API_KEY: { required: false }
-      BOXLITE_DEV_P2_API_KEY: { required: false }
-      BOXLITE_DEV_P2_READONLY_API_KEY: { required: false }
+      SLACK_WEBHOOK_URL:
+        required: false
+      SLACK_DEV_DEPLOYMENT_WEBHOOK_URL:
+        required: false
+      BOXLITE_DEV_API_KEY:
+        required: false
+      BOXLITE_DEV_P2_API_KEY:
+        required: false
+      BOXLITE_DEV_P2_READONLY_API_KEY:
+        required: false
     outputs:
       accepted_attempt:
         description: Release deployment attempt that passed cloud acceptance
@@ -43,10 +50,6 @@ on:
         description: Opaque request ID for run attribution
         required: false
         type: string
-      # A choice rather than free text: this value selects the deployment
-      # Environment of every job below, and an Environment carries the secrets
-      # and the reviewers of the stage it names. Enforced across every workflow
-      # by apps/infra/deployment/release-safety.test.ts.
       stage:
         description: Stage to deploy
         required: true
@@ -66,9 +69,7 @@ on:
           - api
           - runner
       ref:
-        description: >-
-          A stable tag (v<X.Y.Z>); a full commit SHA or pull request (#<number>)
-          for dev/stage. Stage builds the commit named by a tag. Empty uses this dispatch's own commit.
+        description: A stable tag (v<X.Y.Z>); a full commit SHA or pull request (#<number>) for dev/stage. Stage builds the commit named by a tag. Empty uses this dispatch's own commit.
         required: false
       apply:
         description: Apply the change. Off previews it and stops.
@@ -80,44 +81,17 @@ on:
         required: true
         type: boolean
         default: false
-
 concurrency:
-  # One of these per stage. The image workflows it calls hold their own groups —
-  # a publish per stage — and the apply is this workflow's own job, so without a
-  # group here two dispatches would interleave their halves rather than queue,
-  # and two applies against one stage would read and write the same checkpoint.
-  group: mdeploy-all-${{ inputs.stage }}
+  group: shadow-mdeploy-all-${{ inputs.stage }}
   cancel-in-progress: false
-
 permissions:
   contents: read
-  id-token: write
-
 env:
-  # gh ships on a runner and is never signed in, and the stage declaration names
-  # github a required provider — so every step that reaches mstage fails on the
-  # session before it fails on anything worth reading. `resolve` needs it for a
-  # second reason: it asks the Releases API whether a version was ever cut.
   GH_TOKEN: ${{ github.token }}
-
 jobs:
-  # What this run is about, resolved once and refused early.
-  #
-  # No Environment. Every refusal here is about this repository's own refs and
-  # releases, so none of it needs a stage's secrets — and a job that bound one
-  # would cost an approval before the run could tell the operator their ref was
-  # a typo.
   resolve:
     name: resolve ${{ inputs.ref || github.sha }}
-    # Dev and stage can exercise candidate workflow branches. Other stages
-    # retain the main-only guard; release refs are checked separately below.
-    if: ${{ github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage' }}
-    # A job-level block replaces the workflow-level one rather than merging with
-    # it, so `contents: read` is restated. `pull-requests: read` is what lets a
-    # request's merge resolve below, and it is granted here rather than at
-    # workflow level so the jobs that reach a cloud role never carry it — this
-    # is the only job that reads pull requests, and it binds no Environment.
-    # The approval notice reads this run's display title through the Actions API.
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-ci' || inputs.stage == 'dev' || inputs.stage == 'stage' }}
     permissions:
       contents: read
       actions: read
@@ -133,11 +107,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-          # Tags, the commits they name, and the branch the containment check
-          # below compares against. A shallow checkout carries none of them.
           fetch-depth: 0
-
-      # Which of the two paths this run is on, and whether this stage allows it.
       - name: Classify the ref
         id: classify
         shell: bash
@@ -179,7 +149,7 @@ jobs:
             exit 1
           fi
           # Release rollouts keep the protected main workflow definition.
-          if [ -n "$version" ] && [ "$GITHUB_REF" != 'refs/heads/main' ]; then
+          if [ -n "$version" ] && [ "$GITHUB_REF" != 'refs/heads/codex/shadow-release-ci' ]; then
             echo "::error title=ref::a release rollout runs from main; $GITHUB_REF can deploy dev from a commit instead"
             exit 1
           fi
@@ -198,32 +168,6 @@ jobs:
             printf 'line=%s\n' "$line"
           } >> "$GITHUB_OUTPUT"
           echo "${STAGE}: ${line}"
-
-      # A pull request becomes the commit it would merge to, not its head.
-      #
-      # `refs/pull/N/merge` is the request's own base plus the request, which
-      # is the tree that would land. A head is the same work missing whatever
-      # its base gained since it was branched, so shaking one out on a stage
-      # answers about a tree nobody will ever merge — and the older the branch,
-      # the further that answer is from the one being asked for.
-      #
-      # It buys no ordering against this file. The definition running here came
-      # from the ref the run was dispatched at, and on the dev path that need
-      # not be the request's base at all; the merge can sit behind it. What the
-      # merge is guaranteed against is the request's base, which is the
-      # comparison that matters for "would this land cleanly and work".
-      # Same API call as `deploy-infra.yml`'s own resolve, which states the
-      # stronger version of this because it runs from main alone.
-      #
-      # The number rather than a SHA: asking the API which PR a commit belongs
-      # to returns nothing for a fork's head, so a SHA-first lookup can never
-      # accept a fork. A known number works for both.
-      #
-      # This replaces the branch check rather than skipping it. A merge commit
-      # sits on no branch, so `--is-ancestor` could only ever refuse it — what
-      # is proved instead is stronger for this purpose: the pull request is open
-      # right now and merges cleanly, and GitHub recomputes the ref whenever
-      # either side moves.
       - name: Resolve a pull request to the commit it would merge
         id: pr
         if: steps.classify.outputs.pr != ''
@@ -284,13 +228,6 @@ jobs:
           head="$(jq -r '.headRefOid' <<<"$pr_json")"
           echo "#$PR ($([ "$fork" = 'true' ] && echo fork || echo same-repo)) head is $head; deploying merge $sha"
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
-
-      # A tag is not a release. The runner binary a release-path deploy installs
-      # is an asset on the GitHub Release — `stack/runner-binary.ts:270` composes
-      # that URL — so a tag that was pushed but never released, or released
-      # before its build finished, resolves to a download that 404s on the host
-      # at boot. Both halves are asked here, where the answer costs one API read
-      # instead of a rolled-out fleet that cannot start.
       - name: Require the release this tag names
         if: steps.classify.outputs.version != ''
         shell: bash
@@ -321,28 +258,12 @@ jobs:
             fi
           done
           echo "$VERSION carries $tarball and its checksum"
-
-      # A tag or a commit becomes a commit here. A pull request took the step
-      # above instead, because its merge commit sits on no branch and this
-      # check could only refuse it.
-      #
-      # Every job below addresses these bytes rather than the name they were
-      # given: a tag that moved between two resolutions would build one commit
-      # and deploy another. `branch` refuses a commit the dispatched branch
-      # does not contain — existing is not enough, because a commit on a
-      # force-pushed branch still resolves and still names bytes.
       - id: ref
         if: steps.classify.outputs.pr == ''
         uses: ./.github/actions/resolve-ref
         with:
           ref: ${{ steps.classify.outputs.candidate }}
           branch: ${{ github.ref_name }}
-
-      # The one commit this run is about, and the image address's tag, composed
-      # once. Exactly one of the two steps above ran, and this is the only place
-      # that has to know which. The release line and the commit line are two
-      # addresses on purpose: prod can be narrowed to released bytes only
-      # because they are not the same name.
       - name: Address the images
         id: tag
         shell: bash
@@ -369,7 +290,6 @@ jobs:
               *) echo '::error title=components::Unsupported artifact selection'; exit 1 ;;
             esac
           fi
-
       - name: Validate release caller and published commit
         if: github.workflow_ref != format('{0}/.github/workflows/mdeploy-all.yml@{1}', github.repository, github.ref)
         env:
@@ -380,8 +300,8 @@ jobs:
           ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mbuild-release.yml@refs/heads/main" &&
-             "$GITHUB_REF" == refs/heads/main && -n "$VERSION" && "$RELEASE_SHA" == "$RESOLVED" ]] ||
+          [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mbuild-release.yml@refs/heads/codex/shadow-release-ci" &&
+             "$GITHUB_REF" == refs/heads/codex/shadow-release-ci && -n "$VERSION" && "$RELEASE_SHA" == "$RESOLVED" ]] ||
             { echo '::error::Release caller or published commit mismatch'; exit 1; }
           case "$STAGE" in
             dev) ;;
@@ -392,7 +312,6 @@ jobs:
               ;;
             *) exit 1 ;;
           esac
-
       - name: Notify dev reviewers
         if: inputs.apply && inputs.stage == 'dev' && !inputs.release_sha
         continue-on-error: true
@@ -401,7 +320,6 @@ jobs:
           DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
           APPROVAL_PHASE: ${{ steps.classify.outputs.version != '' && 'Release deployment approval' || 'Commit preparation approval' }}
         run: node apps/infra/scripts/release-pipeline.mjs approval
-
       - name: Notify release reviewers
         if: inputs.apply && (inputs.stage == 'prod' || (inputs.stage == 'dev' && inputs.release_sha))
         continue-on-error: true
@@ -410,17 +328,15 @@ jobs:
           DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
           APPROVAL_PHASE: Release deployment approval
         run: node apps/infra/scripts/release-pipeline.mjs approval
-
-  # Each commit artifact plans/builds on its own runner; releases use one apply leg.
   plan:
-    name: ${{ matrix.component == 'release' && 'deploy release' || format('plan and build {0}', matrix.component) }} ${{ inputs.stage }}
-    permissions:
-      contents: read
-      id-token: write
-      packages: read
-    needs: [resolve]
-    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
-    environment: ${{ inputs.stage }}
+    name: Simulated deployment (${{ inputs.stage }})
+    permissions: {}
+    needs:
+      - resolve
+    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/codex/shadow-release-ci' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
+    environment:
+      name: ${{ inputs.stage }}
+      deployment: false
     runs-on: ubuntu-latest
     outputs:
       deployment_attempt: ${{ steps.applied.outputs.attempt }}
@@ -430,7 +346,7 @@ jobs:
       matrix:
         component: ${{ fromJSON(needs.resolve.outputs.prepare_components) }}
     concurrency:
-      group: ${{ matrix.component == 'runner' && 'runner-build' || 'mbuild-publish' }}-${{ inputs.stage }}
+      group: shadow-${{ matrix.component == 'runner' && 'runner-build' || 'mbuild-publish' }}-${{ inputs.stage }}
       cancel-in-progress: false
     steps:
       - name: Require acceptance from this attempt
@@ -438,184 +354,18 @@ jobs:
         env:
           ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
         run: test "$ACCEPTED_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-infra
-        with:
-          stages: ${{ inputs.stage }}
-          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-
-      - name: Resolve the stage
-        id: config
-        working-directory: apps/infra
-        run: |
-          set -Eeuo pipefail
-          output="$(npm run --silent mbuild inspect -- --stage "${{ inputs.stage }}")"
-          echo "$output" >> "$GITHUB_OUTPUT"
-
-      - name: Check component deployment support
-        if: inputs.components != 'api+runner' && steps.config.outputs.kind != 'artifact-registry'
-        run: |
-          echo '::error title=components::AWS/SST does not support independent API/Runner deployment; select api+runner'
-          exit 1
-
-      - name: Federate an AWS identity
-        if: steps.config.outputs.kind == 'ecr'
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-${{ inputs.stage }}-github-deploy
-          aws-region: ${{ steps.config.outputs.region }}
-          role-session-name: mdeploy-all-plan-${{ github.run_id }}
-
-      - name: Federate a GCP identity
-        if: steps.config.outputs.kind == 'artifact-registry'
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_DEPLOYER }}
-
-      - name: Install gcloud
-        if: steps.config.outputs.kind == 'artifact-registry'
-        uses: google-github-actions/setup-gcloud@v2
-
-      # Two answers, and every input to them is a read. The runner's answer is
-      # shorter than it used to be: on the release path there is nothing to
-      # decide, because the binary is an asset on the Release and the stack
-      # downloads it at boot rather than this run staging it anywhere.
-      - name: Decide
-        id: plan
-        working-directory: apps/infra
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          IMAGE_TAG: ${{ needs.resolve.outputs.image_tag }}
-          VERSION: ${{ needs.resolve.outputs.version }}
-          LINE: ${{ needs.resolve.outputs.line }}
-          STAGE: ${{ inputs.stage }}
-          COMPONENTS: ${{ matrix.component == 'release' && inputs.components || matrix.component }}
-          GHCR_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -Eeuo pipefail
-          api=skip
-          runner=skip
-
-          case "$COMPONENTS" in
-            *api*)
-              held=0
-              if [ -n "$VERSION" ]; then
-                npm run --silent mbuild verify -- --tag "$SHA" --ghcr "$GHCR_REPOSITORY" --version "$VERSION" || held=$?
-                if [ "$held" -eq 66 ]; then
-                  echo "::error title=missing release::GHCR is missing images for $IMAGE_TAG. Run manually: gh workflow run mbuild-release.yml --repo $GITHUB_REPOSITORY --ref main -f command=publish -f tag=$VERSION"
-                  exit 1
-                elif [ "$held" -ne 0 ]; then
-                  echo "::error title=registry::could not read GHCR images for $IMAGE_TAG; mbuild verify exited $held"
-                  exit 1
-                fi
-                api=release-import
-              else
-                npm run --silent mbuild verify -- --tag "$IMAGE_TAG" --stage "$STAGE" || held=$?
-                if [ "$held" -eq 0 ]; then
-                  echo "$STAGE already holds the images for $IMAGE_TAG"
-                elif [ "$held" -ne 66 ]; then
-                  echo "::error title=registry::could not tell whether $STAGE holds the images for $IMAGE_TAG; mbuild verify exited $held"
-                  exit 1
-                else
-                  api=build
-                fi
-              fi
-              ;;
-          esac
-
-          case "$COMPONENTS" in
-            *runner*)
-              if [ -n "$VERSION" ]; then
-                # Nothing to do here. `stack/runner-binary.ts` addresses the
-                # GitHub Release asset directly, and `resolve` already proved it
-                # is attached.
-                echo "$VERSION installs the runner tarball from its GitHub Release"
-              else
-                # `--check` reads the same answer the build itself would, without
-                # the checkout and the compile behind it. `--tag "$SHA"` because
-                # this job checks out the branch tip and the deploy installs the
-                # commit `resolve` named.
-                staged="$(npm run --silent runner:build -- --stage "$STAGE" --check --tag "$SHA" | sed -n 's/^staged=//p')"
-                if [ "$staged" = 'complete' ]; then
-                  echo "$STAGE already holds a runner binary for $SHA"
-                else
-                  runner=build
-                fi
-              fi
-              ;;
-          esac
-
-          printf 'api=%s\n' "$api" >> "$GITHUB_OUTPUT"
-          printf 'runner=%s\n' "$runner" >> "$GITHUB_OUTPUT"
-          # Written before the jobs it decides, so the reviewer holding this
-          # stage's approval reads what is about to run rather than inferring
-          # it from four job names.
-          {
-            echo "### plan $STAGE · $LINE"
-            echo
-            echo "| | |"
-            echo "|---|---|"
-            echo "| resolved | \`$LINE\` |"
-            echo "| images | \`$IMAGE_TAG\` → \`$api\` |"
-            echo "| runner | \`$runner\` |"
-            echo "| components | \`$COMPONENTS\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build and upload missing images
-        if: steps.plan.outputs.api == 'build'
-        uses: ./.github/actions/mbuild
-        with:
-          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
-          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
-          command: publish
-          tag: ${{ needs.resolve.outputs.sha }}
-          stage: ${{ inputs.stage }}
-
-      - name: Build and upload the missing Runner
-        if: steps.plan.outputs.runner == 'build'
-        uses: ./.github/actions/build-staged-runner
-        with:
-          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
-          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          gcp-deployer: ${{ vars.GCP_DEPLOYER }}
-          stage: ${{ inputs.stage }}
-          sha: ${{ needs.resolve.outputs.sha }}
-
-      - name: Deploy the released version
-        if: needs.resolve.outputs.version != ''
-        uses: ./.github/actions/mdeploy
-        with:
-          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
-          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          gcp-deployer: ${{ vars.GCP_DEPLOYER }}
-          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
-          ref: ${{ inputs.ref }}
-          stage: ${{ inputs.stage }}
-          sha: ${{ needs.resolve.outputs.sha }}
-          version: ${{ needs.resolve.outputs.version }}
-          image-tag: ${{ needs.resolve.outputs.image_tag }}
-          line: ${{ needs.resolve.outputs.line }}
-          components: ${{ inputs.components }}
-          api-route: ${{ steps.plan.outputs.api }}
-          apply: ${{ inputs.apply }}
-          confirm: ${{ inputs.confirm }}
-
+      - name: Simulate release deployment
+        run: 'echo "SHADOW: release deployment"'
       - name: Record the approved dev apply
         id: applied
         if: inputs.release_sha && inputs.stage == 'dev'
         run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-
   notify-deploy:
     name: Notify reviewers of the commit deployment
     continue-on-error: true
-    needs: [resolve, plan]
+    needs:
+      - resolve
+      - plan
     if: inputs.apply && inputs.stage == 'dev' && needs.resolve.outputs.version == '' && needs.plan.result == 'success'
     permissions:
       contents: read
@@ -631,45 +381,27 @@ jobs:
           DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
           APPROVAL_PHASE: Commit deployment approval
         run: node apps/infra/scripts/release-pipeline.mjs approval
-
   deploy:
     name: ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
-    permissions:
-      contents: read
-      id-token: write
-      packages: read
-    needs: [resolve, plan, notify-deploy]
-    if: >-
-      ${{ !cancelled() && needs.resolve.result == 'success' && needs.plan.result == 'success' && needs.resolve.outputs.version == ''
-      && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
-    environment: ${{ inputs.stage }}
+    permissions: {}
+    needs:
+      - resolve
+      - plan
+      - notify-deploy
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.plan.result == 'success' && needs.resolve.outputs.version == '' && (github.ref == 'refs/heads/codex/shadow-release-ci' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
+    environment:
+      name: ${{ inputs.stage }}
+      deployment: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: ./.github/actions/mdeploy
-        with:
-          stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
-          aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
-          gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          gcp-deployer: ${{ vars.GCP_DEPLOYER }}
-          gcp-image-publisher: ${{ vars.GCP_IMAGE_PUBLISHER }}
-          ref: ${{ inputs.ref }}
-          stage: ${{ inputs.stage }}
-          sha: ${{ needs.resolve.outputs.sha }}
-          version: ${{ needs.resolve.outputs.version }}
-          image-tag: ${{ needs.resolve.outputs.image_tag }}
-          line: ${{ needs.resolve.outputs.line }}
-          components: ${{ inputs.components }}
-          api-route: skip
-          apply: ${{ inputs.apply }}
-          confirm: ${{ inputs.confirm }}
-
+      - name: Simulate commit deployment
+        run: 'echo "SHADOW: commit deployment"'
   result:
     name: Notify deployment result
-    needs: [resolve, plan, deploy]
+    needs:
+      - resolve
+      - plan
+      - deploy
     if: ${{ always() && !cancelled() && inputs.apply && needs.resolve.result != 'skipped' && contains(fromJSON('["dev","stage","prod"]'), inputs.stage) }}
     permissions:
       contents: read
@@ -687,10 +419,11 @@ jobs:
           DEPLOY_REF: ${{ inputs.ref || github.sha }}
           DEPLOY_RESULT: ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result == 'success') && 'success' || 'failure' }}
         run: node apps/infra/scripts/release-pipeline.mjs result
-
   e2e:
     name: Dev release E2E
-    needs: [resolve, plan]
+    needs:
+      - resolve
+      - plan
     if: inputs.release_sha && inputs.stage == 'dev'
     permissions:
       contents: read
@@ -701,14 +434,12 @@ jobs:
       release_sha: ${{ needs.resolve.outputs.sha }}
       tag: ${{ inputs.ref }}
       deployment_attempt: ${{ needs.plan.outputs.deployment_attempt || 'missing' }}
-    secrets:
-      BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
-      BOXLITE_DEV_P2_API_KEY: ${{ secrets.BOXLITE_DEV_P2_API_KEY }}
-      BOXLITE_DEV_P2_READONLY_API_KEY: ${{ secrets.BOXLITE_DEV_P2_READONLY_API_KEY }}
-
   report:
     name: Report dev acceptance
-    needs: [resolve, plan, e2e]
+    needs:
+      - resolve
+      - plan
+      - e2e
     if: always() && inputs.release_sha && inputs.stage == 'dev'
     permissions:
       contents: read

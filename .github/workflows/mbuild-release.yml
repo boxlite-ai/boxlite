@@ -1,8 +1,7 @@
-# The rollout workflow owns the cloud Environment and stage concurrency.
+# Simulation for the release workflow.
 name: mbuild-release
-run-name: publish ${{ inputs.tag }} to GHCR${{ !inputs['build-only'] && ' · dev acceptance · prod review' || '' }}
-
-on:
+run-name: '[SHADOW] publish ${{ inputs.tag }} to GHCR${{ !inputs[''build-only''] && '' · dev acceptance · prod review'' || '''' }}'
+'on':
   workflow_dispatch:
     inputs:
       command:
@@ -10,9 +9,10 @@ on:
         required: true
         default: publish
         type: choice
-        options: [publish]
+        options:
+          - publish
       tag:
-        description: 'Release tag v<X.Y.Z>, naming a commit on main'
+        description: Release tag v<X.Y.Z>, naming a commit on main
         required: true
         type: string
       build-only:
@@ -20,21 +20,17 @@ on:
         required: true
         default: false
         type: boolean
-
 concurrency:
-  group: mbuild-release-${{ inputs.tag }}
+  group: shadow-mbuild-release-${{ inputs.tag }}
   cancel-in-progress: false
-
 permissions:
   contents: read
-
 env:
   GH_TOKEN: ${{ github.token }}
-
 jobs:
   resolve:
     name: resolve ${{ inputs.tag }}
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-ci' }}
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
@@ -43,10 +39,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-          # Tags and the commits they name, and main, which the containment
-          # check below compares against. A shallow checkout carries neither.
           fetch-depth: 0
-
       - name: Require a released version
         id: version
         shell: bash
@@ -81,17 +74,11 @@ jobs:
             exit 1
           fi
           printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
-
-      # `branch` is what refuses a tag whose commit main does not contain — the
-      # release's bytes and the branch that produces them, checked together.
       - id: ref
         uses: ./.github/actions/resolve-ref
         with:
           ref: ${{ steps.version.outputs.ref }}
           branch: ${{ github.ref_name }}
-
-      # Read out of the released commit with `git show` rather than a second
-      # checkout: one file is wanted, and the working tree is still main's.
       - name: Read the artifacts this release declares
         id: artifacts
         shell: bash
@@ -107,93 +94,26 @@ jobs:
           fi
           echo "names=$names" >> "$GITHUB_OUTPUT"
           echo "$SHA declares $names"
-
   publish:
     name: publish ${{ inputs.tag }} · ${{ matrix.artifact }}
-    needs: [resolve]
-    if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/main' }}
+    needs:
+      - resolve
+    if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/codex/shadow-release-ci' }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    permissions: {}
     strategy:
       fail-fast: false
       matrix:
         artifact: ${{ fromJSON(needs.resolve.outputs.artifacts) }}
-    env:
-      GHCR_USERNAME: ${{ github.actor }}
-      GHCR_TOKEN: ${{ github.token }}
     steps:
-      # Keep current publication tooling; old releases need only their build context.
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          ref: ${{ needs.resolve.outputs.sha }}
-          path: release-source
-      - uses: ./.github/actions/setup-infra
-
-      - name: Keep registry credentials out of HOME
-        run: |
-          set -Eeuo pipefail
-          install -d -m 700 "$RUNNER_TEMP/docker"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
-
-      - name: Build and upload
-        working-directory: apps/infra
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          TAG: ${{ inputs.tag }}
-          ARTIFACT: ${{ matrix.artifact }}
-          GHCR_REPOSITORY: ${{ github.repository }}
-          MSTAGE_ENV_CONFIG: ${{ github.workspace }}/release-source/apps/infra/mstage.env.json
-        run: |
-          set -Eeuo pipefail
-          for attempt in 1 2 3; do
-            npm run --silent mbuild publish -- --tag "$SHA" --ghcr "$GHCR_REPOSITORY" --artifact "$ARTIFACT" --version "$TAG" && exit 0
-            status=$?
-            if [ "$status" -eq 65 ]; then
-              echo "::error title=publish::$ARTIFACT at $SHA failed the dependency audit; details are above"
-              exit 1
-            fi
-            if [ "$status" -eq 78 ]; then
-              echo "::error title=publish::$ARTIFACT at $SHA was refused by the image scan gate; findings are above"
-              exit 1
-            fi
-            echo "Publish failed (attempt $attempt/3, exit $status); retrying in $((attempt * 15))s"
-            sleep $((attempt * 15))
-          done
-          echo "::error title=publish::Could not publish $ARTIFACT for $TAG to GHCR after 3 attempts"
-          exit 1
-
-      - name: Report
-        if: always()
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          TAG: ${{ inputs.tag }}
-          ARTIFACT: ${{ matrix.artifact }}
-          REPOSITORY: ${{ github.repository }}
-          RESULT: ${{ job.status }}
-        run: |
-          set -Eeuo pipefail
-          {
-            echo "### mbuild-release $TAG · $ARTIFACT"
-            echo
-            echo "| field | value |"
-            echo "|---|---|"
-            echo "| image | ghcr.io/${REPOSITORY,,}/$ARTIFACT:$TAG-$SHA |"
-            echo "| result | $RESULT |"
-            echo
-            echo 'Manifest digests are printed by the publication step.'
-            echo 'Image scanning runs after import into the deployment stage.'
-          } >> "$GITHUB_STEP_SUMMARY"
-
+      - name: Simulate GHCR image publication
+        run: 'echo "SHADOW: GHCR image publication"'
   check:
     name: Check release assets
-    needs: [resolve, publish]
-    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
+    needs:
+      - resolve
+      - publish
+    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-ci' }}
     runs-on: ubuntu-latest
     timeout-minutes: 185
     steps:
@@ -208,17 +128,16 @@ jobs:
           TAG: ${{ inputs.tag }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: node apps/infra/scripts/release-pipeline.mjs assets
-
   dev:
     name: Dev deployment and acceptance
-    needs: [resolve, check]
-    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
-    permissions: &rollout-permissions
+    needs:
+      - resolve
+      - check
+    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-ci' }}
+    permissions:
       contents: read
       actions: read
       pull-requests: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/mdeploy-all.yml
     with:
       stage: dev
@@ -229,15 +148,16 @@ jobs:
       confirm: true
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-      BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
-      BOXLITE_DEV_P2_API_KEY: ${{ secrets.BOXLITE_DEV_P2_API_KEY }}
-      BOXLITE_DEV_P2_READONLY_API_KEY: ${{ secrets.BOXLITE_DEV_P2_READONLY_API_KEY }}
-
   prod:
     name: Production deployment
-    needs: [resolve, dev]
-    if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
-    permissions: *rollout-permissions
+    needs:
+      - resolve
+      - dev
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-ci' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     uses: ./.github/workflows/mdeploy-all.yml
     with:
       stage: prod
@@ -249,11 +169,14 @@ jobs:
       confirm: true
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
   report:
     name: Report failed release checks
-    needs: [resolve, publish, check, dev]
-    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' && needs.dev.result == 'skipped' }}
+    needs:
+      - resolve
+      - publish
+      - check
+      - dev
+    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-ci' && needs.dev.result == 'skipped' }}
     permissions:
       contents: read
       actions: read

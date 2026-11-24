@@ -223,6 +223,8 @@ async function sendRunSlack({ payload, environment, phase }) {
     ['Phase', phase],
   ].map(([label, value]) => ({ type: 'plain_text', text: label + '\n' + value }))
   const [header, ...details] = payload.blocks
+  payload.text = '[SHADOW] ' + payload.text
+  header.text.text = '[SHADOW] ' + header.text.text
   await sendSlack(webhook, { ...payload, blocks: [header, { type: 'section', fields }, ...details] })
 }
 
