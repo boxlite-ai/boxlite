@@ -45,10 +45,141 @@ const EXECUTABLE_MODE: u32 = 0o755;
 /// Let everyone read firmware, with writes limited to the owner and no execute bits.
 #[cfg(unix)]
 const FIRMWARE_MODE: u32 = 0o644;
+/// Synthetic read-only directory inside Bubblewrap for symlinked runtime layouts.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) const BWRAP_SANDBOX_SHIM_DIR: &str = "/run/boxlite-shim";
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static MEMO: OnceLock<Mutex<HashMap<PathBuf, Arc<MemoEntry>>>> = OnceLock::new();
 static LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedRuntimeFile {
+    pub(crate) canonical_source: PathBuf,
+    pub(crate) logical_name: OsString,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ResolvedRuntimeFiles {
+    pub(crate) files: Vec<ResolvedRuntimeFile>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) has_symlink: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) struct BwrapShimMountPlan {
+    pub(crate) ro_binds: Vec<(PathBuf, PathBuf)>,
+    pub(crate) executable: PathBuf,
+    pub(crate) ld_library_path: String,
+}
+
+fn shim_parent_dir(shim: &Path) -> &Path {
+    shim.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+}
+
+fn is_firmware_filename(filename: &OsStr, binary_name: &OsStr) -> bool {
+    filename != binary_name && filename.as_encoded_bytes().starts_with(b"libkrunfw.")
+}
+
+/// Resolve `binary` and adjacent `libkrunfw.*` files in its directory.
+///
+/// Tracks each entry's canonical file path alongside its logical filename in
+/// `binary`'s directory, plus whether `binary` or any `libkrunfw.*` entry is a
+/// symlink. Non-existent or non-file binaries return an empty result.
+pub(crate) fn resolve_runtime_files(binary: &Path) -> ResolvedRuntimeFiles {
+    let Some(binary_name) = binary.file_name().filter(|name| !name.is_empty()) else {
+        return ResolvedRuntimeFiles::default();
+    };
+    let dir = shim_parent_dir(binary);
+
+    let Ok(link_meta) = fs::symlink_metadata(binary) else {
+        return ResolvedRuntimeFiles::default();
+    };
+    let Ok(meta) = fs::metadata(binary) else {
+        return ResolvedRuntimeFiles::default();
+    };
+    if !meta.is_file() {
+        return ResolvedRuntimeFiles::default();
+    }
+
+    let mut has_symlink = link_meta.file_type().is_symlink();
+    let canonical_binary = binary
+        .canonicalize()
+        .unwrap_or_else(|_| binary.to_path_buf());
+    let mut files = vec![ResolvedRuntimeFile {
+        canonical_source: canonical_binary,
+        logical_name: binary_name.to_os_string(),
+    }];
+
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let filename = entry.file_name();
+            if !is_firmware_filename(&filename, binary_name) {
+                continue;
+            }
+            let entry_path = entry.path();
+            if fs::metadata(&entry_path).is_ok_and(|m| m.is_file()) {
+                if fs::symlink_metadata(&entry_path).is_ok_and(|lm| lm.file_type().is_symlink()) {
+                    has_symlink = true;
+                }
+                let canonical = entry_path.canonicalize().unwrap_or(entry_path);
+                files.push(ResolvedRuntimeFile {
+                    canonical_source: canonical,
+                    logical_name: filename,
+                });
+            }
+        }
+    }
+
+    files.sort_unstable_by(|a, b| a.logical_name.cmp(&b.logical_name));
+    ResolvedRuntimeFiles { files, has_symlink }
+}
+
+/// Plan Bubblewrap read-only mounts, executable path, and `LD_LIBRARY_PATH` for `binary`.
+///
+/// When `binary` or any adjacent `libkrunfw.*` entry is a symlink (e.g., an
+/// unstaged `target/<profile>/runtime/` fallback), resolved targets are mapped
+/// into [`BWRAP_SANDBOX_SHIM_DIR`] so relative symlinks do not dangle or
+/// collide with directory mounts inside the mount namespace. Normal staged
+/// directories keep their direct paths with no extra mounts.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn plan_bwrap_shim_mounts(binary: &Path) -> BwrapShimMountPlan {
+    let shim_dir = binary
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let resolved = resolve_runtime_files(binary);
+    if resolved.has_symlink
+        && let Some(binary_name) = binary.file_name().filter(|name| !name.is_empty())
+    {
+        let sandbox_dir = Path::new(BWRAP_SANDBOX_SHIM_DIR);
+        let ro_binds = resolved
+            .files
+            .into_iter()
+            .map(|file| (file.canonical_source, sandbox_dir.join(file.logical_name)))
+            .collect();
+        let ld_library_path = if shim_dir.is_empty() {
+            BWRAP_SANDBOX_SHIM_DIR.to_string()
+        } else {
+            format!("{BWRAP_SANDBOX_SHIM_DIR}:{shim_dir}")
+        };
+        return BwrapShimMountPlan {
+            ro_binds,
+            executable: sandbox_dir.join(binary_name),
+            ld_library_path,
+        };
+    }
+
+    BwrapShimMountPlan {
+        ro_binds: Vec::new(),
+        executable: binary.to_path_buf(),
+        ld_library_path: shim_dir,
+    }
+}
 
 #[derive(Clone, PartialEq, Eq)]
 struct FileFingerprint {
@@ -110,7 +241,7 @@ fn collect_sources(shim: &Path, dir: &Path, name: &OsStr) -> io::Result<Vec<File
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let filename = entry.file_name();
-        if filename == name || !filename.as_encoded_bytes().starts_with(b"libkrunfw.") {
+        if !is_firmware_filename(&filename, name) {
             continue;
         }
         match fs::metadata(entry.path()) {
@@ -222,10 +353,7 @@ fn stage(shim_path: &Path, cache_dir: &Path) -> io::Result<PathBuf> {
         .file_name()
         .filter(|name| !name.is_empty() && *name != STAMP)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid shim filename"))?;
-    let dir = shim_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+    let dir = shim_parent_dir(shim_path);
     let files = collect_sources(shim_path, dir, name)?;
     let digest = digest_at(shim_path, dir, &files, SystemTime::now())?;
     let target = cache_dir.join(&digest);
@@ -512,10 +640,16 @@ mod tests {
         assert!(Arc::ptr_eq(&first_entry, &entry()));
 
         let mtime = files[0].mtime;
-        fs::write(&shim, b"edit").unwrap();
-        set_file_mtime(&shim, mtime).unwrap();
+        let prev_inode = files[0].inode;
+        // Replace atomically via rename so the inode changes deterministically even
+        // when coarse ctime ticks would otherwise leave the metadata fingerprint equal.
+        let replacement = dir.join("boxlite-shim.new");
+        fs::write(&replacement, b"edit").unwrap();
+        set_file_mtime(&replacement, mtime).unwrap();
+        fs::rename(&replacement, &shim).unwrap();
         let files = collect_sources(&shim, dir, name).unwrap();
         assert_eq!(files[0].mtime, mtime);
+        assert_ne!(files[0].inode, prev_inode);
         let now = SystemTime::now() + 2 * RACY_STAT_WINDOW;
         let updated = digest_at(&shim, dir, &files, now).unwrap();
         assert_ne!(updated, first);
@@ -729,5 +863,71 @@ mod tests {
             assert!(staged.is_file());
             assert_eq!(fs::read_dir(cache).unwrap().count(), 1);
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn plan_bwrap_shim_mounts_remaps_symlinked_runtime_layout() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let target_dir = root.path().join("target/debug");
+        let runtime_dir = target_dir.join("runtime");
+        let real_out = target_dir.join("real-out");
+        let out_link = target_dir.join("build/boxlite-hash/out");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::create_dir_all(&real_out).unwrap();
+        std::fs::create_dir_all(out_link.parent().unwrap()).unwrap();
+        symlink(&real_out, &out_link).unwrap();
+
+        let real_shim = target_dir.join("boxlite-shim");
+        let real_fw = real_out.join("libkrunfw.so.5.4.0");
+        fs::write(&real_shim, b"shim").unwrap();
+        fs::write(&real_fw, b"fw").unwrap();
+
+        let runtime_shim = runtime_dir.join("boxlite-shim");
+        let fw_hop1 = runtime_dir.join(".libkrunfw-hop");
+        let runtime_fw = runtime_dir.join("libkrunfw.so.5");
+        symlink("../boxlite-shim", &runtime_shim).unwrap();
+        symlink("../build/boxlite-hash/out/libkrunfw.so.5.4.0", &fw_hop1).unwrap();
+        symlink(".libkrunfw-hop", &runtime_fw).unwrap();
+
+        let plan = plan_bwrap_shim_mounts(&runtime_shim);
+        assert_eq!(
+            plan.executable,
+            Path::new(BWRAP_SANDBOX_SHIM_DIR).join("boxlite-shim")
+        );
+        assert_eq!(
+            plan.ld_library_path,
+            format!("{BWRAP_SANDBOX_SHIM_DIR}:{}", runtime_dir.display())
+        );
+        assert_eq!(
+            plan.ro_binds,
+            vec![
+                (
+                    real_shim.canonicalize().unwrap(),
+                    Path::new(BWRAP_SANDBOX_SHIM_DIR).join("boxlite-shim")
+                ),
+                (
+                    real_fw.canonicalize().unwrap(),
+                    Path::new(BWRAP_SANDBOX_SHIM_DIR).join("libkrunfw.so.5")
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_bwrap_shim_mounts_keeps_staged_non_symlink_paths_direct() {
+        let (_root, shim, cache) = fixture();
+        fs::write(shim.with_file_name("libkrunfw.so.5"), b"fw").unwrap();
+        let staged = stage_shim(&shim, &cache).unwrap();
+
+        let plan = plan_bwrap_shim_mounts(&staged);
+        assert!(plan.ro_binds.is_empty());
+        assert_eq!(plan.executable, staged);
+        assert_eq!(
+            plan.ld_library_path,
+            staged.parent().unwrap().to_string_lossy()
+        );
     }
 }

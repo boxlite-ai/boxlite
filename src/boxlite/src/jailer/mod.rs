@@ -479,9 +479,13 @@ impl<S: Sandbox> Jail for Jailer<S> {
             {
                 tracing::warn!(path = %bin_dir.display(), error = %err, "Failed to remove legacy shim directory");
             }
+            let mut staged_ok = false;
             if let Some(cache_dir) = self.resolve_shim_cache_dir() {
                 match shim_cache::stage_shim(binary, &cache_dir) {
-                    Ok(staged) => effective_binary = staged,
+                    Ok(staged) => {
+                        effective_binary = staged;
+                        staged_ok = true;
+                    }
                     Err(err) => {
                         tracing::warn!(error = %err, "Failed to stage shim, using original")
                     }
@@ -492,7 +496,7 @@ impl<S: Sandbox> Jail for Jailer<S> {
             }
 
             // Keep the original library directory visible to the dynamic linker.
-            let original_dir = binary.parent();
+            let original_dir = binary.parent().filter(|p| !p.as_os_str().is_empty());
             let effective_dir = effective_binary
                 .parent()
                 .filter(|p| p.exists())
@@ -507,6 +511,27 @@ impl<S: Sandbox> Jail for Jailer<S> {
                         path: dir.to_path_buf(),
                         writable: false,
                     });
+                }
+            }
+
+            // On fallback (staging failed or no cache dir), a symlinked runtime/
+            // layout points outside effective_dir/original_dir; grant read-only
+            // single-file access to each resolved target without exposing sibling files.
+            if !staged_ok {
+                for file in shim_cache::resolve_runtime_files(&effective_binary).files {
+                    let inside_granted_dir = original_dir
+                        .is_some_and(|dir| file.canonical_source.starts_with(dir))
+                        || effective_dir
+                            .as_deref()
+                            .is_some_and(|dir| file.canonical_source.starts_with(dir));
+                    if !inside_granted_dir
+                        && !ctx.paths.iter().any(|pa| pa.path == file.canonical_source)
+                    {
+                        ctx.paths.push(PathAccess {
+                            path: file.canonical_source,
+                            writable: false,
+                        });
+                    }
                 }
             }
         }

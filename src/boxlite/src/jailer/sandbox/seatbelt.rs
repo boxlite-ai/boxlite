@@ -2227,4 +2227,89 @@ mod tests {
             }
         }
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_fallback_symlinked_runtime_execs_and_denies_sibling() {
+        use crate::jailer::Jail;
+        use crate::jailer::builder::JailerBuilder;
+        use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        if !is_sandbox_available() {
+            eprintln!("Skipping: sandbox-exec not available");
+            return;
+        }
+
+        let root = tempfile::tempdir_in("/tmp").expect("tempdir in /tmp");
+        let target_dir = root.path().join("target/debug");
+        let runtime_dir = target_dir.join("runtime");
+        let build_out = target_dir.join("build/boxlite-hash/out/runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::create_dir_all(&build_out).unwrap();
+
+        let real_shim = target_dir.join("boxlite-shim");
+        std::fs::write(
+            &real_shim,
+            "#!/bin/sh\nif [ \"$#\" -gt 0 ]; then\n  /bin/cat \"$1\"\nelse\n  /bin/cat \"${0%/*}/libkrunfw.5.dylib\"\nfi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&real_shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let real_fw = build_out.join("libkrunfw.5.dylib");
+        std::fs::write(&real_fw, b"libkrunfw-fallback-ok\n").unwrap();
+
+        let sibling = target_dir.join("sibling.txt");
+        std::fs::write(&sibling, b"forbidden-sibling\n").unwrap();
+
+        let runtime_shim = runtime_dir.join("boxlite-shim");
+        let runtime_fw = runtime_dir.join("libkrunfw.5.dylib");
+        symlink("../boxlite-shim", &runtime_shim).unwrap();
+        symlink(
+            "../build/boxlite-hash/out/runtime/libkrunfw.5.dylib",
+            &runtime_fw,
+        )
+        .unwrap();
+
+        let layout = BoxFilesystemLayout::new(
+            root.path().join("boxes/test-box"),
+            FsLayoutConfig::without_bind_mount(),
+            false,
+        );
+        let jail = JailerBuilder::new()
+            .with_box_id("seatbelt-fallback-symlink")
+            .with_layout(layout)
+            .with_shim_cache_dir(&runtime_shim)
+            .with_additional_path_access(vec![PathAccess {
+                path: PathBuf::from("/bin"),
+                writable: false,
+            }])
+            .with_jailer_enabled(true)
+            .build_with(SeatbeltSandbox::new())
+            .unwrap();
+
+        let mut ok_cmd = jail.command(&runtime_shim, &[]);
+        let ok_out = ok_cmd.output().expect("run sandboxed symlinked shim");
+        assert!(
+            ok_out.status.success(),
+            "fallback symlinked runtime/ shim + libkrunfw.5.dylib must execute/read in Seatbelt: stderr={}",
+            String::from_utf8_lossy(&ok_out.stderr)
+        );
+        assert_eq!(ok_out.stdout, b"libkrunfw-fallback-ok\n");
+
+        let mut deny_cmd = jail.command(&runtime_shim, &[sibling.to_string_lossy().into_owned()]);
+        let deny_out = deny_cmd
+            .output()
+            .expect("run sandboxed shim against sibling");
+        assert!(
+            !deny_out.status.success(),
+            "reading ../sibling.txt must be denied by Seatbelt"
+        );
+        assert!(
+            String::from_utf8_lossy(&deny_out.stderr).contains("Operation not permitted"),
+            "expected Seatbelt denial for ../sibling.txt, got: {}",
+            String::from_utf8_lossy(&deny_out.stderr)
+        );
+        assert!(deny_out.stdout.is_empty());
+    }
 }

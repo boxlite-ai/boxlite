@@ -106,6 +106,93 @@ mod tests {
         }));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn command_fallback_symlinked_runtime_grants_only_resolved_targets() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().unwrap();
+        let target_root = home.path().join("target-debug");
+        let build_out = target_root.join("build/boxlite-hash/out/runtime");
+        let runtime_dir = target_root.join("runtime");
+        fs::create_dir_all(&build_out).unwrap();
+        fs::create_dir_all(&runtime_dir).unwrap();
+
+        let real_shim = target_root.join("boxlite-shim");
+        let real_fw = build_out.join("libkrunfw.5.dylib");
+        let sibling_top = target_root.join("sibling.txt");
+        let sibling_fw = build_out.join("sibling-fw.txt");
+        fs::write(&real_shim, b"shim").unwrap();
+        fs::write(&real_fw, b"fw").unwrap();
+        fs::write(&sibling_top, b"secret").unwrap();
+        fs::write(&sibling_fw, b"secret-fw").unwrap();
+
+        let runtime_shim = runtime_dir.join("boxlite-shim");
+        let runtime_fw = runtime_dir.join("libkrunfw.5.dylib");
+        let runtime_fw_alias = runtime_dir.join("libkrunfw.dylib");
+        symlink("../boxlite-shim", &runtime_shim).unwrap();
+        symlink(
+            "../build/boxlite-hash/out/runtime/libkrunfw.5.dylib",
+            &runtime_fw,
+        )
+        .unwrap();
+        symlink("libkrunfw.5.dylib", &runtime_fw_alias).unwrap();
+
+        let layout = test_layout(home.path().join("boxes/test-box"));
+        let staging_err_jail = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(layout)
+            .with_shim_cache_dir(&runtime_shim)
+            .with_jailer_enabled(true)
+            .build_with(RecordingSandbox::default())
+            .unwrap();
+        let no_cache_layout = test_layout(home.path().join("standalone-box"));
+        let no_cache_jail = JailerBuilder::new()
+            .with_box_id("test-box-no-cache")
+            .with_layout(no_cache_layout)
+            .with_jailer_enabled(true)
+            .build_with(RecordingSandbox::default())
+            .unwrap();
+
+        let canonical_shim = real_shim.canonicalize().unwrap();
+        let canonical_fw = real_fw.canonicalize().unwrap();
+        let canonical_root = target_root.canonicalize().unwrap();
+        let canonical_build_out = build_out.canonicalize().unwrap();
+
+        for jail in [&staging_err_jail, &no_cache_jail] {
+            let cmd = jail.command(&runtime_shim, &[]);
+            assert_eq!(cmd.get_program(), runtime_shim);
+
+            let grants = jail.sandbox.0.lock().unwrap();
+            for resolved in [&canonical_shim, &canonical_fw] {
+                let matches: Vec<_> = grants.iter().filter(|g| &g.path == resolved).collect();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "resolved file {} must be granted exactly once (got {:?})",
+                    resolved.display(),
+                    grants
+                );
+                assert!(!matches[0].writable);
+            }
+
+            for forbidden in [
+                target_root.as_path(),
+                canonical_root.as_path(),
+                build_out.as_path(),
+                canonical_build_out.as_path(),
+                sibling_top.as_path(),
+                sibling_fw.as_path(),
+            ] {
+                assert!(
+                    grants.iter().all(|g| g.path != forbidden),
+                    "fallback must not expose {}",
+                    forbidden.display()
+                );
+            }
+        }
+    }
+
     #[test]
     fn command_jailer_disabled_skips_staging_and_leaves_legacy_untouched() {
         let (home, binary, layout, builder) = staging_fixture();

@@ -141,7 +141,11 @@ The jailer stages the shim and adjacent `libkrunfw.*` files in
 `<home>/shims/<digest>/`. Each jailed shim receives read-only access to its
 digest directory. The jailer also grants access to the original binary's
 library directory for dynamic linking. If staging fails, the jailer runs the
-installed shim inside the sandbox.
+installed shim inside the sandbox; when that fallback binary or adjacent
+`libkrunfw.*` entries are symlinks (such as `target/<profile>/runtime/`), the
+jailer grants single-file read-only access to each resolved target without
+exposing parent directories, and Bubblewrap mounts those resolved files into
+`/run/boxlite-shim` so relative symlinks do not dangle.
 Custom macOS `sandbox_profile` policies must grant read access to `<home>/shims/`.
 
 Boxes under the same `BOXLITE_HOME` share `boxlite-shim` and `libkrunfw.*`
