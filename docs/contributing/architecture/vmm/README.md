@@ -471,8 +471,12 @@ worker slot synchronously.
     buffered network traffic.
 - **The `run()` thread.**
   - It waits on one `EventLoop` poller for control wakeups, stop requests,
-    vCPU outcomes and device failures. The `RECHECK` interval is one second,
-    so the mailbox and terminal queue are revisited even if a wakeup is lost.
+    vCPU outcomes and device failures. During vCPU setup, the same loop
+    processes control requests and retries kicks. The last ready vCPU wakes
+    the poller; the loop checks terminal events and processes pending pause
+    requests before opening the start gate. The `RECHECK` interval is one
+    second, so the mailbox and terminal queue are revisited even if a wakeup
+    is lost.
   - The poller is `mio`, which uses epoll on Linux and kqueue on macOS and is
     already in `Cargo.lock` through tokio. rust-vmm's event-manager and crosvm's
     `WaitContext` are epoll-only.
@@ -642,8 +646,9 @@ import returns a device-less VM in `Created`.
 2. Each vCPU owner creates its vCPU, calls `restore_state` with the saved CPU
    state, and calls `notify_guest_stopped` to notify the guest clock. It then
    waits at the start gate.
-3. When every vCPU is ready, the driver calls `restore_after_vcpus` to
-   restore the IRQ chips and PIT. Only success opens the gate for guest entry.
+3. The driver handles queued terminal events first. Once every vCPU is ready,
+   if the stop latch is clear, the driver calls `restore_after_vcpus` to restore
+   the IRQ chips and PIT. Only success opens the gate for guest entry.
 
 A setup failure aborts guest entry. The driver joins every started vCPU and
 publishes `Exited`. A `control.pause()` reservation made in `Created` keeps

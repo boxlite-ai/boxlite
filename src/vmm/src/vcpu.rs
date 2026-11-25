@@ -48,10 +48,12 @@ struct StartState {
 
 #[cfg(target_arch = "x86_64")]
 impl StartGate {
-    fn arrive_and_wait(&self) -> bool {
+    fn arrive_and_wait(&self, count: u8, sender: &EventSender) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.ready += 1;
-        self.changed.notify_all();
+        if state.ready >= count && !state.aborted {
+            sender.wake();
+        }
         let state = self
             .changed
             .wait_while(state, |state| !state.go && !state.aborted)
@@ -59,13 +61,9 @@ impl StartGate {
         !state.aborted
     }
 
-    pub(crate) fn wait_ready(&self, count: u8) -> bool {
+    pub(crate) fn is_ready(&self, count: u8) -> bool {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let state = self
-            .changed
-            .wait_while(state, |state| state.ready < count && !state.aborted)
-            .unwrap_or_else(PoisonError::into_inner);
-        !state.aborted
+        state.ready >= count && !state.aborted
     }
 
     pub(crate) fn release(&self) {
@@ -111,7 +109,7 @@ impl<H: X86Vm> Workers<'_, H> {
     pub(crate) fn run(&self, id: u8) {
         match catch_panic(id, || {
             let mut vcpu = self.configure(id)?;
-            if !self.gate.arrive_and_wait() {
+            if !self.gate.arrive_and_wait(self.vcpu_count, self.sender) {
                 return Ok(None);
             }
             self.run_guest(&mut vcpu, id)

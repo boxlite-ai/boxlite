@@ -692,8 +692,11 @@ nothing mapped.
 1. It starts one scoped thread per vCPU, named `vcpuN`. On boot each thread
    sets its CPUID and boot MSRs, and vCPU 0 also sets the entry registers.
    On restore the thread installs the saved state. Each waits at the start
-   gate until the driver allows guest entry. If configuration fails or a
-   thread fails to start, the failure sets the stop latch and aborts the gate.
+   gate until the driver allows guest entry. The driver handles pause, stop,
+   and kick retries in the event loop during setup. The last ready vCPU wakes
+   the loop, and the driver handles queued terminal events and pending pause
+   requests before opening the gate. A spawn or setup failure sets the stop
+   latch and aborts the gate.
 2. Before each guest entry, the worker calls `checkpoint` and checks the stop
    latch. To park, it calls `complete_pending_io` and dispatches each
    `Ok(IoCompletion::Exit(exit))` until completion returns `Ok(IoCompletion::Done)`.
@@ -793,10 +796,10 @@ creation, and RAM registration errors are returned by the constructor.
 
 During `vm.run()`, the driver calls `restore_before_vcpus` before starting
 the vCPU threads. Each vCPU calls `restore_state` and `notify_guest_stopped`
-on its owning thread. Once all vCPUs are ready at the start gate, the driver
-calls `restore_after_vcpus`. Only success opens the gate. A setup error
-keeps the guest from entering and `run()` returns the error after joining
-every started vCPU and publishing `Exited`.
+on its owning thread. The event loop calls `restore_after_vcpus` when all vCPUs
+are ready at the start gate and no stop is pending. Only success opens the gate.
+A setup error keeps the guest from entering, and `run()` returns the error
+after joining every started vCPU and publishing `Exited`.
 
 To inspect or re-export the restored state before guest entry, reserve a
 pause with `control.pause()` while the VM is in `Created`. Start `vm.run()`

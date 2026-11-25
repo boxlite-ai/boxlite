@@ -375,6 +375,43 @@ fn restore_installs_platform_on_driver_and_vcpus_on_their_owners_before_guest_en
 }
 
 #[test]
+fn pause_during_restore_startup_parks_vcpus_before_guest_entry() {
+    let (backend, observed) = backend(Failure::None);
+    let (release, hold) = mpsc::channel();
+    *backend.hold_last.lock().unwrap() = Some(hold);
+    let entries = backend.inner.entries();
+    let mut vm = Vm::with_restored_ram(ram(), machine(COUNT), || Ok(backend)).unwrap();
+
+    drive(&mut vm, false, |control, _| {
+        while !matches!(
+            observed.recv_timeout(WAIT).unwrap(),
+            Install::Cpu(id, _) if id == u32::from(COUNT - 1)
+        ) {}
+        thread::scope(|scope| {
+            let pause = scope.spawn(|| control.pause());
+            // Observe acceptance before the last vCPU's setup hold can time out.
+            let deadline = Instant::now() + WAIT / 2;
+            while control.status() == VmStatus::Running && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let status = control.status();
+            release.send(()).unwrap();
+            assert_eq!(
+                status,
+                VmStatus::Pausing,
+                "pause must be accepted during setup"
+            );
+            pause.join().unwrap().unwrap();
+        });
+
+        assert_eq!(control.status(), VmStatus::Paused);
+        assert!(entries.lock().unwrap().is_empty());
+        control.resume().unwrap();
+        while !matches!(observed.recv_timeout(WAIT).unwrap(), Install::Entry) {}
+    });
+}
+
+#[test]
 fn stop_before_all_vcpus_are_ready_skips_final_platform_restore_and_guest_entry() {
     let (backend, observed) = backend(Failure::None);
     let (release, hold) = mpsc::channel();

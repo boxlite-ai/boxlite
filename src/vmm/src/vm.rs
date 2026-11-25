@@ -462,23 +462,8 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     break;
                 }
             }
-            if gate.wait_ready(vcpus.vcpu_count) && !vcpus.sender.is_stopping() {
-                let installed = match vcpus.startup {
-                    Startup::Boot(_) => Ok(()),
-                    #[cfg(target_os = "linux")]
-                    Startup::Restore(machine) => {
-                        install_platform(|| host_vm.restore_after_vcpus(&machine.platform))
-                    }
-                };
-                match installed {
-                    Ok(()) => gate.release(),
-                    Err(error) => {
-                        vcpus.sender.send(Event::VcpuFailed(error));
-                        gate.abort();
-                    }
-                }
-            }
             let mut pending_kicks = 0u64;
+            let mut gate_settled = false;
             loop {
                 let wait = if pending_kicks != 0 {
                     KICK_RETRY
@@ -512,6 +497,25 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                                     break;
                                 }
                             }
+                        }
+                    }
+                }
+                // Drive a pending pause before opening the gate so workers
+                // see it at their first checkpoint.
+                if !gate_settled && gate.is_ready(vcpus.vcpu_count) && !vcpus.sender.is_stopping() {
+                    gate_settled = true;
+                    let installed = match vcpus.startup {
+                        Startup::Boot(_) => Ok(()),
+                        #[cfg(target_os = "linux")]
+                        Startup::Restore(machine) => {
+                            install_platform(|| host_vm.restore_after_vcpus(&machine.platform))
+                        }
+                    };
+                    match installed {
+                        Ok(()) => gate.release(),
+                        Err(error) => {
+                            vcpus.sender.send(Event::VcpuFailed(error));
+                            gate.abort();
                         }
                     }
                 }
