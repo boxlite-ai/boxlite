@@ -459,35 +459,31 @@ fn run_reports_install_failures_wakes_pause_waiters_and_joins_every_started_vcpu
         let backing = Arc::downgrade(ram.boot_memory());
         let mut vm = Vm::with_restored_ram(ram, machine(COUNT), || Ok(backend)).unwrap();
         let control = vm.control();
-        let error = if injected == Failure::AfterVcpus {
-            vm.run().unwrap_err()
-        } else {
-            control.pause().unwrap();
-            thread::scope(|scope| {
-                let (ready, started) = mpsc::channel();
-                let (reply, result) = mpsc::channel();
-                let control = &control;
-                scope.spawn(move || {
-                    ready.send(()).unwrap();
-                    reply
-                        .send(control.wait_paused(Duration::from_secs(30)))
-                        .unwrap();
-                });
-                started.recv_timeout(WAIT).unwrap();
-                let driver = scope.spawn(|| vm.run());
-                assert!(
-                    matches!(
-                        result.recv_timeout(WAIT).unwrap(),
-                        Err(Error::Control {
-                            operation: "wait_paused",
-                            reason: ControlReason::TerminalOutcome,
-                        })
-                    ),
-                    "{injected:?}"
-                );
-                driver.join().unwrap().unwrap_err()
-            })
-        };
+        control.pause().unwrap();
+        let error = thread::scope(|scope| {
+            let (ready, started) = mpsc::channel();
+            let (reply, result) = mpsc::channel();
+            let control = &control;
+            scope.spawn(move || {
+                ready.send(()).unwrap();
+                reply
+                    .send(control.wait_paused(Duration::from_secs(30)))
+                    .unwrap();
+            });
+            started.recv_timeout(WAIT).unwrap();
+            let driver = scope.spawn(|| vm.run());
+            assert!(
+                matches!(
+                    result.recv_timeout(WAIT).unwrap(),
+                    Err(Error::Control {
+                        operation: "wait_paused",
+                        reason: ControlReason::TerminalOutcome,
+                    })
+                ),
+                "{injected:?}"
+            );
+            driver.join().unwrap().unwrap_err()
+        });
         assert_eq!(control.status(), VmStatus::Exited);
         assert!(matches!(vm.run(), Err(Error::AlreadyRan)));
         assert!(entries.lock().unwrap().is_empty(), "{injected:?}");

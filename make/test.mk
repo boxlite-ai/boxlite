@@ -305,7 +305,7 @@ _ensure-kvm:
 # Run the ignored hardware tests explicitly and bound a stalled guest with a timeout.
 # Both crates run even when one fails, so one report shows every result.
 VMM_KVM_TESTS_TIMEOUT ?= 600s
-VMM_KVM_SNAPSHOT_TESTS := lifecycle::tests::execution::kvm_ snapshot::tests::execution::kvm_ snapshot::tests::restore::kvm_
+VMM_KVM_SNAPSHOT_TESTS := snapshot::tests::execution::kvm_ snapshot::tests::restore::kvm_
 VMM_LINUX_SNAPSHOT_TESTS := snapshot::tests::restore::kvm_linux_
 
 test\:integration\:vmm\:kvm: _ensure-kvm

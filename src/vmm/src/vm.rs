@@ -96,6 +96,12 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
     /// Imports the state and RAM files of a device-less snapshot into a VM in `Created`.
+    ///
+    /// `state_path` and `memory_path` must come from the same successful export and
+    /// remain unchanged during import.
+    /// Import allocates and fills anonymous host RAM sized by the snapshot header's
+    /// logical `ram_len`, so callers should check their memory budget before importing.
+    ///
     /// Call [`Self::run`] to install saved CPU and platform state and execute it.
     /// Reserve a pause through [`Self::control`] before running to hold guest entry.
     pub fn from_state(state_path: impl AsRef<Path>, memory_path: impl AsRef<Path>) -> Result<Self> {
