@@ -281,10 +281,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
-  async assertFilestoreVolumeSupport(box: Box): Promise<void> {
-    this.assertNoFilestoreVolumes(box)
-  }
-
   async createBox(
     box: Box,
     image: string,

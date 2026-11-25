@@ -63,7 +63,7 @@ describe('RunnerAdapterV2 createBox', () => {
     async (capabilities) => {
       const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
       const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
-      Object.assign(adapter as any, {
+      Object.assign(adapter as any, { config: { get: () => false },
         runnerRepository: { findOne: jest.fn().mockResolvedValue({ id: 'runner-1', capabilities }) },
       })
       await adapter.init({ id: 'runner-1', capabilities } as any)
@@ -93,7 +93,7 @@ describe('RunnerAdapterV2 createBox', () => {
       findOne: jest.fn().mockResolvedValue({ id: 'runner-1', capabilities: ['filestore'] }),
     }
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
-    Object.assign(adapter as any, { runnerRepository })
+    Object.assign(adapter as any, { config: { get: () => false }, runnerRepository })
     await adapter.init({ id: 'runner-1', capabilities: null } as any)
 
     await adapter.createBox(
@@ -118,7 +118,7 @@ describe('RunnerAdapterV2 createBox', () => {
     const lastChecked = new Date('2026-11-14T02:00:00Z')
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
-    Object.assign(adapter as any, {
+    Object.assign(adapter as any, { config: { get: () => false },
       runnerRepository: {
         findOne: jest.fn().mockResolvedValue({
           id: 'runner-1',
@@ -184,7 +184,7 @@ describe('RunnerAdapterV2 createBox', () => {
   it('dispatches a filestore volume when the runner declared the capability', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
-    Object.assign(adapter as any, {
+    Object.assign(adapter as any, { config: { get: () => false },
       runnerRepository: { findOne: jest.fn().mockResolvedValue({ id: 'runner-1', capabilities: ['filestore'] }) },
     })
     await adapter.init({ id: 'runner-1', capabilities: ['filestore'] } as any)
