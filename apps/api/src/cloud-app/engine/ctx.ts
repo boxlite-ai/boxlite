@@ -21,8 +21,8 @@ export interface AppVolumes {
   remove(app: AppRow, environment: EnvRow, volumeId: string): Promise<void>
 }
 export interface AppBoxes {
-  /** Every non-destroyed Box owned by the App, independently of the active runtime. */
-  list(app: AppRow, environment?: EnvRow): Promise<string[]>
+  /** Cleanup includes every owned Box. Sleep skips stopped Boxes and failed, inactive runtimes. */
+  list(app: AppRow, environment?: EnvRow, operation?: 'cleanup' | 'sleep'): Promise<string[]>
 }
 export interface AppSourceStore {
   has(appId: string, sha: string): Promise<boolean>
