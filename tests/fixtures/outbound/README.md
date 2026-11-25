@@ -25,6 +25,10 @@ Its paths are example values; live integration tests use temporary directories t
 - `request_cases` covers request shape, field presence, pending state, and backend support. When a case supplies `allow_count`, expand it to repeated valid rules in the request.
 - `flow_cases` gives expected results for the forwarding integrations, including inspection, controlled resolution, platform protections, and registered services.
 
+The Go bridge tests consume the rule, list, match, and decision cases through the compiler and matcher.
+In a decision case, `name_associated` supplies an already verified fact tied to `connection_ip`.
+The forwarding cases separately cover how a caller obtains that evidence.
+
 ### Recovery and forwarding cases
 
 - The superseding-request vectors follow an older ambiguous attempt with a confirmed or refused CAS. Restart the coordinator before testing the next omission.
