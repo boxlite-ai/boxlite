@@ -331,7 +331,8 @@ return. Inactive reasons are known only to the API. Attestation failures never
 consume credentials; failures after successful introspection leave them consumed.
 
 Resource bounds are 4 KiB request bodies, 64 KiB API replies, 64 grants,
-64 KiB ciphertext, 128 KiB serialized stored rows, 8 MiB success JSON and
+65,565 bytes of ciphertext (64 KiB plaintext plus 29 bytes of envelope overhead),
+144 KiB serialized stored rows, 8 MiB success JSON and
 16 concurrent fetch operations. A single SQL statement suppresses oversized
 stored payloads before transfer. No unbounded request queue is created.
 
@@ -356,13 +357,13 @@ tokens or replace staging identity verification.
 ### Credential API contract integration
 
 `make test:apps:secret-server:credential-api` runs the actual service, controller
-and migration from API PR #2769 at commit
-`bd10e984f00758222bfe6724fa3994a17c8e1329`, with the Go fetch handler and real
+and migration as merged by API PR #2769 at commit
+`bc78b36e5dc241bb3d2d7f8522f4f6f546833b40`, with the Go fetch handler and real
 PostgreSQL. The harness reads these files from Git into a temporary directory;
 it does not change the API checkout or implement a second credential service.
 
-Prerequisites: the pinned commit must be available locally (`git fetch origin
-pull/2769/head`), Node.js, installed apps dependencies (`make _ensure-apps-deps`),
+Prerequisites: the merged commit must be available locally (`git fetch origin
+main`), Node.js, installed apps dependencies (`make _ensure-apps-deps`),
 Go, and a disposable PostgreSQL instance allowing database creation.
 
 ```sh
@@ -376,7 +377,7 @@ API schema and a separate secret database, then removes both. Its loopback-only
 issuance fixture invokes the real service; it is not a production API endpoint.
 
 The test verifies wrong-runner rejection without consumption, successful
-redemption and decryption, replay rejection, and persisted audit outcomes. A
-missing or skipped Go test fails the harness. This validates the pinned API
+redemption and decryption of a 64 KiB value, replay rejection, and persisted
+audit outcomes. A missing or skipped Go test fails the harness. This validates the pinned API
 contract in an isolated Nest application, not full API startup, ingress controls,
 service deployment, or GCP attestation. Those checks remain pending.

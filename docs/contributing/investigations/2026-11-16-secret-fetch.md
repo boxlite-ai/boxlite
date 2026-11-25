@@ -23,7 +23,7 @@ process startup, role selection and mounting the fetch handler.
 | [Runtime #2617](https://github.com/boxlite-ai/boxlite/pull/2617) | Initialize storage before readiness and mount fetch for `fetch`/`all` roles | Deploying the fetch service |
 | [Credential API #2769](https://github.com/boxlite-ai/boxlite/pull/2769) | Internal-only introspection with atomic consumption and runner binding | End-to-end deployment |
 
-The credential API contract can be checked before its merge using the pinned
+The credential API contract is checked using the merged
 production controller and service in the
 [contract integration harness](../../../apps/secret-server/README.md#credential-api-contract-integration).
 This isolated check does not validate service startup or deployed ingress.
@@ -62,7 +62,7 @@ log message, without changing the fetch outcome.
 
 Request bodies are limited to 4 KiB, API replies to 64 KiB, grants to 64,
 and concurrent fetch operations to 16. A single database statement checks
-ciphertext (64 KiB) and serialized row (128 KiB) sizes before returning bounded
+ciphertext (64 KiB plus 29 bytes for the v1 envelope) and serialized row (144 KiB) sizes before returning bounded
 columns. This avoids a separate check/read race and limits memory allocation.
 Success JSON is limited to 8 MiB, including escaping expansion. Oversized stored
 rows and saturation return `store_unavailable`; oversized API replies return

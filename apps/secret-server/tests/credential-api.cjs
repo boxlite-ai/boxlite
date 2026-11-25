@@ -11,7 +11,7 @@ const { Test } = require('@nestjs/testing')
 const { DataSource } = require('typeorm')
 const express = require('express')
 
-const apiCommit = 'bd10e984f00758222bfe6724fa3994a17c8e1329'
+const apiCommit = 'bc78b36e5dc241bb3d2d7f8522f4f6f546833b40'
 const repository = path.resolve(__dirname, '../../..')
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'boxlite-credential-api-'))
 const schema = `credential_fetch_${randomUUID().replaceAll('-', '')}`
@@ -40,7 +40,10 @@ async function main() {
     extra: { options: `-c search_path=${schema}`, connectionTimeoutMillis: 5000 },
   }).initialize()
   await database.query(`CREATE SCHEMA "${schema}"`)
-  await database.query('CREATE TABLE box (id varchar(64) PRIMARY KEY)')
+  await database.query(`CREATE TABLE box (
+    id varchar(64) PRIMARY KEY, "runnerId" varchar(64) NOT NULL, "organizationId" uuid NOT NULL,
+    state text NOT NULL DEFAULT 'stopped', "desiredState" text NOT NULL DEFAULT 'stopped'
+  )`)
   const runner = database.createQueryRunner()
   try { await new AddSecretCredential1794873600000().up(runner) }
   finally { await runner.release() }
@@ -57,7 +60,8 @@ async function main() {
   issuance.use(express.json())
   issuance.post('/', async (req, res) => {
     try {
-      await database.query('INSERT INTO box(id) VALUES($1) ON CONFLICT DO NOTHING', [req.body.boxId])
+      const { boxId, runnerId, organizationId } = req.body
+      await database.query('INSERT INTO box(id, "runnerId", "organizationId") VALUES($1, $2, $3) ON CONFLICT DO NOTHING', [boxId, runnerId, organizationId])
       res.json(await service.issue(req.body))
     } catch { res.status(500).json({ error: 'test credential issuance failed' }) }
   })

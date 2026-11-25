@@ -33,10 +33,10 @@ type store interface {
 type postgres struct{ pool *pgxpool.Pool }
 
 func (p postgres) load(ctx context.Context, ids []string) (map[string]secret, error) {
-	// CASE suppresses the entire payload, including wrapping fields, in the same
-	// snapshot as the size check. An oversized row remains distinguishable from absence.
-	rows, err := p.pool.Query(ctx, `SELECT CASE WHEN octet_length(ciphertext)<=65536
- AND octet_length(row_to_json(s)::text)<=131072 THEN row_to_json(s) ELSE NULL END
+	// Allow 64 KiB of plaintext plus the 29-byte v1 envelope overhead.
+	// The row budget also covers hex encoding and routing and wrapping metadata.
+	rows, err := p.pool.Query(ctx, `SELECT CASE WHEN octet_length(ciphertext)<=65565
+ AND octet_length(row_to_json(s)::text)<=147456 THEN row_to_json(s) ELSE NULL END
  FROM secret s WHERE id=ANY($1::uuid[])`, ids)
 	if err != nil {
 		return nil, err

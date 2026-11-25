@@ -15,6 +15,7 @@ import (
 
 	"github.com/boxlite-ai/secret-server/internal/attest"
 	"github.com/boxlite-ai/secret-server/internal/database"
+	"github.com/boxlite-ai/secret-server/internal/encryption"
 	"github.com/boxlite-ai/secret-server/internal/testdb"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -43,7 +44,10 @@ func TestCredentialAPIIntegration(t *testing.T) {
 	}
 	cipher := cipherForTest(t)
 	row := encrypted(t, cipher, first)
-	envelope, err := row.envelope()
+	want := "plaintext-marker-" + strings.Repeat("a", 65536-len("plaintext-marker-"))
+	envelope, err := cipher.Encrypt(ctx, encryption.SecretContext{
+		OrganizationID: org, SecretID: first, Version: 1, Hosts: row.Hosts, Headers: row.Headers,
+	}, []byte(want))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +121,7 @@ func TestCredentialAPIIntegration(t *testing.T) {
 					BoxID   string  `json:"box_id"`
 					Secrets []value `json:"secrets"`
 				}
-				if json.Unmarshal(data, &result) != nil || result.BoxID != "box-a" || len(result.Secrets) != 1 || result.Secrets[0].Value != "plaintext-marker-"+first {
+				if json.Unmarshal(data, &result) != nil || result.BoxID != "box-a" || len(result.Secrets) != 1 || result.Secrets[0].Value != want {
 					t.Fatal("wrong decrypted secret response")
 				}
 			} else if bytes.Contains(data, []byte("plaintext-marker")) {
