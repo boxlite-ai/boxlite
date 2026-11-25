@@ -11,11 +11,11 @@ import {
   ResourceErrorState,
   ResourceErrorNotice,
 } from '@/components/ResourceLayout'
-import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { useRevokeApiKeyMutation } from '@/hooks/mutations/useRevokeApiKeyMutation'
 import { useApiKeysQuery } from '@/hooks/queries/useApiKeysQuery'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { SUPPORTED_API_KEY_PERMISSIONS } from '@/lib/api-key-permissions'
 import { handleApiError } from '@/lib/error-handling'
 import { ApiKeyList, CreateApiKeyPermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { useCallback, useMemo, useState } from 'react'
@@ -23,8 +23,6 @@ import { toast } from 'sonner'
 import { useAuth } from 'react-oidc-context'
 import { ApiKeyTable } from '../components/ApiKeyTable'
 import { usePageTitle } from '@/hooks/usePageTitle'
-
-const DEFAULT_API_KEY_PERMISSIONS = CREATE_API_KEY_PERMISSIONS_GROUPS.flatMap((group) => group.permissions)
 
 /** Lists the selected organization’s keys and limits creation options to the member’s assigned permissions. */
 const Keys: React.FC = () => {
@@ -50,12 +48,12 @@ const Keys: React.FC = () => {
       return []
     }
     if (authenticatedUserOrganizationMember.role === OrganizationUserRoleEnum.OWNER) {
-      return DEFAULT_API_KEY_PERMISSIONS
+      return SUPPORTED_API_KEY_PERMISSIONS
     }
     const assignedPermissions = new Set(
       authenticatedUserOrganizationMember.assignedRoles.flatMap((role) => role.permissions),
     )
-    return DEFAULT_API_KEY_PERMISSIONS.filter(
+    return SUPPORTED_API_KEY_PERMISSIONS.filter(
       (permission) => permission !== CreateApiKeyPermissionsEnum.WRITE_MEMBERS && assignedPermissions.has(permission),
     )
   }, [authenticatedUserOrganizationMember])

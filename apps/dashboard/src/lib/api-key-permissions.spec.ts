@@ -1,5 +1,27 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apiKeyExpirationDate, apiKeyExpirationLabel, apiKeyPermissionSummary } from './api-key-permissions'
+import {
+  API_KEY_PERMISSION_GROUPS,
+  SUPPORTED_API_KEY_PERMISSIONS,
+  apiKeyExpirationDate,
+  apiKeyExpirationLabel,
+  apiKeyPermissionSummary,
+} from './api-key-permissions'
+
+const futurePermission = vi.hoisted(() => 'write:future-resource')
+vi.mock('@boxlite-ai/api-client', async (importOriginal) => {
+  const api = await importOriginal<typeof import('@boxlite-ai/api-client')>()
+  return {
+    ...api,
+    CreateApiKeyPermissionsEnum: { ...api.CreateApiKeyPermissionsEnum, FUTURE_PERMISSION: futurePermission },
+  }
+})
+
+it('offers newly generated API key permissions without a configured display group', () => {
+  expect(SUPPORTED_API_KEY_PERMISSIONS).toContain(futurePermission)
+  expect(API_KEY_PERMISSION_GROUPS.find(({ name }) => name === 'Other permissions')?.permissions).toEqual([
+    futurePermission,
+  ])
+})
 
 afterEach(() => {
   vi.useRealTimers()
