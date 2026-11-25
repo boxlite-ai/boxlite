@@ -110,6 +110,7 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { requiresVolumeMountOptions, runnerSupportsVolumeMountOptions } from '../utils/runner-volume-mount-options'
 import { SecretServerClient } from './secret-server-client'
 import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
@@ -1252,6 +1253,12 @@ export class BoxService {
       throw new ForbiddenException('Recovering boxes with runner API version 2 is not supported')
     }
 
+    if (requiresVolumeMountOptions(box.volumes) && !runnerSupportsVolumeMountOptions(runner)) {
+      throw new ForbiddenException(
+        'VOLUME_MOUNT_OPTIONS_UNSUPPORTED: runner does not support readOnly or subpath mounts',
+      )
+    }
+
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
     try {
@@ -1774,8 +1781,4 @@ export class BoxService {
 
 function encodeDirectPreviewBoxId(boxId: string): string {
   return `d-${Buffer.from(boxId, 'utf8').toString('hex')}`
-}
-
-function requiresVolumeMountOptions(volumes: BoxVolume[] | undefined): boolean {
-  return !!volumes?.some((volume) => volume.readOnly === true || !!volume.subpath)
 }

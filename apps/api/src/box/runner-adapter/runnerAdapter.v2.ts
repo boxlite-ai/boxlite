@@ -13,6 +13,7 @@ import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './ru
 import { Runner } from '../entities/runner.entity'
 import { Box } from '../entities/box.entity'
 import { memoryGiBOf } from '../utils/memory-allocation'
+import { toRunnerVolumes } from '../utils/runner-volume-mount-options'
 import { Job } from '../entities/job.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { JobType } from '../enums/job-type.enum'
@@ -21,7 +22,6 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerState } from '../enums/runner-state.enum'
-import { boxVolumeForDispatch } from '../utils/box-volume.util'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -211,7 +211,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       workingDir: box.workingDir,
       entrypoint: box.entrypoint,
       cmd: box.cmd,
-      volumes: box.volumes?.map(boxVolumeForDispatch),
+      volumes: toRunnerVolumes(box.volumes),
       secrets: box.secrets?.map((secret) => ({
         name: secret.name,
         ...(!enabled ? { value: secret.value } : {}),

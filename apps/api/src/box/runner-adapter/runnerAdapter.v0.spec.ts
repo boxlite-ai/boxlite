@@ -106,6 +106,42 @@ describe('RunnerAdapterV0 createBox', () => {
     )
   })
 
+  it('sends managed volumes and mount options in the create body', async () => {
+    const adapter = new RunnerAdapterV0()
+    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
+    ;(adapter as any).boxApiClient = { create }
+
+    await adapter.createBox(
+      {
+        id: 'box-1',
+        image: 'base',
+        volumes: [
+          {
+            volumeId: 'volume-ro',
+            mountPath: '/data',
+            readOnly: true,
+          },
+          {
+            volumeId: 'volume-subpath',
+            mountPath: '/workspace',
+            subpath: 'team/backend',
+            readOnly: false,
+          },
+        ],
+      } as any,
+      'base',
+    )
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        volumes: [
+          { volumeId: 'volume-ro', mountPath: '/data', subpath: undefined, readOnly: true },
+          { volumeId: 'volume-subpath', mountPath: '/workspace', subpath: 'team/backend', readOnly: false },
+        ],
+      }),
+    )
+  })
+
   /** The caller may pin a curated tag to the build this runner already has. */
   it('sends the image it is handed rather than the one on the box', async () => {
     const adapter = new RunnerAdapterV0()
@@ -146,6 +182,30 @@ describe('RunnerAdapterV0 createBox', () => {
       'box-1',
       expect.objectContaining({
         secrets: [{ name: 'openai', value: 'sk-test', headers: { 'x-api-key': '{value}' } }],
+      }),
+    )
+  })
+
+  it('forwards volume mount options in the recover body', async () => {
+    const adapter = new RunnerAdapterV0()
+    const recover = jest.fn().mockResolvedValue(undefined)
+    ;(adapter as any).boxApiClient = { recover }
+
+    await adapter.recoverBox({
+      id: 'box-1',
+      volumes: [
+        { volumeId: 'volume-ro', mountPath: '/data', readOnly: true },
+        { volumeId: 'volume-subpath', mountPath: '/workspace', subpath: 'team/backend', readOnly: false },
+      ],
+    } as any)
+
+    expect(recover).toHaveBeenCalledWith(
+      'box-1',
+      expect.objectContaining({
+        volumes: [
+          { volumeId: 'volume-ro', mountPath: '/data', subpath: undefined, readOnly: true },
+          { volumeId: 'volume-subpath', mountPath: '/workspace', subpath: 'team/backend', readOnly: false },
+        ],
       }),
     )
   })

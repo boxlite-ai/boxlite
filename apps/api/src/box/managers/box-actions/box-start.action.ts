@@ -8,11 +8,9 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
 import { BoxState } from '../../enums/box-state.enum'
-import { Runner } from '../../entities/runner.entity'
-import { BoxVolume } from '../../dto/box.dto'
 import { DONT_SYNC_AGAIN, BoxAction, SYNC_AGAIN, SyncState } from './box.action'
 import { RunnerState } from '../../enums/runner-state.enum'
-import { RunnerService, VOLUME_MOUNT_OPTIONS_CAPABILITY } from '../../services/runner.service'
+import { RunnerService } from '../../services/runner.service'
 import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { OrganizationService } from '../../../organization/services/organization.service'
 import { TypedConfigService } from '../../../config/typed-config.service'
@@ -23,6 +21,7 @@ import { CuratedImagePinService } from '../../../image/services/curated-image-pi
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
 import { boxVolumeForDispatch } from '../../utils/box-volume.util'
 import { FilestoreInstanceResolver } from '../../services/filestore-instance.resolver'
+import { requiresVolumeMountOptions, runnerSupportsVolumeMountOptions } from '../../utils/runner-volume-mount-options'
 
 import { resolveNestedVirtualization } from '../../runner-adapter/nested-virtualization-policy'
 
@@ -314,12 +313,4 @@ export class BoxStartAction extends BoxAction {
 
     await this.boxRepository.update(box.id, { updateData: { prevRunnerId: null } }, true)
   }
-}
-
-function requiresVolumeMountOptions(volumes: BoxVolume[] | undefined): boolean {
-  return !!volumes?.some((volume) => volume.readOnly === true || !!volume.subpath)
-}
-
-function runnerSupportsVolumeMountOptions(runner: Runner): boolean {
-  return runner.capabilities?.includes(VOLUME_MOUNT_OPTIONS_CAPABILITY) === true
 }
