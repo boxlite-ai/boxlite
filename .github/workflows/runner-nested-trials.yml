@@ -1,0 +1,94 @@
+---
+name: BoxLite nested workload retry
+'on':
+  push:
+    branches:
+    - ci/boxlite-runner-trials-2833
+    paths:
+    - ".github/workflows/runner-nested-trials.yml"
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: '0'
+jobs:
+  rest:
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 45
+    steps:
+    - &1
+      name: Record runner and kernel
+      run: |
+        uname -a
+        id
+        nproc
+        head -1 /proc/meminfo
+        df -h /
+        for f in /sys/module/apparmor/parameters/enabled /sys/kernel/security/lsm /proc/sys/kernel/apparmor_restrict_unprivileged_userns; do
+          if sudo test -e "$f"; then sudo cat "$f"; else echo "Absent: $f"; fi
+        done
+        ls -l /dev/kvm || true
+    - &2
+      name: Check requested CPU count
+      run: test "$(getconf _NPROCESSORS_ONLN)" -eq 4
+    - uses: actions/checkout@v5
+      with:
+        persist-credentials: false
+    - &5
+      uses: "./.github/actions/setup-boxlite-runner"
+    - &3
+      name: Probe unprivileged user and mount namespaces
+      continue-on-error: true
+      run: |
+        if [ "$(id -u)" -eq 0 ]; then
+          sudo -u nobody unshare --user --map-root-user --mount --propagation private true
+        else
+          unshare --user --map-root-user --mount --propagation private true
+        fi
+    - &4
+      name: Check KVM device and API version
+      run: |
+        test -c /dev/kvm
+        sudo chmod a+rw /dev/kvm
+        python3 -c 'import fcntl, os; assert fcntl.ioctl(os.open("/dev/kvm", os.O_RDWR), 0xAE00) == 12'
+    - uses: "./.github/actions/setup-rust"
+      with:
+        cache: 'false'
+    - uses: taiki-e/install-action@nextest
+    - uses: "./.github/actions/setup-go"
+      with:
+        cache: 'false'
+    - run: make setup:submodules
+    - run: make setup:build
+    - run: make test:e2e:serve:volume
+      timeout-minutes: 20
+  nix:
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 90
+    steps:
+    - *1
+    - *2
+    - *3
+    - *4
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+        persist-credentials: false
+    - *5
+    - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702
+    - uses: "./.github/actions/sccache"
+    - name: Check the flake
+      run: nix flake check
+    - name: Build the CLI in the dev shell
+      run: |
+        export CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_HOME="$RUNNER_TEMP/rustup"
+        if [ -n "${RUSTC_WRAPPER:-}" ]; then
+          RUSTC_WRAPPER="$(command -v "$RUSTC_WRAPPER")"
+          export RUSTC_WRAPPER
+        fi
+        nix develop --ignore-environment --keep HOME --keep USER \
+          --keep CARGO_HOME --keep RUSTUP_HOME --keep RUSTC_WRAPPER \
+          --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
+          -c make cli
+    - name: Boot a box
+      timeout-minutes: 10
+      run: "./target/debug/boxlite run --rm alpine:latest echo ok"
