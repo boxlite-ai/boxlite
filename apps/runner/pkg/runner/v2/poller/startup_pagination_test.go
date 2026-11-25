@@ -18,7 +18,6 @@ import (
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
-	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/executor"
 )
@@ -92,17 +91,7 @@ func TestStartupRecoveryListsAllJobs(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(apiclient.NewJob(id, apiclient.JOBTYPE_CREATE_BOX, status.Status, "BOX", id, "2026-01-01T00:00:00Z"))
 			}))
 			defer server.Close()
-			t.Setenv("BOXLITE_API_URL", server.URL)
-			t.Setenv("BOXLITE_RUNNER_TOKEN", "test-runner-token")
-			cfg, err := config.GetConfig()
-			if err != nil {
-				t.Fatal(err)
-			}
-			// The runner config is cached for the process. Each case uses its
-			// own API server and restores the prior config after construction.
-			previousURL := cfg.BoxliteApiUrl
-			cfg.BoxliteApiUrl = server.URL
-			t.Cleanup(func() { cfg.BoxliteApiUrl = previousURL })
+			useTestRunnerAPI(t, server.URL)
 
 			b := &paginationBackend{beforeCreate: func(box dto.CreateBoxDTO) {
 				mu.Lock()

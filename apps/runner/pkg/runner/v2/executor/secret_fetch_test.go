@@ -366,7 +366,7 @@ func TestSecretCredentialFetchResponseSize(t *testing.T) {
 }
 
 func TestSecretCredentialErrorsThroughExecute(t *testing.T) {
-	for _, code := range []string{"attestation_failed", "credential_invalid", "secret_unavailable", "api_unavailable", "decrypt_failed", "secret_store_unavailable", "UNKNOWN_MARKER", "backend", "malformed payload", "metadata"} {
+	for _, code := range []string{"attestation_failed", "credential_invalid", "secret_unavailable", "api_unavailable", "decrypt_failed", "secret_store_unavailable", "store_unavailable", "attestation_unavailable", "UNKNOWN_MARKER", "backend", "malformed payload", "metadata"} {
 		t.Run(code, func(t *testing.T) {
 			var logs bytes.Buffer
 			reported := make(chan string, 16)

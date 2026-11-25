@@ -161,7 +161,8 @@ func (f *secretFetcher) fetch(ctx context.Context, boxID, credential string, req
 		}
 		_ = json.Unmarshal(raw, &problem)
 		switch problem.Code {
-		case "attestation_failed", "credential_invalid", "secret_unavailable", "api_unavailable", "decrypt_failed", "secret_store_unavailable":
+		case "attestation_failed", "credential_invalid", "secret_unavailable", "api_unavailable", "decrypt_failed",
+			"secret_store_unavailable", "store_unavailable", "attestation_unavailable":
 			return nil, fmt.Errorf("secret fetch: %s", problem.Code)
 		default:
 			return nil, fmt.Errorf("secret fetch failed (HTTP %d)", response.StatusCode)

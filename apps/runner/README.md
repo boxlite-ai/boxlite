@@ -774,7 +774,9 @@ Credential-bearing jobs require unique, nonempty names to match fetched secrets.
 If replay adoption confirms the box is absent, the runner removes the volume
 ownership record written during preparation. Other lookup errors preserve that
 record because the box may still exist. The backend error wraps the lookup cause;
-credential job status retains its sanitized error.
+credential job status retains its sanitized error. For a fetch that returns HTTP
+503, job status preserves the Secret Server code `store_unavailable` for storage
+failures and `attestation_unavailable` for identity verifier outages.
 
 Configure an HTTPS `SECRET_SERVER_URL`; HTTP is accepted only for loopback test
 services. Credentials, identity tokens and returned secret content stay out of

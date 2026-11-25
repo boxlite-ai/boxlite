@@ -16,6 +16,7 @@ import (
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/backend"
 	"github.com/boxlite-ai/runner/pkg/runner/v2/executor"
@@ -98,8 +99,7 @@ func TestCredentialStartupRecovery(t *testing.T) {
 	}))
 	defer api.Close()
 
-	t.Setenv("BOXLITE_API_URL", api.URL)
-	t.Setenv("BOXLITE_RUNNER_TOKEN", "test-runner-token")
+	useTestRunnerAPI(t, api.URL)
 	t.Setenv("SECRET_SERVER_URL", api.URL)
 	t.Setenv("GCE_METADATA_HOST", strings.TrimPrefix(api.URL, "http://"))
 	t.Setenv("BOXLITE_RUNNER_ATTESTOR", "gcp_iit")
@@ -164,4 +164,17 @@ func TestCredentialStartupRecovery(t *testing.T) {
 	if len(seen) != 1 || !seen[missing.Id] {
 		t.Errorf("jobs without a create call = %v, want only %s", seen, missing.Id)
 	}
+}
+
+func useTestRunnerAPI(t *testing.T, url string) {
+	t.Helper()
+	t.Setenv("BOXLITE_API_URL", url)
+	t.Setenv("BOXLITE_RUNNER_TOKEN", "test-runner-token")
+	cfg, err := config.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousURL := cfg.BoxliteApiUrl
+	cfg.BoxliteApiUrl = url
+	t.Cleanup(func() { cfg.BoxliteApiUrl = previousURL })
 }
