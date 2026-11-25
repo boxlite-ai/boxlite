@@ -16,7 +16,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 describe('API key inventory permissions', () => {
-  it('names the default Box operations scope and marks expired keys', async () => {
+  it('labels a Box operations key and marks expired keys', async () => {
     const key: ApiKeyList = {
       name: 'agent',
       value: 'masked',
@@ -33,7 +33,8 @@ describe('API key inventory permissions', () => {
     expect(document.body.textContent).toContain('Expired')
     expect(document.body.textContent).not.toContain('Restricted')
   })
-  it('preserves scopes outside the console selection groups', async () => {
+  it('preserves scopes from a newer API when the Console has no label for them', async () => {
+    const futurePermission = 'read:future-resource' as P
     const key: ApiKeyList = {
       name: 'audit',
       value: 'masked',
@@ -41,12 +42,12 @@ describe('API key inventory permissions', () => {
       createdAt: new Date(),
       lastUsedAt: null,
       expiresAt: null,
-      permissions: [P.READ_AUDIT_LOGS],
+      permissions: [futurePermission],
     }
     await act(async () =>
       root.render(<ApiKeyTable data={[key]} loading={false} isLoadingKey={() => false} onRevoke={vi.fn()} />),
     )
-    expect(document.body.textContent).toContain('read:audit_logs')
+    expect(document.body.textContent).toContain(futurePermission)
     expect(document.body.textContent).toContain('No expiration')
   })
 })

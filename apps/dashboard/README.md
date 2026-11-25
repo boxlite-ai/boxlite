@@ -696,36 +696,37 @@ duplicates, updates with fixed scope, write permissions, and refusals named by b
 
 ## Console API key permissions and expiration
 
-**New API key** defaults to **Operate boxes** (`write:boxes`) and **30 days**.
-The Access selector offers Operate boxes, Manage box lifecycle (adds Box deletion),
-and Use boxes with volumes (adds Volume read and write). A preset requires every
-scope in its bundle; unavailable presets explain the missing capabilities.
+**New API key** defaults to **All available permissions** and **30 days**.
+This selects every grant the signed-in member can choose in the current
+organization.
 
-**All available permissions** explicitly selects every supported permission the
-current member can grant in this organization; it does not change the default.
-The overall summary and resource groups show selected/available counts, such as
-**13/13 permissions selected** and **3/3 selected**. Implicit Box reading is excluded.
+The Console includes new schema permissions when it is built with the updated
+API client.
 
-Manual complete selections also show **All available permissions selected**.
-Selecting All takes a snapshot: later grants are not automatically added, and a
-changed grant set changes the effective choice to Custom access. Revoked selections
-remain removable and block creation, but are excluded from available counts and
-prevent the all-selected indication.
+To issue a narrower key, select **Operate boxes**, **Manage box lifecycle** or
+**Use boxes with volumes**. Each of these presets requires every scope in its
+bundle, and an unavailable preset lists the missing scopes.
 
-Loading and errors hide stale counts.
-Selection completeness previews: [before](../../docs/contributing/investigations/assets/api-key-all-permissions/before.png),
+**Adjust permissions** shows each grant in its resource group. Permissions
+without a dedicated group appear under **Other permissions**. Manual changes
+select **Custom access**, and technical scope identifiers are available in
+expandable details.
+
+A permissions refresh keeps the draft grants. If the available set changes,
+reselect **All available permissions** to update the selection.
+
+Empty and revoked selections block creation. Creation also waits for permissions
+to load, and a refresh is available after a failure.
+
+The summary and resource groups show selected and available permission counts.
+Manual selections also indicate when all available permissions are selected.
+Counts are hidden while permissions are loading or unavailable.
+
+Selection previews: [before](../../docs/contributing/investigations/assets/api-key-all-permissions/before.png),
 [all selected](../../docs/contributing/investigations/assets/api-key-all-permissions/after.png),
 and [390px viewport](../../docs/contributing/investigations/assets/api-key-all-permissions/narrow.png).
 
-Adjust permissions opens resource groups for independent choices within the
-signed-in member's available scopes. Manual changes mark the choice Custom access;
-technical scope identifiers live in expandable details. Deleting Boxes and member management require explicit selection.
-
-Without
-Box-write permission the form starts with no selection; empty or revoked selections
-cannot be submitted. Permission loading and failures block creation and failures
-provide refresh. Permissions apply across the selected organization, not a single Box.
-
+Permissions apply across the organization.
 Box reading is implicit and cannot be disabled in this form. Managing image aliases
 includes alias deletion; using an image does not automatically require catalog access.
 

@@ -19,6 +19,7 @@ import {
   API_KEY_PERMISSION_LABELS,
   API_KEY_PERMISSION_HELP,
   IMPLICIT_BOX_READ,
+  SUPPORTED_API_KEY_PERMISSIONS,
   apiKeyExpirationDate,
 } from '@/lib/api-key-permissions'
 import { ApiKeyPermissionsSummary } from './ApiKeyPermissionsSummary'
@@ -32,6 +33,14 @@ interface CreateApiKeyDialogProps {
   permissionsStatus?: 'loading' | 'ready' | 'error'
   onRetryPermissions?: () => Promise<void>
 }
+
+const ALL_AVAILABLE_ACCESS = {
+  id: 'all',
+  label: 'All available permissions',
+  description:
+    'Grant every permission available to you in this organization, including deletion and member management when available.',
+}
+
 const EXPIRY_OPTIONS = [
   { value: '30', label: '30 days' },
   { value: '90', label: '90 days' },
@@ -68,7 +77,7 @@ function ApiKeyForm({
   const [expiry, setExpiry] = useState('30')
   const [selected, setSelected] = useState<Permission[]>([])
   const [customize, setCustomize] = useState(false)
-  const [presetId, setPresetId] = useState('operate')
+  const [presetId, setPresetId] = useState(ALL_AVAILABLE_ACCESS.id)
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Boxes'])
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<ApiKeyResponse | null>(null)
@@ -80,8 +89,8 @@ function ApiKeyForm({
   const initialized = useRef(false)
   const generation = useRef(0)
   const pending = useRef(false)
-  const availablePermissions = [...new Set(API_KEY_PERMISSION_GROUPS.flatMap((group) => group.permissions))].filter(
-    (permission) => grantedPermissions.includes(permission),
+  const availablePermissions = SUPPORTED_API_KEY_PERMISSIONS.filter((permission) =>
+    grantedPermissions.includes(permission),
   )
   const permissionsSignature = [...availablePermissions].sort().join(',')
   const invalid = selected.filter((permission) => !availablePermissions.includes(permission))
@@ -118,10 +127,14 @@ function ApiKeyForm({
     setSubmitting(false)
     if (!initialized.current && permissionsStatus === 'ready') {
       initialized.current = true
-      const defaultAvailable = availablePermissions.includes(Permission.WRITE_BOXES)
-      setSelected(defaultAvailable ? [Permission.WRITE_BOXES] : [])
-      setCustomize(!defaultAvailable)
-      setPresetId(defaultAvailable ? 'operate' : 'custom')
+      setSelected([...availablePermissions])
+    } else if (
+      permissionsStatus === 'ready' &&
+      presetId === ALL_AVAILABLE_ACCESS.id &&
+      (invalid.length > 0 || selected.length !== availablePermissions.length)
+    ) {
+      // Keep the draft grants stable if a membership refresh changes the available set.
+      setPresetId('custom')
     }
     return () => {
       generation.current += 1
@@ -263,8 +276,9 @@ function ApiKeyForm({
                   setCustomize(true)
                   return
                 }
-                const choice = API_KEY_ACCESS_PRESETS.find((item) => item.id === value)!
-                if (!choice.permissions.every((permission) => availablePermissions.includes(permission))) return
+                const choice = API_KEY_ACCESS_PRESETS.find((item) => item.id === value)
+                if (!choice || !choice.permissions.every((permission) => availablePermissions.includes(permission)))
+                  return
                 setPresetId(value)
                 setSelected([...choice.permissions])
                 setExpandedGroups(
@@ -279,6 +293,9 @@ function ApiKeyForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value={ALL_AVAILABLE_ACCESS.id} disabled={!availablePermissions.length}>
+                  {ALL_AVAILABLE_ACCESS.label}
+                </SelectItem>
                 {API_KEY_ACCESS_PRESETS.map((item) => {
                   const missing = item.permissions.filter((permission) => !availablePermissions.includes(permission))
                   return (
@@ -292,15 +309,12 @@ function ApiKeyForm({
                     </SelectItem>
                   )
                 })}
-                <SelectItem value="all" disabled={!availablePermissions.length}>
-                  All available permissions
-                </SelectItem>
                 <SelectItem value="custom">Custom access</SelectItem>
               </SelectContent>
             </Select>
             <p id={id + '-permission-help'} className="text-body text-muted-foreground">
               {effectivePresetId === 'all'
-                ? 'Selects every permission you can currently grant in this organization.'
+                ? ALL_AVAILABLE_ACCESS.description
                 : (preset?.description ?? 'Choose specific operations for this key.')}
             </p>
             <div className="flex items-center justify-between gap-3">
@@ -386,7 +400,7 @@ function ApiKeyForm({
                               }}
                             />
                             <label htmlFor={`${id}-${permission}`} className="min-w-0 cursor-pointer text-body">
-                              {API_KEY_PERMISSION_LABELS[permission]}
+                              {API_KEY_PERMISSION_LABELS[permission] ?? permission}
                               {invalid.includes(permission) && <span className="text-destructive"> · Unavailable</span>}
 
                               {API_KEY_PERMISSION_HELP[permission] && (
