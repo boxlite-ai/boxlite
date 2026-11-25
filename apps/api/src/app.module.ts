@@ -156,6 +156,7 @@ import { McpModule } from './mcp/mcp.module'
           { name: 'authenticated', config: rateLimit.authenticated },
           { name: 'box-create', config: rateLimit.boxCreate },
           { name: 'box-lifecycle', config: rateLimit.boxLifecycle },
+          { name: 'box-cost', config: rateLimit.boxCost },
         ]
           .filter(({ config }) => config.ttl !== undefined && config.limit !== undefined)
           .map(({ name, config }) => ({

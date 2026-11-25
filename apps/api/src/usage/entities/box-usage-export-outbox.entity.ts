@@ -34,6 +34,8 @@ export enum UsageExportStatus {
  */
 @Entity('box_usage_export_outbox')
 @Index('box_usage_export_outbox_pending_idx', ['status', 'availableAt'], { where: `"status" = 'pending'` })
+// An expression index, which TypeORM cannot declare; the migration owns it.
+@Index('box_usage_export_outbox_undelivered_box_idx', { synchronize: false })
 export class BoxUsageExportOutbox {
   /**
    * Deterministic identity of the usage fact, derived from the interval and its

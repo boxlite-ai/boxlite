@@ -10,7 +10,9 @@ import { Redis } from 'ioredis'
 import { DataSource, IsNull, Not, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
@@ -583,6 +585,108 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     const remaining = await periods.find()
     expect(remaining).toHaveLength(1)
     expect(remaining[0].endAt).toBeInstanceOf(Date)
+  })
+
+  describe('deletion requested', () => {
+    const requestDeletion = (manager = dataSource.manager) =>
+      manager.update(Box, { id: box.id }, { desiredState: BoxDesiredState.DESTROYED, pending: true })
+
+    const stateEvent = (newState: BoxState) =>
+      new BoxStateUpdatedEvent({ ...box, desiredState: BoxDesiredState.STARTED } as Box, BoxState.UNKNOWN, newState)
+
+    /** Runs the writer while a deletion request holds the box row uncommitted, then commits the request. */
+    const runAgainstDeletion = async (write: () => Promise<void>) => {
+      const deletion = dataSource.createQueryRunner()
+      await deletion.connect()
+      await deletion.startTransaction()
+      let writing: Promise<void> | undefined
+      try {
+        const [{ pid }] = await deletion.query(`SELECT pg_backend_pid()::int AS pid`)
+        await requestDeletion(deletion.manager)
+        writing = write()
+        const waited = await isBlockedBy(pid)
+        await deletion.commitTransaction()
+        await writing
+        return waited
+      } finally {
+        if (deletion.isTransactionActive) await deletion.rollbackTransaction()
+        await Promise.allSettled([writing])
+        await deletion.release()
+      }
+    }
+
+    it.each([BoxState.STARTED, BoxState.STOPPING, BoxState.STOPPED])(
+      'opens no period when the %s event is handled late',
+      async (state) => {
+        await insertBox({ state })
+        await openPeriod()
+        await requestDeletion()
+
+        await serviceForPersistedBox().handleBoxStateUpdate(stateEvent(state))
+
+        expect(await openPeriods()).toHaveLength(0)
+      },
+    )
+
+    it.each<[string, (service: UsageService) => Promise<void>]>([
+      ['a state event', (service) => service.handleBoxStateUpdate(stateEvent(BoxState.STARTED))],
+      ['the reconcile pass', (service) => service.reconcileUsagePeriods()],
+    ])(
+      '%s waits for the request and then opens no period',
+      async (_name, write) => {
+        await insertBox({ state: BoxState.STARTED })
+
+        expect(await runAgainstDeletion(() => write(serviceForPersistedBox()))).toBe(true)
+
+        expect(await openPeriods()).toHaveLength(0)
+      },
+      10_000,
+    )
+
+    it('the roll-over waits for the request and then only closes', async () => {
+      await insertBox({ state: BoxState.STARTED })
+      await openPeriod({ startAt: new Date(Date.now() - DAY_MS - 60_000) })
+
+      expect(await runAgainstDeletion(() => serviceForPersistedBox().closeAndReopenUsagePeriods())).toBe(true)
+
+      expect(await periods.find()).toEqual([expect.objectContaining({ endAt: expect.any(Date) })])
+    }, 10_000)
+
+    it('the request waits for a period that is being opened', async () => {
+      await insertBox({ state: BoxState.STARTED })
+      const reader = dataSource.createQueryRunner()
+      await reader.connect()
+      await reader.startTransaction()
+      let opening: Promise<void> | undefined
+      let deleting: Promise<unknown> | undefined
+      try {
+        // Holds the opening transaction after it locked the box and before it writes the period.
+        await reader.query('LOCK TABLE box_usage_periods IN ACCESS EXCLUSIVE MODE')
+        const [{ pid }] = await reader.query(`SELECT pg_backend_pid()::int AS pid`)
+        opening = serviceForPersistedBox().handleBoxStateUpdate(stateEvent(BoxState.STARTED))
+        expect(await isBlockedBy(pid)).toBe(true)
+        const [{ opener }] = await dataSource.query(
+          `SELECT pid AS opener FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`,
+          [pid],
+        )
+        deleting = requestDeletion()
+        expect(await isBlockedBy(opener)).toBe(true)
+        await reader.commitTransaction()
+        await Promise.all([opening, deleting])
+      } finally {
+        if (reader.isTransactionActive) await reader.rollbackTransaction()
+        await Promise.allSettled([opening, deleting])
+        await reader.release()
+      }
+
+      expect(await openPeriods()).toHaveLength(1)
+    }, 10_000)
+
+    it('opens no period for a box whose row is gone', async () => {
+      await serviceForPersistedBox().handleBoxStateUpdate(stateEvent(BoxState.STARTED))
+
+      expect(await openPeriods()).toHaveLength(0)
+    })
   })
 
   // The ledger is maintained by in-process events, which are fire-and-forget: a

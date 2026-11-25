@@ -10,6 +10,7 @@ import { resolve } from 'node:path'
 import { parse } from 'yaml'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { RegistriesService } from '../registry/services/registries.service'
+import { BoxCostService } from '../usage/services/box-cost.service'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
 import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
@@ -76,6 +77,30 @@ describe('Box API checkpoint schemas', () => {
     const page = JSON.parse(JSON.stringify(await controller.list(auth)))
     expect(validator('CheckpointList')(page)).toBe(true)
     expect(validator('ServerConfig')(new BoxliteConfigController().getConfig())).toBe(true)
+  })
+})
+
+describe('Box API cost schema', () => {
+  it('validates actual accruing and final costs', async () => {
+    const snapshot = {
+      checkedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(0),
+      unarchived: [],
+      undelivered: [],
+    }
+    const price = jest.fn().mockResolvedValue({ lines: [], totalUsd: null })
+    for (const ended of [false, true]) {
+      const service = new BoxCostService(
+        { query: async () => [{ ...snapshot, ended }] } as never,
+        { price } as never,
+        null,
+      )
+      const cost = await service.getCost('aB3cD4eF5gH6', 'org-1')
+      expect(cost.total_usd).toBe(ended ? '0' : null)
+      expect(validator('BoxCost')(cost)).toBe(true)
+      expect(validator('BoxCost')({ ...cost, total_usd: 0 })).toBe(false)
+    }
   })
 })
 

@@ -11,6 +11,7 @@ import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 import { CommerceBoxLimitService } from '../boxlite-rest/commerce-box-limit.service'
+import { BoxCostService } from '../usage/services/box-cost.service'
 import { Box } from '../box/entities/box.entity'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
@@ -46,6 +47,7 @@ describe('audit targets at HTTP boundaries', () => {
         { provide: BoxStateWaiterService, useValue: { waitForStarted } },
         { provide: CommerceBoxLimitService, useValue: { resolveMaxCreatedBoxes: async () => 10 } },
         { provide: CheckpointRecoverService, useValue: { createBox: createFromCheckpoint } },
+        { provide: BoxCostService, useValue: {} },
       ],
     })
       .overrideGuard(CombinedAuthGuard)

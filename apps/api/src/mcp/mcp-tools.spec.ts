@@ -224,6 +224,7 @@ const API_KEY_ONLY = [
   'claimDomain',
   'bindDomain',
   'unbindDomain',
+  'getBoxCost',
   'listRegistries',
   'createRegistry',
   'removeRegistry',

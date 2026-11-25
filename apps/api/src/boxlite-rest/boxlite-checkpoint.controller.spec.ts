@@ -26,6 +26,8 @@ import { OrganizationService } from '../organization/services/organization.servi
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { SystemRole } from '../user/enums/system-role.enum'
 import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
+import { BoxCostService } from '../usage/services/box-cost.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxService } from '../box/services/box.service'
@@ -113,6 +115,7 @@ describe('Checkpoint REST authentication and request admission', () => {
         { provide: BoxService, useValue: boxes },
         { provide: BoxStateWaiterService, useValue: waiter },
         { provide: CommerceBoxLimitService, useValue: limits },
+        { provide: BoxCostService, useValue: {} },
         { provide: getRedisConnectionToken(), useValue: redis },
         { provide: OrganizationService, useValue: { findOne: async (id: string) => ({ id }) } },
         {
@@ -145,7 +148,10 @@ describe('Checkpoint REST authentication and request admission', () => {
             ),
         },
       ],
-    }).compile()
+    })
+      .overrideGuard(AuthenticatedRateLimitGuard)
+      .useValue({ canActivate: () => true })
+      .compile()
     app = module.createNestApplication()
     app.setGlobalPrefix('api')
     app.useGlobalInterceptors(

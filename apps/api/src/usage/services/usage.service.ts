@@ -128,20 +128,12 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         signal.throwIfAborted()
         switch (event.newState) {
           case BoxState.STARTED: {
-            await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
-              const transitionAt = new Date()
-              await this.closeUsagePeriod(event.box.id, transactionalEntityManager, transitionAt)
-              signal.throwIfAborted()
-              await this.openUsagePeriodFor(event.box, event.newState, transactionalEntityManager, transitionAt)
-              signal.throwIfAborted()
-            })
+            await this.replaceUsagePeriod(event, signal)
             break
           }
           // Billing stops charging compute the moment a stop is requested.
           case BoxState.STOPPING:
-            await this.closeUsagePeriod(event.box.id)
-            signal.throwIfAborted()
-            await this.openUsagePeriodFor(event.box, event.newState)
+            await this.replaceUsagePeriod(event, signal)
             break
           // Safeguards if STOPPING state is skipped
           case BoxState.STOPPED: {
@@ -154,9 +146,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
             })
             signal.throwIfAborted()
             if (cpuUsagePeriod) {
-              await this.closeUsagePeriod(event.box.id)
-              signal.throwIfAborted()
-              await this.openUsagePeriodFor(event.box, event.newState)
+              await this.replaceUsagePeriod(event, signal)
             }
             break
           }
@@ -174,25 +164,51 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
   }
 
   /**
-   * Opens the period the box's current state calls for. A box that bills nothing
-   * (terminal) or whose state is still in flight gets none — the caller has
-   * already closed whatever was open.
+   * Closes the open period and opens the one the box's new state calls for, if
+   * it calls for any.
    */
-  private async openUsagePeriodFor(box: Box, state: BoxState, entityManager?: EntityManager, startAt?: Date) {
-    // The event's newState is the authority on where the box landed; the entity
-    // it carries is a snapshot, and a synthetic transition may have been built
-    // with a state of its own (see the warm-pool claim in box.service.ts).
-    const expected = expectedOpenPeriod({ ...box, state })
-    if (expected === null) {
-      return
-    }
-    await this.createUsagePeriod(box, expected, entityManager, startAt)
+  private async replaceUsagePeriod(event: BoxStateUpdatedEvent, signal: AbortSignal) {
+    await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+      const current = await this.lockBox(event.box.id, transactionalEntityManager)
+      signal.throwIfAborted()
+      const transitionAt = new Date()
+      await this.closeUsagePeriod(event.box.id, transactionalEntityManager, transitionAt)
+      signal.throwIfAborted()
+      if (!current) {
+        return
+      }
+      // The event's newState is the authority on where the box landed; the entity
+      // it carries is a snapshot, and a synthetic transition may have been built
+      // with a state of its own (see the warm-pool claim in box.service.ts).
+      const expected = expectedOpenPeriod({
+        ...event.box,
+        state: event.newState,
+        desiredState: current.desiredState,
+      })
+      if (expected !== null) {
+        await this.createUsagePeriod(event.box, expected, transactionalEntityManager, transitionAt)
+      }
+      signal.throwIfAborted()
+    })
+  }
+
+  /**
+   * Every transaction that opens a period locks the box first. A deletion request
+   * updates the same row, so it either sees the period committed or stops it from
+   * opening: no period opens once deletion is requested.
+   */
+  private lockBox(boxId: string, entityManager: EntityManager): Promise<Box | null> {
+    return entityManager.findOne(Box, {
+      where: { id: boxId },
+      lock: { mode: 'pessimistic_write' },
+      loadEagerRelations: false,
+    })
   }
 
   private async createUsagePeriod(
     box: Pick<Box, 'id' | 'organizationId' | 'region'>,
     shape: UsagePeriodShape,
-    entityManager?: EntityManager,
+    entityManager: EntityManager,
     startAt = new Date(),
   ) {
     const usagePeriod = new BoxUsagePeriod()
@@ -206,7 +222,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     usagePeriod.organizationId = box.organizationId
     usagePeriod.region = box.region
 
-    await (entityManager ? entityManager.save(usagePeriod) : this.boxUsagePeriodRepository.save(usagePeriod))
+    await entityManager.save(usagePeriod)
   }
 
   private async closeUsagePeriod(boxId: string, entityManager?: EntityManager, endAt = new Date()) {
@@ -263,11 +279,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
                 boxSignal.throwIfAborted()
                 // Keep current attribution stable through the rollover, and use
                 // one Box -> usage-period lock order for competing writers.
-                const box = await transactionalEntityManager.findOne(Box, {
-                  where: { id: usagePeriod.boxId },
-                  lock: { mode: 'pessimistic_write' },
-                  loadEagerRelations: false,
-                })
+                const box = await this.lockBox(usagePeriod.boxId, transactionalEntityManager)
                 boxSignal.throwIfAborted()
 
                 const currentUsagePeriod = await transactionalEntityManager.findOne(BoxUsagePeriod, {
@@ -440,36 +452,34 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       lease,
       async (signal) => {
         signal.throwIfAborted()
-        const box = await this.boxRepository.findOne({ where: { id: candidate.box_id } })
-        signal.throwIfAborted()
-        const expected = expectedOpenPeriod(box)
+        const repaired = await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+          const box = await this.lockBox(candidate.box_id, transactionalEntityManager)
+          signal.throwIfAborted()
+          const expected = expectedOpenPeriod(box)
 
-        const open = await this.boxUsagePeriodRepository.findOne({
-          where: { boxId: candidate.box_id, endAt: IsNull() },
-        })
-        signal.throwIfAborted()
+          const open = await transactionalEntityManager.findOne(BoxUsagePeriod, {
+            where: { boxId: candidate.box_id, endAt: IsNull() },
+          })
+          signal.throwIfAborted()
 
-        if (expected === null) {
-          if (!open) {
-            return
+          if (expected === null) {
+            if (!open) {
+              return null
+            }
+            await this.closeUsagePeriod(candidate.box_id, transactionalEntityManager)
+            signal.throwIfAborted()
+            return 'orphan' as const
           }
-          await this.closeUsagePeriod(candidate.box_id)
-          signal.throwIfAborted()
-          this.recordDrift('orphan', candidate.box_id)
-          return
-        }
 
-        if (
-          open &&
-          sameShape(open, expected) &&
-          open.organizationId === box.organizationId &&
-          open.region === box.region
-        ) {
-          return
-        }
+          if (
+            open &&
+            sameShape(open, expected) &&
+            open.organizationId === box.organizationId &&
+            open.region === box.region
+          ) {
+            return null
+          }
 
-        await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
-          signal.throwIfAborted()
           if (open) {
             open.endAt = new Date()
             await transactionalEntityManager.save(open)
@@ -477,9 +487,12 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
           signal.throwIfAborted()
           await this.createUsagePeriod(box, expected, transactionalEntityManager)
           signal.throwIfAborted()
+          return open ? ('stale_shape' as const) : ('missing' as const)
         })
         signal.throwIfAborted()
-        this.recordDrift(open ? 'stale_shape' : 'missing', candidate.box_id)
+        if (repaired) {
+          this.recordDrift(repaired, candidate.box_id)
+        }
       },
       `usage period ${candidate.box_id}`,
     ).catch((error) => {
