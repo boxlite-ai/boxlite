@@ -50,9 +50,9 @@ fn build_gvproxy(source_dir: &Path, output_path: &Path) {
 }
 
 fn main() {
-    // Rebuild when any Go source file changes.
+    // Rebuild when Go sources, module files, or embedded address tables change.
     // cargo:rerun-if-changed on a directory only detects file additions/removals,
-    // not content changes. Walk the directory and watch each .go file individually.
+    // not content changes. Watch the bridge inputs individually.
     let bridge_dir = Path::new("gvproxy-bridge");
     if bridge_dir.is_dir() {
         for entry in fs::read_dir(bridge_dir).expect("Failed to read gvproxy-bridge directory") {
@@ -60,7 +60,7 @@ fn main() {
             let path = entry.path();
             if path
                 .extension()
-                .is_some_and(|ext| ext == "go" || ext == "mod" || ext == "sum")
+                .is_some_and(|ext| ext == "go" || ext == "mod" || ext == "sum" || ext == "csv")
             {
                 println!("cargo:rerun-if-changed={}", path.display());
             }
