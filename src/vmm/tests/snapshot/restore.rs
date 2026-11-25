@@ -17,8 +17,8 @@ use std::{
 };
 
 use boxlite_hypervisor::{
-    KvmVm, MemoryRegion, Vcpu, VcpuExit, X86BootRegisters, X86CpuidEntry, X86Msr, X86Vcpu,
-    X86VcpuState, X86Vm, X86VmState,
+    IoCompletion, KvmVm, MemoryRegion, Vcpu, VcpuExit, X86BootRegisters, X86CpuidEntry, X86Msr,
+    X86Vcpu, X86VcpuState, X86Vm, X86VmState,
 };
 use vm_memory::{Bytes, GuestAddress};
 
@@ -178,7 +178,7 @@ impl Vcpu for Cpu {
         self.inner.run()
     }
 
-    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<Option<VcpuExit<'_>>> {
+    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<IoCompletion<'_>> {
         self.inner.complete_pending_io()
     }
 
@@ -388,22 +388,20 @@ fn pause_during_restore_startup_parks_vcpus_before_guest_entry() {
             observed.recv_timeout(WAIT).unwrap(),
             Install::Cpu(id, _) if id == u32::from(COUNT - 1)
         ) {}
-        thread::scope(|scope| {
-            let pause = scope.spawn(|| control.pause());
-            // Observe acceptance before the last vCPU's setup hold can time out.
-            let deadline = Instant::now() + WAIT / 2;
-            while control.status() == VmStatus::Running && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(1));
-            }
-            let status = control.status();
-            release.send(()).unwrap();
-            assert_eq!(
-                status,
-                VmStatus::Pausing,
-                "pause must be accepted during setup"
-            );
-            pause.join().unwrap().unwrap();
-        });
+        control.pause().unwrap();
+        // Observe acceptance before the last vCPU's setup hold can time out.
+        let deadline = Instant::now() + WAIT / 2;
+        while control.status() == VmStatus::Running && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let status = control.status();
+        release.send(()).unwrap();
+        assert_eq!(
+            status,
+            VmStatus::Pausing,
+            "pause must be accepted during setup"
+        );
+        control.wait_paused(WAIT).unwrap();
 
         assert_eq!(control.status(), VmStatus::Paused);
         assert!(entries.lock().unwrap().is_empty());
@@ -672,6 +670,7 @@ fn export_after_progress(
         control.resume().unwrap();
         thread::sleep(Duration::from_millis(10));
         control.pause().unwrap();
+        control.wait_paused(WAIT).unwrap();
         control.export(&files.state, &files.memory).unwrap();
         if progressed(&files.memory) {
             return;
@@ -825,6 +824,7 @@ fn kvm_split_ram_export_destroy_restore_resume_continues_both_counters() {
             thread::sleep(Duration::from_millis(10));
         }
         control.pause().unwrap();
+        control.wait_paused(WAIT).unwrap();
         // The release byte takes effect when the restored vCPU resumes.
         memory.write_obj(1u8, RELEASE).unwrap();
         control.export(&files.state, &files.memory).unwrap();
@@ -984,6 +984,7 @@ fn linux_wait_for_progress(
         control.resume().unwrap();
         thread::sleep(Duration::from_millis(200));
         control.pause().unwrap();
+        control.wait_paused(WAIT).unwrap();
         control.export(&files.state, &files.memory).unwrap();
         let after = linux_snapshot(files);
         files.remove();
