@@ -49,6 +49,18 @@ export class AdvancedBoxOptionsDto {
   capabilities?: never
 }
 
+@ValidatorConstraint({ name: 'oneMountRequestShape', async: false })
+class OneMountRequestShapeConstraint implements ValidatorConstraintInterface {
+  validate(_value: unknown, args: ValidationArguments): boolean {
+    const request = args.object as { volumes?: unknown[]; mounts?: unknown[] }
+    return !(request.volumes?.length && request.mounts?.length)
+  }
+
+  defaultMessage(): string {
+    return 'volumes and mounts must not both contain entries in one request'
+  }
+}
+
 @ValidatorConstraint({ name: 'isNetworkAllowEntry', async: false })
 class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
   validate(value: unknown): boolean {
@@ -207,14 +219,31 @@ export class VolumeSpecDto {
   @IsString()
   guest_path: string
 
-  /**
-   * Read-only mounts are not implemented yet. Rejected rather than silently
-   * downgraded to read-write, which would hand the caller a writable mount
-   * they believe is protected.
-   */
   @ValidateIf((_, value) => value !== undefined)
-  @IsIn([false])
-  read_only?: false
+  @IsBoolean()
+  read_only?: boolean
+}
+
+export class MountSpecDto {
+  @IsIn(['volume'])
+  type: 'volume'
+
+  @IsString()
+  @IsNotEmpty()
+  source: string
+
+  @IsString()
+  @IsNotEmpty()
+  target: string
+
+  @ValidateIf((_, value) => value !== undefined)
+  @IsBoolean()
+  read_only?: boolean
+
+  @ValidateIf((_, value) => value !== undefined)
+  @IsString()
+  @IsNotEmpty({ message: 'sub_path must be omitted for a whole-volume mount' })
+  sub_path?: string
 }
 
 export class SecretSpecDto {
@@ -335,6 +364,14 @@ export class CreateBoxDto {
   @ValidateNested({ each: true })
   @Type(() => VolumeSpecDto)
   volumes?: VolumeSpecDto[]
+
+  @IsOptional()
+  @IsArray()
+  @ArrayNotEmpty()
+  @ValidateNested({ each: true })
+  @Validate(OneMountRequestShapeConstraint)
+  @Type(() => MountSpecDto)
+  mounts?: MountSpecDto[]
 
   @IsOptional()
   @IsArray()

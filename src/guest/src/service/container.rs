@@ -578,6 +578,7 @@ impl ContainerService for GuestServer {
                         &volume_dir,
                         sub_path,
                         m.read_only,
+                        m.create_missing,
                     ) {
                         Ok(mount) => {
                             let path = mount.path().to_path_buf();

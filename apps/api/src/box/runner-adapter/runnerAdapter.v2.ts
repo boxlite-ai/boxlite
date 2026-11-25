@@ -64,6 +64,10 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     const fresh = report?.state === RunnerState.READY && age >= 0 && age <= 60_000
     return {
       nestedVirtualizationEnabled: fresh && report.nestedVirtualizationEnabled === true,
+      // The report row is the v2 healthcheck projection. Requiring freshness
+      // prevents a runner that stopped advertising mount options from staying
+      // eligible through a stale capability.
+      capabilities: fresh ? (report.capabilities ?? []) : [],
     }
   }
 

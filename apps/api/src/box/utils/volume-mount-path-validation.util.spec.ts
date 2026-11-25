@@ -5,7 +5,7 @@
  */
 
 import { BoxVolume } from '../dto/box.dto'
-import { validateMountPaths } from './volume-mount-path-validation.util'
+import { validateMountPaths, validateSubpaths } from './volume-mount-path-validation.util'
 
 // The mount-path rules are backend-agnostic by construction: every volume
 // reference (managed and filestore alike) carries mountPath at the top level,
@@ -56,5 +56,44 @@ describe('validateMountPaths', () => {
       thrown = error
     }
     expect((thrown as Error).message).toContain('cannot mount to system directory')
+  })
+})
+
+describe('validateSubpaths', () => {
+  it('accepts omitted subpaths and ordinary relative components', () => {
+    expect(() => validateSubpaths([{ volumeId: 'vol', mountPath: '/data' }])).not.toThrow()
+    expect(() => validateSubpaths([{ volumeId: 'vol', mountPath: '/data', subpath: 'foo..bar/team' }])).not.toThrow()
+  })
+
+  it('rejects empty strings, separators, traversal, limits, and wrong types', () => {
+    const cases = [
+      '',
+      '/team/backend',
+      'team/backend/',
+      'team//backend',
+      '.',
+      '..',
+      'team/..',
+      'foo\0bar',
+      'a'.repeat(256),
+      `${'a'.repeat(100)}/`.repeat(64) + 'a',
+      42,
+      null,
+    ]
+
+    for (const subpath of cases) {
+      expect(() => validateSubpaths([{ volumeId: 'vol', mountPath: '/data', subpath } as any])).toThrow()
+    }
+  })
+
+  it('allows exactly 64 components and 4096 bytes', () => {
+    const components = Array.from({ length: 64 }, () => 'a')
+    expect(() =>
+      validateSubpaths([{ volumeId: 'vol', mountPath: '/data', subpath: components.join('/') }]),
+    ).not.toThrow()
+
+    const long = ['a'.repeat(254), 'a'.repeat(254), 'a'.repeat(254), 'a'.repeat(254)]
+    expect(long.join('/')).toHaveLength(4096)
+    expect(() => validateSubpaths([{ volumeId: 'vol', mountPath: '/data', subpath: long.join('/') }])).not.toThrow()
   })
 })

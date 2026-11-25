@@ -47,8 +47,13 @@ impl Drop for MountpointGuard {
 }
 
 impl ResolvedMount {
-    pub(crate) fn pin(payload_root: &Path, sub_path: &str, read_only: bool) -> BoxliteResult<Self> {
-        Self::pin_with_hook(payload_root, sub_path, read_only, || {})
+    pub(crate) fn pin(
+        payload_root: &Path,
+        sub_path: &str,
+        read_only: bool,
+        create_missing: bool,
+    ) -> BoxliteResult<Self> {
+        Self::pin_with_hook(payload_root, sub_path, read_only, create_missing, || {})
     }
 
     /// Pin a volume subdirectory at a temporary mountpoint.
@@ -60,9 +65,10 @@ impl ResolvedMount {
         payload_root: &Path,
         sub_path: &str,
         read_only: bool,
+        create_missing: bool,
         before_pin: impl FnOnce(),
     ) -> BoxliteResult<Self> {
-        let directory = open_subdir(payload_root, sub_path)?;
+        let directory = open_subdir(payload_root, sub_path, create_missing)?;
         before_pin();
         // Pre-create a unique directory before mounting so the move target is
         // private and can be removed deterministically on error.
@@ -153,11 +159,18 @@ fn cleanup_mountpoint(path: &Path, mounted: bool) {
 /// `RESOLVE_BENEATH` keeps resolution under the volume root, while refusing
 /// symlinks and magic links prevents a payload-controlled link from redirecting
 /// to a host path outside the volume.
-fn open_subdir(payload_root: &Path, sub_path: &str) -> BoxliteResult<OwnedFd> {
+fn open_subdir(
+    payload_root: &Path,
+    sub_path: &str,
+    create_missing: bool,
+) -> BoxliteResult<OwnedFd> {
     validate_sub_path(sub_path)?;
+    // O_NOFOLLOW closes the TOCTOU gap on the boundary itself: the guest never
+    // follows a volume root that was replaced by a symlink after the host's
+    // lstat check. Every component below is opened with openat2 no-follow flags.
     let root = open(
         payload_root,
-        OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC,
+        OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW,
         Mode::empty(),
     )
     .map_err(|error| BoxliteError::Storage(format!("open volume payload: {error}")))?;
@@ -168,9 +181,39 @@ fn open_subdir(payload_root: &Path, sub_path: &str) -> BoxliteResult<OwnedFd> {
                 | ResolveFlag::RESOLVE_NO_SYMLINKS
                 | ResolveFlag::RESOLVE_NO_MAGICLINKS,
         );
-    let fd = openat2(root.as_raw_fd(), sub_path, how)
-        .map_err(|error| sub_path_error(sub_path, error))?;
-    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    let mut current = root;
+    for component in sub_path.split('/') {
+        let mut component_bytes = component.as_bytes().to_vec();
+        component_bytes.push(0);
+        let component = std::ffi::CStr::from_bytes_with_nul(&component_bytes)
+            .map_err(|_| BoxliteError::InvalidArgument(format!("invalid volume sub_path {sub_path:?}")))?;
+        let fd = match openat2(current.as_raw_fd(), component, how) {
+            Ok(fd) => fd,
+            Err(nix::errno::Errno::ENOENT) if create_missing => {
+                // RW cloud mounts are the only caller with create_missing=true.
+                // mkdirat stays beneath the current descriptor and mode is still
+                // subject to the process umask, matching the cloud contract.
+                let result = unsafe {
+                    nix::libc::mkdirat(
+                        current,
+                        component.as_ptr(),
+                        Mode::from_bits_truncate(0o755).bits(),
+                    )
+                };
+                if result != 0 {
+                    return Err(BoxliteError::Storage(format!(
+                        "create volume sub_path {sub_path:?} component {component:?}: {}",
+                        nix::errno::Errno::last()
+                    )));
+                }
+                openat2(current.as_raw_fd(), component, how)
+                    .map_err(|error| sub_path_error(sub_path, error))?
+            }
+            Err(error) => return Err(sub_path_error(sub_path, error)),
+        };
+        current = fd;
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(current) })
 }
 
 fn sub_path_error(sub_path: &str, error: nix::errno::Errno) -> BoxliteError {
@@ -246,10 +289,11 @@ mod tests {
         std::fs::write(backend.join("result"), b"original").unwrap();
         std::fs::write(sibling.join("secret"), b"secret").unwrap();
 
-        let resolved = ResolvedMount::pin_with_hook(root.path(), "team/backend", true, || {
-            std::fs::rename(&backend, &moved).unwrap();
-            std::os::unix::fs::symlink(&sibling, &backend).unwrap();
-        });
+        let resolved =
+            ResolvedMount::pin_with_hook(root.path(), "team/backend", true, false, || {
+                std::fs::rename(&backend, &moved).unwrap();
+                std::os::unix::fs::symlink(&sibling, &backend).unwrap();
+            });
         let resolved = resolved.expect("pin the original directory");
         assert_eq!(
             std::fs::read(resolved.path().join("result")).unwrap(),
@@ -270,6 +314,63 @@ mod tests {
     fn missing_openat2_is_unsupported() {
         let error = sub_path_error("workspace", nix::errno::Errno::ENOSYS);
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_write_resolves_creates_missing_components_but_read_only_does_not() {
+        let root = tempfile::tempdir().unwrap();
+
+        let created = open_subdir(root.path(), "team/backend", true).unwrap();
+        assert!(root.path().join("team/backend").is_dir());
+        drop(created);
+
+        let empty = tempfile::tempdir().unwrap();
+        let error = open_subdir(empty.path(), "team/backend", false).unwrap_err();
+        assert!(matches!(error, BoxliteError::NotFound(_)), "{error:?}");
+        assert!(!empty.path().join("team").exists());
+        assert!(!empty.path().join("team/backend").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resolver_rejects_symlink_components_and_files_without_following_them() {
+        let root = tempfile::tempdir().unwrap();
+        let secret = root.path().join("secret");
+        std::fs::create_dir(&secret).unwrap();
+        std::fs::write(secret.join("value"), b"secret").unwrap();
+        std::os::unix::fs::symlink(&secret, root.path().join("team")).unwrap();
+        std::fs::write(root.path().join("file"), b"file").unwrap();
+
+        for create_missing in [false, true] {
+            let error = open_subdir(root.path(), "team/value", create_missing).unwrap_err();
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "create_missing={create_missing}: {error:?}"
+            );
+            assert!(!root.path().join("team/value").exists());
+        }
+
+        let error = open_subdir(root.path(), "file", false).unwrap_err();
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resolver_never_follows_a_symlink_volume_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let real = parent.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("value"), b"secret").unwrap();
+        let link = parent.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let error = open_subdir(&link, "value", false).unwrap_err();
+        assert!(matches!(error, BoxliteError::Storage(_)), "{error:?}");
+        assert!(std::fs::read(real.join("value")).is_ok());
     }
 
     #[test]
@@ -305,7 +406,7 @@ mod tests {
         let payload = parent.path().join("payload");
         std::fs::create_dir_all(payload.join("subdir")).unwrap();
 
-        let resolved = ResolvedMount::pin(&payload, "subdir", false)
+        let resolved = ResolvedMount::pin(&payload, "subdir", false, false)
             .expect("pin must succeed before testing cleanup");
         let mountpoint = resolved.path().to_path_buf();
         assert!(mountpoint.exists());

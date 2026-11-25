@@ -59,6 +59,7 @@ func runnerInfoResponse(collected *metrics.Metrics, servicesInfo []models.Runner
 		},
 		AppVersion:         internal.Version,
 		SupportsPrivileged: true,
+		Capabilities:       []string{dto.VolumeMountOptionsCapability},
 	}
 }
 

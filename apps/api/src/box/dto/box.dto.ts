@@ -88,10 +88,17 @@ export class BoxVolume {
 
   @ApiPropertyOptional({
     description:
-      'Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted.',
+      'Optional relative subdirectory within the volume. Cloud read-write mounts create a missing subpath; cloud read-only mounts fail without creating it. When omitted, the entire volume is mounted.',
     example: 'users/alice',
   })
   subpath?: string
+
+  @ApiPropertyOptional({
+    description:
+      'Mount this Box read-only. The mount is enforced by the runtime, not only by the guest mount flags. Defaults to false.',
+    example: false,
+  })
+  readOnly?: boolean
 }
 
 @ApiSchema({ name: 'BoxSecret' })

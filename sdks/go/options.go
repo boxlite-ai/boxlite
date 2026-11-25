@@ -267,7 +267,9 @@ type volumeEntry struct {
 	managedVolume string
 	hostPath      string
 	guestPath     string
+	subPath       string
 	readOnly      bool
+	cloudVolume   bool
 }
 
 // WithName sets a human-readable name for the box.
@@ -356,6 +358,25 @@ func WithBindMountReadOnly(hostPath, guestPath string) BoxOption {
 		c.checkpointOverride = true
 
 		c.volumes = append(c.volumes, volumeEntry{hostPath: hostPath, guestPath: guestPath, readOnly: true})
+	}
+}
+
+// WithBindMountSubPath binds one relative directory from a cloud-managed
+// volume root. An empty subPath selects the whole root.
+//
+// A read-only mount never creates anything. A read-write mount asks the guest
+// to create missing subpath components only inside hostRoot.
+func WithBindMountSubPath(hostRoot, guestTarget, subPath string, readOnly bool) BoxOption {
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+
+		c.volumes = append(c.volumes, volumeEntry{
+			hostPath:    hostRoot,
+			guestPath:   guestTarget,
+			subPath:     subPath,
+			readOnly:    readOnly,
+			cloudVolume: true,
+		})
 	}
 }
 
@@ -639,7 +660,13 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 			C.free(unsafe.Pointer(cVolume))
 		} else {
 			cHost := toCString(volume.hostPath)
-			C.boxlite_options_add_bind_mount(cOpts, cHost, cGuest, readOnly)
+			if volume.cloudVolume {
+				cSub := toCString(volume.subPath)
+				C.boxlite_options_add_bind_mount_subdir(cOpts, cHost, cGuest, cSub, readOnly)
+				C.free(unsafe.Pointer(cSub))
+			} else {
+				C.boxlite_options_add_bind_mount(cOpts, cHost, cGuest, readOnly)
+			}
 			C.free(unsafe.Pointer(cHost))
 		}
 		C.free(unsafe.Pointer(cGuest))

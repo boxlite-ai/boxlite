@@ -808,7 +808,7 @@ func TestFilestoreInstanceIsPathGuarded(t *testing.T) {
 	}
 }
 
-func TestFilestoreVolumeRejectsSubpath(t *testing.T) {
+func TestFilestoreVolumePlansSubpathWithoutCreatingIt(t *testing.T) {
 	ctx := context.Background()
 	base := t.TempDir()
 	useVolumeMountBasePath(t, base)
@@ -816,18 +816,25 @@ func TestFilestoreVolumeRejectsSubpath(t *testing.T) {
 	c := filestoreTestClient(t)
 	fake := installFakeFilestoreMounts(t, c)
 	subpath := "nested"
+	readonly := false
 
-	_, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
-		{VolumeId: "vol-1", MountPath: "/data", Subpath: &subpath, Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
+	mount, err := c.getVolumeMounts(ctx, "box1", []dto.VolumeDTO{
+		{VolumeId: "vol-1", MountPath: "/data", Subpath: &subpath, ReadOnly: readonly, Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}},
 	})
-	if err == nil {
-		t.Fatal("expected filestore plus subpath to be refused, got nil")
+	if err != nil {
+		t.Fatalf("getVolumeMounts failed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "subpath is not supported for filestore volumes") {
-		t.Fatalf("expected the filestore subpath error, got %q", err)
+	if mount[0].hostPath != filestoreDataDir(filepath.Join(base, filestoreMountPrefix+"ml-scratch"), "vol-1") {
+		t.Fatalf("hostPath = %q, want the Filestore volume root", mount[0].hostPath)
 	}
-	if fake.mounts.Load() != 0 {
-		t.Errorf("mount command ran %d times; subpath rejection must precede mount work", fake.mounts.Load())
+	if mount[0].subPath != subpath || mount[0].readOnly != readonly {
+		t.Fatalf("mount = %#v, want subPath=%q readOnly=%t", mount[0], subpath, readonly)
+	}
+	if _, err := os.Lstat(filepath.Join(mount[0].hostPath, subpath)); !os.IsNotExist(err) {
+		t.Fatalf("Runner created subpath before guest resolution (stat err: %v)", err)
+	}
+	if fake.mounts.Load() != 1 {
+		t.Errorf("mount command ran %d times; a valid Filestore volume must mount its NFS root once", fake.mounts.Load())
 	}
 }
 

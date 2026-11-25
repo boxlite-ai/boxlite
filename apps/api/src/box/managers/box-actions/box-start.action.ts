@@ -8,9 +8,11 @@ import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
 import { BoxState } from '../../enums/box-state.enum'
+import { Runner } from '../../entities/runner.entity'
+import { BoxVolume } from '../../dto/box.dto'
 import { DONT_SYNC_AGAIN, BoxAction, SYNC_AGAIN, SyncState } from './box.action'
 import { RunnerState } from '../../enums/runner-state.enum'
-import { RunnerService } from '../../services/runner.service'
+import { RunnerService, VOLUME_MOUNT_OPTIONS_CAPABILITY } from '../../services/runner.service'
 import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { OrganizationService } from '../../../organization/services/organization.service'
 import { TypedConfigService } from '../../../config/typed-config.service'
@@ -86,6 +88,18 @@ export class BoxStartAction extends BoxAction {
     const image = boxImageIsOrgOwned(box) ? box.image : await this.curatedImagePins.refFor(runner.id, box.image)
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+
+    if (requiresVolumeMountOptions(box.volumes) && !runnerSupportsVolumeMountOptions(runner)) {
+      await this.updateBoxState(
+        box,
+        BoxState.ERROR,
+        lockCode,
+        undefined,
+        'VOLUME_MOUNT_OPTIONS_UNSUPPORTED: runner does not support readOnly or subpath mounts',
+      )
+      return DONT_SYNC_AGAIN
+    }
+
     await runnerAdapter.createBox(
       this.withVolumes(box, volumes),
       image,
@@ -118,6 +132,17 @@ export class BoxStartAction extends BoxAction {
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+
+    if (requiresVolumeMountOptions(box.volumes) && !runnerSupportsVolumeMountOptions(runner)) {
+      await this.updateBoxState(
+        box,
+        BoxState.ERROR,
+        lockCode,
+        undefined,
+        'VOLUME_MOUNT_OPTIONS_UNSUPPORTED: runner does not support readOnly or subpath mounts',
+      )
+      return DONT_SYNC_AGAIN
+    }
 
     let volumes: Box['volumes']
     try {
@@ -289,4 +314,12 @@ export class BoxStartAction extends BoxAction {
 
     await this.boxRepository.update(box.id, { updateData: { prevRunnerId: null } }, true)
   }
+}
+
+function requiresVolumeMountOptions(volumes: BoxVolume[] | undefined): boolean {
+  return !!volumes?.some((volume) => volume.readOnly === true || !!volume.subpath)
+}
+
+function runnerSupportsVolumeMountOptions(runner: Runner): boolean {
+  return runner.capabilities?.includes(VOLUME_MOUNT_OPTIONS_CAPABILITY) === true
 }

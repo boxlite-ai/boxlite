@@ -1211,6 +1211,14 @@ After:
 boxlite_options_add_bind_mount(opts, "/host/data", "/data", 0);
 /* managed volume by id or name (REST runtime) */
 boxlite_options_add_managed_volume(opts, "my-data", "/data", 0);
+/* cloud volume root or subdirectory; RW may create a missing subpath */
+boxlite_options_add_bind_mount_subdir(
+    opts, "/mnt/boxlite-volume-id", "/workspace", "team/backend", 0
+);
+/* the same boundary, read-only; never creates or modifies the volume */
+boxlite_options_add_bind_mount_subdir(
+    opts, "/mnt/boxlite-volume-id", "/workspace", "team/backend", 1
+);
 
 boxlite_volume_create(handle, "my-data", on_created, user_data, &err);
 boxlite_volume_create(handle, NULL, on_created, user_data, &err);  /* unnamed */

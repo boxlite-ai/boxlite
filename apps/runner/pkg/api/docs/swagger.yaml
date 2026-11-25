@@ -209,6 +209,10 @@ definitions:
     properties:
       appVersion:
         type: string
+      capabilities:
+        items:
+          type: string
+        type: array
       metrics:
         $ref: '#/definitions/RunnerMetrics'
       nestedVirtualizationEnabled:
@@ -314,6 +318,8 @@ definitions:
         $ref: '#/definitions/dto.FilestoreRef'
       mountPath:
         type: string
+      readOnly:
+        type: boolean
       subpath:
         type: string
       volumeId:

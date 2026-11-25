@@ -1847,6 +1847,18 @@ void boxlite_options_add_bind_mount(CBoxliteOptions *opts,
                                     const char *guest_path,
                                     int read_only);
 
+// Bind a directory from a cloud-managed volume root.
+//
+// `sub_path` is a validated relative path below `host_path`; an empty string
+// selects the whole root. When `read_only` is zero, the guest may create
+// missing subpath components inside `host_path`. A read-only mount never
+// creates or modifies the volume.
+void boxlite_options_add_bind_mount_subdir(CBoxliteOptions *opts,
+                                           const char *host_path,
+                                           const char *guest_path,
+                                           const char *sub_path,
+                                           int read_only);
+
 // Mount a managed volume, addressed by its server-assigned id **or** by its
 // name — the server resolves either.
 //

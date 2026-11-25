@@ -265,9 +265,11 @@ export class BoxService {
     runnerParams: GetRunnerParams,
     persist: (runner: Runner) => Promise<Box>,
   ): Promise<Box> {
-    const runner = await this.runnerService.getRandomAvailableRunner(
-      box.privileged ? { ...runnerParams, requiresPrivileged: true } : runnerParams,
-    )
+    const runner = await this.runnerService.getRandomAvailableRunner({
+      ...runnerParams,
+      ...(box.privileged ? { requiresPrivileged: true } : {}),
+      ...(requiresVolumeMountOptions(box.volumes) ? { requiresVolumeMountOptions: true } : {}),
+    })
     box.runnerId = runner.id
     return persist(runner)
   }
@@ -1772,4 +1774,8 @@ export class BoxService {
 
 function encodeDirectPreviewBoxId(boxId: string): string {
   return `d-${Buffer.from(boxId, 'utf8').toString('hex')}`
+}
+
+function requiresVolumeMountOptions(volumes: BoxVolume[] | undefined): boolean {
+  return !!volumes?.some((volume) => volume.readOnly === true || !!volume.subpath)
 }

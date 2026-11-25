@@ -65,7 +65,7 @@ describe('BoxLite lifecycle policy mapper', () => {
       volumes: [{ managed_volume: 'volume-123', guest_path: '/data', read_only: false }],
     })
 
-    expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data' }])
+    expect(mapped.volumes).toEqual([{ volumeId: 'volume-123', mountPath: '/data', readOnly: false }])
   })
 
   // A name is as valid as an id here; VolumeService.validateVolumes resolves
@@ -75,7 +75,30 @@ describe('BoxLite lifecycle policy mapper', () => {
       volumes: [{ managed_volume: 'customer-data', guest_path: '/data', read_only: false }],
     })
 
-    expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data' }])
+    expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data', readOnly: false }])
+  })
+
+  it('maps mounts and volumes to the same internal shape', () => {
+    expect(
+      createBoxToCreateBox({
+        mounts: [
+          {
+            type: 'volume',
+            source: 'volume-123',
+            target: '/workspace',
+            read_only: true,
+            sub_path: 'team/backend',
+          },
+        ],
+      }).volumes,
+    ).toEqual([
+      {
+        volumeId: 'volume-123',
+        mountPath: '/workspace',
+        readOnly: true,
+        subpath: 'team/backend',
+      },
+    ])
   })
 
   it('maps REST secret specs to secret placeholder rules', () => {

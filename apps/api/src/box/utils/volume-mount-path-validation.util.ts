@@ -61,6 +61,15 @@ export function validateMountPaths(volumes: BoxVolume[]): void {
 }
 
 /**
+ * Rejects exactly one complete ".." component while allowing ordinary names
+ * such as "foo..bar". Kept as a separate helper so the rule is explicit at the
+ * security boundary instead of hidden behind a substring check.
+ */
+export function containsPathTraversalComponent(subpath: string): boolean {
+  return subpath.split('/').some((component) => component === '..')
+}
+
+/**
  * Validates subpaths for box volumes to ensure they are safe S3 key prefixes
  * @param volumes - Array of BoxVolume objects to validate
  * @throws Error with descriptive message if any subpath is invalid
@@ -69,10 +78,14 @@ export function validateSubpaths(volumes: BoxVolume[]): void {
   const errors: string[] = []
 
   for (const volume of volumes) {
+    if (volume.readOnly !== undefined && typeof volume.readOnly !== 'boolean') {
+      errors.push('Invalid readOnly (must be a boolean)')
+    }
+
     const subpath = volume.subpath
 
     // Empty/undefined subpath is valid (means mount entire volume)
-    if (!subpath) {
+    if (subpath === undefined) {
       continue
     }
 
@@ -81,21 +94,45 @@ export function validateSubpaths(volumes: BoxVolume[]): void {
       continue
     }
 
-    // S3 keys should not start with /
-    if (subpath.startsWith('/')) {
-      errors.push(`Invalid subpath "${subpath}" (S3 key prefixes cannot start with /)`)
+    if (subpath === '') {
+      errors.push('Invalid subpath "" (omit subpath to mount the entire volume)')
       continue
     }
 
-    // Prevent path traversal
-    if (subpath.includes('..')) {
-      errors.push(`Invalid subpath "${subpath}" (cannot contain .. for security)`)
+    if (subpath.includes('\0')) {
+      errors.push(`Invalid subpath "${subpath}" (cannot contain NUL)`)
       continue
     }
 
-    // No consecutive slashes
-    if (subpath.includes('//')) {
-      errors.push(`Invalid subpath "${subpath}" (cannot contain consecutive slashes)`)
+    if (subpath.startsWith('/') || subpath.endsWith('/')) {
+      errors.push(`Invalid subpath "${subpath}" (must be a relative directory path without a trailing slash)`)
+      continue
+    }
+
+    if (Buffer.byteLength(subpath, 'utf8') > 4096) {
+      errors.push(`Invalid subpath "${subpath}" (must be at most 4096 bytes)`)
+      continue
+    }
+
+    if (subpath.split('/').length > 64) {
+      errors.push(`Invalid subpath "${subpath}" (must contain at most 64 path components)`)
+      continue
+    }
+
+    let componentError = false
+    for (const component of subpath.split('/')) {
+      if (component === '' || component === '.' || containsPathTraversalComponent(component)) {
+        errors.push(`Invalid subpath "${subpath}" (cannot contain empty, ".", or ".." path components)`)
+        componentError = true
+        break
+      }
+      if (Buffer.byteLength(component, 'utf8') > 255) {
+        errors.push(`Invalid subpath "${subpath}" (each path component must be at most 255 bytes)`)
+        componentError = true
+        break
+      }
+    }
+    if (componentError) {
       continue
     }
   }

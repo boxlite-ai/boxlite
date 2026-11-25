@@ -38,6 +38,12 @@ const MIN_PRIVILEGED_CONTAINER_GUEST_VERSION: crate::portal::interfaces::guest::
 /// with no `/dev/kvm` while the caller believes nesting was granted.
 const MIN_DEVICE_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
 
+/// Oldest guest release that understands `BindMount.create_missing`. Without
+/// this gate, a guest that only knows the earlier safe-subpath feature would
+/// ignore the field and turn a read-write cloud mount into fail-on-missing.
+const MIN_VOLUME_MOUNT_OPTIONS_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion =
+    (0, 14, 1);
+
 pub struct GuestInitTask;
 
 struct GuestBootstrapConfig {
@@ -237,6 +243,19 @@ async fn run_guest_init(
             }
         }
     };
+    if bootstrap.container.mounts.iter().any(|mount| {
+        matches!(
+            mount.payload,
+            crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+                create_missing: true,
+                ..
+            }
+        )
+    }) {
+        guest_interface
+            .require_min_version(MIN_VOLUME_MOUNT_OPTIONS_GUEST_VERSION)
+            .await?;
+    }
     guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");
 
@@ -346,6 +365,7 @@ mod tests {
         };
         let managed = mount(crate::volumes::ContainerMountPayload::ManagedSubDirectory {
             sub_path: "team/backend".to_string(),
+            create_missing: false,
         });
         assert!(requires_safe_volume_sub_path(&[managed]));
         assert!(!requires_safe_volume_sub_path(&[
@@ -494,6 +514,7 @@ mod tests {
                     owner_gid: 0,
                     payload: crate::volumes::ContainerMountPayload::ManagedSubDirectory {
                         sub_path: "team/backend".to_string(),
+                        create_missing: false,
                     },
                 }],
                 ca_certs: vec![],

@@ -51,6 +51,11 @@ pub struct ResolvedVolume {
     /// Owner GID of host directory (for auto-idmap in guest).
     pub owner_gid: u32,
     pub kind: ResolvedShareKind,
+    /// Whether the guest may create missing subpath directories.
+    ///
+    /// Only cloud read-write mounts enable this. It must remain false for
+    /// local named volumes so their existing fail-closed contract is kept.
+    pub create_missing: bool,
 }
 
 fn managed_share_kind(mount: &crate::volumes::ResolvedLocalMount) -> ResolvedShareKind {
@@ -110,6 +115,7 @@ pub fn resolve_user_volumes(
                 owner_uid: metadata.uid(),
                 owner_gid: metadata.gid(),
                 kind,
+                create_missing: false,
             });
             continue;
         }
@@ -123,28 +129,56 @@ pub fn resolve_user_volumes(
             )));
         }
 
-        let resolved_path = host_path.canonicalize().map_err(|e| {
-            BoxliteError::Config(format!(
-                "Failed to resolve volume path '{}': {}",
-                vol.host_path, e
-            ))
-        })?;
-
-        // A directory is shared as-is; a single file keeps its own path here and
-        // is staged into a dedicated share dir later (see vmm_spawn), so virtio-fs
-        // never exposes the file's host siblings.
-        let (source_path, kind) = match classify_volume_share(&resolved_path) {
-            Some(VolumeShare::Dir(dir)) => (dir, ResolvedShareKind::Directory),
-            Some(VolumeShare::File(file_name)) => (
-                resolved_path.clone(),
-                ResolvedShareKind::SingleFile { file_name },
-            ),
-            None => {
-                return Err(BoxliteError::Config(format!(
-                    "Volume host path is not a file or directory: {}",
+        // Cloud volume roots are boundary directories, not caller-owned paths.
+        // lstat intentionally rejects a missing root or a symlink root before
+        // the guest resolver runs. Read-only preparation must not create it.
+        let (source_path, kind, create_missing) = if vol.cloud_volume {
+            let metadata = host_path.symlink_metadata().map_err(|_| {
+                BoxliteError::NotFound(format!(
+                    "Cloud volume host path does not exist: {}",
+                    vol.host_path
+                ))
+            })?;
+            if !metadata.is_dir() {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "Cloud volume host path is not a real directory: {}",
                     vol.host_path
                 )));
             }
+            let sub_path = vol.sub_path.as_deref().unwrap_or("");
+            let kind = if sub_path.is_empty() {
+                ResolvedShareKind::ManagedDirectory
+            } else {
+                ResolvedShareKind::ManagedSubDirectory {
+                    sub_path: sub_path.to_owned(),
+                }
+            };
+            (host_path.clone(), kind, !vol.read_only)
+        } else {
+            let resolved_path = host_path.canonicalize().map_err(|e| {
+                BoxliteError::Config(format!(
+                    "Failed to resolve volume path '{}': {}",
+                    vol.host_path, e
+                ))
+            })?;
+
+            // A directory is shared as-is; a single file keeps its own path here and
+            // is staged into a dedicated share dir later (see vmm_spawn), so virtio-fs
+            // never exposes the file's host siblings.
+            let (source_path, kind) = match classify_volume_share(&resolved_path) {
+                Some(VolumeShare::Dir(dir)) => (dir, ResolvedShareKind::Directory),
+                Some(VolumeShare::File(file_name)) => (
+                    resolved_path.clone(),
+                    ResolvedShareKind::SingleFile { file_name },
+                ),
+                None => {
+                    return Err(BoxliteError::Config(format!(
+                        "Volume host path is not a file or directory: {}",
+                        vol.host_path
+                    )));
+                }
+            };
+            (source_path, kind, false)
         };
 
         let tag = format!("uservol{}", i);
@@ -152,10 +186,10 @@ pub fn resolve_user_volumes(
         // Owner comes from the mount target itself (file or dir) for guest idmap.
         let (owner_uid, owner_gid) = {
             use std::os::unix::fs::MetadataExt;
-            let meta = std::fs::metadata(&resolved_path).map_err(|e| {
+            let meta = std::fs::metadata(&source_path).map_err(|e| {
                 BoxliteError::Config(format!(
                     "Failed to stat volume path '{}': {}",
-                    resolved_path.display(),
+                    source_path.display(),
                     e
                 ))
             })?;
@@ -180,6 +214,7 @@ pub fn resolve_user_volumes(
             owner_uid,
             owner_gid,
             kind,
+            create_missing,
         });
     }
 
@@ -210,6 +245,7 @@ pub fn resolve_user_volumes(
                     owner_uid: metadata.uid(),
                     owner_gid: metadata.gid(),
                     kind,
+                    create_missing: false,
                 });
             }
             crate::runtime::options::MountType::Bind => {
@@ -218,6 +254,8 @@ pub fn resolve_user_volumes(
                     host_path: source.to_owned(),
                     guest_path: mount.target.clone(),
                     read_only: mount.read_only,
+                    sub_path: mount.sub_path.clone(),
+                    cloud_volume: false,
                 };
                 resolved.extend(resolve_user_volumes(&[bind], &[], store)?);
             }
@@ -496,6 +534,7 @@ mod tests {
             host_path: tmp.path().to_str().unwrap().to_string(),
             guest_path: "/data".to_string(),
             read_only: false,
+            ..Default::default()
         }];
         let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
             crate::runtime::options::BoxliteOptions {
@@ -729,6 +768,7 @@ mod tests {
             host_path: file_path.to_str().unwrap().to_string(),
             guest_path: "/etc/app.conf".to_string(),
             read_only: true,
+            ..Default::default()
         }];
         let runtime = crate::runtime::rt_impl::RuntimeImpl::new_for_test(
             crate::runtime::options::BoxliteOptions {

@@ -137,7 +137,16 @@ export class BoxliteBoxController {
     if (dto.checkpoint_id !== undefined) {
       return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
     }
-    if (dto.volumes?.length) this.assertCanAttachVolumes(authContext)
+
+    // Attaching a volume grants the box access to its data, so it is authorized
+    // independently of WRITE_BOXES: the caller must hold the volume permissions
+    // too. WRITE_BOXES alone must not reach another key's volumes.
+    if (dto.volumes?.length) {
+      this.assertCanAttachVolumes(authContext)
+    }
+    if (dto.mounts?.length) {
+      this.assertCanAttachVolumes(authContext)
+    }
     const organization = authContext.organization
     const createBoxDto = createBoxToCreateBox(dto)
     const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(organization.id)

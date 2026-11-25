@@ -255,6 +255,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       appVersion: response.data.appVersion,
       supportsPrivileged: response.data.supportsPrivileged,
       nestedVirtualizationEnabled: response.data.nestedVirtualizationEnabled,
+      capabilities: response.data.capabilities,
     }
   }
 

@@ -36,6 +36,7 @@ export interface RunnerInfo {
   metrics?: RunnerMetrics
   appVersion?: string
   supportsPrivileged?: boolean
+  capabilities?: string[]
 }
 
 export interface StartBoxResponse {

@@ -312,7 +312,11 @@ export class RunnerService {
       where: runnerFilter,
     })
 
-    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    const eligible = params.requiresVolumeMountOptions
+      ? runners.filter((runner) => runner.capabilities?.includes(VOLUME_MOUNT_OPTIONS_CAPABILITY))
+      : runners
+
+    return eligible.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
   }
 
   /**
@@ -617,6 +621,7 @@ export class RunnerService {
                       signal: abortController.signal,
                       infoFailed: runnerInfoFailed,
                       nestedVirtualizationEnabled: runnerInfo?.nestedVirtualizationEnabled,
+                      capabilities: runnerInfo?.capabilities,
                     },
                   )
                 })(),
@@ -1042,12 +1047,15 @@ export class RunnerService {
  */
 export const NO_AVAILABLE_RUNNERS = 'No available runners'
 
+export const VOLUME_MOUNT_OPTIONS_CAPABILITY = 'volume-mount-options'
+
 export class GetRunnerParams {
   regions?: string[]
   boxClass?: BoxClass
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
   requiresPrivileged?: boolean
+  requiresVolumeMountOptions?: boolean
 }
 
 interface AvailabilityScoreParams {

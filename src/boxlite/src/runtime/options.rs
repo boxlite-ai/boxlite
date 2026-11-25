@@ -1062,6 +1062,22 @@ pub struct VolumeSpec {
 
     /// Mount without write access.
     pub read_only: bool,
+
+    /// Relative directory selected from `host_path` for a cloud bind mount.
+    ///
+    /// This is persisted so stop/start keeps the exact mount target. `None`
+    /// means the whole cloud volume root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_path: Option<String>,
+
+    /// Marks a mount created through the cloud volume C ABI.
+    ///
+    /// Unlike a user-written host bind, the host path is always a managed
+    /// volume root: it must be a real directory, and its relative subpath is
+    /// safely created by the guest when the mount is writable. Persisting this
+    /// marker keeps restart behavior identical to create behavior.
+    #[serde(default)]
+    pub cloud_volume: bool,
 }
 
 impl VolumeSpec {
@@ -1072,6 +1088,8 @@ impl VolumeSpec {
             host_path: host_path.into(),
             guest_path: guest_path.into(),
             read_only: false,
+            sub_path: None,
+            cloud_volume: false,
         }
     }
 
@@ -1082,6 +1100,29 @@ impl VolumeSpec {
             host_path: String::new(),
             guest_path: guest_path.into(),
             read_only: false,
+            sub_path: None,
+            cloud_volume: false,
+        }
+    }
+
+    /// Bind one directory from a cloud-managed volume root.
+    ///
+    /// An empty `sub_path` selects the whole root. When writable, missing
+    /// subpath components may be created inside that root; read-only mounts
+    /// never create anything. The runner is responsible for preparing the
+    /// backend volume root itself before calling this option.
+    pub fn cloud_bind_mount(
+        host_path: impl Into<String>,
+        guest_path: impl Into<String>,
+        sub_path: impl Into<String>,
+        read_only: bool,
+    ) -> Self {
+        let sub_path = sub_path.into();
+        Self {
+            read_only,
+            sub_path: (!sub_path.is_empty()).then_some(sub_path),
+            cloud_volume: true,
+            ..Self::bind_mount(host_path, guest_path)
         }
     }
 
@@ -2689,6 +2730,7 @@ mod tests {
                 host_path: "/tmp/data".into(),
                 guest_path: "/data".into(),
                 read_only: false,
+                ..Default::default()
             }],
             ..Default::default()
         };
