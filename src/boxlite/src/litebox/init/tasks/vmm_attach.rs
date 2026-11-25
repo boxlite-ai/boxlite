@@ -56,7 +56,8 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
         let pid_file = layout.pid_file_path();
         let exit_file = layout.exit_file_path();
 
-        let pid = match PidFileReader::at(&pid_file).process_identity() {
+        let identity = PidFileReader::at(&pid_file).process_identity();
+        let pid = match identity {
             ProcessIdentity::Verified(pid) | ProcessIdentity::Legacy(pid) => {
                 // Live shim wins — archive any prior-lifecycle exit file
                 // so a future crash gets the canonical slot.
@@ -98,6 +99,25 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
                 return Err(BoxliteError::InvalidState(msg));
             }
         };
+
+        #[cfg(target_os = "linux")]
+        if network.is_some() {
+            use crate::net::gvproxy::CloudGuardRuntime;
+
+            let checked = match CloudGuardRuntime::from_host() {
+                Ok(Some(profile)) => {
+                    profile
+                        .verify_existing(&config_id, &layout.net_backend_socket_path(), identity)
+                        .await
+                }
+                Ok(None) => Ok(()),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = checked {
+                CloudGuardRuntime::isolate_rejected(&config_id, identity, &error).await?;
+                return Err(error);
+            }
+        }
 
         let handler = ShimHandler::from_pid(pid, config_id);
 

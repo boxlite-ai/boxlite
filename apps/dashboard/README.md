@@ -1201,10 +1201,12 @@ Overview presents provisioned CPU, memory and disk without implying measured usa
 
 ### Inspecting Box network policy
 
-The Overview Network section distinguishes disabled, unrestricted, restricted,
-and unknown outbound policies. Expand a restricted policy to inspect the exact
-API-reported destination rules; rules may contain hostnames or CIDRs. The
-console does not infer live traffic, reachability, or open guest ports.
+The Overview Network section distinguishes disabled, no Box allowlist,
+restricted, and unknown outbound policies. Expand a restricted policy to
+inspect the exact API-reported destination rules, including hostnames and CIDRs.
+
+Host protection still applies with an empty Box allowlist. The console reports
+policy from the API, independent of live traffic, reachability, and open ports.
 
 Domains lists organization-owned bindings targeting this Box, including the
 destination port. Other Boxes, application targets, and unbound domains are

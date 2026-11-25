@@ -111,6 +111,67 @@ pub(crate) fn reap_box(_box_id: &crate::runtime::id::BoxID) -> bool {
     false
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn box_contains_launcher(
+    box_id: &crate::runtime::id::BoxID,
+    pid: u32,
+) -> std::io::Result<bool> {
+    cgroup::contains_pid(box_id, pid)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn isolate_box(
+    box_id: &crate::runtime::id::BoxID,
+    launcher: Option<u32>,
+) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    if let Some(pid) = launcher
+        && !box_contains_launcher(box_id, pid)?
+    {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "launcher is outside its Box cgroup",
+        ));
+    }
+    let path = cgroup::cgroup_path(box_id.as_str());
+    if !cgroup::populated(&path)? {
+        return Ok(());
+    }
+    if !reap_box(box_id) && cgroup::populated(&path)? {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "cannot stop the Box cgroup",
+        ));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while cgroup::populated(&path)? {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        Ok(())
+    })
+    .await?
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn require_known_box_cgroups(
+    known: &std::collections::HashSet<&str>,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(cgroup::box_cgroup_root())? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir()
+            && !entry
+                .file_name()
+                .to_str()
+                .is_some_and(|id| known.contains(id))
+            && cgroup::populated(&entry.path())?
+        {
+            return Err(std::io::Error::other("untracked Box cgroup is populated"));
+        }
+    }
+    Ok(())
+}
+
 // Volume specification (convenience re-export)
 pub use crate::runtime::options::VolumeSpec;
 use crate::runtime::options::{MountSpec, MountType};

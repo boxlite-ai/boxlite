@@ -6,6 +6,12 @@
 - macOS (Apple Silicon) or Linux (x86_64/ARM64) with KVM
 - Python 3.10+ (for Python SDK development)
 
+The embedded gvproxy build uses Bash, Go, and Git. The build and tests apply
+the DNS resolver patch to a temporary copy of the pinned gvisor-tap-vsock
+module. Go dependency downloads remain reusable from the normal module cache.
+
+Vendored builds apply the same patch through a temporary Go build overlay.
+
 ## Quick start
 
 ```bash

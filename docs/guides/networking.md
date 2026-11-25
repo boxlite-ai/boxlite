@@ -7,9 +7,11 @@ Create boxes with a network policy, then replace either direction through `box.n
 ### Updating a running box
 
 Each `update_*` method replaces one complete direction; it never patches. The other direction is unchanged.
-Enabled outbound with an empty allowlist removes restrictions; disabled stops
-network traffic and replaces the list with an empty list. Omitted outbound rules
-use the default empty list; update methods do not merge or restore earlier rules.
+Enabled outbound with an empty allowlist removes Box-level restrictions.
+Host protection, including the [Cloud platform guard](../concepts/networking.md#cloud-platform-guard), still applies.
+Disabled stops network traffic and clears the Box allowlist.
+
+Omitted outbound rules use the default empty list. Each update takes only the supplied rules.
 An inbound allowlist is unsupported.
 
 ```python
@@ -58,7 +60,7 @@ object such as `{"mode":"enabled","allow_net":["example.com"]}`.
 ```bash
 boxlite network inbound mybox enabled
 boxlite network outbound mybox enabled --allow-net '*.example.com' --allow-net 10.0.0.0/8
-boxlite network outbound mybox enabled  # default empty list: unrestricted
+boxlite network outbound mybox enabled  # clears the Box allowlist
 boxlite network outbound mybox disabled
 boxlite inspect mybox
 ```
@@ -251,7 +253,7 @@ async with boxlite.SimpleBox(image="alpine:latest") as box:
     print(result.stdout)
 ```
 
-**From Box to Host Loopback:**
+**From a Local Box to host loopback**
 
 ```bash
 # On the host, start a service bound to loopback
@@ -268,11 +270,9 @@ async with boxlite.SimpleBox(image="alpine:latest") as box:
     print(result.stdout)
 ```
 
-`host.boxlite.internal` is a built-in BoxLite hostname that resolves to the
-host loopback proxy address. It is not a Docker compatibility alias.
-Security note: with an empty `allow_net`, any service bound to host loopback is
-reachable from inside the box. A non-empty `allow_net` must list
-`"192.168.127.254"`, or a CIDR covering it, for the alias to be reachable.
+On Local, `host.boxlite.internal` reaches host loopback when the host rules
+permit the alias. A non-empty `allow_net` must also cover `"192.168.127.254"`
+with an IP or CIDR rule. Guarded Cloud Runners deny connections to the alias.
 
 ## Network metrics
 

@@ -1502,9 +1502,8 @@ impl NetworkFlags {
             rx_kbps: self.net_rx_kbps,
         };
 
-        // Leave BoxOptions::default() (outbound Enabled/full access, inbound
-        // Disabled/private) untouched when no flag is given, so a bare `run`
-        // behaves as before.
+        // With no flags, keep the default enabled outbound mode, empty Box
+        // allowlist, and disabled inbound mode.
         if self.network.is_none() && self.allow_net.is_empty() && self.inbound.is_none() {
             return Ok(());
         }
@@ -2617,8 +2616,7 @@ mod tests {
 
     #[test]
     fn test_network_flags_default_left_untouched() {
-        // Neither flag set => BoxOptions::default() network is preserved
-        // (Enabled, empty allow_net), so a bare `run` keeps full access.
+        // A bare `run` keeps the default enabled mode and empty Box allowlist.
         let mut opts = BoxOptions::default();
         network_flags(None, &[])
             .apply_to(&mut opts)

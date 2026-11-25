@@ -610,13 +610,11 @@ async fn wildcard_allows_subdomain_connection_not_other_domains() {
     litebox.stop().await.unwrap();
 }
 
-/// An empty allowlist is full access. Asserted with a direct-IP connection,
-/// which is exactly what a non-empty allowlist forbids and what a name lookup
-/// cannot distinguish; this is the negative twin of
+/// A Local Box with an empty allowlist permits the direct-IP control used in
 /// `tcp_filter_blocks_direct_ip_connection`.
 #[tokio::test]
 #[ignore = "requires VM runtime (run with make test)"]
-async fn empty_allowlist_allows_all() {
+async fn empty_allowlist_permits_direct_ip() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -910,9 +908,8 @@ async fn host_alias_reaches_host_loopback_service() {
     litebox.stop().await.unwrap();
 }
 
-/// Resolution and egress are separate policies: the built-in DNS record is
-/// always served, but reaching the address it hands out is governed by
-/// `allow_net`.
+/// On the Local runtime, DNS serves the alias while the Box allowlist denies
+/// the connection to its address.
 #[tokio::test]
 #[ignore = "requires VM runtime (run with make test)"]
 async fn host_alias_blocked_by_restrictive_allowlist() {

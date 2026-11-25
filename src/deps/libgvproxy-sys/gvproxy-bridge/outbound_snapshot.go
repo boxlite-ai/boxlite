@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"net"
 
+	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
@@ -15,7 +17,6 @@ type outboundSnapshot struct {
 	filter      *AllowNetFilter
 	legacyAllow []string
 	extended    *extendedOutboundPolicy
-	cloud       bool
 	dialer      *egressDialer
 	state       string
 }
@@ -28,6 +29,10 @@ func (p *outboundPolicyController) compile(policy outboundPolicy, revision strin
 	dialer, err := newEgressDialer(filter, p.config.Subnet)
 	if err != nil {
 		return nil, err
+	}
+	dialer.guard = p.guard
+	if p.resolve != nil {
+		dialer.resolve = p.resolve
 	}
 	rules := policy.tcp
 	policy.tcp = nil
@@ -48,7 +53,7 @@ func (s *outboundSnapshot) setTCPPolicy(mode string, rules trustedTCPRules) erro
 	if err != nil {
 		return err
 	}
-	s.extended, s.cloud = policy, rules.cloud
+	s.extended = policy
 	s.policy = outboundPolicy{Mode: mode, AllowNet: s.legacyAllow}
 	if mode == "disabled" {
 		s.policy.AllowNet = []string{}
@@ -67,18 +72,49 @@ func (p *outboundPolicyController) publish(snapshot *outboundSnapshot, state str
 // fails. Enabled packets continue through the original filter-table chains.
 type outboundModeTarget struct {
 	snapshot snapshotSource
+	guard    platformGuard
+	guestNIC tcpip.NICID
+	gateway  tcpip.Address
 	next     int
 }
 
-func (t *outboundModeTarget) Action(*stack.PacketBuffer, stack.Hook, *stack.Route, stack.AddressableEndpoint) (stack.RuleVerdict, int) {
-	if t.snapshot().policy.Mode == "disabled" {
+func (t *outboundModeTarget) Action(pkt *stack.PacketBuffer, _ stack.Hook, _ *stack.Route, _ stack.AddressableEndpoint) (stack.RuleVerdict, int) {
+	if !t.guard.active() || t.snapshot().policy.Mode == "disabled" || (t.guard.cloud && !t.permitsGuestDHCP(pkt)) {
 		return stack.RuleDrop, 0
 	}
 	return stack.RuleJump, t.next
 }
 
-func installOutboundModeGate(s *stack.Stack, snapshot snapshotSource) error {
-	tables := s.IPTables()
+func (t *outboundModeTarget) permitsGuestDHCP(pkt *stack.PacketBuffer) bool {
+	ip := header.IPv4(pkt.NetworkHeader().Slice())
+	if ip.TransportProtocol() != header.UDPProtocolNumber || ip.FragmentOffset() != 0 {
+		return true
+	}
+	udp := header.UDP(pkt.TransportHeader().Slice())
+	if ip.More() {
+		// The input hook runs before reassembly. Only the first fragment has
+		// ports, and gVisor keeps its UDP header in packet data until reassembly.
+		first, ok := pkt.Data().PullUp(header.UDPMinimumSize)
+		if !ok {
+			return false
+		}
+		udp = header.UDP(first)
+	}
+	if len(udp) < header.UDPMinimumSize {
+		return false
+	}
+	const dhcpServerPort, dhcpClientPort = 67, 68
+	if udp.DestinationPort() != dhcpServerPort {
+		return true
+	}
+	destination := ip.DestinationAddress()
+	return pkt.NICID == t.guestNIC && udp.SourcePort() == dhcpClientPort &&
+		(destination == t.gateway || destination == header.IPv4Broadcast)
+}
+
+func (p *outboundPolicyController) installOutboundModeGate() error {
+	gateway := tcpip.AddrFromSlice(net.ParseIP(p.config.GatewayIP).To4())
+	tables := p.stack.IPTables()
 	table := tables.GetTable(stack.FilterID, false)
 	table.Rules = append([]stack.Rule(nil), table.Rules...)
 	ruleCount := len(table.Rules)
@@ -89,7 +125,8 @@ func installOutboundModeGate(s *stack.Stack, snapshot snapshotSource) error {
 		}
 		table.BuiltinChains[hook] = len(table.Rules)
 		table.Rules = append(table.Rules, stack.Rule{
-			Filter: stack.EmptyFilter4(), Target: &outboundModeTarget{snapshot: snapshot, next: entry},
+			Filter: stack.EmptyFilter4(),
+			Target: &outboundModeTarget{snapshot: p.active.Load, guard: p.guard, guestNIC: p.nic, gateway: gateway, next: entry},
 		}, stack.Rule{
 			// A returned original chain must use this hook's underflow,
 			// rather than falling through into the next appended gate.

@@ -23,7 +23,7 @@ var _ MappedNullable = &OutboundNetworkSpec{}
 type OutboundNetworkSpec struct {
 	// Whether the guest may reach out
 	Mode NetworkMode `json:"mode"`
-	// Outbound allowlist in force; empty means unrestricted egress
+	// Box-level outbound allowlist. Host protection applies even when it is empty.
 	AllowNet []string `json:"allow_net"`
 	AdditionalProperties map[string]interface{}
 }

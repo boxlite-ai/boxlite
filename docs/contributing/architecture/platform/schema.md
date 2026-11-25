@@ -528,7 +528,7 @@ or `archived`.
 | `volumes` | `jsonb` | array of `{ volumeId, mountPath }` |
 | `inboundEnabled` | `boolean` | default `false`; `true` lets the proxy serve exposed services under each tunnel's access policy (public: no sign-in; private: tunnel token or member) |
 | `outboundEnabled` | `boolean` | default `true`; `false` blocks all egress |
-| `outboundAllowNet` | `text[]` | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress |
+| `outboundAllowNet` | `text[]` | nullable Box allowlist (hosts, wildcards, IPv4, CIDRs); null leaves host protection in force |
 | `outboundControl` | `jsonb` | nullable private revision and pending-attempt metadata; omitted from ordinary entity reads |
 | `authToken` | `character varying` | `nanoid(32)`, lowercased |
 | `daemonVersion` | `character varying` | nullable |

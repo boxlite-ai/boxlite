@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"math"
 	"net"
 	"net/netip"
@@ -25,7 +26,8 @@ func outboundUDPHandler(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		registration.Lock()
 		defer registration.Unlock()
 		current := snapshot()
-		if current.policy.Mode == "disabled" {
+		guard := current.dialer.guard
+		if current.policy.Mode == "disabled" || !guard.active() {
 			return true
 		}
 		// Two packets may miss demux before one registers the endpoint.
@@ -33,11 +35,11 @@ func outboundUDPHandler(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			endpoint.HandlePacket(id, pkt)
 			return true
 		}
-		if current.extended != nil {
+		if current.extended != nil || current.dialer.guard.requiresCheckedUDP() {
 			target, reason := udpAdmission(id, nat, natLock, current)
 			if reason != outboundAllowed {
 				blocked.note(id.LocalAddress, id.LocalPort, reason)
-			} else if !flows.admit(s, id, pkt, target, current.dialer.dial) && flows.ctx.Err() == nil {
+			} else if !flows.admit(s, id, pkt, target, current.dialer.dialUDP) && flows.ctx.Err() == nil {
 				blocked.note(id.LocalAddress, id.LocalPort, "flow-capacity")
 			}
 			return true
@@ -49,6 +51,17 @@ func outboundUDPHandler(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		}
 		return upstream.HandlePacket(id, pkt)
 	}
+}
+
+func (d *egressDialer) dialUDP(ctx context.Context, network, address string) (net.Conn, error) {
+	if !d.guard.active() {
+		return nil, net.ErrClosed
+	}
+	conn, err := d.dial(ctx, network, address)
+	if err != nil {
+		return conn, err
+	}
+	return d.guard.track(conn)
 }
 
 func udpAdmission(id stack.TransportEndpointID, nat map[tcpip.Address]tcpip.Address,
@@ -66,6 +79,15 @@ func udpAdmission(id stack.TransportEndpointID, nat map[tcpip.Address]tcpip.Addr
 	target := egressTarget{
 		PolicyIP: netip.AddrFrom4(original.As4()), ConnectionIP: netip.AddrFrom4(translated.As4()),
 		Port: id.LocalPort, Protocol: "udp", PolicyRevision: snapshot.revision,
+	}
+	if snapshot.dialer.guard.denies(target.PolicyIP) || snapshot.dialer.guard.denies(target.ConnectionIP) {
+		return egressTarget{}, outboundPlatformDeny
+	}
+	if snapshot.extended == nil {
+		if !udpDestinationAllowed(original, snapshot.filter) {
+			return egressTarget{}, outboundAllowMiss
+		}
+		return target, outboundAllowed
 	}
 	decision := snapshot.extended.evaluate(target, snapshot.egressAddressFacts(target.PolicyIP, false), outboundNameFacts{})
 	if decision.reason != outboundAllowed {
@@ -89,6 +111,9 @@ func udpDestinationAllowed(dest tcpip.Address, filter *AllowNetFilter) bool {
 	// HTTP over TCP, so opening UDP to 169.254.0.0/16 would only add egress.
 	if linkLocalSubnet.Contains(dest) || dest == header.IPv4Broadcast {
 		return false
+	}
+	if filter == nil {
+		return true
 	}
 	addr4 := dest.As4()
 	return filter.MatchesIP(net.IP(addr4[:]))

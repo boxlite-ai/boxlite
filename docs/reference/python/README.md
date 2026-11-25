@@ -252,10 +252,11 @@ network = NetworkSpec(
 | `mode` | `str` | Required | `"enabled"` or `"disabled"` |
 | `allow_net` | `List[str]` | `[]` | Outbound allowlist used only when `mode="enabled"` |
 
-A host matched by a configured `Secret` is additionally reachable on port 443
-without a rule of its own, so `allow_net` is not the only egress gate. The
-connection is dialed by name, and under a non-empty `allow_net` an answer in a
-private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it.
+A configured `Secret` can permit TCP port 443 without a matching Box rule.
+With a non-empty `allow_net`, Local hostname routing requires a matching IP or
+CIDR rule for private, loopback, or CGNAT answers. Host protection, including
+the [Cloud platform guard](../../concepts/networking.md#cloud-platform-guard),
+applies even with an empty allowlist.
 
 `mode="disabled"` removes the guest network interface entirely. No secret makes
 a host reachable in that mode — there is no network to reach it over.
@@ -314,12 +315,9 @@ secrets=[
 ]
 ```
 
-Each host a secret matches becomes reachable on port 443 under a non-empty
-`allow_net` without a rule of its own — a secret is an egress grant as well as
-a credential. It is a by-name dial like any hostname rule, so a host answering
-with a private, loopback or CGNAT address is still refused unless an IP or CIDR
-rule covers that range. Those hosts on port 80, on any other port, or over UDP
-are governed by `allow_net` alone.
+A secret can permit TCP port 443 without an `allow_net` rule for that host.
+The gateway dials by name and applies the same Box and host address checks as
+for hostname rules. Other ports and UDP follow the regular Box and host rules.
 
 `headers` is a required keyword argument containing a non-empty name-to-template dictionary.
 Omission, `None` and empty dictionaries are rejected.

@@ -5939,7 +5939,7 @@ components:
           - $ref: "#/components/schemas/NetworkMode"
           description: Whether the guest may reach out
         allow_net:
-          description: Outbound allowlist in force; empty means unrestricted egress
+          description: Box-level outbound allowlist. Host protection applies even when it is empty.
           example:
           - api.openai.com
           - 10.0.0.0/8

@@ -3122,14 +3122,14 @@ components:
           items:
             type: string
           description: |
-            Optional outbound allowlist used only when `mode=enabled`.
-            Empty or omitted means full outbound access.
+            Optional Box outbound allowlist used only when `mode=enabled`.
+            Host protection applies even when this list is empty or omitted.
             Supports hostnames, wildcard hostnames, IPs, and CIDRs.
-            A host matched by a configured secret is additionally reachable on
-            port 443 without a rule of its own, so this is not the only egress
-            gate. That connection is dialed by name, and under a non-empty
-            list an answer in a private, loopback or CGNAT range is refused
-            unless an IP or CIDR rule covers it.
+
+            A configured secret can permit TCP port 443 without a Box rule
+            for that host. With a non-empty list, Local hostname routing
+            requires a matching IP or CIDR rule for private, loopback, or
+            CGNAT answers. The Cloud platform guard's denies take precedence.
 
     OutboundSnapshot:
       type: object

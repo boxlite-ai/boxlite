@@ -166,7 +166,8 @@ type DNSRecord struct {
 
 // DNSZone represents a local DNS zone configuration
 // These are local DNS records served by the gateway's embedded DNS server.
-// Queries not matching any zone are forwarded to the host's system DNS.
+// Local forwards non-zone queries through the host resolver. Cloud uses
+// the resolver endpoints approved by the operator inventory.
 type DNSZone struct {
 	Name      string      `json:"name"`              // Zone name (e.g., "myapp.local.", "." for root)
 	Records   []DNSRecord `json:"records,omitempty"` // Exact A records within the zone
@@ -202,6 +203,12 @@ type GvproxyConfig struct {
 	// RateLimit, when set, shapes the guest link in both directions. Absent or
 	// zero-sized in a direction means that direction is unlimited. See shaper.go.
 	RateLimit *RateLimitConfig `json:"rate_limit,omitempty"`
+
+	// Host-protected prefixes are compiled before network startup.
+	PlatformProtectedCIDRs  []string        `json:"platform_protected_cidrs,omitempty"`
+	CloudGuard              *cloudBootstrap `json:"cloud_guard,omitempty"`
+	guard                   platformGuard
+	cloudInventoryDirectory string
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
@@ -218,13 +225,9 @@ type GvproxyInstance struct {
 	secretMatcher *SecretHostMatcher             // Hostname→secrets lookup (nil if no secrets)
 }
 
-// buildDNSZones converts the zones the caller configures (the
-// host.boxlite.internal alias) into upstream's zone type, and that is all the
-// box's DNS server serves beyond forwarding. allow_net does not touch DNS: it
-// is enforced when the gateway dials (forked_tcp.go, egress_dialer.go), so a
-// name outside the allowlist resolves like any other and is refused at
-// connect. An earlier design sinkholed unlisted names here, which only ever
-// covered A queries and so never closed the channel it appeared to.
+// buildDNSZones converts configured records, including the virtual host alias.
+// Box allowlists govern connections. DNS forwarding uses the selected
+// resolver and follows the network mode and platform guard state.
 func buildDNSZones(config GvproxyConfig) []types.Zone {
 	dnsZones := make([]types.Zone, 0, len(config.DNSZones))
 	for _, zone := range config.DNSZones {
@@ -243,19 +246,10 @@ func buildDNSZones(config GvproxyConfig) []types.Zone {
 	return dnsZones
 }
 
-// newAllowNetFilter builds the egress allowlist for a box. It is the single
-// place that decides which addresses are exempt from allow_net, so the test
-// harness can build its filter the same way and a change here cannot pass
-// unnoticed.
-//
-// The gateway and guest addresses are the virtual network's own endpoints
-// rather than egress destinations. config.HostIP is deliberately not among
-// them: it NATs to the host's loopback (buildTapConfig below), which makes it
-// a real destination that must obey allow_net like any other. Its DNS record
-// is still served unconditionally — resolving the alias is not egress.
-//
-// Returns nil when allow_net is empty, which the transport handlers read as
-// "forward everything".
+// newAllowNetFilter builds the Box allowlist. It exempts the gateway and
+// guest addresses from the Box filter. The virtual host alias is a forwarded
+// destination subject to both Box and host policy.
+// An empty list returns nil, and platform protection still applies.
 func newAllowNetFilter(config GvproxyConfig) *AllowNetFilter {
 	return NewAllowNetFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
 }
@@ -449,16 +443,9 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 
 	// Start virtual network in goroutine
 	go func() {
-		vn, err := virtualnetwork.New(tapConfig)
+		vn, policy, err := newGvproxyNetwork(ctx, tapConfig, config, instance.ca, instance.secretMatcher, initialPolicy)
 		if err != nil {
-			logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("Failed to create virtual network")
 			initErr <- err
-			return
-		}
-
-		policy, err := newOutboundPolicyController(ctx, vn, tapConfig, config.GuestIP, instance.ca, instance.secretMatcher, initialPolicy, config.OutboundRevision)
-		if err != nil {
-			initErr <- fmt.Errorf("initialize outbound policy: %w", err)
 			return
 		}
 
@@ -493,13 +480,24 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 					mux.Handle(outboundStatusPath, policy)
 					mux.Handle(outboundSnapshotPath, policy)
 					mux.Handle(completeOutboundStatusPath, policy)
-					if sErr := http.Serve(l, mux); sErr != nil && ctx.Err() == nil {
+					if policy.guard.epoch != nil {
+						mux.Handle(platformGuardStatus, policy.guard.epoch.status(policy.inventory))
+					}
+					serve := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if !policy.guard.active() && r.URL.Path != platformGuardStatus {
+							http.Error(w, "Cloud inventory is inactive", http.StatusServiceUnavailable)
+							return
+						}
+						mux.ServeHTTP(w, r)
+					})
+					if sErr := http.Serve(l, serve); sErr != nil && ctx.Err() == nil {
 						logrus.WithError(sErr).Error("gvproxy services HTTP server exited")
 					}
 				}()
 			}
 		}
 		initErr <- nil
+		traffic := policy.guard.trafficContext(ctx)
 
 		// Platform-specific packet handling
 		if runtime.GOOS == "darwin" {
@@ -521,8 +519,8 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				logrus.WithFields(logrus.Fields{"id": id, "remote": wrappedConn.RemoteAddr().String()}).Info("VFKit connection accepted")
 
 				// Handle the VFKit protocol with the wrapped connection
-				if err := runGuestLink(ctx, wrappedConn, 0, config.RateLimit, vn.AcceptVfkit); err != nil {
-					if ctx.Err() == nil {
+				if err := policy.guard.runGuestLink(traffic, wrappedConn, 0, config.RateLimit, vn.AcceptVfkit); err != nil {
+					if traffic.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptVfkit error")
 					}
 				}
@@ -545,10 +543,19 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 
 				// Close listener after first connection (one VM per gvproxy instance)
 				listener.Close()
+				if config.CloudGuard != nil {
+					guest := acceptedConn.(*net.UnixConn)
+					if err := config.CloudGuard.hostOperation(traffic, "register_guest", guest); err != nil {
+						_ = guest.Close()
+						policy.guard.epoch.retire()
+						logrus.WithError(err).Error("Cloud guard refused guest data socket")
+						return
+					}
+				}
 
 				// Handle the Qemu protocol
-				if err := runGuestLink(ctx, acceptedConn, 4, config.RateLimit, vn.AcceptQemu); err != nil {
-					if ctx.Err() == nil {
+				if err := policy.guard.runGuestLink(traffic, acceptedConn, 4, config.RateLimit, vn.AcceptQemu); err != nil {
+					if traffic.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptQemu error")
 					}
 				}
@@ -654,12 +661,17 @@ func gvproxy_get_stats(id C.longlong) *C.char {
 
 //export gvproxy_outbound_capabilities
 func gvproxy_outbound_capabilities() C.uint {
+	// Cloud guards require the Linux cgroup and Unix descriptor handoff.
 	capabilities := supportedOutboundCapabilities()
-	var bits C.uint
+	// Bit 4 is the trusted platform-CIDR launch capability.
+	bits := C.uint(1 << 4)
 	for i, supported := range []bool{capabilities.Admission, capabilities.Deny, capabilities.Port, capabilities.Capacity} {
 		if supported {
 			bits |= 1 << i
 		}
+	}
+	if runtime.GOOS == "linux" {
+		bits |= 1 << 5
 	}
 	return bits
 }

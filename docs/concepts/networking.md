@@ -24,11 +24,53 @@ Box                    gvproxy                  Internet
 
 **Features:**
 
-- Full outbound internet access
+- Outbound TCP and UDP with Box rules and host protection
 - Local port publication (TCP)
 - Local one-shot service tunnels
 - Built-in DHCP and DNS
 - Network metrics (bytes sent/received)
+
+### Host-protected IPv4 destinations
+
+Set `BOXLITE_PLATFORM_PROTECTED_CIDRS` in the host Runtime process environment
+to a comma-separated list of IPv4 CIDRs for newly started gvproxy backends.
+These ranges apply to TCP and UDP forwarding in both admission modes. The
+bridge checks the guest destination and the socket address selected by NAT or
+DNS.
+
+For example, a host-supplied `192.0.2.0/24` entry also denies its IPv4-mapped
+form and takes precedence over a Box allow rule. Invalid entries and shims
+without this capability fail startup. Box policy replacement leaves the
+installed host ranges in force.
+
+Restart the backend to pick up changes to the host list. A backend with these
+ranges applies the 256-flow UDP limit in legacy admission as well.
+
+### Cloud platform guard
+
+A guarded Cloud Runner also protects its platform networks and host addresses.
+Guests can use the gateway's built-in DNS and DHCP. The gateway sends upstream
+DNS only to the operator's validated resolver endpoints.
+
+Static host CIDRs and the operator inventory continue to apply when a Box
+replaces its own rules.
+
+The host guard and the network backend independently watch the inventory. A
+changed, invalid, or expired inventory stops guest networking for that backend.
+A cold restart takes a fresh inventory sample before enabling networking.
+
+The Linux host enforces the deadline on socket admission, the Box's guest Unix
+socket, and at its cgroup packet hook. IP packets that cleared the hook before
+the deadline can still drain through a device queue. The private management
+socket remains available for status and stop operations.
+
+| When | Guard state | Traffic |
+| --- | --- | --- |
+| Inventory is valid | The host and gvproxy sample the same operator revision independently. | Approved traffic can pass the kernel and gvproxy. |
+| A matching sample reaches the kernel before the current cutoff | The kernel verifies the prior lease and publishes the extension. | Existing flows can continue. |
+| The inventory or freshness lease expires | The kernel refuses late renewal and gvproxy closes retired flows. | New socket admission and packets evaluated at the hook are denied. Packets already downstream of the hook can still arrive. |
+
+See [GCP guarded Runner setup](../../apps/infra/docs/gcp/runners.md#guarded-runner-pool).
 
 ### Secret injection certificates
 
@@ -271,4 +313,7 @@ Boxes receive network configuration via DHCP:
 
 - IP address from virtual subnet
 - Default gateway
-- DNS servers (configurable, defaults to host resolvers)
+- Gateway DNS endpoint
+
+The Local gateway uses the host resolver. On a guarded Cloud Runner, the
+gateway uses the approved resolver endpoints in the operator inventory.
