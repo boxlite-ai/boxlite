@@ -1123,6 +1123,13 @@ enum BoxliteErrorCode boxlite_get_or_create_box(CBoxliteRuntime *runtime,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
 
+// Adopt an existing named box after checking its policy. Missing boxes return NotFound.
+enum BoxliteErrorCode boxlite_adopt_box(CBoxliteRuntime *runtime,
+                                        CBoxliteOptions *opts,
+                                        CBoxGetOrCreateBoxCb cb,
+                                        void *user_data,
+                                        CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle,
                                        CBoxStopBoxCb cb,
                                        void *user_data,

@@ -43,6 +43,8 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)>;
 
+    async fn adopt(&self, options: BoxOptions, name: &str) -> BoxliteResult<LiteBox>;
+
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>>;
 
     async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>>;

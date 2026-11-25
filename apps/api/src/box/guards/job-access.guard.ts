@@ -4,22 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import {
-  Injectable,
-  CanActivate,
-  ExecutionContext,
-  NotFoundException,
-  ForbiddenException,
-  Logger,
-} from '@nestjs/common'
+import { Injectable, CanActivate, ExecutionContext, NotFoundException } from '@nestjs/common'
 import { BaseAuthContext } from '../../common/interfaces/auth-context.interface'
 import { JobService } from '../services/job.service'
-import { isRunnerContext, RunnerContext } from '../../common/interfaces/runner-context.interface'
+import { isRunnerContext } from '../../common/interfaces/runner-context.interface'
 
 @Injectable()
 export class JobAccessGuard implements CanActivate {
-  private readonly logger = new Logger(JobAccessGuard.name)
-
   constructor(private readonly jobService: JobService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -29,28 +20,10 @@ export class JobAccessGuard implements CanActivate {
     // TODO: initialize authContext safely
     const authContext: BaseAuthContext = request.user
 
-    try {
-      const job = await this.jobService.findOne(jobId)
-      if (!job) {
-        throw new NotFoundException('Job not found')
-      }
-
-      if (!isRunnerContext(authContext)) {
-        throw new ForbiddenException('User is not a runner')
-      }
-
-      const runnerContext = authContext as RunnerContext
-
-      if (runnerContext.runnerId !== job.runnerId) {
-        throw new ForbiddenException('Runner ID does not match job runner ID')
-      }
-
-      return true
-    } catch (error) {
-      if (!(error instanceof NotFoundException)) {
-        this.logger.error(error)
-      }
+    const job = await this.jobService.findOne(jobId)
+    if (!job || !isRunnerContext(authContext) || authContext.runnerId !== job.runnerId) {
       throw new NotFoundException('Job not found')
     }
+    return true
   }
 }

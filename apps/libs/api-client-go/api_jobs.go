@@ -183,12 +183,19 @@ func (a *JobsAPIService) GetJobExecute(r JobsAPIGetJobRequest) (*Job, *http.Resp
 }
 
 type JobsAPIListJobsRequest struct {
+	afterId *string
 	ctx context.Context
 	ApiService JobsAPI
 	page *float32
 	limit *float32
 	status *JobStatus
 	offset *float32
+}
+
+// List jobs in ascending ID order after this UUID. Start with the nil UUID.
+func (r JobsAPIListJobsRequest) AfterId(afterId string) JobsAPIListJobsRequest {
+	r.afterId = &afterId
+	return r
 }
 
 // Page number of the results
@@ -255,6 +262,9 @@ func (a *JobsAPIService) ListJobsExecute(r JobsAPIListJobsRequest) (*PaginatedJo
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
 
+	if r.afterId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "afterId", r.afterId, "form", "")
+	}
 	if r.page != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "page", r.page, "form", "")
 	} else {

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
@@ -50,16 +51,26 @@ func NewService(cfg *PollerServiceConfig) (*Service, error) {
 
 // Start begins the job polling loop
 func (s *Service) Start(ctx context.Context) {
-	jobs, err := s.listStartupJobs(ctx)
+	ids, err := s.listStartupJobs(ctx)
 	if err != nil {
 		return
 	}
-	if len(jobs) == 0 {
-		s.log.InfoContext(ctx, "No IN_PROGRESS jobs found")
-	} else {
-		s.log.InfoContext(ctx, "Found IN_PROGRESS jobs", "count", len(jobs))
-		for _, job := range jobs {
-			go s.executor.Recover(ctx, &job)
+	for _, id := range ids {
+		job, err := readStartup(ctx, s.log, func(attempt context.Context) (*apiclient.Job, *http.Response, error) {
+			job, response, err := s.client.JobsAPI.GetJob(attempt, id).Execute()
+			if response != nil && response.StatusCode == http.StatusNotFound {
+				return nil, response, nil
+			}
+			if err == nil && (job == nil || job.Id != id) {
+				return nil, response, fmt.Errorf("invalid startup job response")
+			}
+			return job, response, err
+		})
+		if err != nil {
+			return
+		}
+		if job != nil && job.Status == apiclient.JOBSTATUS_IN_PROGRESS {
+			go s.executor.Recover(ctx, job)
 		}
 	}
 
@@ -92,54 +103,61 @@ func (s *Service) Start(ctx context.Context) {
 	}
 }
 
-func (s *Service) listStartupJobs(ctx context.Context) ([]apiclient.Job, error) {
-	// Complete the offset-paginated scan before job execution can shrink it.
-	var jobs []apiclient.Job
-	seen := make(map[string]struct{})
-	for page := float32(1); ; page++ {
-		result, err := s.listStartupPage(ctx, page)
+func (s *Service) listStartupJobs(ctx context.Context) ([]string, error) {
+	const pageSize = 100
+	cursor := "00000000-0000-0000-0000-000000000000"
+	var ids []string
+	for {
+		page, err := readStartup(ctx, s.log, func(attempt context.Context) (*apiclient.PaginatedJobs, *http.Response, error) {
+			page, response, err := s.client.JobsAPI.ListJobs(attempt).
+				Status(apiclient.JOBSTATUS_IN_PROGRESS).AfterId(cursor).Limit(pageSize).Execute()
+			if err == nil && page == nil {
+				return nil, response, fmt.Errorf("empty startup job page")
+			}
+			if err == nil {
+				// An older API may ignore the cursor. Never dispatch a partial scan.
+				previous := cursor
+				for _, job := range page.Items {
+					if job.Id <= previous {
+						return nil, response, fmt.Errorf("startup job cursor did not advance")
+					}
+					previous = job.Id
+				}
+			}
+			return page, response, err
+		})
 		if err != nil {
 			return nil, err
 		}
-		for _, job := range result.Items {
-			if _, duplicate := seen[job.Id]; !duplicate {
-				seen[job.Id] = struct{}{}
-				jobs = append(jobs, job)
-			}
+		for _, job := range page.Items {
+			ids = append(ids, job.Id)
 		}
-		if page >= result.TotalPages {
-			return jobs, ctx.Err()
+		if len(page.Items) < pageSize {
+			return ids, nil
 		}
+		cursor = ids[len(ids)-1]
 	}
 }
 
-func (s *Service) listStartupPage(ctx context.Context, page float32) (*apiclient.PaginatedJobs, error) {
-	const (
-		pageSize       = 100
-		requestTimeout = 30 * time.Second
-		retryDelay     = time.Second
-	)
+// Both startup reads are idempotent. Retry without logging response bodies,
+// which may include a credential-bearing job payload.
+func readStartup[T any](ctx context.Context, log *slog.Logger, read func(context.Context) (*T, *http.Response, error)) (*T, error) {
 	for ctx.Err() == nil {
-		attempt, cancel := context.WithTimeout(ctx, requestTimeout)
-		result, response, err := s.client.JobsAPI.ListJobs(attempt).
-			Status(apiclient.JOBSTATUS_IN_PROGRESS).
-			Page(page).
-			Limit(pageSize).
-			Execute()
+		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
+		result, response, err := read(attempt)
 		cancel()
-		if err == nil && result != nil {
+		if err == nil {
 			return result, nil
 		}
 		status := 0
 		if response != nil {
 			status = response.StatusCode
 		}
-		// List errors may contain job payloads. Log only safe metadata.
-		s.log.WarnContext(ctx, "Failed to list startup jobs, retrying", "page", page, "http_status", status)
+		log.WarnContext(ctx, "Failed to read startup jobs, retrying", "http_status", status)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(retryDelay):
+		case <-time.After(time.Second):
 		}
 	}
 	return nil, ctx.Err()

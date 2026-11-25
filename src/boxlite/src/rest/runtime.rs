@@ -33,6 +33,34 @@ pub(crate) struct RestRuntime {
 }
 
 impl RestRuntime {
+    async fn adopt_named_box(
+        &self,
+        options: &BoxOptions,
+        box_name: &str,
+    ) -> BoxliteResult<LiteBox> {
+        let response = self
+            .client
+            .get::<BoxResponse>(&format!("/boxes/{box_name}"))
+            .await?;
+        options.sanitize_remote()?;
+        let actual = response.privileged.ok_or_else(|| {
+            BoxliteError::Unsupported(format!(
+                "cannot reuse box {box_name:?}: the server did not report its \
+                             privileged mode; upgrade the server to expose privilege metadata"
+            ))
+        })?;
+        if actual != options.advanced.privileged {
+            return Err(BoxliteError::Unsupported(format!(
+                "cannot reuse box {box_name:?}: requested privileged={}, but the \
+                             existing box has privileged={actual}; use a different name or recreate it",
+                options.advanced.privileged
+            )));
+        }
+        let info = response.to_box_info()?;
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        Ok(litebox_from_rest(rest_box))
+    }
+
     pub fn new(config: &BoxliteRestOptions) -> BoxliteResult<Self> {
         let client = ApiClient::new(config)?;
         Ok(Self { client })
@@ -494,26 +522,8 @@ impl RuntimeBackend for RestRuntime {
         options.sanitize_remote()?;
 
         if let Some(ref box_name) = name {
-            let path = format!("/boxes/{box_name}");
-            match self.client.get::<BoxResponse>(&path).await {
-                Ok(response) => {
-                    let actual = response.privileged.ok_or_else(|| {
-                        BoxliteError::Unsupported(format!(
-                            "cannot reuse box {box_name:?}: the server did not report its \
-                             privileged mode; upgrade the server to expose privilege metadata"
-                        ))
-                    })?;
-                    if actual != options.advanced.privileged {
-                        return Err(BoxliteError::Unsupported(format!(
-                            "cannot reuse box {box_name:?}: requested privileged={}, but the \
-                             existing box has privileged={actual}; use a different name or recreate it",
-                            options.advanced.privileged
-                        )));
-                    }
-                    let info = response.to_box_info()?;
-                    let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
-                    return Ok((litebox_from_rest(rest_box), false));
-                }
+            match self.adopt_named_box(&options, box_name).await {
+                Ok(handle) => return Ok((handle, false)),
                 Err(BoxliteError::NotFound(_)) => {}
                 Err(error) => return Err(error),
             }
@@ -521,6 +531,10 @@ impl RuntimeBackend for RestRuntime {
         // Create new box
         let litebox = self.create(options, name).await?;
         Ok((litebox, true))
+    }
+
+    async fn adopt(&self, options: BoxOptions, box_name: &str) -> BoxliteResult<LiteBox> {
+        self.adopt_named_box(&options, box_name).await
     }
 
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {

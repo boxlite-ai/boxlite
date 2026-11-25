@@ -757,12 +757,18 @@ On startup, an in-progress credential job can only adopt an existing local
 box, skipping identity and secret retrieval. If the box is absent, the runner
 reports failure and asks the caller to submit a new create request. This
 also applies if the previous process exited before dispatch. If the target
-disappears before adoption, creation fails.
+disappears before adoption, creation fails. The runtime checks the saved box's
+policy against the request before returning its handle. A privilege mismatch
+fails before start, and adoption cannot create a replacement.
 
-The startup poller collects every page of in-progress jobs before dispatch.
-Otherwise, completed jobs would shift later pages and hide work. Failed page
-requests retry until they succeed or the runner shuts down. Normal polling
-begins after the scan so a list failure cannot silently strand old jobs.
+Deploy the Jobs API with `afterId` support before upgrading the Runner.
+Startup scans `GET /jobs?status=IN_PROGRESS` in ascending UUID order,
+starting with the nil UUID and continuing after the last ID in each batch.
+A timeout that removes an earlier job cannot shift the next batch. After
+collecting the IDs, Runner reads each job again and dispatches it only if it
+still exists and is in progress. Transient read errors retry until shutdown.
+The status read and execution are separate operations. A timeout that occurs
+after the final read can still race with execution.
 
 Jobs without credentials retain inline values, and START_BOX continues using
 runtime-local secrets. Direct HTTP create/recover still require inline values.

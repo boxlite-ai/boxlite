@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only
  */
 
-import { In } from 'typeorm'
+import { In, MoreThan } from 'typeorm'
 import { Job } from '../entities/job.entity'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { JobService } from './job.service'
@@ -90,5 +90,29 @@ describe('JobService.claimPendingJobs', () => {
     jobRepository.update.mockRejectedValueOnce(new Error('deadlock detected'))
 
     await expect(claimPendingJobs(service, 'runner-1', 10)).rejects.toThrow('deadlock detected')
+  })
+})
+
+describe('JobService.findJobsForRunner', () => {
+  it('keeps numbered pages and seeks by immutable ID for cursor requests', async () => {
+    const repository = { findAndCount: jest.fn().mockResolvedValue([[], 0]) }
+    const service = new JobService(repository as any, {} as any, {} as any)
+    const status = JobStatus.IN_PROGRESS
+    const runnerId = 'runner-1'
+    await service.findJobsForRunner(runnerId, status, 2, 100)
+    expect(repository.findAndCount).toHaveBeenLastCalledWith({
+      where: { runnerId, status },
+      order: { createdAt: 'DESC' },
+      skip: 100,
+      take: 100,
+    })
+    const cursor = '00000000-0000-4000-8000-000000000099'
+    await service.findJobsForRunner(runnerId, status, 1, 100, cursor)
+    expect(repository.findAndCount).toHaveBeenLastCalledWith({
+      where: { runnerId, status, id: MoreThan(cursor) },
+      order: { id: 'ASC' },
+      skip: 0,
+      take: 100,
+    })
   })
 })

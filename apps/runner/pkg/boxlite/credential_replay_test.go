@@ -84,7 +84,7 @@ func TestCredentialReplayVolumeRecordOnLookupError(t *testing.T) {
 // Cross the actual Go/C/Rust REST boundary. A replay lookup is only a hint:
 // deleting the persisted box before adoption must never produce a replacement.
 func TestCredentialReplayRequireExisting(t *testing.T) {
-	for _, scenario := range []string{"present", "start existing", "deleted after lookup", "lookup failure"} {
+	for _, scenario := range []string{"present", "start existing", "privilege mismatch", "deleted after lookup", "lookup failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			var reads, creates, starts atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +108,7 @@ func TestCredentialReplayRequireExisting(t *testing.T) {
 					http.Error(w, "not found", 404)
 					return
 				}
-				fmt.Fprint(w, `{"box_id":"box-1","name":"box-1","status":"configured","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z","image":"alpine:latest","cpus":1,"memory_mib":128}`)
+				fmt.Fprintf(w, `{"privileged":%t,"box_id":"box-1","name":"box-1","status":"configured","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z","image":"alpine:latest","cpus":1,"memory_mib":128}`, scenario == "privilege mismatch")
 			}))
 			defer server.Close()
 			runtime, err := sdk.NewRest(sdk.BoxliteRestOptions{URL: server.URL})
@@ -132,13 +132,16 @@ func TestCredentialReplayRequireExisting(t *testing.T) {
 			if err != nil || !exists {
 				t.Fatalf("lookup: exists=%t err=%v", exists, err)
 			}
-			outbound, skipStart := false, scenario != "start existing"
+			outbound, skipStart := false, scenario != "start existing" && scenario != "privilege mismatch"
 			_, _, err = client.Create(context.Background(), dto.CreateBoxDTO{Id: "box-1", Image: "alpine:latest", RequireExisting: true, OutboundEnabled: &outbound, SkipStart: &skipStart})
 			if (scenario == "present" || scenario == "start existing") && err != nil {
 				t.Fatal(err)
 			}
 			if scenario == "deleted after lookup" && err == nil {
 				t.Fatal("missing replay target accepted")
+			}
+			if scenario == "privilege mismatch" && (err == nil || starts.Load() != 0) {
+				t.Fatalf("adopted incompatible box: error=%v starts=%d", err, starts.Load())
 			}
 			if creates.Load() != 0 {
 				t.Fatal("replay attempted replacement creation")

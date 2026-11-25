@@ -55,3 +55,39 @@ func TestIntegrationGetOrCreateReportsCreatedFlag(t *testing.T) {
 		t.Fatalf("adopted box must have the same id: first=%q second=%q", first.ID(), second.ID())
 	}
 }
+
+func TestAdoptChecksLocalPolicyWithoutCreating(t *testing.T) {
+	rt := newTestRuntime(t)
+	ctx := t.Context()
+	const name = "saved-privilege"
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer advanced.Close()
+	if err := advanced.SetPrivileged(true); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := rt.Create(ctx, "alpine:latest", WithName(name), WithAdvancedOptions(advanced), WithAutoRemove(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer saved.Close()
+	if _, err := rt.Adopt(ctx, name, "alpine:latest"); err == nil {
+		t.Fatal("ordinary request adopted privileged box")
+	}
+	handle, err := rt.Adopt(ctx, name, "alpine:latest", WithAdvancedOptions(advanced))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	if handle.ID() != saved.ID() {
+		t.Fatalf("adopted %s, want %s", handle.ID(), saved.ID())
+	}
+	if _, err := rt.Adopt(ctx, "missing", "alpine:latest"); !IsNotFound(err) {
+		t.Fatalf("adopt missing box: %v", err)
+	}
+	if _, err := rt.Get(ctx, "missing"); !IsNotFound(err) {
+		t.Fatalf("missing box after adoption: %v", err)
+	}
+}

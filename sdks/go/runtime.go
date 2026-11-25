@@ -215,11 +215,26 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 // plane's unique box id, so a replayed CREATE_BOX re-adopts the orphan.
 // Force-removing only the created case on cancel is a tracked follow-up.
 func (r *Runtime) GetOrCreate(ctx context.Context, image string, opts ...BoxOption) (*Box, bool, error) {
+	return r.getOrCreate(ctx, image, nil, opts)
+}
+
+// Adopt opens an existing box by name or ID after checking its option compatibility.
+// A missing box returns a not-found error without creating a replacement.
+func (r *Runtime) Adopt(ctx context.Context, id, image string, opts ...BoxOption) (*Box, error) {
+	box, _, err := r.getOrCreate(ctx, image, &id, opts)
+	return box, err
+}
+
+func (r *Runtime) getOrCreate(ctx context.Context, image string, existingID *string, opts []BoxOption) (*Box, bool, error) {
 	r.ensureDrainRunning()
 
 	cfg := &boxConfig{}
 	for _, o := range opts {
 		o(cfg)
+	}
+
+	if existingID != nil {
+		cfg.name = *existingID
 	}
 
 	cOpts, err := buildCOptions(image, cfg)
@@ -231,7 +246,12 @@ func (r *Runtime) GetOrCreate(ctx context.Context, image string, opts ...BoxOpti
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_get_or_create_box(r.handle, cOpts, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
+	var code C.enum_BoxliteErrorCode
+	if existingID != nil {
+		code = C.boxlite_adopt_box(r.handle, cOpts, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
+	} else {
+		code = C.boxlite_get_or_create_box(r.handle, cOpts, C.cbGetOrCreateBox(), handleToPtr(h), &cerr)
+	}
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		// boxlite_get_or_create_box consumes opts on success but not on synchronous failure.

@@ -69,13 +69,19 @@ func TestCredentialStartupRecovery(t *testing.T) {
 			if got := r.URL.Query().Get("status"); got != "IN_PROGRESS" {
 				t.Errorf("startup list status = %q", got)
 			}
-			_ = json.NewEncoder(w).Encode(apiclient.NewPaginatedJobs([]apiclient.Job{missing, existing, inline}, 3, 1, 1))
+			_ = json.NewEncoder(w).Encode(apiclient.NewPaginatedJobs([]apiclient.Job{existing, inline, missing}, 3, 1, 1))
 		case "/jobs/poll":
 			if polled.Add(1) == 1 {
 				_ = json.NewEncoder(w).Encode(map[string]any{"jobs": []apiclient.Job{fresh}})
 				return
 			}
 			<-r.Context().Done()
+		case "/jobs/missing", "/jobs/existing", "/jobs/inline":
+			for _, job := range []apiclient.Job{missing, existing, inline} {
+				if r.URL.Path == "/jobs/"+job.Id {
+					_ = json.NewEncoder(w).Encode(job)
+				}
+			}
 		case "/internal/v1/fetch":
 			fetches.Add(1)
 			_, _ = io.WriteString(w, `{"box_id":"fresh","secrets":[{"name":"A","value":"fetched","hosts":["example.com"],"headers":{"Authorization":"Bearer {value}"}}]}`)

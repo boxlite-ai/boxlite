@@ -67,7 +67,13 @@ export class JobController {
     @RunnerContextDecorator() runnerContext: RunnerContext,
     @Query() query: ListJobsQueryDto,
   ): Promise<PaginatedJobsDto> {
-    return await this.jobService.findJobsForRunner(runnerContext.runnerId, query.status, query.page, query.limit)
+    return await this.jobService.findJobsForRunner(
+      runnerContext.runnerId,
+      query.status,
+      query.page,
+      query.limit,
+      query.afterId,
+    )
   }
 
   @Get('poll')

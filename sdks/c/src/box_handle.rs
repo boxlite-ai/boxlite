@@ -64,7 +64,19 @@ pub unsafe extern "C" fn boxlite_get_or_create_box(
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    get_or_create_box(runtime, opts, cb, user_data, out_error)
+    get_or_create_box(runtime, opts, cb, user_data, out_error, false)
+}
+
+/// Adopt an existing named box after checking its policy. Missing boxes return NotFound.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_adopt_box(
+    runtime: *mut CBoxliteRuntime,
+    opts: *mut CBoxliteOptions,
+    cb: CBoxGetOrCreateBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    get_or_create_box(runtime, opts, cb, user_data, out_error, true)
 }
 
 #[unsafe(no_mangle)]
@@ -205,6 +217,7 @@ unsafe fn get_or_create_box(
     cb: CBoxGetOrCreateBoxCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
+    require_existing: bool,
 ) -> BoxliteErrorCode {
     unsafe {
         if runtime.is_null() {
@@ -231,19 +244,31 @@ unsafe fn get_or_create_box(
         let task_queue = queue.clone();
 
         tokio_rt.spawn(async move {
-            let result = runtime_clone
-                .get_or_create(opts_handle.options, opts_handle.name)
-                .await
-                .map(|(handle, created)| {
-                    let box_id = handle.id().clone();
-                    let boxed = Box::new(BoxHandle {
-                        handle: Arc::new(handle),
-                        box_id,
-                        tokio_rt: task_tokio_rt,
-                        queue: task_queue.clone(),
-                    });
-                    (crate::event_queue::OwnedFfiPtr::new(boxed), created)
+            let result = if require_existing {
+                match opts_handle.name {
+                    Some(name) => runtime_clone
+                        .adopt(opts_handle.options, &name)
+                        .await
+                        .map(|handle| (handle, false)),
+                    None => Err(BoxliteError::InvalidArgument(
+                        "adoption requires a box name or ID".into(),
+                    )),
+                }
+            } else {
+                runtime_clone
+                    .get_or_create(opts_handle.options, opts_handle.name)
+                    .await
+            }
+            .map(|(handle, created)| {
+                let box_id = handle.id().clone();
+                let boxed = Box::new(BoxHandle {
+                    handle: Arc::new(handle),
+                    box_id,
+                    tokio_rt: task_tokio_rt,
+                    queue: task_queue.clone(),
                 });
+                (crate::event_queue::OwnedFfiPtr::new(boxed), created)
+            });
             push_event(
                 &queue,
                 RuntimeEvent::GetOrCreateBox {

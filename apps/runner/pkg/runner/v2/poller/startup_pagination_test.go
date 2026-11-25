@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
+
 	"strings"
 	"sync"
 	"testing"
@@ -23,12 +23,21 @@ import (
 )
 
 func TestStartupRecoveryListsAllJobs(t *testing.T) {
-	for _, failPage := range []int{0, 1, 2} {
-		t.Run(fmt.Sprintf("temporary failure on page %d", failPage), func(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		failPage             int
+		expireAfterFirstPage bool
+	}{
+		{name: "all active"},
+		{name: "first page unavailable", failPage: 1},
+		{name: "second page unavailable", failPage: 2},
+		{name: "first job expires after first page", expireAfterFirstPage: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			const count = 101
 			var jobs []apiclient.Job
 			for i := range count {
-				id := strconv.Itoa(i)
+				id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
 				job := apiclient.NewJob(id, apiclient.JOBTYPE_CREATE_BOX, apiclient.JOBSTATUS_IN_PROGRESS, "BOX", id, "2026-01-01T00:00:00Z")
 				job.SetPayload(fmt.Sprintf(`{"id":%q}`, id))
 				jobs = append(jobs, *job)
@@ -52,16 +61,19 @@ func TestStartupRecoveryListsAllJobs(t *testing.T) {
 				defer mu.Unlock()
 				if r.URL.Path == "/jobs" {
 					page := 1
-					if raw := r.URL.Query().Get("page"); raw != "" {
-						page, _ = strconv.Atoi(raw)
+					after := r.URL.Query().Get("afterId")
+					switch after {
+					case "00000000-0000-0000-0000-000000000000":
+					case jobs[99].Id:
+						page = 2
+					default:
+						t.Errorf("unexpected cursor %q", after)
 					}
-					if page < 1 || page > 2 || r.URL.Query().Get("status") != "IN_PROGRESS" {
-						t.Errorf("unexpected list query: %s", r.URL.RawQuery)
-						w.WriteHeader(http.StatusBadRequest)
-						return
+					if r.URL.Query().Get("status") != "IN_PROGRESS" {
+						t.Error("startup scan omitted status filter")
 					}
 					pageCalls[page]++
-					if page == failPage && pageCalls[page] == 1 {
+					if page == tc.failPage && pageCalls[page] == 1 {
 						w.WriteHeader(http.StatusServiceUnavailable)
 						return
 					}
@@ -69,17 +81,29 @@ func TestStartupRecoveryListsAllJobs(t *testing.T) {
 					// shrink the offset-paginated results and hide remaining jobs.
 					var remaining []apiclient.Job
 					for _, job := range jobs {
-						if reports[job.Id] == 0 {
+						if job.Id > after && reports[job.Id] == 0 && !(tc.expireAfterFirstPage && page == 2 && job.Id == jobs[0].Id) {
 							remaining = append(remaining, job)
 						}
 					}
 					total := len(remaining)
-					start := min((page-1)*100, total)
-					_ = json.NewEncoder(w).Encode(apiclient.NewPaginatedJobs(remaining[start:min(start+100, total)], float32(total), float32(page), float32((total+99)/100)))
+					_ = json.NewEncoder(w).Encode(apiclient.NewPaginatedJobs(remaining[:min(100, total)], float32(total), 1, float32((total+99)/100)))
 					scanComplete = page == 2
 					return
 				}
 				id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/status")
+				if r.Method == http.MethodGet {
+					for _, job := range jobs {
+						if job.Id == id {
+							if tc.expireAfterFirstPage && id == jobs[0].Id {
+								job.Status = apiclient.JOBSTATUS_FAILED
+							}
+							_ = json.NewEncoder(w).Encode(job)
+							return
+						}
+					}
+					http.NotFound(w, r)
+					return
+				}
 				var status apiclient.UpdateJobStatus
 				if !strings.HasSuffix(r.URL.Path, "/status") || json.NewDecoder(r.Body).Decode(&status) != nil || status.Status != apiclient.JOBSTATUS_COMPLETED {
 					t.Errorf("unexpected status update for %s", id)
@@ -118,7 +142,11 @@ func TestStartupRecoveryListsAllJobs(t *testing.T) {
 			defer func() { cancel(); <-stopped }()
 
 			seen := make(map[string]bool, count)
-			for range count {
+			expected := count
+			if tc.expireAfterFirstPage {
+				expected--
+			}
+			for range expected {
 				select {
 				case id := <-reported:
 					if seen[id] {
@@ -137,12 +165,16 @@ func TestStartupRecoveryListsAllJobs(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 			for _, job := range jobs {
-				if reports[job.Id] != 1 {
-					t.Errorf("job %s recovered %d times", job.Id, reports[job.Id])
+				want := 1
+				if tc.expireAfterFirstPage && job.Id == jobs[0].Id {
+					want = 0
+				}
+				if reports[job.Id] != want {
+					t.Errorf("job %s recovered %d times, want %d", job.Id, reports[job.Id], want)
 				}
 			}
-			if failPage != 0 && pageCalls[failPage] < 2 {
-				t.Errorf("page %d did not retry: %v", failPage, pageCalls)
+			if tc.failPage > 0 && pageCalls[tc.failPage] < 2 {
+				t.Errorf("page %d did not retry: %v", tc.failPage, pageCalls)
 			}
 		})
 	}
@@ -156,4 +188,34 @@ type paginationBackend struct {
 func (b *paginationBackend) Create(_ context.Context, box dto.CreateBoxDTO) (string, string, error) {
 	b.beforeCreate(box)
 	return box.Id, "test", nil
+}
+
+// Capture requests from the generated client used by the runner, including
+// callers that still use numbered pages without a recovery cursor.
+func TestStartupRecoveryCursorRequests(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000099"
+	for _, cursor := range []string{"", id} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			want := "limit=100&page=1&status=IN_PROGRESS"
+			if cursor != "" {
+				want = "afterId=" + cursor + "&" + want
+			}
+			if r.Method != http.MethodGet || r.URL.Path != "/jobs" || r.URL.RawQuery != want {
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(apiclient.NewPaginatedJobs([]apiclient.Job{}, 0, 1, 0))
+		}))
+		config := apiclient.NewConfiguration()
+		config.Servers = apiclient.ServerConfigurations{{URL: server.URL}}
+		req := apiclient.NewAPIClient(config).JobsAPI.ListJobs(t.Context()).Status(apiclient.JOBSTATUS_IN_PROGRESS)
+		if cursor != "" {
+			req = req.AfterId(cursor)
+		}
+		_, _, err := req.Execute()
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 }

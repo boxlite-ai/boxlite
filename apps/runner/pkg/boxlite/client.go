@@ -590,7 +590,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		return "", "", err
 	}
 	var bx *boxlite.Box
-	if id != boxDto.Id || boxDto.RequireExisting {
+	if boxDto.RequireExisting {
+		bx, err = c.runtime.Adopt(ctx, id, boxDto.Image, opts...)
+	} else if id != boxDto.Id {
 		bx, err = c.runtime.Get(ctx, id)
 	}
 	// The target lease excludes HTTP destruction until adoption/start finishes.
