@@ -119,6 +119,12 @@ func (d *egressDialer) byAddress(target egressTarget) upstreamDial {
 }
 
 func (d *egressDialer) dialTarget(ctx context.Context, network string, target egressTarget) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return nil, context.DeadlineExceeded
+	}
 	target.Protocol = "tcp"
 	if d.connect != nil {
 		return d.connect(ctx, target)
@@ -132,6 +138,10 @@ func (d *egressDialer) dialTarget(ctx context.Context, network string, target eg
 // gateway process is not, so an unforced dial could open IPv6 egress that no
 // allow_net rule can express.
 func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.Conn, error) {
+	return d.dialHost(ctx, target, nil)
+}
+
+func (d *egressDialer) dialHost(ctx context.Context, target egressTarget, check func(netip.Addr) outboundReason) (net.Conn, error) {
 	// One bound for the whole operation: the host lookup plus every candidate
 	// dial. It lives here rather than at the call site because the MITM path
 	// hands this dial to http.Transport, whose DialContext carries only the
@@ -143,7 +153,7 @@ func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.C
 
 	deadline, _ := ctx.Deadline() // always set: WithTimeout above just set one
 
-	ips, err := d.candidates(ctx, target.Hostname)
+	ips, err := d.candidates(ctx, target.Hostname, check)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +210,7 @@ func candidateDeadline(now, deadline time.Time, remaining int) time.Time {
 	return now.Add(share)
 }
 
-func (d *egressDialer) candidates(ctx context.Context, hostname string) ([]net.IP, error) {
+func (d *egressDialer) candidates(ctx context.Context, hostname string, check func(netip.Addr) outboundReason) ([]net.IP, error) {
 	resolved, err := d.resolve(ctx, hostname)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", hostname, err)
@@ -211,7 +221,15 @@ func (d *egressDialer) candidates(ctx context.Context, hostname string) ([]net.I
 		if ip4 == nil {
 			continue
 		}
-		if reason, refused := d.refuses(ip4); refused {
+		var reason string
+		if check != nil {
+			if decision := check(netip.AddrFrom4([4]byte(ip4))); decision != outboundAllowed {
+				reason = string(decision)
+			}
+		} else {
+			reason, _ = d.refuses(ip4)
+		}
+		if reason != "" {
 			logrus.WithFields(logrus.Fields{
 				"hostname": hostname,
 				"resolved": ip4,
@@ -225,6 +243,20 @@ func (d *egressDialer) candidates(ctx context.Context, hostname string) ([]net.I
 		return nil, fmt.Errorf("resolve %s: no dialable IPv4 address", hostname)
 	}
 	return ips, nil
+}
+
+func (s *outboundSnapshot) tcpAddressFacts(ip netip.Addr, candidate bool) outboundAddressFacts {
+	ip = ip.Unmap()
+	if !ip.Is4() {
+		return outboundAddressFacts{address: ip, platformDenied: true}
+	}
+	reason, restricted := unroutableEgress(ip.AsSlice())
+	local := reason == "loopback" || reason == "private" || reason == "cgnat"
+	return outboundAddressFacts{
+		address:         ip,
+		platformDenied:  (restricted && (!local || s.cloudTCP)) || (candidate && s.dialer.boxSubnet.Contains(ip.AsSlice())),
+		restrictedLocal: candidate && local,
+	}
 }
 
 // refuses decides whether a resolved address may be dialed on the guest's

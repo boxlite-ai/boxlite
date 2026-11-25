@@ -145,7 +145,7 @@ func decideTCPInspectRoute(hostname string, destIP net.IP, destPort uint16,
 }
 
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
-	natLock *sync.Mutex, ec2MetadataAccess bool, snapshot snapshotSource,
+	natLock *sync.Mutex, ec2MetadataAccess bool, snapshot snapshotSource, inspectionSlots chan struct{},
 	ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
 
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
@@ -156,6 +156,10 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		}
 		filter, dialer := current.filter, current.dialer
 		localAddress := r.ID().LocalAddress
+		if localAddress.Len() != net.IPv4len {
+			r.Complete(true)
+			return
+		}
 
 		if !ec2MetadataAccess && linkLocalSubnet.Contains(localAddress) {
 			r.Complete(true)
@@ -172,6 +176,10 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			Port:           destPort,
 			Protocol:       "tcp",
 			PolicyRevision: current.revision,
+		}
+		if current.tcpPolicy != nil {
+			forwardExtendedTCP(r, target, current, inspectionSlots, ca, secretMatcher)
+			return
 		}
 
 		switch decideTCPRoute(destIP, destPort, filter, secretMatcher) {
@@ -201,35 +209,24 @@ func standardForward(r *tcp.ForwarderRequest, dial upstreamDial) {
 		return
 	}
 
-	var wq waiter.Queue
-	ep, tcpErr := r.CreateEndpoint(&wq)
-	r.Complete(false)
-	if tcpErr != nil {
+	guest := openGuestTCP(r)
+	if guest == nil {
 		outbound.Close()
-		if _, ok := tcpErr.(*tcpip.ErrConnectionRefused); ok {
-			logrus.Debugf("r.CreateEndpoint() = %v", tcpErr)
-		} else {
-			logrus.Errorf("r.CreateEndpoint() = %v", tcpErr)
-		}
 		return
 	}
+	relayTCP(guest, outbound)
+}
 
+func relayTCP(guest, outbound net.Conn) {
 	remote := tcpproxy.DialProxy{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 			return outbound, nil
 		},
 	}
-	remote.HandleConn(gonet.NewTCPConn(&wq, ep))
+	remote.HandleConn(guest)
 }
 
-// inspectAndForward: Accept → Peek SNI/Host → decide → Dial → relay.
-// The flow is reversed from upstream because we need to read from the guest
-// before deciding whether, and where, to connect.
-func inspectAndForward(r *tcp.ForwarderRequest, target egressTarget,
-	filter *AllowNetFilter, dialer *egressDialer, ca *BoxCA, secretMatcher *SecretHostMatcher) {
-	destIP := net.IP(target.PolicyIP.AsSlice())
-	destPort := target.Port
-	// Step 1: Accept TCP from guest first (reversed from upstream)
+func openGuestTCP(r *tcp.ForwarderRequest) net.Conn {
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
 	r.Complete(false)
@@ -239,9 +236,20 @@ func inspectAndForward(r *tcp.ForwarderRequest, target egressTarget,
 		} else {
 			logrus.Errorf("r.CreateEndpoint() = %v", tcpErr)
 		}
+		return nil
+	}
+	return gonet.NewTCPConn(&wq, ep)
+}
+
+// inspectAndForward accepts the guest before deciding where to connect.
+func inspectAndForward(r *tcp.ForwarderRequest, target egressTarget,
+	filter *AllowNetFilter, dialer *egressDialer, ca *BoxCA, secretMatcher *SecretHostMatcher) {
+	destIP := net.IP(target.PolicyIP.AsSlice())
+	destPort := target.Port
+	guestConn := openGuestTCP(r)
+	if guestConn == nil {
 		return
 	}
-	guestConn := gonet.NewTCPConn(&wq, ep)
 
 	// Step 2: Peek to extract hostname (non-consuming read via bufio.Reader).
 	// Canonicalized once here; an IP literal in SNI/Host becomes "" and can
@@ -303,15 +311,7 @@ func inspectAndForward(r *tcp.ForwarderRequest, target egressTarget,
 		return
 	}
 
-	// Step 5: Relay using tcpproxy.DialProxy (same as standardForward). The
-	// bufio.Reader wrapper replays the peeked bytes as DialProxy copies
-	// guest→server.
-	remote := tcpproxy.DialProxy{
-		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return outbound, nil
-		},
-	}
-	remote.HandleConn(bufferedGuest)
+	relayTCP(bufferedGuest, outbound)
 }
 
 func egressName(e tcpEgress) string {
