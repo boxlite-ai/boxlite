@@ -103,8 +103,8 @@ func (c *Client) exportBox(ctx context.Context, boxId, destDir string) (string, 
 //
 // An IMPORT_BOX job can be redelivered — the runner can restart between the
 // import finishing and the job being marked COMPLETED — and importing twice
-// would leave a second box holding the same disk. A box that is already present
-// therefore satisfies the job.
+// would leave a second box holding the same disk. A legacy archive can satisfy
+// the replay through the existing box after its format is validated.
 func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error {
 	operation, err := c.lockCheckpointTarget(ctx, boxId)
 	if err != nil {

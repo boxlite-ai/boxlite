@@ -34,7 +34,7 @@ control plane through `runner` telemetry columns, `job` results and CPU incident
 
 ## Protected checkpoint coordination
 
-The [protected checkpoint migration](../../../../apps/api/src/migrations/pre-deploy/1795096807000-add-protected-checkpoint-control.ts)
+The [protected checkpoint migration](../../../../apps/api/src/migrations/pre-deploy/1795096807000-add-protected-checkpoint-control-migration.ts)
 binds managed archives to the committed outbound policy and the Runner that owns the disk work.
 
 | Stored field | Meaning |

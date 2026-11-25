@@ -3,9 +3,8 @@
 # Copyright Daytona Platforms Inc.
 # SPDX-License-Identifier: AGPL-3.0
 
-# Fails if any migration file is placed directly under
-# apps/api/src/migrations/ instead of pre-deploy/ or post-deploy/.
-# Legacy migrations (timestamp <= LEGACY_CUTOFF) are excluded.
+# Check placement and the suffix used by the API build and migration loaders.
+# Legacy migrations (timestamp <= LEGACY_CUTOFF) may stay at the root.
 
 # Exit on error
 set -e
@@ -24,6 +23,9 @@ for f in "$@"; do
   fi
 
   case "$migration_path" in
+    pre-deploy/*/*-migration.ts|post-deploy/*/*-migration.ts)
+      forbidden+=("$rel")
+      ;;
     pre-deploy/*-migration.ts) ;;
     post-deploy/*-migration.ts) ;;
     */*-migration.ts)
@@ -36,11 +38,15 @@ for f in "$@"; do
       fi
       forbidden+=("$rel")
       ;;
+    *.spec.ts) ;;
+    [0-9]*.ts|*/[0-9]*.ts)
+      forbidden+=("$rel")
+      ;;
   esac
 done
 
 if [ ${#forbidden[@]} -gt 0 ]; then
-  echo "Migration files must be placed in one of:" >&2
+  echo "Use the -migration.ts suffix and place migration files in one of:" >&2
   echo "  - apps/api/src/migrations/pre-deploy/" >&2
   echo "  - apps/api/src/migrations/post-deploy/" >&2
   echo "" >&2

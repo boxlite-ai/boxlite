@@ -43,6 +43,9 @@ This allows the database and API to be updated independently while maintaining c
 Note: the root folder is reserved for the pre-launch baseline only. Do not add new root migrations;
 use `pre-deploy/` or `post-deploy/` for new changes.
 
+Use `<timestamp>-<description>-migration.ts` so the API build and migration commands both discover the file.
+TypeORM records the migration class name and timestamp in its journal, so a filename correction keeps the existing history.
+
 ## Developer Workflow
 
 ### 1. Make Changes to Database Entities
@@ -174,6 +177,69 @@ The new API should read from and write to `display_name` only. The trigger handl
 
 ## Migration Scripts
 
+### Concurrent API startup
+
+API startup with `RUN_MIGRATIONS=true` and the migration CLI share a database-wide PostgreSQL advisory lock.
+Each uses one primary database session from lock acquisition through the final journal write.
+A waiting client reads pending migrations only after acquiring the lock.
+
+The baseline migration installs `uuid-ossp` under this lock. API and CLI connections leave extension installation to the migrations.
+
+When two clients start against an empty database, the first creates and updates the journal.
+The second leaves no transaction open between lock attempts.
+
+```mermaid
+sequenceDiagram
+    participant A as API startup
+    participant P as PostgreSQL
+    participant B as Migration CLI
+    A->>P: Acquire session lock and read journal
+    A->>P: Run pending DDL, including concurrent indexes
+    B->>P: Try lock in a short autocommit query
+    P-->>B: Lock held by API session
+    A->>P: Record applied migrations and release lock
+    B->>P: Acquire lock and read updated journal
+    B->>P: Release lock after checking pending migrations
+```
+
+The executor retains per-migration transactions and supports `CREATE INDEX CONCURRENTLY`.
+
+Lock acquisition waits up to five minutes. Each lock query has a five-second client and server limit.
+The migrator closes the PostgreSQL session when it cannot confirm acquisition or release.
+
+Use a direct or session-pooled PostgreSQL connection for the `boxlite:typeorm:migrations` lock.
+Existing application transactions can still delay concurrent index DDL.
+
+### Rolling deployments from the production image
+
+Pin migration jobs to the new API release image. Set the stage value `RUN_MIGRATIONS=false` before rollout and verify both running API generations inherit it on restart.
+Use all-phase startup for fresh databases or maintenance windows without older replicas.
+
+The deployment owner runs expansion before launching the new API revision. After switching traffic, verify that the old replicas have stopped and cannot restart before supplying `--old-replicas-retired` to the contraction job.
+
+```text
+Deployment  expand -> launch new -> retire old -> verify -> contract
+Old API     =========================X
+New API                 ============================================
+```
+
+The build records phase membership from each source path before Webpack flattens the migration filenames.
+With the job's database environment, run these commands from the image's working directory using its Node entrypoint.
+
+```bash
+node dist/apps/api/migrate.js list pre-deploy
+node dist/apps/api/migrate.js run pre-deploy
+node dist/apps/api/migrate.js list post-deploy
+node dist/apps/api/migrate.js run post-deploy --old-replicas-retired
+```
+
+Compare each list to the release's migration identities. The phase-specific commands apply pending migrations from that phase only.
+
+The [F1 schema transition paper](https://research.google/pubs/online-asynchronous-schema-change-in-f1/) and [Strong Migrations](https://github.com/ankane/strong_migrations#removing-a-column) inform transition ordering.
+BoxLite's CLI owns the phase jobs described here.
+
+Run the source CLI commands below from the `apps` workspace.
+
 ### `npm run migration:run:init`
 
 Runs **all migrations** from both pre-deploy and post-deploy folders. Use this for:
@@ -248,6 +314,12 @@ When that last migration is `AddAdminUsageWindowIndexes1792470000000`, use:
 
 ```bash
 npm run migration:revert -- --transaction none
+```
+
+The production image has the same nontransactional option for concurrent index drops.
+
+```bash
+node dist/apps/api/migrate.js revert all --transaction none
 ```
 
 TypeORM 0.3.31 starts a transaction for `undoLastMigration` in `each` mode despite
