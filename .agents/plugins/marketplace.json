@@ -22,7 +22,7 @@
       "name": "boxlite",
       "source": {
         "source": "local",
-        "path": "./plugins/boxlite"
+        "path": "./target/plugins/boxlite-marketplace/plugins/boxlite"
       },
       "policy": {
         "installation": "AVAILABLE",

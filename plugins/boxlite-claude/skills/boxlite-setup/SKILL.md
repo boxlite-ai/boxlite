@@ -3,6 +3,18 @@ name: boxlite-setup
 description: Choose and verify BoxLite Cloud OAuth, Cloud API key, or Local mode before operating a Box. Use for onboarding or an explicit mode change, not application end-user login.
 ---
 
+## Install from a local marketplace
+
+For a local installation, run `make plugin:boxlite:dist` in the BoxLite repository.
+Replace `ABSOLUTE_MARKETPLACE_DIRECTORY` with the absolute path to the generated `target/plugins/boxlite-marketplace` directory.
+
+```sh
+claude plugin marketplace add ABSOLUTE_MARKETPLACE_DIRECTORY
+claude plugin install boxlite@boxlite
+```
+
+Start a new session and run `/boxlite:boxlite-setup`.
+
 ## Choose a mode
 
 Reuse the user's explicit choice, or present these three options before workload operations:
@@ -10,7 +22,7 @@ Reuse the user's explicit choice, or present these three options before workload
 | Mode | Connection | Requirements |
 | --- | --- | --- |
 | Cloud OAuth | Host OAuth -> BoxLite MCP | BoxLite account and host authorization |
-| Cloud API key | User key -> the same BoxLite MCP | User-supplied key and private host MCP configuration |
+| Cloud API key | User key -> the same BoxLite MCP | User-supplied key and Claude’s sensitive plugin setting |
 | Local | Local CLI -> embedded runtime | Shell, compatible CLI, and virtualization; no cloud account |
 
 Both cloud choices use `https://api.boxlite.ai/mcp`, the same tools, and the [cloud workflow](../boxlite/references/cloud.md).
@@ -23,31 +35,20 @@ Without a writable project, retain the selection in the conversation; OAuth need
 
 ## Cloud OAuth
 
-For first use, have the user complete BoxLite registration in the Dashboard, including email verification and a default organization.
-An existing Dashboard account can sign in even when its MCP token contains no profile claims; direct first-time registration from MCP is not promised.
-
-Use the bundled `boxlite` MCP connection and the host's OAuth UI.
-Let the host open the browser, obtain consent, and store tokens; never implement login or read the host's token store.
-
-If unavailable, report the exact setup step and wait for authorization rather than installing a CLI or requesting an API key.
-Client-registration errors happen before user login: report the issuer/client setup blocker without asking the user to reset a password.
-
-If the API returns `email_required` or `registration_required`, direct the user to complete Dashboard registration with the same identity, then retry explicitly.
-If no default organization exists, stop and have the user complete organization setup; never choose another account or organization automatically.
-
-Discover tools and read their schemas, then call `listBoxes` for the selected organization.
-Check `isError` and the response; an empty authorized list is valid, but discovery or HTTP 401 is not successful login.
-Confirm the intended organization before writes, then resume the original task.
+Open `/mcp` and authorize `plugin:boxlite:boxlite` in the browser. Claude manages consent and token storage.
 
 ## Cloud API key
 
-Follow [native host setup](references/cloud-auth.md); only authentication differs from OAuth.
-Require the user to supply a key to the host explicitly through their chosen private secret environment.
-Never put credentials in plugin files, argv, chat, screenshots, or application archives.
+Run `/plugin configure boxlite@boxlite`, enter the key in the sensitive **BoxLite API key** field, then reload the plugin.
+Select only `plugin:boxlite:boxlite-api`, including when a manually configured server has a similar name.
+If the key is empty or the connection is denied, stop and ask the user to update the plugin configuration.
 
-Check that the selected key reference is nonempty without printing its value before discovering or calling tools.
-Refuse a missing or empty key even if OAuth is cached; if the host cannot enforce that separation, report API-key mode unavailable.
-Use only the selected API-key MCP connection, verify identity and organization, then follow the shared cloud workflow.
+## Verify the selected cloud connection
+
+Follow [cloud authentication checks](references/cloud-auth.md) on the selected connection.
+Confirm the intended organization and a successful `listBoxes` response before workload operations. An empty authorized list is valid.
+
+Stop on missing credentials or denial. Keep secrets out of chat, logs, and project files.
 
 ## Local
 

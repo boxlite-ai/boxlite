@@ -9,11 +9,14 @@ plugin\:boxlite\:check: plugin-boxlite-force
 	@$(PLUGIN_PYTHON) scripts/plugins/boxlite.py check
 	@$(MAKE) --no-print-directory test:unit:plugins
 
+plugin\:boxlite\:submission: plugin-boxlite-force plugin\:boxlite\:check
+	@$(PLUGIN_PYTHON) scripts/plugins/boxlite.py submission
+
 plugin\:boxlite\:dist: plugin-boxlite-force plugin\:boxlite\:check
 	@$(PLUGIN_PYTHON) scripts/plugins/boxlite.py dist
 
 plugin\:boxlite\:check\:cc: plugin-boxlite-force plugin\:boxlite\:dist
-	@claude plugin validate --strict plugins/boxlite
+	@claude plugin validate --strict plugins/boxlite-claude
 	@claude plugin validate --strict target/plugins/boxlite-marketplace
 plugin\:boxlite\:coverage: plugin-boxlite-force
 	@mkdir -p target/coverage/plugins

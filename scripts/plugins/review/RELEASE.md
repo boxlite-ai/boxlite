@@ -18,7 +18,7 @@ API-key setup requires a native host with private MCP configuration; Local requi
 
 **Repository:** https://github.com/boxlite-ai/boxlite
 
-**Plugin folder:** `plugins/boxlite`
+**Claude Directory folder:** `plugins/boxlite-claude`
 
 **Website:** https://boxlite.ai
 
@@ -32,7 +32,7 @@ API-key setup requires a native host with private MCP configuration; Local requi
 
 ## Changes from 0.1
 
-- Adds an explicit three-mode setup workflow and one shared cloud MCP declaration.
+- Adds an explicit three-mode setup workflow and a shared cloud MCP service.
 - Replaces cloud CLI deployment helpers with host MCP instructions; preserves native CLI execution for Local only.
 - Adds a local launcher that removes inherited cloud routing, rejects credential-bearing runtime homes and routing overrides, and preserves subprocess exit codes.
 - Adds reproducible plugin and standalone marketplace archives, exact package inventory checks, and review materials.
@@ -60,7 +60,7 @@ Cloud tool arguments, commands and selected file archives use the existing BoxLi
 The helper does not persist transfer tickets, pending snapshots or archive payload logs; host-managed output storage follows host behavior.
 Local execution uses the user's host; requested image pulls and guest commands can contact their configured networks.
 
-OAuth tokens stay with the host and API keys stay in the user's private environment; the plugin has no separate telemetry or token store.
+OAuth tokens stay with the host. Claude stores API keys in its secure plugin configuration. Codex reads the key from the user’s private environment.
 
 ## Release status
 

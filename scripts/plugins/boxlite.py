@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
 """Validate and reproducibly package BoxLite's cloud MCP and local workflows."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import re
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-PLUGIN = REPO / 'plugins/boxlite'
+PLUGIN = REPO / 'plugins/boxlite-codex'
 CACHE = {'node_modules', '.venv', '__pycache__', 'dist', 'public'}
 PRIVATE = {'deployment.json', 'credentials.toml', 'secrets.json', 'supervisor.conf', 'data'}
 MCP_URL = 'https://api.boxlite.ai/mcp'
-CLAUDE_FILES = {'hooks/hooks.json', 'hooks/transfer.js', 'skills/boxlite/scripts/archive_worker.py'}
-INVENTORY = CLAUDE_FILES | {
-    'plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json',
+SHARED_SOURCE = {
+    'LICENSE', 'README.md', 'assets/boxlite-icon.png', 'skills/boxlite/SKILL.md',
+    'skills/boxlite/references/cloud.md', 'skills/boxlite/references/local.md',
+    'skills/boxlite-setup/references/cloud-auth.md', 'skills/boxlite/scripts/local.py',
     'skills/boxlite/scripts/transfer.py', 'skills/boxlite/scripts/transfer_archive.py',
     'skills/boxlite/scripts/transfer_hosts.py',
-    'mcp.json', '.mcp.json', 'README.md', 'LICENSE', 'assets/boxlite-icon.png',
-    'skills/boxlite/SKILL.md', 'skills/boxlite/agents/openai.yaml',
-    'skills/boxlite/references/cloud.md', 'skills/boxlite/references/local.md',
-    'skills/boxlite/scripts/local.py', 'skills/boxlite-setup/SKILL.md',
-    'skills/boxlite-setup/agents/openai.yaml', 'skills/boxlite-setup/references/cloud-auth.md',
+}
+CODEX_SOURCE = {
+    'plugin.json', '.codex-plugin/plugin.json', 'mcp.json', '.mcp.json',
+    'skills/boxlite/agents/openai.yaml', 'skills/boxlite-setup/SKILL.md',
+    'skills/boxlite-setup/agents/openai.yaml',
+}
+CLAUDE_SOURCE = {
+    '.claude-plugin/plugin.json', '.mcp.json', 'skills/boxlite-setup/SKILL.md',
+    'hooks/hooks.json', 'hooks/transfer.js', 'skills/boxlite/scripts/archive_worker.py',
 }
 
 
@@ -68,23 +75,24 @@ def required_field(mapping, key, label):
     return mapping[key]
 
 
-def validate(root=PLUGIN):
-    """Return package files after validating manifests, skills, and package boundaries."""
-    files = list(package_files(root))
+def portable_manifest(root):
     manifest = load_manifest(root, 'plugin.json')
     if manifest.get('$schema') != 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json':
         raise ValueError('Expected portable Agent Plugins schema')
     version = manifest.get('version')
     if manifest.get('name') != 'boxlite' or not isinstance(version, str) or not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
         raise ValueError('Unexpected plugin identity/version')
+    return manifest
+
+
+def validate_payload(root):
+    """Return package files after validating manifests, skills, and package boundaries."""
+    files = list(package_files(root))
+    manifest = portable_manifest(root)
     legacy = load_manifest(root, '.codex-plugin/plugin.json')
     for key in ('name', 'version', 'description'):
         if required_field(manifest, key, 'portable manifest') != required_field(legacy, key, 'Codex manifest'):
             raise ValueError(f'Compatibility identity differs: {key}')
-    claude = load_manifest(root, '.claude-plugin/plugin.json')
-    for key in ('name', 'version', 'description'):
-        if required_field(manifest, key, 'portable manifest') != required_field(claude, key, 'Claude manifest'):
-            raise ValueError(f'Claude compatibility identity differs: {key}')
     extensions = required_field(manifest, 'extensions', 'portable manifest')
     settings = required_field(extensions, 'com.openai', 'extensions')
     interface = required_field(settings, 'interface', 'OpenAI extension')
@@ -113,7 +121,7 @@ def validate(root=PLUGIN):
     skills = [path for path in files if path.name == 'SKILL.md' and path.parent.parent == root / 'skills']
     if not skills:
         raise ValueError('No skills packaged')
-    if checked_path(root, onboarding) not in skills:
+    if onboarding not in {'./' + path.relative_to(root).as_posix() for path in skills}:
         raise ValueError('Onboarding must name a packaged skill')
     for skill in skills:
         text = skill.read_text()
@@ -129,9 +137,51 @@ def validate(root=PLUGIN):
             compile(path.read_text(), str(path), 'exec')
         if path.suffix in {'.js', '.json', '.md', '.py', '.yaml'} and re.search(r'\bblk_[A-Za-z0-9_-]{16,}', path.read_text()):
             raise ValueError('Credential material is not distributable')
-    if {path.relative_to(root).as_posix() for path in files} != INVENTORY:
+    if {path.relative_to(root).as_posix() for path in files} != SHARED_SOURCE | CODEX_SOURCE:
         raise ValueError('Package inventory differs: missing or undeclared files')
     return files
+
+
+def validate_claude(root, portable):
+    """Check the complete Directory source before passing it to a host."""
+    files = list(package_files(root))
+    if {path.relative_to(root).as_posix() for path in files} != SHARED_SOURCE | CLAUDE_SOURCE:
+        raise ValueError('Claude Directory inventory differs')
+    for path in files:
+        if path.suffix in {'.md', '.js', '.json', '.py'} and re.search(r'\bblk_[A-Za-z0-9_-]{16,}', path.read_text()):
+            raise ValueError('Credential material is not distributable')
+    manifest = load_manifest(root, '.claude-plugin/plugin.json')
+    release = portable_manifest(portable)
+    for key in ('name', 'version', 'description'):
+        if required_field(manifest, key, 'Claude manifest') != required_field(release, key, 'portable manifest'):
+            raise ValueError(f'Claude Directory identity differs: {key}')
+    return files
+
+
+@contextmanager
+def codex_payload(root):
+    """Materialize shared files at their archive paths for host-level validation."""
+    claude = root.with_name('boxlite-claude')
+    validate_claude(claude, root)
+    with tempfile.TemporaryDirectory() as temporary:
+        stage = Path(temporary)
+        for path in package_files(root):
+            name = path.relative_to(root)
+            if name.as_posix() in SHARED_SOURCE:
+                raise ValueError(f'Duplicate shared source: {name}')
+            target = stage / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+        for name in SHARED_SOURCE:
+            target = stage / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(claude / name, target)
+        yield stage, validate_payload(stage)
+
+
+def validate(root=PLUGIN):
+    with codex_payload(root) as (stage, files):
+        return [path.relative_to(stage) for path in files]
 
 
 def write_zip(archive, root, files):
@@ -145,19 +195,22 @@ def write_zip(archive, root, files):
             zipped.writestr(info, path.read_bytes())
 
 
-def build(output, root=PLUGIN):
-    """Validate and stage a deterministic ZIP, host marketplaces, and SHA-256 digest."""
-    files = validate(root)
+def build(output, root=PLUGIN, *, marketplace_bundle=True):
+    """Build the submission ZIP and optionally the local installation bundle."""
     output.mkdir(parents=True, exist_ok=True)
-    version = load_manifest(root, 'plugin.json')['version']
-    archive = output / f'boxlite-{version}.zip'
-    write_zip(archive, root, [path for path in files if path.relative_to(root).as_posix() not in CLAUDE_FILES])
-    marketplace = output / 'boxlite-marketplace'
-    if marketplace.exists():
-        shutil.rmtree(marketplace)
-    staged = marketplace / 'plugins/boxlite'
-    for path in files:
-        target = staged / path.relative_to(root)
+    with codex_payload(root) as (stage, files):
+        version = load_manifest(stage, 'plugin.json')['version']
+        archive = output / f'boxlite-{version}.zip'
+        write_zip(archive, stage, files)
+        if not marketplace_bundle:
+            return archive
+        marketplace = output / 'boxlite-marketplace'
+        if marketplace.exists():
+            shutil.rmtree(marketplace)
+        shutil.copytree(stage, marketplace / 'plugins/boxlite')
+    claude = root.with_name('boxlite-claude')
+    for path in package_files(claude):
+        target = marketplace / 'plugins/boxlite-claude' / path.relative_to(claude)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, target)
     catalog = marketplace / '.agents/plugins/marketplace.json'
@@ -171,7 +224,7 @@ def build(output, root=PLUGIN):
     claude_catalog.write_text(json.dumps({
         'name': 'boxlite', 'description': 'BoxLite cloud MCP and independent local runtime.',
         'owner': {'name': 'BoxLite'}, 'plugins': [{
-            'name': 'boxlite', 'source': './plugins/boxlite',
+            'name': 'boxlite', 'source': './plugins/boxlite-claude',
             'description': load_manifest(root, 'plugin.json')['description'],
         }],
     }, indent=2) + '\n')
@@ -185,9 +238,9 @@ def build(output, root=PLUGIN):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['check', 'dist'])
+    parser.add_argument('action', choices=['check', 'dist', 'submission'])
     args = parser.parse_args()
     if args.action == 'check':
-        print(f'BoxLite package validated: {len(validate())} source files')
+        print(f'Validated Claude source and {len(validate())} Codex submission files')
     else:
-        print(build(REPO / 'target/plugins'))
+        print(build(REPO / 'target/plugins', marketplace_bundle=args.action == 'dist'))

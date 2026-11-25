@@ -1,5 +1,5 @@
 [run]
 include =
     scripts/plugins/*.py
-    plugins/boxlite/skills/boxlite/scripts/*.py
+    plugins/boxlite-claude/skills/boxlite/scripts/*.py
 relative_files = True

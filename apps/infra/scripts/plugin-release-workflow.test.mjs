@@ -13,19 +13,14 @@ const publisher = load(readFileSync(join(root, '.github/workflows/publish-plugin
 const packageScript = build.jobs.build.steps.find((step) => step.id === 'package').run
 const verifyScript = publisher.jobs.verify.steps.find((step) => step.id === 'source').run
 const publishScript = publisher.jobs.publish.steps.find((step) => step.id === 'registry').run
-const { version } = JSON.parse(readFileSync(join(root, 'plugins/boxlite/plugin.json'), 'utf8'))
+const { version } = JSON.parse(readFileSync(join(root, 'plugins/boxlite-codex/plugin.json'), 'utf8'))
 const tag = `boxlite-plugin-v${version}`
-const files = [
-  `boxlite-${version}.zip`,
-  `boxlite-marketplace-${version}.zip`,
-  'SHA256SUMS',
-  `boxlite-review-kit-${version}.zip`,
-  `boxlite-review-kit-${version}.zip.sha256`,
-]
+const files = [`boxlite-${version}.zip`]
+const checksum = readFileSync(join(root, `scripts/plugins/review/boxlite-${version}.zip.sha256`), 'utf8').trim()
 
 // Exercise the workflow against archives produced by the real package builder.
 before(() => {
-  const built = spawnSync('make', ['--no-print-directory', 'plugin:boxlite:review-kit'], {
+  const built = spawnSync('make', ['--no-print-directory', 'plugin:boxlite:submission'], {
     cwd: root,
     encoding: 'utf8',
     timeout: 90_000,
@@ -91,6 +86,7 @@ const fault = process.env.RELEASE_FAULT
 const digest = 'sha256:' + 'a'.repeat(64)
 if (command === 'gh' && args[0] === 'api') {
   const endpoint = args[1]
+  if (args.some(arg => arg.includes('/contents/scripts/plugins/review/'))) { console.log(process.env.ZIP_CHECKSUM); process.exit(0) }
   if (fault === 'api-error') process.exit(1)
   if (endpoint.endsWith('/workflows/build-plugins.yml')) console.log('17')
   else if (endpoint.endsWith('/workflows/423888825')) console.log(fault === 'legacy-active' ? 'active' : 'disabled_manually')
@@ -120,7 +116,8 @@ if (command === 'gh' && args[0] === 'api') {
   } else process.exit(2)
 } else if (command === 'oras') {
   if (args[0] === 'push' && args.includes('--oci-layout')) {
-    if (!args.slice(-5).every((file) => fs.existsSync(file.split(':')[0]))) process.exit(2)
+    const layers = args.slice(args.indexOf('--oci-layout') + 1).filter(arg => arg.endsWith(':application/zip') || arg.endsWith(':text/plain'))
+    if (layers.length !== 1 || !fs.existsSync(layers[0].split(':')[0])) process.exit(2)
   } else if (args[0] === 'login') {
     assertPassword()
   } else if (args[0] === 'cp') {
@@ -148,6 +145,7 @@ function assertPassword() {
       ...process.env,
       PATH: bin + ':' + process.env.PATH,
       RELEASE_FAULT: fault,
+      ZIP_CHECKSUM: checksum,
       CALL_LOG: log,
       VERSION: version,
       CREATED: '2026-11-20T00:00:00Z',
@@ -173,6 +171,8 @@ function assertPassword() {
 }
 
 test('plugin build is read-only and publication uses only the verified attempt', (t) => {
+  const upload = build.jobs.build.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@'))
+  assert.equal(upload.with.path, 'target/plugins/boxlite-${{ steps.package.outputs.version }}.zip')
   assert.deepEqual(build.permissions, { contents: 'read' })
   assert.deepEqual(Object.keys(build.jobs), ['build'])
   assert.deepEqual(publisher.on.workflow_run.workflows, [build.name])
@@ -224,13 +224,13 @@ test('plugin verifier rejects a same-name workflow with a different identity', (
 })
 
 for (const [fault, expectedCopies] of [['none', 1], ['same-digest', 0]]) {
-  test(`plugin publisher verifies five OCI layers and emits the digest on ${fault}`, (t) => {
+  test(`plugin publisher publishes the verified Codex ZIP and emits the digest on ${fault}`, (t) => {
     const { run, calls, copies, output } = execute(t, publishScript, fault)
     assert.equal(run.status, 0, run.stderr)
     const layout = calls.find(([command, subcommand]) => command === 'oras' && subcommand === 'push')
     assert.ok(layout.includes('--oci-layout'))
     assert.ok(layout.includes('org.opencontainers.image.created=2026-11-20T00:00:00Z'))
-    assert.deepEqual(layout.slice(-5).map((file) => file.split(':')[0]), files)
+    assert.deepEqual(layout.filter((arg) => arg.endsWith(':application/zip') || arg.endsWith(':text/plain')).map((file) => file.split(':')[0]), files)
     assert.equal(copies.length, expectedCopies)
     if (expectedCopies) assert.equal(copies[0].at(-1), `ghcr.io/boxlite-ai/boxlite-plugin:${version}`)
     assert.equal(output, `image=ghcr.io/boxlite-ai/boxlite-plugin\ndigest=sha256:${'a'.repeat(64)}\n`)

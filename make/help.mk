@@ -47,6 +47,7 @@ help:
 	@echo "    make github-ci-runner-image - Build the local Node Listener image"
 	@echo ""
 	@echo "  Plugins:"
+	@echo "    make plugin:boxlite:submission - Build the standalone Codex submission ZIP"
 	@echo "    make plugin:boxlite:check    - Validate BoxLite plugin and package tests"
 	@echo "    make plugin:boxlite:dist     - Build cloud/local plugin and marketplace ZIPs"
 	@echo "    make plugin:boxlite:check:cc - Validate Claude Code plugin and marketplace"

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
 // The host loads the mod as ESM even though this repository defaults to CommonJS.
-const source = readFileSync(new URL('../../../plugins/boxlite/hooks/transfer.js', import.meta.url))
+const source = readFileSync(new URL('../../../plugins/boxlite-claude/hooks/transfer.js', import.meta.url))
 const {register} = await import('data:text/javascript;base64,' + source.toString('base64'))
 let download
 register((event, filter, handler) => {

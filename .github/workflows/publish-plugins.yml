@@ -124,17 +124,18 @@ jobs:
           image="ghcr.io/$repository"
           reference="$image:$VERSION"
           tag="boxlite-plugin-v$VERSION"
-          review_kit="boxlite-review-kit-$VERSION.zip"
-          sha256sum --strict --check SHA256SUMS "$review_kit.sha256"
+          checksum="$(gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/$GITHUB_REPOSITORY/contents/scripts/plugins/review/boxlite-$VERSION.zip.sha256?ref=$SOURCE_SHA")"
+          expected="${checksum%% *}"
+          [[ "$expected" =~ ^[a-f0-9]{64}$ ]]
+          printf '%s  %s\n' "$expected" "boxlite-$VERSION.zip" | sha256sum --strict --check
           layout="$RUNNER_TEMP/plugin-oci:$VERSION"
           oras push --oci-layout --artifact-type application/vnd.boxlite.plugin.v1 \
             --annotation "org.opencontainers.image.created=$CREATED" \
             --annotation "org.opencontainers.image.revision=$SOURCE_SHA" \
             --annotation "org.opencontainers.image.version=$VERSION" \
             --annotation "org.opencontainers.image.url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-            "$layout" "boxlite-$VERSION.zip:application/zip" \
-            "boxlite-marketplace-$VERSION.zip:application/zip" SHA256SUMS:text/plain \
-            "$review_kit:application/zip" "$review_kit.sha256:text/plain"
+            "$layout" "boxlite-$VERSION.zip:application/zip"
           digest="$(oras resolve --oci-layout "$layout")"
           if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
             echo 'ORAS did not return a manifest digest.' >&2
@@ -191,4 +192,4 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
           IMAGE: ${{ steps.registry.outputs.image }}
           DIGEST: ${{ steps.registry.outputs.digest }}
-        run: printf 'Plugin version `%s`\n\nDownload with `oras pull %s@%s`.\n' "$VERSION" "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+        run: printf 'Plugin version %s\n\n    oras pull %s@%s\n' "$VERSION" "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

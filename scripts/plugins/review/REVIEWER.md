@@ -4,9 +4,10 @@
 
 Upload `boxlite-0.2.0.zip` to OpenAI's plugin portal; do not upload this review-kit ZIP as the plugin.
 Extract `boxlite-marketplace-0.2.0.zip` for native Codex and Claude Code installation using its absolute directory.
-The marketplace includes both host catalogs and the shared plugin directory, with no external relative-path dependency.
+The marketplace includes both host catalogs and both self-contained plugin directories, with no external relative-path dependency.
 
-For Claude's public directory, provide the public repository, release commit/tag, and `plugins/boxlite` folder.
+For Claude's public directory, provide the GitHub repository and the `plugins/boxlite-claude` folder. Select the branch or tag containing the candidate when it differs from the default branch.
+
 Submit a companion connector for `https://api.boxlite.ai/mcp` under the same organization.
 Record the exact published commit and archive hashes in the private readiness checklist.
 
@@ -23,8 +24,11 @@ Follow [OAuth acceptance](OAUTH.md) for staged prerequisites, account setup, neg
 The public OpenAI submission flow has no API-key connection setup.
 Do not label the protected endpoint unauthenticated or add headers to the public manifest.
 
-For native Codex/Claude Code API-key testing, follow the packaged `cloud-auth.md` using a private environment reference.
-Disable the unused OAuth connection or verify host deduplication, then prove missing/empty keys stop without using a cached OAuth identity.
+For native Codex, follow its packaged `boxlite-setup` skill to configure the private environment reference.
+
+In Claude, enter the key in the BoxLite plugin configuration and select `plugin:boxlite:boxlite-api`.
+Verify missing and empty keys stop API-key operations even after OAuth login.
+
 For Local, use a supported virtualization-capable host and the packaged launcher; no cloud account is required.
 
 ## OpenAI directory test cases
@@ -96,7 +100,7 @@ Upload and scan are distinct from review approval and publication.
 
 For Claude, run the native validator, then the portal's repository validation and security scan, and resolve every blocking finding.
 
-The optional native API-key setup references `BOXLITE_API_KEY` in a user-configured Authorization header. Record the portal's disposition of this example under its credential-handling rules, along with the scanned commit and the result for the hooks module.
+Record the scanned commit and the portal results for the sensitive plugin setting, native manifest, and hooks module.
 Review the companion connector's complete exposed tool set: readable titles, correct read/write hints, and separate tools for read and write operations are required.
 
 A mixed read/write API catalog invoker cannot be made compliant solely by changing this plugin's skills or its description.

@@ -1,14 +1,14 @@
 # BoxLite plugin distribution and review
 
 The plugin offers Cloud OAuth and Cloud API key over one hosted MCP service, plus an independent local runtime.
-Its design is [issue #2535](https://github.com/boxlite-ai/boxlite/issues/2535); user instructions live in [the plugin README](../../plugins/boxlite/README.md).
+Its design is [issue #2535](https://github.com/boxlite-ai/boxlite/issues/2535); user instructions live in [the plugin README](../../plugins/boxlite-claude/README.md).
 
 ## Build and validate
 
 Use Python 3.9+ and the repository make targets:
 
 ```sh
-make plugin:boxlite:check
+make plugin:boxlite:submission
 make plugin:boxlite:dist
 make plugin:boxlite:check:cc
 make plugin:boxlite:review-kit
@@ -31,7 +31,14 @@ Archive names follow the synchronized manifest version.
 The packager uses an exact inventory, fixed ZIP metadata and ordering, and excludes private state and caches.
 
 The review kit is a handoff archive, not the ZIP to upload as an OpenAI plugin.
-Claude's directory reads a published GitHub plugin folder; a local marketplace ZIP does not substitute for that repository.
+
+Claude Directory reads `plugins/boxlite-claude` at the published Git ref. Its native manifest declares an optional sensitive API key.
+
+The OAuth connection has no configured header. The API-key connection uses the same endpoint with the fixed query `?connection=api-key` so Claude discovers both connections.
+
+The release build assembles the Codex ZIP from `plugins/boxlite-codex` and shared files in `plugins/boxlite-claude`. Edit cloud operations and authentication checks once in the Claude source. Each host's setup skill supplies its own connection names and credential configuration.
+
+Only the Codex submission ZIP is uploaded by Actions. The marketplace, review kit, and their checksums are optional local outputs. Run `make plugin:boxlite:dist` before using the repository-local Codex marketplace entry.
 
 ## Publish versioned packages to GHCR
 
@@ -60,17 +67,17 @@ Check that the repository’s Latest Release contains the runtime `install.sh` b
 
 ### Release a plugin version
 
-Update the version in all three manifests and `scripts/plugins/review/{cases,checklist}.json`. Update version-specific examples and run the package checks.
+Update the version in all three manifests and `scripts/plugins/review/{cases,checklist}.json`. Build the submission, review its contents, and record its SHA-256 in `scripts/plugins/review/boxlite-VERSION.zip.sha256`. Run the package checks.
 
 After the change merges, tag the intended commit on `main` and push the tag. For example, if the manifests contain version `0.2.0`:
 
 ```sh
-make plugin:boxlite:check:cc plugin:boxlite:review-kit
+make plugin:boxlite:submission
 git tag boxlite-plugin-v0.2.0
 git push origin boxlite-plugin-v0.2.0
 ```
 
-The publisher stores all five files in one OCI artifact at `ghcr.io/boxlite-ai/boxlite-plugin:0.2.0`.
+The publisher stores the verified Codex ZIP in one OCI artifact at `ghcr.io/boxlite-ai/boxlite-plugin:0.2.0`.
 Retry a failed build by rerunning the read-only workflow on the matching tag:
 
 ```sh
@@ -108,7 +115,8 @@ Resolve the artifact by version and verify the publisher's signed build commit a
       and .[0].annotations["org.opencontainers.image.revision"] == $commit'
   oras pull "$reference" --output "boxlite-plugin-$version"
   cd "boxlite-plugin-$version"
-  sha256sum --check SHA256SUMS "boxlite-review-kit-$version.zip.sha256"
+  gh api -H "Accept: application/vnd.github.raw+json" \
+    "repos/boxlite-ai/boxlite/contents/scripts/plugins/review/boxlite-$version.zip.sha256?ref=$commit" | sha256sum --check
 )
 ```
 
@@ -138,7 +146,7 @@ The Codex helper and the current Claude session’s BoxLite tools supply the tra
 
 The helper handles archive base64 inside the program and prints completion metadata. It adds no checksum or upload readback.
 
-The [design](https://github.com/boxlite-ai/boxlite/issues/2928) and [usage contract](../../plugins/boxlite/skills/boxlite/references/cloud.md#files) describe both host adapters.
+The [design](https://github.com/boxlite-ai/boxlite/issues/2928) and [usage contract](../../plugins/boxlite-claude/skills/boxlite/references/cloud.md#files) describe both host adapters.
 `make test:unit:plugins` exercises local filesystem and host subprocess boundaries; its peers are fixtures.
 Native-host and deployed-server acceptance are separate from those tests.
 

@@ -57,7 +57,7 @@ Neither failure permits an account, credential, or organization switch without t
 Install the final marketplace archive into an isolated native host profile and record its hash and the host version.
 Use the bundled OAuth connection and native login UI; never read or export the host token cache.
 
-For a separately configured Codex connection, the packaged authentication guide documents `codex mcp login`; Claude Code also exposes login in `/mcp`.
+For a separately configured Codex connection, the packaged Codex setup skill documents `codex mcp login`; Claude Code also exposes login in `/mcp`.
 Record the actual tool namespace and returned account/organization context privately before any write.
 
 ## Acceptance matrix
