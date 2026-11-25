@@ -25,11 +25,19 @@ describe('outbound policy HTTP authorization', () => {
   let jwks: Server
   let issuer: string
   let getPolicy: jest.Mock
+  let getCompletePolicy: jest.Mock
+  let getCompleteStatus: jest.Mock
   let getStatus: jest.Mock
   let setPolicy: jest.Mock
+  let setCompletePolicy: jest.Mock
   const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })
   const organizationId = 'org-1'
   const audience = 'outbound-authorization-test'
+  const completeSnapshot = {
+    revision: 'complete-a',
+    admission: 'extended_ipv4',
+    policy: { mode: 'enabled', allow_net: ['example.com:443'], deny_net: [] },
+  }
 
   function jwt(userId: string, expired = false): string {
     const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
@@ -96,6 +104,9 @@ describe('outbound policy HTTP authorization', () => {
       updateLastUsedAt: jest.fn().mockResolvedValue(undefined),
     }
     getPolicy = jest.fn().mockResolvedValue({ revision: 'rev-a', policy: { mode: 'enabled', allow_net: [] } })
+    getCompletePolicy = jest.fn().mockResolvedValue(completeSnapshot)
+    setCompletePolicy = jest.fn().mockResolvedValue(completeSnapshot)
+    getCompleteStatus = jest.fn().mockResolvedValue({ application_state: 'pending', pending_revision: 'complete-b' })
     getStatus = jest.fn().mockResolvedValue({ application_state: 'pending', pending_revision: 'rev-b' })
     setPolicy = jest.fn().mockResolvedValue({
       outboundEnabled: false,
@@ -108,7 +119,14 @@ describe('outbound policy HTTP authorization', () => {
       providers: [
         {
           provide: BoxService,
-          useValue: { getOutboundNetwork: getPolicy, getOutboundStatus: getStatus, setOutboundNetwork: setPolicy },
+          useValue: {
+            getOutboundNetwork: getPolicy,
+            getCompleteOutboundNetwork: getCompletePolicy,
+            getCompleteOutboundStatus: getCompleteStatus,
+            getOutboundStatus: getStatus,
+            setOutboundNetwork: setPolicy,
+            setCompleteOutboundNetwork: setCompletePolicy,
+          },
         },
         { provide: BoxStateWaiterService, useValue: {} },
         { provide: CheckpointRecoverService, useValue: {} },
@@ -167,19 +185,23 @@ describe('outbound policy HTTP authorization', () => {
   })
   beforeEach(() => {
     getPolicy.mockClear()
+    getCompletePolicy.mockClear()
+    getCompleteStatus.mockClear()
     getStatus.mockClear()
     setPolicy.mockClear()
+    setCompletePolicy.mockClear()
   })
 
   async function request(
     method: 'GET' | 'PUT',
     prefix = '/org-1',
     token?: string,
-    status = false,
+    status: boolean | 'complete' | 'complete/status' = false,
     headers: Record<string, string> = {},
+    body: object = { mode: 'disabled' },
   ): Promise<Response> {
     return fetch(
-      `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/v1${prefix}/boxes/box1/network/outbound${status ? '/status' : ''}`,
+      `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api/v1${prefix}/boxes/box1/network/outbound${typeof status === 'string' ? '/' + status : status ? '/status' : ''}`,
       {
         method,
         headers: {
@@ -187,15 +209,18 @@ describe('outbound policy HTTP authorization', () => {
           ...(token ? { authorization: `Bearer ${token}` } : {}),
           ...headers,
         },
-        ...(method === 'PUT' ? { body: JSON.stringify({ mode: 'disabled' }) } : {}),
+        ...(method === 'PUT' ? { body: JSON.stringify(body) } : {}),
       },
     )
   }
 
   function expectNoDispatch(): void {
     expect(getPolicy).not.toHaveBeenCalled()
+    expect(getCompletePolicy).not.toHaveBeenCalled()
+    expect(getCompleteStatus).not.toHaveBeenCalled()
     expect(getStatus).not.toHaveBeenCalled()
     expect(setPolicy).not.toHaveBeenCalled()
+    expect(setCompletePolicy).not.toHaveBeenCalled()
   }
 
   it('allows read-only organization keys on canonical, explicit and legacy read routes', async () => {
@@ -209,6 +234,62 @@ describe('outbound policy HTTP authorization', () => {
     expect(getPolicy.mock.calls).toEqual(Array.from({ length: 3 }, () => ['box1', organizationId]))
     expect(getStatus.mock.calls).toEqual(getPolicy.mock.calls)
     expect(setPolicy).not.toHaveBeenCalled()
+  })
+
+  it('requires organization authentication and returns complete policy with a strong validator', async () => {
+    expect((await request('GET', '/org-1', undefined, 'complete')).status).toBe(401)
+    expect((await request('GET', '/org-1', 'outbound-outsider-key', 'complete')).status).toBe(403)
+    expectNoDispatch()
+
+    for (const prefix of ['', '/org-1', '/default']) {
+      const response = await request('GET', prefix, 'outbound-read-key', 'complete')
+      expect(response.status).toBe(200)
+      expect(response.headers.get('etag')).toBe('"complete-a"')
+      expect(await response.json()).toEqual(completeSnapshot)
+    }
+    expect(getCompletePolicy.mock.calls).toEqual(Array.from({ length: 3 }, () => ['box1', organizationId]))
+    expect(getPolicy).not.toHaveBeenCalled()
+  })
+
+  it('does not return a policy ETag for a pending first create', async () => {
+    getCompletePolicy.mockResolvedValueOnce(null)
+    const response = await request('GET', '/org-1', 'outbound-read-key', 'complete')
+    expect(response.status).toBe(409)
+    expect(response.headers.get('etag')).toBeNull()
+    expect(await response.json()).toMatchObject({ code: 'outbound_pending' })
+  })
+
+  it('checks organization access before returning private complete status', async () => {
+    expect((await request('GET', '/org-1', undefined, 'complete/status')).status).toBe(401)
+    expect((await request('GET', '/org-1', 'outbound-outsider-key', 'complete/status')).status).toBe(403)
+    expectNoDispatch()
+    const response = await request('GET', '/org-1', 'outbound-read-key', 'complete/status')
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(await response.json()).toEqual({ application_state: 'pending', pending_revision: 'complete-b' })
+    expect(getCompleteStatus).toHaveBeenCalledWith('box1', organizationId)
+  })
+
+  it('requires a scoped writer for complete PUT and preserves explicit empty deny', async () => {
+    const policy = { mode: 'enabled', allow_net: ['example.com:443'], deny_net: [] }
+    const replace = (key?: string, headers: Record<string, string> = {}, body: object = policy) =>
+      request('PUT', '/org-1', key, 'complete', headers, body)
+    expect((await replace()).status).toBe(401)
+    expect((await replace('outbound-read-key')).status).toBe(403)
+    expect((await replace('outbound-outsider-key')).status).toBe(403)
+    expect((await replace('outbound-write-key', { 'if-match': 'invalid' })).status).toBe(400)
+    expect((await replace('outbound-write-key', {}, { ...policy, deny_net: null })).status).toBe(400)
+    expectNoDispatch()
+
+    const response = await replace('outbound-write-key', { 'if-match': '"complete-a"' })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('etag')).toBe('"complete-a"')
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+    expect(await response.json()).toEqual(completeSnapshot)
+    const [[boxId, body, org, matches]] = setCompletePolicy.mock.calls
+    expect([boxId, body, org]).toEqual(['box1', policy, organizationId])
+    expect(matches('complete-a')).toBe(true)
+    expect(matches('other')).toBe(false)
   })
 
   it('allows a scoped write key and preserves the public conditional policy request', async () => {

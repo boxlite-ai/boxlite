@@ -29,6 +29,7 @@ import { BoxMigration } from '../entities/box-migration.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
 import { CheckpointArchiveStore } from '../stores/checkpoint-archive.store'
+import { hasCompleteOutboundControl } from '../stores/outbound-policy.store'
 
 @Injectable()
 export class CheckpointService {
@@ -70,6 +71,12 @@ export class CheckpointService {
             lock: { mode: 'pessimistic_write' },
           }))
         if (!box) throw new NotFoundException('Source box not found')
+        if (await hasCompleteOutboundControl(manager, box.id)) {
+          throw new ConflictException({
+            code: 'complete_policy_required',
+            message: 'Checkpoint capture does not support complete outbound policy',
+          })
+        }
         // The parent lock also serializes first use, when no coordination row exists yet.
         const checkpointState =
           (await manager.findOne(BoxCheckpointState, {

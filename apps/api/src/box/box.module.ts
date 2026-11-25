@@ -37,6 +37,8 @@ import { RegionModule } from '../region/region.module'
 import { ImageModule } from '../image/image.module'
 import { Region } from '../region/entities/region.entity'
 import { JobController } from './controllers/job.controller'
+import { CompleteCreateJobController } from './controllers/complete-create-job.controller'
+import { CompleteCreateJobService } from './services/complete-create-job.service'
 import { JobService } from './services/job.service'
 import { JobStateHandlerService } from './services/job-state-handler.service'
 import { Job } from './entities/job.entity'
@@ -114,6 +116,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     PreviewController,
     VolumeController,
     JobController,
+    CompleteCreateJobController,
     CustomDomainController,
     CustomDomainMaintenanceController,
   ],
@@ -137,6 +140,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     BoxStopAction,
     BoxDestroyAction,
     JobService,
+    CompleteCreateJobService,
     JobStateHandlerService,
     BoxActivityService,
     BoxExitCodeService,

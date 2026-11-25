@@ -52,6 +52,14 @@ CREATE INDEX IF NOT EXISTS idx_box_state_status ON box_state(status);
 CREATE INDEX IF NOT EXISTS idx_box_state_pid ON box_state(pid);
 "#;
 
+pub const HOSTED_OUTBOUND_OPERATION_TABLE: &str = r#"
+-- The logical hosted name survives rebuilding a Box under a new native ID.
+CREATE TABLE IF NOT EXISTS hosted_outbound_operation (
+    incarnation TEXT PRIMARY KEY NOT NULL,
+    journal TEXT NOT NULL
+);
+"#;
+
 /// Alive file table schema.
 ///
 /// Tracks runtime instance. If stale on startup, indicates reboot.

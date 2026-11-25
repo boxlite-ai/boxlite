@@ -36,6 +36,7 @@ use crate::runtime::types::BoxStatus;
 use crate::vmm::controller::VmmHandler;
 use crate::{BoxID, BoxInfo};
 
+mod hosted_outbound;
 mod operations;
 pub(crate) mod outbound;
 pub(crate) use operations::{BoxEvent, BoxRun};
@@ -1957,6 +1958,13 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
 
     async fn complete_outbound_status(&self) -> BoxliteResult<crate::net::CompleteOutboundStatus> {
         self.read_complete_outbound_status().await
+    }
+
+    async fn hosted_outbound(
+        &self,
+        command: crate::net::HostedOutboundCommand,
+    ) -> BoxliteResult<crate::net::HostedOutboundReceipt> {
+        self.hosted_outbound(command).await
     }
 
     async fn replace_complete_outbound(

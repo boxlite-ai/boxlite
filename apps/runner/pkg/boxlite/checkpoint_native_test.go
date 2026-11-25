@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 
 	sdk "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/cmd/runner/config"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/checkpoint"
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
@@ -98,6 +100,87 @@ func checkpointSourceFixture(t *testing.T, image string) archiveSource {
 type nativeArchiveStore struct {
 	data      []byte
 	downloads int
+}
+
+func TestIntegrationHostedOutboundFollowsPublishedCheckpoint(t *testing.T) {
+	ctx := t.Context()
+	home := t.TempDir()
+	client := completeCreateFixture(t, home)
+	target := uuid.NewString()
+	defer client.Close()
+	defer client.Destroy(ctx, target)
+	enabled := true
+	if _, _, err := client.Create(ctx, dto.CreateBoxDTO{Id: target, Image: "alpine", MemoryQuota: 1, OutboundEnabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Stop(ctx, target, false); err != nil {
+		t.Fatal(err)
+	}
+	artifacts := checkpoint.Artifacts{Root: filepath.Join(home, "work", "archives")}
+	ref := checkpoint.Reference{CheckpointID: uuid.NewString(), ExportJobID: uuid.NewString(), SourceBoxID: target, ArcPath: "gs://archives/" + uuid.NewString() + ".boxlite"}
+	store := &nativeArchiveStore{}
+	archive, err := artifacts.Export(ctx, ref, func(ctx context.Context, dir string) (string, string, error) {
+		path, image, err := client.ExportCheckpoint(ctx, target, dir)
+		if err == nil {
+			store.data, err = os.ReadFile(path)
+		}
+		return path, image, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := checkpoint.RestoreRequest{
+		OperationID: uuid.NewString(), Sequence: 1, Target: target, Mode: "recover",
+		Archive: archive, PlatformEnv: map[string]string{"BOXLITE_BOX_ID": target},
+	}
+	restored, err := client.RestoreCheckpoint(ctx, request, uuid.NewString(), artifacts, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Start(ctx, target, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := client.CompleteOutboundSnapshot(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(id string, command map[string]any) (sdk.HostedOutboundReceipt, error) {
+		t.Helper()
+		body, err := json.Marshal(command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client.HostedOutbound(ctx, id, body)
+	}
+	prepare := map[string]any{"operation": "prepare", "previous": previous, "revision": "promoted", "policy": json.RawMessage(`{"mode":"enabled","deny_net":[]}`)}
+	if _, err := send("checkpoint-"+request.OperationID, prepare); !sdk.IsInvalidArgument(err) {
+		t.Fatalf("direct access by the private native name: %v", err)
+	}
+	prepared, err := send(target, prepare)
+	if err != nil || prepared.Candidate == nil {
+		t.Fatalf("prepare checkpoint-backed replacement: %+v, %v", prepared, err)
+	}
+	attempt := map[string]any{
+		"incarnation": target, "attempt_id": "promote-checkpoint", "generation": 1,
+		"previous": previous, "candidate": prepared.Candidate,
+	}
+	for _, exchange := range []struct{ command, receipt string }{{"apply", "applied"}, {"finalize", "finalized"}} {
+		receipt, err := send(target, map[string]any{"operation": exchange.command, "attempt": attempt})
+		if err != nil || receipt.Outcome != exchange.receipt || receipt.Snapshot == nil || receipt.Snapshot.Revision != "promoted" {
+			t.Fatalf("%s checkpoint-backed replacement: %+v, %v", exchange.command, receipt, err)
+		}
+	}
+	if err := client.Stop(ctx, target, false); err != nil {
+		t.Fatal(err)
+	}
+	request.OperationID, request.Sequence = uuid.NewString(), 2
+	if _, err := client.RestoreCheckpoint(ctx, request, uuid.NewString(), artifacts, store); !errors.Is(err, checkpoint.ErrCompleteCreateConflict) {
+		t.Fatalf("checkpoint recovery accepted a protected stopped Box: %v", err)
+	}
+	info, err := client.nativeBoxInfo(ctx, target)
+	if err != nil || info.ID != restored.NativeID || store.downloads != 1 {
+		t.Fatalf("blocked recovery changed the target or downloaded an archive: %+v, %v, downloads=%d", info, err, store.downloads)
+	}
 }
 
 func (s *nativeArchiveStore) Upload(context.Context, string, string) error {

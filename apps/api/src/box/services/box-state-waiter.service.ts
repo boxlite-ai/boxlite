@@ -5,13 +5,14 @@
  */
 
 import { InjectRedis } from '@nestjs-modules/ioredis'
-import { Injectable, Logger, OnModuleDestroy, RequestTimeoutException } from '@nestjs/common'
+import { HttpException, Injectable, Logger, OnModuleDestroy, RequestTimeoutException } from '@nestjs/common'
 import Redis from 'ioredis'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { BoxDto } from '../dto/box.dto'
 import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
 import { BoxState } from '../enums/box-state.enum'
+import { COMPLETE_CREATE_UNSUPPORTED_REASON } from '../entities/outbound-control-record'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxService } from './box.service'
 
@@ -53,8 +54,13 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     return this.subscription
   }
 
-  waitForStarted(boxId: string, organizationId: string, timeoutSeconds: number): Promise<BoxDto> {
-    return this.waitForState(boxId, organizationId, BoxState.STARTED, timeoutSeconds)
+  waitForStarted(
+    boxId: string,
+    organizationId: string,
+    timeoutSeconds: number,
+    completeCreate = false,
+  ): Promise<BoxDto> {
+    return this.waitForState(boxId, organizationId, BoxState.STARTED, timeoutSeconds, completeCreate)
   }
 
   waitForStopped(boxId: string, organizationId: string, timeoutSeconds: number): Promise<BoxDto> {
@@ -66,11 +72,12 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     organizationId: string,
     targetState: BoxState,
     timeoutSeconds: number,
+    completeCreate = false,
   ): Promise<BoxDto> {
     const current = await this.boxService.findOneByIdOrName(boxId, organizationId)
     if (current.state === targetState) return this.boxService.toBoxDto(current)
     await this.ensureSubscribed()
-    this.assertNotFailed(current.state, current.errorReason)
+    this.assertNotFailed(current.state, current.errorReason, completeCreate)
 
     return new Promise<BoxDto>((resolve, reject) => {
       let finished = false
@@ -104,7 +111,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
           return
         }
         try {
-          this.assertNotFailed(event.box.state, event.box.errorReason)
+          this.assertNotFailed(event.box.state, event.box.errorReason, completeCreate)
         } catch (error) {
           fail(error)
         }
@@ -120,7 +127,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
         .findOneByIdOrName(boxId, organizationId)
         .then((box) => {
           if (box.state === targetState) return finish(box)
-          this.assertNotFailed(box.state, box.errorReason)
+          this.assertNotFailed(box.state, box.errorReason, completeCreate)
         })
         .catch(fail)
 
@@ -166,8 +173,11 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     return new RequestTimeoutException({ message, boxId })
   }
 
-  private assertNotFailed(state: BoxState, errorReason?: string | null) {
+  private assertNotFailed(state: BoxState, errorReason?: string | null, completeCreate = false) {
     if (state === BoxState.ERROR) {
+      if (completeCreate && errorReason === COMPLETE_CREATE_UNSUPPORTED_REASON) {
+        throw new HttpException({ code: 'unsupported', message: 'Runner lacks required outbound capabilities' }, 501)
+      }
       throw new BadRequestError(`Box state transition failed: ${errorReason || 'Unknown error'}`)
     }
     if (state === BoxState.DESTROYED || state === BoxState.DESTROYING) {

@@ -23,6 +23,8 @@ import { Box } from '../entities/box.entity'
 import { memoryGiBOf } from '../utils/memory-allocation'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
+import { CompleteCreateAttempt, CompleteOutboundSnapshot, RunnerOutboundControl } from './outbound-control'
+import { outboundCreateBoxRequest } from './outbound-create-box'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -260,46 +262,27 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     metadata?: { [key: string]: string },
     nestedVirtualization = false,
   ): Promise<StartBoxResponse | undefined> {
-    if (box.privileged && !this.runner.supportsPrivileged) {
-      throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
-    }
+    const { volumes, ...request } = outboundCreateBoxRequest(this.runner, box, image, metadata, nestedVirtualization)
     const response = await this.boxApiClient.create({
-      id: box.id,
-      ...(nestedVirtualization ? { nestedVirtualization: true } : {}),
-      image,
-      osUser: box.osUser,
-      cpuQuota: box.cpu,
-      gpuQuota: box.gpu,
-      memoryQuota: memoryGiBOf(box),
-      storageQuota: box.disk,
-      env: box.env,
-      runAsUser: box.runAsUser,
-      privileged: box.privileged,
-      workingDir: box.workingDir,
-      entrypoint: box.entrypoint,
-      cmd: box.cmd,
-      secrets: box.secrets?.map((secret) => ({
-        name: secret.name,
-        value: secret.value,
-        hosts: secret.hosts,
-        placeholder: secret.placeholder,
-        headers: secret.headers,
-      })),
+      ...request,
       outboundEnabled: box.outboundEnabled,
       outboundAllowNet: box.outboundAllowNet ?? undefined,
-      metadata,
-      authToken: box.authToken,
-      organizationId: box.organizationId,
-      regionId: box.region,
     })
+    if (!response?.data?.daemonVersion) return undefined
+    return { daemonVersion: response.data.daemonVersion }
+  }
 
-    if (!response?.data?.daemonVersion) {
-      return undefined
-    }
-
-    return {
-      daemonVersion: response.data.daemonVersion,
-    }
+  async createCompleteBox(
+    box: Box,
+    image: string,
+    attempt: CompleteCreateAttempt,
+    metadata?: { [key: string]: string },
+    nestedVirtualization = false,
+  ) {
+    return new RunnerOutboundControl(this.runner, box.id).createComplete(
+      attempt,
+      outboundCreateBoxRequest(this.runner, box, image, metadata, nestedVirtualization),
+    )
   }
 
   async startBox(
@@ -341,11 +324,11 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     await this.boxApiClient.updateNetworkSettings(boxId, updateNetworkSettingsDto)
   }
 
-  async recoverBox(box: Box): Promise<void> {
+  private recoveryConfiguration(box: Box): Omit<RecoverBoxDTO, 'outboundEnabled' | 'outboundAllowNet'> {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
-    const recoverBoxDTO: RecoverBoxDTO = {
+    return {
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,
@@ -365,10 +348,23 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         mountPath: volume.mountPath,
         subpath: volume.subpath,
       })),
-      outboundEnabled: box.outboundEnabled,
-      outboundAllowNet: box.outboundAllowNet ?? undefined,
       errorReason: box.errorReason,
     }
-    await this.boxApiClient.recover(box.id, recoverBoxDTO)
+  }
+
+  async recoverBox(box: Box): Promise<void> {
+    await this.boxApiClient.recover(box.id, {
+      ...this.recoveryConfiguration(box),
+      outboundEnabled: box.outboundEnabled,
+      outboundAllowNet: box.outboundAllowNet ?? undefined,
+    })
+  }
+
+  async rebuildCompleteBox(box: Box, snapshot: CompleteOutboundSnapshot): Promise<void> {
+    await new RunnerOutboundControl(this.runner, box.id).rebuild(
+      snapshot,
+      box.updatedAt.getTime(),
+      this.recoveryConfiguration(box),
+    )
   }
 }

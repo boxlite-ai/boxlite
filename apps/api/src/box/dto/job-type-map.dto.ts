@@ -31,6 +31,9 @@ export interface JobTypeMap {
   [JobType.CREATE_BOX]: {
     resourceType: [ResourceType.BOX]
   }
+  [JobType.CREATE_COMPLETE_OUTBOUND_BOX]: {
+    resourceType: [ResourceType.BOX]
+  }
   [JobType.START_BOX]: {
     resourceType: [ResourceType.BOX]
   }

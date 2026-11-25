@@ -18,6 +18,9 @@ func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir string) (s
 		return "", "", err
 	}
 	defer operation.Close()
+	if err := operation.CheckNoCompleteCreate(); err != nil {
+		return "", "", err
+	}
 	ctx = context.WithoutCancel(ctx)
 	info, err := c.nativeBoxInfo(ctx, boxId)
 	if err != nil {
@@ -47,6 +50,9 @@ func (c *Client) ExportBox(ctx context.Context, boxId, destDir string) (string, 
 		return "", err
 	}
 	defer operation.Close()
+	if err := operation.CheckNoCompleteCreate(); err != nil {
+		return "", err
+	}
 	return c.exportBox(context.WithoutCancel(ctx), boxId, destDir)
 }
 
@@ -83,6 +89,9 @@ func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error
 		return err
 	}
 	defer operation.Close()
+	if err := operation.CheckNoCompleteCreate(); err != nil {
+		return err
+	}
 	ctx = context.WithoutCancel(ctx)
 	present, err := c.boxPresent(ctx, boxId)
 	if err != nil {

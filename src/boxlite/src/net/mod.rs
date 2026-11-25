@@ -35,9 +35,10 @@ pub(crate) use outbound_rules::outbound_rule_has_port;
 
 pub use outbound::{
     CompleteOutboundObservation, CompleteOutboundPolicy, CompleteOutboundSnapshot,
-    CompleteOutboundStatus, EffectiveOutboundPolicy, OutboundAdmission, OutboundApplicationState,
-    OutboundBootstrap, OutboundCapabilities, OutboundReplaceOutcome, OutboundReplacement,
-    OutboundRevision, OutboundSnapshot, OutboundSnapshotStatus, OutboundStatus,
+    CompleteOutboundStatus, EffectiveOutboundPolicy, HostedOutboundAttempt, HostedOutboundCommand,
+    HostedOutboundReceipt, OutboundAdmission, OutboundApplicationState, OutboundBootstrap,
+    OutboundCapabilities, OutboundReplaceOutcome, OutboundReplacement, OutboundRevision,
+    OutboundSnapshot, OutboundSnapshotStatus, OutboundStatus, PreparedOutboundCreate,
 };
 
 pub use gvproxy::GvproxyBackend;

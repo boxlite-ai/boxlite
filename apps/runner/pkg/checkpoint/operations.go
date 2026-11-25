@@ -218,23 +218,9 @@ func (l *TargetLease) UnpublishedCandidate() (string, error) {
 }
 
 func (l *TargetLease) read() (*restoreRecord, error) {
-	file, err := regularFile(l.path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, 64*1024+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > 64*1024 {
-		return nil, fmt.Errorf("checkpoint operation record exceeds 64 KiB")
-	}
 	var record restoreRecord
-	if err := json.Unmarshal(data, &record); err != nil {
+	found, err := readTargetRecord(l.path, &record)
+	if err != nil || !found {
 		return nil, err
 	}
 	if record.Retired {
@@ -258,14 +244,37 @@ func (l *TargetLease) read() (*restoreRecord, error) {
 }
 
 func (l *TargetLease) write(record restoreRecord) error {
+	return writeTargetRecord(l.path, record)
+}
+
+func readTargetRecord(path string, record any) (bool, error) {
+	file, err := regularFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 64*1024+1))
+	if err != nil {
+		return false, err
+	}
+	if len(data) > 64*1024 {
+		return false, fmt.Errorf("target operation record exceeds 64 KiB")
+	}
+	return true, json.Unmarshal(data, record)
+}
+
+func writeTargetRecord(path string, record any) error {
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
 	if len(data) > 64*1024 {
-		return fmt.Errorf("checkpoint operation record exceeds 64 KiB")
+		return fmt.Errorf("target operation record exceeds 64 KiB")
 	}
-	file, err := os.CreateTemp(filepath.Dir(l.path), ".operation-")
+	file, err := os.CreateTemp(filepath.Dir(path), ".operation-")
 	if err != nil {
 		return err
 	}
@@ -278,8 +287,8 @@ func (l *TargetLease) write(record restoreRecord) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(file.Name(), l.path); err != nil {
+	if err := os.Rename(file.Name(), path); err != nil {
 		return err
 	}
-	return syncDirectory(filepath.Dir(l.path))
+	return syncDirectory(filepath.Dir(path))
 }

@@ -646,6 +646,49 @@ Runner tests execute its production bearer and error middleware over HTTP.
 Missing, malformed, and wrong credentials cannot reach control lookup; the configured bearer can use all three resources.
 A separate client test crosses the actual Go/C/Rust transport against a controlled Runtime peer, including stopped-Box reads and refused mutation.
 
+#### Complete outbound preparation and reads
+
+Runner's bearer-authenticated `POST /v1/boxes/{boxId}/network/outbound/complete/prepare-create` takes an outbound policy and an allocated `X-Boxlite-Outbound-Revision` header.
+Runtime checks the selected backend and returns the normalized snapshot plus `deny_present` before provisioning a Box.
+The field records whether the request explicitly supplied `deny_net`, including an empty list.
+
+For example, revision `rev-b` with `EXAMPLE.com:0443` and `deny_net: []` prepares `example.com:443` at `rev-b` with `deny_present: true`.
+A backend missing deny capability refuses that request even when the effective deny list is empty.
+
+The local Runtime bridge can create or adopt a named Box using the prepared snapshot.
+Before new creation it validates the snapshot and rechecks capability. Adoption requires the same committed revision, admission mode, and rules with no pending operation.
+
+The complete snapshot and status GETs under `/network/outbound/complete` carry both lists and admission mode.
+Snapshot GET returns a strong ETag for the durable revision. Status GET reports durable and live observations separately without starting the Box.
+
+The production Runner server tests authorize and refuse requests to the complete outbound routes over loopback HTTP.
+The Go SDK test crosses C and Rust against a shim that advertises no deny capability. On that backend, omission succeeds and explicit empty deny is refused during preparation and creation.
+
+#### Complete create and cancellation on Runner
+
+On the same bearer-authenticated resource, `POST /complete/create` carries the target incarnation, attempt ID, generation, prepared policy and Box configuration.
+`POST /complete/cancel-create` carries the same attempt identity and prepared policy.
+The prepared policy always carries an explicit `deny_present` boolean.
+
+Runner holds the logical Box lock across both operations, using the same lock as legacy provisioning and checkpoint restore.
+It synchronizes a target record independently of the native Box before provisioning. The record binds the generation to the exact prepared policy and contains no Box credentials.
+
+Runtime rechecks the backend while creating the configured Box. Runner mounts volumes and starts the Box after that check succeeds.
+
+Cancellation before provisioning persists a fence and returns `no_effect`. A definitive unsupported refusal from Runtime persists the same fence before returning HTTP 501.
+
+The fence survives Runner restart and a refused attempt keeps its `unsupported` failure code.
+Delayed create and repeated cancel return the original attempt's outcome without provisioning.
+An incomplete capability response leaves the attempt pending.
+
+After provisioning starts, Runner returns `installed` only for a running Box whose durable and live policy both match the prepared snapshot exactly.
+An incomplete observation returns `pending` and leaves the journal in place. A different owner cannot claim the same generation.
+
+Legacy create, legacy recovery, and archive or checkpoint transfer refuse a target owned by a complete create attempt.
+The controlled shim test removes deny capability after preparation and checks that Runner creates neither a Box nor a volume probe.
+
+The VM test verifies that create and cancel return the same live snapshot across Rust, C, and Go.
+
 ### CLI serve control resources
 
 The CLI serve router implements the same resources.
@@ -780,6 +823,190 @@ It combines real transactions and HTTP with a controlled Runner peer; it does no
 
 A real PostgreSQL trigger rejects final publication after the Runner ACK to exercise restoration and failed-restoration intent.
 Socket loss and pending/uncertain readback checks distinguish matching revisions from completed application.
+
+#### Complete policy reads
+
+Apply pre-deploy migration `AddCompleteOutboundControl1795096800000` before deploying complete-policy readers.
+The nullable `completeOutboundControl` column carries committed and pending complete policy separately from the legacy projection.
+Downgrade locks the Box table and refuses while any complete record remains, including a protected policy with empty lists.
+
+The organization-scoped `GET /v1/{org}/boxes/{boxId}/network/outbound/complete` returns the committed snapshot with a strong revision ETag.
+A pending replacement returns the committed predecessor. A pending first create returns `outbound_pending` with no policy ETag.
+
+Existing Boxes without complete control metadata return their legacy revision and an empty deny list from the complete resource.
+The legacy outbound routes refuse protected Boxes. Legacy replacement checks this condition under the same row lock used to reserve changes.
+
+The companion `GET /network/outbound/complete/status` reports pending intent without sending a Runner request.
+Without pending intent, Cloud compares the exact policy and revision from its primary with the Runner's durable and live observations.
+
+An unavailable Runner or a disagreement yields `uncertain`. A reservation or change in owner or snapshot during readback invalidates that observation.
+
+REST Box detail, list, create, start, and stop responses read network metadata from the primary for the authorized organization.
+For protected Boxes the default response omits `network`. Requests with `X-BoxLite-Source: dashboard` still receive the inbound setting and show outbound as unavailable.
+
+The Box response varies by that header and is private and non-cacheable. When the primary cannot supply the projection, the response omits network metadata.
+
+#### Cloud V0 dispatch and recovery
+
+Nested outbound create chooses the complete path for explicit `deny_net`, an allow rule with a port, or more than ten allow rules.
+The deprecated flat form still uses the legacy rules and limit.
+Complete creation bypasses the warm pool and asks the selected Runner to prepare the policy before reserving a Box.
+
+Cloud verifies the placed Runner on the primary before sending the preparation request.
+Reservation requires the same Runner lease, endpoint, and credential used for preparation.
+
+The primary admission row starts closed. Reservation takes a shared lock on that row and checks admission again before inserting the Box and its attempt.
+A definitive preparation refusal returns HTTP 501 before a Box row is inserted.
+
+```mermaid
+sequenceDiagram
+    participant C as Cloud API
+    participant P as PostgreSQL primary
+    participant R as Runner
+    C->>P: Verify open admission and enrolled Runner
+    C->>R: Prepare policy under the verified binding
+    R-->>C: Canonical policy receipt
+    alt V0
+        C->>P: Recheck binding and commit Box intent
+        C->>R: Dispatch create or reconcile the same intent
+        R-->>C: Exact installation or no-effect receipt
+    else V2
+        C->>P: Recheck binding and commit Box and job
+        R->>C: Claim with current lease
+        C->>P: Record claim
+        C-->>R: Deliver the claimed job
+        R->>C: Submit terminal receipt
+        C->>P: Commit receipt
+        opt Cloud restarts before publication
+            C->>P: Read committed receipt for the same attempt
+        end
+    end
+    C->>P: Publish the matching Box result
+```
+
+The Box-created event dispatches a committed V0 reservation through Runner's complete create route.
+Cloud checks the response against the stored incarnation, attempt ID, generation and prepared policy, including deny presence.
+Legacy lifecycle dispatch skips unresolved complete creates.
+
+Startup and the periodic recovery job page the primary database for V0 reservations using `idx_box_pending_complete_v0_create`.
+Recovery gives the initial dispatcher 30 seconds from the Box's creation timestamp, then calls the cancellation route for that exact attempt.
+A lost or ambiguous response leaves the reservation pending for a later pass.
+
+Cloud holds the Box row lock when consuming an exact installation or no-effect receipt. It verifies that the assigned Runner and full reservation still match.
+
+An installation commits the snapshot and publishes STARTED. A no-effect receipt closes the reservation and records a terminal failure.
+
+#### Cloud V2 delivery and recovery
+
+The [hosted create sequence](#cloud-v0-dispatch-and-recovery) shows how a protected claim follows reservation.
+
+V2 reserves the Box and its complete-create job in one primary transaction. The reservation and job share the same Box incarnation, Runner, attempt, job ID and claim ID.
+
+Private claim and receipt routes require the current Runner bearer and its release-bound `BOXLITE_COMPLETE_OUTBOUND_LEASE_TOKEN`. The primary enrollment stores the token hash.
+
+The ordinary queue excludes complete jobs from polling, startup replay, status writes and expiry.
+The V2 executor handles claims. Direct create refuses V2 claim IDs, and recovery uses the V0 cancellation endpoint.
+
+A claim can be delivered once. After ten minutes it enters reconciliation while its job remains `IN_PROGRESS`.
+
+The reconciler asks the assigned Runner to settle that exact claim under the target lock. Incomplete or mismatched evidence keeps the Box pending.
+
+The protected queue polls independently of the ordinary queue, waiting one second when empty.
+Lease rotation can close an undelivered job under the claim lock. A delivered claim keeps its lease until terminal evidence is committed.
+
+The primary commits terminal evidence before Box publication. STARTED reports and periodic recovery prompt readback, including after a restart.
+
+Only the matching reservation can commit the installed snapshot or close with no effect.
+The recovery scan uses the partial index `idx_box_pending_complete_v2_create` on Boxes with outstanding V2 reservations.
+
+With loopback PostgreSQL, run `make test:apps:api TEST_FILES=complete-create-job.integration` to verify queue isolation, credentials, claim expiry and receipt recovery.
+Admission starts closed and requires a compatible serving cohort before protected creates can be enabled.
+
+#### Checkpoints and drain migration
+
+Cloud refuses checkpoint capture for a protected Box under its source-row lock, including when both rule lists are empty.
+Drain migration selects legacy Boxes, and its exporter and importer recheck protection under the Box lock before enqueuing work.
+
+#### Hosted replacement and rebuild
+
+Send `PUT /api/v1/{org}/boxes/{boxId}/network/outbound/complete` with a complete policy such as
+`{"mode":"enabled","allow_net":["example.com:443"],"deny_net":[]}`.
+The route requires Box write access and a running Box. An optional strong `If-Match` checks
+the committed revision, and a pending replacement returns 409 until recovery completes.
+
+```mermaid
+sequenceDiagram
+    participant A as Cloud API
+    participant P as PostgreSQL primary
+    participant R as Runner and Runtime
+    A->>R: Prepare canonical candidate and check capabilities
+    A->>P: Commit predecessor, candidate, owner and generation
+    A->>R: Apply that attempt
+    R->>R: Journal before dispatch, then persist exact live candidate
+    R-->>A: Applied receipt
+    A->>P: Publish candidate and record finalization
+    A->>R: Finalize the committed snapshot
+    R->>R: Retire compensation and preserve the generation floor
+```
+
+An omitted `deny_net` and an explicit empty array remain distinct when Runtime replays an
+owned apply. The Runtime checks confirmed live policy before publishing an applied receipt,
+and stores the exact predecessor alongside the attempt until finalization.
+
+If the API loses a PostgreSQL commit reply, it rereads the primary. A committed candidate
+can be finalized, while a retained intent uses its bound cancellation or installation receipt.
+
+When installation won and Cloud did not publish it, Cloud reserves a fresh restoration revision
+and Runtime restores the predecessor. Recovery retries the same restoration after an interrupted reply.
+
+V0 recovery checks the durable policy under the Runner target lock and also checks live policy
+when the predecessor is running. An exact match can rebuild under the same logical name,
+seed the saved policy revision, and return a durable receipt for the resulting native Box.
+
+The rebuild journal makes retry of the same request reuse that Box. The Runtime's generation
+floor belongs to the logical name and survives replacement of the native Box ID.
+
+Runtime verifies and pins a private copy of the V0 rebuild backend before Runner can remove the
+predecessor. The replacement uses that copy for creation and boot, including after a Runner restart.
+
+Legacy checkpoint recovery keeps the published Box ID as the replacement identity even when its
+native name changes. After a complete policy is installed, checkpoint recovery refuses that Box
+before downloading or importing another archive.
+
+#### Release admission
+
+```mermaid
+sequenceDiagram
+    participant O as Release controller
+    participant P as PostgreSQL primary
+    participant A as API
+    participant R as Runner
+    O->>O: Verify ingress, Runtime access and retired credentials
+    O->>P: Register enrolled Runners and verified rollout receipt
+    O->>P: Activate with the dedicated API principal
+    A->>P: Lock admission and verify Runner enrollment
+    A->>R: Dispatch with the enrolled credential
+    O->>P: Close admission and retain the release floor
+    A->>R: Drain existing work under its enrollment
+    O->>P: Confirm drain and begin downgrade
+```
+
+The PostgreSQL admission row starts closed. The release controller removes the old API from
+ingress and excludes old Runner processes from Runtime state.
+
+Before activation, the controller rotates Runner credentials and records each verified release
+and lease.
+
+The database owner calls `complete_outbound_activate` with the verified rollout receipt,
+release floor, dedicated API role and retired API roles.
+The transaction requires the retired roles to have login disabled and their sessions drained.
+
+It also checks the enrolled Runner cohort against the floor and current credentials.
+The API role can lock the admission row and read enrollment.
+
+`complete_outbound_close` disables new reservations and preserves the floor for recovery.
+`complete_outbound_begin_downgrade` requires drained work and expired enrollment. The migrations
+also reject downgrade while protected policy or its generation floor remains.
 
 ### Public Cloud control resources
 

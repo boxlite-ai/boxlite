@@ -26,6 +26,7 @@ function makeController() {
     create: jest.fn().mockResolvedValue(startedBox),
     destroy: jest.fn().mockResolvedValue(startedBox),
     findOneByIdOrName: jest.fn().mockResolvedValue({ ...startedBox, state: BoxState.STOPPED }),
+    getBoxNetworkProjections: jest.fn().mockResolvedValue([]),
     start: jest.fn().mockResolvedValue(startedBox),
     stop: jest.fn().mockResolvedValue(startedBox),
     toBoxDto: jest.fn().mockResolvedValue(startedBox),
@@ -51,7 +52,7 @@ describe('BoxliteBoxController business event actor', () => {
     const waiter = { waitForStarted: jest.fn().mockResolvedValue(startedBox) }
     if (waitFails) waiter.waitForStarted.mockRejectedValue(new Error('wait failed'))
     const controller = new BoxliteBoxController(
-      {} as never,
+      { getBoxNetworkProjections: jest.fn().mockResolvedValue([]) } as never,
       waiter as never,
       { resolveMaxCreatedBoxes: async () => 3 } as never,
       recovery as never,

@@ -17,7 +17,6 @@ use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::{BoxOptions, NetworkSpec};
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::ContainerID;
-use crate::util::find_binary;
 use crate::vmm::controller::{ShimController, VmmController, VmmHandler};
 use crate::vmm::{Entrypoint, InstanceSpec, PreparedKernel, VmmKind};
 use crate::volumes::{
@@ -437,7 +436,7 @@ async fn spawn_vm(
     inputs: &VmmSpawnInputs,
 ) -> BoxliteResult<Box<dyn VmmHandler>> {
     let mut controller = ShimController::new(
-        find_binary("boxlite-shim")?,
+        crate::vmm::controller::rebuild_shim_for_box(inputs.layout.root())?,
         inputs.engine_kind,
         box_id.clone(),
         inputs.options.clone(),

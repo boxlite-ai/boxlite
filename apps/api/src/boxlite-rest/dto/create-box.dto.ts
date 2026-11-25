@@ -84,6 +84,35 @@ export class OutboundNetworkSpecDto {
   allow_net?: string[]
 }
 
+export class CompleteCreateOutboundSpecDto {
+  @IsIn(['enabled', 'disabled'])
+  mode: 'enabled' | 'disabled'
+
+  @ValidateIf((_, value) => value !== undefined)
+  @IsArray()
+  @ArrayMaxSize(64)
+  @IsString({ each: true })
+  @Validate(IsOutboundPolicyCombinationConstraint)
+  allow_net?: string[]
+
+  @ValidateIf((_, value) => value !== undefined)
+  @IsArray()
+  @ArrayMaxSize(64)
+  @IsString({ each: true })
+  deny_net?: string[]
+}
+
+function usesCompleteCreateOutbound(outbound: unknown): boolean {
+  if (!outbound || typeof outbound !== 'object' || Array.isArray(outbound)) return false
+  if (Object.prototype.hasOwnProperty.call(outbound, 'deny_net')) return true
+  const { allow_net } = outbound as { allow_net?: unknown }
+  return (
+    Array.isArray(allow_net) &&
+    (allow_net.length > MAX_NETWORK_ALLOW_LIST_ENTRIES ||
+      allow_net.some((entry) => typeof entry === 'string' && /:\d+$/.test(entry.trim())))
+  )
+}
+
 // Rejects any non-empty inbound allowlist: no layer enforces it yet (the
 // proxy gates purely on mode), so accepting one would hand the caller a
 // box that is fully open while they believe it is restricted. Lift this
@@ -118,8 +147,10 @@ export class NetworkSpecDto {
   @IsOptional()
   @IsObject()
   @ValidateNested()
-  @Type(() => OutboundNetworkSpecDto)
-  outbound?: OutboundNetworkSpecDto
+  @Type(({ object }) =>
+    usesCompleteCreateOutbound(object?.outbound) ? CompleteCreateOutboundSpecDto : OutboundNetworkSpecDto,
+  )
+  outbound?: OutboundNetworkSpecDto | CompleteCreateOutboundSpecDto
 
   @IsOptional()
   @IsObject()
@@ -166,7 +197,9 @@ function normalizeNetworkShape(value: unknown): NetworkSpecDto | unknown {
   // allow_net alone (no explicit mode) implies enabled, matching outbound's
   // existing default — an allowlist with nothing to enable would be inert.
   const outbound = mode !== undefined || allow_net !== undefined ? { mode: mode ?? 'enabled', allow_net } : undefined
-  return plainToInstance(NetworkSpecDto, { ...rest, outbound })
+  const normalized = plainToInstance(NetworkSpecDto, rest)
+  if (outbound) normalized.outbound = plainToInstance(OutboundNetworkSpecDto, outbound)
+  return normalized
 }
 
 /**
