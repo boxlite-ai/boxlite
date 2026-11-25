@@ -59,6 +59,7 @@ func NewService(cfg *PollerServiceConfig) (*Service, error) {
 func (s *Service) Start(ctx context.Context) {
 	if s.completeLease != "" {
 		go s.pollCompleteCreates(ctx)
+		go s.pollProtectedCheckpoints(ctx)
 	}
 	inProgressJobs, _, err := s.client.JobsAPI.ListJobs(ctx).Status(apiclient.JOBSTATUS_IN_PROGRESS).Execute()
 	if err != nil {
@@ -100,6 +101,25 @@ func (s *Service) Start(ctx context.Context) {
 					go s.executor.Execute(ctx, &job)
 				}
 			}
+		}
+	}
+}
+
+func (s *Service) pollProtectedCheckpoints(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		job, err := runnerapiclient.ClaimProtectedCheckpoint(ctx, s.client, s.completeLease)
+		if err != nil && ctx.Err() == nil {
+			s.log.WarnContext(ctx, "Failed to claim protected checkpoint", "error", err)
+		}
+		if job != nil {
+			s.executor.ExecuteProtectedCheckpoint(ctx, s.completeLease, *job)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }

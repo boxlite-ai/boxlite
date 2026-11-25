@@ -347,7 +347,7 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 </details>
 
 <details>
-<summary><b>Runners and jobs</b> · 19 routes</summary>
+<summary><b>Runners and jobs</b> · 23 routes</summary>
 
 | Method   | Path                                   | What it does                                                   |
 | -------- | -------------------------------------- | -------------------------------------------------------------- |
@@ -370,6 +370,14 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 | `POST`   | `/jobs/{jobId}/status`             | Reports job progress, success, or failure.                     |
 | `POST` | `/jobs/complete-outbound/claim` | Claims one protected V2 create using the Runner bearer and current `X-BoxLite-Complete-Lease`. |
 | `POST` | `/jobs/complete-outbound/{jobId}/receipt` | Commits terminal proof for the exact protected claim before Box publication. |
+| `POST` | `/jobs/protected-checkpoints/claim` | Returns a lease-bound export, upload, restore or cleanup job. |
+| `POST` | `/jobs/protected-checkpoints/{jobId}/start` | Verifies that a claimed writer still holds the operation and an active lease. |
+| `POST` | `/jobs/protected-checkpoints/{jobId}/cleanup` | Verifies ownership of a terminal job awaiting disposal. |
+| `POST` | `/jobs/protected-checkpoints/{jobId}/receipt` | Records a matched success, failure or cleanup acknowledgment. |
+
+The protected checkpoint routes are internal and require the Runner bearer
+and `X-BoxLite-Complete-Lease` header. The ordinary queue and status routes
+exclude these jobs. See [checkpoint coordination](schema.md#protected-checkpoint-coordination).
 
 </details>
 

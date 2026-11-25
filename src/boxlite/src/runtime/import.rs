@@ -1,5 +1,6 @@
 //! Box import from `.boxlite` archives.
 
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -10,14 +11,17 @@ use serde_json::Value;
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::LiteBox;
 use crate::litebox::archive::{
-    ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, PUBLISHED_PORTS_ARCHIVE_VERSION,
-    extract_archive, move_file, sha256_file,
+    ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, OUTBOUND_POLICY_ARCHIVE_VERSION,
+    PUBLISHED_PORTS_ARCHIVE_VERSION, PortableOutboundPolicy, carries_file_contents,
+    checkpoint_image_pin, extract_archive, is_archive_manifest, move_file, open_archive_reader,
+    sha256_file,
 };
+use crate::litebox::box_impl::outbound::CompleteOutboundControl;
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::options::{
-    ArchiveImportPolicy, BoxArchive, BoxOptions, RootfsSpec, normalize_legacy_ports,
+    ArchiveImportPolicy, BoxArchive, BoxOptions, NetworkSpec, RootfsSpec, normalize_legacy_ports,
 };
-use crate::runtime::rt_impl::RuntimeImpl;
+use crate::runtime::rt_impl::{ProvisionedResources, RuntimeImpl};
 use crate::runtime::types::BoxStatus;
 
 /// Import a box from a `.boxlite` archive.
@@ -40,14 +44,49 @@ pub(crate) async fn import_box(
 
     // Phase 1: Extract and validate archive (blocking I/O).
     let layout = runtime.layout.clone();
-    let (manifest, temp_dir) =
+    let (manifest, temp_dir, archived_policy) =
         tokio::task::spawn_blocking(move || extract_and_validate(&archive_path, &layout))
             .await
             .map_err(|e| {
                 BoxliteError::Internal(format!("Import extraction task panicked: {}", e))
             })??;
 
-    let options = options_from_manifest(&manifest, archive.import_policy())?;
+    let mut options = options_from_manifest(&manifest, archive.import_policy())?;
+    if archive.managed_checkpoint().is_some() && archived_policy.is_none() {
+        return Err(BoxliteError::Unsupported(
+            "managed checkpoint requires a complete outbound archive".into(),
+        ));
+    }
+    let outbound = if let Some(policy) = archived_policy {
+        if !matches!(&options.network, NetworkSpec::Enabled { allow_net } if allow_net.is_empty()) {
+            return Err(BoxliteError::InvalidArgument(
+                "complete policy archives require a NIC and empty legacy allow rules".into(),
+            ));
+        }
+        let committed = match archive.import_policy() {
+            ArchiveImportPolicy::Trusted => policy.prepare_local().await?,
+            ArchiveImportPolicy::UntrustedRemote => {
+                return Err(rejected_upload("complete outbound policy"));
+            }
+            ArchiveImportPolicy::LegacyOnly => {
+                return Err(BoxliteError::Unsupported(
+                    "legacy archive transport does not support complete outbound policy".into(),
+                ));
+            }
+            ArchiveImportPolicy::Managed => {
+                let proof = archive.managed_checkpoint().ok_or_else(|| {
+                    BoxliteError::Internal("missing managed checkpoint import proof".into())
+                })?;
+                apply_managed_checkpoint(&manifest, &policy, &mut options, proof).await?
+            }
+        };
+        Some(CompleteOutboundControl {
+            committed,
+            pending: None,
+        })
+    } else {
+        None
+    };
 
     // Phase 2: Validate disks and install into a staging directory (blocking I/O).
     // The staging dir lives inside temp_dir; provision_box will rename it.
@@ -61,7 +100,17 @@ pub(crate) async fn import_box(
     let litebox = runtime
         // An archive carries the box's options but not what its image resolved
         // to, so an imported box has no record until one is rebuilt.
-        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None)
+        .provision_box(
+            staging_dir,
+            name,
+            options,
+            BoxStatus::Stopped,
+            None,
+            ProvisionedResources {
+                outbound,
+                base_disk: None,
+            },
+        )
         .await?;
 
     tracing::info!(
@@ -71,6 +120,78 @@ pub(crate) async fn import_box(
     );
 
     Ok(litebox)
+}
+
+async fn apply_managed_checkpoint(
+    manifest: &ArchiveManifest,
+    archived_policy: &PortableOutboundPolicy,
+    options: &mut BoxOptions,
+    proof: &crate::ManagedCheckpointImport,
+) -> BoxliteResult<crate::net::CompleteOutboundSnapshot> {
+    let snapshot = &proof.snapshot;
+    if archived_policy.policy != snapshot.policy
+        || archived_policy.admission != snapshot.admission
+        || snapshot.revision == crate::net::OutboundRevision::initial()
+    {
+        return Err(BoxliteError::InvalidState(
+            "checkpoint outbound policy differs from the owned target snapshot".into(),
+        ));
+    }
+    let pin = checkpoint_image_pin(&proof.pinned_image)?;
+    let RootfsSpec::Image(image) = &options.rootfs else {
+        return Err(BoxliteError::InvalidState(
+            "checkpoint has no OCI image".into(),
+        ));
+    };
+    if checkpoint_image_pin(&manifest.image)? != pin || checkpoint_image_pin(image)? != pin {
+        return Err(BoxliteError::InvalidState(
+            "checkpoint image differs from its captured image pin".into(),
+        ));
+    }
+    const PLATFORM_KEYS: [&str; 6] = [
+        "BOXLITE_BOX_ID",
+        "BOXLITE_ORGANIZATION_ID",
+        "BOXLITE_REGION_ID",
+        "BOXLITE_OTEL_ENDPOINT",
+        "BOXLITE_TRACEPARENT",
+        "BOXLITE_TRACESTATE",
+    ];
+    if !proof
+        .platform_env
+        .get("BOXLITE_BOX_ID")
+        .is_some_and(|id| !id.is_empty())
+        || proof
+            .platform_env
+            .iter()
+            .any(|(key, value)| !PLATFORM_KEYS.contains(&key.as_str()) || value.contains('\0'))
+    {
+        return Err(BoxliteError::InvalidArgument(
+            "invalid checkpoint target environment".into(),
+        ));
+    }
+    options
+        .env
+        .retain(|(key, _)| !PLATFORM_KEYS.contains(&key.as_str()));
+    options.env.extend(
+        proof
+            .platform_env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    options.rootfs = RootfsSpec::Image(proof.pinned_image.clone());
+    snapshot.validate_installed()?;
+    if crate::net::gvproxy::CloudGuardRuntime::from_host()?.is_none()
+        || (snapshot.ipv6.is_some()
+            && !crate::net::gvproxy::CloudGuardRuntime::qualifies_ipv6().await?)
+    {
+        return Err(BoxliteError::Unsupported(
+            "checkpoint restore requires a qualified Cloud outbound backend".into(),
+        ));
+    }
+    crate::vmm::controller::probe_outbound_capabilities()
+        .await?
+        .require(snapshot.requirements())?;
+    Ok(snapshot.clone())
 }
 
 /// Read the persisted configuration, falling back to the v1/v2 image field.
@@ -119,7 +240,7 @@ fn options_from_manifest(
         ));
     }
 
-    if policy == ArchiveImportPolicy::Trusted {
+    if policy != ArchiveImportPolicy::UntrustedRemote {
         return Ok(options);
     }
 
@@ -230,7 +351,11 @@ impl<'de> serde::Deserialize<'de> for ArchiveJson {
 fn extract_and_validate(
     archive_path: &Path,
     layout: &crate::runtime::layout::FilesystemLayout,
-) -> BoxliteResult<(ArchiveManifest, tempfile::TempDir)> {
+) -> BoxliteResult<(
+    ArchiveManifest,
+    tempfile::TempDir,
+    Option<PortableOutboundPolicy>,
+)> {
     let temp_dir = tempfile::tempdir_in(layout.temp_dir())
         .map_err(|e| BoxliteError::Storage(format!("Failed to create temp directory: {}", e)))?;
 
@@ -243,35 +368,7 @@ fn extract_and_validate(
         ));
     }
 
-    let manifest_json = std::fs::read_to_string(&manifest_path)?;
-    let ArchiveJson(raw_manifest) = serde_json::from_str(&manifest_json)
-        .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {e}")))?;
-    if [
-        "/outbound_policy",
-        "/outbound_v1",
-        "/box_options/outbound_policy",
-        "/box_options/network/outbound_v1",
-        "/box_options/network/deny_net",
-        "/box_options/network/Enabled/deny_net",
-        "/box_options/network/outbound/deny_net",
-    ]
-    .iter()
-    .any(|path| raw_manifest.pointer(path).is_some())
-    {
-        return Err(BoxliteError::Unsupported(
-            "archive contains complete outbound policy".into(),
-        ));
-    }
-    let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
-        .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
-
-    if manifest.version > MAX_SUPPORTED_VERSION {
-        return Err(BoxliteError::Storage(format!(
-            "Unsupported archive version {} (max supported: {}). Upgrade boxlite.",
-            manifest.version, MAX_SUPPORTED_VERSION
-        )));
-    }
-
+    let (manifest, outbound_policy) = parse_manifest(&std::fs::read_to_string(&manifest_path)?)?;
     let extracted_container = temp_dir.path().join(disk_filenames::CONTAINER_DISK);
     if !extracted_container.exists() {
         return Err(BoxliteError::Storage(format!(
@@ -280,7 +377,6 @@ fn extract_and_validate(
         )));
     }
 
-    // Verify checksums (v2+ archives have non-empty checksums).
     if !manifest.container_disk_checksum.is_empty() {
         let actual = sha256_file(&extracted_container)?;
         if actual != manifest.container_disk_checksum {
@@ -291,7 +387,100 @@ fn extract_and_validate(
         }
     }
 
-    Ok((manifest, temp_dir))
+    Ok((manifest, temp_dir, outbound_policy))
+}
+
+pub(crate) fn validate_legacy_archive_manifest(archive_path: &Path) -> BoxliteResult<()> {
+    let mut archive = tar::Archive::new(open_archive_reader(archive_path)?);
+    let mut manifest_seen = false;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if !carries_file_contents(entry.header().entry_type()) {
+            return Err(BoxliteError::Storage("Invalid archive member type".into()));
+        }
+        if !is_archive_manifest(&entry.path()?) {
+            continue;
+        }
+        if manifest_seen || entry.size() > 1024 * 1024 {
+            return Err(BoxliteError::Storage(
+                "Expected one manifest of at most 1 MiB".into(),
+            ));
+        }
+        let mut data = String::new();
+        entry.read_to_string(&mut data)?;
+        let (manifest, outbound) = parse_manifest(&data)?;
+        if outbound.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "legacy archive transport does not support complete outbound policy".into(),
+            ));
+        }
+        options_from_manifest(&manifest, ArchiveImportPolicy::LegacyOnly)?;
+        manifest_seen = true;
+    }
+    if !manifest_seen {
+        return Err(BoxliteError::Storage(
+            "Invalid archive: manifest.json not found".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_manifest(
+    manifest_json: &str,
+) -> BoxliteResult<(ArchiveManifest, Option<PortableOutboundPolicy>)> {
+    let ArchiveJson(raw_manifest) = serde_json::from_str(manifest_json)
+        .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {e}")))?;
+    let has_portable_policy = raw_manifest.get("outbound_policy").is_some();
+    let declared_version = raw_manifest.get("version").and_then(Value::as_u64);
+    if (has_portable_policy && declared_version != Some(OUTBOUND_POLICY_ARCHIVE_VERSION.into()))
+        || [
+            "/outbound_v1",
+            "/box_options/outbound_policy",
+            "/box_options/network/outbound_v1",
+            "/box_options/network/deny_net",
+            "/box_options/network/Enabled/deny_net",
+            "/box_options/network/outbound/deny_net",
+        ]
+        .iter()
+        .any(|path| raw_manifest.pointer(path).is_some())
+    {
+        return Err(BoxliteError::Unsupported(
+            "archive contains complete outbound policy".into(),
+        ));
+    }
+    let manifest: ArchiveManifest = serde_json::from_str(manifest_json)
+        .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
+
+    if manifest.version == 0 || manifest.version > MAX_SUPPORTED_VERSION {
+        return Err(BoxliteError::Storage(format!(
+            "Unsupported archive version {} (max supported: {}). Upgrade boxlite.",
+            manifest.version, MAX_SUPPORTED_VERSION
+        )));
+    }
+    let outbound_policy = if manifest.version == OUTBOUND_POLICY_ARCHIVE_VERSION {
+        let Some(policy) = raw_manifest
+            .get("outbound_policy")
+            .filter(|value| !value.is_null())
+        else {
+            return Err(BoxliteError::Storage(format!(
+                "archive version {OUTBOUND_POLICY_ARCHIVE_VERSION} requires policy"
+            )));
+        };
+        if manifest.box_options.is_none() || manifest.container_disk_checksum.is_empty() {
+            return Err(BoxliteError::Storage(format!(
+                "archive version {OUTBOUND_POLICY_ARCHIVE_VERSION} requires options and disk checksum"
+            )));
+        }
+        Some(
+            serde_json::from_value(policy.clone()).map_err(|e| {
+                BoxliteError::Storage(format!("Invalid archived outbound policy: {e}"))
+            })?,
+        )
+    } else {
+        None
+    };
+
+    Ok((manifest, outbound_policy))
 }
 
 /// Validate disk security and move disks into box_home/disks/.

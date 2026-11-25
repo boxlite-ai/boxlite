@@ -44,11 +44,18 @@ type Artifacts struct{ Root string }
 type Capture func(context.Context, string) (archive, pinnedImage string, err error)
 
 func (a Artifacts) Export(ctx context.Context, ref Reference, capture Capture) (Artifact, error) {
+	return a.ExportAuthorized(ctx, ref, capture, nil)
+}
+
+func (a Artifacts) ExportAuthorized(ctx context.Context, ref Reference, capture Capture, authorize func(context.Context) error) (Artifact, error) {
 	directory, unlock, err := a.lock(ctx, ref)
 	if err != nil {
 		return Artifact{}, err
 	}
 	defer unlock()
+	if err := authorizeArtifact(ctx, directory, authorize); err != nil {
+		return Artifact{}, err
+	}
 	if record, err := a.read(directory, ref); err == nil {
 		return record, a.verify(directory, record)
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -124,11 +131,18 @@ func (a Artifacts) Export(ctx context.Context, ref Reference, capture Capture) (
 // Upload leaves the file in place even on success. Only an acknowledged
 // terminal upload job permits cleanup, so a lost API callback can be replayed.
 func (a Artifacts) Upload(ctx context.Context, expected Artifact, store storage.ArchiveStore) (Artifact, error) {
+	return a.UploadAuthorized(ctx, expected, store, nil)
+}
+
+func (a Artifacts) UploadAuthorized(ctx context.Context, expected Artifact, store storage.ArchiveStore, authorize func(context.Context) error) (Artifact, error) {
 	directory, unlock, err := a.lock(ctx, expected.Reference)
 	if err != nil {
 		return Artifact{}, err
 	}
 	defer unlock()
+	if err := authorizeArtifact(ctx, directory, authorize); err != nil {
+		return Artifact{}, err
+	}
 	record, err := a.read(directory, expected.Reference)
 	if err != nil {
 		return Artifact{}, err
@@ -148,12 +162,71 @@ func (a Artifacts) Upload(ctx context.Context, expected Artifact, store storage.
 	return record, nil
 }
 
+func authorizeArtifact(ctx context.Context, directory string, authorize func(context.Context) error) error {
+	_, err := os.Lstat(filepath.Join(directory, "cancelled.json"))
+	if err == nil {
+		return fmt.Errorf("checkpoint artifact operation is terminal")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if authorize == nil {
+		return nil
+	}
+	return authorize(ctx)
+}
+
+// CleanRejected fences the owner and disposes of capture artifacts under the writer lock.
+func (a Artifacts) CleanRejected(ctx context.Context, ref Reference, store storage.ArchiveStore, authorize func(context.Context) error) error {
+	directory, unlock, err := a.lock(ctx, ref)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if authorize == nil || store == nil {
+		return fmt.Errorf("checkpoint cleanup requires authorization and storage")
+	}
+	if err := authorize(ctx); err != nil {
+		return err
+	}
+	if err := writeTargetRecord(filepath.Join(directory, "cancelled.json"), ref); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(directory, "archive.boxlite")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".export-") || strings.HasPrefix(entry.Name(), ".artifact-") {
+			if err := os.RemoveAll(filepath.Join(directory, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	if err := syncDirectory(directory); err != nil {
+		return err
+	}
+	return store.Remove(ctx, ref.ArcPath)
+}
+
 func (a Artifacts) Acknowledge(ctx context.Context, expected Artifact) error {
+	return a.AcknowledgeAuthorized(ctx, expected, nil)
+}
+
+func (a Artifacts) AcknowledgeAuthorized(ctx context.Context, expected Artifact, authorize func(context.Context) error) error {
 	directory, unlock, err := a.lock(ctx, expected.Reference)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	if authorize != nil {
+		if err := authorize(ctx); err != nil {
+			return err
+		}
+	}
 	record, err := a.read(directory, expected.Reference)
 	if err != nil {
 		return err

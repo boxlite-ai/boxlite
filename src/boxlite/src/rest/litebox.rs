@@ -577,6 +577,7 @@ impl BoxBackend for RestBox {
         &self,
         options: CloneOptions,
         name: Option<String>,
+        _policy: crate::runtime::backend::CopyPolicy<'_>,
     ) -> BoxliteResult<crate::LiteBox> {
         self.client.require_clone_enabled().await?;
 
@@ -606,7 +607,13 @@ impl BoxBackend for RestBox {
         let mut results = Vec::with_capacity(count);
         for i in 0..count {
             let name = names.get(i).cloned();
-            let litebox = self.clone_box(options.clone(), name).await?;
+            let litebox = self
+                .clone_box(
+                    options.clone(),
+                    name,
+                    crate::runtime::backend::CopyPolicy::LegacyOnly,
+                )
+                .await?;
             results.push(litebox);
         }
         Ok(results)
@@ -616,7 +623,13 @@ impl BoxBackend for RestBox {
         &self,
         options: ExportOptions,
         dest: &Path,
+        policy: crate::runtime::backend::CopyPolicy<'_>,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        if matches!(policy, crate::runtime::backend::CopyPolicy::Managed(_)) {
+            return Err(BoxliteError::Unsupported(
+                "managed checkpoint export requires a local Runtime".into(),
+            ));
+        }
         self.client.require_export_enabled().await?;
 
         let box_id = self.box_id_str();

@@ -125,7 +125,7 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash api/scripts/validate-migration-paths.sh $(find api/src/migrations -name '*-migration.ts' -type f)"
+        "command": "bash api/scripts/validate-migration-paths.sh $(find api/src/migrations -type f \\( -name '*-migration.ts' -o -name '[0-9]*.ts' \\) ! -name '*.spec.ts')"
       }
     }
   }

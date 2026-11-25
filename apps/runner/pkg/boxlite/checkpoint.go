@@ -5,8 +5,11 @@ package boxlite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"reflect"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/checkpoint"
@@ -30,11 +33,26 @@ func (c *Client) lockCheckpointTarget(ctx context.Context, target string) (*chec
 }
 
 func (c *Client) RestoreCheckpoint(ctx context.Context, request checkpoint.RestoreRequest, attemptID string, artifacts checkpoint.Artifacts, store storage.ArchiveStore) (checkpoint.RestoreResult, error) {
+	if len(request.TargetOutbound) != 0 {
+		return checkpoint.RestoreResult{}, fmt.Errorf("legacy checkpoint restore does not accept a complete policy")
+	}
+	return c.restoreCheckpoint(ctx, request, attemptID, artifacts, store, nil)
+}
+
+func (c *Client) RestoreManagedCheckpoint(ctx context.Context, request checkpoint.RestoreRequest, attemptID string, artifacts checkpoint.Artifacts, store storage.ArchiveStore, authorize func(context.Context) error) (checkpoint.RestoreResult, error) {
+	if len(request.TargetOutbound) == 0 || authorize == nil {
+		return checkpoint.RestoreResult{}, fmt.Errorf("managed restore requires a snapshot and work authorization")
+	}
+	return c.restoreCheckpoint(ctx, request, attemptID, artifacts, store, authorize)
+}
+
+func (c *Client) restoreCheckpoint(ctx context.Context, request checkpoint.RestoreRequest, attemptID string, artifacts checkpoint.Artifacts, store storage.ArchiveStore, authorize func(context.Context) error) (checkpoint.RestoreResult, error) {
 	restorer := checkpoint.Restorer{
-		Operations: c.checkpointOperations(),
-		Artifacts:  artifacts,
-		Store:      store,
-		Backend:    nativeCheckpointRecovery{client: c, target: request.Target},
+		Operations:       c.checkpointOperations(),
+		Artifacts:        artifacts,
+		Store:            store,
+		Backend:          nativeCheckpointRecovery{client: c, target: request.Target},
+		AuthorizeManaged: authorize,
 	}
 	return restorer.Restore(ctx, request, attemptID)
 }
@@ -46,6 +64,11 @@ func (c *Client) RetireCheckpointTarget(ctx context.Context, target string) erro
 	}
 	defer lease.Close()
 	return lease.Retire()
+}
+
+func (c *Client) CleanManagedCheckpoint(ctx context.Context, request checkpoint.RestoreRequest, attemptID string, artifacts checkpoint.Artifacts, authorize func(context.Context) error) error {
+	restorer := checkpoint.Restorer{Operations: c.checkpointOperations(), Artifacts: artifacts, Backend: nativeCheckpointRecovery{client: c, target: request.Target}}
+	return restorer.CleanManaged(ctx, request, attemptID, authorize)
 }
 
 // This adapter is invoked with the logical target lease already held. Calling
@@ -90,10 +113,37 @@ func (n nativeCheckpointRecovery) Import(ctx context.Context, archive *checkpoin
 	if err != nil {
 		return "", err
 	}
-	bx, err := n.client.runtime.Import(ctx, path, name)
+	bx, err := n.client.runtime.ImportLegacy(ctx, path, name)
 	if err != nil {
 		return "", err
 	}
 	defer bx.Close()
 	return bx.ID(), nil
+}
+
+func (n nativeCheckpointRecovery) ImportManaged(ctx context.Context, archive *checkpoint.DownloadedArchive, env map[string]string, name string, snapshot json.RawMessage) (string, error) {
+	bx, err := n.client.runtime.ImportManagedCheckpoint(ctx, archive.Path, name, boxlite.CheckpointImportPolicy{
+		CheckpointExportPolicy: boxlite.CheckpointExportPolicy{Snapshot: snapshot, PinnedImage: archive.Artifact.PinnedImage},
+		PlatformEnv:            env,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer bx.Close()
+	return bx.ID(), nil
+}
+
+func (n nativeCheckpointRecovery) VerifyManaged(ctx context.Context, nativeID string, snapshot json.RawMessage) error {
+	var expected boxlite.CompleteOutboundSnapshot
+	if err := json.Unmarshal(snapshot, &expected); err != nil {
+		return fmt.Errorf("invalid managed checkpoint target snapshot: %w", err)
+	}
+	status, err := n.client.CompleteOutboundStatus(ctx, nativeID)
+	if err != nil {
+		return err
+	}
+	if status.PendingRevision != "" || !reflect.DeepEqual(status.Persisted, expected) {
+		return fmt.Errorf("managed checkpoint target has a different persisted outbound policy")
+	}
+	return nil
 }

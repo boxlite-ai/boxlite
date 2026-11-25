@@ -55,6 +55,8 @@ pub use event_listener::{AuditEvent, AuditEventKind, AuditEventListener, EventLi
 pub use images::ResolvedImage;
 pub use litebox::SnapshotHandle;
 pub use litebox::archive::ArchiveManifest;
+#[doc(hidden)]
+pub use litebox::archive::{ManagedCheckpointExport, ManagedCheckpointImport};
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
     AttachOptions, BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout,

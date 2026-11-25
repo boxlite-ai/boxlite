@@ -186,6 +186,12 @@ class _TrackingRuntime:
             pass  # never mask the real return
         return box
 
+    async def create_with_outbound_policy(self, options, policy, name=None):
+        bound_box_lifetime(options)
+        box = await self._inner.create_with_outbound_policy(options, policy, name=name or e2e_box_name())
+        self._created.append((box.id, time.monotonic()))
+        return box
+
     def __getattr__(self, name):
         return getattr(self._inner, name)
 

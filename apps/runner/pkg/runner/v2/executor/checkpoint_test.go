@@ -14,10 +14,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
 	"github.com/boxlite-ai/runner/pkg/checkpoint"
 	"github.com/boxlite-ai/runner/pkg/storage"
 	"github.com/google/uuid"
@@ -261,6 +263,42 @@ func TestCheckpointUploadDoesNotHoldTheBoxJobOperationLease(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("upload did not finish")
 	}
+}
+
+type stalledCleanupStore struct {
+	storage.ArchiveStore
+}
+
+func (*stalledCleanupStore) Remove(ctx context.Context, _ string) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestProtectedCheckpointCleanupBoundsStalledStorage(t *testing.T) {
+	h, backend, original := checkpointHarness(t)
+	h.executor.backend = struct {
+		*checkpointBackend
+		protectedCheckpointBackend
+	}{checkpointBackend: backend}
+	h.executor.archiveStore = &stalledCleanupStore{ArchiveStore: h.store}
+	var payload protectedCheckpointPayload
+	if err := h.executor.parsePayload(original.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.CaptureOutbound = json.RawMessage(`{"revision":"expected"}`)
+	job := runnerapiclient.ProtectedCheckpointJob{
+		ID: original.Id, Type: protectedExport, ResourceID: original.ResourceId, Cleanup: true,
+	}
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+		defer cancel()
+		start := time.Now()
+		_, err := h.executor.runProtectedCheckpoint(ctx, job, payload, func(context.Context) error { return nil })
+		if elapsed := time.Since(start); !errors.Is(err, context.DeadlineExceeded) || elapsed > time.Minute {
+			t.Fatalf("cleanup did not enforce its own storage deadline: %v after %s", err, elapsed)
+		}
+	})
 }
 
 func TestCheckpointExportRejectsUnsupportedStorageBeforeNativeCapture(t *testing.T) {

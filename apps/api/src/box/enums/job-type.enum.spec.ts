@@ -22,6 +22,9 @@ describe('JobType', () => {
       'EXPORT_CHECKPOINT',
       'UPLOAD_CHECKPOINT',
       'IMPORT_CHECKPOINT',
+      'EXPORT_PROTECTED_CHECKPOINT',
+      'UPLOAD_PROTECTED_CHECKPOINT',
+      'IMPORT_PROTECTED_CHECKPOINT',
     ])
   })
 })

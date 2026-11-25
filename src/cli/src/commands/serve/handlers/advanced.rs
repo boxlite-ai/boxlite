@@ -8,7 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use boxlite::{BoxArchive, CloneOptions, ExportOptions};
+use boxlite::BoxArchive;
 
 use super::super::types::{CloneRequest, ImportQuery};
 use super::super::{AppState, error_from_boxlite, error_response, get_or_fetch_box};
@@ -23,7 +23,7 @@ pub(in crate::commands::serve) async fn clone_box(
         Err(resp) => return resp,
     };
 
-    match litebox.clone_box(CloneOptions::default(), req.name).await {
+    match litebox.clone_box_legacy_only(req.name).await {
         Ok(cloned) => {
             let info = match cloned.info().await {
                 Ok(info) => info,
@@ -63,10 +63,7 @@ pub(in crate::commands::serve) async fn export_box(
         }
     };
 
-    match litebox
-        .export(ExportOptions::default(), temp_dir.path())
-        .await
-    {
+    match litebox.export_legacy_only(temp_dir.path()).await {
         Ok(archive) => {
             let bytes = match std::fs::read(archive.path()) {
                 Ok(b) => b,

@@ -1,6 +1,7 @@
 use crate::db::{BoxStore, Database};
 use crate::experimental::ExperimentalFeatures;
 use crate::images::{ImageDiskManager, ImageManager};
+use crate::litebox::box_impl::outbound::CompleteOutboundControl;
 use crate::litebox::box_impl::{BoxEvent, BoxRun};
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
@@ -8,7 +9,7 @@ use crate::lock::{FileLockManager, LockGuard, LockManager, Locker};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::net::{CompleteOutboundPolicy, OutboundRevision, PreparedOutboundCreate};
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
-use crate::runtime::id::{BoxID, BoxIDMint};
+use crate::runtime::id::{BaseDiskID, BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
@@ -26,6 +27,12 @@ use tokio_util::sync::CancellationToken;
 enum OutboundCreate {
     Policy(CompleteOutboundPolicy),
     Prepared(PreparedOutboundCreate),
+}
+
+#[derive(Default)]
+pub(crate) struct ProvisionedResources<'a> {
+    pub(crate) outbound: Option<CompleteOutboundControl>,
+    pub(crate) base_disk: Option<&'a BaseDiskID>,
 }
 
 fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
@@ -558,13 +565,15 @@ impl RuntimeImpl {
         }
 
         // Persist Configured state only after both lock namespaces are allocated.
-        let outbound = snapshot.cloned().map(|committed| {
-            crate::litebox::box_impl::outbound::CompleteOutboundControl {
-                committed,
-                pending: None,
-            }
+        let outbound = snapshot.cloned().map(|committed| CompleteOutboundControl {
+            committed,
+            pending: None,
         });
-        if let Err(e) = self.persist_box_with_policy(&config, &mut state, outbound) {
+        let resources = ProvisionedResources {
+            outbound,
+            base_disk: None,
+        };
+        if let Err(e) = self.persist_box_with_resources(&config, &mut state, resources) {
             // TOCTOU race recovery: lookup_box (line ~268) and add_box are
             // separate non-atomic operations. Between them, another concurrent
             // caller can complete the full create path and persist first:
@@ -1451,6 +1460,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         initial_status: BoxStatus,
         resolved_image: Option<crate::images::ResolvedImage>,
+        resources: ProvisionedResources<'_>,
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
@@ -1485,7 +1495,7 @@ impl RuntimeImpl {
         state.set_status(initial_status);
         state.resolved_image = resolved_image;
 
-        if let Err(e) = self.persist_box_with_locks(&config, &mut state) {
+        if let Err(e) = self.persist_box_with_resources(&config, &mut state, resources) {
             let _ = std::fs::remove_dir_all(&config.box_home);
             config.sockets().remove();
             return Err(e);
@@ -1498,19 +1508,20 @@ impl RuntimeImpl {
 
     /// Allocate the paired namespaces before publishing the persisted lock ID.
     /// A numeric ID stays unavailable until its disk namespace is clean.
+    #[cfg(test)]
     fn persist_box_with_locks(
         &self,
         config: &BoxConfig,
         state: &mut BoxState,
     ) -> BoxliteResult<()> {
-        self.persist_box_with_policy(config, state, None)
+        self.persist_box_with_resources(config, state, ProvisionedResources::default())
     }
 
-    fn persist_box_with_policy(
+    fn persist_box_with_resources(
         &self,
         config: &BoxConfig,
         state: &mut BoxState,
-        outbound: Option<crate::litebox::box_impl::outbound::CompleteOutboundControl>,
+        resources: ProvisionedResources<'_>,
     ) -> BoxliteResult<()> {
         let id = self.lock_manager.allocate()?;
         if let Err(e) = self.disk_lock_manager.allocate_and_retrieve(id) {
@@ -1519,10 +1530,12 @@ impl RuntimeImpl {
             return Err(e);
         }
         state.set_lock_id(id);
-        if let Err(e) = self
-            .box_manager
-            .add_box_with_outbound(config, state, outbound)
-        {
+        if let Err(e) = self.box_manager.add_box_with_resources(
+            config,
+            state,
+            resources.outbound,
+            resources.base_disk,
+        ) {
             self.free_box_locks(id);
             return Err(e);
         }
@@ -2957,13 +2970,16 @@ mod tests {
                 .prepare(OutboundAdmission::ExtendedIpv4, OutboundRevision::initial())
                 .unwrap();
             runtime
-                .persist_box_with_policy(
+                .persist_box_with_resources(
                     &config,
                     &mut state,
-                    Some(CompleteOutboundControl {
-                        committed,
-                        pending: None,
-                    }),
+                    ProvisionedResources {
+                        outbound: Some(CompleteOutboundControl {
+                            committed,
+                            pending: None,
+                        }),
+                        base_disk: None,
+                    },
                 )
                 .unwrap();
             let (_handle, inserted) = runtime.get_or_create_box_impl(config.clone(), state);

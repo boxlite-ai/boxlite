@@ -1864,8 +1864,9 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         &self,
         options: crate::runtime::options::CloneOptions,
         name: Option<String>,
+        policy: crate::runtime::backend::CopyPolicy<'_>,
     ) -> BoxliteResult<crate::LiteBox> {
-        BoxImpl::clone_box(self, options, name).await
+        BoxImpl::clone_box(self, options, name, policy).await
     }
 
     async fn clone_boxes(
@@ -1874,15 +1875,23 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         count: usize,
         names: Vec<String>,
     ) -> BoxliteResult<Vec<crate::LiteBox>> {
-        BoxImpl::clone_boxes(self, options, count, names).await
+        BoxImpl::clone_boxes(
+            self,
+            options,
+            count,
+            names,
+            crate::runtime::backend::CopyPolicy::Local,
+        )
+        .await
     }
 
     async fn export_box(
         &self,
         options: crate::runtime::options::ExportOptions,
         dest: &std::path::Path,
+        policy: crate::runtime::backend::CopyPolicy<'_>,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
-        BoxImpl::export_box(self, options, dest).await
+        BoxImpl::export_box(self, options, dest, policy).await
     }
 
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {

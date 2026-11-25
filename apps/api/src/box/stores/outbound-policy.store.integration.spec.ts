@@ -9,9 +9,9 @@ import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { AddOutboundControl1794888000000 } from '../../migrations/pre-deploy/1794888000000-add-outbound-control-migration'
 import { AddCompleteOutboundControl1795096800000 } from '../../migrations/pre-deploy/1795096800000-add-complete-outbound-control-migration'
-import { AddPendingCompleteV0CreateIndex1795096801000 } from '../../migrations/pre-deploy/1795096801000-add-pending-complete-v0-create-index'
-import { AddCompleteOutboundAdmission1795096802000 } from '../../migrations/pre-deploy/1795096802000-add-complete-outbound-admission'
-import { AddCompleteOutboundEnrollmentAndClaims1795096803000 } from '../../migrations/pre-deploy/1795096803000-add-complete-outbound-enrollment-and-claims'
+import { AddPendingCompleteV0CreateIndex1795096801000 } from '../../migrations/pre-deploy/1795096801000-add-pending-complete-v0-create-index-migration'
+import { AddCompleteOutboundAdmission1795096802000 } from '../../migrations/pre-deploy/1795096802000-add-complete-outbound-admission-migration'
+import { AddCompleteOutboundEnrollmentAndClaims1795096803000 } from '../../migrations/pre-deploy/1795096803000-add-complete-outbound-enrollment-and-claims-migration'
 import { Job } from '../entities/job.entity'
 import {
   OutboundCommitUnknown,

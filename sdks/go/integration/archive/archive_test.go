@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -42,6 +43,66 @@ func TestIntegrationArchiveRoundTrip(t *testing.T) {
 	fixture.importAndValidateRestored()
 	fixture.removeArchiveAndValidateRestored()
 	fixture.validatePostShutdownBehavior()
+}
+
+func TestIntegrationCompleteOutboundArchive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	fixture := newArchiveRoundTripFixture(t, ctx)
+	runtime := fixture.runtime
+	source, err := runtime.CreateWithOutboundPolicy(ctx, "alpine:latest", boxlite.CompleteOutboundPolicy{
+		Mode: boxlite.NetworkModeEnabled, DenyNet: []string{},
+	}, boxlite.WithAutoRemove(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.source, fixture.sourceID = source, source.ID()
+	if err := source.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	network, err := source.Network()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer network.Close()
+	updated, err := network.ReplaceOutboundPolicy(ctx, boxlite.CompleteOutboundPolicy{
+		Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"api.example.test:443"}, DenyNet: []string{"blocked.example.test"},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := source.Export(ctx, filepath.Join(t.TempDir(), "complete.boxlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := runtime.Import(ctx, archive, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.restored, fixture.restoredID = restored, restored.ID()
+	if restored.ID() == source.ID() {
+		t.Fatal("import reused the source Box")
+	}
+	native, err := restored.Network()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer native.Close()
+	status, err := native.OutboundPolicyStatus(ctx)
+	if err != nil || status.Persisted == nil || status.Persisted.Revision == updated.Acknowledged.Revision ||
+		!reflect.DeepEqual(status.Persisted.Policy, updated.Acknowledged.Policy) {
+		t.Fatalf("imported policy does not match committed rules with a fresh revision: %+v (%v)", status, err)
+	}
+	if err := restored.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	live, err := native.OutboundPolicyStatus(ctx)
+	if err != nil || live.Observed == nil || !reflect.DeepEqual(live.Observed.Snapshot, *status.Persisted) {
+		t.Fatalf("imported policy was not applied at first start: %+v (%v)", live, err)
+	}
 }
 
 func newArchiveRoundTripFixture(t *testing.T, ctx context.Context) *archiveRoundTripFixture {

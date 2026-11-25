@@ -5,6 +5,7 @@ package checkpoint
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -119,6 +120,134 @@ func recoveryHarness(t *testing.T) (Restorer, RestoreRequest, *recoveryNative, *
 	operations := Operations{Root: filepath.Join(t.TempDir(), "operations")}
 	native.operations, native.target = operations, target
 	return Restorer{Operations: operations, Artifacts: artifacts, Store: store, Backend: native}, request, native, store
+}
+
+type managedRecoveryNative struct {
+	*recoveryNative
+	installed json.RawMessage
+}
+
+func (n *managedRecoveryNative) ImportManaged(ctx context.Context, archive *DownloadedArchive, env map[string]string, name string, snapshot json.RawMessage) (string, error) {
+	id, err := n.Import(ctx, archive, env, name)
+	if err == nil {
+		n.candidates[name].ProtectedOutbound = true
+		n.installed = append(json.RawMessage(nil), snapshot...)
+	}
+	return id, err
+}
+
+func (n *managedRecoveryNative) VerifyManaged(_ context.Context, _ string, snapshot json.RawMessage) error {
+	if string(n.installed) != string(snapshot) {
+		return errors.New("different persisted policy")
+	}
+	return nil
+}
+
+func TestCheckpointManagedRestoreVerifiesReplayAndFencesLateImports(t *testing.T) {
+	const snapshot = `{"admission":"extended_ipv4","revision":"copy-revision","policy":{"mode":"enabled","allow_net":[],"deny_net":["example.test"]}}`
+	for _, scenario := range []string{"verified-replay", "cleaned-before-import", "retired-before-cleanup"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := t.Context()
+			restore, request, native, _ := recoveryHarness(t)
+			native.current = nil
+			request.Mode, request.TargetOutbound = "create", json.RawMessage(snapshot)
+			managed := &managedRecoveryNative{recoveryNative: native}
+			restore.Backend = managed
+			attempt := uuid.NewString()
+			if _, err := restore.Restore(ctx, request, attempt); err == nil || native.imports != 0 {
+				t.Fatal("protected restore reached native import without lease authorization")
+			}
+			restore.AuthorizeManaged = func(context.Context) error { return nil }
+			if scenario != "verified-replay" {
+				if scenario == "retired-before-cleanup" {
+					lease, err := restore.Operations.Lock(ctx, request.Target)
+					if err != nil {
+						t.Fatal(err)
+					}
+					err = lease.Retire()
+					lease.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := restore.CleanManaged(ctx, request, attempt, restore.AuthorizeManaged); err != nil {
+					t.Fatal(err)
+				}
+				restarted := restore
+				restarted.Operations = Operations{Root: restore.Operations.Root}
+				if _, err := restarted.Restore(ctx, request, attempt); err == nil || native.imports != 0 {
+					t.Fatal("restarted worker imported a cleaned operation")
+				}
+				return
+			}
+			first, err := restore.Restore(ctx, request, attempt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replay, err := restore.Restore(ctx, request, attempt)
+			if err != nil || replay.NativeID != first.NativeID || native.imports != 1 {
+				t.Fatalf("valid replay should reuse its protected candidate: %#v, %v", replay, err)
+			}
+			managed.installed = json.RawMessage(`{"revision":"wrong"}`)
+			if _, err := restore.Restore(ctx, request, attempt); err == nil || !strings.Contains(err.Error(), "different persisted policy") {
+				t.Fatalf("changed candidate passed protected replay: %v", err)
+			}
+		})
+	}
+}
+
+type stalledManagedDownload struct {
+	*downloadStore
+	entered chan struct{}
+	rescue  chan struct{}
+}
+
+func (s *stalledManagedDownload) Download(ctx context.Context, _, _ string) error {
+	close(s.entered)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.rescue:
+		return errors.New("release stalled test store")
+	}
+}
+
+func TestManagedCheckpointCancellationStopsDownloadBeforeImport(t *testing.T) {
+	restore, request, native, store := recoveryHarness(t)
+	native.current = nil
+	request.Mode, request.TargetOutbound = "create", json.RawMessage(`{"revision":"expected"}`)
+	restore.Backend = &managedRecoveryNative{recoveryNative: native}
+	restore.AuthorizeManaged = func(context.Context) error { return nil }
+	stalled := &stalledManagedDownload{downloadStore: store, entered: make(chan struct{}), rescue: make(chan struct{})}
+	defer close(stalled.rescue)
+	restore.Store = stalled
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() {
+		_, err := restore.Restore(ctx, request, uuid.NewString())
+		finished <- err
+	}()
+	select {
+	case <-stalled.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the managed download did not start")
+	}
+	cancel()
+	if err := <-finished; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled restore returned %v", err)
+	}
+
+	wait, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	lease, err := restore.Operations.Lock(wait, request.Target)
+	if err != nil {
+		t.Fatalf("stalled download still owns the target after cancellation: %v", err)
+	}
+	defer lease.Close()
+	if native.imports != 0 {
+		t.Fatal("a cancelled download reached native import")
+	}
 }
 
 func TestCheckpointRestoreImportFailurePreservesPredecessor(t *testing.T) {

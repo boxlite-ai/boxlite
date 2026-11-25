@@ -75,6 +75,8 @@ import { MemoryIncidentModule } from './memory-incidents/memory-incident.module'
 import { Checkpoint } from './entities/checkpoint.entity'
 import { CheckpointService } from './services/checkpoint.service'
 import { CheckpointJobReceiver } from './services/checkpoint-job-receiver.service'
+import { ProtectedCheckpointJobService } from './services/protected-checkpoint-job.service'
+import { ProtectedCheckpointJobController } from './controllers/protected-checkpoint-job.controller'
 import { CheckpointOperation } from './entities/checkpoint-operation.entity'
 import { BoxCheckpointState } from './entities/box-checkpoint-state.entity'
 import { CheckpointRecoverService } from './services/checkpoint-recover.service'
@@ -117,6 +119,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     VolumeController,
     JobController,
     CompleteCreateJobController,
+    ProtectedCheckpointJobController,
     CustomDomainController,
     CustomDomainMaintenanceController,
   ],
@@ -125,6 +128,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     CheckpointArchiveStore,
     CheckpointRecoverService,
     CheckpointJobReceiver,
+    ProtectedCheckpointJobService,
     BoxService,
     BoxManager,
     BoxWarmPoolService,

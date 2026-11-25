@@ -12,6 +12,55 @@ import { JsBoxlite } from "../lib/index.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { testRegistries } from "./test-registries.js";
+
+test("complete outbound copy roundtrip", { timeout: 120_000 }, async () => {
+  const homeDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "boxlite-outbound-copy-"),
+  );
+  const runtime = new JsBoxlite({ homeDir, imageRegistries: testRegistries() });
+  const owned: string[] = [];
+  try {
+    const policy = {
+      mode: "enabled" as const,
+      allowNet: ["api.example.test:443"],
+      denyNet: ["blocked.example.test"],
+    };
+    const source = await runtime.createWithOutboundPolicy(
+      { image: "alpine:latest", autoDelete: 0 },
+      { mode: "enabled", denyNet: [] },
+    );
+    owned.push(source.id);
+    await source.start();
+    const initial = await source.network.outboundPolicyStatus();
+    const capture = await source.network.replaceOutboundPolicy(
+      policy,
+      initial.persisted!.revision,
+    );
+    await source.stop();
+    const stopped = (await runtime.get(source.id))!;
+    const clone = await stopped.cloneBox();
+    owned.push(clone.id);
+    const archive = await stopped.export(
+      path.join(homeDir, "complete.boxlite"),
+    );
+    const restored = await runtime.importBox(archive);
+    owned.push(restored.id);
+    expect(new Set(owned).size).toBe(3);
+    for (const child of [clone, restored]) {
+      const { persisted } = await child.network.outboundPolicyStatus();
+      expect(persisted?.policy).toEqual(capture.acknowledged.policy);
+      expect(persisted?.revision).not.toBe(capture.acknowledged.revision);
+      await child.start();
+      const live = await child.network.outboundPolicyStatus();
+      expect(live.observed?.snapshot).toEqual(persisted);
+    }
+  } finally {
+    for (const id of owned.reverse()) await runtime.remove(id, true);
+    runtime.close();
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
 
 // TODO: Fix snapshot tests — Rust tests (boxlite/tests/snapshot.rs) stop the
 // box before snapshot operations (create_stopped_box pattern). This test file

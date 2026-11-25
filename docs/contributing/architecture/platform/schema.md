@@ -32,6 +32,24 @@ uses a private SQLite store for the same controller records. The Go services —
 imports an ORM, `database/sql`, or an embedded store. Runner state reaches the
 control plane through `runner` telemetry columns, `job` results and CPU incident reports.
 
+## Protected checkpoint coordination
+
+The [protected checkpoint migration](../../../../apps/api/src/migrations/pre-deploy/1795096807000-add-protected-checkpoint-control-migration.ts)
+binds managed archives to the committed outbound policy and the Runner that owns the disk work.
+
+| Stored field | Meaning |
+| --- | --- |
+| `checkpoint.captureOutbound` | Exact source snapshot for capture and restore. `NULL` identifies legacy checkpoints. |
+| `job.checkpointCleanupRequired` | Keeps a finished protected job and its captured ownership available until work is disposed of. |
+| Protected checkpoint job indexes | Cover unfinished jobs and outstanding cleanup for Runner polling and reconciliation. |
+| `checkpoint_operation.protectedDisposalConfirmed` | Lets a failed unpublished target complete deletion after bound disposal, including when its Runner has retired. |
+| `complete_outbound_runner_enrollment.protected_checkpoint_identity` | Immutable writer instance and work-disk identities associated with the enrolled lease. |
+| `complete_outbound_runner_enrollment.protected_checkpoint_retirement` | Verified provider evidence for retired writer resources. |
+
+Only the enrolled API principal can update protected job transitions. Active
+writers and cleanup holds protect the original lease, and protected archives
+and outstanding work block downgrade.
+
 ## Experimental CI authorization state
 
 The SQL-owned tables below are created by

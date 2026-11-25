@@ -4,10 +4,10 @@
  */
 
 import { join } from 'path'
-import { DataSource } from 'typeorm'
 import { baseDataSourceOptions } from '../data-source'
+import { MigrationDataSource } from '../migration-data-source'
 
-const PostDeployDataSource = new DataSource({
+const PostDeployDataSource = new MigrationDataSource({
   ...baseDataSourceOptions,
   migrations: [join(__dirname, '*-migration.{ts,js}')],
 })

@@ -41,7 +41,11 @@ Rust, Python and Go expose effect, HTTP status, code and Box ID on complete requ
 
 Replacement reports a committed snapshot and a separate status read. `application_verified` is true only when the confirmed live snapshot matches that write's full identity. A newer confirmed revision describes current state and leaves the earlier write unverified.
 
-Complete control supports the usual start, stop, restart, inspection and removal operations. Cloud checkpoint capture and drain migration refuse Boxes with complete control. Native clone and export also refuse them, including when the installed lists are empty.
+Complete control supports the usual start, stop, restart, inspection and removal operations. A direct local SDK clone inherits the source's committed rules and forwarding mode. Local export saves them in a v7 `.boxlite` archive for a compatible SDK or local `boxlite import`.
+
+The destination stores the policy before first start and uses its own policy revision. Archives that require Guest IPv6 need a destination with Guest IPv6 enabled and a compatible backend. HTTP clone and archive endpoints and drain migration accept legacy outbound policy.
+
+A Cloud checkpoint on a qualified Runner captures the latest committed complete policy with the stopped Box. Creating a new Box from that checkpoint installs the captured policy before startup, including after the original Box is deleted. A pending policy transition or incompatible Runner prevents the checkpoint operation.
 
 ### Updating a running box with legacy policy
 
@@ -117,7 +121,7 @@ boxlite inspect mybox
 | Runtime disabled | Suspends the NIC, including DNS and inbound traffic; control and exec remain available. |
 | Re-enable | Uses the supplied complete policy on the existing NIC. Existing connections may have timed out. |
 | Persistence | Successful outbound updates survive reattachment and normal stop/start. |
-| Clone/export | For legacy policies, copies inherit the latest persisted outbound policy. |
+| Clone/export | Local SDK copies inherit the latest persisted outbound policy. |
 | Inbound timing | Cloud proxy cache expiry governs new connections; existing connections stay open. |
 
 REST creation and outbound replacement share the same combination check:
@@ -157,12 +161,13 @@ boxlite start mybox
 outbound with an empty list and disabled inbound. Creation with `--network
 disabled` cannot include rules because it provisions no NIC.
 
-Creation and updates accept the same rules: hostnames, `*.` wildcard hostnames,
-IPv4 addresses and IPv4 CIDRs, with surrounding spaces trimmed. Both reject
-anything else, such as `''`, `example.com:443` or `a.com,b.com`, so every saved
-list can be re-sent as an update. Start and import do not recheck rules, so boxes and archives saved by
-older releases keep working; replace such a list with a valid one before
-updating it.
+Legacy creation and updates accept hostnames, `*.` wildcard hostnames, IPv4
+addresses and IPv4 CIDRs after trimming surrounding spaces. Inputs such as
+`''`, `example.com:443` and `a.com,b.com` are invalid, so the same valid list
+can be sent on creation and updates.
+
+Lists saved by older releases keep working on start and import. Replace such a
+list with a valid one before updating it.
 
 ### Update paths
 

@@ -6,6 +6,7 @@
 import { In, Not } from 'typeorm'
 import { Job } from '../entities/job.entity'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
+import { LEASE_BOUND_JOB_TYPES } from '../enums/job-type.enum'
 import { JobService } from './job.service'
 
 function makePendingJob(id: string): Job {
@@ -69,7 +70,7 @@ describe('JobService.claimPendingJobs', () => {
     expect(claimed[0].status).toBe(JobStatus.IN_PROGRESS)
 
     expect(jobRepository.update).toHaveBeenCalledWith(
-      { id: In(['job-1']), status: JobStatus.PENDING, type: Not(JobType.CREATE_COMPLETE_OUTBOUND_BOX) },
+      { id: In(['job-1']), status: JobStatus.PENDING, type: Not(In(LEASE_BOUND_JOB_TYPES)) },
       expect.objectContaining({ status: JobStatus.IN_PROGRESS }),
       { returning: ['id'] },
     )

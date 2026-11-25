@@ -1,10 +1,17 @@
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import type { AddressInfo } from 'node:net'
 import { ConfigService } from '@nestjs/config'
+import { PassportModule } from '@nestjs/passport'
+import { Test } from '@nestjs/testing'
 import { DataSource, Repository } from 'typeorm'
+import { ApiKeyStrategy } from '../../auth/api-key.strategy'
+import { JwtStrategy } from '../../auth/jwt.strategy'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
+import { ProtectedCheckpointJobController } from '../controllers/protected-checkpoint-job.controller'
+import { CompleteOutboundSnapshot, RunnerOutboundControl } from '../runner-adapter/outbound-control'
 import { Box } from '../entities/box.entity'
 import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
@@ -43,6 +50,15 @@ import { BoxManager } from '../managers/box.manager'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxCreatedEvent } from '../events/box-create.event'
 import { subscribeBusinessEvents } from '../../common/utils/business-event.util'
+import type { RunnerContext } from '../../common/interfaces/runner-context.interface'
+import { AddCompleteOutboundAdmission1795096802000 } from '../../migrations/pre-deploy/1795096802000-add-complete-outbound-admission-migration'
+import { AddCompleteOutboundEnrollmentAndClaims1795096803000 } from '../../migrations/pre-deploy/1795096803000-add-complete-outbound-enrollment-and-claims-migration'
+import { AddCompleteOutboundReleaseControl1795096806000 } from '../../migrations/pre-deploy/1795096806000-add-complete-outbound-release-control-migration'
+import { AddProtectedCheckpointControl1795096807000 } from '../../migrations/pre-deploy/1795096807000-add-protected-checkpoint-control-migration'
+import { AddProtectedCheckpointQueueIndexes1795096808000 } from '../../migrations/pre-deploy/1795096808000-add-protected-checkpoint-queue-indexes-migration'
+import { ProtectedCheckpointJobService } from './protected-checkpoint-job.service'
+import { GetRunnerParams, RunnerService } from './runner.service'
+import { requireProtectedCheckpointOwner } from '../stores/protected-checkpoint.store'
 
 const describeWithDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `checkpoint_api_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -59,12 +75,18 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   let service: CheckpointService
   let receiver: CheckpointJobReceiver
   let recovery: CheckpointRecoverService
+  let jobService: JobService
+  let protectedJobs: ProtectedCheckpointJobService
   let repository: BoxRepository
   const events = { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue([]) }
   const organization = { id: organizationId } as Organization
   const resourceLimits = { resolve: jest.fn() }
   const imageAdmission = { assert: jest.fn() }
-  const runnerSelection = { getRandomAvailableRunner: jest.fn() }
+  const runnerSelection = {
+    getRandomAvailableRunner: jest.fn(),
+    findAvailableRunners: jest.fn(),
+    getProtectedCheckpointOwner: jest.fn(),
+  }
   const archiveStore = { remove: jest.fn() }
   let settings: { archivePrefix?: string; maxPerOrganization: number; enabled?: boolean }
   const cache = { invalidate: jest.fn() }
@@ -101,11 +123,26 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     }).initialize()
     await dataSource.query(`CREATE SCHEMA "${schema}"`)
     await dataSource.synchronize()
+    const migration = dataSource.createQueryRunner()
+    try {
+      await migration.query(
+        'ALTER TABLE "job" DROP COLUMN "completeOutboundReconciling", DROP COLUMN "checkpointCleanupRequired"',
+      )
+      await migration.query('ALTER TABLE "checkpoint" DROP COLUMN "captureOutbound"')
+      await migration.query('ALTER TABLE "checkpoint_operation" DROP COLUMN "protectedDisposalConfirmed"')
+      await new AddCompleteOutboundAdmission1795096802000().up(migration)
+      await new AddCompleteOutboundEnrollmentAndClaims1795096803000().up(migration)
+      await new AddCompleteOutboundReleaseControl1795096806000().up(migration)
+      await new AddProtectedCheckpointControl1795096807000().up(migration)
+      await new AddProtectedCheckpointQueueIndexes1795096808000().up(migration)
+    } finally {
+      await migration.release()
+    }
     checkpoints = dataSource.getRepository(Checkpoint)
     boxes = dataSource.getRepository(Box)
     states = dataSource.getRepository(BoxCheckpointState)
     jobs = dataSource.getRepository(Job)
-    const jobService = new JobService(jobs, { lpush: jest.fn().mockResolvedValue(1) } as any, {} as any)
+    jobService = new JobService(jobs, { lpush: jest.fn().mockResolvedValue(1) } as any, {} as any)
     const config = { get: (key: string) => (key === 'checkpoint' ? settings : undefined) } as ConfigService
     service = new CheckpointService(dataSource, config, jobService, cache as any, archiveStore as never)
     receiver = new CheckpointJobReceiver(
@@ -113,6 +150,13 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       cache as never,
       events as unknown as EventEmitter2,
       uploadNotifications as never,
+    )
+    protectedJobs = new ProtectedCheckpointJobService(
+      dataSource,
+      jobService,
+      archiveStore as never,
+      cache as never,
+      events as unknown as EventEmitter2,
     )
     repository = new BoxRepository(dataSource, events as unknown as EventEmitter2, cache as any)
     recovery = new CheckpointRecoverService(
@@ -141,6 +185,9 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await dataSource.query(
       `TRUNCATE TABLE "${schema}"."checkpoint_operation", "${schema}"."checkpoint", "${schema}"."job", "${schema}"."box", "${schema}"."runner", "${schema}"."image", "${schema}"."registry_credential" CASCADE`,
     )
+    await dataSource.query(
+      "UPDATE complete_outbound_admission SET phase = 'closed', minimum_release = NULL, api_principal = NULL, deployment_receipt = NULL",
+    )
     settings = { archivePrefix: 'gs://checkpoint-tests/checkpoints/', maxPerOrganization: 10, enabled: true }
     runner = new Runner({
       region: 'us',
@@ -152,6 +199,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       diskGiB: 1000,
     })
     runner.state = RunnerState.READY
+    runner.apiUrl = 'http://127.0.0.1:32802'
     await dataSource.getRepository(Runner).save(runner)
     cache.invalidate.mockClear()
     events.emit.mockClear()
@@ -159,8 +207,18 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     resourceLimits.resolve.mockReset().mockResolvedValue({ maxCpuPerBox: 16, maxMemoryPerBox: 128, maxDiskPerBox: 100 })
     imageAdmission.assert.mockReset().mockResolvedValue(undefined)
     runnerSelection.getRandomAvailableRunner.mockReset().mockImplementation(async () => runner)
+    runnerSelection.findAvailableRunners.mockReset().mockImplementation(async () => [runner])
+    runnerSelection.getProtectedCheckpointOwner
+      .mockReset()
+      .mockImplementation((id: string) => requireProtectedCheckpointOwner(dataSource.manager, id))
+    jest.spyOn(RunnerOutboundControl.prototype, 'prepareCreate').mockImplementation(async (revision, policy) => ({
+      snapshot: { revision, admission: 'extended_ipv4', policy: { ...policy, deny_net: policy.deny_net ?? [] } },
+      deny_present: policy.deny_net !== undefined,
+    }))
     archiveStore.remove.mockReset().mockResolvedValue(undefined)
   })
+
+  afterEach(() => jest.restoreAllMocks())
 
   // Read persisted coordination separately; service responses remain plain Boxes.
   async function withCheckpointState(box: Box) {
@@ -300,7 +358,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect((await boxes.findOneByOrFail({ id: shadow.id })).pending).toBe(false)
   })
 
-  async function protectedSource() {
+  async function protectedSource(snapshot: Partial<CompleteOutboundSnapshot> = {}) {
     const box = await source('complete-outbound-source')
     await boxes.update(box.id, {
       completeOutboundControl: {
@@ -309,22 +367,613 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
           revision: randomUUID(),
           admission: 'extended_ipv4',
           policy: { mode: 'enabled', allow_net: [], deny_net: [] },
+          ...snapshot,
         },
       },
     })
     return box
   }
 
-  it('refuses checkpoint capture for a Box with a protected empty outbound policy', async () => {
+  it('refuses protected checkpoint capture without an enrolled Runner', async () => {
     const protectedBox = await protectedSource()
     await expect(service.create(organizationId, protectedBox.id)).rejects.toMatchObject({
-      status: 409,
-      response: expect.objectContaining({ code: 'complete_policy_required' }),
+      status: 503,
     })
     expect(await jobs.count()).toBe(0)
     expect(await checkpoints.count()).toBe(0)
     expect(await states.findOneBy({ boxId: protectedBox.id })).toBeNull()
   })
+
+  const leaseToken = 'p'.repeat(48)
+  const writer = {
+    provider: 'gcp',
+    project: 'test-project',
+    zone: 'test-zone',
+    instanceId: '123',
+    workDiskIds: ['456'],
+  }
+  const deletionProof = (type: string, targetId: string) => ({
+    project: writer.project,
+    zone: writer.zone,
+    targetId,
+    status: 'DONE',
+    operationType: 'delete',
+    targetLink: `/projects/${writer.project}/zones/${writer.zone}/${type}/fixture`,
+  })
+
+  async function enrollProtectedRunner(current = runner): Promise<RunnerContext> {
+    await dataSource.query(`UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'protected-test',
+      api_principal = current_user, deployment_receipt = 'fixture'`)
+    await dataSource.query(
+      `INSERT INTO complete_outbound_runner_enrollment
+      (runner_id, lease_id, token_sha256, runner_key_sha256, verified_floor, expires_at, protected_checkpoint_identity)
+      VALUES ($1, $2, $3, $4, 'protected-test', clock_timestamp() + interval '1 hour', $5)`,
+      [
+        current.id,
+        randomUUID(),
+        createHash('sha256').update(leaseToken).digest('hex'),
+        createHash('sha256').update(current.apiKey).digest('hex'),
+        JSON.stringify(writer),
+      ],
+    )
+    return { role: 'runner', runnerId: current.id, runner: current } as RunnerContext
+  }
+
+  async function exportProtectedCheckpoint(worker: RunnerContext, checkpoint: Checkpoint) {
+    const job = await protectedJobs.claim(worker, leaseToken)
+    expect(job).toMatchObject({ id: checkpoint.exportJobId, type: JobType.EXPORT_PROTECTED_CHECKPOINT })
+    await protectedJobs.authorize(worker, leaseToken, job!.id, false)
+    await protectedJobs.accept(worker, leaseToken, job!.id, {
+      kind: job!.type,
+      outcome: 'completed',
+      captureOutbound: checkpoint.captureOutbound,
+      archive: archive(checkpoint),
+    })
+    return service.get(organizationId, checkpoint.id)
+  }
+
+  async function readyProtectedCheckpoint(worker: RunnerContext, checkpoint: Checkpoint) {
+    const uploading = await exportProtectedCheckpoint(worker, checkpoint)
+    const upload = await protectedJobs.claim(worker, leaseToken)
+    await protectedJobs.accept(worker, leaseToken, upload!.id, {
+      kind: upload!.type,
+      outcome: 'completed',
+      archive: uploading.archive,
+      captureOutbound: checkpoint.captureOutbound,
+    })
+    await protectedJobs.accept(worker, leaseToken, upload!.id, { kind: upload!.type, outcome: 'cleaned' })
+  }
+
+  it('finds the IPv6 restore target beyond the ordinary shortlist even with IPv4-only rules', async () => {
+    const worker = await enrollProtectedRunner()
+    const runnerRepository = dataSource.getRepository(Runner)
+    const enrolled = async (name: string, changes: Partial<Runner>) => {
+      const candidate = await runnerRepository.save({
+        ...runner,
+        id: randomUUID(),
+        name,
+        apiKey: `key-${name}`,
+        ...changes,
+      })
+      await enrollProtectedRunner(candidate)
+      return candidate
+    }
+    const dualStack = await enrolled('dual-stack-runner', { availabilityScore: 1 })
+    const ipv6 = { interface: 'eth0', guest: 'fd42:424f:584c:1::2', gateway: 'fd42:424f:584c:1::1' } as const
+    const policy: CompleteOutboundSnapshot['policy'] = { mode: 'enabled', allow_net: ['192.0.2.7:443'], deny_net: [] }
+    const original = await protectedSource({ admission: 'extended_dual_stack', ipv6, policy })
+    const checkpoint = await service.create(organizationId, original.id)
+    await readyProtectedCheckpoint(worker, checkpoint)
+
+    const prepare = jest.mocked(RunnerOutboundControl.prototype.prepareCreate)
+    runnerSelection.findAvailableRunners.mockResolvedValueOnce([runner])
+    await expect(
+      recovery.createBox(organization, checkpoint.id, 'no-qualified-runner', undefined),
+    ).rejects.toMatchObject({ status: 503 })
+    expect(await boxes.findOneBy({ name: 'no-qualified-runner' })).toBeNull()
+    expect(await jobs.countBy({ type: JobType.IMPORT_PROTECTED_CHECKPOINT })).toBe(0)
+
+    const ipv4Pool: Runner[] = []
+    for (let i = 0; i < 10; i++) ipv4Pool.push(await enrolled(`ipv4-${i}`, { availabilityScore: 100 }))
+    runnerSelection.findAvailableRunners.mockImplementationOnce((params: GetRunnerParams) =>
+      RunnerService.prototype.findAvailableRunners.call(
+        {
+          runnerRepository: { find: async () => [dualStack, ...ipv4Pool] },
+          configService: { getOrThrow: () => 0 },
+        } as never,
+        params,
+      ),
+    )
+    let probed = 0
+    prepare.mockImplementation(async (revision, requested) => {
+      const qualified = ++probed > ipv4Pool.length
+      return {
+        snapshot: {
+          revision,
+          admission: qualified ? 'extended_dual_stack' : 'extended_ipv4',
+          ipv6: qualified ? ipv6 : undefined,
+          policy: { ...requested, deny_net: [] },
+        },
+        deny_present: requested.deny_net !== undefined,
+      }
+    })
+    const copy = await recovery.createBox(organization, checkpoint.id, 'qualified-copy', undefined)
+    expect(copy.runnerId).toBe(dualStack.id)
+    expect(probed).toBe(11)
+    const job = await jobs.findOneByOrFail({ type: JobType.IMPORT_PROTECTED_CHECKPOINT, resourceId: copy.id })
+    expect(job.getPayload()).toMatchObject({
+      restore: { targetOutbound: { admission: 'extended_dual_stack', ipv6, policy } },
+    })
+
+    const small = await enrolled('small-runner', { cpu: 2 })
+    const stale = await enrolled('stale-runner', {})
+    stale.apiKey = 'rotated-fixture-key'
+    await runnerRepository.save(stale)
+    runnerSelection.findAvailableRunners.mockResolvedValueOnce([small, stale, dualStack])
+    prepare.mockClear()
+    const healthy = await recovery.createBox(organization, checkpoint.id, 'healthy-copy', undefined)
+    expect(healthy.runnerId).toBe(dualStack.id)
+    expect(prepare).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires a Runner bearer and matching lease at each protected checkpoint HTTP route', async () => {
+    await enrollProtectedRunner()
+    const source = await protectedSource()
+    const checkpoint = await service.create(organizationId, source.id)
+    const config = { get: (name: string) => (name === 'proxy.apiKey' ? 'checkpoint-proxy-test-key' : undefined) }
+    const module = await Test.createTestingModule({
+      imports: [PassportModule.register({ session: false })],
+      controllers: [ProtectedCheckpointJobController],
+      providers: [
+        { provide: ProtectedCheckpointJobService, useValue: protectedJobs },
+        {
+          provide: ApiKeyStrategy,
+          useFactory: () =>
+            new ApiKeyStrategy(
+              { get: async () => null } as never,
+              { getApiKeyByValue: async () => null } as never,
+              {} as never,
+              config as never,
+              { findByApiKey: (apiKey: string) => dataSource.getRepository(Runner).findOneBy({ apiKey }) } as never,
+              { findOneByProxyApiKey: async () => null } as never,
+            ),
+        },
+        {
+          provide: JwtStrategy,
+          useFactory: () =>
+            new JwtStrategy(
+              { issuer: 'http://127.0.0.1', audience: 'checkpoint-test', jwksUri: 'http://127.0.0.1/jwks' },
+              {} as never,
+              config as never,
+              {} as never,
+            ),
+        },
+      ],
+    }).compile()
+    const app = module.createNestApplication()
+    try {
+      app.setGlobalPrefix('api')
+      await app.listen(0, '127.0.0.1')
+      const { port } = app.getHttpServer().address() as AddressInfo
+      const request = (path: string, bearer?: string, lease = leaseToken, proof?: object) =>
+        fetch(`http://127.0.0.1:${port}/api/jobs/protected-checkpoints/${path}`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-boxlite-complete-lease': lease,
+            ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+          },
+          ...(proof ? { body: JSON.stringify(proof) } : {}),
+        })
+      const { exportJobId } = checkpoint
+      const failed = { kind: JobType.EXPORT_PROTECTED_CHECKPOINT, outcome: 'failed' }
+      for (const path of ['claim', `${exportJobId}/start`, `${exportJobId}/receipt`, `${exportJobId}/cleanup`]) {
+        const proof = path.endsWith('/receipt') ? failed : undefined
+        expect((await request(path, undefined, leaseToken, proof)).status).toBe(401)
+        expect((await request(path, 'checkpoint-proxy-test-key', leaseToken, proof)).status).toBe(401)
+        expect((await request(path, runner.apiKey, 'x'.repeat(48), proof)).status).toBe(403)
+      }
+      expect(await jobs.findOneByOrFail({ id: exportJobId! })).toMatchObject({ status: JobStatus.PENDING })
+      const claim = await request('claim', runner.apiKey)
+      expect(claim.status).toBe(200)
+      expect(await claim.json()).toMatchObject({ job: { id: exportJobId } })
+      expect((await request(`${exportJobId}/start`, runner.apiKey)).status).toBe(204)
+      expect((await request(`${exportJobId}/cleanup`, runner.apiKey)).status).toBe(409)
+      expect((await request(`${exportJobId}/receipt`, runner.apiKey, leaseToken, failed)).status).toBe(204)
+      expect((await request(`${exportJobId}/cleanup`, runner.apiKey)).status).toBe(204)
+      const cleaned = { ...failed, outcome: 'cleaned' }
+      expect((await request(`${exportJobId}/receipt`, runner.apiKey, leaseToken, cleaned)).status).toBe(204)
+      expect(await jobs.findOneByOrFail({ id: exportJobId! })).toMatchObject({
+        status: JobStatus.FAILED,
+        checkpointCleanupRequired: false,
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('captures the committed policy and restores it after source deletion through owned jobs', async () => {
+    const worker = await enrollProtectedRunner()
+    const original = await protectedSource()
+    const checkpoint = await service.create(organizationId, original.id)
+    expect(checkpoint.captureOutbound?.policy.deny_net).toEqual([])
+    expect(await jobService.findPendingJobsForRunner(runner.id)).toEqual([])
+    await expect(jobService.updateJobStatus(checkpoint.exportJobId!, JobStatus.IN_PROGRESS)).rejects.toMatchObject({
+      status: 409,
+    })
+    await jobs.update(checkpoint.exportJobId!, { status: JobStatus.IN_PROGRESS })
+    expect(await jobs.findOneByOrFail({ id: checkpoint.exportJobId! })).toMatchObject({ status: JobStatus.PENDING })
+    await expect(protectedJobs.claim(worker, 'x'.repeat(48))).rejects.toMatchObject({ status: 403 })
+    const uploading = await exportProtectedCheckpoint(worker, checkpoint)
+    await boxes.delete(original.id)
+    const upload = await protectedJobs.claim(worker, leaseToken)
+    expect(upload).toMatchObject({ id: uploading.activeJobId, type: JobType.UPLOAD_PROTECTED_CHECKPOINT })
+    await protectedJobs.accept(worker, leaseToken, upload!.id, {
+      kind: upload!.type,
+      outcome: 'completed',
+      captureOutbound: checkpoint.captureOutbound,
+      archive: uploading.archive,
+    })
+    expect(await protectedJobs.claim(worker, leaseToken)).toMatchObject({
+      id: upload!.id,
+      cleanup: true,
+      cleanupPublished: true,
+    })
+    await protectedJobs.accept(worker, leaseToken, upload!.id, { kind: upload!.type, outcome: 'cleaned' })
+
+    const restored = await recovery.createBox(organization, checkpoint.id, 'protected-copy', undefined)
+    expect(restored.state).toBe(BoxState.RESTORING)
+    const job = await protectedJobs.claim(worker, leaseToken)
+    expect(job).toMatchObject({ type: JobType.IMPORT_PROTECTED_CHECKPOINT })
+    const expected = job!.payload.restore!.targetOutbound
+    expect(expected.policy).toEqual(checkpoint.captureOutbound?.policy)
+    expect(expected.revision).not.toBe(checkpoint.captureOutbound?.revision)
+    expect(await boxes.findOneByOrFail({ id: restored.id })).toMatchObject({ state: BoxState.RESTORING })
+    await protectedJobs.accept(worker, leaseToken, job!.id, {
+      kind: job!.type,
+      outcome: 'completed',
+      nativeId: 'native-protected-copy',
+      operationId: job!.payload.restore!.operationId,
+      targetSequence: job!.payload.restore!.targetSequence,
+      targetOutbound: expected,
+    })
+    const persisted = await boxes
+      .createQueryBuilder('box')
+      .addSelect('box.completeOutboundControl')
+      .where({ id: restored.id })
+      .getOneOrFail()
+    expect(persisted.state).toBe(BoxState.STOPPED)
+    expect(persisted.desiredState).toBe(BoxDesiredState.STARTED)
+    expect(persisted.pending).toBe(true)
+    expect(persisted.completeOutboundControl?.committed).toEqual(expected)
+  })
+
+  it.each(['retirement', 'expiry'])('fences an import receipt waiting across Runner %s', async (mode) => {
+    const worker = await enrollProtectedRunner()
+    const original = await protectedSource()
+    const checkpoint = await service.create(organizationId, original.id)
+    await readyProtectedCheckpoint(worker, checkpoint)
+    const copy = await recovery.createBox(organization, checkpoint.id, 'protected-copy', undefined)
+    const job = (await protectedJobs.claim(worker, leaseToken))!
+    const restore = job.payload.restore!
+    const blocker = dataSource.createQueryRunner()
+    await blocker.connect()
+    await blocker.startTransaction()
+    const [{ pid }] = await blocker.query('SELECT pg_backend_pid() AS pid')
+    const [lease] =
+      mode === 'expiry'
+        ? await dataSource.query(
+            `WITH updated AS (UPDATE complete_outbound_runner_enrollment
+              SET expires_at = clock_timestamp() + interval '2 seconds' WHERE runner_id = $1 RETURNING expires_at)
+              SELECT expires_at FROM updated`,
+            [runner.id],
+          )
+        : await blocker.query(
+            "UPDATE complete_outbound_runner_enrollment SET protected_checkpoint_retirement = '{}' WHERE runner_id = $1",
+            [runner.id],
+          )
+    await blocker.query('SELECT id FROM "job" WHERE id = $1 FOR UPDATE', [job.id])
+    const receipt = protectedJobs
+      .accept(worker, leaseToken, job.id, {
+        kind: job.type,
+        outcome: 'completed',
+        nativeId: 'protected-copy',
+        operationId: restore.operationId,
+        targetSequence: restore.targetSequence,
+        targetOutbound: restore.targetOutbound,
+      })
+      .then(
+        () => 204,
+        (error) => error.status,
+      )
+    try {
+      let waiting = false
+      for (let attempt = 0; attempt < 100 && !waiting; attempt++) {
+        const [row] = await dataSource.query(
+          'SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))) AS waiting',
+          [pid],
+        )
+        waiting = row.waiting
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      expect(waiting).toBe(true)
+      if (mode === 'expiry') {
+        await blocker.query('SELECT pg_sleep(GREATEST(0, extract(epoch FROM ($1::timestamptz - clock_timestamp()))))', [
+          lease.expires_at,
+        ])
+      }
+    } finally {
+      await blocker.commitTransaction()
+      await blocker.release()
+    }
+    expect(await receipt).toBe(409)
+    expect(await boxes.findOneByOrFail({ id: copy.id })).toMatchObject({ state: BoxState.RESTORING })
+  })
+
+  it('retries cleanup without starving another protected checkpoint', async () => {
+    const worker = await enrollProtectedRunner()
+    const original = await protectedSource()
+    const failed = await service.create(organizationId, original.id)
+    const job = (await protectedJobs.claim(worker, leaseToken))!
+    expect(job.id).toBe(failed.exportJobId)
+    await protectedJobs.accept(worker, leaseToken, job.id, { kind: job.type, outcome: 'failed' })
+
+    const followup = await service.create(organizationId, original.id)
+    await expect(protectedJobs.claim(worker, leaseToken)).resolves.toMatchObject({ id: job.id, cleanup: true })
+    // The worker polls again without acknowledging a failed disposal.
+    await expect(protectedJobs.claim(worker, leaseToken)).resolves.toMatchObject({
+      id: followup.exportJobId,
+      cleanup: false,
+    })
+    await expect(protectedJobs.claim(worker, leaseToken)).resolves.toMatchObject({ id: job.id, cleanup: true })
+    expect(await jobs.findOneByOrFail({ id: job.id })).toMatchObject({ checkpointCleanupRequired: true })
+  })
+
+  it('uses partial queue indexes instead of scanning completed ordinary jobs', async () => {
+    const worker = await enrollProtectedRunner()
+    await dataSource.query(
+      `INSERT INTO "job" (id, version, type, status, "runnerId", "resourceType", "resourceId", "completedAt")
+       SELECT gen_random_uuid(), 1, 'CREATE_BOX', 'COMPLETED', $1, 'BOX', gen_random_uuid(), clock_timestamp()
+       FROM generate_series(1, 30000)`,
+      [runner.id],
+    )
+    await dataSource.query('ANALYZE "job"')
+    const logger = jest.spyOn(dataSource.logger, 'logQuery')
+    try {
+      await expect(protectedJobs.claim(worker, leaseToken)).resolves.toBeNull()
+      await protectedJobs.reconcile()
+      const selects = logger.mock.calls.filter(([sql]) => sql.startsWith('SELECT') && sql.includes('AS "job_id"'))
+      expect(selects).toHaveLength(2)
+      const plans = await Promise.all(
+        selects.map(([sql, parameters]) =>
+          dataSource.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, parameters),
+        ),
+      )
+      for (const [result] of plans) {
+        const [{ Plan }] = result['QUERY PLAN']
+        expect(Plan['Shared Hit Blocks'] + Plan['Shared Read Blocks']).toBeLessThan(32)
+        expect(JSON.stringify(Plan)).toMatch(/"Index Name":"idx_job_protected_checkpoint_(claim|reconcile)"/)
+      }
+    } finally {
+      logger.mockRestore()
+    }
+  })
+
+  it('fences a rejected protected export and keeps its artifact owned until valid cleanup', async () => {
+    const worker = await enrollProtectedRunner()
+    const original = await protectedSource()
+    const checkpoint = await service.create(organizationId, original.id)
+    const job = await protectedJobs.claim(worker, leaseToken)
+    const receipt = {
+      kind: job!.type,
+      outcome: 'completed',
+      archive: archive(checkpoint),
+      captureOutbound: {
+        ...checkpoint.captureOutbound,
+        policy: { mode: 'enabled', allow_net: [], deny_net: ['192.0.2.7'] },
+      },
+    }
+    await expect(protectedJobs.accept(worker, leaseToken, job!.id, receipt)).rejects.toMatchObject({ status: 409 })
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({ state: 'failed', activeJobId: job!.id })
+    expect(await states.findOneByOrFail({ boxId: original.id })).toMatchObject({ activeJobId: null })
+    expect(await boxes.findOneByOrFail({ id: original.id })).toMatchObject({ state: BoxState.STOPPED, pending: false })
+    expect(await jobs.count()).toBe(1)
+    expect(await protectedJobs.claim(worker, leaseToken)).toMatchObject({ cleanup: true, cleanupPublished: false })
+    await expect(protectedJobs.authorize(worker, leaseToken, job!.id, false)).rejects.toMatchObject({ status: 409 })
+    await protectedJobs.authorize(worker, leaseToken, job!.id, true)
+    await protectedJobs.accept(worker, leaseToken, job!.id, { kind: job!.type, outcome: 'cleaned' })
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({ state: 'failed', activeJobId: null })
+    await expect(protectedJobs.accept(worker, leaseToken, job!.id, receipt)).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('keeps an expired upload owned until the disconnected writer and volume are retired', async () => {
+    const worker = await enrollProtectedRunner()
+    const original = await protectedSource()
+    const checkpoint = await service.create(organizationId, original.id)
+    const uploading = await exportProtectedCheckpoint(worker, checkpoint)
+    await dataSource.query(
+      'UPDATE complete_outbound_runner_enrollment SET expires_at = clock_timestamp() WHERE runner_id = $1',
+      [runner.id],
+    )
+    await dataSource.getRepository(Runner).update(runner.id, { state: RunnerState.DECOMMISSIONED })
+    await protectedJobs.reconcile()
+    expect(await jobs.findOneByOrFail({ id: uploading.activeJobId! })).toMatchObject({
+      status: JobStatus.FAILED,
+      checkpointCleanupRequired: true,
+    })
+    const recordRetirement = (instanceId: string, disks: unknown[]) =>
+      dataSource.query(
+        'UPDATE complete_outbound_runner_enrollment SET protected_checkpoint_retirement = $1 WHERE runner_id = $2',
+        [JSON.stringify({ instance: deletionProof('instances', instanceId), disks }), runner.id],
+      )
+    const retired = async (instanceId: string, disks: unknown[]) => {
+      await recordRetirement(instanceId, disks)
+      await protectedJobs.reconcile()
+    }
+    await retired('124', [deletionProof('disks', '456')])
+    await retired('123', [])
+    expect(archiveStore.remove).not.toHaveBeenCalled()
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({
+      state: 'failed',
+      activeJobId: uploading.activeJobId,
+    })
+    let entered!: () => void
+    let release!: () => void
+    const removing = new Promise<void>((resolve) => (entered = resolve))
+    const blocked = new Promise<void>((resolve) => (release = resolve))
+    archiveStore.remove.mockImplementationOnce(async () => {
+      entered()
+      await blocked
+      throw new ServiceUnavailableException('storage unavailable')
+    })
+    const reconciling = retired('123', [deletionProof('disks', '456')])
+    try {
+      await Promise.race([
+        removing,
+        reconciling.then(() => {
+          throw new Error('Retired writer cleanup did not reach object storage')
+        }),
+      ])
+      await dataSource.transaction(async (manager) => {
+        await manager.query("SET LOCAL lock_timeout = '750ms'")
+        await manager.query('SELECT complete_outbound_close()')
+        const [control] = await manager.query('SELECT phase FROM complete_outbound_admission WHERE id = 1')
+        expect(control.phase).toBe('closed')
+      })
+      expect(await service.get(organizationId, checkpoint.id)).toMatchObject({
+        state: 'failed',
+        activeJobId: uploading.activeJobId,
+      })
+    } finally {
+      release()
+      await reconciling
+    }
+    expect(await jobs.findOneByOrFail({ id: uploading.activeJobId! })).toMatchObject({
+      checkpointCleanupRequired: true,
+    })
+    archiveStore.remove.mockImplementationOnce(async () => {
+      await recordRetirement('124', [deletionProof('disks', '456')])
+    })
+    await protectedJobs.reconcile()
+    expect(await jobs.findOneByOrFail({ id: uploading.activeJobId! })).toMatchObject({
+      checkpointCleanupRequired: true,
+    })
+
+    await retired('123', [deletionProof('disks', '456')])
+    expect(archiveStore.remove).toHaveBeenCalledWith(expect.objectContaining({ id: checkpoint.id }), true)
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({ state: 'failed', activeJobId: null })
+  })
+
+  it.each([false, true])('closes restore admission with a previously claimed import of %s', async (claimed) => {
+    const worker = await enrollProtectedRunner()
+    const original = await protectedSource()
+    const checkpoint = await service.create(organizationId, original.id)
+    await readyProtectedCheckpoint(worker, checkpoint)
+    const copy = await recovery.createBox(organization, checkpoint.id, 'protected-copy', undefined)
+    const kind = JobType.IMPORT_PROTECTED_CHECKPOINT
+    const importJob = await jobs.findOneByOrFail({ type: kind, resourceId: copy.id })
+    if (claimed) expect(await protectedJobs.claim(worker, leaseToken)).toMatchObject({ id: importJob.id })
+    await dataSource.query("UPDATE complete_outbound_admission SET phase = 'closed'")
+    await protectedJobs.reconcile()
+    if (claimed) {
+      const claim = await protectedJobs.claim(worker, leaseToken)
+      expect(claim).toMatchObject({ id: importJob.id, cleanup: false })
+      const restore = claim!.payload.restore!
+      await protectedJobs.authorize(worker, leaseToken, importJob.id, false)
+      await protectedJobs.accept(worker, leaseToken, importJob.id, {
+        kind,
+        outcome: 'completed',
+        nativeId: 'protected-copy',
+        operationId: restore.operationId,
+        targetSequence: restore.targetSequence,
+        targetOutbound: restore.targetOutbound,
+      })
+      expect(await jobs.findOneByOrFail({ id: importJob.id })).toMatchObject({ status: JobStatus.COMPLETED })
+      expect(await boxes.findOneByOrFail({ id: copy.id })).toMatchObject({ state: BoxState.STOPPED })
+    } else {
+      expect(await protectedJobs.claim(worker, leaseToken)).toBeNull()
+      expect(await jobs.findOneByOrFail({ id: importJob.id })).toMatchObject({
+        status: JobStatus.FAILED,
+        checkpointCleanupRequired: false,
+      })
+      expect(await boxes.findOneByOrFail({ id: copy.id })).toMatchObject({ state: BoxState.ERROR })
+    }
+  })
+
+  it.each(['unclaimed', 'cleaned', 'deleted-before-cleanup'])(
+    'releases a failed protected restore and its checkpoint use after %s',
+    async (scenario) => {
+      const worker = await enrollProtectedRunner()
+      const original = await protectedSource()
+      const checkpoint = await service.create(organizationId, original.id)
+      await readyProtectedCheckpoint(worker, checkpoint)
+      const copy = await recovery.createBox(organization, checkpoint.id, 'protected-copy', undefined)
+      const kind = JobType.IMPORT_PROTECTED_CHECKPOINT
+      const restore = await jobs.findOneByOrFail({ type: kind, resourceId: copy.id })
+      const destroy = () => lifecycleService().destroy(copy.id, organizationId, Context.user())
+      if (scenario === 'unclaimed') {
+        await dataSource.query("UPDATE complete_outbound_admission SET phase = 'closed'")
+        await protectedJobs.reconcile()
+      } else {
+        expect(await protectedJobs.claim(worker, leaseToken)).toMatchObject({ id: restore.id })
+        if (scenario === 'deleted-before-cleanup') {
+          await destroy()
+          await boxes.update(copy.id, { state: BoxState.DESTROYED })
+          await expect(service.remove(organizationId, checkpoint.id)).rejects.toMatchObject({ status: 409 })
+          await expect(protectedJobs.authorize(worker, leaseToken, restore.id, false)).rejects.toMatchObject({
+            status: 409,
+          })
+          await protectedJobs.reconcile()
+        } else {
+          await protectedJobs.accept(worker, leaseToken, restore.id, { kind, outcome: 'failed' })
+        }
+        expect(await jobs.findOneByOrFail({ id: restore.id })).toMatchObject({
+          status: JobStatus.FAILED,
+          checkpointCleanupRequired: true,
+        })
+        await protectedJobs.accept(worker, leaseToken, restore.id, { kind, outcome: 'cleaned' })
+      }
+      if (scenario !== 'deleted-before-cleanup') {
+        await expect(destroy()).resolves.toMatchObject({ desiredState: BoxDesiredState.DESTROYED })
+        await boxes.update(copy.id, { state: BoxState.DESTROYED })
+      }
+      await service.remove(organizationId, checkpoint.id)
+      expect(await checkpoints.findOneBy({ id: checkpoint.id })).toBeNull()
+    },
+  )
+
+  it.each([false, true])(
+    'releases restores on a retired Runner when deletion happens first: %s',
+    async (deleteFirst) => {
+      const worker = await enrollProtectedRunner()
+      const original = await protectedSource()
+      const checkpoint = await service.create(organizationId, original.id)
+      await readyProtectedCheckpoint(worker, checkpoint)
+      const copy = await recovery.createBox(organization, checkpoint.id, 'protected-copy', undefined)
+      const restore = await protectedJobs.claim(worker, leaseToken)
+      expect(restore).toMatchObject({ type: JobType.IMPORT_PROTECTED_CHECKPOINT, resourceId: copy.id })
+      const destroy = () => lifecycleService().destroy(copy.id, organizationId, Context.user())
+      if (deleteFirst) await destroy()
+      await dataSource.query(
+        'UPDATE complete_outbound_runner_enrollment SET expires_at = clock_timestamp(), protected_checkpoint_retirement = $1 WHERE runner_id = $2',
+        [
+          JSON.stringify({ instance: deletionProof('instances', '123'), disks: [deletionProof('disks', '456')] }),
+          runner.id,
+        ],
+      )
+      await dataSource.getRepository(Runner).update(runner.id, { state: RunnerState.DECOMMISSIONED })
+      await protectedJobs.reconcile()
+      await protectedJobs.reconcile()
+      if (!deleteFirst) await destroy()
+      expect(await boxes.findOneByOrFail({ id: copy.id })).toMatchObject({
+        state: BoxState.DESTROYED,
+        desiredState: BoxDesiredState.DESTROYED,
+        pending: false,
+      })
+      await service.remove(organizationId, checkpoint.id)
+      expect(await checkpoints.findOneBy({ id: checkpoint.id })).toBeNull()
+    },
+  )
 
   it('marks only the legacy Box for drain migration', async () => {
     await protectedSource()

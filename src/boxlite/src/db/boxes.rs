@@ -16,11 +16,11 @@ use std::sync::{
 
 use crate::litebox::box_impl::outbound::{CompleteOutboundControl, OutboundControl};
 use crate::litebox::config::BoxConfig;
-use crate::runtime::id::BoxID;
+use crate::runtime::id::{BaseDiskID, BoxID};
 use crate::runtime::types::BoxState;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::{Database, db_err};
+use super::{BaseDiskStore, Database, db_err};
 
 /// Box storage wrapping Database.
 ///
@@ -373,14 +373,15 @@ impl BoxStore {
     /// Follows Podman pattern of explicit transactions for multi-statement operations.
     #[cfg(test)]
     pub fn save(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
-        self.save_with_outbound(config, state, None)
+        self.save_with_resources(config, state, None, None)
     }
 
-    pub(crate) fn save_with_outbound(
+    pub(crate) fn save_with_resources(
         &self,
         config: &BoxConfig,
         state: &BoxState,
         outbound: Option<CompleteOutboundControl>,
+        base_disk: Option<&BaseDiskID>,
     ) -> BoxliteResult<()> {
         let mut conn = self.db.conn();
         let tx = db_err!(conn.transaction())?;
@@ -413,6 +414,9 @@ impl BoxStore {
             "INSERT INTO box_state (id, status, pid, json) VALUES (?1, ?2, ?3, ?4)",
             params![config.id, state.status.as_str(), state.pid, state_json],
         ))?;
+        if let Some(base_disk) = base_disk {
+            BaseDiskStore::add_ref_on(&tx, base_disk, config.id.as_str())?;
+        }
 
         // Commit transaction
         db_err!(tx.commit())?;

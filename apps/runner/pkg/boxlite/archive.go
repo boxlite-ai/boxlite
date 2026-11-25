@@ -5,6 +5,7 @@ package boxlite
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -13,6 +14,17 @@ import (
 )
 
 func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir string) (string, string, error) {
+	return c.exportCheckpoint(ctx, boxId, destDir, nil)
+}
+
+func (c *Client) ExportManagedCheckpoint(ctx context.Context, boxId, destDir string, snapshot json.RawMessage) (string, string, error) {
+	if len(snapshot) == 0 {
+		return "", "", fmt.Errorf("managed capture requires an expected snapshot")
+	}
+	return c.exportCheckpoint(ctx, boxId, destDir, snapshot)
+}
+
+func (c *Client) exportCheckpoint(ctx context.Context, boxId, destDir string, snapshot json.RawMessage) (string, string, error) {
 	operation, err := c.lockCheckpointTarget(ctx, boxId)
 	if err != nil {
 		return "", "", err
@@ -37,7 +49,17 @@ func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir string) (s
 	if err != nil {
 		return "", "", err
 	}
-	archive, err := c.exportBox(ctx, boxId, destDir)
+	if len(snapshot) == 0 {
+		archive, err := c.exportBox(ctx, boxId, destDir)
+		return archive, pinned, err
+	}
+	box, err := c.getOrFetchBox(ctx, boxId)
+	if err != nil {
+		return "", "", err
+	}
+	archive, err := box.ExportManagedCheckpoint(ctx, destDir, boxlite.CheckpointExportPolicy{
+		Snapshot: snapshot, PinnedImage: pinned,
+	})
 	return archive, pinned, err
 }
 
@@ -66,7 +88,7 @@ func (c *Client) exportBox(ctx context.Context, boxId, destDir string) (string, 
 		return "", err
 	}
 
-	archivePath, err := bx.Export(ctx, destDir)
+	archivePath, err := bx.ExportLegacy(ctx, destDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to export box %s: %w", boxId, err)
 	}
@@ -81,8 +103,8 @@ func (c *Client) exportBox(ctx context.Context, boxId, destDir string) (string, 
 //
 // An IMPORT_BOX job can be redelivered — the runner can restart between the
 // import finishing and the job being marked COMPLETED — and importing twice
-// would leave a second box holding the same disk. A box that is already present
-// therefore satisfies the job.
+// would leave a second box holding the same disk. A legacy archive can satisfy
+// the replay through the existing box after its format is validated.
 func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error {
 	operation, err := c.lockCheckpointTarget(ctx, boxId)
 	if err != nil {
@@ -98,11 +120,14 @@ func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error
 		return err
 	}
 	if present {
+		if err := boxlite.ValidateLegacyArchive(archivePath); err != nil {
+			return err
+		}
 		c.logger.InfoContext(ctx, "import skipped, box already present", "box", boxId)
 		return nil
 	}
 
-	bx, err := c.runtime.Import(ctx, archivePath, boxId)
+	bx, err := c.runtime.ImportLegacy(ctx, archivePath, boxId)
 	if err != nil {
 		return fmt.Errorf("failed to import box %s from %s: %w", boxId, archivePath, err)
 	}

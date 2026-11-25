@@ -103,8 +103,11 @@ async def test_network_updates_reject_unsupported_state(rt, image, e2e_auth, con
         before = (await box.info()).state.status
         reply = await api(e2e_auth, "PUT", f"boxes/{box.id}/network/outbound", {"mode": "enabled"})
         assert reply.status in (400, 409, 422, 501), "unsupported update did not return a contract error"
-        message = reply.body.decode().lower()
-        assert ("networking is disabled" in message if condition == "no-nic" else "running" in message)
+        error = json.loads(reply.body)
+        if condition == "no-nic":
+            assert error.get("code") == "unsupported"
+        else:
+            assert "running" in error["message"].lower()
         assert (await box.info()).state.status == before
         await _readback(rt, box, e2e_auth, mode, [])
     finally:

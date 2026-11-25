@@ -20,7 +20,7 @@ import { AnalyticsService } from './analytics/services/analytics.service'
 import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.interface'
 import { TypedConfigService } from './config/typed-config.service'
 import { FailedAuthTrackerService } from './auth/failed-auth-tracker.service'
-import { DataSource, MigrationExecutor } from 'typeorm'
+import { runBundledMigrationCommand } from './migrations/bundled-migrations'
 import { getOpenApiConfig } from './openapi.config'
 import { AuditInterceptor } from './audit/interceptors/audit.interceptor'
 import { extname, join } from 'node:path'
@@ -51,6 +51,14 @@ const httpsOptions: HttpsOptions = {
 }
 
 async function bootstrap() {
+  const command = process.argv[2]
+  if (command === '--migration-run' || command === '--migration-revert') {
+    return runBundledMigrationCommand([
+      command === '--migration-run' ? 'run' : 'revert',
+      'all',
+      ...process.argv.slice(3),
+    ])
+  }
   if (process.env.OTEL_ENABLED === 'true') {
     await otelSdk.start()
   }
@@ -108,25 +116,8 @@ async function bootstrap() {
     }),
   )
 
-  // Runtime flags for migrations for run and revert migrations
   if (process.argv.length > 2) {
-    if (process.argv[2].startsWith('--migration-')) {
-      const dataSource = app.get(DataSource)
-      dataSource.setOptions({ logging: true })
-      const migrationExecutor = new MigrationExecutor(dataSource)
-
-      switch (process.argv[2]) {
-        case '--migration-run':
-          await migrationExecutor.executePendingMigrations()
-          break
-        case '--migration-revert':
-          await migrationExecutor.undoLastMigration()
-          break
-        default:
-          Logger.error('Invalid migration flag')
-          process.exit(1)
-      }
-    } else if (process.argv[2] === '--create-admin-api-key') {
+    if (process.argv[2] === '--create-admin-api-key') {
       if (process.argv.length < 4) {
         Logger.error('Invalid flag. API key name is required.')
         process.exit(1)

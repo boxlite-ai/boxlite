@@ -52,14 +52,15 @@ impl BoxManager {
 
     /// Add a new box to the database.
     pub fn add_box(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
-        self.add_box_with_outbound(config, state, None)
+        self.add_box_with_resources(config, state, None, None)
     }
 
-    pub(crate) fn add_box_with_outbound(
+    pub(crate) fn add_box_with_resources(
         &self,
         config: &BoxConfig,
         state: &BoxState,
         outbound: Option<super::box_impl::outbound::CompleteOutboundControl>,
+        base_disk: Option<&crate::runtime::id::BaseDiskID>,
     ) -> BoxliteResult<()> {
         // Check name uniqueness if name is set
         if let Some(ref name) = config.name
@@ -79,7 +80,8 @@ impl BoxManager {
             )));
         }
 
-        self.store.save_with_outbound(config, state, outbound)?;
+        self.store
+            .save_with_resources(config, state, outbound, base_disk)?;
 
         tracing::debug!(
             box_id = %config.id,

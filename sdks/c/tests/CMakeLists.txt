@@ -38,6 +38,7 @@ set(TEST_TARGETS
     test_agents
     test_agents_opencode
     test_simple_api
+    test_complete_outbound_archive
     test_null_callback
     test_socket_address
     test_outbound_revision
@@ -82,6 +83,7 @@ endforeach()
 # Label integration tests (require VM)
 set_tests_properties(test_agents PROPERTIES LABELS "unit;ffi")
 set_tests_properties(test_simple_api PROPERTIES LABELS "integration")
+set_tests_properties(test_complete_outbound_archive PROPERTIES LABELS "integration" TIMEOUT 240)
 # test_null_callback only exercises the FFI argument-validation path;
 # no VM is required, but we still link the runtime dylib.
 set_tests_properties(test_null_callback PROPERTIES LABELS "unit;ffi")

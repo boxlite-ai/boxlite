@@ -600,9 +600,9 @@ export class BoxRepository extends BaseRepository<Box> {
       checkpointState.sequence += 1
       await manager.save(BoxCheckpointState, checkpointState)
       Object.assign(box, Box.getSoftDeleteUpdate(box), {
-        state: BoxState.ERROR,
+        state: operation.protectedDisposalConfirmed ? BoxState.DESTROYED : BoxState.ERROR,
         recoverable: false,
-        errorReason: 'Checkpoint operation cancelled for Box deletion',
+        errorReason: operation.protectedDisposalConfirmed ? null : 'Checkpoint operation cancelled for Box deletion',
       })
       box.assertValid()
       box.enforceInvariants()

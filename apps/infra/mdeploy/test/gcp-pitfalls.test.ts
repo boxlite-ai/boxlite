@@ -456,6 +456,11 @@ test('the API is told to apply its own schema, as the incumbent stack tells it',
   }
 })
 
+test('a phased rollout keeps API startup migrations disabled', () => {
+  assert.equal(apiEnvironment('gcp', { RUN_MIGRATIONS: 'false' }).RUN_MIGRATIONS, 'false')
+  assert.throws(() => apiEnvironment('gcp', { RUN_MIGRATIONS: 'fales' }), /RUN_MIGRATIONS/)
+})
+
 // ── who may invoke the control plane ────────────────────────────────────────
 
 test('the API is invocable by the load balancer, which carries no identity', () => {

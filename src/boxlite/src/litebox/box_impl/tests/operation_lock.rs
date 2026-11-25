@@ -1094,6 +1094,222 @@ fn assert_disk_admission_released(bx: &BoxImpl) {
     assert!(LockGuard::try_new(lifecycle.as_ref()).is_some());
 }
 
+async fn complete_outbound_copy_source(
+    runtime: &Arc<RuntimeImpl>,
+) -> (crate::LiteBox, crate::net::CompleteOutboundSnapshot) {
+    use crate::litebox::box_impl::outbound::CompleteOutboundControl;
+    use crate::net::{CompleteOutboundPolicy, OutboundAdmission, OutboundRevision};
+    use crate::runtime::options::NetworkMode;
+
+    let source = persistent_disk_test_box(runtime).await;
+    create_disk_for_test(&disk_test_backend(&source));
+    let committed = CompleteOutboundPolicy {
+        mode: NetworkMode::Enabled,
+        allow_net: vec!["192.0.2.0/24".into()],
+        deny_net: Some(vec!["192.0.2.7".into()]),
+    }
+    .prepare(OutboundAdmission::ExtendedIpv4, OutboundRevision::fresh())
+    .unwrap();
+    runtime
+        .box_manager
+        .save_complete_outbound(
+            source.id(),
+            &CompleteOutboundControl {
+                committed: committed.clone(),
+                pending: None,
+            },
+        )
+        .unwrap();
+    (source, committed)
+}
+
+fn assert_copied_outbound(
+    runtime: &RuntimeImpl,
+    copy: &crate::LiteBox,
+    source: &crate::net::CompleteOutboundSnapshot,
+) {
+    let (state, legacy, complete) = runtime.box_manager.outbound_state(copy.id()).unwrap();
+    let complete = complete.expect("copy must persist complete outbound control");
+    assert_eq!(state.status, BoxStatus::Stopped);
+    assert!(legacy.is_none());
+    assert!(complete.pending.is_none());
+    assert_eq!(complete.committed.policy, source.policy);
+    assert_eq!(complete.committed.admission, source.admission);
+    assert_ne!(complete.committed.revision, source.revision);
+}
+
+#[tokio::test]
+async fn complete_outbound_copy_clone_persists_policy_for_each_child() {
+    let home = TempDir::new().unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let (source, committed) = complete_outbound_copy_source(&runtime).await;
+    let child = source
+        .clone_box(Default::default(), Some("single".into()))
+        .await
+        .expect("single clone must accept a committed complete policy");
+    assert_copied_outbound(&runtime, &child, &committed);
+
+    let children = source
+        .clone_boxes(Default::default(), 2, vec!["first".into(), "second".into()])
+        .await
+        .expect("batch clone must accept a committed complete policy");
+    assert_eq!(children.len(), 2);
+    for child in &children {
+        assert_copied_outbound(&runtime, child, &committed);
+    }
+}
+
+#[tokio::test]
+async fn complete_outbound_copy_archive_restores_policy_before_first_start() {
+    let home = TempDir::new().unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let (source, committed) = complete_outbound_copy_source(&runtime).await;
+    let archive = source
+        .export(Default::default(), home.path())
+        .await
+        .expect("export must accept a committed complete policy");
+    let copy = runtime
+        .import_box(archive, Some("restored".into()))
+        .await
+        .expect("import must restore the archived complete policy");
+    assert_copied_outbound(&runtime, &copy, &committed);
+}
+
+#[tokio::test]
+async fn complete_outbound_copy_rejects_unsupported_archive_paths() {
+    use crate::litebox::archive::{MANIFEST_FILENAME, build_zstd_tar_archive, extract_archive};
+    use crate::runtime::options::BoxArchive;
+
+    let home = TempDir::new().unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let (source, _) = complete_outbound_copy_source(&runtime).await;
+    assert!(matches!(
+        source
+            .clone_box_legacy_only(Some("legacy-clone".into()))
+            .await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+    assert!(matches!(
+        source.export_legacy_only(home.path()).await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+    let archive = source
+        .export(Default::default(), home.path())
+        .await
+        .unwrap();
+    assert!(matches!(
+        runtime
+            .import_box(BoxArchive::from_untrusted_upload(archive.path()), None)
+            .await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+
+    let extracted = TempDir::new().unwrap();
+    extract_archive(archive.path(), extracted.path()).unwrap();
+    let manifest_path = extracted.path().join(MANIFEST_FILENAME);
+    let bytes = std::fs::read(&manifest_path).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(manifest["version"], 7);
+    assert!(
+        manifest
+            .as_object_mut()
+            .unwrap()
+            .remove("outbound_policy")
+            .is_some()
+    );
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let missing = home.path().join("missing-policy.boxlite");
+    build_zstd_tar_archive(
+        &missing,
+        &manifest_path,
+        &extracted.path().join("disk.qcow2"),
+        1,
+    )
+    .unwrap();
+    let result = runtime.import_box(BoxArchive::new(missing), None).await;
+    assert!(
+        matches!(result, Err(BoxliteError::Storage(message)) if message.contains("version 7 requires policy"))
+    );
+    assert_eq!(runtime.list_info().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn complete_outbound_copy_reference_failure_keeps_only_the_committed_prefix() {
+    use crate::disk::BaseDiskKind;
+
+    let home = TempDir::new().unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = persistent_disk_test_box(&runtime).await;
+    create_disk_for_test(&disk_test_backend(&source));
+    runtime
+        .box_manager
+        .db()
+        .conn()
+        .execute_batch(
+            "CREATE TRIGGER fail_second_clone_reference BEFORE INSERT ON base_disk_ref
+             WHEN (SELECT name FROM box_config WHERE id = NEW.box_id) = 'second'
+             BEGIN SELECT RAISE(ABORT, 'second child reference rejected'); END;",
+        )
+        .unwrap();
+
+    let result = source
+        .clone_boxes(
+            Default::default(),
+            3,
+            vec!["first".into(), "second".into(), "third".into()],
+        )
+        .await;
+    assert!(
+        matches!(result, Err(BoxliteError::Database(message)) if message.contains("second child reference rejected")),
+        "a clone with a failed reference write must fail provisioning"
+    );
+    let first = runtime.get("first").await.unwrap().unwrap();
+    assert!(runtime.get("second").await.unwrap().is_none());
+    assert!(runtime.get("third").await.unwrap().is_none());
+    let bases = runtime
+        .base_disk_mgr
+        .store()
+        .list_by_box(source.id().as_str(), Some(BaseDiskKind::CloneBase))
+        .unwrap();
+    assert_eq!(bases.len(), 1);
+    let mut refs = runtime
+        .base_disk_mgr
+        .store()
+        .dependent_boxes(bases[0].id())
+        .unwrap();
+    let mut expected_refs = [source.id().to_string(), first.id().to_string()];
+    refs.sort();
+    expected_refs.sort();
+    assert_eq!(refs, expected_refs);
+    let box_dirs: std::collections::BTreeSet<_> = std::fs::read_dir(runtime.layout.boxes_dir())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(
+        box_dirs,
+        std::collections::BTreeSet::from([
+            disk_test_backend(&source).config.box_home.clone(),
+            disk_test_backend(&first).config.box_home.clone(),
+        ]),
+    );
+}
+
 #[tokio::test]
 async fn batch_clone_shares_base_and_records_refs_until_last_removal() {
     enable_disk_operation_logs();

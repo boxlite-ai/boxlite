@@ -7,12 +7,19 @@ const { composePlugins, withNx } = require('@nx/webpack')
 const path = require('path')
 const glob = require('glob')
 
-const migrationFiles = glob.sync(path.join(__dirname, 'src/migrations/**/*-migration.{ts,js}'))
-const migrationEntries = migrationFiles.reduce((acc, migrationFile) => {
-  const entryName = migrationFile.substring(migrationFile.lastIndexOf('/') + 1, migrationFile.lastIndexOf('.'))
-  acc[entryName] = migrationFile
-  return acc
-}, {})
+const migrationRoot = path.join(__dirname, 'src/migrations')
+const migrationEntries = {}
+const migrationPhases = { baseline: [], 'pre-deploy': [], 'post-deploy': [] }
+for (const file of glob.sync('**/*-migration.{ts,js}', { cwd: migrationRoot }).sort()) {
+  const directory = path.dirname(file)
+  const phase = directory === '.' ? 'baseline' : directory
+  const entry = `migrations/${path.basename(file, path.extname(file))}`
+  if (!Object.hasOwn(migrationPhases, phase) || Object.hasOwn(migrationEntries, entry)) {
+    throw new Error(`Invalid migration entry: ${file}`)
+  }
+  migrationEntries[entry] = path.join(migrationRoot, file)
+  migrationPhases[phase].push(`${entry}.js`)
+}
 
 module.exports = composePlugins(
   // Default Nx composable plugin
@@ -31,10 +38,18 @@ module.exports = composePlugins(
     config.output.clean = {
       keep: /openapi.*\.json$/,
     }
-    // add typeorm migrations as entry points
-    for (const key in migrationEntries) {
-      config.entry[`migrations/${key}`] = migrationEntries[key]
-    }
+    Object.assign(config.entry, migrationEntries, { migrate: path.join(__dirname, 'src/migrate.ts') })
+    config.plugins.push({
+      apply(compiler) {
+        compiler.hooks.thisCompilation.tap('MigrationPhases', (compilation) => {
+          const { Compilation, sources } = compiler.webpack
+          compilation.hooks.processAssets.tap(
+            { name: 'MigrationPhases', stage: Compilation.PROCESS_ASSETS_STAGE_ADDITIONAL },
+            () => compilation.emitAsset('migration-phases.json', new sources.RawSource(JSON.stringify(migrationPhases))),
+          )
+        })
+      },
+    })
     config.mode = process.env.NODE_ENV
 
     config.watchOptions = {

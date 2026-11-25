@@ -28,6 +28,15 @@ export interface JobTypeMap {
   [JobType.IMPORT_CHECKPOINT]: {
     resourceType: [ResourceType.BOX]
   }
+  [JobType.EXPORT_PROTECTED_CHECKPOINT]: {
+    resourceType: [ResourceType.BOX]
+  }
+  [JobType.UPLOAD_PROTECTED_CHECKPOINT]: {
+    resourceType: [ResourceType.CHECKPOINT]
+  }
+  [JobType.IMPORT_PROTECTED_CHECKPOINT]: {
+    resourceType: [ResourceType.BOX]
+  }
   [JobType.CREATE_BOX]: {
     resourceType: [ResourceType.BOX]
   }

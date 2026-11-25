@@ -170,10 +170,11 @@ C CPU parameters and `CBoxInfo.cpus` now use `double`; rebuild C and Go consumer
 The Simple C API retains its documented `cpus=0` default sentinel; explicit options use the shared positive-value validation.
 Go information/list calls obtain CPUs from the existing callback without supplementary per-Box requests.
 
-Persistence stores numeric `cpus`; calculations normalize it to integer millicpu.
-Main-branch integer data remains readable, but experimental non-null `cpu_limit` or `cpu_limit_millicpu` records are rejected rather than silently converted.
-Fractional archives use version 6; integer exports retain the existing version 3/4/5 selection.
-Import supports versions 1–6 and rejects newer archive versions.
+Persistence stores numeric `cpus` and normalizes it to integer millicpu for calculations.
+Existing integer data remains readable. BoxLite rejects records with non-null experimental `cpu_limit` or `cpu_limit_millicpu` fields.
+
+Archives with legacy outbound policy select version 6 for fractional CPUs and versions 3–5 for integer CPUs. Local import accepts versions 1–7, including the complete outbound policy carried by version 7. Legacy HTTP and migration import paths accept versions 1–6.
+
 Downgrading a local database containing fractional CPUs is unsupported.
 
 Monitor consumption with `box.metrics().cpu_time_ms`.
