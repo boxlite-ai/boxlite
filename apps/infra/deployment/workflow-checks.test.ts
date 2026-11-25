@@ -86,7 +86,7 @@ test('CodeQL places every language on its qualified runner and retains its build
   assert.deepEqual(job.strategy.matrix.include, [
     { language: 'actions', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-64gbdisk' },
     { language: 'c-cpp', 'build-mode': 'none', runner: 'ubuntu-latest' },
-    { language: 'go', 'build-mode': 'autobuild', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
+    { language: 'go', 'build-mode': 'autobuild', runner: 'ubuntu-latest' },
     { language: 'javascript-typescript', 'build-mode': 'none', runner: 'ubuntu-latest' },
     { language: 'python', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
     { language: 'rust', 'build-mode': 'none', runner: 'ubuntu-latest' },
