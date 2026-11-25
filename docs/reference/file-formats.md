@@ -14,7 +14,6 @@ BoxLite keeps boxes, images, and its database under its home directory, `~/.boxl
 │       ├── sockets/           # Unix sockets: control, guest ready, network
 │       ├── shared/            # Files shared with the guest over virtio-fs
 │       ├── mounts/            # Host side of shared/ (isolate_mounts, Linux)
-│       ├── bin/               # Shim binary and libraries the jailer copies in
 │       ├── boot/              # Custom kernel and initramfs
 │       ├── ca/                # CA for secret injection, kept from the guest
 │       ├── logs/              # Shim logs and console.log (kernel, init)
@@ -23,6 +22,11 @@ BoxLite keeps boxes, images, and its database under its home directory, `~/.boxl
 │       ├── shim.stderr        # Shim stderr, for crash diagnostics
 │       ├── exit               # Shim exit record: exit code and error details
 │       └── exit.previous      # Exit record from the previous run
+├── shims/                     # Shared shim cache for jailed boxes
+│   └── {digest}/              # First 16 lowercase hex characters of SHA-256
+│       ├── boxlite-shim       # Executable used by the jailer
+│       ├── libkrunfw.*        # Bundled firmware loaded from beside the shim
+│       └── .complete         # BoxLite version and build profile on separate lines
 ├── bases/                     # Immutable clone bases and guest rootfs cache
 ├── images/                    # OCI image cache
 │   ├── layers/                # Layer blobs
@@ -57,6 +61,12 @@ the resolved host path. The path is resolved again on each start. Temporary and 
 directories are cleaned during runtime initialization and are not returned as volumes. A physical
 cleanup failure is logged and retried at the next initialization; it neither restores a logically
 removed volume nor prevents the runtime from opening.
+
+The jailer refreshes the completion stamp on each cache use. Runtime startup
+and new publications prune entries older than one hour for debug builds and
+seven days for release or unknown builds. Unfinished `.staging.*` directories
+expire after one hour. Jailed box startup attempts to remove any legacy
+`boxes/{box-id}/bin/` directory.
 
 The embedded runtime lives outside the home directory, in `boxlite/runtimes/` under the platform's
 local data directory: `~/Library/Application Support` on macOS, `~/.local/share` on Linux.

@@ -279,6 +279,50 @@ class LocalE2ETest(unittest.TestCase):
                     os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
 
+    def check_shared_shim_reaping(self, *, use_bwrap_parent):
+        home = self.state / "runtime"
+        shim = str(home / "shims/0123456789abcdef/boxlite-shim")
+        recoverable = home / "boxes/recoverable"
+        recoverable.mkdir(parents=True)
+        (recoverable / "shim.pid").write_text("101\n42\n")
+        argv = {101: [shim], 102: [shim]}
+        if use_bwrap_parent:
+            argv[201] = ["/usr/bin/bwrap", str(recoverable / "tmp"), shim]
+            argv[202] = ["/usr/bin/bwrap", str(home / "boxes/lost/tmp"), shim]
+            environments = {101: b"BOXLITE_BOX_ID=lost", 102: b"BOXLITE_BOX_ID=recoverable"}
+        else:
+            argv[201] = ["/usr/bin/bwrap", str(self.state / "other/boxes/lost/tmp")]
+            environments = {101: b"BOXLITE_BOX_ID=recoverable", 102: b"BOXLITE_BOX_ID=lost"}
+        real_read_text = Path.read_text
+
+        def read_text(path):
+            if path.name == "stat" and path.parent.parent == Path("/proc"):
+                pid = int(path.parent.name)
+                return f"{pid} (shim ) name) S {pid + 100} " + "0 " * 17 + "42"
+            return real_read_text(path)
+
+        def read_bytes(path):
+            self.assertEqual(path.name, "environ")
+            return b"OTHER=ignored\0" + environments[int(path.parent.name)] + b"\0"
+
+        with patch.object(local, "RUNTIME_HOME", home), \
+                patch.object(local, "box_processes", return_value=[101, 102]), \
+                patch.object(local, "_argv", side_effect=lambda pid: argv.get(pid, [])), \
+                patch.object(Path, "read_text", read_text), \
+                patch.object(Path, "read_bytes", read_bytes), \
+                patch.object(local.os, "kill") as check_pid, \
+                patch.object(local, "stop_orphaned_boxes", return_value=[]) as reap:
+            local.reap_unrecoverable_boxes()
+
+        check_pid.assert_called_once_with(101, 0)
+        reap.assert_called_once_with(pids=[102])
+
+    def test_reap_shared_shims_attributed_by_bwrap_parent(self):
+        self.check_shared_shim_reaping(use_bwrap_parent=True)
+
+    def test_reap_shared_shims_attributed_by_box_id_environment(self):
+        self.check_shared_shim_reaping(use_bwrap_parent=False)
+
     def test_compose_declares_all_dependency_services(self):
         compose = (local.E2E / "compose.yaml").read_text()
         for service in ("postgres", "redis", "registry", "rauthy", "rustfs"):
@@ -486,6 +530,12 @@ class LocalE2ETest(unittest.TestCase):
         self.assertFalse(local.owned_process(["/tmp/elsewhere/boxes/abc/bin/boxlite-shim"]))
         self.assertFalse(local.owned_process([f"{home}/boxes/abc/bin/python3"]))
         self.assertFalse(local.owned_process([]))
+
+    def test_owned_process_matches_shared_shims_in_this_checkout(self):
+        home = str(local.RUNTIME_HOME)
+        self.assertTrue(local.owned_process([f"{home}/shims/0123456789abcdef/boxlite-shim"]))
+        self.assertFalse(local.owned_process(["/tmp/elsewhere/shims/0123456789abcdef/boxlite-shim"]))
+        self.assertFalse(local.owned_process([f"{home}/shims/abc/python3"]))
 
     def test_prune_box_dirs_removes_only_box_directories(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -43,6 +43,7 @@ pub struct SpawnedShim {
 pub struct ShimSpawner<'a> {
     binary_path: &'a Path,
     layout: &'a BoxFilesystemLayout,
+    shim_cache_dir: Option<PathBuf>,
     box_id: &'a str,
     options: &'a BoxOptions,
     nested_virtualization: bool,
@@ -59,6 +60,7 @@ impl<'a> ShimSpawner<'a> {
         Self {
             binary_path,
             layout,
+            shim_cache_dir: None,
             box_id,
             options,
             nested_virtualization: false,
@@ -98,6 +100,11 @@ impl<'a> ShimSpawner<'a> {
         self
     }
 
+    pub(crate) fn with_shim_cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.shim_cache_dir = Some(dir.into());
+        self
+    }
+
     pub fn with_volume_access(mut self, paths: Vec<PathAccess>) -> Self {
         self.volume_access = paths;
         self
@@ -128,6 +135,26 @@ impl<'a> ShimSpawner<'a> {
             .collect()
     }
 
+    fn jailer_builder(&self, detach: bool) -> JailerBuilder {
+        let mut builder = JailerBuilder::new()
+            .with_box_id(self.box_id)
+            .with_layout(self.layout.clone())
+            .with_security(self.options.advanced.security.clone())
+            .with_volumes(self.options.volumes.clone())
+            .with_mounts(self.options.mounts.clone())
+            .with_additional_path_access(self.additional_path_access())
+            .with_network_backend_enabled(matches!(
+                &self.options.network,
+                NetworkSpec::Enabled { .. }
+            ))
+            .with_detach(detach);
+
+        if let Some(dir) = &self.shim_cache_dir {
+            builder = builder.with_shim_cache_dir(dir);
+        }
+        builder
+    }
+
     /// Spawn the shim subprocess with jailer isolation and optional watchdog.
     ///
     /// When `detach` is false, creates a watchdog pipe so the shim detects
@@ -147,19 +174,7 @@ impl<'a> ShimSpawner<'a> {
         // 2. Build jailer with optional FD preservation for watchdog pipe.
         // `with_detach(detach)` threads the lifecycle choice into the
         // jailer's pre_exec chain (setsid vs. process_group).
-        let mut builder = JailerBuilder::new()
-            .with_box_id(self.box_id)
-            .with_layout(self.layout.clone())
-            .with_security(self.options.advanced.security.clone())
-            .with_volumes(self.options.volumes.clone())
-            .with_mounts(self.options.mounts.clone())
-            .with_additional_path_access(self.additional_path_access())
-            .with_network_backend_enabled(matches!(
-                &self.options.network,
-                NetworkSpec::Enabled { .. }
-            ))
-            .with_detach(detach);
-
+        let mut builder = self.jailer_builder(detach);
         if let Some(ref setup) = child_setup {
             builder = builder.with_preserved_fd(setup.raw_fd(), watchdog::PIPE_FD);
         }
@@ -325,6 +340,19 @@ mod tests {
         // No CLI args — config is sent via stdin pipe
         // Just verify the spawner was created without error
         assert_eq!(spawner.box_id, "test-box");
+    }
+
+    #[test]
+    fn spawn_forwards_explicit_shim_cache_dir_to_jailer() {
+        let layout = test_layout();
+        let options = BoxOptions::default();
+        let cache_dir = PathBuf::from("/tmp/custom-shim-cache");
+        let spawner = ShimSpawner::new(Path::new("/bin/true"), &layout, "test-box", &options)
+            .with_shim_cache_dir(&cache_dir);
+
+        let jailer = spawner.jailer_builder(false).build().unwrap();
+
+        assert_eq!(jailer.resolve_shim_cache_dir(), Some(cache_dir));
     }
 
     /// The probe grant widens the shim's sandbox, so only a box that asked for
