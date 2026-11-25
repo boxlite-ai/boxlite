@@ -29,7 +29,6 @@ const RELEASE_DEPLOY_WORKFLOW = join(REPO_ROOT, '.github/workflows/deploy-releas
 const API_IMAGE_BUILD_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-apps-api-image.yml')
 const BUILD_C_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-c.yml')
 const BUILD_RUNNER_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-runner-binary.yml')
-const BUILD_GO_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-go.yml')
 const E2E_CLOUD_WORKFLOW = join(REPO_ROOT, '.github/workflows/e2e-cloud.yml')
 const DEV_DEPLOY_ROLE_TRUST = join(REPO_ROOT, 'apps/infra/bootstrap/aws/deploy-role-trust.json')
 const DEV_DEPLOY_ROLE_POLICY = join(REPO_ROOT, 'apps/infra/bootstrap/aws/deploy-role-policy.json')
@@ -1365,53 +1364,14 @@ function workflowExpression(expression: string, context: Record<string, unknown>
   return runInNewContext(expression.replace(/^\s*\$\{\{|\}\}\s*$/g, ''), context)
 }
 
-for (const [file, consumer, linuxOnly, name] of [
-  [BUILD_RUNNER_WORKFLOW, 'build', true, 'Runner'],
-  [BUILD_GO_WORKFLOW, 'test', false, 'Go'],
-] as const) {
-  test(`${name} manual builds produce their commit C SDK before consuming it`, () => {
-    const workflow = load(readFileSync(file, 'utf8'))
-    const producer = workflow.jobs['build-c']
-    assert.ok(producer, 'manual builds must produce a C SDK instead of linking the published version')
-    assert.equal(producer.uses, './.github/workflows/build-c.yml')
-    assert.equal(producer.with.linux_x64_only ?? false, linuxOnly)
-    assert.ok(workflow.jobs[consumer].needs.includes('build-c'))
-    const sha = 'a'.repeat(40)
-    const context = {
-      github: { event_name: 'workflow_dispatch', sha },
-      inputs: {},
-      needs: {
-        config: { result: 'success' },
-        'resolve-ref': { result: 'success', outputs: { sha } },
-        'build-c': { result: 'success' },
-      },
-      cancelled: () => false,
-    }
-    assert.equal(workflowExpression(producer.if, context), true)
-    assert.equal(workflowExpression(producer.with.ref, context), sha)
-    assert.equal(workflowExpression(workflow.jobs[consumer].if, context), true)
-    for (const result of ['failure', 'cancelled']) {
-      context.needs['build-c'].result = result
-      assert.equal(workflowExpression(workflow.jobs[consumer].if, context), false, result)
-    }
-    Object.assign(context.inputs, { ref: sha, libboxlite_source: 'artifact' })
-    context.needs['build-c'].result = 'skipped'
-    assert.equal(workflowExpression(producer.if, context), false)
-    assert.equal(workflowExpression(workflow.jobs[consumer].if, context), true)
-    assert.equal(workflowExpression(workflow.jobs[consumer].if, { ...context, cancelled: () => true }), false)
-  })
-}
-
-test('manual Runner identity uses its own C artifact while reusable callers keep their selected source', () => {
+test('reusable Runner builds link the selected C artifact or published library', () => {
   const workflow = load(readFileSync(BUILD_RUNNER_WORKFLOW, 'utf8'))
   const step = workflow.jobs.build.steps.find((step: any) => step.name === 'Resolve artifact identity')
   const fixture = mkdtempSync(join(tmpdir(), 'boxlite-runner-source-'))
   try {
     for (const [event, inputSource, expected] of [
-      ['workflow_dispatch', '', 'artifact'],
       ['workflow_dispatch', 'artifact', 'artifact'],
       ['workflow_dispatch', 'release', 'release'],
-      ['workflow_run', '', 'release'],
     ]) {
       const output = join(fixture, `${event}-${inputSource || 'direct'}`)
       const context = { github: { event_name: event }, inputs: { libboxlite_source: inputSource } }
@@ -1430,7 +1390,6 @@ test('manual Runner identity uses its own C artifact while reusable callers keep
       )
       assert.equal(fields.source, expected, `${event}: ${inputSource || 'direct'}`)
       assert.equal(fields.archive.includes('a'.repeat(40)), expected === 'artifact')
-      if (inputSource) assert.equal(workflowExpression(workflow.jobs['build-c'].if, context), false)
     }
   } finally {
     rmSync(fixture, { recursive: true, force: true })
@@ -1443,7 +1402,7 @@ test('the C archive reaches Go and Runner through the same release run and Go ta
     assert.ok(release.jobs[name].needs.includes('build-c'))
     assert.equal(release.jobs[name].with.ref, '${{ needs.resolve.outputs.sha }}')
     const build = load(readFileSync(join(REPO_ROOT, '.github/workflows', name + '.yml'), 'utf8'))
-    assert.deepEqual(Object.keys(build.on).sort(), ['workflow_call','workflow_dispatch'])
+    assert.deepEqual(Object.keys(build.on).sort(), ['workflow_call'])
     const steps = (build.jobs.test ?? build.jobs.build).steps
     const download = steps.find((step: any) => step.name === 'Download commit libboxlite.a')
     assert.match(download.uses, /^actions\/download-artifact@/)
@@ -1755,7 +1714,7 @@ test('a job calling a reusable workflow grants at least what that workflow asks 
   // The exact count, not a
   // floor, so a call that stops being swept fails here rather than being
   // absorbed — and adding one means changing this number in the same commit.
-  assert.equal(checked, 19, `expected every local reusable call to be swept, saw ${checked}`)
+  assert.equal(checked, 17, `expected every local reusable call to be swept, saw ${checked}`)
 })
 
 test('every reusable workflow is called with the inputs it declares', () => {
@@ -1802,7 +1761,7 @@ test('every reusable workflow is called with the inputs it declares', () => {
   // The exact count, not a floor: a call that stops being swept is the drop
   // this exists to catch, and one that appears is a caller nobody reviewed.
   // Adding a legitimate one means changing this number in the same commit.
-  assert.equal(checked, 19, `expected every reusable-workflow call swept, saw ${checked}`)
+  assert.equal(checked, 17, `expected every reusable-workflow call swept, saw ${checked}`)
 })
 
 /**

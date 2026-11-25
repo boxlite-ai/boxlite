@@ -6,7 +6,6 @@ on:
       ref:
         required: true
         type: string
-  workflow_dispatch:  # Allow manual triggering
 
 env:
   SKIP_INSTALL_NODEJS: '1'

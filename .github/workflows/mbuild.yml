@@ -30,6 +30,7 @@ concurrency:
   # rather than as the race it is.
   group: mbuild-${{ inputs.command }}-${{ inputs.stage || inputs.to }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read

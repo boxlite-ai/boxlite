@@ -30,8 +30,8 @@ PRODUCT RELEASE (dispatch from main)    mbuild-release creates or selects the dr
                                    complete distribution + Go tests + successful dev E2E ─┴─▶ attach files
                                          ──▶ PyPI, npm and Go tag ──▶ publish GitHub Release ──▶ crates.io
 
-SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go SDK tests
-                                        build-runner-binary ──▶ build-c ──▶ Runner link
+SINGLE COMPONENT (dispatch from main)   mbuild-release ──▶ component build + tests ──▶ component publication
+                                        build-only ──▶ artifacts from the selected source
 
 BOX IMAGES                              apps/box-images/v* tag ──▶ release-box-images
 
@@ -48,9 +48,7 @@ CONFIG                                  ci-config action ◀── lint, test, c
 
 ## Workflows
 
-**Callable** marks a workflow another one can invoke with `uses:`. `config.yml` and `mbuild.yml` are
-the two that are *exclusively* callable; workflows with `workflow_dispatch` can also run on their
-own.
+**Callable** marks a workflow used by another workflow. The Triggers column lists each independent entry point.
 
 | Workflow | Triggers | Callable | Purpose |
 | --- | --- | --- | --- |
@@ -61,19 +59,19 @@ own.
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs. It regenerates through the `generate:api-client` targets, `apps/hack` post-steps included, so regenerate with those targets rather than the bare generator |
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
-| `build-runtime.yml` | weekly, dispatch, `workflow_call` | yes | Builds runtime and CLI archives. The release build also stages the installer and checksums. |
-| `build-c.yml` | dispatch, `workflow_call` | yes | Stages the platform C SDK archives, including the static library used by Go and Runner. |
-| `build-go.yml` | dispatch, `workflow_call` | yes | Tests the Go SDK against the matching C archive from this run. |
-| `build-node.yml` | dispatch, `workflow_call` | yes | Builds and tests the Node.js addon and stages packed npm distributions. |
-| `build-wheels.yml` | dispatch, `workflow_call` | yes | Builds and tests Python wheels with cibuildwheel and stages them as Actions Artifacts. |
-| `build-runner-binary.yml` | dispatch, `workflow_call` | yes | Links the Linux amd64 Runner against the selected C library and stages the archive and checksum. |
+| `build-runtime.yml` | weekly, `workflow_call` | yes | Builds runtime and CLI archives. The release build also stages the installer and checksums. |
+| `build-c.yml` | `workflow_call` | yes | Stages the platform C SDK archives, including the static library used by Go and Runner. |
+| `build-go.yml` | `workflow_call` | yes | Tests the Go SDK against the matching C archive from this run. |
+| `build-node.yml` | `workflow_call` | yes | Builds and tests the Node.js addon and stages packed npm distributions. |
+| `build-wheels.yml` | `workflow_call` | yes | Builds and tests Python wheels with cibuildwheel and stages them as Actions Artifacts. |
+| `build-runner-binary.yml` | `workflow_call` | yes | Links the Linux amd64 Runner against the selected C library and stages the archive and checksum. |
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: main suite, identity and isolated catalog lanes on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
 | `mdeploy-all.yml` | dispatch, `workflow_call` | yes | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
 | `mbuild.yml` | `workflow_call` | call-only | Reusable wrapper for the shared stage-image action; mdeploy-all invokes it in its image preparation leg |
-| `mbuild-release.yml` | dispatch | — | Owns product builds, GHCR publication, dev acceptance, draft attachment, package publication and approved prod deployment. The `build-only` option selects the GHCR image jobs. |
+| `mbuild-release.yml` | dispatch | — | Owns product builds, GHCR publication, dev acceptance, draft attachment, package publication and approved prod deployment. Also dispatches individual component builds and publications. |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | Publishes the curated box image flavors to GHCR |
@@ -369,7 +367,7 @@ scan private lockfiles created by root containers. A cold cache still requires a
 
 Runtime, C, Node and wheel release builds can reuse compiler snapshots for their platform.
 They still assemble their own SDK artifacts and perform cold builds when no compatible entry
-exists. Runtime distribution builds run weekly, manually and on releases; routine tests and
+exists. Runtime builds run weekly and through the release workflow; routine tests and
 Clippy continue checking platform-specific code.
 
 ## Box image cache
@@ -394,17 +392,11 @@ The `analyze` job is a matrix over `actions`, `c-cpp`, `go`, `javascript-typescr
 `rust`. All use `build-mode: none` (source only, no compile) except `go`, whose extractor has to
 observe a real build and therefore uses `autobuild`.
 
-## Manual SDK and Runner builds
+## Manual component builds
 
-Dispatching `build-runner-binary.yml` builds the selected full commit SHA's Linux x64 C SDK,
-then links the Runner against that same-run artifact. Its archive and version identity include
-the commit SHA. Dispatching `build-go.yml` builds the selected workflow ref's C SDK on all
-supported platforms, then tests each Go SDK against its matching artifact. Neither manual
-path requires a published release for the current `Cargo.toml` version.
+Select one of the six component commands in `mbuild-release.yml`. Go uses the matching C SDK matrix and Runner uses only the Linux x64 C archive. The parent runs the selected component’s checks before publishing it.
 
-For a product release, `mbuild-release.yml` calls `build-c.yml` once. The Go test matrix downloads the archive for each target, and the release Runner build links the Linux x64 archive from the same run. A C build failure blocks both consumers.
-
-The parent publishes the Go module tag after dev acceptance and attachment. Before creating the tag it checks that the remote product tag still points to the tested commit.
+For example, `publish-wheels` builds wheels for the supported platforms, verifies the files, attaches them to the selected Release and publishes them to PyPI. With `build-only`, a standalone run builds the selected source and stores its artifacts in Actions. See the [component commands and publication destinations](../../apps/infra/docs/release.md#build-and-publish-one-component).
 
 ## Adding a stage
 

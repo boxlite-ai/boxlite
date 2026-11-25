@@ -50,6 +50,25 @@ A version-only installation requires a published `release-candidate.json`. For a
 
 The host fetches its Runner bytes from GHCR by digest. Backfilling metadata does not confer a dev E2E acceptance receipt or make the historical build eligible for component repairs.
 
+### Build and publish one component
+
+Run `mbuild-release.yml` from `main` and select an existing product Release tag. Each command builds its own files, runs the component checks and publishes within this run. Standalone runs skip cloud deployment, dev E2E, prod approval and draft promotion.
+
+| Command | Builds and publishes |
+| --- | --- |
+| `publish-runtime` | Runtime, CLI, installer and checksums → GitHub Release. An already public Release also permits crates.io publication. |
+| `publish-wheels` | Platform wheels → GitHub Release and PyPI. |
+| `publish-node` | Platform packages and main npm package → GitHub Release and npm. |
+| `publish-c` | Platform C SDK archives → GitHub Release. |
+| `publish-go` | Builds the C SDK matrix, tests the Go SDK against those archives and tags `sdks/go/vX.Y.Z`. |
+| `publish-runner` | Builds the Linux x64 C SDK and Runner, pushes the Runner to GHCR and attaches its archive and checksum to GitHub Release. |
+
+For example, `gh workflow run mbuild-release.yml --ref main -f command=publish-wheels -f tag=v1.2.3` selects fresh wheel publication. Set `build-only=true` to keep a standalone build in Actions. Use `source-ref` to build a branch or commit. A complete `publish` with `build-only=true` stages the GHCR images and Runner.
+
+Component builds can overlap while a full release waits for prod approval. Jobs writing the same Release assets take a per-tag lock. Package publishers take a lock per registry and version. GitHub allows up to 100 pending jobs per group with `queue: max`.
+
+On a full release retry, a rebuilt macOS wheel changes the distribution manifest. The run verifies all files again. It can reuse successful dev E2E if every tested Linux client hash and every deployment digest still matches the receipt.
+
 ### Manually republish a component
 
 Open **Actions → mbuild-release → Run workflow** on `main`, select the product tag and choose `repair-runtime`, `repair-wheels`, `repair-node` or `repair-c`. Enter the candidate artifact ID from the original run. The matching dev acceptance receipt and candidate artifact must still be available. This command rechecks the tag and candidate and restores the selected attachments. Wheel and Node repairs also run the top-level PyPI or npm publisher. A repair on a draft leaves publication and prod approval to the original run.

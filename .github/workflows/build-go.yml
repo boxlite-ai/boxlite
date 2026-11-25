@@ -1,7 +1,6 @@
 name: Build Go SDK
 
 on:
-  workflow_dispatch:
   workflow_call:
     inputs:
       ref:
@@ -15,25 +14,12 @@ jobs:
   config:
     uses: ./.github/workflows/config.yml
 
-  build-c:
-    name: Build manual commit C SDK
-    if: ${{ !inputs.ref }}
-    permissions:
-      contents: read
-    uses: ./.github/workflows/build-c.yml
-    with:
-      ref: ${{ github.sha }}
-
   test:
     name: Test (${{ matrix.target }})
-    needs: [config, build-c]
+    needs: config
     permissions:
       contents: read
       actions: read
-    if: >-
-      !cancelled() &&
-      needs.config.result == 'success' &&
-      (needs['build-c'].result == 'success' || needs['build-c'].result == 'skipped')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

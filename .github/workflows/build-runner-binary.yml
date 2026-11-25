@@ -1,12 +1,6 @@
 name: Build Runner Binary
 
 on:
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Full commit SHA to build with its matching C SDK.'
-        required: false
-        type: string
   workflow_call:
     inputs:
       release_tag:
@@ -59,25 +53,9 @@ jobs:
           git cat-file -e "$candidate^{commit}"
           echo "sha=$candidate" >> "$GITHUB_OUTPUT"
 
-  build-c:
-    name: Build manual commit C SDK
-    needs: resolve-ref
-    # Reusable callers supply a source, even when their event is workflow_dispatch.
-    if: github.event_name == 'workflow_dispatch' && !inputs.libboxlite_source
-    permissions:
-      contents: read
-    uses: ./.github/workflows/build-c.yml
-    with:
-      ref: ${{ needs['resolve-ref'].outputs.sha }}
-      linux_x64_only: true
-
   build:
     name: Build Runner (linux-amd64)
-    needs: [resolve-ref, build-c]
-    if: >-
-      !cancelled() &&
-      needs['resolve-ref'].result == 'success' &&
-      (needs['build-c'].result == 'success' || needs['build-c'].result == 'skipped')
+    needs: resolve-ref
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -103,11 +81,11 @@ jobs:
         env:
           BUILD_SHA: ${{ needs.resolve-ref.outputs.sha }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          INPUT_SOURCE: ${{ inputs.libboxlite_source || (github.event_name == 'workflow_dispatch' && 'artifact' || 'release') }}
+          INPUT_SOURCE: ${{ inputs.libboxlite_source }}
         run: |
           set -euo pipefail
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          SOURCE="${INPUT_SOURCE:-release}"
+          SOURCE="$INPUT_SOURCE"
           if [[ -n "$RELEASE_TAG" ]]; then
             [[ "$RELEASE_TAG" == "v$VERSION" && "$SOURCE" == artifact ]] || exit 1
             identity="$VERSION"

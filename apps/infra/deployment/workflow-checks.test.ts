@@ -155,10 +155,14 @@ test('Go vet and golangci-lint reuse the Linux coverage build', () => {
   assert.ok(!formatting.some((step: any) => /dev:go|setup:build/.test(step.run ?? '')), 'formatting must not build the native runtime')
 })
 
-test('distribution runtime builds retain reusable, weekly and manual triggers without push rebuilds', () => {
-  const triggers = workflow('build-runtime.yml').on
-  assert.equal('push' in triggers, false)
-  assert.ok(!('release' in triggers) && 'workflow_call' in triggers && 'schedule' in triggers && 'workflow_dispatch' in triggers)
+test('all six manual component builds are selected through mbuild-release', () => {
+  const commands = workflow('mbuild-release.yml').on.workflow_dispatch.inputs.command.options
+  for (const component of ['runtime', 'wheels', 'node', 'c', 'go', 'runner']) {
+    const file = component === 'runner' ? 'build-runner-binary.yml' : 'build-' + component + '.yml'
+    const triggers = workflow(file).on
+    assert.deepEqual(Object.keys(triggers).sort(), component === 'runtime' ? ['schedule', 'workflow_call'] : ['workflow_call'], file)
+    assert.ok(commands.includes('publish-' + component), component)
+  }
 })
 
 for (const event of ['pull_request', 'push', 'merge_group', 'schedule', 'workflow_dispatch']) {

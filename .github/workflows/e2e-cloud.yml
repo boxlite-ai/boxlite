@@ -256,6 +256,7 @@ permissions:
 concurrency:
   group: e2e-cloud-${{ inputs.stage || 'dev' }}
   cancel-in-progress: false
+  queue: max
 
 env:
   BOXLITE_DEPS_STUB: '1'

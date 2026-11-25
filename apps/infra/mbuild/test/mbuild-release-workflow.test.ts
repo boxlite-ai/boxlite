@@ -18,7 +18,7 @@ test('release publication runs from main with package write access and no cloud 
   assert.equal(workflow.jobs.publish.permissions.packages, 'write')
   assert.equal(workflow.permissions['id-token'], undefined)
   assert.doesNotMatch(commands, /configure-aws-credentials|google-github-actions|mstage login|--stage dev|--to prod/)
-  assert.deepEqual(workflow.on.workflow_dispatch.inputs.command.options, ['publish', 'repair-runtime', 'repair-wheels', 'repair-node', 'repair-c'])
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.command.options, ['publish', 'publish-runtime', 'publish-wheels', 'publish-node', 'publish-c', 'publish-go', 'publish-runner', 'repair-runtime', 'repair-wheels', 'repair-node', 'repair-c'])
   assert.equal(workflow.on.workflow_call, undefined)
 })
 
@@ -74,8 +74,16 @@ test('current tooling builds the release source using its declaration without lo
   assert.ok(commands.indexOf('DOCKER_CONFIG=$RUNNER_TEMP/docker') < commands.indexOf('mbuild publish'))
 })
 
-test('all publication attempts for one release queue together', () => {
-  assert.equal(workflow.concurrency.group, 'mbuild-release-${{ inputs.tag }}')
-  assert.equal(workflow.concurrency['cancel-in-progress'], false)
-  assert.match(workflow['run-name'], /GHCR/)
+test('component runs overlap and serialize writes by tag and destination', () => {
+  assert.equal(workflow.concurrency.group, "mbuild-release-run-${{ inputs.command == 'publish' && inputs.tag || github.run_id }}")
+  assert.equal(workflow.concurrency.queue, 'max')
+  const { jobs } = workflow
+  assert.equal(jobs.attach.concurrency.group, jobs.finalize.concurrency.group)
+  assert.equal(jobs.resolve.concurrency.group, "mbuild-release-assets-${{ !inputs['build-only'] && inputs.tag || github.run_id }}")
+  for (const name of ['build-go', 'build-c', 'build-node', 'build-runtime', 'build-wheels', 'build-runner-binary'])
+    assert.equal(jobs[name].concurrency, undefined, name)
+  for (const name of ['resolve', 'attach', 'finalize', 'pypi', 'npm', 'tag-go-module', 'publish_crates', 'publish', 'publish-runner'])
+    assert.equal(jobs[name].concurrency.queue, 'max', name)
+  const locks = ['attach', 'pypi', 'npm', 'tag-go-module', 'publish_crates', 'publish', 'publish-runner'].map(name => jobs[name].concurrency.group)
+  assert.equal(new Set(locks).size, locks.length)
 })

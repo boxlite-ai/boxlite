@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { load } from 'js-yaml'
+import { selectRelease } from './release-selection.mjs'
 
 const readWorkflow = (name) =>
   load(readFileSync(new URL('../../../.github/workflows/' + name + '.yml', import.meta.url), 'utf8'))
@@ -237,7 +238,8 @@ test('PyPI publication rejects conflicting wheels before the upload action can r
 })
 
 test('build-only never enters deployment, checks, or reporting; failed E2E cannot stamp acceptance', () => {
-  for (const id of ['distribution', 'dev', 'prod', 'report']) assert.match(release.jobs[id].if, /!inputs\['build-only'\]/)
+  for (const id of ['distribution', 'dev', 'prod']) assert.match(release.jobs[id].if, /needs\.resolve\.outputs\.mode == 'release'/)
+  assert.match(release.jobs.report.if, /!inputs\['build-only'\]/)
   assert.equal(rollout.concurrency.group, 'mdeploy-all-${{ inputs.stage }}')
   assert.notEqual(release.concurrency.group, rollout.concurrency.group)
   const outputs = rollout.on.workflow_call.outputs
@@ -341,7 +343,7 @@ test('release SDK worktree uses the verified commit even when the remote has adv
 
 test('component repairs use the accepted candidate and package publishers stay in the entry workflow', () => {
   const commands = release.on.workflow_dispatch.inputs.command.options
-  assert.deepEqual(commands, ['publish', 'repair-runtime', 'repair-wheels', 'repair-node', 'repair-c'])
+  assert.deepEqual(commands.filter((name) => name.startsWith('repair-')), ['repair-runtime', 'repair-wheels', 'repair-node', 'repair-c'])
   const locate = release.jobs['accepted-candidate']
   const receipt = locate.steps.find((step) => step.id === 'receipt').run
   assert.match(receipt, /head_branch == "main"/)
@@ -398,16 +400,17 @@ test('GHCR pins unlock dev and dev acceptance independently unlocks prod and pub
 
 test('publication gates accept a skipped optional ancestor and require successful direct prerequisites', () => {
   for (const [id, prerequisites, commands] of [
-    ['npm', ['attach'], ['publish', 'repair-node']],
-    ['pypi', ['attach'], ['publish', 'repair-wheels']],
-    ['tag-go-module', ['attach'], ['publish']],
+    ['npm', ['attach'], ['publish', 'publish-node', 'repair-node']],
+    ['pypi', ['attach'], ['publish', 'publish-wheels', 'repair-wheels']],
+    ['tag-go-module', ['attach'], ['publish', 'publish-go']],
     ['finalize', ['npm', 'pypi', 'tag-go-module'], ['publish']],
-    ['publish_crates', ['finalize'], ['publish']],
+    ['publish_crates', ['finalize'], ['publish', 'publish-runtime']],
   ]) {
     const condition = expression(release.jobs[id].if)
     const evaluate = new Function('github', 'inputs', 'needs', 'cancelled', 'contains', 'fromJSON',
-      'return ' + condition.replaceAll('needs.tag-go-module', "needs['tag-go-module']"))
+      'return ' + condition.replace(/needs\.([\w]+-[\w-]+)/g, "needs['$1']"))
     const needs = Object.fromEntries(release.jobs[id].needs.map((name) => [name, { result: 'success' }]))
+    needs.resolve.outputs = { public_release: 'true' }
     const selected = (command, cancelled = false, ref = 'refs/heads/main') => {
       // GitHub implicitly adds success() when the condition omits a status function.
       if (!/\b(success|failure|always|cancelled)\(/.test(condition)) return false
@@ -426,4 +429,50 @@ test('publication gates accept a skipped optional ancestor and require successfu
     assert.equal(selected('publish', true), false)
     assert.equal(selected('publish', false, 'refs/heads/topic'), false)
   }
+})
+
+test('single components select their producers and bypass rollout, including with skipped sibling jobs', () => {
+  for (const [component, group] of Object.entries({ runtime: 'runtime-distribution', wheels: 'wheels-', node: 'node-packages', c: 'c-sdk-', go: '', runner: 'runner-linux-amd64' })) {
+    const command = 'publish-' + component
+    for (const buildOnly of [true, false]) {
+      const selection = selectRelease(command, buildOnly, '', '')
+      assert.equal(selection.group, group)
+      const needs = Object.fromEntries(Object.keys(release.jobs).map(id => [id, { result: 'skipped', outputs: {} }]))
+      needs.resolve = { result: 'success', outputs: { ...selection, builds: JSON.stringify(selection.builds) } }
+      const allows = id => {
+        const job = release.jobs[id]
+        const deps = [job.needs || []].flat()
+        const condition = expression(job.if).replaceAll('needs.*.result', 'results').replace(/needs\.([\w]+-[\w-]+)/g, "needs['$1']")
+        const statuses = deps.map(dep => needs[dep].result)
+        if (!condition.includes('cancelled()') && statuses.some(result => result !== 'success')) return false
+        const evaluate = new Function('needs','results','inputs','github','contains','fromJSON','cancelled','return ' + condition)
+        return Boolean(evaluate(needs, statuses, { command, 'build-only': buildOnly }, { ref: 'refs/heads/main' }, (a,b) => a.includes(b), JSON.parse, () => false))
+      }
+      const enabled = []
+      for (const id of ['build-runtime','build-wheels','build-node','build-c','build-go','build-runner-binary','publish','publish-runner','distribution','accepted-candidate','dev','attach','npm','pypi','tag-go-module','prod','finalize','publish_crates']) {
+        if (allows(id)) { enabled.push(id); needs[id].result = 'success' }
+      }
+      const expected = ['go','runner'].includes(component) ? ['build-c'] : []
+      expected.push(component === 'runner' ? 'build-runner-binary' : 'build-' + component)
+      if (!buildOnly) {
+        if (component === 'runner') expected.push('publish-runner')
+        if (group) expected.push('distribution','attach')
+        if (component === 'node') expected.push('npm')
+        if (component === 'wheels') expected.push('pypi')
+        if (component === 'go') expected.push('tag-go-module')
+      }
+      assert.deepEqual(enabled, expected, command + ' build-only=' + buildOnly)
+      if (!buildOnly && group) {
+        needs[selection.producer].result = 'failure'
+        assert.equal(allows('distribution'), false, 'failed ' + component + ' must block publication')
+      }
+      if (!buildOnly && component === 'runtime') {
+        needs.resolve.outputs.public_release = 'true'
+        assert.equal(allows('publish_crates'), true)
+      }
+    }
+  }
+  assert.throws(() => selectRelease('publish-c', false, '', 'feature'))
+  assert.throws(() => selectRelease('repair-node', false, '', ''))
+  assert.throws(() => selectRelease('publish-runner', false, '3', ''))
 })

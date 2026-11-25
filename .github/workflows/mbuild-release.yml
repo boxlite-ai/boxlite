@@ -1,32 +1,35 @@
 # The rollout workflow owns the cloud Environment and stage concurrency.
 name: mbuild-release
-run-name: release ${{ inputs.tag }} to GHCR${{ !inputs['build-only'] && ' · dev acceptance · prod review' || '' }}
+run-name: ${{ inputs.command }} ${{ inputs.tag || inputs['source-ref'] || github.ref_name }}${{ inputs['build-only'] && ' · build only' || '' }}
 
 on:
   workflow_dispatch:
     inputs:
       command:
-        description: Run the release or republish an accepted component
+        description: Full release, fresh component publication, or repair from an accepted candidate
         required: true
         default: publish
         type: choice
-        options: [publish, repair-runtime, repair-wheels, repair-node, repair-c]
+        options: [publish, publish-runtime, publish-wheels, publish-node, publish-c, publish-go, publish-runner, repair-runtime, repair-wheels, repair-node, repair-c]
       candidate-id:
         description: 'For repair, the Actions artifact ID of the dev-accepted release candidate'
         type: string
       tag:
-        description: 'Release tag v<X.Y.Z>, naming a commit on main'
-        required: true
+        description: 'Stable tag on main, required for publication'
+        type: string
+      source-ref:
+        description: 'Optional commit or branch for a standalone build-only run; defaults to main'
         type: string
       build-only:
-        description: Build and upload only; skip deployment, E2E and Slack reporting
+        description: Stage standalone build artifacts, or publish only GHCR artifacts for a full build
         required: true
         default: false
         type: boolean
 
 concurrency:
-  group: mbuild-release-${{ inputs.tag }}
+  group: mbuild-release-run-${{ inputs.command == 'publish' && inputs.tag || github.run_id }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -36,13 +39,21 @@ env:
 
 jobs:
   resolve:
+    concurrency:
+      group: mbuild-release-assets-${{ !inputs['build-only'] && inputs.tag || github.run_id }}
+      queue: max
     name: resolve ${{ inputs.tag }}
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
-      sha: ${{ steps.ref.outputs.sha }}
+      sha: ${{ steps.ref.outputs.sha || steps.source.outputs.sha }}
+      mode: ${{ steps.selection.outputs.mode }}
+      builds: ${{ steps.selection.outputs.builds }}
+      group: ${{ steps.selection.outputs.group }}
+      producer: ${{ steps.selection.outputs.producer }}
+      public_release: ${{ steps.draft.outputs.public }}
       artifacts: ${{ steps.artifacts.outputs.names }}
       release_id: ${{ steps.draft.outputs.id }}
     steps:
@@ -53,16 +64,33 @@ jobs:
           # check below compares against. A shallow checkout carries neither.
           fetch-depth: 0
 
-      - name: Validate repair inputs
-        if: inputs.command != 'publish'
+      - name: Select builds and publication scope
+        id: selection
         env:
-          CANDIDATE: ${{ inputs['candidate-id'] }}
+          COMMAND: ${{ inputs.command }}
           BUILD_ONLY: ${{ inputs['build-only'] }}
+          CANDIDATE: ${{ inputs['candidate-id'] }}
+          SOURCE: ${{ inputs['source-ref'] }}
+        run: node apps/infra/scripts/release-selection.mjs
+
+      - name: Resolve standalone build source
+        id: source
+        if: steps.selection.outputs.mode == 'build'
+        env:
+          SOURCE: ${{ inputs['source-ref'] }}
+          TAG: ${{ inputs.tag }}
         run: |
-          [[ "$BUILD_ONLY" == false && "$CANDIDATE" =~ ^[1-9][0-9]*$ ]] || { echo "A component repair requires candidate-id and build-only=false" >&2; exit 1; }
+          set -euo pipefail
+          [[ -z "$SOURCE" || -z "$TAG" ]] || { echo 'Choose one source ref or tag' >&2; exit 1; }
+          ref="${SOURCE:-${TAG:-$GITHUB_SHA}}"
+          encoded=$(jq -rn --arg ref "$ref" '$ref | @uri')
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$encoded" --jq .sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Require a released version
         id: version
+        if: steps.selection.outputs.mode != 'build'
         shell: bash
         env:
           TAG: ${{ inputs.tag }}
@@ -99,6 +127,7 @@ jobs:
       # `branch` is what refuses a tag whose commit main does not contain — the
       # release's bytes and the branch that produces them, checked together.
       - id: ref
+        if: steps.selection.outputs.mode != 'build'
         uses: ./.github/actions/resolve-ref
         with:
           ref: ${{ steps.version.outputs.ref }}
@@ -116,8 +145,8 @@ jobs:
           version=$(git show "$SHA:Cargo.toml" | awk -F '"' '/^\[workspace\.package\]$/ {workspace=1; next} /^\[/ {workspace=0} workspace && /^version = "/ {print $2}')
           [[ "$TAG" == "v$version" ]] || { echo 'Tag differs from workspace version' >&2; exit 1; }
           if [[ "$COMMAND" != publish ]]; then
-            id=$(gh release view "$TAG" --json databaseId --jq '.databaseId')
-            echo "id=$id" >> "$GITHUB_OUTPUT"
+            release=$(gh release view "$TAG" --json databaseId,isDraft)
+            jq -r '"id=\(.databaseId)\npublic=\(.isDraft | not)"' <<< "$release" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! gh release view "$TAG" --json databaseId >/dev/null; then
@@ -131,6 +160,7 @@ jobs:
       # checkout: one file is wanted, and the working tree is still main's.
       - name: Read the artifacts this release declares
         id: artifacts
+        if: inputs.command == 'publish'
         shell: bash
         env:
           SHA: ${{ steps.ref.outputs.sha }}
@@ -147,7 +177,7 @@ jobs:
 
   build-runtime:
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'runtime') }}
     uses: ./.github/workflows/build-runtime.yml
     permissions:
       contents: read
@@ -155,32 +185,33 @@ jobs:
       attestations: write
     with:
       ref: ${{ needs.resolve.outputs.sha }}
-      tag: ${{ inputs.tag }}
+      tag: ${{ needs.resolve.outputs.mode != 'build' && inputs.tag || '' }}
 
   build-wheels:
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'wheels') }}
     uses: ./.github/workflows/build-wheels.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
 
   build-node:
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'node') }}
     uses: ./.github/workflows/build-node.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
 
   build-c:
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'c') }}
     uses: ./.github/workflows/build-c.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
+      linux_x64_only: ${{ inputs.command == 'publish-runner' }}
 
   build-go:
     needs: [resolve, build-c]
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'go') }}
     permissions:
       contents: read
       actions: read
@@ -190,14 +221,17 @@ jobs:
 
   build-runner-binary:
     needs: [resolve, build-c]
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'runner') }}
     uses: ./.github/workflows/build-runner-binary.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
       libboxlite_source: artifact
-      release_tag: ${{ inputs.tag }}
+      release_tag: ${{ needs.resolve.outputs.mode != 'build' && inputs.tag || '' }}
 
   publish:
+    concurrency:
+      group: mbuild-release-ghcr-${{ matrix.artifact }}-${{ inputs.tag }}
+      queue: max
     name: publish ${{ inputs.tag }} · ${{ matrix.artifact }}
     needs: [resolve]
     if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/main' }}
@@ -277,7 +311,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish-runner:
-    if: ${{ github.ref == 'refs/heads/main' }}
+    concurrency:
+      group: mbuild-release-ghcr-runner-${{ inputs.tag }}
+      queue: max
+    if: ${{ needs.resolve.outputs.mode != 'build' && github.ref == 'refs/heads/main' }}
     name: Publish Runner archive to GHCR
     needs: [resolve, build-runner-binary]
     runs-on: ubuntu-latest
@@ -329,8 +366,12 @@ jobs:
             producer.json
 
   distribution:
-    if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] }}
-    name: Verify complete release distribution
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' &&
+      ((needs.resolve.outputs.mode == 'release' && needs.publish.result == 'success' && needs.publish-runner.result == 'success' &&
+      needs.build-runtime.result == 'success' && needs.build-wheels.result == 'success' && needs.build-node.result == 'success' && needs.build-c.result == 'success') ||
+      (needs.resolve.outputs.mode == 'component' && needs.resolve.outputs.group != '' && needs[needs.resolve.outputs.producer].result == 'success')) }}
+    name: Verify release files
     needs: [resolve, publish, publish-runner, build-runtime, build-wheels, build-node, build-c]
     runs-on: ubuntu-latest
     permissions:
@@ -345,22 +386,24 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          pattern: '@(runtime-distribution|wheels-*|node-packages|c-sdk-*|runner-linux-amd64|ghcr-*)'
+          pattern: ${{ needs.resolve.outputs.mode == 'component' && (inputs.command == 'publish-runner' && '@(runner-linux-amd64|ghcr-runner)' || format('{0}*', needs.resolve.outputs.group)) || '@(runtime-distribution|wheels-*|node-packages|c-sdk-*|runner-linux-amd64|ghcr-*)' }}
           path: staged
       - name: Validate the candidate
         id: stage
         env:
           SHA: ${{ needs.resolve.outputs.sha }}
           TAG: ${{ inputs.tag }}
-          IMAGES: ${{ needs.resolve.outputs.artifacts }}
+          IMAGES: ${{ needs.resolve.outputs.artifacts || '[]' }}
+          COMPONENT_GROUP: ${{ needs.resolve.outputs.group }}
+          OPERATION: ${{ needs.resolve.outputs.mode == 'component' && 'component' || 'stage' }}
         run: |
           set -euo pipefail
-          digest=$(node apps/infra/scripts/release-candidate.mjs stage)
+          digest=$(node apps/infra/scripts/release-candidate.mjs "$OPERATION")
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         id: upload
         with:
-          name: release-candidate-${{ github.run_attempt }}
+          name: ${{ needs.resolve.outputs.mode == 'component' && inputs.command || 'release-candidate' }}-${{ github.run_attempt }}
           compression-level: 0
           if-no-files-found: error
           path: candidate/
@@ -368,7 +411,7 @@ jobs:
   dev:
     name: Dev deployment and acceptance
     needs: [resolve, publish, publish-runner]
-    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
+    if: ${{ needs.resolve.outputs.mode == 'release' && github.ref == 'refs/heads/main' }}
     permissions: &rollout-permissions
       contents: read
       actions: read
@@ -393,7 +436,7 @@ jobs:
   accepted-candidate:
     name: Locate the previously accepted candidate
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command != 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/main' && needs.resolve.outputs.mode == 'repair' }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -422,9 +465,12 @@ jobs:
           printf 'id=%s\nrun=%s\ndigest=%s\n' "$ID" "$run" "$digest" >> "$GITHUB_OUTPUT"
 
   attach:
-    name: Record dev acceptance and attach verified files
+    concurrency:
+      group: mbuild-release-assets-${{ inputs.tag }}
+      queue: max
+    name: Attach verified release files
     needs: [resolve, distribution, build-go, dev, accepted-candidate]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && ((needs.dev.outputs.accepted_attempt != '' && needs.distribution.result == 'success' && needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success') }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && ((needs.dev.outputs.accepted_attempt != '' && needs.distribution.result == 'success' && needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success' || (needs.resolve.outputs.mode == 'component' && needs.distribution.result == 'success')) }}
     outputs:
       candidate: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
       digest: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
@@ -477,20 +523,23 @@ jobs:
           path: acceptance.json
           overwrite: true
           if-no-files-found: error
-      - name: Verify every draft attachment
+      - name: Verify selected release attachments
         env:
           TAG: ${{ inputs.tag }}
           SHA: ${{ needs.resolve.outputs.sha }}
-          REPAIR_GROUP: ${{ fromJSON('{"repair-runtime":"runtime-distribution","repair-wheels":"wheels-","repair-node":"node-packages","repair-c":"c-sdk-","publish":""}')[inputs.command] }}
+          REPAIR_GROUP: ${{ needs.resolve.outputs.group }}
           CANDIDATE_DIGEST: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
           RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
         run: node apps/infra/scripts/release-candidate.mjs attach
 
   npm:
+    concurrency:
+      group: mbuild-release-npm-${{ inputs.tag }}
+      queue: max
     if: >-
-      ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","repair-node"]'), inputs.command) &&
+      ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","publish-node","repair-node"]'), inputs.command) &&
       !cancelled() && needs.attach.result == 'success' }}
-    name: Publish accepted npm packages
+    name: Publish verified npm packages
     needs: [resolve, attach]
     runs-on: ubuntu-latest
     permissions:
@@ -533,8 +582,11 @@ jobs:
           done
 
   pypi:
+    concurrency:
+      group: mbuild-release-pypi-${{ inputs.tag }}
+      queue: max
     if: >-
-      ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) &&
+      ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","publish-wheels","repair-wheels"]'), inputs.command) &&
       !cancelled() && needs.attach.result == 'success' }}
     name: Publish to PyPI
     needs: [resolve, attach]
@@ -574,11 +626,15 @@ jobs:
         run: bash scripts/release/verify-pypi-wheels.sh after
 
   tag-go-module:
+    concurrency:
+      group: mbuild-release-go-${{ inputs.tag }}
+      queue: max
     if: >-
-      ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' &&
-      !cancelled() && needs.attach.result == 'success' }}
+      ${{ github.ref == 'refs/heads/main' && !cancelled() &&
+      ((inputs.command == 'publish' && needs.attach.result == 'success') ||
+      (inputs.command == 'publish-go' && !inputs['build-only'] && needs.build-go.result == 'success')) }}
     name: Tag Go Module
-    needs: [resolve, attach]
+    needs: [resolve, attach, build-go]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -623,11 +679,15 @@ jobs:
           git push origin "$C_SHA:$go_ref"
 
   publish_crates:
+    concurrency:
+      group: mbuild-release-crates-${{ inputs.tag }}
+      queue: max
     if: >-
-      ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' &&
-      !cancelled() && needs.finalize.result == 'success' }}
+      ${{ github.ref == 'refs/heads/main' && !cancelled() &&
+      ((inputs.command == 'publish' && needs.finalize.result == 'success') ||
+      (inputs.command == 'publish-runtime' && needs.resolve.outputs.public_release == 'true' && needs.attach.result == 'success')) }}
     name: Publish to crates.io
-    needs: [resolve, finalize]
+    needs: [resolve, finalize, attach]
     runs-on: ubuntu-latest
     env:
       BOXLITE_DEPS_STUB: "1"
@@ -731,6 +791,9 @@ jobs:
           echo "::endgroup::"
 
   finalize:
+    concurrency:
+      group: mbuild-release-assets-${{ inputs.tag }}
+      queue: max
     if: >-
       ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' &&
       !cancelled() && needs.npm.result == 'success' &&
@@ -762,7 +825,7 @@ jobs:
   prod:
     name: Production deployment
     needs: [resolve, dev]
-    if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
+    if: ${{ github.ref == 'refs/heads/main' && needs.resolve.outputs.mode == 'release' && needs.dev.outputs.accepted_attempt != '' }}
     permissions: *rollout-permissions
     uses: ./.github/workflows/mdeploy-all.yml
     with:

@@ -161,12 +161,13 @@ async function prepareClients(candidate, directory) {
   await writeFile(join(bundle, 'tested-clients.json'), JSON.stringify(clients))
 }
 
-async function stage(deploymentOnly = false) {
+async function stage(mode, component) {
   const { TAG: tag, SHA: sha, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT } = process.env
   await tagIdentity(tag, sha)
   const run = numberId(GITHUB_RUN_ID)
   const attempt = numberId(GITHUB_RUN_ATTEMPT)
   const index = artifactIndex(run)
+  const deploymentOnly = mode === 'deployment'
   const groups = deploymentOnly ? [] : await archiveSources(tag, (await readJson('.github/ci-config.json')).platforms)
   const assets = {}
   const producers = {}
@@ -179,6 +180,7 @@ async function stage(deploymentOnly = false) {
   }
   await mkdir(bundle)
   for (const [group, contract] of groups) {
+    if (component && !group.startsWith(component)) continue
     const dir = await origin(group)
     const files = (await readdir(dir, { withFileTypes: true })).filter(({ name }) => name !== 'producer.json')
     assert.ok(files.length, 'Empty artifact ' + group)
@@ -199,21 +201,26 @@ async function stage(deploymentOnly = false) {
       await copyFile(path, join(bundle, name))
     }
   }
-  const images = {}
-  const expectedImages = JSON.parse(process.env.IMAGES)
-  for (const image of expectedImages) {
-    assert.match(image, /^[a-z][a-z0-9-]*$/)
-    const dir = await origin('ghcr-' + image)
-    const [entry] = await readJson(join(dir, 'image.json'))
-    assert.equal(entry.artifact, image)
-    assert.match(entry.digest, digestPattern)
-    images[image] = entry.digest
+  const candidate = { tag, sha, run, attempt, producers, assets }
+  if (mode === 'component' && component !== 'runner-linux-amd64') {
+    assert.ok(Object.keys(assets).length, 'No files for selected component')
+  } else {
+    const images = {}
+    const expectedImages = JSON.parse(process.env.IMAGES)
+    for (const image of expectedImages) {
+      assert.match(image, /^[a-z][a-z0-9-]*$/)
+      const dir = await origin('ghcr-' + image)
+      const [entry] = await readJson(join(dir, 'image.json'))
+      assert.equal(entry.artifact, image)
+      assert.match(entry.digest, digestPattern)
+      images[image] = entry.digest
+    }
+    const runner = await readJson(join(await origin('ghcr-runner'), 'runner.json'))
+    assert.match(runner.manifest, digestPattern)
+    assert.match(runner.archive, digestPattern)
+    if (!deploymentOnly) assert.equal(runner.archive, assets['boxlite-runner-' + tag + '-linux-amd64.tar.gz'].digest)
+    Object.assign(candidate, { images, runner })
   }
-  const runner = await readJson(join(await origin('ghcr-runner'), 'runner.json'))
-  assert.match(runner.manifest, digestPattern)
-  assert.match(runner.archive, digestPattern)
-  if (!deploymentOnly) assert.equal(runner.archive, assets['boxlite-runner-' + tag + '-linux-amd64.tar.gz'].digest)
-  const candidate = { tag, sha, run, attempt, producers, assets, images, runner }
   await writeFile(join(bundle, metadata), JSON.stringify(candidate, null, 2) + '\n')
   return candidate
 }
@@ -282,8 +289,11 @@ async function main(command) {
     console.log(await clientArtifactIds(tag))
     return
   }
-  if (['stage', 'deployment'].includes(command)) {
-    await stage(command === 'deployment')
+  if (['stage', 'deployment', 'component'].includes(command)) {
+    const group = command === 'component' ? process.env.COMPONENT_GROUP : ''
+    if (command === 'component')
+      assert.ok(['runtime-distribution', 'wheels-', 'node-packages', 'c-sdk-', 'runner-linux-amd64'].includes(group), 'Unknown component group')
+    await stage(command, group)
     console.log(await fileDigest(join(bundle, metadata)))
     return
   }

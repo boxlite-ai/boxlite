@@ -38,7 +38,8 @@ test('stage binds candidate files and GHCR pins to the tagged commit and produce
     }
     packages['boxlite-ai-boxlite-' + target + '-' + version + '.tgz'] = target
     group('c-sdk-' + target, { ['boxlite-c-' + tag + '-' + target + '.tar.gz']: target })
-    group('wheels-' + os, { ['boxlite-' + version + '-cp312-' + target + '.whl']: os })
+    const wheel = target === 'linux-x64-gnu' ? linuxClients(tag)['wheels-ubuntu-latest'][0] : 'boxlite-' + version + '-cp312-' + target + '.whl'
+    group('wheels-' + os, { [wheel]: os })
   }
   group('node-packages', packages)
   const runtimeDir = group('runtime-distribution', runtime)
@@ -55,6 +56,9 @@ case "$*" in
   *commits/refs%2Ftags%2F*) printf '{"sha":"%s"}\\n' "$SHA" ;;
   *actions/runs/10/artifacts*) cat index.json ;;
   *attempts/2/jobs*) cat jobs.json ;;
+  *releases/7/assets*) jq -s '[.]' uploads.jsonl ;;
+  *releases/7) printf '{"tag_name":"v1.2.3","draft":true}' ;;
+  'release upload '*) name=$(basename "$4"); digest=$(shasum -a 256 "$4" | cut -d' ' -f1); jq -nc --arg name "$name" --arg digest "sha256:$digest" '{name:$name,digest:$digest,state:"uploaded"}' >>uploads.jsonl ;;
   *) exit 2 ;;
 esac
 `,
@@ -90,6 +94,13 @@ esac
   assert.deepEqual(receipt.images, { api: hash('api') })
   assert.equal(receipt.producers['ghcr-api'].attempt, 1)
   assert.equal(receipt.assets['install.sh.sha256'].group, 'runtime-distribution')
+  writeFileSync(join(dir, 'uploads.jsonl'), '')
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const attached = stage('candidate', 'attach', { CANDIDATE_DIGEST: fingerprint, RELEASE_ID: '7', REPAIR_GROUP: 'runtime-distribution' })
+    assert.equal(attached.status, 0, attached.stderr)
+    const names = readFileSync(join(dir, 'uploads.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).name)
+    assert.deepEqual(names.sort(), Object.keys(runtime).sort(), 'Each runtime file, including install.sh.sha256, uploads exactly once across retries')
+  }
   const e2e = join(dir, 'linux-clients')
   const clients = {}
   for (const [group, files] of Object.entries(linuxClients(tag))) {
@@ -97,7 +108,7 @@ esac
     mkdirSync(path, { recursive: true })
     writeFileSync(join(path, 'producer.json'), JSON.stringify({ run: 10, attempt: 1, sha }))
     for (const name of files) {
-      const bytes = 'test client ' + name
+      const bytes = readFileSync(join(dir, 'candidate', name))
       writeFileSync(join(path, name), bytes)
       clients[name] = hash(bytes)
     }
@@ -107,15 +118,25 @@ esac
   assert.equal(prepared.status, 0, prepared.stderr)
   const tested = JSON.parse(readFileSync(join(dir, 'deploy', 'tested-clients.json')))
   assert.deepEqual(tested, clients)
-  const full = {
-    ...receipt,
-    assets: {
-      ...receipt.assets,
-      ...Object.fromEntries(Object.entries(clients).map(([name, digest]) => [name, { digest }])),
-    },
-  }
+  const full = receipt
   const acceptance = { tag, sha, run: 10, clients: tested }
   verifyAcceptedDistribution(full, acceptance, deploy)
+  const macWheel = 'boxlite-1.2.3-cp312-darwin-arm64.whl'
+  const macGroup = receipt.assets[macWheel].group
+  writeFileSync(join(dir, 'staged', macGroup, macWheel), 'rebuilt macOS wheel')
+  writeFileSync(join(dir, 'staged', macGroup, 'producer.json'), JSON.stringify({ run: 10, attempt: 2, sha }))
+  const rebuild = stage('rebuilt')
+  assert.equal(rebuild.status, 0, rebuild.stderr)
+  const changed = await verifyCandidate(join(dir, 'rebuilt'), { tag, sha, fingerprint: rebuild.stdout.trim() })
+  assert.notEqual(changed.assets[macWheel].digest, full.assets[macWheel].digest)
+  verifyAcceptedDistribution(changed, acceptance, deploy)
+  writeFileSync(join(dir, 'rebuilt', macWheel), 'changed after verification')
+  await assert.rejects(verifyCandidate(join(dir, 'rebuilt'), { tag, sha, fingerprint: rebuild.stdout.trim() }), /Changed release asset/)
+  const single = stage('wheels', 'component', { COMPONENT_GROUP: 'wheels-' })
+  assert.equal(single.status, 0, single.stderr)
+  const wheels = await verifyCandidate(join(dir, 'wheels'), { tag, sha, fingerprint: single.stdout.trim() })
+  assert.deepEqual(Object.keys(wheels.producers).sort(), index.map((entry) => entry.name).filter((name) => name.startsWith('wheels-')).sort())
+  assert.ok(Object.values(wheels.assets).every(({ group }) => group.startsWith('wheels-')))
   assert.throws(() => verifyAcceptedDistribution(full, { ...acceptance, clients: {} }, deploy))
   const file = Object.keys(tested)[0]
   assert.throws(

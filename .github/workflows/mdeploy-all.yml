@@ -104,6 +104,7 @@ concurrency:
   # and two applies against one stage would read and write the same checkpoint.
   group: mdeploy-all-${{ inputs.stage }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -479,6 +480,7 @@ jobs:
     concurrency:
       group: ${{ matrix.component == 'runner' && 'runner-build' || 'mbuild-publish' }}-${{ inputs.stage }}
       cancel-in-progress: false
+      queue: max
     steps:
       - *verify-dev-acceptance
       - uses: actions/checkout@v5
