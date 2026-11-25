@@ -3564,7 +3564,7 @@ components:
       type: object
       description: Managed persistent volume summary, as returned by the list endpoint
       additionalProperties: false
-      required: [id, name, state, storage_backend, created_at]
+      required: [id, name, state, created_at]
       properties:
         id:
           type: string
@@ -3578,8 +3578,8 @@ components:
           type: string
           enum: [object_storage, nfs]
           description: |
-            The backend that owns the volume. Derived from whether `instance`
-            is present.
+            The cloud backend that owns the volume, derived from whether
+            `instance` is present. Absent for local directory volumes.
           example: nfs
         created_at:
           type: string
@@ -3642,7 +3642,7 @@ components:
       type: object
       description: Managed persistent volume detail, as returned by create/get
       additionalProperties: false
-      required: [id, name, state, storage_backend, created_at, updated_at]
+      required: [id, name, state, created_at, updated_at]
       properties:
         id:
           type: string
@@ -3656,8 +3656,8 @@ components:
           type: string
           enum: [object_storage, nfs]
           description: |
-            The backend that owns the volume. Derived from whether `instance`
-            is present.
+            The cloud backend that owns the volume, derived from whether
+            `instance` is present. Absent for local directory volumes.
           example: nfs
         created_at:
           type: string
