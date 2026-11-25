@@ -172,6 +172,25 @@ func TestFilesWrite(t *testing.T) {
 	}
 }
 
+func TestFilesReplaceWithEmptyFileAndRemove(t *testing.T) {
+	g, mount, _ := volume(t)
+	path := filepath.Join(mount, "a.txt")
+	rec, result := do(t, g, http.MethodPut, filesURL(path, "overwrite", "1"), "", ctl())
+	if rec.Code != http.StatusOK || result["replaced"] != true || result["bytes"] != float64(0) {
+		t.Fatalf("replace with empty file: %d %s", rec.Code, rec.Body.String())
+	}
+	if data, err := os.ReadFile(path); err != nil || len(data) != 0 {
+		t.Fatalf("read empty file: %q, %v", data, err)
+	}
+	rec, _ = do(t, g, http.MethodDelete, filesURL(path), "", ctl())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("file remains after deletion: %v", err)
+	}
+}
+
 func TestFilesRejectOversizedUploads(t *testing.T) {
 	g, mount, _ := volume(t)
 	prev := maxUpload
