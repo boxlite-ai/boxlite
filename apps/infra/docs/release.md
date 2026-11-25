@@ -2,6 +2,12 @@
 
 Start `mbuild-release` on `main` to build a draft release, test its files on dev and publish the verified version.
 
+## Shadow rehearsal
+
+On `codex/shadow-release-3069-v2`, the `mbuild-release` rehearsal simulates builds, uploads, publication, cloud deployment and E2E. A synthetic candidate and its acceptance receipt travel through job outputs inside the run. Its concurrency groups are exclusive to the shadow workflow.
+
+Dev and prod approvals use the existing GitHub Environment reviewer rules with `deployment: false`; the approval job has an empty token permission set. The workflow requests no cloud identity. GitHub records the run and approvals, and the configured release Slack webhook receives messages marked `[SHADOW]`.
+
 ## Release runbook
 
 Merge the version bump and tag its commit on `main`. The tag must match the stable workspace version in `Cargo.toml`.

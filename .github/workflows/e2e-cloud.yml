@@ -14,6 +14,9 @@ run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format
       candidate_digest:
         required: false
         type: string
+      shadow_pins:
+        required: true
+        type: string
       release_sha:
         description: Exact tagged commit deployed by release acceptance.
         required: false
@@ -43,33 +46,11 @@ run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format
       shadow_failure:
         type: string
         required: false
-    secrets:
-      BOXLITE_DEV_API_KEY:
-        description: Dev-stack boxlite API key for profile p1.
-        required: false
-      BOXLITE_DEV_P2_API_KEY:
-        description: Dev key for p2, in a different organization from p1. Required at runtime on dev.
-        required: false
-      BOXLITE_DEV_P2_READONLY_API_KEY:
-        description: Dev read-only key in p2 organization. Required at runtime on dev.
-        required: false
-      BOXLITE_STAGE_API_KEY:
-        description: Stage key for p1.
-        required: false
-      BOXLITE_STAGE_P2_API_KEY:
-        description: Stage key for p2 in a different organization.
-        required: false
-      BOXLITE_STAGE_P2_READONLY_API_KEY:
-        description: Stage read-only key in the p2 organization.
-        required: false
-      BOXLITE_PROD_API_KEY:
-        description: Prod-stack boxlite API key for profile p1.
-        required: false
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: e2e-cloud-${{ inputs.stage || 'dev' }}
+  group: shadow-v2-e2e-cloud-${{ inputs.stage || 'dev' }}
   cancel-in-progress: false
 env:
   BOXLITE_DEPS_STUB: '1'
@@ -84,20 +65,22 @@ jobs:
     outputs:
       release_result: ${{ steps.acceptance.outputs.result }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/release-candidate
-        with:
-          id: ${{ inputs.candidate_id }}
-          digest: ${{ inputs.candidate_digest }}
-          tag: ${{ inputs.tag }}
-          sha: ${{ inputs.release_sha }}
-      - name: Simulate dev cloud E2E
+      - name: Verify fixture outputs and simulate dev cloud E2E
         shell: bash
         env:
           FAIL: ${{ inputs.shadow_failure }}
-        run: test "$FAIL" != e2e
+          PINS: ${{ inputs.shadow_pins }}
+          EXPECTED: ${{ inputs.candidate_digest }}
+          ID: ${{ inputs.candidate_id }}
+          SHA: ${{ inputs.release_sha }}
+          APPLIED: ${{ inputs.deployment_attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$FAIL" != e2e && "$APPLIED" == "$GITHUB_RUN_ATTEMPT" ]] || exit 1
+          digest=$(printf '%s' "$PINS" | sha256sum | cut -d' ' -f1)
+          [[ "sha256:$digest" == "$EXPECTED" ]] || exit 1
+          jq -e --arg tag "$RELEASE_TAG" --arg sha "$SHA" --argjson id "$ID" \
+            '.tag == $tag and .sha == $sha and .attempt == $id' <<< "$PINS" >/dev/null
       - id: acceptance
         if: always()
         name: Record simulated E2E outcome

@@ -16,7 +16,7 @@ run-name: '[SHADOW] release ${{ inputs.tag }} to GHCR${{ !inputs[''build-only'']
         required: true
         type: string
       build-only:
-        description: Build and upload only; skip deployment, E2E and Slack reporting
+        description: Simulate the build jobs only
         required: true
         default: false
         type: boolean
@@ -179,7 +179,7 @@ jobs:
       contents: read
       actions: read
     outputs:
-      candidate_id: ${{ steps.upload.outputs.artifact-id }}
+      candidate_id: ${{ github.run_attempt }}
       digest: ${{ steps.stage.outputs.digest }}
       registry_digests: ${{ steps.stage.outputs.pins }}
     steps:
@@ -190,31 +190,13 @@ jobs:
           TAG: ${{ inputs.tag }}
           PIN: sha256:1111111111111111111111111111111111111111111111111111111111111111
           FAIL: ${{ inputs['simulate-failure'] }}
-        run: >-
+        run: |
           set -euo pipefail
-
           [[ "$FAIL" != check ]]
-
-          mkdir candidate
-
-          printf 'shadow fixture\n' > candidate/sample.txt
-
-          file="sha256:$(sha256sum candidate/sample.txt | cut -d' ' -f1)"
-
-          jq -n --arg tag "$TAG" --arg sha "$GITHUB_SHA" --arg pin "$PIN" --arg file "$file"
-          '{tag:$tag,sha:$sha,images:{api:$pin},runner:{manifest:$pin,archive:$file},assets:{"sample.txt":{digest:$file,group:"shadow"}}}' >
-          candidate/release-candidate.json
-
-          printf 'digest=sha256:%s\n' "$(sha256sum candidate/release-candidate.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-          echo "pins=$(jq -c '{tag,sha,images,runner}' candidate/release-candidate.json)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
-        id: upload
-        with:
-          name: release-candidate-${{ github.run_attempt }}
-          compression-level: 0
-          if-no-files-found: error
-          path: candidate/
+          pins=$(jq -cn --arg tag "$TAG" --arg sha "$GITHUB_SHA" --arg pin "$PIN" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{tag:$tag,sha:$sha,attempt:$attempt,images:{api:$pin},runner:{manifest:$pin,archive:$pin}}')
+          digest=$(printf '%s' "$pins" | sha256sum | cut -d' ' -f1)
+          printf 'digest=sha256:%s\npins=%s\n' "$digest" "$pins" >> "$GITHUB_OUTPUT"
   dev:
     name: Dev deployment and acceptance
     needs:
@@ -255,7 +237,7 @@ jobs:
       run: unused
       digest: unused
   attach:
-    name: Record dev acceptance and attach verified files
+    name: Simulate attaching the dev-accepted candidate
     needs:
       - resolve
       - check
@@ -265,39 +247,14 @@ jobs:
       ${{ !cancelled() && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (needs.dev.outputs.accepted_attempt != '' ||
       needs.accepted-candidate.result == 'success') }}
     outputs:
-      candidate: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
-      digest: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
-      run: ${{ needs.accepted-candidate.outputs.run || github.run_id }}
+      receipt: ${{ steps.acceptance.outputs.receipt }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/release-candidate
-        with:
-          run: ${{ needs.accepted-candidate.outputs.run || github.run_id }}
-          id: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
-          digest: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
-          tag: ${{ inputs.tag }}
-          sha: ${{ needs.resolve.outputs.sha }}
-      - name: Match release files to the client bytes accepted by dev
-        if: inputs.command == 'publish'
-        env:
-          TAG: ${{ inputs.tag }}
-          SHA: ${{ needs.resolve.outputs.sha }}
-          CANDIDATE_DIGEST: ${{ needs.distribution.outputs.digest }}
-          DEPLOYMENT_ID: ${{ needs.check.outputs.candidate_id }}
-          DEPLOYMENT_DIGEST: ${{ needs.check.outputs.digest }}
-          DEPLOYMENT_PINS: ${{ needs.check.outputs.registry_digests }}
-          ACCEPTED_ATTEMPT: ${{ needs.dev.outputs.accepted_attempt }}
-        run: |
-          set -euo pipefail
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-accepted-$DEPLOYMENT_ID" --dir "$RUNNER_TEMP/dev-receipt"
-          ACCEPTANCE_FILE="$RUNNER_TEMP/dev-receipt/acceptance.json" node apps/infra/scripts/release-candidate.mjs check-acceptance
-      - name: Record the exact candidate accepted by dev
+      - name: Pass the dev acceptance receipt as a job output
+        id: acceptance
         if: inputs.command == 'publish'
         env:
           CANDIDATE: ${{ needs.distribution.outputs.candidate_id }}
@@ -306,19 +263,11 @@ jobs:
           SHA: ${{ needs.resolve.outputs.sha }}
           ACCEPTED: ${{ needs.dev.outputs.accepted_attempt }}
         run: |
-          jq -n --argjson run "$GITHUB_RUN_ID" --argjson attempt "$ACCEPTED" --argjson id "$CANDIDATE" \
+          set -euo pipefail
+          receipt=$(jq -cn --argjson run "$GITHUB_RUN_ID" --argjson attempt "$ACCEPTED" --argjson id "$CANDIDATE" \
             --arg digest "$DIGEST" --arg tag "$TAG" --arg sha "$SHA" \
-            '{run: $run, attempt: $attempt, candidate: $id, digest: $digest, tag: $tag, sha: $sha}' > acceptance.json
-      - uses: actions/upload-artifact@v4
-        if: inputs.command == 'publish'
-        with:
-          name: dev-accepted-${{ needs.distribution.outputs.candidate_id }}
-          path: acceptance.json
-          overwrite: true
-          if-no-files-found: error
-      - name: Simulate attaching the accepted files
-        shell: bash
-        run: test -s "$RELEASE_ASSET_DIR/sample.txt"
+            '{run:$run,attempt:$attempt,candidate:$id,digest:$digest,tag:$tag,sha:$sha}')
+          printf 'receipt=%s\n' "$receipt" >> "$GITHUB_OUTPUT"
   npm:
     name: Publish accepted npm packages
     needs:
@@ -330,16 +279,6 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/release-candidate
-        with:
-          run: ${{ needs.attach.outputs.run }}
-          id: ${{ needs.attach.outputs.candidate }}
-          digest: ${{ needs.attach.outputs.digest }}
-          tag: ${{ inputs.tag }}
-          sha: ${{ needs.resolve.outputs.sha }}
       - name: Simulate package publication
         shell: bash
         env:
@@ -356,16 +295,6 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/release-candidate
-        with:
-          run: ${{ needs.attach.outputs.run }}
-          id: ${{ needs.attach.outputs.candidate }}
-          digest: ${{ needs.attach.outputs.digest }}
-          tag: ${{ inputs.tag }}
-          sha: ${{ needs.resolve.outputs.sha }}
       - name: Simulate package publication
         shell: bash
         env:
@@ -409,6 +338,8 @@ jobs:
       - npm
       - tag-go-module
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    outputs:
+      receipt: ${{ needs.attach.outputs.receipt }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -436,6 +367,7 @@ jobs:
       candidate_id: ${{ needs.check.outputs.candidate_id }}
       candidate_digest: ${{ needs.check.outputs.digest }}
       registry_digests: ${{ needs.check.outputs.registry_digests }}
+      shadow_receipt: ${{ needs.finalize.outputs.receipt }}
       accepted_attempt: ${{ needs.dev.outputs.accepted_attempt }}
       components: api+runner
       apply: true

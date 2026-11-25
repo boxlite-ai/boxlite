@@ -22,6 +22,9 @@ run-name: '[SHADOW] release deployment ${{ inputs.stage }}'
       release_sha:
         required: true
         type: string
+      shadow_receipt:
+        type: string
+        required: false
       accepted_attempt:
         required: false
         type: string
@@ -41,12 +44,6 @@ run-name: '[SHADOW] release deployment ${{ inputs.stage }}'
       SLACK_WEBHOOK_URL:
         required: false
       SLACK_DEV_DEPLOYMENT_WEBHOOK_URL:
-        required: false
-      BOXLITE_DEV_API_KEY:
-        required: false
-      BOXLITE_DEV_P2_API_KEY:
-        required: false
-      BOXLITE_DEV_P2_READONLY_API_KEY:
         required: false
     outputs:
       accepted_attempt:
@@ -93,6 +90,7 @@ jobs:
         name: Verify dev acceptance for the production candidate
         if: inputs.release_sha && inputs.stage == 'prod'
         env:
+          RECEIPT: ${{ inputs.shadow_receipt }}
           ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
           CANDIDATE: ${{ inputs.candidate_id }}
           DIGEST: ${{ inputs.candidate_digest }}
@@ -100,14 +98,12 @@ jobs:
           SHA: ${{ inputs.release_sha }}
         run: |
           set -euo pipefail
-          [[ "$CANDIDATE" =~ ^[1-9][0-9]*$ && "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
-          [[ "$ACCEPTED_ATTEMPT" =~ ^[1-9][0-9]*$ && "$ACCEPTED_ATTEMPT" -le "$GITHUB_RUN_ATTEMPT" ]]
-          receipt=$(mktemp -d "$RUNNER_TEMP/acceptance.XXXXXX")
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-accepted-$CANDIDATE" --dir "$receipt"
-          jq -e --argjson run "$GITHUB_RUN_ID" --argjson id "$CANDIDATE" --argjson attempt "$ACCEPTED_ATTEMPT" \
+          [[ -n "$RECEIPT" && "$CANDIDATE" =~ ^[1-9][0-9]*$ && "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
+          [[ "$ACCEPTED_ATTEMPT" =~ ^[1-9][0-9]*$ && "$ACCEPTED_ATTEMPT" -le "$GITHUB_RUN_ATTEMPT" ]] || exit 1
+          jq -se --argjson run "$GITHUB_RUN_ID" --argjson id "$CANDIDATE" --argjson attempt "$ACCEPTED_ATTEMPT" \
             --arg digest "$DIGEST" --arg tag "$TAG" --arg sha "$SHA" \
-            '.run == $run and .candidate == $id and .attempt == $attempt and .digest == $digest and .tag == $tag and .sha == $sha' \
-            "$receipt/acceptance.json" >/dev/null
+            'length == 1 and (.[0] | .run == $run and .candidate == $id and .attempt == $attempt and .digest == $digest and .tag == $tag and .sha == $sha)' \
+            <<< "$RECEIPT" >/dev/null
 
       - name: Notify dev reviewers
         if: inputs.apply && inputs.stage == 'dev' && !inputs.release_sha
@@ -137,12 +133,12 @@ jobs:
       matrix:
         component: ${{ fromJSON(needs.resolve.outputs.prepare_components) }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
+    permissions: {}
     outputs:
       deployment_attempt: ${{ steps.applied.outputs.attempt }}
-    environment: ${{ inputs.stage }}
+    environment:
+      name: ${{ inputs.stage }}
+      deployment: false
     concurrency:
       group: shadow-v2-plan-${{ inputs.stage }}
       cancel-in-progress: false
@@ -246,5 +242,6 @@ jobs:
       tag: ${{ inputs.ref }}
       candidate_id: ${{ inputs.candidate_id }}
       candidate_digest: ${{ inputs.candidate_digest }}
+      shadow_pins: ${{ inputs.registry_digests }}
       deployment_attempt: ${{ needs.plan.outputs.deployment_attempt || 'missing' }}
       shadow_failure: ${{ inputs.shadow_failure }}
