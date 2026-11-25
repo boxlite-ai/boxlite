@@ -746,6 +746,8 @@ in both `Authorization: Bearer` and `X-Boxlite-Runner-Identity`.
 
 The response must match the box ID and exactly the requested secret names.
 Its values, hosts, headers and placeholders replace the job's definitions.
+The runner reads at most 8 MiB of response JSON plus one byte to detect
+oversize responses, matching the Secret Server's 8 MiB success limit.
 Metadata retrieval and fetch share a five-second deadline. A freshly polled
 job makes at most one fetch request, without redirects or retries. A lost
 response may have consumed the credential. Retrieval and subsequent create
@@ -756,6 +758,11 @@ box, skipping identity and secret retrieval. If the box is absent, the runner
 reports failure and asks the caller to submit a new create request. This
 also applies if the previous process exited before dispatch. If the target
 disappears before adoption, creation fails.
+
+The startup poller collects every page of in-progress jobs before dispatch.
+Otherwise, completed jobs would shift later pages and hide work. Failed page
+requests retry until they succeed or the runner shuts down. Normal polling
+begins after the scan so a list failure cannot silently strand old jobs.
 
 Jobs without credentials retain inline values, and START_BOX continues using
 runtime-local secrets. Direct HTTP create/recover still require inline values.

@@ -324,6 +324,47 @@ func TestSecretCredentialResponseValidation(t *testing.T) {
 	}
 }
 
+func TestSecretCredentialFetchResponseSize(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size int
+		ok   bool
+	}{
+		{"above former limit", 1<<20 + 1, true},
+		{"at server limit", 8 << 20, true},
+		{"above server limit", 8<<20 + 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const prefix = `{"box_id":"box-1","secrets":[{"name":"A","value":"sample","hosts":["example.com"],"headers":{"Authorization":"Bearer {value}"},"placeholder":"`
+			const suffix = `"}]}`
+			// Pad the JSON with valid trailing whitespace so the fixture does not
+			// rely on a secret value larger than the server allows.
+			const body = prefix + "placeholder" + suffix
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				_, _ = io.WriteString(w, body)
+				_, _ = io.WriteString(w, strings.Repeat(" ", tc.size-len(body)))
+			}))
+			defer server.Close()
+			f := newSecretFetcher(server.URL, "")
+			f.metadata = fixedIdentity()
+			b := &secretBackend{}
+			_, err := secretExecutor(b, f).executeJob(t.Context(), secretJob(t, true, []map[string]string{{"name": "A"}}))
+			if !tc.ok {
+				if err == nil || err.Error() != "invalid secret fetch response" || len(b.created) != 0 {
+					t.Fatalf("oversize response: err=%v creates=%d", err, len(b.created))
+				}
+			} else if err != nil || len(b.created) != 1 || len(b.created[0].Secrets) != 1 || b.created[0].Secrets[0].Value != "sample" {
+				t.Fatalf("valid response: err=%v creates=%d", err, len(b.created))
+			}
+			if got := calls.Load(); got != 1 {
+				t.Fatalf("fetch requests=%d, want 1", got)
+			}
+		})
+	}
+}
+
 func TestSecretCredentialErrorsThroughExecute(t *testing.T) {
 	for _, code := range []string{"attestation_failed", "credential_invalid", "secret_unavailable", "api_unavailable", "decrypt_failed", "secret_store_unavailable", "UNKNOWN_MARKER", "backend", "malformed payload", "metadata"} {
 		t.Run(code, func(t *testing.T) {

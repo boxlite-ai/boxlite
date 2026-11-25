@@ -149,7 +149,8 @@ func (f *secretFetcher) fetch(ctx context.Context, boxID, credential string, req
 		return nil, fmt.Errorf("secret fetch outcome unknown")
 	}
 	defer response.Body.Close()
-	const maxResponse = 1024 * 1024
+	// Match the Secret Server limit on the entire serialized response.
+	const maxResponse = 8 << 20
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxResponse+1))
 	if err != nil || len(raw) > maxResponse {
 		return nil, fmt.Errorf("invalid secret fetch response")

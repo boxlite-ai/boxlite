@@ -50,18 +50,16 @@ func NewService(cfg *PollerServiceConfig) (*Service, error) {
 
 // Start begins the job polling loop
 func (s *Service) Start(ctx context.Context) {
-	inProgressJobs, _, err := s.client.JobsAPI.ListJobs(ctx).Status(apiclient.JOBSTATUS_IN_PROGRESS).Execute()
+	jobs, err := s.listStartupJobs(ctx)
 	if err != nil {
-		// Only log error
-		s.log.WarnContext(ctx, "Failed to fetch IN_PROGRESS jobs", "error", err)
+		return
+	}
+	if len(jobs) == 0 {
+		s.log.InfoContext(ctx, "No IN_PROGRESS jobs found")
 	} else {
-		if inProgressJobs != nil && len(inProgressJobs.Items) > 0 {
-			s.log.InfoContext(ctx, "Found IN_PROGRESS jobs", "count", len(inProgressJobs.Items))
-			for _, job := range inProgressJobs.Items {
-				go s.executor.Recover(ctx, &job)
-			}
-		} else {
-			s.log.InfoContext(ctx, "No IN_PROGRESS jobs found")
+		s.log.InfoContext(ctx, "Found IN_PROGRESS jobs", "count", len(jobs))
+		for _, job := range jobs {
+			go s.executor.Recover(ctx, &job)
 		}
 	}
 
@@ -92,6 +90,59 @@ func (s *Service) Start(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (s *Service) listStartupJobs(ctx context.Context) ([]apiclient.Job, error) {
+	// Complete the offset-paginated scan before job execution can shrink it.
+	var jobs []apiclient.Job
+	seen := make(map[string]struct{})
+	for page := float32(1); ; page++ {
+		result, err := s.listStartupPage(ctx, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, job := range result.Items {
+			if _, duplicate := seen[job.Id]; !duplicate {
+				seen[job.Id] = struct{}{}
+				jobs = append(jobs, job)
+			}
+		}
+		if page >= result.TotalPages {
+			return jobs, ctx.Err()
+		}
+	}
+}
+
+func (s *Service) listStartupPage(ctx context.Context, page float32) (*apiclient.PaginatedJobs, error) {
+	const (
+		pageSize       = 100
+		requestTimeout = 30 * time.Second
+		retryDelay     = time.Second
+	)
+	for ctx.Err() == nil {
+		attempt, cancel := context.WithTimeout(ctx, requestTimeout)
+		result, response, err := s.client.JobsAPI.ListJobs(attempt).
+			Status(apiclient.JOBSTATUS_IN_PROGRESS).
+			Page(page).
+			Limit(pageSize).
+			Execute()
+		cancel()
+		if err == nil && result != nil {
+			return result, nil
+		}
+		status := 0
+		if response != nil {
+			status = response.StatusCode
+		}
+		// List errors may contain job payloads. Log only safe metadata.
+		s.log.WarnContext(ctx, "Failed to list startup jobs, retrying", "page", page, "http_status", status)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(retryDelay):
+		}
+	}
+	return nil, ctx.Err()
 }
 
 // pollJobs polls the API for pending jobs
