@@ -1642,7 +1642,6 @@ impl BoxImpl {
 /// Produced under `with_disk_admission` + `with_operation` while the VM was
 /// atomically paused and resumed; callers finalize checksums and archive
 /// packaging after the VM has already resumed.
-#[allow(dead_code)]
 pub(crate) struct CapturedFullCheckpoint {
     pub(crate) staging_dir: tempfile::TempDir,
     pub(crate) disk_path: std::path::PathBuf,
@@ -1658,7 +1657,6 @@ impl BoxImpl {
     ///
     /// Coordinates disk and lifecycle admission so no concurrent stop, snapshot,
     /// or remove races with `CaptureCheckpoint` over `vmm.sock`.
-    #[allow(dead_code)]
     pub(crate) async fn capture_full_checkpoint_to_dir(
         &self,
     ) -> BoxliteResult<CapturedFullCheckpoint> {

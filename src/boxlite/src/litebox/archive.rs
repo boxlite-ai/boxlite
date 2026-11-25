@@ -3,7 +3,6 @@
 //! Handles `.boxlite` archive files: zstd-compressed tarballs containing
 //! disk images and a JSON manifest.
 
-#![allow(dead_code)]
 use std::io::Write;
 use std::path::Path;
 
@@ -300,6 +299,7 @@ fn missing_manifest() -> BoxliteError {
     BoxliteError::Storage("Invalid archive: first member must be manifest.json".into())
 }
 
+#[cfg(test)]
 pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()> {
     unpack_file_members(open_archive(archive_path)?.entries()?, dest_dir)
 }

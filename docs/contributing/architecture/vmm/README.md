@@ -7,6 +7,9 @@ BoxLite is replacing libkrun and libkrunfw with a virtualization stack it owns:
 - a pinned Linux LTS guest kernel, shipped as a file;
 - `boxlite-guest` as the guest's PID 1.
 
+For local `libkrun` full (memory + device + disk) checkpoint export and restore, see
+[libkrun full checkpoint export and restore flow](#libkrun-full-checkpoint-export-and-restore-flow).
+
 This document is the design the VMM milestones build on
 ([#1512](https://github.com/boxlite-ai/boxlite/issues/1512)). It covers the
 hypervisor backend interface, the device model, the VM lifecycle and its
@@ -747,6 +750,70 @@ The kernel then boots itself (Linux v6.12):
    vsock port 2695, connects to port 2696 to report ready, and waits for
    `Guest.Init` (`src/guest/src/service/server.rs:107-163`).
 
+## libkrun full checkpoint export and restore flow
+
+Local full (memory + device + disk) checkpoint export and restore for `libkrun` runs on
+macOS arm64 (HVF) and Linux x86_64 (KVM) without `nested_virtualization`, wired through
+`LiteBox::export(ExportOptions::full(), dest)` and `BoxliteRuntime::import_box(archive, name)`
+over the single-owner `vmm.sock` control channel (`src/boxlite/src/vmm/vmm_socket.rs`)
+and `BoxState::pending_memory_restore`:
+
+1. **Atomic live capture and v8 `.boxlite` archive export (`ExportOptions::full()`)**:
+   - `RestBox::export_box` rejects `options.include_memory == true` with
+     `BoxliteError::Unsupported`; `LocalRuntime::checkpoints()` remains `Unsupported`
+     (REST-only cloud abstraction).
+   - `BoxImpl::capture_full_checkpoint_to_dir` acquires `with_disk_admission` and
+     `with_operation`, ensures `Container.Start` has completed (`ensure_container_started`),
+     prepares a per-box staging directory `{box_home}/tmp/export-ckpt-*/` (already
+     RW-granted inside Seatbelt and bwrap), and sends
+     `ControlOp::CaptureCheckpoint { vm_state_path, disk_dst_path }` over `vmm.sock`.
+   - Inside the shim (`src/boxlite/src/vmm/krun/engine.rs`), the `vmm-control` thread
+     calls `krun_pause` (which flushes and syncs virtio-blk), arms a `ResumeOnDrop` guard,
+     writes `vmstate.krun` via `krun_save_checkpoint`, flattens the live `vda` QCOW2 chain
+     into `disk.qcow2` via `Qcow2Helper::flatten`, and resumes the source VM with
+     `krun_resume` before replying with `vm_state_bytes` and the live `vdb` path.
+   - Host resets the source handle's cached `GuestSession` H2 channel (`GuestSession::reset`)
+     so subsequent RPCs reconnect after libkrun's pause/resume transport reset, requires a
+     valid existing live `vdb` path reported by the shim (returning an error instead of
+     falling back to `runtime.guest_rootfs`), releases the pause/admission locks, and in
+     `do_export_full_finalize` computes SHA-256 checksums for `disk.qcow2`,
+     `vmstate.krun`, and `guest-rootfs.ext4`, writes a v8 `ArchiveManifest` with
+     `memory_checkpoint` metadata (including `container_id` and host platform), and
+     packages the four files into the zstd-compressed `.boxlite` archive before dropping
+     the staging directory.
+2. **Trusted archive import and one-shot restore (`pending_memory_restore`)**:
+   - `import_box` validates `ArchiveImportPolicy::Trusted` and host platform compatibility
+     (`macos-aarch64-hvf` / `linux-x86_64-kvm`) immediately after parsing `manifest.json`
+     (before large-file SHA-256 hashing), then checks `ContainerID::parse`, extraction-dir
+     containment, and SHA-256 checksums for `disk.qcow2`, `vmstate.krun`, and
+     `guest-rootfs.ext4`.
+   - It stages `disks/disk.qcow2` and `checkpoint/{vmstate.krun, guest-rootfs.ext4}` into
+     the new box home and provisions the box via `RuntimeImpl::provision_box_with_restore`
+     in `BoxStatus::Configured` with the original `container_id` and
+     `pending_memory_restore = true`.
+   - On first `start()`, `BoxBuilder` selects the restore plan
+     (`FilesystemTask -> VmmSpawnTask -> GuestConnectTask -> PortPublishTask`), skipping
+     `BootAssets`, `ContainerRootfs`, `GuestRootfs`, and `GuestInit`. `VmmSpawnTask`
+     passes `InstanceSpec.checkpoint_restore = Some(box_home/checkpoint/vmstate.krun)` and
+     attaches `vdb` from `box_home/checkpoint/guest-rootfs.ext4` (with
+     `ShimSpawner::with_extra_ro_paths` granting read-only sandbox access). Once
+     `spawn_vm` succeeds, `VmmSpawnTask` marks the guard and immediately persists
+     `pending_memory_restore = false` so the RW disk cannot be replayed against a stale
+     `vmstate.krun`. `GuestConnectTask` skips `ready.sock` and polls `Guest.Ping` over
+     `box.sock` (racing against shim exit and resetting broken channels between retries).
+   - `BoxImpl::init_live_state` pre-populates `container_start`, publishes
+     `BoxStatus::Running` (with `pending_memory_restore = false`), and best-effort removes
+     only `box_home/checkpoint/vmstate.krun` while retaining
+     `box_home/checkpoint/guest-rootfs.ext4` so a live restored box can run chained
+     `export(ExportOptions::full())` against its live `vdb`. Live shim adoption in
+     `recover_boxes` similarly clears `pending_memory_restore = false` and removes only
+     `vmstate.krun`; `finish_stop` (stop/exit cleanup), post-`VmmSpawnTask`
+     `CleanupGuard::drop` failure cleanup, and dead/aborted shim recovery remove the
+     entire `box_home/checkpoint/` directory (with `BoxBuilder` setting
+     `reuse_rootfs = true` on `Failed` boxes with an existing disk so retries cold-boot
+     without leftover checkpoint state, while leaving untouched `Configured` checkpoint
+     boxes intact).
+
 ## Room for later milestones
 
 - **M6, hot-plug mounts.**
@@ -824,62 +891,3 @@ Host APIs:
 - **KVM:** the [KVM API](https://docs.kernel.org/virt/kvm/api.html).
 - **WHP:** the
   [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
-
-### Portal session reset after VM pause/resume
-
-`libkrun` pause/resume resets guest vsock transports, invalidating cached HTTP/2 channels.
-`GuestSession::reset()` clears the `Connection` channel mutex so subsequent RPCs on the
-same handle establish a fresh vsock connection automatically.
-
-### Cross-platform Unix socket transport and `InstanceSpec::checkpoint_restore`
-
-`vmm_socket/transport.rs` adds Darwin `getpeereid`, `SO_NOSIGPIPE`, `FD_CLOEXEC`, and
-`O_NONBLOCK` stream helpers alongside Linux `SO_PEERCRED`/`SCM_RIGHTS`.
-`InstanceSpec::checkpoint_restore` carries the optional `vmstate.krun` path.
-
-### Cross-platform `vmm.sock` CaptureCheckpoint control route
-
-`vmm_socket` exposes `ControlOp::CaptureCheckpoint`, `ControlReply::CheckpointCaptured`,
-and `ControlError::ShimShutdown` over the existing HTTP/1.1 Unix control channel across
-macOS arm64 and Linux x86_64.
-
-### Krun shim checkpoint capture and restore
-
-`KrunVmmInstance::enter` serves `vmm.sock` on macOS arm64 and Linux x86_64, executing
-`krun_pause -> krun_save_checkpoint -> Qcow2Helper::flatten -> krun_resume` with
-`ResumeOnDrop` and shim exit after replying on `ESHUTDOWN`. Restores bind
-`krun_build_from_checkpoint`.
-
-### Checkpoint options, shim forwarding, and one-shot restore state
-
-`ExportOptions::full()` requests memory checkpoints locally while REST rejects
-`include_memory: true` with `Unsupported`. `ShimController` forwards `checkpoint_restore`
-and grants RO access to checkpoint files, and `BoxState::pending_memory_restore` tracks
-one-shot restore.
-
-### Archive v8 format and manifest pre-validation
-
-Archive version 8 adds `MemoryCheckpointArchiveMetadata` (`platform`, `container_id`,
-checksums, `outbound_disabled`) and bundles `vmstate.krun` + `guest-rootfs.ext4`.
-`read_archive_manifest()` inspects `manifest.json` before extracting multi-GB payloads.
-
-### Trusted v8 import and crash recovery
-
-`import_box` enforces `ArchiveImportPolicy::Trusted`, host platform match, strict v8
-manifest/checksum validation, and stages `checkpoint/{vmstate.krun, guest-rootfs.ext4}`
-with `pending_memory_restore = true`. `recover_boxes` preserves pre-spawn checkpoints and
-clears aborted post-spawn restores.
-
-### BoxBuilder checkpoint restore pipeline
-
-When `pending_memory_restore` is set, `BoxBuilder` runs `FilesystemTask -> VmmSpawnTask ->
-GuestConnectTask -> PortPublishTask`, skipping rootfs creation and `GuestInit`.
-`VmmSpawnTask` consumes `pending_memory_restore` after spawn, and `GuestConnectTask` polls
-`Guest.Ping` instead of `ready.sock`.
-
-### Live box capture, staging safety, and restore commit
-
-`BoxImpl::capture_full_checkpoint_to_dir` ensures container init has started, keeps
-`staging_dir` alive across capture cancellation, hard-links live `vdb` inside locks, and
-resets `GuestSession`. `init_live_state` latches `container_start` after disarming cleanup
-and removes `vmstate.krun` after committing `Running`.

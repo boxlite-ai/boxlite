@@ -171,9 +171,13 @@ impl BoxImpl {
 
     pub(crate) async fn export_box(
         &self,
-        _options: crate::runtime::options::ExportOptions,
+        options: crate::runtime::options::ExportOptions,
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        if options.include_memory {
+            return self.export_full_checkpoint(dest).await;
+        }
+
         let t0 = Instant::now();
         self.with_disk_admission(async {
             let box_home = self.config.box_home.clone();
@@ -222,6 +226,85 @@ impl BoxImpl {
             result
         })
         .await
+    }
+
+    async fn export_full_checkpoint(
+        &self,
+        dest: &std::path::Path,
+    ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        use crate::runtime::options::NetworkMode;
+
+        if !self.config.options.secrets.is_empty() {
+            return Err(BoxliteError::Unsupported(
+                "full memory checkpoint export is not supported for boxes with secrets".into(),
+            ));
+        }
+        let t0 = Instant::now();
+        let platform = super::archive::current_checkpoint_platform().ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "full memory checkpoint export is only supported on macos-aarch64-hvf and linux-x86_64-kvm".into(),
+            )
+        })?;
+        let captured = self.capture_full_checkpoint_to_dir().await?;
+
+        let config_name = self.config.name.clone();
+        let mut config_options = self.config.options.clone();
+        if let Some(policy) = &captured.outbound_policy
+            && policy.mode == NetworkMode::Enabled
+        {
+            config_options.network = policy.clone().try_into()?;
+        }
+        // A runtime egress block belongs in checkpoint metadata, not the NIC config.
+        let box_id_str = self.id().to_string();
+        let container_id_str = self.config.container.id.as_str().to_owned();
+        let dest = dest.to_path_buf();
+
+        let result = tokio::task::spawn_blocking(move || {
+            do_export_full_finalize(
+                captured,
+                config_name.as_deref(),
+                &config_options,
+                &box_id_str,
+                &container_id_str,
+                platform,
+                &dest,
+            )
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("Export finalize task panicked: {}", e)))?;
+
+        tracing::info!(
+            box_id = %self.config.id,
+            elapsed_ms = t0.elapsed().as_millis() as u64,
+            ok = result.is_ok(),
+            "export_box (full checkpoint) completed"
+        );
+
+        result
+    }
+}
+
+fn resolve_export_output_path(
+    dest: &std::path::Path,
+    config_name: Option<&str>,
+) -> std::path::PathBuf {
+    if dest.is_dir() {
+        let name = config_name.unwrap_or("box");
+        dest.join(format!("{}.boxlite", name))
+    } else {
+        dest.to_path_buf()
+    }
+}
+
+fn image_name_for_export(
+    config_options: &crate::runtime::options::BoxOptions,
+) -> BoxliteResult<String> {
+    match &config_options.rootfs {
+        crate::runtime::options::RootfsSpec::Image(img) => Ok(img.clone()),
+        crate::runtime::options::RootfsSpec::RootfsPath(path) => Ok(path.clone()),
+        crate::runtime::options::RootfsSpec::Checkpoint(_) => Err(BoxliteError::Unsupported(
+            crate::runtime::checkpoints::UNSUPPORTED_ON_LOCAL.into(),
+        )),
     }
 }
 
@@ -281,26 +364,13 @@ fn do_export_finalize(
         sha256_file,
     };
 
-    let output_path = if dest.is_dir() {
-        let name = config_name.unwrap_or("box");
-        dest.join(format!("{}.boxlite", name))
-    } else {
-        dest.to_path_buf()
-    };
+    let output_path = resolve_export_output_path(dest, config_name);
 
     let t_checksum = Instant::now();
     let container_disk_checksum = sha256_file(&flatten.flat_container)?;
     let checksum_ms = t_checksum.elapsed().as_millis() as u64;
 
-    let image = match &config_options.rootfs {
-        crate::runtime::options::RootfsSpec::Image(img) => img.clone(),
-        crate::runtime::options::RootfsSpec::RootfsPath(path) => path.clone(),
-        crate::runtime::options::RootfsSpec::Checkpoint(_) => {
-            return Err(BoxliteError::Unsupported(
-                crate::runtime::checkpoints::UNSUPPORTED_ON_LOCAL.into(),
-            ));
-        }
-    };
+    let image = image_name_for_export(config_options)?;
 
     let manifest = ArchiveManifest {
         version: archive_version_for_options(config_options),
@@ -309,8 +379,8 @@ fn do_export_finalize(
         box_options: Some(config_options.clone()),
         guest_disk_checksum: String::new(),
         container_disk_checksum,
-        exported_at: chrono::Utc::now().to_rfc3339(),
         memory_checkpoint: None,
+        exported_at: chrono::Utc::now().to_rfc3339(),
     };
 
     let manifest_json = serde_json::to_string_pretty(&manifest)
@@ -332,4 +402,111 @@ fn do_export_finalize(
     );
 
     Ok(crate::runtime::options::BoxArchive::new(output_path))
+}
+
+fn do_export_full_finalize(
+    captured: super::box_impl::CapturedFullCheckpoint,
+    config_name: Option<&str>,
+    config_options: &crate::runtime::options::BoxOptions,
+    box_id_str: &str,
+    container_id_str: &str,
+    platform: &str,
+    dest: &std::path::Path,
+) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+    use super::archive::{
+        ArchiveManifest, MANIFEST_FILENAME, MEMORY_CHECKPOINT_ARCHIVE_VERSION,
+        MemoryCheckpointArchiveMetadata, build_zstd_tar_archive_with_memory, sha256_file,
+    };
+
+    let output_path = resolve_export_output_path(dest, config_name);
+
+    let t_checksum = Instant::now();
+    let container_disk_checksum = sha256_file(&captured.disk_path)?;
+    let vmstate_checksum = sha256_file(&captured.vmstate_path)?;
+    let guest_rootfs_checksum = sha256_file(&captured.guest_rootfs_path)?;
+    let checksum_ms = t_checksum.elapsed().as_millis() as u64;
+
+    let image = image_name_for_export(config_options)?;
+
+    let manifest = ArchiveManifest {
+        version: MEMORY_CHECKPOINT_ARCHIVE_VERSION,
+        box_name: config_name.map(|s| s.to_string()),
+        image,
+        box_options: Some(config_options.clone()),
+        guest_disk_checksum: String::new(),
+        container_disk_checksum,
+        memory_checkpoint: Some(MemoryCheckpointArchiveMetadata {
+            platform: platform.to_string(),
+            container_id: container_id_str.to_string(),
+            vmstate_checksum,
+            vmstate_size_bytes: captured.vmstate_size_bytes,
+            guest_rootfs_checksum,
+            outbound_disabled: captured.outbound_policy.as_ref().is_some_and(|policy| {
+                policy.mode == crate::runtime::options::NetworkMode::Disabled
+            }),
+        }),
+        exported_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    let manifest_json = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| BoxliteError::Internal(format!("Failed to serialize manifest: {}", e)))?;
+    let manifest_path = captured.staging_dir.path().join(MANIFEST_FILENAME);
+    std::fs::write(&manifest_path, manifest_json)?;
+
+    let t_archive = Instant::now();
+    build_zstd_tar_archive_with_memory(
+        &output_path,
+        &manifest_path,
+        &captured.disk_path,
+        &captured.vmstate_path,
+        &captured.guest_rootfs_path,
+        3,
+    )?;
+    let archive_ms = t_archive.elapsed().as_millis() as u64;
+
+    tracing::info!(
+        box_id = %box_id_str,
+        output = %output_path.display(),
+        vmstate_size_bytes = captured.vmstate_size_bytes,
+        checksum_ms,
+        archive_ms,
+        "Exported box with full memory checkpoint to archive"
+    );
+
+    Ok(crate::runtime::options::BoxArchive::new(output_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::options::{BoxOptions, BoxliteOptions, ExportOptions, Secret};
+    use crate::runtime::rt_impl::RuntimeImpl;
+
+    #[tokio::test]
+    async fn full_export_rejects_boxes_with_secrets_before_capture() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().join("runtime"),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut options = BoxOptions::default();
+        options.secrets.push(Secret {
+            name: "test".into(),
+            hosts: vec!["example.com".into()],
+            placeholder: "dummy".into(),
+            value: "test-value".into(),
+            headers: Some([("x-test".into(), "{value}".into())].into()),
+        });
+        let handle = runtime.create(options, None).await.unwrap();
+        let error = handle
+            .export(ExportOptions::full(), home.path())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, BoxliteError::Unsupported(ref message)
+            if message == "full memory checkpoint export is not supported for boxes with secrets"),
+            "{error:?}"
+        );
+    }
 }
