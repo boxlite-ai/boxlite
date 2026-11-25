@@ -130,7 +130,7 @@ func TestFetchRuntimeRequiresAttestation(t *testing.T) {
 				w.WriteHeader(500)
 			}))
 			defer api.Close()
-			t.Setenv("SECRET_SERVER_INTROSPECTION_URL", api.URL)
+			t.Setenv("SECRET_SERVER_INTROSPECTION_URL", api.URL+"/introspect")
 			address := startRuntime(t, ctx).awaitAddress(t, ctx)
 			for _, tc := range []struct {
 				path, proof string
@@ -155,6 +155,40 @@ func TestFetchRuntimeRequiresAttestation(t *testing.T) {
 				if resp.StatusCode != tc.status {
 					t.Errorf("%s returned %d, want %d", tc.path, resp.StatusCode, tc.status)
 				}
+			}
+		})
+	}
+}
+
+func TestFetchStartupRejectsInvalidEndpoint(t *testing.T) {
+	for _, tc := range []struct{ role, endpoint string }{
+		{"fetch", ""},
+		{"all", "https://api.invalid"},
+		{"all", "https://api.invalid/"},
+	} {
+		t.Run(tc.role+"/"+tc.endpoint, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			dsn := runtimeDatabase(t, ctx)
+			t.Setenv("SECRET_SERVER_ROLE", tc.role)
+			t.Setenv("SECRET_SERVER_ATTESTORS", "dev")
+			t.Setenv("SECRET_SERVER_INTROSPECTION_URL", tc.endpoint)
+			err := runWithListener(ctx, nil, func(_, _ string) (net.Listener, error) {
+				t.Error("invalid config reached listener")
+				return nil, errors.New("listener reached")
+			})
+			if err == nil || !strings.Contains(err.Error(), "SECRET_SERVER_INTROSPECTION_URL") {
+				t.Errorf("startup error = %v, want introspection URL error", err)
+			}
+			pool, err := pgxpool.New(ctx, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			var initialized bool
+			err = pool.QueryRow(ctx, "SELECT to_regclass('goose_db_version') IS NOT NULL OR to_regclass('key_verification_canary') IS NOT NULL").Scan(&initialized)
+			if err != nil || initialized {
+				t.Fatalf("invalid config initialized database: initialized=%t err=%v", initialized, err)
 			}
 		})
 	}

@@ -63,7 +63,7 @@ func TestIntegration(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _ = json.NewEncoder(w).Encode(active()) }))
 	defer api.Close()
 	v := verifierFunc(func(context.Context, http.Header) (attest.RunnerID, error) { return "runner-a", nil })
-	h, err := New(pool, c, v, api.URL, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h, err := New(pool, c, v, api.URL+"/introspect", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestIntegration(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(auth)
 				}))
 				defer api.Close()
-				handler, err := New(pool, c, selector, api.URL, logger)
+				handler, err := New(pool, c, selector, api.URL+"/introspect", logger)
 				if err != nil {
 					t.Fatal(err)
 				}

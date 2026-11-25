@@ -17,7 +17,7 @@ func TestClientRejectsInvalidResponses(t *testing.T) {
 		t.Run(body[:min(len(body), 30)], func(t *testing.T) {
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, body) }))
 			defer s.Close()
-			c, _ := newClient(s.URL)
+			c, _ := newClient(s.URL + "/introspect")
 			if _, err := c.consume(context.Background(), "x", "r"); err == nil {
 				t.Fatal("invalid reply accepted")
 			}
@@ -27,7 +27,7 @@ func TestClientRejectsInvalidResponses(t *testing.T) {
 		a := active()
 		mutate(&a)
 		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _ = json.NewEncoder(w).Encode(a) }))
-		c, _ := newClient(s.URL)
+		c, _ := newClient(s.URL + "/introspect")
 		_, err := c.consume(context.Background(), "x", "r")
 		s.Close()
 		if err == nil {
@@ -45,7 +45,7 @@ func TestClientNoRetriesRedirectsAndTimeout(t *testing.T) {
 				w.WriteHeader(status)
 			}))
 			defer s.Close()
-			c, _ := newClient(s.URL)
+			c, _ := newClient(s.URL + "/introspect")
 			if _, err := c.consume(context.Background(), "x", "r"); err == nil || calls != 1 {
 				t.Fatalf("calls %d error %v", calls, err)
 			}
@@ -55,7 +55,7 @@ func TestClientNoRetriesRedirectsAndTimeout(t *testing.T) {
 	release := make(chan struct{})
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); <-release }))
 	defer func() { close(release); s.Close() }()
-	c, _ := newClient(s.URL)
+	c, _ := newClient(s.URL + "/introspect")
 	if c.http.Timeout != 3*time.Second {
 		t.Fatal("wrong timeout")
 	}
@@ -90,7 +90,7 @@ func TestResponseSizeBoundary(t *testing.T) {
 		body := `{"active":false}`
 		body += strings.Repeat(" ", size-len(body))
 		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, body) }))
-		c, _ := newClient(s.URL)
+		c, _ := newClient(s.URL + "/introspect")
 		_, err := c.consume(context.Background(), "x", "r")
 		s.Close()
 		if (err == nil) != (size == 65536) {

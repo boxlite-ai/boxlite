@@ -72,6 +72,9 @@ func newServer(ctx context.Context, c Config, deps startupDependencies) (*Server
 			return nil, errors.New("invalid runner attestation configuration (check SECRET_SERVER_ATTESTORS, SECRET_SERVER_RUNNER_REGISTRY and gcp_iit settings)")
 		}
 		runnerVerifier = selector
+		if err := fetch.ValidateIntrospectionURL(c.IntrospectionURL); err != nil {
+			return nil, fmt.Errorf("invalid SECRET_SERVER_INTROSPECTION_URL: %w", err)
+		}
 	}
 	provider, err := encryption.NewEnvKeyProvider(c.KeyID, c.Key)
 	if err != nil {

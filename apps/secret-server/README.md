@@ -338,7 +338,8 @@ internal endpoint, for example:
 export SECRET_SERVER_INTROSPECTION_URL=https://api-internal/internal/v1/credentials/introspect
 ```
 
-An invalid or missing URL prevents the service from listening. The runtime
+For fetch-enabled roles, startup rejects a missing URL or a URL without an
+endpoint path before opening the database pool. The runtime
 mounts `POST /internal/v1/fetch` separately from write-caller authentication.
 The `write` role leaves fetch disabled and does not require this URL.
 

@@ -33,13 +33,24 @@ type apiClient struct {
 	http     http.Client
 }
 
-func newClient(endpoint string) (*apiClient, error) {
+// ValidateIntrospectionURL checks the endpoint without connecting to the API.
+func ValidateIntrospectionURL(endpoint string) error {
 	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("invalid introspection endpoint")
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("invalid introspection endpoint")
+	}
+	if strings.Trim(u.Path, "/") == "" {
+		return errors.New("introspection URL requires an endpoint path")
 	}
 	if ip, _ := netip.ParseAddr(u.Hostname()); u.Scheme == "http" && !ip.IsLoopback() {
-		return nil, errors.New("introspection requires HTTPS outside literal loopback")
+		return errors.New("introspection requires HTTPS outside literal loopback")
+	}
+	return nil
+}
+
+func newClient(endpoint string) (*apiClient, error) {
+	if err := ValidateIntrospectionURL(endpoint); err != nil {
+		return nil, err
 	}
 	return &apiClient{endpoint: endpoint, http: http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }

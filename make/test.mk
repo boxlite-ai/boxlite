@@ -792,7 +792,7 @@ run\:apps\:secret-server:
 	@cd apps/secret-server && ENVIRONMENT=local SECRET_SERVER_ROLE=$${SECRET_SERVER_ROLE:-write} SECRET_SERVER_AUTH_MODE=dev SECRET_SERVER_ATTESTORS=$${SECRET_SERVER_ATTESTORS:-dev} GOWORK=off go run ./cmd/secret-server
 
 SECRET_SERVER_INTEGRATION_PACKAGES := ./internal/database ./internal/fetch ./internal/server ./internal/testdb ./cmd/secret-server
-SECRET_SERVER_INTEGRATION_TESTS := ^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer|RunRejectsOccupiedPort|StartupClosesPoolWhenValidatorConstructionFails|RunBoundsDatabaseCleanup|FetchRuntimeRequiresAttestation|StartupWaitsForMigrationLock|CreateOverridesDatabaseQuery)$$
+SECRET_SERVER_INTEGRATION_TESTS := ^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer|RunRejectsOccupiedPort|StartupClosesPoolWhenValidatorConstructionFails|RunBoundsDatabaseCleanup|FetchRuntimeRequiresAttestation|FetchStartupRejectsInvalidEndpoint|StartupWaitsForMigrationLock|CreateOverridesDatabaseQuery)$$
 PHONY_TARGETS += _require-secret-test-database test\:apps\:secret-server\:integration
 _require-secret-test-database:
 	@test -n "$$SECRET_TEST_DATABASE_URL" || { echo "Set SECRET_TEST_DATABASE_URL to a disposable PostgreSQL server before running Secret Server integration tests." >&2; exit 1; }

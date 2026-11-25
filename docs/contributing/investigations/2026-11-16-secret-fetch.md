@@ -35,7 +35,7 @@ require separate validation.
 The runtime starts with its existing PostgreSQL pool, initialized schema, and
 validated cipher. For `fetch` and `all`, build the handler with the runtime's
 Runner verifier and the full URL in `SECRET_SERVER_INTROSPECTION_URL`. Validate
-the endpoint before listening. The handler owns Runner verification so the same
+the URL and its endpoint path before opening the database pool. The handler owns Runner verification so the same
 verified identity drives consumption and audit, with one verification per request.
 The `write` role leaves the fetch route disabled and requires no API URL.
 
