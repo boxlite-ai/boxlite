@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises'
 import * as tar from 'tar'
 import type { MakeCtx } from '../cli.js'
 import type { Deployment, DomainView, EnvSummary } from '../api.js'
-import { updateLink, writeLink, type Ctx } from '../context.js'
+import { writeLink, type Ctx } from '../context.js'
 import { describe } from '../meta.js'
 import { formatBytes, table } from '../output.js'
 import { contextMarkdown } from '../render/context-markdown.js'
@@ -273,7 +273,8 @@ async function syncAccessToToml(ctx: Ctx, value: string): Promise<boolean> {
 }
 
 async function pull(ctx: Ctx): Promise<void> {
-  const spec = await (await ctx.appApi()).getSpec()
+  const api = await ctx.appApi()
+  const spec = await api.getSpec()
   const path = join(ctx.cwd, MANIFEST_FILE)
   let backedUp = false
   try {
@@ -285,7 +286,9 @@ async function pull(ctx: Ctx): Promise<void> {
   }
   await writeFile(path, specToToml(spec))
   const version = typeof spec.version === 'number' ? spec.version : undefined
-  if (version !== undefined) await updateLink(ctx.cwd, { base_version: version })
+  if (version !== undefined) {
+    await writeLink(ctx.cwd, { app: ctx.appName(), env: ctx.envName, api_url: api.baseUrl, base_version: version })
+  }
   ctx.out.data({ file: MANIFEST_FILE, version, backup: backedUp ? `${MANIFEST_FILE}.bak` : null })
   ctx.out.line(
     `wrote boxlite.toml from spec v${version ?? '?'}${backedUp ? ' (previous file kept as boxlite.toml.bak, including any [env.*] overrides and comments)' : ''}`,
