@@ -5,8 +5,10 @@ How BoxLite's code fits together, for contributors: the runtime, and the hosted 
 
 ## Design documents
 
-- [Outbound connection and replacement contract](outbound-contract.md): shared target ownership,
-  transport selection, conditional updates, revision acknowledgements, and recovery examples.
+- The [outbound connection and replacement contract](outbound-contract.md) covers shared target
+  ownership, transport selection, conditional updates, revision acknowledgements, and recovery.
+  The [outbound proxy contract](outbound-proxy-contract.md) covers proposed proxy registration,
+  host credential delivery, DNS routing, and rotation.
 - [Hosted platform](platform/README.md): how the `apps/` services fit together, their
   [interfaces](platform/api.md), and their [data model](platform/schema.md).
 - [VMM](vmm/README.md): BoxLite's own VMM, which is replacing libkrun.
