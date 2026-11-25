@@ -11,6 +11,8 @@ mod common;
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
 use boxlite::runtime::options::{BoxOptions, NetworkSpec};
 use common::box_test::BoxTestBase;
+use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 // ============================================================================
@@ -218,6 +220,64 @@ async fn jailer_enabled_box_starts_and_executes() {
         out.contains("jailer-test"),
         "Command should succeed with jailer enabled"
     );
+}
+
+#[tokio::test]
+async fn jailer_shares_single_staged_shim_across_boxes() {
+    let t = BoxTestBase::with_home(JailerHome::new().home, jailer_enabled_options()).await;
+    let second = t
+        .runtime
+        .create(jailer_enabled_options(), None)
+        .await
+        .unwrap();
+    let box_bin = |bx: &boxlite::LiteBox| {
+        t.home_dir()
+            .join("boxes")
+            .join(bx.id().as_str())
+            .join("bin")
+    };
+    let cache = t.home_dir().join("shims");
+
+    t.bx.start().await.unwrap();
+    let generation = fs::read_dir(&cache)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let digest = generation.file_name().unwrap().to_str().unwrap();
+    assert_eq!(digest.len(), 16);
+    assert!(
+        digest
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    );
+    let stamp = generation.join(".complete");
+    let old = filetime::FileTime::from_unix_time(1, 0);
+    filetime::set_file_mtime(&stamp, old).unwrap();
+    let shim = generation.join("boxlite-shim");
+    let inode = fs::metadata(&shim).unwrap().ino();
+
+    second.start().await.unwrap();
+    assert!(filetime::FileTime::from_last_modification_time(&fs::metadata(stamp).unwrap()) > old);
+    assert_eq!(fs::read_dir(&cache).unwrap().count(), 1);
+    assert_eq!(fs::metadata(&shim).unwrap().ino(), inode);
+    let legacy_bin = box_bin(&t.bx);
+    assert!(!legacy_bin.exists());
+    assert!(!box_bin(&second).exists());
+
+    t.bx.stop().await.unwrap();
+    fs::create_dir(&legacy_bin).unwrap();
+    fs::write(legacy_bin.join("stale-shim"), b"legacy shim").unwrap();
+    let restarted = t.runtime.get(t.bx.id().as_str()).await.unwrap().unwrap();
+    restarted.start().await.unwrap();
+    assert!(!legacy_bin.exists());
+    assert_eq!(fs::read_dir(cache).unwrap().count(), 1);
+    assert_eq!(fs::metadata(shim).unwrap().ino(), inode);
+
+    restarted.stop().await.unwrap();
+    second.stop().await.unwrap();
+    t.runtime.remove(second.id().as_str(), true).await.unwrap();
 }
 
 /// #1072: dropping the jailer's own network grants must not take the shim's

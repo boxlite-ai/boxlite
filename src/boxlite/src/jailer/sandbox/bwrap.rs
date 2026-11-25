@@ -65,6 +65,8 @@ impl Sandbox for BwrapSandbox {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
+        let shim_plan =
+            crate::jailer::shim_cache::plan_bwrap_shim_mounts(std::path::Path::new(&binary));
 
         let mut bwrap_cmd = bwrap::BwrapCommand::new();
 
@@ -123,6 +125,14 @@ impl Sandbox for BwrapSandbox {
             bwrap_cmd.ro_bind(&pa.path, &pa.path);
             tracing::debug!(path = %pa.path.display(), "bwrap: ro-bind");
         }
+        for (src, dest) in &shim_plan.ro_binds {
+            bwrap_cmd.ro_bind(src, dest);
+            tracing::debug!(
+                src = %src.display(),
+                dest = %dest.display(),
+                "bwrap: ro-bind shim runtime"
+            );
+        }
 
         // =====================================================================
         // Environment sanitization
@@ -130,19 +140,15 @@ impl Sandbox for BwrapSandbox {
         // The statically-linked shim dlopen's libkrunfw via LD_LIBRARY_PATH (its
         // `$ORIGIN` rpath is ineffective), and `--clearenv` wipes it — without
         // this the VM fails to start ("Couldn't find or load libkrunfw.so.5",
-        // libkrun status=-2). Point it at the shim's own directory (`<box>/bin`),
-        // which is bound into the sandbox and is exactly where `copy_libkrunfw`
-        // placed the library the shim loads.
-        let shim_dir = std::path::Path::new(&binary)
-            .parent()
-            .map(|dir| dir.to_string_lossy().into_owned())
-            .unwrap_or_default();
-
+        // libkrun status=-2). The staged shim and libkrunfw share a read-only
+        // binding at `<home>/shims/<digest>`. When falling back to a symlinked
+        // `runtime/` layout, resolved targets are mounted into a synthetic
+        // read-only `/run/boxlite-shim` directory so symlinks do not dangle.
         bwrap_cmd
             .with_clearenv()
             .setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
             .setenv("HOME", "/root")
-            .setenv("LD_LIBRARY_PATH", shim_dir);
+            .setenv("LD_LIBRARY_PATH", shim_plan.ld_library_path.as_str());
 
         // Preserve debugging environment variables
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
@@ -155,7 +161,7 @@ impl Sandbox for BwrapSandbox {
         bwrap_cmd.chdir("/");
 
         // Replace the command with bwrap-wrapped version.
-        *cmd = bwrap_cmd.build(std::path::Path::new(&binary), &args);
+        *cmd = bwrap_cmd.build(&shim_plan.executable, &args);
 
         // Add cgroup join as a pre_exec hook (async-signal-safe).
         if let Some(cgroup_procs) = cgroup::build_cgroup_procs_path(ctx.id) {
@@ -201,10 +207,11 @@ mod tests {
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,
+            shim_cache_dir: None,
             detached: false,
         };
 
-        let shim = "/var/lib/boxlite/boxes/abc/bin/boxlite-shim";
+        let shim = "/var/lib/boxlite/shims/0123456789abcdef/boxlite-shim";
         let mut cmd = Command::new(shim);
         BwrapSandbox::new().apply(&ctx, &mut cmd);
 
@@ -219,8 +226,8 @@ mod tests {
             .expect("bwrap must --setenv LD_LIBRARY_PATH so the static shim can dlopen libkrunfw");
         assert_eq!(
             args[pos + 2],
-            "/var/lib/boxlite/boxes/abc/bin",
-            "LD_LIBRARY_PATH must point at the shim's own directory (where libkrunfw is copied)"
+            "/var/lib/boxlite/shims/0123456789abcdef",
+            "LD_LIBRARY_PATH must point at the staged shim and firmware directory"
         );
     }
 
@@ -246,9 +253,10 @@ mod tests {
                 resource_limits: limits,
                 network_enabled: false,
                 sandbox_profile: None,
+                shim_cache_dir: None,
                 detached,
             };
-            let mut cmd = Command::new("/var/lib/boxlite/boxes/abc/bin/boxlite-shim");
+            let mut cmd = Command::new("/var/lib/boxlite/shims/0123456789abcdef/boxlite-shim");
             BwrapSandbox::new().apply(&ctx, &mut cmd);
             cmd.get_args().any(|a| a == "--die-with-parent")
         }
@@ -261,5 +269,124 @@ mod tests {
             !has_die_with_parent(true),
             "detached box must not get --die-with-parent or it is killed when run -d returns"
         );
+    }
+
+    #[test]
+    fn apply_mounts_symlinked_runtime_into_synthetic_shim_dir() {
+        use crate::jailer::sandbox::PathAccess;
+        use crate::jailer::shim_cache::BWRAP_SANDBOX_SHIM_DIR;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        if !bwrap::is_available() {
+            eprintln!(
+                "skipping apply_mounts_symlinked_runtime_into_synthetic_shim_dir: bwrap not available"
+            );
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let target_dir = root.path().join("target/debug");
+        let runtime_dir = target_dir.join("runtime");
+        let build_out = target_dir.join("build/boxlite-hash/out/runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::create_dir_all(&build_out).unwrap();
+
+        let real_shim = target_dir.join("boxlite-shim");
+        std::fs::write(
+            &real_shim,
+            "#!/bin/sh\nif [ \"$#\" -gt 0 ]; then\n  cat \"$1\"\nelse\n  printf '%s:' \"$LD_LIBRARY_PATH\"\n  cat /run/boxlite-shim/libkrunfw.so.5\nfi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&real_shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let real_fw = build_out.join("libkrunfw.so.5.4.0");
+        std::fs::write(&real_fw, b"fw-ok").unwrap();
+        let sibling = target_dir.join("sibling.txt");
+        std::fs::write(&sibling, b"secret").unwrap();
+
+        let runtime_shim = runtime_dir.join("boxlite-shim");
+        let runtime_fw = runtime_dir.join("libkrunfw.so.5");
+        symlink("../boxlite-shim", &runtime_shim).unwrap();
+        symlink(
+            "../build/boxlite-hash/out/runtime/libkrunfw.so.5.4.0",
+            &runtime_fw,
+        )
+        .unwrap();
+
+        let canonical_shim = real_shim.canonicalize().unwrap();
+        let canonical_fw = real_fw.canonicalize().unwrap();
+        let limits = Box::leak(Box::new(ResourceLimits::default()));
+        let ctx = SandboxContext {
+            id: "test-box",
+            paths: vec![
+                PathAccess {
+                    path: runtime_dir.clone(),
+                    writable: false,
+                },
+                PathAccess {
+                    path: canonical_shim.clone(),
+                    writable: false,
+                },
+                PathAccess {
+                    path: canonical_fw.clone(),
+                    writable: false,
+                },
+            ],
+            unix_sockets: Default::default(),
+            resource_limits: limits,
+            network_enabled: false,
+            sandbox_profile: None,
+            shim_cache_dir: None,
+            detached: true,
+        };
+
+        let mut cmd = Command::new(&runtime_shim);
+        BwrapSandbox::new().apply(&ctx, &mut cmd);
+
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let expected_shim_dest = format!("{BWRAP_SANDBOX_SHIM_DIR}/boxlite-shim");
+        let expected_fw_dest = format!("{BWRAP_SANDBOX_SHIM_DIR}/libkrunfw.so.5");
+        let expected_ld = format!("{BWRAP_SANDBOX_SHIM_DIR}:{}", runtime_dir.display());
+        assert!(args.windows(3).any(|w| {
+            w[0] == "--ro-bind"
+                && w[1] == canonical_shim.to_string_lossy()
+                && w[2] == expected_shim_dest
+        }));
+        assert!(args.windows(3).any(|w| {
+            w[0] == "--ro-bind"
+                && w[1] == canonical_fw.to_string_lossy()
+                && w[2] == expected_fw_dest
+        }));
+        assert!(
+            args.windows(3)
+                .any(|w| w[0] == "--setenv" && w[1] == "LD_LIBRARY_PATH" && w[2] == expected_ld)
+        );
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some(expected_shim_dest.as_str())
+        );
+
+        if bwrap::can_create_user_namespace().is_ok() {
+            let output = cmd.output().expect("execute bwrap symlinked runtime shim");
+            assert!(
+                output.status.success(),
+                "bwrap execution failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("{expected_ld}:fw-ok")
+            );
+
+            let mut sibling_cmd = Command::new(&runtime_shim);
+            sibling_cmd.arg(&sibling);
+            BwrapSandbox::new().apply(&ctx, &mut sibling_cmd);
+            let sibling_out = sibling_cmd.output().expect("execute sibling probe");
+            assert!(!sibling_out.status.success());
+            assert!(sibling_out.stdout.is_empty());
+        }
     }
 }
