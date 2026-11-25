@@ -250,6 +250,7 @@ jobs:
               - '.github/actions/ci-config/**/!(*.md)'
               - '.github/workflows/test.yml'
             go:
+              - '.github/actions/setup-boxlite-runner/**/!(*.md)'
               - 'sdks/go/**/!(*.md)'
               - 'src/deps/libgvproxy-sys/**/!(*.md)'
               - 'apps/image-service/**/!(*.md)'
@@ -291,6 +292,7 @@ jobs:
               - 'codecov.yml'
               - '.github/workflows/test.yml'
             dashboard:
+              - '.github/actions/setup-boxlite-runner/**/!(*.md)'
               - 'apps/dashboard/**/!(*.md)'
               - 'apps/libs/api-client/**/!(*.md)'
               - 'apps/package.json'
@@ -654,7 +656,7 @@ jobs:
     name: Secret Server PostgreSQL integration
     needs: changes
     if: ${{ needs.changes.outputs.go == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
     timeout-minutes: 10
     permissions:
       contents: read
@@ -675,10 +677,13 @@ jobs:
           --health-retries 12
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
+      - name: Install Go race detector dependencies
+        run: sudo apt-get install -y --no-install-recommends gcc libc6-dev
       - uses: ./.github/actions/setup-go
       - name: Run Secret Server PostgreSQL integration tests
         env:
-          SECRET_TEST_DATABASE_URL: postgresql://boxlite:boxlite@127.0.0.1:${{ job.services.postgres.ports[5432] }}/boxlite
+          SECRET_TEST_DATABASE_URL: postgresql://boxlite:boxlite@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/boxlite
         run: make coverage:apps:secret-server:integration
       - name: Upload Secret Server integration coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -975,7 +980,7 @@ jobs:
     name: Dashboard Tests
     needs: changes
     if: ${{ needs.changes.outputs.dashboard == 'true' }}
-    runs-on: "ubuntu-latest"
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
     permissions: # Read source; OIDC authenticates the coverage upload.
       contents: "read"
       id-token: write
@@ -986,6 +991,12 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: ${{ false }}
+      - uses: ./.github/actions/setup-boxlite-runner
+      - name: Install native Node build dependencies
+        run: sudo apt-get install -y --no-install-recommends build-essential python3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Enable Corepack
         run: "corepack enable"
       - uses: actions/setup-node@v4

@@ -27,7 +27,7 @@ jobs:
     if: >-
       github.event_name != 'workflow_run' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
-    runs-on: ubuntu-latest
+    runs-on: boxlite
     permissions:
       contents: read
       actions: read
@@ -37,6 +37,8 @@ jobs:
       platforms: ${{ steps.config.outputs.platforms }}
       go-version: ${{ steps.config.outputs.go-version }}
     steps:
+      - name: Install release configuration tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gh jq
       - name: Verify C release producer
         if: github.event_name == 'workflow_run'
         shell: bash

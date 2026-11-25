@@ -46,7 +46,7 @@ jobs:
         include:
           - language: actions
             build-mode: none
-            runner: ubuntu-latest
+            runner: boxlite-4vcpu-16gbmem-64gbdisk
           - language: c-cpp
             build-mode: none
             runner: ubuntu-latest

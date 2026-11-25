@@ -51,16 +51,26 @@ test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native p
   }
 })
 
+for (const [name, job, runner] of [
+  ['build-go.yml', 'config', 'boxlite'],
+  ['build-plugins.yml', 'build', 'boxlite'],
+  ['api-client-drift.yml', 'check-generated-clients', 'boxlite-4vcpu-16gbmem-30gbdisk'],
+  ['test.yml', 'dashboard', 'boxlite-4vcpu-16gbmem-30gbdisk'],
+  ['test.yml', 'secret-server-postgres', 'boxlite-4vcpu-16gbmem-30gbdisk'],
+  ['build-box-images.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
+] as const) {
+  test(`${name}/${job} requests its qualified BoxLite runner`, () => {
+    assert.equal(workflow(name).jobs[job]['runs-on'], runner)
+  })
+}
+
 for (const [name, job, matrix] of [
-  ['api-client-drift.yml', 'check-generated-clients', false],
-  ['build-box-images.yml', 'build', false],
   ['release-box-images.yml', 'release', false],
   ['build-c.yml', 'build', true],
   ['build-node.yml', 'build', true],
   ['build-runtime.yml', 'build', true],
   ['build-wheels.yml', 'build_wheels', true],
   ['test.yml', 'api', false],
-  ['test.yml', 'dashboard', false],
   ['test.yml', 'nix', false],
   ['test.yml', 'rust', true],
 ] as const) {
@@ -74,7 +84,7 @@ test('CodeQL places every language on its qualified runner and retains its build
   const job = workflow('codeql.yml').jobs.analyze
   assert.equal(job['runs-on'], '${{ matrix.runner }}')
   assert.deepEqual(job.strategy.matrix.include, [
-    { language: 'actions', 'build-mode': 'none', runner: 'ubuntu-latest' },
+    { language: 'actions', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-64gbdisk' },
     { language: 'c-cpp', 'build-mode': 'none', runner: 'ubuntu-latest' },
     { language: 'go', 'build-mode': 'autobuild', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
     { language: 'javascript-typescript', 'build-mode': 'none', runner: 'ubuntu-latest' },

@@ -19,24 +19,22 @@ The connection needs permission to register workers and quota for the requested
 
 | Runner label | Jobs |
 | --- | --- |
-| `boxlite` | Lightweight lint, setup, status and release uploads using the default 10 GiB disk |
-| `boxlite-4vcpu-16gbmem-30gbdisk` | Python and Node SDK tests, Go SDK release checks, Node release packaging, and Go and Python CodeQL |
-| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, Go coverage, and standalone guest artifact builds |
-| GitHub-hosted Ubuntu | Service-container jobs, Docker image and SDK builds, Dashboard, Rust coverage, Nix, and Actions, Rust, C/C++ and TypeScript CodeQL |
+| `boxlite` | Lightweight lint and setup, plugin package validation, Go SDK release configuration, status and selected release artifact uploads |
+| `boxlite-4vcpu-16gbmem-30gbdisk` | Python and Node SDK tests, Go SDK release checks, Node release packaging, Go and Python CodeQL, Dashboard tests, Secret Server PostgreSQL integration and API client drift |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, Go coverage, standalone guest artifacts, Actions CodeQL and the non-publishing multiarch Box image build |
+| GitHub-hosted Ubuntu | API tests, native SDK and runtime packaging, Rust coverage, Nix and REST E2E, C/C++, Rust and TypeScript CodeQL, protected publishing and runner recovery |
 
-The platform matrix controls check names and artifacts. Linux ARM64 and macOS
-legs run on their native platforms. BoxLite jobs install tools through the
-[runner setup action](../actions/setup-boxlite-runner/action.yml) where needed.
+Linux ARM64 and macOS matrix jobs use their native platforms. Building an ARM64
+container image with Buildx exercises a different path from native ARM64 SDK tests.
 
-Rust and Nix use GitHub-hosted Ubuntu for their AppArmor user-namespace setup.
-The x64 Go hardware tests require BoxLite workers with nested virtualization and
-usable `/dev/kvm`.
-
-The workers serving this repository must pass Docker startup before
-service-container and Docker build jobs can use BoxLite. GitHub-hosted
-runners provide Docker for those jobs, including API client drift, API tests,
-and Linux manylinux and wheel builds.
+GitHub starts PostgreSQL and Redis services before checkout. The runner must
+provide a working Docker daemon at registration time. Dashboard tests and
+API client drift install Node 22 before enabling Corepack for the Yarn cache.
 [Docker startup contract](../../apps/libs/ci-listener/README.md#docker-startup).
+
+Rust, Nix and REST exercise unprivileged user namespaces on hosted Ubuntu.
+The BoxLite guest can run the SSH suite under its default namespace policy.
+AppArmor enforcement requires a guest kernel with the AppArmor interface.
 
 The local E2E workflow uses its GCP runner pool for persistent caches and VM
 lifecycle. Deployment recovery uses GitHub-hosted runners. npm publishing uses
