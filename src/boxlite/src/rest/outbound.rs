@@ -9,11 +9,11 @@ use crate::runtime::options::OutboundNetworkConfig;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use reqwest::{Method, Response, StatusCode, header};
 
-fn uncertain(reason: impl std::fmt::Display) -> BoxliteError {
+pub(super) fn uncertain(reason: impl std::fmt::Display) -> BoxliteError {
     BoxliteError::Network(format!("invalid revisioned outbound response: {reason}"))
 }
 
-fn body_error(error: reqwest::Error) -> BoxliteError {
+pub(super) fn body_error(error: reqwest::Error) -> BoxliteError {
     if error.is_timeout() {
         BoxliteError::Network("outbound control response timed out".into())
     } else {
@@ -21,7 +21,7 @@ fn body_error(error: reqwest::Error) -> BoxliteError {
     }
 }
 
-fn revision(response: &Response) -> BoxliteResult<OutboundRevision> {
+pub(super) fn revision(response: &Response) -> BoxliteResult<OutboundRevision> {
     let mut values = response.headers().get_all(header::ETAG).iter();
     let value = values.next().ok_or_else(|| uncertain("missing ETag"))?;
     if values.next().is_some() {
@@ -35,7 +35,7 @@ fn revision(response: &Response) -> BoxliteResult<OutboundRevision> {
     OutboundRevision::parse(token).map_err(uncertain)
 }
 
-async fn checked(response: Response) -> BoxliteResult<Response> {
+pub(super) async fn checked(response: Response) -> BoxliteResult<Response> {
     let status = response.status();
     if status == StatusCode::OK {
         return Ok(response);

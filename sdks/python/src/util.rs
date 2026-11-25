@@ -1,6 +1,39 @@
 use boxlite::BoxliteError;
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
+pyo3::import_exception!(boxlite.errors, OutboundPolicyError);
+
+pub(crate) fn map_outbound_err(error: boxlite::net::OutboundPolicyError) -> PyErr {
+    use boxlite::net::OutboundPolicyError as Error;
+    match error {
+        Error::Runtime(error) => map_err(error),
+        Error::Request {
+            effect,
+            status,
+            code,
+            box_id,
+            message,
+        } => OutboundPolicyError::new_err((message, effect.as_str(), status, code, box_id)),
+    }
+}
+
+pub(crate) fn outbound_policy(
+    policy: &Bound<'_, pyo3::types::PyDict>,
+) -> PyResult<boxlite::net::CompleteOutboundPolicy> {
+    let json: String = policy
+        .py()
+        .import("json")?
+        .call_method1("dumps", (policy,))?
+        .extract()?;
+    serde_json::from_str(&json)
+        .map_err(|error| map_err(BoxliteError::InvalidArgument(error.to_string())))
+}
+
+pub(crate) fn json_dict(value: serde_json::Result<String>) -> PyResult<Py<PyAny>> {
+    let json = value.map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+    Python::attach(|py| Ok(py.import("json")?.call_method1("loads", (json,))?.unbind()))
+}
+
 type Raise = fn(String) -> PyErr;
 
 /// Imports each `boxlite.errors` class (lazily, on the first failure raised as

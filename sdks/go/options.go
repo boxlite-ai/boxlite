@@ -256,6 +256,7 @@ type boxConfig struct {
 	autoResume         *bool
 	detach             *bool
 	network            *NetworkSpec
+	outboundSelected   bool
 	networkErr         error // deferred WithNetwork validation error, surfaced at conversion
 	secrets            []Secret
 	advanced           *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
@@ -428,6 +429,8 @@ func WithCmd(args ...string) BoxOption {
 func WithNetwork(spec NetworkSpec) BoxOption {
 	return func(c *boxConfig) {
 		c.checkpointOverride = true
+		c.outboundSelected = spec.Outbound.Mode != "" || spec.Outbound.AllowNet != nil ||
+			spec.Mode != "" || spec.AllowNet != nil
 
 		resolved, err := spec.resolve()
 		if err != nil {
@@ -674,23 +677,25 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		return nil, cfg.networkErr
 	}
 	if cfg.network != nil {
-		switch cfg.network.Outbound.Mode {
-		case "", NetworkModeEnabled:
-			C.boxlite_options_set_network_enabled(cOpts)
-			for _, host := range cfg.network.Outbound.AllowNet {
-				cHost := toCString(host)
-				C.boxlite_options_add_network_allow(cOpts, cHost)
-				C.free(unsafe.Pointer(cHost))
-			}
-		case NetworkModeDisabled:
-			if len(cfg.network.Outbound.AllowNet) > 0 {
+		if cfg.outboundSelected {
+			switch cfg.network.Outbound.Mode {
+			case "", NetworkModeEnabled:
+				C.boxlite_options_set_network_enabled(cOpts)
+				for _, host := range cfg.network.Outbound.AllowNet {
+					cHost := toCString(host)
+					C.boxlite_options_add_network_allow(cOpts, cHost)
+					C.free(unsafe.Pointer(cHost))
+				}
+			case NetworkModeDisabled:
+				if len(cfg.network.Outbound.AllowNet) > 0 {
+					C.boxlite_options_free(cOpts)
+					return nil, fmt.Errorf("network.outbound.mode=%q is incompatible with allow_net", NetworkModeDisabled)
+				}
+				C.boxlite_options_set_network_disabled(cOpts)
+			default:
 				C.boxlite_options_free(cOpts)
-				return nil, fmt.Errorf("network.outbound.mode=%q is incompatible with allow_net", NetworkModeDisabled)
+				return nil, fmt.Errorf("invalid outbound network mode %q", cfg.network.Outbound.Mode)
 			}
-			C.boxlite_options_set_network_disabled(cOpts)
-		default:
-			C.boxlite_options_free(cOpts)
-			return nil, fmt.Errorf("invalid outbound network mode %q", cfg.network.Outbound.Mode)
 		}
 		// The field exists for shape symmetry with Outbound, but no layer
 		// enforces an inbound allowlist yet — reject rather than accept a

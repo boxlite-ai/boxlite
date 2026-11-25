@@ -5,7 +5,7 @@ use clap::{Args, Subcommand};
 
 use crate::cli::GlobalFlags;
 
-mod policy;
+pub(crate) mod policy;
 pub mod tunnel;
 
 #[derive(Args, Debug)]
@@ -20,6 +20,8 @@ pub enum NetworkCommand {
     Inbound(policy::InboundArgs),
     /// Replace outbound policy and its entire allowlist.
     Outbound(policy::OutboundArgs),
+    /// Conditionally replace a complete outbound policy from JSON.
+    ReplaceOutbound(policy::ReplaceOutboundArgs),
     /// Print a remote URL, forward a local listener, or revoke a box service's URL.
     Tunnel(tunnel::TunnelArgs),
 }
@@ -28,6 +30,7 @@ pub async fn execute(args: NetworkArgs, global: &GlobalFlags) -> Result<()> {
     match args.command {
         NetworkCommand::Inbound(args) => policy::set_inbound(args, global).await,
         NetworkCommand::Outbound(args) => policy::set_outbound(args, global).await,
+        NetworkCommand::ReplaceOutbound(args) => policy::replace_outbound(args, global).await,
         NetworkCommand::Tunnel(args) => tunnel::execute(args, global).await,
     }
 }

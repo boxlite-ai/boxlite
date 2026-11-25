@@ -31,6 +31,7 @@ export type BoxNetworkPanelProps = {
   children?: ReactNode
   /** The box's policy in both directions; absent when the API did not report it. */
   network?: NetworkInfo
+  outboundDetails?: ReactNode
   inboundPending?: boolean
   /** False for viewers, who see the state but cannot change exposure. */
   canManage: boolean
@@ -69,6 +70,7 @@ function OutboundPolicy({ outbound }: { outbound?: NetworkInfo['outbound'] }) {
 /** Box-wide network policy, with explicit per-port tunnel actions. */
 export function BoxNetworkPanel({
   network,
+  outboundDetails,
   inboundPending = false,
   canManage,
   onToggleInbound,
@@ -85,11 +87,11 @@ export function BoxNetworkPanel({
       <BoxDetailHeading title="Network" />
 
       {/* Sheet convention: grey key, foreground value; hue carries the risk
-          signal (amber when inbound is enabled). Outbound is read-only: no
-          route changes it after create. */}
+          signal (amber when inbound is enabled). The Console shows outbound
+          policy as read-only. */}
       <dl>
         <BoxDetailField label="Outbound" className="font-sans">
-          <OutboundPolicy outbound={network?.outbound} />
+          {outboundDetails ?? <OutboundPolicy outbound={network?.outbound} />}
         </BoxDetailField>
 
         {/* Disabled is a proxy-level block; enabled tunnels retain their own access policy. */}

@@ -703,6 +703,30 @@ impl BoxNetworkBackend for RestBox {
         self.client.read_outbound_status(&self.box_id_str()).await
     }
 
+    async fn complete_outbound_snapshot(
+        &self,
+    ) -> BoxliteResult<crate::net::CompleteOutboundSnapshot> {
+        self.client
+            .read_complete_outbound_snapshot(&self.box_id_str())
+            .await
+    }
+
+    async fn outbound_policy_status(&self) -> BoxliteResult<crate::net::OutboundPolicyStatus> {
+        self.client
+            .read_outbound_policy_status(&self.box_id_str())
+            .await
+    }
+
+    async fn replace_verified_outbound_policy(
+        &self,
+        policy: crate::net::CompleteOutboundPolicy,
+        expected: Option<crate::net::OutboundRevision>,
+    ) -> crate::net::OutboundPolicyResult<crate::net::OutboundPolicyReplacement> {
+        self.client
+            .replace_verified_outbound_policy(&self.box_id_str(), policy, expected)
+            .await
+    }
+
     async fn replace_outbound_snapshot(
         &self,
         replacement: crate::net::OutboundReplacement,

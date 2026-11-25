@@ -41,6 +41,12 @@ pub use outbound::{
     OutboundSnapshot, OutboundSnapshotStatus, OutboundStatus, PreparedOutboundCreate,
 };
 
+mod outbound_policy;
+pub use outbound_policy::{
+    OutboundPolicyEffect, OutboundPolicyError, OutboundPolicyObservation,
+    OutboundPolicyReplacement, OutboundPolicyResult, OutboundPolicyStatus,
+};
+
 pub use gvproxy::GvproxyBackend;
 
 /// How the Box connects to the network backend.

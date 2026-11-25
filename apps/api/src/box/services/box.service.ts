@@ -563,12 +563,26 @@ export class BoxService implements OnApplicationBootstrap {
   private async prepareCompleteCreate(box: Box, runner: Runner, policy: CompleteOutboundPolicy) {
     if (runner.apiVersion !== '0' && runner.apiVersion !== '2') {
       throw new HttpException(
-        { code: 'unsupported', message: 'Selected Runner cannot create complete outbound policy' },
+        {
+          code: 'unsupported',
+          message: 'Selected Runner cannot create complete outbound policy',
+          creation_effect: 'not_allocated',
+        },
         501,
       )
     }
     return this.boxRepository.withCompleteCreateRunner(runner.id, async (verifiedRunner, leaseId) => {
-      const candidate = await new RunnerOutboundControl(verifiedRunner, box.id).prepareCreate(randomUUID(), policy)
+      const candidate = await new RunnerOutboundControl(verifiedRunner, box.id)
+        .prepareCreate(randomUUID(), policy)
+        .catch((error: unknown) => {
+          if (!(error instanceof HttpException)) throw error
+          const response = error.getResponse()
+          throw new HttpException(
+            { ...(typeof response === 'string' ? { message: response } : response), creation_effect: 'not_allocated' },
+            error.getStatus(),
+            { cause: error },
+          )
+        })
       const owner = {
         kind: 'create',
         incarnation: box.id,

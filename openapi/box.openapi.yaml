@@ -308,6 +308,16 @@ paths:
         The box starts in `configured` status. Call `POST /start` to
         initialize the VM, or it will start lazily on first `exec`.
 
+        Complete outbound policy uses nested `network.outbound`. Check a fresh
+        `capabilities.complete_outbound_policy_enabled` before sending it. An
+        explicit `deny_net` (including []) requires extended IPv4 and deny
+        support. With omitted deny, a port rule, IPv4-mapped literal, or over
+        ten allow rules uses extended IPv4. Older-shaped requests retain legacy admission.
+
+        After 201, read the committed complete snapshot by the returned Box ID.
+        An error with `creation_effect: allocated` retains the allocated Box
+        ID. A lost response or unknown effect does not authorize a retry.
+
         `checkpoint_id` creates the box from a ready managed checkpoint
         instead of an image. The box inherits every saved execution setting,
         so only `name` may accompany it; any other field is refused with 400.
@@ -361,6 +371,12 @@ paths:
           $ref: "#/components/responses/UnprocessableEntityError"
         "429":
           $ref: "#/components/responses/ResourceExhaustedError"
+        "501":
+          description: Complete policy unsupported before allocation or during startup
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteOutboundError"
         "503":
           $ref: "#/components/responses/ServiceUnavailableError"
 
@@ -1457,6 +1473,111 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /{prefix}/boxes/{box_id}/network/outbound/complete:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: getCompleteOutboundPolicy
+      summary: Read the committed complete outbound policy
+      tags: [Network]
+      responses:
+        "200":
+          description: Committed snapshot and its strong revision ETag
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteOutboundSnapshot"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: First create is pending, code outbound_pending, no ETag
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteOutboundError"
+    put:
+      operationId: replaceCompleteOutboundPolicy
+      summary: Replace complete outbound policy and return the committed snapshot
+      description: |
+        Use a strong If-Match bound to the committed snapshot. Running and
+        pending checks precede revision comparison. Omitted deny cannot clear
+        possible active denies. Explicit empty deny requires deny support.
+
+        The acknowledgement reports a commit. For application evidence, read
+        status and compare the complete confirmed snapshot to this response.
+      tags: [Network]
+      parameters:
+        - name: If-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteOutboundPolicy"
+      responses:
+        "200":
+          description: Committed complete policy with its fresh strong ETag
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteOutboundSnapshot"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: A precheck can return outbound_not_running or outbound_replace_busy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteOutboundError"
+        "412":
+          description: The committed revision failed the supplied precondition
+        "501":
+          description: The Runner refused a prerequisite before application
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteOutboundError"
+        "503":
+          description: Inspect status before deciding whether to submit another write
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteOutboundError"
+
+  /{prefix}/boxes/{box_id}/network/outbound/complete/status:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: getCompleteOutboundPolicyStatus
+      summary: Read complete policy application status
+      description: A pending first create can have no committed snapshot. This read does not start the Box.
+      tags: [Network]
+      responses:
+        "200":
+          description: Current phase and available complete snapshots
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompleteOutboundStatus"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
   /{prefix}/boxes/{box_id}/network/outbound/status:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2391,6 +2512,9 @@ components:
               type: boolean
               description: Server honors `ExecRequest.user`.
               example: true
+            complete_outbound_policy_enabled:
+              type: boolean
+              description: Server preserves complete outbound create input and supports independent policy readback.
             idempotency_key_lifetime:
               type: string
               description: How long idempotency keys are retained (ISO 8601 duration)
@@ -3080,7 +3204,7 @@ components:
       additionalProperties: false
       properties:
         outbound:
-          $ref: "#/components/schemas/OutboundNetworkSpec"
+          $ref: "#/components/schemas/CompleteOutboundPolicy"
         inbound:
           $ref: "#/components/schemas/InboundNetworkSpec"
           description: |
@@ -3130,6 +3254,92 @@ components:
             for that host. With a non-empty list, Local hostname routing
             requires a matching IP or CIDR rule for private, loopback, or
             CGNAT answers. The Cloud platform guard's denies take precedence.
+
+    CompleteOutboundPolicy:
+      type: object
+      description: Complete outbound Box rules. Each list supports up to 64 IPv4 rules.
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [enabled, disabled]
+        allow_net:
+          type: array
+          items:
+            type: string
+          description: Destination allow rules, optionally with a port. IPv4-mapped addresses and CIDRs normalize to IPv4. Omission means an empty allowlist.
+        deny_net:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+          description: Destination deny rules. Omission differs from explicit empty. Null is invalid.
+
+    CompleteOutboundSnapshot:
+      type: object
+      required: [revision, admission, policy]
+      properties:
+        revision:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]+$'
+        admission:
+          type: string
+          enum: [legacy, extended_ipv4]
+        policy:
+          allOf:
+            - $ref: "#/components/schemas/CompleteOutboundPolicy"
+            - required: [allow_net, deny_net]
+
+    CompleteOutboundStatus:
+      type: object
+      required: [persisted, runtime_persisted, observed, application_state]
+      properties:
+        persisted:
+          anyOf:
+            - $ref: "#/components/schemas/CompleteOutboundSnapshot"
+            - type: "null"
+        runtime_persisted:
+          anyOf:
+            - $ref: "#/components/schemas/CompleteOutboundSnapshot"
+            - type: "null"
+        observed:
+          anyOf:
+            - type: object
+              required: [snapshot, application_state]
+              properties:
+                snapshot:
+                  $ref: "#/components/schemas/CompleteOutboundSnapshot"
+                application_state:
+                  type: string
+                  enum: [pending, confirmed, uncertain]
+            - type: "null"
+        application_state:
+          type: string
+          enum: [pending, confirmed, uncertain]
+          description: The Cloud's current application phase. Matching snapshots alone do not confirm application.
+        pending_revision:
+          type: string
+
+    CompleteOutboundError:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        code:
+          type: string
+        creation_effect:
+          type: string
+          enum: [not_allocated, allocated]
+        box_id:
+          type: string
+          description: Admitted Box ID, also supplied as boxId for older consumers.
+        effect:
+          type: string
+          enum: [not_applied]
 
     OutboundSnapshot:
       type: object

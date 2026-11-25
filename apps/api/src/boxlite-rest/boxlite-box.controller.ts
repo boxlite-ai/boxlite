@@ -163,9 +163,26 @@ export class BoxliteBoxController {
     })
     if (request) request[AUDIT_TARGET_ID] = box.id
     if (box.state !== BoxState.STARTED) {
-      box = completeOutbound
-        ? await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30, true)
-        : await this.boxStateWaiter.waitForStarted(box.id, organization.id, 30)
+      const boxId = box.id
+      if (completeOutbound) {
+        box = await this.boxStateWaiter.waitForStarted(boxId, organization.id, 30, true).catch((error: unknown) => {
+          const status = error instanceof HttpException ? error.getStatus() : 500
+          const detail = error instanceof HttpException ? error.getResponse() : 'Complete outbound Box failed to start'
+          const failure = new HttpException(
+            {
+              ...(typeof detail === 'string' ? { message: detail } : detail),
+              creation_effect: 'allocated',
+              boxId,
+            },
+            status,
+            { cause: error },
+          )
+          const retryAfterSeconds = (error as { retryAfterSeconds?: unknown } | null)?.retryAfterSeconds
+          throw Object.assign(failure, { retryAfterSeconds })
+        })
+      } else {
+        box = await this.boxStateWaiter.waitForStarted(boxId, organization.id, 30)
+      }
     }
     return this.respondWithBox(box, organization.id, response)
   }

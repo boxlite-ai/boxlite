@@ -330,6 +330,30 @@ class SyncBoxlite:
         )
         return SyncBox(self, native_box), created
 
+    def create_with_outbound_policy(
+        self, options: "BoxOptions", policy: dict, name: str | None = None
+    ) -> "SyncBox":
+        """Create a Box using complete outbound policy."""
+        self._require_started()
+        from ._box import SyncBox
+
+        box = self._sync(
+            self._boxlite.create_with_outbound_policy(options, policy, name=name)
+        )
+        return SyncBox(self, box)
+
+    def get_or_create_with_outbound_policy(
+        self, options: "BoxOptions", policy: dict, name: str | None = None
+    ) -> tuple["SyncBox", bool]:
+        """Reuse a Box only if its committed policy and admission match."""
+        self._require_started()
+        from ._box import SyncBox
+
+        box, created = self._sync(
+            self._boxlite.get_or_create_with_outbound_policy(options, policy, name=name)
+        )
+        return SyncBox(self, box), created
+
     def get(self, id_or_name: str) -> Optional["SyncBox"]:
         """
         Get an existing box by ID or name.

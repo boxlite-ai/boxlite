@@ -105,6 +105,7 @@ pub(crate) type WsHandshakeResponse = tokio_tungstenite::tungstenite::handshake:
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
+    policy_http: Arc<tokio::sync::OnceCell<Client>>,
     tunnel_connector: TunnelConnector,
     base_url: String,
     /// Routing-slot value substituted into the `{prefix}` URL segment
@@ -143,6 +144,7 @@ impl ApiClient {
 
         Ok(Self {
             http,
+            policy_http: Arc::new(tokio::sync::OnceCell::new()),
             tunnel_connector,
             base_url,
             path_prefix,
@@ -332,6 +334,46 @@ impl ApiClient {
     pub async fn create_box(&self, request: &CreateBoxRequest) -> BoxliteResult<BoxResponse> {
         let requested = request.cpus.map(CpuCount::new).transpose()?;
         let value: serde_json::Value = self.post("/boxes", request).await?;
+        Self::decode_created_box(value, requested)
+    }
+
+    pub(super) async fn complete_outbound_request(
+        &self,
+        method: Method,
+        path: &str,
+    ) -> BoxliteResult<RequestBuilder> {
+        // A redirect or replay can dispatch a second state-changing request.
+        let http = self
+            .policy_http
+            .get_or_try_init(|| async {
+                Client::builder()
+                    .default_headers(client_identity_headers())
+                    .timeout(Duration::from_secs(300))
+                    .connect_timeout(Duration::from_secs(300))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .retry(reqwest::retry::never())
+                    .build()
+                    .map_err(|error| {
+                        BoxliteError::Config(format!(
+                            "failed to create outbound policy client: {error}"
+                        ))
+                    })
+            })
+            .await?;
+        let is_create = method == Method::POST;
+        let builder = http.request(method, self.url(path));
+        let builder = if is_create {
+            builder
+        } else {
+            builder.timeout(Duration::from_secs(10))
+        };
+        self.authorize(builder).await
+    }
+
+    pub(super) fn decode_created_box(
+        value: serde_json::Value,
+        requested: Option<CpuCount>,
+    ) -> BoxliteResult<BoxResponse> {
         if let Some(requested) = requested.filter(|cpu| cpu.is_fractional()) {
             let actual = value
                 .get("cpus")
@@ -618,6 +660,16 @@ impl ApiClient {
 
     async fn fetch_config(&self) -> BoxliteResult<ServerConfig> {
         self.get_root("/config").await
+    }
+
+    pub(super) async fn require_complete_outbound_policy(&self) -> BoxliteResult<()> {
+        let config = self.fetch_config().await?;
+        ensure_capability(
+            "complete outbound policy",
+            config
+                .capabilities
+                .and_then(|capabilities| capabilities.complete_outbound_policy_enabled),
+        )
     }
 
     /// `GET /v1/me` — identity of the calling credential. Not cached

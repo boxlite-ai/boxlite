@@ -405,14 +405,19 @@ describe('/mcp', () => {
     expect(denied.status).toBe(403)
   })
 
-  it.each(['configureSsh', 'createRegistry', 'createInvite', 'prepareTunnel'])(
-    'refuses %s to an OAuth caller whatever its scopes',
-    async (operationId) => {
-      const denied = await call('invoke_api_endpoint', { operationId, arguments: {} }, 'Bearer oauth:write:boxes')
+  it.each([
+    'configureSsh',
+    'createRegistry',
+    'createInvite',
+    'prepareTunnel',
+    'getCompleteOutboundPolicy',
+    'replaceCompleteOutboundPolicy',
+    'getCompleteOutboundPolicyStatus',
+  ])('refuses %s to an OAuth caller whatever its scopes', async (operationId) => {
+    const denied = await call('invoke_api_endpoint', { operationId, arguments: {} }, 'Bearer oauth:write:boxes')
 
-      expect(denied.status).toBe(403)
-    },
-  )
+    expect(denied.status).toBe(403)
+  })
 
   it('leaves operations off the OAuth allowlist to API-key callers', async () => {
     const allowed = await call(

@@ -49,6 +49,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let message: string
     let code: string | undefined
     let boxId: string | undefined
+    let creationEffect: 'allocated' | 'not_allocated' | undefined
+    let effect: 'not_applied' | undefined
     // Image progress is forwarded rather than
     // flattened because it is the same shape a successful box response
     // publishes, and a caller that parses one should not need a second parser.
@@ -94,6 +96,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
         code = typeof responseCode === 'string' ? responseCode : undefined
         const responseBoxId = (exceptionResponse as Record<string, unknown>).boxId
         boxId = typeof responseBoxId === 'string' && responseBoxId.length > 0 ? responseBoxId : undefined
+        const responseCreationEffect = (exceptionResponse as Record<string, unknown>).creation_effect
+        if (responseCreationEffect === 'allocated' || responseCreationEffect === 'not_allocated') {
+          creationEffect = responseCreationEffect
+        }
+        if ((exceptionResponse as Record<string, unknown>).effect === 'not_applied') effect = 'not_applied'
         const responseProgress = (exceptionResponse as Record<string, unknown>).progress
         progress =
           typeof responseProgress === 'object' && responseProgress !== null && !Array.isArray(responseProgress)
@@ -129,6 +136,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
       message,
       ...(code ? { code } : {}),
       ...(boxId ? { boxId } : {}),
+      ...(creationEffect ? { creation_effect: creationEffect } : {}),
+      ...(creationEffect === 'allocated' && boxId ? { box_id: boxId } : {}),
+      ...(effect ? { effect } : {}),
       ...(progress ? { progress } : {}),
     })
   }

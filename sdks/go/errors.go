@@ -38,7 +38,8 @@ const (
 	// Interactive execution session was reaped server-side after
 	// disconnect; reattach is no longer possible — start a new exec.
 	// Server-side HTTP 410.
-	ErrSessionReaped ErrorCode = 21
+	ErrSessionReaped  ErrorCode = 21
+	ErrOutboundPolicy ErrorCode = 22
 )
 
 // Error is a typed error from the BoxLite runtime.
@@ -49,6 +50,22 @@ type Error struct {
 
 func (e *Error) Error() string {
 	return fmt.Sprintf("boxlite: %s (code=%d)", e.Message, e.Code)
+}
+
+// OutboundPolicyError records the effect and identity of a failed complete request.
+type OutboundPolicyError struct {
+	Effect  string `json:"effect"`
+	Status  int    `json:"status"`
+	Code    string `json:"code"`
+	BoxID   string `json:"box_id"`
+	Message string `json:"message"`
+}
+
+func (e *OutboundPolicyError) Error() string {
+	if e.BoxID != "" {
+		return fmt.Sprintf("outbound policy %s for Box %s: %s", e.Effect, e.BoxID, e.Message)
+	}
+	return fmt.Sprintf("outbound policy %s: %s", e.Effect, e.Message)
 }
 
 // IsNotFound reports whether err indicates a not-found condition.

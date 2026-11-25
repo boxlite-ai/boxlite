@@ -858,8 +858,11 @@ The Box response varies by that header and is private and non-cacheable. When th
 
 #### Cloud V0 dispatch and recovery
 
-Nested outbound create chooses the complete path for explicit `deny_net`, an allow rule with a port, or more than ten allow rules.
+Nested outbound create selects the complete path when `deny_net` is present or the allowlist has more than ten rules.
+An allow rule with a port, IPv4-mapped address, or IPv4-mapped CIDR also selects complete creation with extended IPv4 admission.
+
 The deprecated flat form still uses the legacy rules and limit.
+Legacy creation trims surrounding whitespace in allow rules before storage.
 Complete creation bypasses the warm pool and asks the selected Runner to prepare the policy before reserving a Box.
 
 Cloud verifies the placed Runner on the primary before sending the preparation request.

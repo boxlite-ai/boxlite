@@ -34,6 +34,14 @@ type CompleteOutboundSnapshot struct {
 	Admission OutboundAdmission       `json:"admission"`
 }
 
+// CompleteOutboundPolicy preserves a nil DenyNet as omitted and a non-nil
+// empty DenyNet as an explicit clear.
+type CompleteOutboundPolicy struct {
+	Mode     NetworkMode `json:"mode"`
+	AllowNet []string    `json:"allow_net,omitempty"`
+	DenyNet  []string    `json:"deny_net,omitzero"`
+}
+
 type PreparedOutboundCreate struct {
 	Snapshot    CompleteOutboundSnapshot `json:"snapshot"`
 	DenyPresent bool                     `json:"deny_present"`
@@ -72,6 +80,55 @@ type CompleteOutboundStatus struct {
 	ApplicationState OutboundApplicationState     `json:"application_state"`
 	PendingRevision  string                       `json:"pending_revision,omitempty"`
 	ObservationError string                       `json:"observation_error,omitempty"`
+}
+
+type OutboundPolicyStatus struct {
+	Persisted        *CompleteOutboundSnapshot    `json:"persisted"`
+	RuntimePersisted *CompleteOutboundSnapshot    `json:"runtime_persisted"`
+	Observed         *CompleteOutboundObservation `json:"observed"`
+	ApplicationState OutboundApplicationState     `json:"application_state"`
+	PendingRevision  string                       `json:"pending_revision,omitempty"`
+	ObservationError string                       `json:"observation_error,omitempty"`
+}
+
+type OutboundPolicyReplacement struct {
+	Acknowledged        CompleteOutboundSnapshot `json:"acknowledged"`
+	Status              *OutboundPolicyStatus    `json:"status"`
+	ApplicationVerified bool                     `json:"application_verified"`
+	StatusError         string                   `json:"status_error"`
+}
+
+// OutboundPolicyStatus reads complete Cloud or native policy without changing it.
+func (n *Network) OutboundPolicyStatus(ctx context.Context) (OutboundPolicyStatus, error) {
+	var result OutboundPolicyStatus
+	err := n.readNetworkJSON(ctx, &result, func(handle *C.CBoxNetworkHandle, value **C.char, failure *C.CBoxliteError) C.enum_BoxliteErrorCode {
+		return C.boxlite_network_outbound_policy_status(handle, value, failure)
+	})
+	return result, err
+}
+
+// ReplaceOutboundPolicy fences expected or, if empty, the committed revision
+// before it writes. The returned status is separate evidence of application.
+func (n *Network) ReplaceOutboundPolicy(ctx context.Context, policy CompleteOutboundPolicy, expected string) (OutboundPolicyReplacement, error) {
+	var result OutboundPolicyReplacement
+	if expected != "" && !ValidOutboundRevision(expected) {
+		return result, &Error{Code: ErrInvalidArgument, Message: "invalid expected outbound revision"}
+	}
+	body, err := json.Marshal(policy)
+	if err != nil {
+		return result, err
+	}
+	cPolicy := C.CString(string(body))
+	defer C.free(unsafe.Pointer(cPolicy))
+	var revision *C.char
+	if expected != "" {
+		revision = C.CString(expected)
+		defer C.free(unsafe.Pointer(revision))
+	}
+	err = n.readNetworkJSON(ctx, &result, func(handle *C.CBoxNetworkHandle, value **C.char, failure *C.CBoxliteError) C.enum_BoxliteErrorCode {
+		return C.boxlite_network_replace_outbound_policy(handle, revision, cPolicy, value, failure)
+	})
+	return result, err
 }
 
 // The native ABI flattens the observed snapshot into the observation object.

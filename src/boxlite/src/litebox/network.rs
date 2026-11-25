@@ -455,6 +455,24 @@ impl NetworkHandle {
         self.network_backend.complete_outbound_status().await
     }
 
+    /// Read complete policy status from the Box's runtime, including pending creation.
+    pub async fn outbound_policy_status(&self) -> BoxliteResult<crate::net::OutboundPolicyStatus> {
+        self.network_backend.outbound_policy_status().await
+    }
+
+    /// Conditionally replace complete policy and read back the current status.
+    /// An absent expected revision still fences the committed policy read before the write.
+    pub async fn replace_verified_outbound_policy(
+        &self,
+        policy: crate::net::CompleteOutboundPolicy,
+        expected: Option<crate::net::OutboundRevision>,
+    ) -> crate::net::OutboundPolicyResult<crate::net::OutboundPolicyReplacement> {
+        policy.validate()?;
+        self.network_backend
+            .replace_verified_outbound_policy(policy, expected)
+            .await
+    }
+
     /// Entry point for the authenticated Runner control plane's owned replacement.
     #[doc(hidden)]
     pub async fn hosted_outbound(

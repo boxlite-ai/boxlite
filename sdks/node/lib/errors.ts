@@ -23,6 +23,39 @@ export class BoxliteError extends Error {
   }
 }
 
+export interface OutboundPolicyFailure {
+  effect: "not_allocated" | "allocated" | "not_applied" | "uncertain";
+  status: number | null;
+  code: string | null;
+  box_id: string | null;
+  message: string;
+}
+
+/** Extracts effect and Box identity from a complete outbound request failure. */
+export function outboundPolicyFailure(
+  error: unknown,
+): OutboundPolicyFailure | undefined {
+  const prefix = "outbound_policy: ";
+  if (!(error instanceof Error) || !error.message.startsWith(prefix)) return;
+  try {
+    const details = JSON.parse(error.message.slice(prefix.length));
+    if (
+      details &&
+      ["not_allocated", "allocated", "not_applied", "uncertain"].includes(
+        details.effect,
+      ) &&
+      (details.status === null || Number.isInteger(details.status)) &&
+      (details.code === null || typeof details.code === "string") &&
+      (details.box_id === null || typeof details.box_id === "string") &&
+      typeof details.message === "string"
+    )
+      return details;
+  } catch {
+    return;
+  }
+  return undefined;
+}
+
 /**
  * Execution error thrown when a command fails (non-zero exit code).
  *

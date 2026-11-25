@@ -165,6 +165,42 @@ pub(crate) struct PyBoxConnection {
 
 #[pymethods]
 impl PyNetworkHandle {
+    fn outbound_policy_status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let status = handle
+                .network()
+                .outbound_policy_status()
+                .await
+                .map_err(map_err)?;
+            crate::util::json_dict(serde_json::to_string(&status))
+        })
+    }
+
+    #[pyo3(signature = (policy, expected_revision=None))]
+    fn replace_outbound_policy<'py>(
+        &self,
+        py: Python<'py>,
+        policy: &Bound<'_, pyo3::types::PyDict>,
+        expected_revision: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let policy = crate::util::outbound_policy(policy)?;
+        let expected = expected_revision
+            .as_deref()
+            .map(boxlite::net::OutboundRevision::parse)
+            .transpose()
+            .map_err(map_err)?;
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let result = handle
+                .network()
+                .replace_verified_outbound_policy(policy, expected)
+                .await
+                .map_err(crate::util::map_outbound_err)?;
+            crate::util::json_dict(serde_json::to_string(&result))
+        })
+    }
+
     fn update_inbound<'py>(
         &self,
         py: Python<'py>,

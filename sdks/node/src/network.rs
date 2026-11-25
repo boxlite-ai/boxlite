@@ -4,12 +4,13 @@ use std::sync::{Arc, Mutex};
 
 use boxlite::LiteBox;
 use boxlite::litebox::{BoxTunnel, SocketAddress, TunnelForwarder, TunnelOptions};
+use boxlite::net::{CompleteOutboundPolicy, OutboundRevision};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::options::{JsInboundNetworkSpec, JsOutboundNetworkSpec};
-use crate::util::map_err;
+use crate::util::{map_err, map_outbound_error};
 use boxlite::runtime::options::{InboundNetworkConfig, OutboundNetworkConfig};
 
 type ConnectionReader = boxlite::BoxReader;
@@ -46,6 +47,62 @@ pub struct JsTunnelOptions {
 
 /// Binding-only adapter: read node:net SocketAddress getters before spawning.
 pub struct TunnelTarget(SocketAddr);
+
+pub struct CompletePolicyArg(pub(crate) CompleteOutboundPolicy);
+
+impl TypeName for CompletePolicyArg {
+    fn type_name() -> &'static str {
+        "CompleteOutboundPolicy"
+    }
+
+    fn value_type() -> napi::ValueType {
+        napi::ValueType::Object
+    }
+}
+
+impl ValidateNapiValue for CompletePolicyArg {}
+
+impl FromNapiValue for CompletePolicyArg {
+    unsafe fn from_napi_value(env: sys::napi_env, value: sys::napi_value) -> Result<Self> {
+        // SAFETY: N-API validated the argument and holds both handles live for conversion.
+        let policy = unsafe { Object::from_napi_value(env, value)? };
+        let keys = policy.get_all_property_names(
+            KeyCollectionMode::OwnOnly,
+            KeyFilter::AllProperties,
+            KeyConversion::NumbersToStrings,
+        )?;
+        for index in 0..keys.get_array_length()? {
+            let key: String = keys
+                .get_element(index)
+                .map_err(|_| Error::from_reason("outbound policy keys must be strings"))?;
+            if !matches!(key.as_str(), "mode" | "allowNet" | "denyNet") {
+                return Err(Error::from_reason(format!(
+                    "unknown outbound policy field {key}"
+                )));
+            }
+        }
+        if !policy.has_own_property("mode")? {
+            return Err(Error::from_reason("outbound policy mode is required"));
+        }
+        let mode: String = policy.get_named_property("mode")?;
+        // Read present properties as arrays. Option conversion would erase null.
+        let allow_net: Option<Vec<String>> = policy
+            .has_own_property("allowNet")?
+            .then(|| policy.get_named_property("allowNet"))
+            .transpose()?;
+        let deny_net: Option<Vec<String>> = policy
+            .has_own_property("denyNet")?
+            .then(|| policy.get_named_property("denyNet"))
+            .transpose()?;
+        let policy = CompleteOutboundPolicy {
+            mode: mode.parse().map_err(map_err)?,
+            allow_net: allow_net.unwrap_or_default(),
+            deny_net,
+        };
+        policy.validate().map_err(map_err)?;
+        Ok(Self(policy))
+    }
+}
 
 impl TypeName for TunnelTarget {
     fn type_name() -> &'static str {
@@ -333,6 +390,40 @@ pub struct JsBoxConnection {
 
 #[napi]
 impl JsNetworkHandle {
+    #[napi]
+    pub async fn outbound_policy_status(&self) -> Result<serde_json::Value> {
+        let status = self
+            .handle
+            .network()
+            .outbound_policy_status()
+            .await
+            .map_err(map_err)?;
+        serde_json::to_value(status).map_err(|error| Error::from_reason(error.to_string()))
+    }
+
+    #[napi(
+        strict,
+        ts_args_type = "policy: { mode: 'enabled' | 'disabled'; allowNet?: string[]; denyNet?: string[] }, expectedRevision?: string"
+    )]
+    pub async fn replace_outbound_policy(
+        &self,
+        policy: CompletePolicyArg,
+        expected_revision: Option<String>,
+    ) -> Result<serde_json::Value> {
+        let expected = expected_revision
+            .as_deref()
+            .map(OutboundRevision::parse)
+            .transpose()
+            .map_err(map_err)?;
+        let result = self
+            .handle
+            .network()
+            .replace_verified_outbound_policy(policy.0, expected)
+            .await
+            .map_err(map_outbound_error)?;
+        serde_json::to_value(result).map_err(|error| Error::from_reason(error.to_string()))
+    }
+
     #[napi]
     pub async fn update_inbound(&self, spec: JsInboundNetworkSpec) -> Result<()> {
         self.handle

@@ -13,12 +13,19 @@ const mocks = vi.hoisted(() => ({
     setBoxInboundMode: vi.fn(),
     prepareBoxTunnel: vi.fn(),
     revokeBoxTunnel: vi.fn(),
+    getBoxOutboundPolicyStatus: vi.fn(),
     boxApi: { getBox: vi.fn() },
   },
   org: 'org-1',
+  account: 'viewer-1',
   success: vi.fn(),
 }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => mocks.api }))
+vi.mock('react-oidc-context', () => ({
+  useAuth: () => ({
+    user: { profile: { iss: 'test-issuer', sub: mocks.account }, access_token: `token-${mocks.account}` },
+  }),
+}))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({ selectedOrganization: { id: mocks.org } }),
 }))
@@ -40,6 +47,7 @@ function network(mode: NetworkMode) {
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   mocks.org = 'org-1'
+  mocks.account = 'viewer-1'
   vi.resetAllMocks()
   mocks.api = initialApi
   canManage = true
@@ -51,6 +59,7 @@ beforeEach(() => {
     token: null,
   })
   mocks.api.revokeBoxTunnel.mockResolvedValue(undefined)
+  mocks.api.getBoxOutboundPolicyStatus.mockRejectedValue(new Error('unavailable'))
   box = {
     id: 'box-1',
     name: 'web-api',
@@ -85,6 +94,51 @@ async function click(text: RegExp, scope: ParentNode = document) {
   expect(button, `button ${text}`).toBeTruthy()
   await act(async () => button?.click())
 }
+
+it.each([401, 403, 404])(
+  'renders outbound policy by account and organization, discarding late replies after %s',
+  async (status) => {
+    const snapshot = { policy: { mode: 'enabled', allow_net: ['api.example.com'], deny_net: ['blocked.example.com'] } }
+    let finishOld!: (value: unknown) => void
+    mocks.api.getBoxOutboundPolicyStatus
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishOld = resolve
+          }),
+      )
+      .mockResolvedValueOnce({ persisted: snapshot, application_state: 'pending' })
+      .mockRejectedValueOnce(new Error(String(status)))
+
+    await render()
+    expect(mocks.api.getBoxOutboundPolicyStatus).toHaveBeenLastCalledWith(
+      'org-1',
+      'box-1',
+      'token-viewer-1',
+      expect.any(AbortSignal),
+    )
+    const oldSignal: AbortSignal = mocks.api.getBoxOutboundPolicyStatus.mock.calls[0][3]
+    mocks.org = 'org-2'
+    await render()
+    expect(oldSignal.aborted).toBe(true)
+    expect(document.body.textContent).toContain('Pending')
+    expect(document.body.textContent).toContain('blocked.example.com')
+    expect(document.body.textContent).not.toContain('Unrestricted')
+
+    mocks.org = 'org-1'
+    mocks.account = 'viewer-2'
+    await render()
+    expect(mocks.api.getBoxOutboundPolicyStatus).toHaveBeenLastCalledWith(
+      'org-1',
+      'box-1',
+      'token-viewer-2',
+      expect.any(AbortSignal),
+    )
+    await act(async () => finishOld({ persisted: snapshot, application_state: 'confirmed' }))
+    expect(document.body.textContent).toContain('Policy unavailable')
+    expect(document.body.textContent).not.toContain('blocked.example.com')
+  },
+)
 async function port(value: string) {
   const input = document.querySelector<HTMLInputElement>('input[inputmode="numeric"]')
   expect(input).toBeTruthy()

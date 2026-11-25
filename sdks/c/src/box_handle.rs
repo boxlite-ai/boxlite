@@ -15,7 +15,7 @@ use tokio::runtime::Runtime as TokioRuntime;
 use boxlite::BoxID;
 use boxlite::BoxliteError;
 use boxlite::litebox::LiteBox;
-use boxlite::net::PreparedOutboundCreate;
+use boxlite::net::{CompleteOutboundPolicy, PreparedOutboundCreate};
 
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::event_queue::{
@@ -39,6 +39,11 @@ pub struct BoxHandle {
     pub queue: Arc<EventQueue>,
 }
 
+enum AdoptPolicy {
+    Prepared(PreparedOutboundCreate),
+    Complete(CompleteOutboundPolicy),
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_create_box(
     runtime: *mut CBoxliteRuntime,
@@ -47,7 +52,28 @@ pub unsafe extern "C" fn boxlite_create_box(
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    create_box(runtime, opts, cb, user_data, out_error)
+    create_box(runtime, opts, None, cb, user_data, out_error)
+}
+
+/// Create with complete outbound policy JSON. Policy bytes are copied before
+/// return. On success, consumes opts and dispatches cb through runtime_drain.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_create_box_with_outbound_policy(
+    runtime: *mut CBoxliteRuntime,
+    opts: *mut CBoxliteOptions,
+    policy_json: *const c_char,
+    cb: CBoxCreateBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    match unsafe { read_complete_create_policy(opts, policy_json) } {
+        Ok(policy) => create_box(runtime, opts, Some(policy), cb, user_data, out_error),
+        Err(error) => {
+            let code = crate::error::error_to_code(&error);
+            unsafe { write_error(out_error, error) };
+            code
+        }
+    }
 }
 
 /// Get an existing box by name, or create a new one if it does not exist.
@@ -85,12 +111,65 @@ pub unsafe extern "C" fn boxlite_get_or_create_box_with_prepared_outbound(
         })
     });
     match prepared {
-        Ok(prepared) => get_or_create_box(runtime, opts, Some(prepared), cb, user_data, out_error),
+        Ok(prepared) => get_or_create_box(
+            runtime,
+            opts,
+            Some(AdoptPolicy::Prepared(prepared)),
+            cb,
+            user_data,
+            out_error,
+        ),
         Err(error) => {
             unsafe { write_error(out_error, error) };
             BoxliteErrorCode::InvalidArgument
         }
     }
+}
+
+/// Create or adopt a named Box with the same committed complete policy. On
+/// success, consumes opts. The policy JSON is copied before return.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_get_or_create_box_with_outbound_policy(
+    runtime: *mut CBoxliteRuntime,
+    opts: *mut CBoxliteOptions,
+    policy_json: *const c_char,
+    cb: CBoxGetOrCreateBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    match unsafe { read_complete_create_policy(opts, policy_json) } {
+        Ok(policy) => get_or_create_box(
+            runtime,
+            opts,
+            Some(AdoptPolicy::Complete(policy)),
+            cb,
+            user_data,
+            out_error,
+        ),
+        Err(error) => {
+            let code = crate::error::error_to_code(&error);
+            unsafe { write_error(out_error, error) };
+            code
+        }
+    }
+}
+
+unsafe fn read_complete_create_policy(
+    opts: *mut CBoxliteOptions,
+    policy_json: *const c_char,
+) -> boxlite::BoxliteResult<CompleteOutboundPolicy> {
+    let options = unsafe { opts.as_ref() }.ok_or_else(|| null_pointer_error("opts"))?;
+    if options.legacy_outbound_selected {
+        return Err(BoxliteError::InvalidArgument(
+            "complete policy cannot be combined with legacy outbound options".into(),
+        ));
+    }
+    let json = unsafe { c_str_to_string(policy_json) }?;
+    let policy: CompleteOutboundPolicy = serde_json::from_str(&json).map_err(|error| {
+        BoxliteError::InvalidArgument(format!("invalid complete outbound policy: {error}"))
+    })?;
+    policy.validate()?;
+    Ok(policy)
 }
 
 #[unsafe(no_mangle)]
@@ -164,6 +243,7 @@ pub unsafe extern "C" fn boxlite_box_free(handle: *mut CBoxHandle) {
 unsafe fn create_box(
     runtime: *mut RuntimeHandle,
     opts: *mut OptionsHandle,
+    policy: Option<CompleteOutboundPolicy>,
     cb: CBoxCreateBoxCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -196,19 +276,31 @@ unsafe fn create_box(
         let task_queue = queue.clone();
 
         tokio_rt.spawn(async move {
-            let result = runtime_clone
-                .create(opts_handle.options, opts_handle.name)
-                .await
-                .map(|handle| {
-                    let box_id = handle.id().clone();
-                    let boxed = Box::new(BoxHandle {
-                        handle: Arc::new(handle),
-                        box_id,
-                        tokio_rt: task_tokio_rt,
-                        queue: task_queue.clone(),
-                    });
-                    crate::event_queue::OwnedFfiPtr::new(boxed)
+            let result = match policy {
+                Some(policy) => {
+                    runtime_clone
+                        .create_with_complete_outbound_policy(
+                            opts_handle.options,
+                            opts_handle.name,
+                            policy,
+                        )
+                        .await
+                }
+                None => runtime_clone
+                    .create(opts_handle.options, opts_handle.name)
+                    .await
+                    .map_err(Into::into),
+            }
+            .map(|handle| {
+                let box_id = handle.id().clone();
+                let boxed = Box::new(BoxHandle {
+                    handle: Arc::new(handle),
+                    box_id,
+                    tokio_rt: task_tokio_rt,
+                    queue: task_queue.clone(),
                 });
+                crate::event_queue::OwnedFfiPtr::new(boxed)
+            });
             push_event(
                 &queue,
                 RuntimeEvent::CreateBox {
@@ -228,7 +320,7 @@ unsafe fn create_box(
 unsafe fn get_or_create_box(
     runtime: *mut RuntimeHandle,
     opts: *mut OptionsHandle,
-    prepared: Option<PreparedOutboundCreate>,
+    policy: Option<AdoptPolicy>,
     cb: CBoxGetOrCreateBoxCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -248,7 +340,9 @@ unsafe fn get_or_create_box(
             return BoxliteErrorCode::InvalidArgument;
         }
 
-        if prepared.is_some() && (*opts).name.as_deref().is_none_or(str::is_empty) {
+        if matches!(policy, Some(AdoptPolicy::Prepared(_)))
+            && (*opts).name.as_deref().is_none_or(str::is_empty)
+        {
             write_error(
                 out_error,
                 BoxliteError::InvalidArgument(
@@ -268,16 +362,28 @@ unsafe fn get_or_create_box(
         let task_queue = queue.clone();
 
         tokio_rt.spawn(async move {
-            let result = match (prepared, opts_handle.name) {
-                (Some(prepared), Some(name)) => {
+            let result = match (policy, opts_handle.name) {
+                (Some(AdoptPolicy::Prepared(prepared)), Some(name)) => runtime_clone
+                    .get_or_create_with_prepared_outbound(opts_handle.options, name, prepared)
+                    .await
+                    .map_err(Into::into),
+                (Some(AdoptPolicy::Complete(policy)), name) => {
                     runtime_clone
-                        .get_or_create_with_prepared_outbound(opts_handle.options, name, prepared)
+                        .get_or_create_with_complete_outbound_policy(
+                            opts_handle.options,
+                            name,
+                            policy,
+                        )
                         .await
                 }
-                (None, name) => runtime_clone.get_or_create(opts_handle.options, name).await,
-                (Some(_), None) => Err(BoxliteError::InvalidArgument(
+                (None, name) => runtime_clone
+                    .get_or_create(opts_handle.options, name)
+                    .await
+                    .map_err(Into::into),
+                (Some(AdoptPolicy::Prepared(_)), None) => Err(BoxliteError::InvalidArgument(
                     "prepared outbound create requires a Box name".into(),
-                )),
+                )
+                .into()),
             };
             let result = result.map(|(handle, created)| {
                 let box_id = handle.id().clone();

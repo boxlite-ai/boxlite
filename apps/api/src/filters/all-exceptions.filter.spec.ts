@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ArgumentsHost, HttpStatus, NotFoundException, RequestTimeoutException } from '@nestjs/common'
+import { ArgumentsHost, HttpException, HttpStatus, NotFoundException, RequestTimeoutException } from '@nestjs/common'
 import { AllExceptionsFilter } from './all-exceptions.filter'
 import { RunnerApiError } from '../box/errors/runner-api-error'
 import { BoxCreationAdmissionUnavailableError } from '../box/errors/box-creation-limit.error'
@@ -12,6 +12,30 @@ import { BoxPreparingImageTimeoutError } from '../box/errors/box-preparing-image
 import { BoxProgressPhase } from '../box/enums/box-progress-phase.enum'
 
 describe('AllExceptionsFilter', () => {
+  it.each([
+    [{ creation_effect: 'not_allocated' }, 501],
+    [{ creation_effect: 'allocated', boxId: 'box-1', box_id: 'box-1' }, 501],
+    [{ effect: 'not_applied' }, 409],
+  ])('forwards complete outbound failure metadata %o', async (fields, statusCode) => {
+    const json = jest.fn()
+    const status = jest.fn().mockReturnValue({ json })
+    const filter = new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never)
+    const host = {
+      switchToHttp: () => ({
+        getResponse: () => ({ status }),
+        getRequest: () => ({ path: '/api/v1/org/boxes', url: '/api/v1/org/boxes' }),
+      }),
+    } as ArgumentsHost
+
+    await filter.catch(
+      new HttpException({ message: 'Operation refused', code: 'unsupported', ...fields }, statusCode),
+      host,
+    )
+
+    expect(status).toHaveBeenCalledWith(statusCode)
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ ...fields, code: 'unsupported' }))
+  })
+
   it.each(['box-1', undefined, '', 123, { id: 'box-1' }])('only forwards a valid timeout Box ID: %p', async (boxId) => {
     const json = jest.fn()
     const status = jest.fn().mockReturnValue({ json })

@@ -4,7 +4,46 @@ Create boxes with a network policy, then replace either direction through `box.n
 
 ## Details
 
-### Updating a running box
+### Complete outbound policy
+
+Opt in to complete outbound policy to use deny lists, port-specific rules, or up to 64 rules per list. Host protection and inbound settings continue to apply. The policy file accepts `mode`, `allow_net`, and `deny_net`.
+
+Complete policy normalizes IPv4-mapped addresses and CIDRs to IPv4. Cloud creation selects extended admission for this rule syntax.
+
+```json
+{"mode":"enabled","allow_net":["api.example.com:443"],"deny_net":["blocked.example.com"]}
+```
+
+Save the JSON as `policy.json` and use it on create, run, or conditional replacement.
+
+```bash
+boxlite create --outbound-policy policy.json --name worker alpine:latest
+boxlite start worker
+boxlite inspect --outbound-policy worker
+boxlite network replace-outbound worker --policy policy.json --expected-revision REVISION
+```
+
+Use `--outbound-policy` independently of `--network` and `--allow-net`. Leaving out `--expected-revision` uses the revision read before the write. Replace rejects omitted deny rules when denies may still be active, while `"deny_net": []` explicitly clears them on a capable runtime.
+
+| SDK | Create | Replace and read |
+| --- | --- | --- |
+| Rust | `create_with_complete_outbound_policy` | `replace_verified_outbound_policy`, `outbound_policy_status` |
+| Python | `create_with_outbound_policy` | `replace_outbound_policy`, `outbound_policy_status` |
+| Node | `createWithOutboundPolicy` | `replaceOutboundPolicy`, `outboundPolicyStatus` |
+| Go | `CreateWithOutboundPolicy` | `ReplaceOutboundPolicy`, `OutboundPolicyStatus` |
+| C | `boxlite_create_box_with_outbound_policy` | `boxlite_network_replace_outbound_policy`, `boxlite_network_outbound_policy_status` |
+
+Python accepts a policy dictionary in both its async and sync APIs. Node uses `allowNet` and `denyNet`, and Go uses nil and non-nil slices for omission and presence. Use an empty non-nil slice for an explicit clear.
+
+Cloud creation requires a current capability advertisement and verifies the committed policy by Box ID after success. A create error with a known Box ID lets you inspect that Box. An uncertain outcome calls for inspection before any further write.
+
+Rust, Python and Go expose effect, HTTP status, code and Box ID on complete request errors. Node reads those fields with `outboundPolicyFailure(error)`. C uses the `OutboundPolicy` error code and a JSON message with the same fields.
+
+Replacement reports a committed snapshot and a separate status read. `application_verified` is true only when the confirmed live snapshot matches that write's full identity. A newer confirmed revision describes current state and leaves the earlier write unverified.
+
+Complete control supports the usual start, stop, restart, inspection and removal operations. Cloud checkpoint capture and drain migration refuse Boxes with complete control. Native clone and export also refuse them, including when the installed lists are empty.
+
+### Updating a running box with legacy policy
 
 Each `update_*` method replaces one complete direction; it never patches. The other direction is unchanged.
 Enabled outbound with an empty allowlist removes Box-level restrictions.
@@ -78,7 +117,7 @@ boxlite inspect mybox
 | Runtime disabled | Suspends the NIC, including DNS and inbound traffic; control and exec remain available. |
 | Re-enable | Uses the supplied complete policy on the existing NIC. Existing connections may have timed out. |
 | Persistence | Successful outbound updates survive reattachment and normal stop/start. |
-| Clone/export | Copies inherit the latest persisted outbound policy. |
+| Clone/export | For legacy policies, copies inherit the latest persisted outbound policy. |
 | Inbound timing | Cloud proxy cache expiry governs new connections; existing connections stay open. |
 
 REST creation and outbound replacement share the same combination check:
