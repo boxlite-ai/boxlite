@@ -76,6 +76,8 @@ func startNetworkWith(t *testing.T, cfg GvproxyConfig) *guestTap {
 // the host resolver, socket dialer, and selected transport. DNS defaults to
 // refusing; unscripted sockets may reach only literal loopback addresses.
 type networkSeams struct {
+	beforeAttach  func(context.Context, *outboundPolicyController)
+	wrapGuestLink func(net.Conn) net.Conn
 	ca            *BoxCA
 	secretMatcher *SecretHostMatcher
 	resolve       resolveFunc
@@ -135,10 +137,20 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 
 	guestSide, stackSide := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if seams.beforeAttach != nil {
+		seams.beforeAttach(ctx, policy)
+	}
 	accepted := make(chan struct{})
+	link := stackSide
+	if seams.wrapGuestLink == nil {
+		link = wrapConn(stackSide, 4, cfg.RateLimit)
+	} else {
+		link = seams.wrapGuestLink(stackSide)
+	}
 	go func() {
 		defer close(accepted)
-		_ = vn.AcceptQemu(ctx, wrapConn(stackSide, 4, cfg.RateLimit))
+		_ = vn.AcceptQemu(ctx, link)
 	}()
 	nic := policy.nic
 	t.Cleanup(func() {

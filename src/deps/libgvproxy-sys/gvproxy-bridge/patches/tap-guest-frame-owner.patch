@@ -1,0 +1,45 @@
+--- a/pkg/tap/switch.go
++++ b/pkg/tap/switch.go
+@@ -144,7 +144,7 @@
+ 				continue
+ 			}
+ 
+-			err := e.txBuf(id, conn, buf)
++			err := e.txBuf(id, conn, buf, pkt.Owner)
+ 			if err != nil {
+ 				return err
+ 			}
+@@ -160,7 +160,7 @@
+ 		}
+ 		e.camLock.RUnlock()
+ 		conn := e.conns[id]
+-		err := e.txBuf(id, conn, buf)
++		err := e.txBuf(id, conn, buf, pkt.Owner)
+ 		if err != nil {
+ 			return err
+ 		}
+@@ -169,14 +169,22 @@
+ 	return nil
+ }
+ 
+-func (e *Switch) txBuf(id int, conn protocolConn, buf []byte) error {
++func (e *Switch) txBuf(id int, conn protocolConn, buf []byte, owner tcpip.PacketOwner) error {
+ 	if conn.protocolImpl.Stream() {
+ 		size := conn.protocolImpl.(streamProtocol).Buf()
+ 		conn.protocolImpl.(streamProtocol).Write(size, len(buf))
+ 		buf = append(size, buf...)
+ 	}
++	write := conn.Write
++	if writer, ok := conn.Conn.(interface {
++		WriteGuestFrame([]byte, tcpip.PacketOwner) (int, error)
++	}); ok && owner != nil {
++		write = func(frame []byte) (int, error) {
++			return writer.WriteGuestFrame(frame, owner)
++		}
++	}
+ 	for {
+-		if _, err := conn.Write(buf); err != nil {
++		if _, err := write(buf); err != nil {
+ 			if errors.Is(err, syscall.ENOBUFS) {
+ 				// socket buffer can be full keep retrying sending the same data
+ 				// again until it works or we get a different error

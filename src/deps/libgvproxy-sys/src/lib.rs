@@ -27,6 +27,17 @@ extern "C" {
     /// Instance ID (handle) or -1 on error
     pub fn gvproxy_create(config_json: *const c_char, errOut: *mut *mut c_char) -> c_longlong;
 
+    /// Create a proxy-capable instance through the trusted host startup path.
+    ///
+    /// Pass a null route pointer for unbound startup. A bound route includes
+    /// the registered endpoint and resolver pin, with optional credentials.
+    /// On failure the caller frees the error string with `gvproxy_free_string`.
+    pub fn gvproxy_create_managed(
+        config_json: *const c_char,
+        route_json: *const c_char,
+        err_out: *mut *mut c_char,
+    ) -> c_longlong;
+
     /// Free a string allocated by libgvproxy
     ///
     /// # Arguments

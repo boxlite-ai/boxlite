@@ -150,7 +150,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
 		current := snapshot()
-		if current.policy.Mode == "disabled" {
+		if current.ingressClosed() || (current.managed && current.state != "confirmed") {
 			r.Complete(true)
 			return
 		}

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
@@ -29,13 +32,29 @@ type nicOperations interface {
 // One controller owns policy replacement for both transports and the NIC.
 // Forwarders capture immutable snapshots, so established flows keep their policy and transport.
 type outboundPolicyController struct {
-	mu      sync.Mutex
-	active  atomic.Pointer[outboundSnapshot]
-	config  *types.Configuration
-	guestIP string
-	stack   *stack.Stack
-	nic     tcpip.NICID
-	nicOps  nicOperations
+	mu             sync.Mutex
+	publication    sync.Mutex
+	puts           sync.WaitGroup
+	stopped        bool
+	active         atomic.Pointer[outboundSnapshot]
+	config         *types.Configuration
+	guestIP        string
+	stack          *stack.Stack
+	nic            tcpip.NICID
+	nicOps         nicOperations
+	dnsWork        *dnsLookupWork
+	newUDPRelay    func() *managedUDP
+	managedContext context.Context
+}
+
+func (p *outboundPolicyController) beginPut() bool {
+	p.publication.Lock()
+	defer p.publication.Unlock()
+	if p.stopped {
+		return false
+	}
+	p.puts.Add(1)
+	return true
 }
 
 func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *types.Configuration, guestIP string, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, initialRevision string) (*outboundPolicyController, error) {
@@ -77,12 +96,15 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 	return p, nil
 }
 
-func (p *outboundPolicyController) apply(policy outboundPolicy, revision string) error {
+func (p *outboundPolicyController) apply(ctx context.Context, policy outboundPolicy, revision string) error {
 	candidate, err := p.compile(policy, revision)
 	if err != nil {
 		return err
 	}
 	previous := p.active.Load()
+	if previous.managed {
+		return p.applyManaged(ctx, previous, candidate)
+	}
 	transition := previous
 	var nicErr tcpip.Error
 	if policy.Mode == "disabled" {
@@ -129,12 +151,22 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	switch r.Method {
 	case http.MethodGet:
 	case http.MethodPut:
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		var policy outboundPolicy
+		if !p.beginPut() {
+			http.Error(w, "outbound update canceled", http.StatusServiceUnavailable)
+			return
+		}
+		defer p.puts.Done()
+		var body struct {
+			outboundPolicy
+			ProxyRoute json.RawMessage `json:"proxy_route"`
+		}
+		control := http.NewResponseController(w)
+		if control.SetReadDeadline(time.Now().Add(5*time.Second)) == nil {
+			defer control.SetReadDeadline(time.Time{})
+		}
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&policy); err != nil {
+		if err := decoder.Decode(&body); err != nil {
 			http.Error(w, "invalid outbound policy", http.StatusBadRequest)
 			return
 		}
@@ -142,16 +174,52 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 			http.Error(w, "expected one outbound policy", http.StatusBadRequest)
 			return
 		}
-		if err := policy.validate(); err != nil {
+		if err := body.outboundPolicy.validate(); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		revision, status, err := revisionForOutboundUpdate(r, p.active.Load().revision)
+		var routeConfig *managedRouteConfig
+		if len(body.ProxyRoute) != 0 {
+			routeDecoder := json.NewDecoder(bytes.NewReader(body.ProxyRoute))
+			routeDecoder.DisallowUnknownFields()
+			if r.URL.Path != outboundSnapshotPath || routeDecoder.Decode(&routeConfig) != nil {
+				http.Error(w, "invalid managed proxy route", http.StatusBadRequest)
+				return
+			}
+		}
+		// Reading an incomplete request must not reserve the update lock.
+		// Evaluate both cancellation and the revision after acquiring it.
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if err := r.Context().Err(); err != nil {
+			http.Error(w, "outbound update canceled", http.StatusServiceUnavailable)
+			return
+		}
+		previous := p.active.Load()
+		revision, status, err := revisionForOutboundUpdate(r, previous.revision)
 		if err != nil {
 			http.Error(w, err.Error(), status)
 			return
 		}
-		if err := p.apply(policy, revision); err != nil {
+		if len(body.ProxyRoute) != 0 {
+			if !previous.managed {
+				http.Error(w, "managed proxy network is unavailable", http.StatusConflict)
+				return
+			}
+			route, routeErr := routeConfig.resolver(p.config.Subnet, p.dnsWork)
+			if routeErr != nil {
+				http.Error(w, routeErr.Error(), http.StatusBadRequest)
+				return
+			}
+			err = p.replaceManagedRoute(r.Context(), body.outboundPolicy, revision, route)
+		} else {
+			if previous.proxyDNS != nil || (previous.managed && previous.state != "confirmed" && r.URL.Path != outboundSnapshotPath) {
+				http.Error(w, "managed binding requires an explicit proxy route", http.StatusConflict)
+				return
+			}
+			err = p.apply(r.Context(), body.outboundPolicy, revision)
+		}
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
