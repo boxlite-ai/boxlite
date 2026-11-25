@@ -4,14 +4,30 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/boxlite-ai/secret-server/internal/attest"
 	"google.golang.org/api/idtoken"
 )
 
 type validateToken func(context.Context, string, string) (*idtoken.Payload, error)
+
+func fetchAuth(verifier attest.Verifier, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := verifier.Verify(r.Context(), r.Header)
+		switch {
+		case errors.Is(err, attest.ErrInvalidProof):
+			problem(w, http.StatusUnauthorized, "attestation_failed")
+		case err != nil:
+			problem(w, http.StatusServiceUnavailable, "attestation_unavailable")
+		default:
+			next.ServeHTTP(w, r)
+		}
+	})
+}
 
 func problem(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/problem+json")

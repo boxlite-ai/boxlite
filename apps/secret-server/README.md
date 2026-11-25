@@ -20,12 +20,17 @@ for write or all roles, `SECRET_SERVER_ALLOWED_CALLERS`. Dev mode requires
 environment key provider is rejected in production.
 
 The write route group validates Google ID tokens and permits only verified emails
-on the allowlist. The reserved fetch path and all business handlers return 404
-until their separate implementations land. `/health` is liveness; `/ready`
-checks database connectivity. Startup also performs an encryption round trip.
+on the allowlist. The fetch route checks Runner proof in `fetch` and `all` roles.
+The current business handlers are placeholders that return 404 after authentication.
+
+`/health` is liveness and `/ready` checks database connectivity. Startup also
+performs an encryption round trip.
 
 Startup applies migrations and verifies the durable encrypted canary before the
 server listens. A failed migration or key check prevents startup and readiness.
+Startup and the standalone `migrate` command each allow up to two minutes,
+including any wait for the migration lock.
+
 If token validator initialization fails, startup closes the database pool and
 returns an error before opening the listener.
 
@@ -49,8 +54,10 @@ exposing secret values; it does not use envconfig or validator.
 
 For a local run, supply a persistent development key, database URL, and dev token
 through the environment, then run `make run:apps:secret-server`. The role defaults
-to `write`; set `SECRET_SERVER_ROLE=fetch` to select fetch. Do not commit or print
-the key or token. The local database must use the same key across restarts.
+to `write`; set `SECRET_SERVER_ROLE=fetch` to select fetch. The local target defaults
+to the `dev` attestor. Do not commit or print the key or token.
+
+The local database must use the same key across restarts.
 
 To exercise startup and readiness against a disposable PostgreSQL database, set
 `SECRET_TEST_DATABASE_URL` and run `make test:apps:secret-server`. Integration
@@ -225,15 +232,16 @@ runnerID, err := selector.Verify(ctx, r.Header)
 ```
 
 `googleVerifier` comes from `attest.NewGoogleTokenVerifier(ctx, nil)`.
-Every error from `New` must fail startup. The service skeleton reads these
-values from `SECRET_SERVER_ATTESTORS`, `SECRET_SERVER_AUDIENCE`,
-`SECRET_SERVER_GCP_PROJECT`, `SECRET_SERVER_RUNNER_SERVICE_ACCOUNT`, and
-`SECRET_SERVER_RUNNER_REGISTRY` once it lands; this package does not read the
-environment.
+
+In `fetch` and `all` roles, startup requires `SECRET_SERVER_ATTESTORS`, a
+comma-separated list of enabled attestors. The `gcp_iit` attestor uses
+`SECRET_SERVER_AUDIENCE`, `SECRET_SERVER_GCP_PROJECT`,
+`SECRET_SERVER_RUNNER_SERVICE_ACCOUNT`, and `SECRET_SERVER_RUNNER_REGISTRY`.
+Invalid attestation configuration prevents startup before the listener opens.
 
 | `Verify` result | Meaning | Fetch route answer |
 | --- | --- | --- |
-| `runnerID, nil` | Proof valid; instance registered | Continue to introspection |
+| `runnerID, nil` | Proof valid | Continue to the fetch handler (currently a 404 placeholder) |
 | `errors.Is(err, attest.ErrInvalidProof)` | Missing, ambiguous, or rejected proof | 401 `attestation_failed` |
 | any other error | Google signing keys unreachable | 503; the runner retries |
 
@@ -249,8 +257,8 @@ environment.
 - **dev attestor.** Reads `X-Boxlite-Dev-Runner` and is refused unless
   `ENVIRONMENT` is `local` or `dev`. It rejects runner IDs registered under
   another mode.
-- **Logging.** Rejection reasons name the failed check, never token content.
-  Callers log the error and return only the problem code.
+- **Errors.** The fetch route returns a fixed problem code without token or
+  verifier error details.
 
 Known limitations: a captured token can be replayed until it expires, about
 an hour; the zone is not checked; the registry is written by hand.

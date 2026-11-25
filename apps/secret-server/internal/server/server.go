@@ -9,9 +9,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/boxlite-ai/secret-server/internal/attest"
 	"github.com/boxlite-ai/secret-server/internal/database"
 	"github.com/boxlite-ai/secret-server/internal/encryption"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -54,6 +56,22 @@ func defaultStartupDependencies() startupDependencies {
 }
 
 func newServer(ctx context.Context, c Config, deps startupDependencies) (*Server, error) {
+	var runnerVerifier attest.Verifier
+	if c.Role == "fetch" || c.Role == "all" {
+		var tokens attest.TokenVerifier
+		if slices.Contains(c.RunnerAttestation.Attestors, attest.GCPIITName) {
+			verifier, err := attest.NewGoogleTokenVerifier(ctx, &http.Client{Timeout: 5 * time.Second})
+			if err != nil {
+				return nil, errors.New("runner attestation token verifier initialization failed")
+			}
+			tokens = verifier
+		}
+		selector, err := attest.New(c.RunnerAttestation, tokens, slog.Default())
+		if err != nil {
+			return nil, errors.New("invalid runner attestation configuration (check SECRET_SERVER_ATTESTORS, SECRET_SERVER_RUNNER_REGISTRY and gcp_iit settings)")
+		}
+		runnerVerifier = selector
+	}
 	provider, err := encryption.NewEnvKeyProvider(c.KeyID, c.Key)
 	if err != nil {
 		return nil, errors.New("invalid SECRET_MASTER_KEY_ID or SECRET_MASTER_KEY_BASE64")
@@ -101,7 +119,7 @@ func newServer(ctx context.Context, c Config, deps startupDependencies) (*Server
 		return nil, errors.New("token validator initialization failed")
 	}
 	s := &Server{config: c, db: db}
-	s.http = &http.Server{Addr: net.JoinHostPort("", c.Port), Handler: routes(c, db.Ping, validator.Validate), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	s.http = &http.Server{Addr: net.JoinHostPort("", c.Port), Handler: routes(c, db.Ping, validator.Validate, runnerVerifier), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	return s, nil
 }
 
@@ -130,13 +148,17 @@ func databaseError(err error) error {
 	}
 }
 
-func routes(c Config, ping func(context.Context) error, validate validateToken) http.Handler {
+func routes(c Config, ping func(context.Context) error, validate validateToken, runnerVerifier attest.Verifier) http.Handler {
 	mux := http.NewServeMux()
 	// Endpoint implementations are supplied by their respective follow-up work.
 	// The fetch path is reserved separately so the write middleware never handles it.
 	notFound := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { problem(w, http.StatusNotFound, "not_found") })
-	mux.Handle("/internal/v1/fetch", notFound)
-	mux.Handle("/internal/v1/fetch/", notFound)
+	var fetch http.Handler = notFound
+	if runnerVerifier != nil {
+		fetch = fetchAuth(runnerVerifier, fetch)
+	}
+	mux.Handle("/internal/v1/fetch", fetch)
+	mux.Handle("/internal/v1/fetch/", fetch)
 	if c.Role == "write" || c.Role == "all" {
 		mux.Handle("/internal/v1/", writeAuth(c, validate, notFound))
 	}

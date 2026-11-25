@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const migrationTimeout = 2 * time.Minute
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -37,7 +39,7 @@ func runWithListener(ctx context.Context, args []string, listen func(network, ad
 		if url == "" {
 			return fmt.Errorf("DATABASE_URL is required")
 		}
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		ctx, cancel := context.WithTimeout(ctx, migrationTimeout)
 		defer cancel()
 		pool, err := pgxpool.New(ctx, url)
 		if err != nil {
@@ -50,7 +52,7 @@ func runWithListener(ctx context.Context, args []string, listen func(network, ad
 	if err != nil {
 		return err
 	}
-	startup, cancel := context.WithTimeout(ctx, 15*time.Second)
+	startup, cancel := context.WithTimeout(ctx, migrationTimeout)
 	defer cancel()
 	s, err := server.New(startup, c)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/boxlite-ai/secret-server/internal/attest"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -18,7 +19,17 @@ func TestRoutes(t *testing.T) {
 	for _, role := range []string{"write", "fetch", "all"} {
 		t.Run(role, func(t *testing.T) {
 			pingErr := error(nil)
-			handler := routes(Config{Role: role, AuthMode: "dev", DevToken: "secret"}, func(context.Context) error { return pingErr }, nil)
+			var runnerVerifier attest.Verifier
+			wantFetch := http.StatusNotFound
+			if role == "fetch" || role == "all" {
+				selector, err := attest.New(attest.Config{Attestors: []string{attest.DevName}, Environment: "local"}, nil, slog.Default())
+				if err != nil {
+					t.Fatal(err)
+				}
+				runnerVerifier = selector
+				wantFetch = http.StatusUnauthorized
+			}
+			handler := routes(Config{Role: role, AuthMode: "dev", DevToken: "secret"}, func(context.Context) error { return pingErr }, nil, runnerVerifier)
 			request := func(path, token string) int {
 				r := httptest.NewRequest(http.MethodGet, path, nil)
 				if token != "" {
@@ -41,10 +52,10 @@ func TestRoutes(t *testing.T) {
 			if got := request("/health", ""); got != 200 {
 				t.Fatalf("liveness depends on db: %d", got)
 			}
-			if got := request("/internal/v1/fetch", ""); got != 404 {
+			if got := request("/internal/v1/fetch", ""); got != wantFetch {
 				t.Fatalf("unimplemented fetch: %d", got)
 			}
-			if got := request("/internal/v1/fetch/child", ""); got != 404 {
+			if got := request("/internal/v1/fetch/child", ""); got != wantFetch {
 				t.Fatalf("fetch subtree: %d", got)
 			}
 			want := 401
@@ -62,7 +73,7 @@ func TestRoutes(t *testing.T) {
 }
 
 func TestHealthAndReadinessRejectOtherMethods(t *testing.T) {
-	handler := routes(Config{}, func(context.Context) error { t.Error("unexpected ping"); return nil }, nil)
+	handler := routes(Config{}, func(context.Context) error { t.Error("unexpected ping"); return nil }, nil, nil)
 	for _, path := range []string{"/health", "/ready"} {
 		t.Run(path, func(t *testing.T) {
 			w := httptest.NewRecorder()

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/boxlite-ai/secret-server/internal/attest"
 )
 
 type Config struct {
@@ -16,6 +18,7 @@ type Config struct {
 	AllowedCallers                                                           []string
 	Port                                                                     string
 	ShutdownTimeout                                                          time.Duration
+	RunnerAttestation                                                        attest.Config
 }
 
 func LoadConfig() (Config, error) {
@@ -72,6 +75,22 @@ func LoadConfig() (Config, error) {
 		}
 	default:
 		return c, errors.New("invalid SECRET_SERVER_AUTH_MODE")
+	}
+	if c.Role == "fetch" || c.Role == "all" {
+		c.RunnerAttestation = attest.Config{
+			Environment: c.Environment,
+			Registry:    os.Getenv("SECRET_SERVER_RUNNER_REGISTRY"),
+			GCPIIT: attest.GCPIITConfig{
+				Audience:       c.Audience,
+				Project:        os.Getenv("SECRET_SERVER_GCP_PROJECT"),
+				ServiceAccount: os.Getenv("SECRET_SERVER_RUNNER_SERVICE_ACCOUNT"),
+			},
+		}
+		for _, name := range strings.Split(os.Getenv("SECRET_SERVER_ATTESTORS"), ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				c.RunnerAttestation.Attestors = append(c.RunnerAttestation.Attestors, name)
+			}
+		}
 	}
 	return c, nil
 }
