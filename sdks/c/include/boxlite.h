@@ -63,6 +63,8 @@ typedef enum BoxliteErrorCode {
   // Interactive execution session was reaped server-side after disconnect.
   // Reattach is no longer possible — start a new exec.
   SessionReaped = 21,
+  // A complete policy request failed. The error message contains JSON details.
+  OutboundPolicy = 22,
 } BoxliteErrorCode;
 
 // Network mode exposed by [`CNetworkInfo`].
@@ -1105,6 +1107,15 @@ enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          void *user_data,
                                          CBoxliteError *out_error);
 
+// Create with complete outbound policy JSON. Policy bytes are copied before
+// return. On success, consumes opts and dispatches cb through runtime_drain.
+enum BoxliteErrorCode boxlite_create_box_with_outbound_policy(CBoxliteRuntime *runtime,
+                                                              CBoxliteOptions *opts,
+                                                              const char *policy_json,
+                                                              CBoxCreateBoxCb cb,
+                                                              void *user_data,
+                                                              CBoxliteError *out_error);
+
 // Get an existing box by name, or create a new one if it does not exist.
 //
 // When a box with the given name already exists it returns that box instead
@@ -1126,6 +1137,15 @@ enum BoxliteErrorCode boxlite_get_or_create_box_with_prepared_outbound(CBoxliteR
                                                                        CBoxGetOrCreateBoxCb cb,
                                                                        void *user_data,
                                                                        CBoxliteError *out_error);
+
+// Create or adopt a named Box with the same committed complete policy. On
+// success, consumes opts. The policy JSON is copied before return.
+enum BoxliteErrorCode boxlite_get_or_create_box_with_outbound_policy(CBoxliteRuntime *runtime,
+                                                                     CBoxliteOptions *opts,
+                                                                     const char *policy_json,
+                                                                     CBoxGetOrCreateBoxCb cb,
+                                                                     void *user_data,
+                                                                     CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle,
                                        CBoxStopBoxCb cb,
@@ -1762,6 +1782,20 @@ enum BoxliteErrorCode boxlite_network_complete_outbound_snapshot(CBoxNetworkHand
 enum BoxliteErrorCode boxlite_network_complete_outbound_status(CBoxNetworkHandle *network,
                                                                char **out_json,
                                                                CBoxliteError *out_error);
+
+// Read complete status, including nullable Cloud snapshots and Runner persistence.
+// Free a successful response with boxlite_free_string.
+enum BoxliteErrorCode boxlite_network_outbound_policy_status(CBoxNetworkHandle *network,
+                                                             char **out_json,
+                                                             CBoxliteError *out_error);
+
+// Replace complete policy conditionally. A NULL expected_revision fences the
+// committed revision read before replacement. Free a successful readback with boxlite_free_string.
+enum BoxliteErrorCode boxlite_network_replace_outbound_policy(CBoxNetworkHandle *network,
+                                                              const char *expected_revision,
+                                                              const char *policy_json,
+                                                              char **out_json,
+                                                              CBoxliteError *out_error);
 
 // Execute a private hosted control-plane command. Free the receipt with boxlite_free_string.
 enum BoxliteErrorCode boxlite_network_hosted_outbound(CBoxNetworkHandle *network,

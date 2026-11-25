@@ -29,6 +29,7 @@ export class BoxliteConfigController {
         inbound_update_enabled: true,
         private_tunnels_enabled: true,
         exec_user_enabled: true,
+        complete_outbound_policy_enabled: true,
       },
     }
   }

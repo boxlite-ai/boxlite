@@ -13,6 +13,7 @@ pub struct OptionsHandle {
     pub name: Option<String>,
     pub(crate) checkpoint_override: bool,
     pub(crate) checkpoint_selected: bool,
+    pub(crate) legacy_outbound_selected: bool,
 }
 
 impl OptionsHandle {
@@ -78,6 +79,7 @@ mod required_headers_tests {
             name: None,
             checkpoint_override: false,
             checkpoint_selected: false,
+            legacy_outbound_selected: false,
         };
         let name = CString::new("x").unwrap();
         let value = CString::new("private-token").unwrap();
@@ -512,6 +514,7 @@ pub unsafe fn options_new(
             name: None,
             checkpoint_override: false,
             checkpoint_selected: false,
+            legacy_outbound_selected: false,
         });
 
         *out_opts = Box::into_raw(handle);
@@ -679,6 +682,7 @@ pub unsafe fn options_add_port(
 pub unsafe fn options_set_network_enabled(handle: *mut OptionsHandle) {
     unsafe {
         if !handle.is_null() {
+            (*handle).legacy_outbound_selected = true;
             (*handle).options.network = NetworkSpec::Enabled {
                 allow_net: Vec::new(),
             };
@@ -689,6 +693,7 @@ pub unsafe fn options_set_network_enabled(handle: *mut OptionsHandle) {
 pub unsafe fn options_set_network_disabled(handle: *mut OptionsHandle) {
     unsafe {
         if !handle.is_null() {
+            (*handle).legacy_outbound_selected = true;
             (*handle).options.network = NetworkSpec::Disabled;
         }
     }
@@ -699,6 +704,7 @@ pub unsafe fn options_add_network_allow(handle: *mut OptionsHandle, host: *const
         if handle.is_null() || host.is_null() {
             return;
         }
+        (*handle).legacy_outbound_selected = true;
         if let Ok(h) = c_str_to_string(host)
             && let NetworkSpec::Enabled { allow_net } = &mut (*handle).options.network
         {
@@ -893,6 +899,7 @@ mod headers_map_tests {
                 name: None,
                 checkpoint_override: false,
                 checkpoint_selected: false,
+                legacy_outbound_selected: false,
             };
             unsafe {
                 boxlite_options_add_secret_with_headers(

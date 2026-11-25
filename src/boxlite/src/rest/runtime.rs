@@ -5,12 +5,16 @@ use std::sync::Arc;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::metrics::RuntimeMetrics;
+use crate::net::{
+    CompleteOutboundPolicy, OutboundAdmission, OutboundPolicyResult, OutboundRevision,
+};
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::backend::RuntimeBackend;
-use crate::runtime::options::{BoxArchive, BoxOptions};
+use crate::runtime::options::{BoxArchive, BoxOptions, NetworkSpec};
 use crate::{BoxInfo, LiteBox};
 
 use super::client::ApiClient;
+use super::complete_outbound::{cloud_create_admission, request_uncertain};
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
 use super::types::{
@@ -36,6 +40,36 @@ impl RestRuntime {
     pub fn new(config: &BoxliteRestOptions) -> BoxliteResult<Self> {
         let client = ApiClient::new(config)?;
         Ok(Self { client })
+    }
+
+    async fn validate_create(&self, options: &BoxOptions) -> BoxliteResult<()> {
+        options.sanitize_remote()?;
+        options.validate_secrets()?;
+
+        // Validate only the caller's requested policy. An unset auto_stop means
+        // "no auto-stop", so it must not borrow the server's default here —
+        // otherwise a plain remove-on-stop box (`--rm` → auto_delete=1) is
+        // wrongly rejected by the ordering check before the request is even sent.
+        crate::runtime::types::BoxLifecyclePolicy {
+            auto_stop: options.auto_stop.unwrap_or(0),
+            auto_delete: options.auto_delete.unwrap_or(0),
+            auto_resume: options.auto_resume.unwrap_or(true),
+        }
+        .validate()?;
+
+        // A server that does not advertise the capability policy would accept
+        // the request and drop the field, silently granting default privileges.
+        // `Some` alone is the trigger, even an explicitly empty policy: the
+        // caller configured something, and a server that can't represent the
+        // concept at all can't be trusted to preserve that from a no-op value.
+        if options.advanced.capabilities().is_some() {
+            self.client.require_linux_capabilities_enabled().await?;
+        }
+        if options.advanced.privileged {
+            self.client.require_privileged_enabled().await?;
+        }
+
+        Ok(())
     }
 }
 
@@ -436,6 +470,27 @@ impl BoxOptions {
     }
 }
 
+fn verify_reuse_privileged(
+    response: &BoxResponse,
+    box_name: &str,
+    expected: bool,
+) -> BoxliteResult<()> {
+    let actual = response.privileged.ok_or_else(|| {
+        BoxliteError::Unsupported(format!(
+            "cannot reuse box {box_name:?}: the server did not report its \
+             privileged mode; upgrade the server to expose privilege metadata"
+        ))
+    })?;
+    if actual != expected {
+        return Err(BoxliteError::Unsupported(format!(
+            "cannot reuse box {box_name:?}: requested privileged={}, but the \
+             existing box has privileged={actual}; use a different name or recreate it",
+            expected
+        )));
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
@@ -446,31 +501,7 @@ impl RuntimeBackend for RestRuntime {
                 .create_from_checkpoint(checkpoint, name.as_deref())
                 .await;
         }
-        options.sanitize_remote()?;
-        options.validate_secrets()?;
-
-        // Validate only the caller's requested policy. An unset auto_stop means
-        // "no auto-stop", so it must not borrow the server's default here —
-        // otherwise a plain remove-on-stop box (`--rm` → auto_delete=1) is
-        // wrongly rejected by the ordering check before the request is even sent.
-        crate::runtime::types::BoxLifecyclePolicy {
-            auto_stop: options.auto_stop.unwrap_or(0),
-            auto_delete: options.auto_delete.unwrap_or(0),
-            auto_resume: options.auto_resume.unwrap_or(true),
-        }
-        .validate()?;
-
-        // A server that does not advertise the capability policy would accept
-        // the request and drop the field, silently granting default privileges.
-        // `Some` alone is the trigger, even an explicitly empty policy: the
-        // caller configured something, and a server that can't represent the
-        // concept at all can't be trusted to preserve that from a no-op value.
-        if options.advanced.capabilities().is_some() {
-            self.client.require_linux_capabilities_enabled().await?;
-        }
-        if options.advanced.privileged {
-            self.client.require_privileged_enabled().await?;
-        }
+        self.validate_create(&options).await?;
 
         let req = CreateBoxRequest::from_options(&options, name);
         let resp = self.client.create_box(&req).await?;
@@ -497,19 +528,7 @@ impl RuntimeBackend for RestRuntime {
             let path = format!("/boxes/{box_name}");
             match self.client.get::<BoxResponse>(&path).await {
                 Ok(response) => {
-                    let actual = response.privileged.ok_or_else(|| {
-                        BoxliteError::Unsupported(format!(
-                            "cannot reuse box {box_name:?}: the server did not report its \
-                             privileged mode; upgrade the server to expose privilege metadata"
-                        ))
-                    })?;
-                    if actual != options.advanced.privileged {
-                        return Err(BoxliteError::Unsupported(format!(
-                            "cannot reuse box {box_name:?}: requested privileged={}, but the \
-                             existing box has privileged={actual}; use a different name or recreate it",
-                            options.advanced.privileged
-                        )));
-                    }
+                    verify_reuse_privileged(&response, box_name, options.advanced.privileged)?;
                     let info = response.to_box_info()?;
                     let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
                     return Ok((litebox_from_rest(rest_box), false));
@@ -521,6 +540,91 @@ impl RuntimeBackend for RestRuntime {
         // Create new box
         let litebox = self.create(options, name).await?;
         Ok((litebox, true))
+    }
+
+    async fn create_with_complete_outbound_policy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        mut policy: CompleteOutboundPolicy,
+        reuse_existing: bool,
+    ) -> OutboundPolicyResult<(LiteBox, bool)> {
+        if options.checkpoint_source()?.is_some() {
+            return Err(BoxliteError::InvalidArgument(
+                "complete outbound policy cannot override Cloud checkpoint settings".into(),
+            )
+            .into());
+        }
+        if !matches!(&options.network, NetworkSpec::Enabled { allow_net } if allow_net.is_empty()) {
+            return Err(BoxliteError::InvalidArgument(
+                "complete outbound policy cannot be combined with legacy outbound options".into(),
+            )
+            .into());
+        }
+        let mut expected =
+            policy.prepare(cloud_create_admission(&policy), OutboundRevision::initial())?;
+        if expected.admission == OutboundAdmission::Legacy {
+            // Cloud stores legacy allow rules with surrounding whitespace removed.
+            for rule in &mut policy.allow_net {
+                *rule = rule.trim().to_owned();
+            }
+            expected.policy.allow_net.clone_from(&policy.allow_net);
+        }
+        self.validate_create(&options).await?;
+        if let Some(box_name) = name.as_ref().filter(|_| reuse_existing) {
+            if matches!(box_name.as_str(), "" | "." | "..") {
+                return Err(BoxliteError::InvalidArgument("invalid Box name".into()).into());
+            }
+            let path = format!("/boxes/{}", urlencoding::encode(box_name));
+            match self.client.get::<BoxResponse>(&path).await {
+                Ok(response) => {
+                    verify_reuse_privileged(&response, box_name, options.advanced.privileged)?;
+                    let committed = self
+                        .client
+                        .read_complete_outbound_snapshot(&response.box_id)
+                        .await?;
+                    if committed.admission != expected.admission
+                        || committed.policy != expected.policy
+                    {
+                        return Err(BoxliteError::InvalidState(
+                            "cannot reuse the named Box with a different complete outbound policy or admission".into(),
+                        ).into());
+                    }
+                    let info = response.to_box_info()?;
+                    let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+                    return Ok((litebox_from_rest(rest_box), false));
+                }
+                Err(BoxliteError::NotFound(_)) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+
+        let mut request = CreateBoxRequest::from_options(&options, name);
+        request.set_complete_outbound_policy(policy, &options.inbound_network);
+        self.client.require_complete_outbound_policy().await?;
+        let response = self.client.create_complete_outbound_box(&request).await?;
+        let box_id = response.box_id.clone();
+        let unverified = |error| {
+            request_uncertain(
+                Some(reqwest::StatusCode::CREATED),
+                Some(box_id.clone()),
+                error,
+            )
+        };
+        let committed = self
+            .client
+            .read_complete_outbound_snapshot(&box_id)
+            .await
+            .map_err(unverified)?;
+        if committed.admission != expected.admission || committed.policy != expected.policy {
+            return Err(unverified(BoxliteError::InvalidState(
+                "created Box did not commit the requested complete outbound policy or admission"
+                    .into(),
+            )));
+        }
+        let info = response.to_box_info().map_err(unverified)?;
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        Ok((litebox_from_rest(rest_box), true))
     }
 
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
@@ -732,11 +836,31 @@ mod tests {
     async fn capture_server(
         replies: Vec<(u16, &'static str)>,
     ) -> (u16, tokio::task::JoinHandle<Vec<(String, String)>>) {
+        capture_server_with_etags(
+            replies
+                .into_iter()
+                .map(|(status, body)| (status, body.to_owned(), None))
+                .collect(),
+        )
+        .await
+    }
+
+    async fn capture_server_with_etags(
+        replies: Vec<(u16, String, Option<&'static str>)>,
+    ) -> (u16, tokio::task::JoinHandle<Vec<(String, String)>>) {
+        capture_response_server(replies, false).await
+    }
+
+    async fn capture_response_server(
+        replies: Vec<(u16, String, Option<&'static str>)>,
+        truncate_last_body: bool,
+    ) -> (u16, tokio::task::JoinHandle<Vec<(String, String)>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
-            for (status, body) in replies {
+            let response_count = replies.len();
+            for (index, (status, body, etag)) in replies.into_iter().enumerate() {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut headers = Vec::new();
                 while !headers.ends_with(b"\r\n\r\n") {
@@ -754,11 +878,19 @@ mod tests {
                 let mut request_body = vec![0; length];
                 socket.read_exact(&mut request_body).await.unwrap();
                 requests.push((request, String::from_utf8(request_body).unwrap()));
+                if status == 0 {
+                    continue;
+                }
+                let etag = etag
+                    .map(|value| format!("ETag: {value}\r\n"))
+                    .unwrap_or_default();
+                let advertised_length =
+                    body.len() + usize::from(truncate_last_body && index + 1 == response_count);
                 socket
                     .write_all(
                         format!(
-                            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(),
+                            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{etag}\r\n{}",
+                            advertised_length,
                             body
                         )
                         .as_bytes(),
@@ -769,6 +901,516 @@ mod tests {
             requests
         });
         (port, server)
+    }
+
+    const COMPLETE_CONFIG: &str = r#"{"capabilities":{"complete_outbound_policy_enabled":true}}"#;
+
+    fn complete_runtime(port: u16) -> crate::BoxliteRuntime {
+        crate::BoxliteRuntime::rest(
+            BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))
+                .with_api_key("test-token")
+                .with_path_prefix("org-slot"),
+        )
+        .unwrap()
+    }
+
+    fn complete_snapshot(revision: &str, admission: &str, deny: &[String]) -> serde_json::Value {
+        serde_json::json!({"revision": revision, "admission": admission,
+            "policy": {"mode": "enabled", "allow_net": [], "deny_net": deny}})
+    }
+
+    fn complete_status(snapshot: &serde_json::Value, phase: &str) -> String {
+        serde_json::json!({"persisted": snapshot, "runtime_persisted": snapshot,
+            "observed": {"snapshot": snapshot, "application_state": "confirmed"},
+            "application_state": phase})
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn complete_outbound_create_preserves_deny_presence_and_verifies_commit() {
+        for deny_net in [None, Some(vec![]), Some(vec!["example.com".into()])] {
+            let admission = if deny_net.is_some() {
+                "extended_ipv4"
+            } else {
+                "legacy"
+            };
+            let snapshot =
+                complete_snapshot("r1", admission, deny_net.as_deref().unwrap_or_default());
+            let (port, server) = capture_server_with_etags(vec![
+                (200, COMPLETE_CONFIG.into(), None),
+                (201, BOX_RESPONSE.into(), None),
+                (200, snapshot.to_string(), Some("\"r1\"")),
+            ])
+            .await;
+            let runtime = complete_runtime(port);
+            let handle = runtime
+                .create_with_complete_outbound_policy(
+                    BoxOptions::default(),
+                    None,
+                    CompleteOutboundPolicy {
+                        deny_net: deny_net.clone(),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let requests = server.await.unwrap();
+            assert!(requests[0].0.starts_with("GET /v1/config "));
+            assert!(requests[1].0.starts_with("POST /v1/org-slot/boxes "));
+            assert!(requests[2].0.starts_with(&format!(
+                "GET /v1/org-slot/boxes/{}/network/outbound/complete ",
+                handle.id()
+            )));
+            for (headers, _) in &requests {
+                assert!(headers.contains("\r\nauthorization: Bearer test-token\r\n"));
+            }
+            let body: serde_json::Value = serde_json::from_str(&requests[1].1).unwrap();
+            let outbound = &body["network"]["outbound"];
+            assert_eq!(
+                outbound.get("deny_net"),
+                deny_net
+                    .as_ref()
+                    .map(|list| serde_json::json!(list))
+                    .as_ref()
+            );
+            assert_eq!(body["network"]["inbound"]["mode"], "disabled");
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_outbound_create_and_reuse_verify_trimmed_legacy_allow_rules() {
+        use crate::net::OutboundPolicyError;
+
+        for (reuse, committed_host) in [
+            (false, "API.Example.COM"),
+            (true, "API.Example.COM"),
+            (true, "different.example.com"),
+        ] {
+            let mut installed = complete_snapshot("r1", "legacy", &[]);
+            installed["policy"]["allow_net"] = serde_json::json!([committed_host, "192.0.2.8/24"]);
+            let mut responses = if reuse {
+                let mut named_box: serde_json::Value = serde_json::from_str(BOX_RESPONSE).unwrap();
+                named_box["privileged"] = false.into();
+                vec![(200, named_box.to_string(), None)]
+            } else {
+                vec![
+                    (200, COMPLETE_CONFIG.into(), None),
+                    (201, BOX_RESPONSE.into(), None),
+                ]
+            };
+            responses.push((200, installed.to_string(), Some("\"r1\"")));
+            let (port, server) = capture_server_with_etags(responses).await;
+            let runtime = complete_runtime(port);
+            let policy = CompleteOutboundPolicy {
+                allow_net: vec![" \tAPI.Example.COM  ".into(), " 192.0.2.8/24 ".into()],
+                ..Default::default()
+            };
+            if reuse {
+                let result = runtime
+                    .get_or_create_with_complete_outbound_policy(
+                        BoxOptions::default(),
+                        Some("named".into()),
+                        policy,
+                    )
+                    .await;
+                if committed_host == "API.Example.COM" {
+                    assert!(!result.unwrap().1);
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(OutboundPolicyError::Runtime(BoxliteError::InvalidState(_)))
+                    ));
+                }
+            } else {
+                runtime
+                    .create_with_complete_outbound_policy(BoxOptions::default(), None, policy)
+                    .await
+                    .unwrap();
+            }
+            let requests = server.await.unwrap();
+            if reuse {
+                assert_eq!(requests.len(), 2);
+                assert!(requests[0].0.starts_with("GET /v1/org-slot/boxes/named "));
+            } else {
+                assert_eq!(requests.len(), 3);
+                assert!(requests[1].0.starts_with("POST /v1/org-slot/boxes "));
+                let body: serde_json::Value = serde_json::from_str(&requests[1].1).unwrap();
+                let outbound = &body["network"]["outbound"];
+                assert_eq!(outbound["allow_net"], installed["policy"]["allow_net"]);
+                assert!(outbound.get("deny_net").is_none());
+            }
+            assert!(
+                requests
+                    .last()
+                    .unwrap()
+                    .0
+                    .contains("/network/outbound/complete ")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_outbound_create_verifies_mapped_ipv4_rules_without_deny() {
+        for (rule, canonical) in [
+            ("::ffff:192.0.2.8", "192.0.2.8"),
+            ("::ffff:192.0.2.8/120", "192.0.2.0/24"),
+        ] {
+            let mut installed = complete_snapshot("r1", "extended_ipv4", &[]);
+            installed["policy"]["allow_net"] = serde_json::json!([canonical]);
+            let (port, server) = capture_server_with_etags(vec![
+                (200, COMPLETE_CONFIG.into(), None),
+                (201, BOX_RESPONSE.into(), None),
+                (200, installed.to_string(), Some("\"r1\"")),
+            ])
+            .await;
+
+            complete_runtime(port)
+                .create_with_complete_outbound_policy(
+                    BoxOptions::default(),
+                    None,
+                    CompleteOutboundPolicy {
+                        allow_net: vec![rule.into()],
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+
+            let requests = server.await.unwrap();
+            let create: serde_json::Value = serde_json::from_str(&requests[1].1).unwrap();
+            let outbound = &create["network"]["outbound"];
+            assert_eq!(outbound["allow_net"], serde_json::json!([rule]));
+            assert_eq!(outbound.get("deny_net"), None);
+            assert!(requests[2].0.contains("/network/outbound/complete "));
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_outbound_create_distinguishes_allocation_from_missing_proof() {
+        use crate::net::{OutboundPolicyEffect, OutboundPolicyError};
+        let (port, server) = capture_server(vec![(200, "{}")]).await;
+        let error = complete_runtime(port)
+            .create_with_complete_outbound_policy(
+                BoxOptions::default(),
+                None,
+                CompleteOutboundPolicy::default(),
+            )
+            .await
+            .err()
+            .expect("missing capability must refuse create");
+        assert!(matches!(
+            error,
+            OutboundPolicyError::Runtime(BoxliteError::Unsupported(_))
+        ));
+        assert_eq!(server.await.unwrap().len(), 1);
+
+        for (replies, effect, status, has_id) in [
+            (
+                vec![(
+                    501,
+                    r#"{"code":"unsupported","creation_effect":"not_allocated"}"#.into(),
+                    None,
+                )],
+                OutboundPolicyEffect::NotAllocated,
+                Some(501),
+                false,
+            ),
+            (
+                vec![(
+                    501,
+                    r#"{"code":"unsupported","creation_effect":"allocated","box_id":"box-1"}"#
+                        .into(),
+                    None,
+                )],
+                OutboundPolicyEffect::Allocated,
+                Some(501),
+                true,
+            ),
+            (
+                vec![(0, String::new(), None)],
+                OutboundPolicyEffect::Uncertain,
+                None,
+                false,
+            ),
+            (
+                vec![
+                    (201, BOX_RESPONSE.into(), None),
+                    (
+                        200,
+                        complete_snapshot("r1", "legacy", &[]).to_string(),
+                        Some("\"mismatched\""),
+                    ),
+                ],
+                OutboundPolicyEffect::Uncertain,
+                Some(201),
+                true,
+            ),
+        ] {
+            let mut exchanges = vec![(200, COMPLETE_CONFIG.into(), None)];
+            exchanges.extend(replies);
+            let (port, server) = capture_server_with_etags(exchanges).await;
+            let error = complete_runtime(port)
+                .create_with_complete_outbound_policy(
+                    BoxOptions::default(),
+                    None,
+                    CompleteOutboundPolicy::default(),
+                )
+                .await
+                .err()
+                .expect("uncertain or refused create must return a typed error");
+            let OutboundPolicyError::Request {
+                effect: actual,
+                status: http,
+                box_id,
+                ..
+            } = error
+            else {
+                panic!("missing request evidence: {error}");
+            };
+            assert_eq!((actual, http, box_id.is_some()), (effect, status, has_id));
+            assert_eq!(
+                server
+                    .await
+                    .unwrap()
+                    .iter()
+                    .filter(|(head, _)| head.starts_with("POST "))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_outbound_replacement_binds_live_readback_to_acknowledged_revision() {
+        let previous = complete_snapshot("r0", "extended_ipv4", &["blocked.example".into()]);
+        let acknowledged = complete_snapshot("r1", "extended_ipv4", &[]);
+        for (phase, current, verifies) in [
+            ("confirmed", "r1", true),
+            ("confirmed", "r2", false),
+            ("pending", "r1", false),
+            ("uncertain", "r1", false),
+        ] {
+            let current_snapshot = complete_snapshot(current, "extended_ipv4", &[]);
+            let (port, server) = capture_server_with_etags(vec![
+                (200, BOX_RESPONSE.into(), None),
+                (200, previous.to_string(), Some("\"r0\"")),
+                (200, acknowledged.to_string(), Some("\"r1\"")),
+                (200, complete_status(&current_snapshot, phase), None),
+            ])
+            .await;
+            let runtime = complete_runtime(port);
+            let handle = runtime.get("box").await.unwrap().unwrap();
+            let outcome = handle
+                .network()
+                .replace_verified_outbound_policy(
+                    CompleteOutboundPolicy {
+                        deny_net: Some(vec![]),
+                        ..Default::default()
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(outcome.acknowledged.revision.as_str(), "r1");
+            assert_eq!(
+                outcome.status.unwrap().persisted.unwrap().revision.as_str(),
+                current
+            );
+            assert_eq!(outcome.application_verified, verifies);
+            let requests = server.await.unwrap();
+            assert!(requests[2].0.starts_with(&format!(
+                "PUT /v1/org-slot/boxes/{}/network/outbound/complete ",
+                handle.id()
+            )));
+            assert!(requests[2].0.contains("\r\nif-match: \"r0\"\r\n"));
+            let body: serde_json::Value = serde_json::from_str(&requests[2].1).unwrap();
+            assert_eq!(body.get("deny_net"), Some(&serde_json::json!([])));
+            assert!(!requests[2].0.contains("x-boxlite-outbound-revision"));
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|(head, _)| head.starts_with("PUT "))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_outbound_replacement_keeps_412_when_error_body_is_lost() {
+        use crate::net::{OutboundPolicyEffect, OutboundPolicyError};
+
+        let snapshot = complete_snapshot("r0", "extended_ipv4", &[]).to_string();
+        for (status, expected_status, expected_effect) in [
+            (412, Some(412), OutboundPolicyEffect::NotApplied),
+            (503, Some(503), OutboundPolicyEffect::Uncertain),
+            (0, None, OutboundPolicyEffect::Uncertain),
+        ] {
+            let (port, server) = capture_response_server(
+                vec![
+                    (200, BOX_RESPONSE.into(), None),
+                    (200, snapshot.clone(), Some("\"r0\"")),
+                    (status, r#"{"message":"re"#.into(), None),
+                ],
+                true,
+            )
+            .await;
+            let runtime = complete_runtime(port);
+            let handle = runtime.get("box").await.unwrap().unwrap();
+            let error = handle
+                .network()
+                .replace_verified_outbound_policy(CompleteOutboundPolicy::default(), None)
+                .await
+                .unwrap_err();
+            let OutboundPolicyError::Request {
+                effect,
+                status,
+                code,
+                ..
+            } = error
+            else {
+                panic!("expected classified request failure: {error}");
+            };
+            assert_eq!(
+                (status, effect, code),
+                (expected_status, expected_effect, None)
+            );
+            let requests = server.await.unwrap();
+            assert_eq!(requests.len(), 3);
+            assert!(requests[2].0.starts_with("PUT "));
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_outbound_replacement_preserves_refusals_and_uncertain_effects() {
+        use crate::net::{OutboundPolicyEffect, OutboundPolicyError};
+
+        let committed = complete_snapshot("r0", "extended_ipv4", &["blocked.example".into()]);
+        let readback = (200, committed.to_string(), Some("\"r0\""));
+        for (status, body, etag, effect, code) in [
+            (
+                409,
+                r#"{"code":"outbound_not_running"}"#,
+                None,
+                OutboundPolicyEffect::NotApplied,
+                Some("outbound_not_running"),
+            ),
+            (
+                409,
+                r#"{"code":"outbound_replace_busy"}"#,
+                None,
+                OutboundPolicyEffect::NotApplied,
+                Some("outbound_replace_busy"),
+            ),
+            (
+                412,
+                r#"{"message":"stale"}"#,
+                None,
+                OutboundPolicyEffect::NotApplied,
+                None,
+            ),
+            (
+                501,
+                r#"{"code":"unsupported","effect":"not_applied"}"#,
+                None,
+                OutboundPolicyEffect::NotApplied,
+                Some("unsupported"),
+            ),
+            (
+                503,
+                r#"{"code":"outbound_pending"}"#,
+                None,
+                OutboundPolicyEffect::Uncertain,
+                Some("outbound_pending"),
+            ),
+            (
+                409,
+                r#"{"code":"unknown"}"#,
+                None,
+                OutboundPolicyEffect::Uncertain,
+                Some("unknown"),
+            ),
+            (
+                200,
+                r#"{"revision":"r1","admission":"legacy","policy":{"mode":"enabled","allow_net":[],"deny_net":[]}}"#,
+                Some("\"r1\""),
+                OutboundPolicyEffect::Uncertain,
+                None,
+            ),
+        ] {
+            let (port, server) = capture_server_with_etags(vec![
+                (200, BOX_RESPONSE.into(), None),
+                readback.clone(),
+                (status, body.to_owned(), etag),
+            ])
+            .await;
+            let runtime = complete_runtime(port);
+            let handle = runtime.get("box").await.unwrap().unwrap();
+            let policy = CompleteOutboundPolicy {
+                deny_net: Some(vec![]),
+                ..Default::default()
+            };
+            let error = handle
+                .network()
+                .replace_verified_outbound_policy(policy, None)
+                .await
+                .unwrap_err();
+            let OutboundPolicyError::Request {
+                effect: actual,
+                status: http,
+                code: actual_code,
+                ..
+            } = error
+            else {
+                panic!("expected classified request failure: {error}");
+            };
+            assert_eq!(
+                (http, actual_code.as_deref(), actual),
+                (Some(status), code, effect)
+            );
+            assert_eq!(
+                server
+                    .await
+                    .unwrap()
+                    .iter()
+                    .filter(|(head, _)| head.starts_with("PUT "))
+                    .count(),
+                1
+            );
+        }
+
+        for expected in [None, Some(OutboundRevision::parse("stale").unwrap())] {
+            let (port, server) =
+                capture_server_with_etags(vec![(200, BOX_RESPONSE.into(), None), readback.clone()])
+                    .await;
+            let runtime = complete_runtime(port);
+            let handle = runtime.get("box").await.unwrap().unwrap();
+            let error = handle
+                .network()
+                .replace_verified_outbound_policy(
+                    CompleteOutboundPolicy::default(),
+                    expected.clone(),
+                )
+                .await
+                .unwrap_err();
+            match expected {
+                None => assert!(matches!(
+                    error,
+                    OutboundPolicyError::Runtime(BoxliteError::InvalidArgument(_))
+                )),
+                Some(_) => assert!(matches!(
+                    error,
+                    OutboundPolicyError::Runtime(BoxliteError::InvalidState(_))
+                )),
+            }
+            assert!(
+                server
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|(head, _)| head.starts_with("GET "))
+            );
+        }
     }
 
     const BOXES_PAGE: &str = r#"{"boxes":[{"box_id":"01HJK4TNRPQSXYZ8WM6NCVT9R5","name":"first","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","image":"alpine:latest","cpus":2,"memory_mib":512}],"next_page_token":"cursor+/="}"#;

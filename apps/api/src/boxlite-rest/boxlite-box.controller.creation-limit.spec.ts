@@ -7,6 +7,9 @@ import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
 import { Context } from '../common/context/context'
+import { plainToInstance } from 'class-transformer'
+import { HttpException } from '@nestjs/common'
+import { CreateBoxDto } from './dto/create-box.dto'
 
 const organization = { id: '11111111-1111-4111-8111-111111111111' }
 const authContext = { organization, organizationId: organization.id }
@@ -42,6 +45,28 @@ function makeController() {
 }
 
 describe('BoxliteBoxController creation limit', () => {
+  it('keeps the allocated Box ID when complete outbound startup returns unsupported', async () => {
+    const { controller, boxService, boxStateWaiter } = makeController()
+    boxService.create.mockResolvedValue({ ...startedBox, state: BoxState.CREATING })
+    boxStateWaiter.waitForStarted.mockRejectedValue(
+      new HttpException({ code: 'unsupported', message: 'Runner refused policy' }, 501),
+    )
+    const dto = plainToInstance(CreateBoxDto, {
+      image: 'boxlite/base',
+      network: { outbound: { mode: 'enabled', deny_net: [] } },
+    })
+
+    await expect(controller.createBox(authContext as never, dto, Context.user())).rejects.toMatchObject({
+      status: 501,
+      response: { code: 'unsupported', creation_effect: 'allocated', boxId: 'box-1' },
+    })
+    expect(boxService.create).toHaveBeenCalledWith(expect.anything(), organization, expect.anything(), {
+      maxCreatedBoxes: 3,
+      completeOutbound: { mode: 'enabled', allow_net: [], deny_net: [] },
+    })
+    expect(boxStateWaiter.waitForStarted).toHaveBeenCalledWith('box-1', organization.id, 30, true)
+  })
+
   it('resolves the organization limit and passes it only to create', async () => {
     const { controller, boxService, boxStateWaiter, commerceBoxLimitService } = makeController()
 

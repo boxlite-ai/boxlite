@@ -848,7 +848,7 @@ unsafe fn dispatch_unit_event(result: Result<(), BoxliteError>, user_data: usize
 /// and a zeroed error; on failure it receives a null pointer and a
 /// populated error.
 unsafe fn dispatch_handle_event<T>(
-    result: Result<crate::event_queue::OwnedFfiPtr<T>, BoxliteError>,
+    result: Result<crate::event_queue::OwnedFfiPtr<T>, impl Into<FFIError>>,
     user_data: usize,
     cb: HandleCb<T>,
 ) {
@@ -857,7 +857,7 @@ unsafe fn dispatch_handle_event<T>(
         let ptr = match result {
             Ok(owned) => owned.take(),
             Err(e) => {
-                err = crate::error::error_to_c_error(e);
+                err = e.into();
                 ptr::null_mut()
             }
         };
@@ -895,7 +895,10 @@ unsafe fn dispatch_string_event(
 /// `created` flag (`true` = newly created, `false` = adopted existing box).
 /// On error the handle is null and `created` is reported as `false`.
 unsafe fn dispatch_get_or_create_event(
-    result: Result<(crate::event_queue::OwnedFfiPtr<crate::CBoxHandle>, bool), BoxliteError>,
+    result: Result<
+        (crate::event_queue::OwnedFfiPtr<crate::CBoxHandle>, bool),
+        boxlite::net::OutboundPolicyError,
+    >,
     user_data: usize,
     cb: crate::event_queue::CBoxGetOrCreateBoxFn,
 ) {
@@ -904,7 +907,7 @@ unsafe fn dispatch_get_or_create_event(
         let (ptr, created) = match result {
             Ok((owned, created)) => (owned.take(), created),
             Err(e) => {
-                err = crate::error::error_to_c_error(e);
+                err = e.into();
                 (ptr::null_mut(), false)
             }
         };
@@ -1102,7 +1105,13 @@ mod tests {
         RUNTIME_IMPORT_CALLBACK_DROPS.store(0, std::sync::atomic::Ordering::SeqCst);
         let owned = crate::event_queue::OwnedFfiPtr::new(Box::new(TrackedImportPayload));
 
-        unsafe { dispatch_handle_event(Ok(owned), 0, consume_runtime_import_handle) };
+        unsafe {
+            dispatch_handle_event(
+                Ok::<_, BoxliteError>(owned),
+                0,
+                consume_runtime_import_handle,
+            )
+        };
 
         assert_eq!(
             RUNTIME_IMPORT_CALLBACK_DROPS.load(std::sync::atomic::Ordering::SeqCst),

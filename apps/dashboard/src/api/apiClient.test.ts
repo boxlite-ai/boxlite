@@ -476,6 +476,39 @@ describe('ApiClient checkpoints', () => {
   })
 })
 
+describe('ApiClient complete outbound policy', () => {
+  it.each(['confirmed', 'pending', 'uncertain'] as const)(
+    'keeps the reported phase %s with equal snapshots',
+    async (phase) => {
+      const requests: any[] = []
+      const snapshot = {
+        revision: 'r1',
+        admission: 'extended_ipv4',
+        policy: { mode: 'enabled', allow_net: [], deny_net: [] },
+      }
+      const wire = {
+        persisted: snapshot,
+        runtime_persisted: snapshot,
+        observed: { snapshot, application_state: 'confirmed' },
+        application_state: phase,
+      }
+      const api = await makeClient(vi.fn(), 200, wire, requests)
+      const status = await api.getBoxOutboundPolicyStatus(
+        'org/one',
+        'box',
+        'current-token',
+        new AbortController().signal,
+      )
+      expect(status.application_state).toBe(phase)
+      expect(requests[0]).toMatchObject({
+        method: 'get',
+        url: '/v1/org%2Fone/boxes/box/network/outbound/complete/status',
+        headers: { Authorization: 'Bearer current-token' },
+      })
+    },
+  )
+})
+
 describe('ApiClient.setBoxInboundMode', () => {
   it('sends the mode to the /v1 inbound route of the selected organization', async () => {
     vi.resetModules()

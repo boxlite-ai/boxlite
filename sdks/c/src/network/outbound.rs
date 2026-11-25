@@ -1,8 +1,8 @@
 //! Additive revision control ABI; existing policy setters and error codes stay stable.
 use super::*;
 use boxlite::net::{
-    CompleteOutboundPolicy, HostedOutboundCommand, OutboundReplaceOutcome, OutboundReplacement,
-    OutboundRevision, OutboundSnapshot,
+    CompleteOutboundPolicy, HostedOutboundCommand, OutboundPolicyError, OutboundReplaceOutcome,
+    OutboundReplacement, OutboundRevision, OutboundSnapshot,
 };
 
 #[cfg(test)]
@@ -86,6 +86,51 @@ pub unsafe extern "C" fn boxlite_network_complete_outbound_status(
             network
                 .tokio_rt
                 .block_on(network.handle.complete_outbound_status())
+        })
+    }
+}
+
+/// Read complete status, including nullable Cloud snapshots and Runner persistence.
+/// Free a successful response with boxlite_free_string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_outbound_policy_status(
+    network: *mut CBoxNetworkHandle,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        read_json(network, out_json, out_error, |network| {
+            network
+                .tokio_rt
+                .block_on(network.handle.outbound_policy_status())
+        })
+    }
+}
+
+/// Replace complete policy conditionally. A NULL expected_revision fences the
+/// committed revision read before replacement. Free a successful readback with boxlite_free_string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_network_replace_outbound_policy(
+    network: *mut CBoxNetworkHandle,
+    expected_revision: *const c_char,
+    policy_json: *const c_char,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        json_result::<_, OutboundPolicyError>(out_json, out_error, || {
+            let network = network
+                .as_ref()
+                .ok_or_else(|| null_pointer_error("network"))?;
+            let expected = (!expected_revision.is_null())
+                .then(|| revision(expected_revision, "expected_revision"))
+                .transpose()?;
+            let policy = parse_policy::<CompleteOutboundPolicy>(policy_json)?;
+            network.tokio_rt.block_on(
+                network
+                    .handle
+                    .replace_verified_outbound_policy(policy, expected),
+            )
         })
     }
 }
@@ -199,14 +244,14 @@ unsafe fn read_json<T: serde::Serialize>(
     }
 }
 
-unsafe fn json_result<T: serde::Serialize>(
+unsafe fn json_result<T: serde::Serialize, E: From<BoxliteError> + Into<CBoxliteError>>(
     out_json: *mut *mut c_char,
     out_error: *mut CBoxliteError,
-    read: impl FnOnce() -> Result<T, BoxliteError>,
+    read: impl FnOnce() -> Result<T, E>,
 ) -> BoxliteErrorCode {
     let result = (|| {
         if out_json.is_null() {
-            return Err(null_pointer_error("out_json"));
+            return Err(E::from(null_pointer_error("out_json")));
         }
         unsafe {
             *out_json = ptr::null_mut();
@@ -222,5 +267,19 @@ unsafe fn json_result<T: serde::Serialize>(
         }
         Ok(())
     })();
-    policy_result(result, out_error)
+    match result {
+        Ok(()) => BoxliteErrorCode::Ok,
+        Err(error) => {
+            let mut failure = error.into();
+            let code = failure.code;
+            unsafe {
+                if let Some(out_error) = out_error.as_mut() {
+                    *out_error = failure;
+                } else {
+                    crate::boxlite_error_free(&mut failure);
+                }
+            }
+            code
+        }
+    }
 }

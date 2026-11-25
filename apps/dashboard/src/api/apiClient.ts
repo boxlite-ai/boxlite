@@ -42,6 +42,7 @@ import { BoxliteError } from './errors'
 import type { DomainList, HeldDomain, CustomDomain, CustomDomainList } from './domain-types'
 import type { Checkpoint, CheckpointPage } from './checkpoint-types'
 import { readTunnelDescriptor, tunnelOperationError, TunnelRequestError, type TunnelDescriptor } from './tunnel'
+import { readBoxOutboundPolicyStatus } from './outbound-policy'
 
 // A burst of in-flight requests can all 401 at once when the access token goes
 // invalid; this in-page guard ensures at most one re-login redirect per page
@@ -553,6 +554,20 @@ export class ApiClient {
       `/v1/${encodeURIComponent(org)}/domains/${encodeURIComponent(hostname)}/target`,
       this.v1Config(),
     )
+  }
+
+  public async getBoxOutboundPolicyStatus(
+    organizationId: string,
+    boxId: string,
+    accessToken: string,
+    signal: AbortSignal,
+  ) {
+    signal.throwIfAborted()
+    const { data } = await this.http.get<unknown>(
+      this.v1BoxPath(organizationId, boxId, '/network/outbound/complete/status'),
+      { ...this.v1Config(), headers: { Authorization: `Bearer ${accessToken}` }, signal, timeout: 15_000 },
+    )
+    return readBoxOutboundPolicyStatus(data)
   }
 
   /** Sets a box's inbound mode through the `/v1` route the CLI and SDKs use. */

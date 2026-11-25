@@ -105,6 +105,7 @@ pub(crate) struct ServerCapabilities {
     pub import_enabled: Option<bool>,
     pub private_tunnels_enabled: Option<bool>,
     pub exec_user_enabled: Option<bool>,
+    pub complete_outbound_policy_enabled: Option<bool>,
 }
 
 // ============================================================================
@@ -161,6 +162,27 @@ pub(crate) struct CreateBoxRequest {
 }
 
 impl CreateBoxRequest {
+    pub(super) fn set_complete_outbound_policy(
+        &mut self,
+        policy: crate::net::CompleteOutboundPolicy,
+        inbound: &crate::runtime::options::NetworkSpec,
+    ) {
+        let inbound = crate::runtime::options::NetworkConfig::from_specs(
+            &crate::runtime::options::NetworkSpec::default(),
+            inbound,
+        )
+        .inbound;
+        self.network = Some(CreateBoxNetworkSpec::Complete(
+            CreateBoxCompleteNetworkSpec {
+                outbound: policy,
+                inbound: CreateBoxInboundNetworkSpec {
+                    mode: mode_str(inbound.mode),
+                    allow_net: inbound.allow_net,
+                },
+            },
+        ));
+    }
+
     pub fn from_options(
         options: &crate::runtime::options::BoxOptions,
         name: Option<String>,
@@ -298,6 +320,13 @@ pub(crate) enum CreateBoxNetworkSpec {
     Legacy(CreateBoxLegacyNetworkSpec),
     /// Inbound/outbound shape — sent when inbound is enabled.
     Nested(CreateBoxNestedNetworkSpec),
+    Complete(CreateBoxCompleteNetworkSpec),
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateBoxCompleteNetworkSpec {
+    pub outbound: crate::net::CompleteOutboundPolicy,
+    pub inbound: CreateBoxInboundNetworkSpec,
 }
 
 #[derive(Debug, Serialize)]

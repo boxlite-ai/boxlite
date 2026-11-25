@@ -123,7 +123,10 @@ export class CompleteOutboundCoordinator {
       return await this.store.lockedComplete(id, organizationId, true, async ({ box, write, runner: verify }) => {
         const current = completeOutboundRecord(box)
         if (current?.pending || current?.finalization || (!current && outboundRecord(box).pending)) {
-          throw new ConflictException('An outbound operation is still pending')
+          throw new ConflictException({
+            code: 'outbound_replace_busy',
+            message: 'An outbound operation is still pending',
+          })
         }
         if (
           box.state !== BoxState.STARTED ||
@@ -131,19 +134,27 @@ export class CompleteOutboundCoordinator {
           box.pending ||
           !box.runnerId
         ) {
-          throw new ConflictException('Outbound policy updates require a running Box')
+          throw new ConflictException({
+            code: 'outbound_not_running',
+            message: 'Outbound policy updates require a running Box',
+          })
         }
         const previous = persistedCompleteOutbound(box)
         if (!previous) throw unresolved()
         if (matches && !matches(previous.revision)) throw new HttpException('Outbound revision does not match', 412)
 
         const { runner, leaseId } = await verify()
-        const receipt = await new RunnerOutboundControl(runner, box.id).hostedOutbound({
-          operation: 'prepare',
-          previous,
-          revision: randomUUID(),
-          policy,
-        })
+        const receipt = await new RunnerOutboundControl(runner, box.id)
+          .hostedOutbound({ operation: 'prepare', previous, revision: randomUUID(), policy })
+          .catch((error: unknown) => {
+            if (!(error instanceof HttpException)) throw error
+            const detail = error.getResponse()
+            throw new HttpException(
+              { ...(typeof detail === 'string' ? { message: detail } : detail), effect: 'not_applied' },
+              error.getStatus(),
+              { cause: error },
+            )
+          })
         if (receipt.outcome !== 'prepared') throw unresolved()
         const owner: CompleteReplaceIntent = {
           kind: 'replace',

@@ -1,4 +1,7 @@
-use anyhow::{Result, anyhow};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, anyhow};
+use boxlite::net::{CompleteOutboundPolicy, OutboundRevision};
 use boxlite::runtime::options::{InboundNetworkConfig, NetworkMode, OutboundNetworkConfig};
 use clap::Args;
 
@@ -57,6 +60,46 @@ pub async fn set_outbound(args: OutboundArgs, global: &GlobalFlags) -> Result<()
         .await?
         .ok_or_else(|| anyhow!("No such box: {}", args.access.target))?;
     handle.network().update_outbound(config).await?;
+    Ok(())
+}
+
+#[derive(Args, Debug)]
+pub struct ReplaceOutboundArgs {
+    #[arg(value_name = "BOX")]
+    pub target: String,
+    #[arg(long, value_name = "PATH")]
+    pub policy: PathBuf,
+    #[arg(long, value_name = "REVISION")]
+    pub expected_revision: Option<String>,
+}
+
+pub(crate) async fn read_complete_policy(path: &Path) -> Result<CompleteOutboundPolicy> {
+    let bytes = tokio::fs::read(path)
+        .await
+        .with_context(|| format!("read {}", path.display()))?;
+    let policy: CompleteOutboundPolicy = serde_json::from_slice(&bytes)
+        .with_context(|| format!("invalid outbound policy in {}", path.display()))?;
+    policy.validate()?;
+    Ok(policy)
+}
+
+pub async fn replace_outbound(args: ReplaceOutboundArgs, global: &GlobalFlags) -> Result<()> {
+    let policy = read_complete_policy(&args.policy).await?;
+    let expected = args
+        .expected_revision
+        .as_deref()
+        .map(OutboundRevision::parse)
+        .transpose()?;
+    let runtime = global.create_runtime()?;
+    let handle = runtime
+        .get(&args.target)
+        .await?
+        .ok_or_else(|| anyhow!("No such box: {}", args.target))?;
+    let outcome = handle
+        .network()
+        .replace_verified_outbound_policy(policy, expected)
+        .await?;
+    println!("{}", serde_json::to_string_pretty(&outcome)?);
     Ok(())
 }
 

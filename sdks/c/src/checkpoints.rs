@@ -696,6 +696,7 @@ mod tests {
                     name: None,
                     checkpoint_override: false,
                     checkpoint_selected: false,
+                    legacy_outbound_selected: false,
                 }));
                 crate::options::boxlite_options_set_checkpoint(options, key.as_ptr());
                 crate::options::boxlite_options_set_name(options, name.as_ptr());

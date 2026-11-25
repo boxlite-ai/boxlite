@@ -33,6 +33,8 @@ import type {
 export type {
   CheckpointHandle,
   CheckpointInfo,
+  CompleteOutboundPolicy,
+  CompleteOutboundSnapshot,
   Domain,
   DomainHandle,
   DomainList,
@@ -46,6 +48,8 @@ export type {
   ImageUsage,
   ImageVersion,
   NewRegistryCredential,
+  OutboundPolicyReplacement,
+  OutboundPolicyStatus,
   RegistryCredential,
   RegistryHandle,
   VolumeHandle,
@@ -140,7 +144,9 @@ export {
   TimeoutError,
   ParseError,
   errorCode,
+  outboundPolicyFailure,
   type BoxliteErrorCode,
+  type OutboundPolicyFailure,
 } from "./errors.js";
 export * from "./constants.js";
 
