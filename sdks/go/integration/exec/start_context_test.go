@@ -5,12 +5,14 @@ package exec_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -20,11 +22,21 @@ import (
 // The delayed REST response controls admission, while the command and its
 // termination run through the native C runtime in a real micro-VM.
 func TestIntegrationStartExecutionCancelReapsLateVMProcess(t *testing.T) {
+	options := []boxlite.RuntimeOption{boxlite.WithHomeDir(t.TempDir())}
 	image := os.Getenv("BOXLITE_GO_VM_IMAGE")
 	if image == "" {
-		image = "public.ecr.aws/docker/library/alpine:latest"
+		if registry := os.Getenv("BOXLITE_TEST_REGISTRY"); registry != "" {
+			options = append(options, boxlite.WithImageRegistry(boxlite.ImageRegistry{
+				Host:      registry,
+				Transport: boxlite.RegistryTransportHTTP,
+				Search:    true,
+			}))
+			image = "alpine:latest"
+		} else {
+			image = "public.ecr.aws/docker/library/alpine:latest"
+		}
 	}
-	native, err := boxlite.NewRuntime(boxlite.WithHomeDir(t.TempDir()))
+	native, err := boxlite.NewRuntime(options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,17 +78,25 @@ func TestIntegrationStartExecutionCancelReapsLateVMProcess(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, "{\"execution_id\":\"late-real-vm\"}")
 	})
+	const cleanupTimeout = 10 * time.Second
 	mux.HandleFunc("DELETE /v1/boxes/box1/executions/late-real-vm", func(w http.ResponseWriter, _ *http.Request) {
-		killErr := workload.Kill(ctx)
-		if killErr == nil {
-			_, killErr = workload.Wait(ctx)
+		cleanupCtx, cancel := context.WithTimeout(ctx, cleanupTimeout)
+		defer cancel()
+
+		err := workload.Kill(cleanupCtx)
+		if err == nil {
+			var exitCode int
+			exitCode, err = workload.Wait(cleanupCtx)
+			if err == nil && exitCode != -int(syscall.SIGKILL) {
+				err = fmt.Errorf("guest process exited with %d, want %d (SIGKILL)", exitCode, -int(syscall.SIGKILL))
+			}
 		}
-		terminated <- killErr
-		if killErr != nil {
-			http.Error(w, killErr.Error(), http.StatusInternalServerError)
-			return
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
 		}
-		w.WriteHeader(http.StatusNoContent)
+		terminated <- err
 	})
 	mux.HandleFunc("GET /v1/boxes/box1/executions/late-real-vm", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -155,8 +175,8 @@ func TestIntegrationStartExecutionCancelReapsLateVMProcess(t *testing.T) {
 		if killErr != nil {
 			t.Fatal(killErr)
 		}
-	case <-ctx.Done():
-		t.Fatal("late execution did not trigger native termination")
+	case <-time.After(cleanupTimeout):
+		t.Fatal("late execution did not terminate within the cleanup deadline")
 	}
 	dead, err := box.Exec(ctx, "kill", "-0", pid)
 	if err != nil || dead.ExitCode == 0 {
@@ -166,5 +186,5 @@ func TestIntegrationStartExecutionCancelReapsLateVMProcess(t *testing.T) {
 	if err != nil || check.ExitCode != 0 || strings.TrimSpace(check.Stdout) != "vm-still-healthy" {
 		t.Fatalf("VM unusable after cleanup: result=%+v err=%v", check, err)
 	}
-	t.Logf("guest process %s was reaped; VM still executes commands", pid)
+	t.Logf("guest process %s exited on SIGKILL and was reaped; VM still executes commands", pid)
 }

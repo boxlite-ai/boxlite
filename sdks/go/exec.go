@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"maps"
 	"runtime/cgo"
 	"slices"
 	"sort"
@@ -45,13 +44,6 @@ func envMapToFlatPairs(env map[string]string) []string {
 		pairs = append(pairs, k, env[k])
 	}
 	return pairs
-}
-
-// envMapToCStringArray converts an env map to a C string array suitable
-// for `BoxliteCommand.env_pairs`. Returns (nil, 0) for nil/empty input.
-// Caller must free via freeCStringArray.
-func envMapToCStringArray(env map[string]string) (**C.char, int) {
-	return toCStringArray(envMapToFlatPairs(env))
 }
 
 // ExecutionOptions configures a streaming command execution.
@@ -217,7 +209,8 @@ func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult
 
 // StartExecution starts a command and returns a streaming execution handle.
 // If ctx ends during startup, StartExecution returns its error and releases
-// any execution the native call returns later. The context covers startup.
+// any execution the native call returns later. A native call already in
+// progress can still submit the command after StartExecution returns.
 func (b *Box) StartExecution(ctx context.Context, name string, args []string, opts *ExecutionOptions) (*Execution, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -236,21 +229,22 @@ func (b *Box) StartExecution(ctx context.Context, name string, args []string, op
 }
 
 func (b *Box) submitExecutionWithContext(ctx context.Context, name string, args []string, cfg ExecutionOptions) (*C.CExecutionHandle, error) {
+	// Native submission can outlive this call. Flatten the environment before
+	// starting the worker so it owns the sorted pairs without cloning the map.
+	env := envMapToFlatPairs(cfg.Env)
+	cfg.Env = nil
 	if ctx.Done() == nil {
-		return b.submitExecution(ctx, name, args, cfg)
+		return b.submitExecution(ctx, name, args, env, cfg)
 	}
 
-	// Native submission can outlive this call. Snapshot caller-owned inputs
-	// before sharing them with the worker.
 	args = slices.Clone(args)
-	cfg.Env = maps.Clone(cfg.Env)
 	type submission struct {
 		handle *C.CExecutionHandle
 		err    error
 	}
 	submitted := make(chan submission)
 	go func() {
-		handle, err := b.submitExecution(ctx, name, args, cfg)
+		handle, err := b.submitExecution(ctx, name, args, env, cfg)
 		select {
 		case submitted <- submission{handle: handle, err: err}:
 		case <-ctx.Done():
@@ -269,14 +263,14 @@ func (b *Box) submitExecutionWithContext(ctx context.Context, name string, args 
 	}
 }
 
-func (b *Box) submitExecution(ctx context.Context, name string, args []string, cfg ExecutionOptions) (*C.CExecutionHandle, error) {
+func (b *Box) submitExecution(ctx context.Context, name string, args, env []string, cfg ExecutionOptions) (*C.CExecutionHandle, error) {
 	cCmd := toCString(name)
 	defer C.free(unsafe.Pointer(cCmd))
 
 	cArgs, argc := toCStringArray(args)
 	defer freeCStringArray(cArgs, argc)
 
-	envPairs, envCount := envMapToCStringArray(cfg.Env)
+	envPairs, envCount := toCStringArray(env)
 	defer freeCStringArray(envPairs, envCount)
 
 	var cWorkdir *C.char
