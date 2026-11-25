@@ -571,6 +571,18 @@ test('the management client is refused without the audience it needs', () => {
   assert.equal(environment.OIDC_MANAGEMENT_API_AUDIENCE, 'https://auth.dev.boxlite.ai/api/v2/')
 })
 
+test('forwards reconciliation endpoints when management writes are disabled', () => {
+  const { environment } = assemble({
+    ...base,
+    OIDC_MANAGEMENT_API_ENABLED: 'false',
+    OIDC_MANAGEMENT_API_BASE_URL: 'https://management.example.com/api/v2',
+    OIDC_MANAGEMENT_API_TOKEN_URL: 'https://management.example.com/oauth/token',
+  })
+  assert.equal(environment.OIDC_MANAGEMENT_API_ENABLED, undefined)
+  assert.equal(environment.OIDC_MANAGEMENT_API_BASE_URL, 'https://management.example.com/api/v2')
+  assert.equal(environment.OIDC_MANAGEMENT_API_TOKEN_URL, 'https://management.example.com/oauth/token')
+})
+
 test('a stage that names no billing service keeps the dashboard’s billing pages gated off', () => {
   const { environment } = assemble(base)
   assert.equal(environment.BILLING_API_URL, undefined)

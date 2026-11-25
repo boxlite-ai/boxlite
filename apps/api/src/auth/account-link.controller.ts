@@ -17,6 +17,7 @@ import { ApiExcludeController } from '@nestjs/swagger'
 import { AnonymousRateLimitGuard } from '../common/guards/anonymous-rate-limit.guard'
 import { TypedConfigService } from '../config/typed-config.service'
 import { AccountLinkService } from './account-link.service'
+import type { AccountLinkPreparation } from './account-link-consent-jobs.service'
 
 /**
  * Called by the Post-Login Action, never by a browser: the request carries no
@@ -40,7 +41,7 @@ export class AccountLinkController {
 
   @Post('prepare')
   @UseGuards(AnonymousRateLimitGuard)
-  async prepare(@Headers('authorization') authorization?: string): Promise<{ operationId: string; ready: boolean }> {
+  async prepare(@Headers('authorization') authorization?: string): Promise<AccountLinkPreparation> {
     return this.accountLink.prepare(this.requestToken(authorization))
   }
 

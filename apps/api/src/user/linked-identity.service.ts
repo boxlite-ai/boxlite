@@ -123,19 +123,22 @@ export class LinkedIdentityService {
     secondary: User,
     registrationConsentPending: boolean,
   ): Promise<void> {
-    const existing = await em.findOne(User, { where: { id: primaryUserId } })
-    if (existing) {
-      return
-    }
-    await em.insert(User, {
-      id: primaryUserId,
-      name: secondary.name,
-      email: secondary.email,
-      emailVerified: secondary.emailVerified,
-      registrationConsentPending,
-      publicKeys: secondary.publicKeys,
-      role: secondary.role,
-    })
+    await em
+      .createQueryBuilder()
+      .insert()
+      .into(User)
+      .values({
+        id: primaryUserId,
+        name: secondary.name,
+        email: secondary.email,
+        emailVerified: secondary.emailVerified,
+        registrationConsentPending,
+        publicKeys: secondary.publicKeys,
+        role: secondary.role,
+      })
+      .orIgnore()
+      .execute()
+    await em.findOneOrFail(User, { where: { id: primaryUserId }, lock: { mode: 'pessimistic_write' } })
   }
 
   private async moveMemberships(em: EntityManager, primaryUserId: string, secondaryUserId: string): Promise<number> {

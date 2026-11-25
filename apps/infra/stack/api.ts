@@ -244,15 +244,15 @@ export function buildApi(input: ApiInputs) {
         ...(publicOidcIssuer && {
           PUBLIC_OIDC_DOMAIN: publicOidcIssuer,
         }),
+        ...(process.env.OIDC_MANAGEMENT_API_BASE_URL && {
+          OIDC_MANAGEMENT_API_BASE_URL: process.env.OIDC_MANAGEMENT_API_BASE_URL,
+        }),
+        ...(process.env.OIDC_MANAGEMENT_API_TOKEN_URL && {
+          OIDC_MANAGEMENT_API_TOKEN_URL: process.env.OIDC_MANAGEMENT_API_TOKEN_URL,
+        }),
         // Optional: Auth0 Management API (enables account linking etc.)
         ...(process.env.OIDC_MANAGEMENT_API_ENABLED === 'true' && {
           OIDC_MANAGEMENT_API_ENABLED: 'true',
-          ...(process.env.OIDC_MANAGEMENT_API_BASE_URL && {
-            OIDC_MANAGEMENT_API_BASE_URL: process.env.OIDC_MANAGEMENT_API_BASE_URL,
-          }),
-          ...(process.env.OIDC_MANAGEMENT_API_TOKEN_URL && {
-            OIDC_MANAGEMENT_API_TOKEN_URL: process.env.OIDC_MANAGEMENT_API_TOKEN_URL,
-          }),
           // Client id/secret come from the SST secret store now. If the feature
           // is enabled but a secret is unset, the value resolves to '' and the
           // Api errors at runtime — instead of the old deploy-time requireEnv

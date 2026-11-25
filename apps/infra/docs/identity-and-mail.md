@@ -293,9 +293,12 @@ person proves that account is theirs, and nobody is asked to set a password.
 BoxLite never receives a password.
 
 Before linking, the Action calls `POST /api/auth/link/prepare` with both
-identities and an operation ID. It calls `POST /api/auth/link/result` after a
-confirmed result. BoxLite transfers consent only after confirmation, either
-from the Action or from its own Auth0 lookup.
+identities and an attempt ID. The API returns the operation ID and dispatch
+deadline. The Action reports a confirmed result to `POST /api/auth/link/result`.
+
+BoxLite moves resources and consent after confirmation from the Action or its
+read-only Auth0 lookup. A later sign-in can retry the same unresolved pair
+after the dispatch window and a negative lookup.
 
 The Action signs each call with an endpoint-specific HS256 audience and a
 one-minute lifetime. `GET /api/auth/link/status` reports whether BoxLite knows
@@ -417,7 +420,11 @@ Auth0 never returns a secret's value, so every such apply rewrites all three;
 that is how a rotated key arrives. The journal keeps the Action's code and no
 secret, so `--rollback` restores the code and leaves the secrets in place.
 
-Give the API the same key and
+Create a dedicated Auth0 machine-to-machine application with only `read:users`.
+Store its client ID and secret in the API stage before deploying. The Action
+setup command provisions a separate client for writing links.
+
+Give the API the same signing key and
 [deploy the stage](deployment.md#deploy-through-github-actions) before that
 apply turns the link on. Until the API runs with the key, both endpoints answer
 404 and the Action denies every login it would link.
@@ -426,6 +433,10 @@ apply turns the link on. Until the API runs with the key, both endpoints answer
 export AUTH0_ACCOUNT_LINK_SECRET="$(openssl rand -base64 48)"
 printf %s "$AUTH0_ACCOUNT_LINK_SECRET" |
   npm run mstage env set -- OIDC_ACCOUNT_LINK_SECRET --stage <stage>
+printf %s "$AUTH0_ACCOUNT_LINK_READ_CLIENT_ID" |
+  npm run mstage env set -- OIDC_ACCOUNT_LINK_READ_CLIENT_ID --stage <stage>
+printf %s "$AUTH0_ACCOUNT_LINK_READ_CLIENT_SECRET" |
+  npm run mstage env set -- OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET --stage <stage>
 # Deploy the stage, then turn the link on:
 npm run auth0:configure-login -- --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> --connection <database-connection-name> \

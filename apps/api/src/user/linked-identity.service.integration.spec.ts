@@ -7,6 +7,8 @@ import { randomUUID } from 'node:crypto'
 import axios from 'axios'
 import type Redis from 'ioredis'
 import { DataSource } from 'typeorm'
+import { AccountLinkAuth0Reader } from '../auth/account-link-auth0-reader.service'
+import { AddAccountLinkAttempts1795560001000 } from '../migrations/pre-deploy/1795560001000-add-account-link-attempts-migration'
 import { AccountLinkConsentJobs } from '../auth/account-link-consent-jobs.service'
 import { AccountLinkReconciliation } from '../auth/account-link-reconciliation.service'
 import { TypedConfigService } from '../config/typed-config.service'
@@ -36,6 +38,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
   let dataSource: DataSource
   let service: LinkedIdentityService
   let jobs: AccountLinkConsentJobs
+  const auth0 = { linkExists: jest.fn().mockResolvedValue(false) }
   // The API key cache, which ApiKeyStrategy fills and adopt prunes.
   const cache = new Map<string, string>()
   const redis = {
@@ -72,10 +75,16 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     const runner = dataSource.createQueryRunner()
     try {
       await new AddAccountLinkConsentJobs1795560000000().up(runner)
+      await new AddAccountLinkAttempts1795560001000().up(runner)
     } finally {
       await runner.release()
     }
-    jobs = new AccountLinkConsentJobs(dataSource, service, { get: () => ({}) } as unknown as TypedConfigService)
+    jobs = new AccountLinkConsentJobs(
+      dataSource,
+      service,
+      { get: () => ({}) } as unknown as TypedConfigService,
+      auth0 as unknown as AccountLinkAuth0Reader,
+    )
   })
 
   afterAll(async () => {
@@ -88,6 +97,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
   })
 
   beforeEach(async () => {
+    auth0.linkExists.mockReset().mockResolvedValue(false)
     await dataSource.query('DELETE FROM "account_link_consent_job"')
     await dataSource.getRepository(RegistrationConsent).deleteAll()
     cache.clear()
@@ -208,13 +218,11 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     })
     const original = await records.findOneByOrFail({ userId: SOCIAL })
 
-    expect(await jobs.prepare(first)).toEqual({ operationId: first.id, ready: true })
+    expect(await jobs.prepare(first)).toMatchObject({ operationId: first.id, ready: true })
     expect(await jobs.prepare({ ...first, id: randomUUID() })).toEqual({ operationId: first.id, ready: false })
     await expect(jobs.prepare(second)).rejects.toMatchObject({ status: 409 })
     expect(await records.find()).toEqual([original])
-    expect(await dataSource.getRepository(User).findOneByOrFail({ id: PRIMARY })).toMatchObject({
-      registrationConsentPending: true,
-    })
+    expect(await dataSource.getRepository(User).findOneBy({ id: PRIMARY })).toBeNull()
     await jobs.complete(first, 'done')
     await jobs.prepare(second)
     await jobs.complete(second, 'done')
@@ -223,6 +231,40 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     expect(await dataSource.getRepository(User).findOneByOrFail({ id: finalTarget })).toMatchObject({
       registrationConsentPending: false,
     })
+  })
+
+  it('keeps membership and keys on the source after a rejected Auth0 link', async () => {
+    await user(SOCIAL)
+    const org = await organization(SOCIAL, 'source organization')
+    await member(org, SOCIAL, OrganizationMemberRole.OWNER, true)
+    await apiKey(org, SOCIAL, 'source-key')
+    const operation = { id: randomUUID(), source_id: SOCIAL, target_id: PRIMARY }
+    await jobs.prepare(operation)
+    await jobs.complete(operation, 'failed')
+
+    expect(await membershipsOf(SOCIAL)).toEqual([expect.objectContaining({ organizationId: org })])
+    expect(await dataSource.getRepository(ApiKey).findOneByOrFail({ name: 'source-key' })).toMatchObject({
+      userId: SOCIAL,
+    })
+  })
+
+  it('permits a fresh attempt for the same unconfirmed pair after checking Auth0', async () => {
+    await user(SOCIAL)
+    const operation = { id: randomUUID(), source_id: SOCIAL, target_id: PRIMARY }
+    await jobs.prepare(operation)
+    await dataSource.query(
+      `UPDATE "account_link_attempt" SET "dispatch_until" = now() - interval '2 minutes' WHERE "id" = $1`,
+      [operation.id],
+    )
+    const retry = { ...operation, id: randomUUID() }
+    expect(await jobs.prepare(retry)).toMatchObject({ operationId: operation.id, ready: true })
+    expect(auth0.linkExists).toHaveBeenCalledWith(expect.objectContaining({ id: operation.id, target_id: PRIMARY }))
+    await jobs.complete(operation, 'failed', { attemptId: retry.id })
+    await jobs.complete(operation, 'done')
+    const [job] = await dataSource.query('SELECT "state" FROM "account_link_consent_job" WHERE "id" = $1', [
+      operation.id,
+    ])
+    expect(job.state).toBe('done')
   })
 
   it('leaves consent in place after rejection and ignores writes from an expired lease', async () => {
@@ -236,14 +278,14 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     await dataSource.query('UPDATE "account_link_consent_job" SET "lease_expires_at" = now()')
     const [current] = await jobs.claim()
     expect(current.lease_token).not.toBe(expired.lease_token)
-    await jobs.complete(expired, 'done', expired.lease_token)
+    await jobs.complete(expired, 'done', { leaseToken: expired.lease_token })
     await jobs.defer(expired)
     expect(await records.findOneBy({ userId: PRIMARY })).toBeNull()
     await jobs.complete(operation, 'failed')
-    await jobs.complete(current, 'done', current.lease_token)
+    await jobs.complete(current, 'done', { leaseToken: current.lease_token })
     expect(await records.findOneBy({ userId: SOCIAL })).not.toBeNull()
     const retry = { ...operation, id: randomUUID() }
-    expect(await jobs.prepare(retry)).toEqual({ operationId: retry.id, ready: true })
+    expect(await jobs.prepare(retry)).toMatchObject({ operationId: retry.id, ready: true })
     await jobs.complete(retry, 'done')
     expect(await records.findOneBy({ userId: PRIMARY })).not.toBeNull()
   })
@@ -258,11 +300,13 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     const config = {
       get: (key: string) => (key === 'oidc.accountLink.readClient' ? client : false),
       getOrThrow: (key: string) =>
-        key === 'oidc.managementApi.baseUrl'
-          ? 'https://identity.example/api/v2'
-          : 'https://identity.example/oauth/token',
+        key === 'oidc.accountLink.readClient'
+          ? client
+          : key === 'oidc.managementApi.baseUrl'
+            ? 'https://identity.example/api/v2'
+            : 'https://identity.example/oauth/token',
     } as unknown as TypedConfigService
-    const worker = new AccountLinkReconciliation(jobs, config)
+    const worker = new AccountLinkReconciliation(jobs, config, new AccountLinkAuth0Reader(config))
     const token = jest.spyOn(axios, 'post').mockResolvedValue({ data: { access_token: 'read-token', expires_in: 600 } })
     const lookup = jest.spyOn(axios, 'get').mockResolvedValue({
       data: { user_id: PRIMARY, identities: [{ provider: 'github', user_id: '103' }] },
@@ -276,7 +320,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
       })
       await dataSource.query('UPDATE "account_link_consent_job" SET "next_check_at" = now()')
       await worker.reconcile()
-      expect(await records.findOneBy({ userId: PRIMARY })).not.toBeNull()
+      expect(await records.findOneBy({ userId: PRIMARY })).toMatchObject({ acceptedByUserId: null })
       expect(token).toHaveBeenCalledTimes(1)
       expect(lookup).toHaveBeenLastCalledWith(
         `https://identity.example/api/v2/users/${encodeURIComponent(PRIMARY)}`,
@@ -304,23 +348,22 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     })
     const keyService = new ApiKeyService(keys, {} as never, {} as never, {} as never)
     const users = new UserService(dataSource.getRepository(User), new EventEmitter2(), dataSource)
-    const sourceConsent = { userId: SOCIAL, tosVersion: 'older-terms', privacyVersion: 'privacy' }
     const records = dataSource.getRepository(RegistrationConsent)
-    await records.insert(sourceConsent)
     const operation = { id: randomUUID(), source_id: SOCIAL, target_id: PRIMARY }
     await jobs.prepare(operation)
+    expect(await keyService.findWithCurrentOwner(key)).toMatchObject({ apiKey: { userId: SOCIAL } })
+    await jobs.complete(operation, 'done')
     expect(await keyService.findWithCurrentOwner(key)).toMatchObject({
       apiKey: { userId: PRIMARY },
       owner: { id: PRIMARY, registrationConsentPending: true },
     })
     const versions = { tosVersion: 'current-terms', privacyVersion: 'privacy' }
     expect(await users.acceptPendingRegistration(PRIMARY, versions, 'us')).toMatchObject({ accepted: true })
-    await jobs.complete(operation, 'done')
     expect(await records.findOneBy({ userId: PRIMARY })).toMatchObject({
       ...versions,
       acceptedByUserId: PRIMARY,
     })
-    expect(await records.findOneBy({ userId: SOCIAL })).toMatchObject(sourceConsent)
+    expect(await records.findOneBy({ userId: SOCIAL })).toBeNull()
     expect(await dataSource.getRepository(Organization).count()).toBe(1)
   })
 

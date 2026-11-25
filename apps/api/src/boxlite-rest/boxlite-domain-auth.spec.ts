@@ -81,7 +81,12 @@ describe('Domain acquisition authorization', () => {
         emailVerified: true,
       }),
     }
-    const config = { get: (key: string) => (key === 'proxy.apiKey' ? 'domain-proxy-key' : 30) }
+    const configValues: Record<string, number | string> = {
+      'proxy.apiKey': 'domain-proxy-key',
+      'apiKey.validationCacheTtlSeconds': 30,
+      'apiKey.userCacheTtlSeconds': 30,
+    }
+    const config = { get: (key: string) => configValues[key] }
     const apiKeys = {
       getApiKeyByValue: async (token: string) => {
         if (!['domain-write-key', 'domain-read-key', 'domain-expired-key'].includes(token))

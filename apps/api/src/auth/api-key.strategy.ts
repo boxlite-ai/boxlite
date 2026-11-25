@@ -83,7 +83,12 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       }
     }
 
-    const live = this.configService.get('legal') ? await this.apiKeyService.findWithCurrentOwner(token) : undefined
+    const live = this.configService.get('legal')
+      ? await this.apiKeyService.findWithCurrentOwner(token).catch((error) => {
+          this.logger.debug('Error checking current API key owner:', error)
+          return null
+        })
+      : undefined
     if (live && (!live.owner || live.owner.registrationConsentPending)) {
       throw new UnauthorizedException('This API key cannot be used until registration is complete')
     }

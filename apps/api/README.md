@@ -235,14 +235,17 @@ Configure `OIDC_ACCOUNT_LINK_READ_CLIENT_ID` and `OIDC_ACCOUNT_LINK_READ_CLIENT_
 dedicated Auth0 Management API client with `read:users` and verify the API scheduler
 can run without incoming traffic before enabling legal enforcement.
 
-The Action prepares each link in BoxLite before calling Auth0. Confirmed links
-transfer an existing acceptance only when the retained account has none.
-Consent keeps its original accepter, document versions, and timestamp.
+The Action reserves an attempt in BoxLite before calling Auth0. Confirmed
+links move resources and eligible consent in one transaction. An existing
+acceptance on the retained account takes precedence.
 
-A confirmed rejection allows a fresh attempt from sign-in. An unknown result
-keeps the original job active and the scheduler checks Auth0 for the exact linked
-identity. After six inconclusive checks, the API logs the operation ID at warning
-level and continues hourly checks. Alert on that warning.
+A rejected operation allows a fresh attempt from sign-in. With an unknown result,
+the scheduler checks for the exact identity and logs a warning after six
+inconclusive checks, then continues hourly. Alert on that warning.
+
+After the dispatch reservation and backoff expire, a fresh sign-in can retry
+the same pair if Auth0 confirms the identity is absent. A later rejection keeps
+an earlier uncertain attempt eligible for confirmation.
 
 ## Coupon link claims
 

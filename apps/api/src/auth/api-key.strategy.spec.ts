@@ -56,6 +56,18 @@ function createStrategy() {
 }
 
 describe('ApiKeyStrategy', () => {
+  it.each(['runner', 'region-proxy'])('still checks %s credentials if the owner lookup fails', async (role) => {
+    const { strategy, mocks } = createStrategy()
+    mocks.configService.get.mockImplementation((name) => (name === 'legal' ? {} : undefined))
+    mocks.apiKeyService.findWithCurrentOwner.mockRejectedValue(new Error('owner query failed'))
+    if (role === 'runner') mocks.runnerService.findByApiKey.mockResolvedValue({ id: 'runner' })
+    else mocks.regionService.findOneByProxyApiKey.mockResolvedValue({ id: 'region' })
+
+    await expect(strategy.validate('service-key')).resolves.toMatchObject({ role })
+    expect(mocks.redis.get).not.toHaveBeenCalled()
+    expect(mocks.apiKeyService.updateLastUsedAt).not.toHaveBeenCalled()
+  })
+
   it('denies an adopted key owned by a pending user before reading caches or trying service keys', async () => {
     const { strategy, mocks } = createStrategy()
     mocks.configService.get.mockImplementation((name) => (name === 'legal' ? {} : undefined))

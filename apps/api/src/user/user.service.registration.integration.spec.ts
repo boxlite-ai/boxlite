@@ -33,6 +33,7 @@ import { UserCreatedEvent } from './events/user-created.event'
 import { User } from './user.entity'
 import { RegistrationConsent } from './registration-consent.entity'
 import { AddRegistrationConsent1795392000000 } from '../migrations/pre-deploy/1795392000000-add-registration-consent-migration'
+import { AddAccountLinkConsentJobs1795560000000 } from '../migrations/pre-deploy/1795560000000-add-account-link-consent-jobs-migration'
 import { UserService } from './user.service'
 
 const integration = process.env.DB_HOST ? describe : describe.skip
@@ -60,11 +61,12 @@ integration.each(['user_id_pk', 'PK_cace4a159ff9f2512dd42373760'])(
         entities: [User, Organization, OrganizationUser, OrganizationRole, OrganizationInvitation],
         namingStrategy: new CustomNamingStrategy(),
         synchronize: false,
-        migrations: [AddRegistrationConsent1795392000000],
+        migrations: [AddRegistrationConsent1795392000000, AddAccountLinkConsentJobs1795560000000],
         extra: { options: `-c search_path=${schema},public -c statement_timeout=10000` },
       }).initialize()
       await db.query(`CREATE SCHEMA "${schema}"`)
       await db.synchronize()
+      await db.query('ALTER TABLE "user" DROP COLUMN "registrationConsentPending"')
       await db.runMigrations()
       db.setOptions({ entities: [...(db.options.entities as Function[]), RegistrationConsent] })
       await db.destroy()

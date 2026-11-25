@@ -4,7 +4,11 @@
  */
 
 import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
-import { AccountLinkConsentJobs, AccountLinkOperation } from './account-link-consent-jobs.service'
+import {
+  AccountLinkConsentJobs,
+  AccountLinkOperation,
+  AccountLinkPreparation,
+} from './account-link-consent-jobs.service'
 import { AuditService } from '../audit/services/audit.service'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
@@ -57,7 +61,7 @@ export class AccountLinkService {
     private readonly consentJobs: AccountLinkConsentJobs,
   ) {}
 
-  async prepare(token: string): Promise<{ operationId: string; ready: boolean }> {
+  async prepare(token: string): Promise<AccountLinkPreparation> {
     const payload = await this.readRequest(token, PREPARE_AUDIENCE)
     const operation = this.operation(payload)
     return this.recordAdoption(operation.target_id, operation.source_id, () => this.consentJobs.prepare(operation))
@@ -66,10 +70,14 @@ export class AccountLinkService {
   async result(token: string): Promise<void> {
     const payload = await this.readRequest(token, RESULT_AUDIENCE)
     const operation = this.operation(payload)
+    const attemptId = payload.attempt_id ?? operation.id
+    if (typeof attemptId !== 'string' || !OPERATION_ID.test(attemptId)) {
+      throw new UnauthorizedException('The account-link attempt is not valid.')
+    }
     if (payload.outcome !== 'done' && payload.outcome !== 'failed') {
       throw new UnauthorizedException('The account-link result is not valid.')
     }
-    await this.consentJobs.complete(operation, payload.outcome)
+    await this.consentJobs.complete(operation, payload.outcome, { attemptId })
   }
 
   private operation(payload: Record<string, unknown> & { sub: string }): AccountLinkOperation {

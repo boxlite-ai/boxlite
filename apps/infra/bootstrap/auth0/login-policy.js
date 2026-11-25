@@ -314,17 +314,18 @@ async function boxliteKnows(event, userId) {
   return (await response.json()).known === true
 }
 
-async function linkRequest(event, endpoint, audience, claims) {
+async function linkRequest(event, endpoint, audience, claims, signal) {
   return fetch(`${ACCOUNT_LINK_API_ORIGIN}/api/auth/link/${endpoint}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${signLinkRequest(event, audience, claims)}` },
+    signal,
   })
 }
 
-async function link(event, api, primaryUserId, userId) {
+async function link(event, api, primaryUserId, userId, deadline) {
   const token = await managementToken(event, api)
-  const operationId = require('crypto').randomUUID()
-  const claims = { sub: userId, primary_user_id: primaryUserId, operation_id: operationId }
+  const attemptId = require('crypto').randomUUID()
+  const claims = { sub: userId, primary_user_id: primaryUserId, operation_id: attemptId }
   // Retrying preparation is safe before this invocation has sent a link request.
   const prepared = await linkRequest(event, 'prepare', PREPARE_AUDIENCE, claims).catch(() =>
     linkRequest(event, 'prepare', PREPARE_AUDIENCE, claims),
@@ -332,7 +333,16 @@ async function link(event, api, primaryUserId, userId) {
   if (prepared.status === 409) throw new AccountLinkPendingError()
   if (prepared.status !== 201) throw new Error(`preparing account link answered ${prepared.status}`)
   const preparation = await prepared.json()
-  if (preparation.operationId !== operationId || preparation.ready !== true) throw new AccountLinkPendingError()
+  const { operationId, dispatchUntil } = preparation
+  if (
+    preparation.ready !== true ||
+    typeof operationId !== 'string' ||
+    !Number.isFinite(dispatchUntil) ||
+    dispatchUntil <= Date.now() ||
+    deadline <= Date.now()
+  ) {
+    throw new AccountLinkPendingError()
+  }
 
   const separator = userId.indexOf('|')
   const { status } = await management(
@@ -345,15 +355,25 @@ async function link(event, api, primaryUserId, userId) {
   ).catch(() => {
     throw new AccountLinkPendingError()
   })
-  if (status !== 201 && ![400, 401, 403, 404, 422].includes(status)) {
+  // An authentication or authorization rejection rules out a write for this attempt.
+  if (status !== 201 && status !== 401 && status !== 403) {
     throw new AccountLinkPendingError()
   }
 
   const outcome = status === 201 ? 'done' : 'failed'
   let acknowledged = false
   try {
-    const response = await linkRequest(event, 'result', RESULT_AUDIENCE, { ...claims, outcome })
-    acknowledged = response.status === 204
+    const remaining = Math.min(2000, deadline - Date.now())
+    if (remaining > 0) {
+      const response = await linkRequest(
+        event,
+        'result',
+        RESULT_AUDIENCE,
+        { ...claims, operation_id: operationId, attempt_id: attemptId, outcome },
+        AbortSignal.timeout(remaining),
+      )
+      acknowledged = response.status === 204
+    }
   } catch {
     // BoxLite can reconcile a confirmed link even when the result cannot reach it.
   }
@@ -382,10 +402,10 @@ async function accountThatStays(event, accounts) {
 }
 
 /** Each identity gets its own BoxLite operation before linking in Auth0. */
-async function fold(event, api, accounts) {
+async function fold(event, api, accounts, deadline) {
   const stays = await accountThatStays(event, accounts)
   const folded = [event.user, ...accounts].filter((user) => user.user_id !== stays.user_id)
-  for (const user of folded) await link(event, api, stays.user_id, user.user_id)
+  for (const user of folded) await link(event, api, stays.user_id, user.user_id, deadline)
   if (stays.user_id !== event.user.user_id) api.authentication.setPrimaryUser(stays.user_id)
   setIdentityClaims(event, api, true)
 }
@@ -395,7 +415,7 @@ async function fold(event, api, accounts) {
  * proven, or shows the link page that asks for the proof. `mailboxProven` is
  * set right after the email Form has checked a code.
  */
-async function planLink(event, api, { mailboxProven = false, entry = false } = {}) {
+async function planLink(event, api, { mailboxProven = false, entry = false, deadline }) {
   const emailVerified = mailboxProven || event.user.email_verified === true
   let accounts
   try {
@@ -416,7 +436,7 @@ async function planLink(event, api, { mailboxProven = false, entry = false } = {
   // address, a password one too. A code from the email Form folds social
   // accounts only; a password account asks for its password.
   if (provesMailbox(event) || (mailboxProven && !password)) {
-    await fold(event, api, accounts)
+    await fold(event, api, accounts, deadline)
     return
   }
   // A link page reached by reusing an earlier sign-in from the session is the
@@ -429,7 +449,7 @@ async function planLink(event, api, { mailboxProven = false, entry = false } = {
   renderLinkForm(event, api, { mode: password ? 'password' : 'code' })
 }
 
-async function startAccountLink(event, api) {
+async function startAccountLink(event, api, deadline) {
   // Without an address there is no account to fold into.
   if (!event.user?.email) {
     setIdentityClaims(event, api)
@@ -445,7 +465,7 @@ async function startAccountLink(event, api) {
     api.prompt.render(EMAIL_VERIFICATION_FORM_ID)
     return
   }
-  await planLink(event, api, { entry: true })
+  await planLink(event, api, { entry: true, deadline })
 }
 
 /**
@@ -462,7 +482,7 @@ async function cancelLink(event, api) {
 }
 
 /** The link page came back: cancelled, with a password, or to get a code. */
-async function answerLinkForm(event, api) {
+async function answerLinkForm(event, api, deadline) {
   const fields = event.prompt?.fields ?? {}
   if (fields.cancel === 'cancel') {
     await cancelLink(event, api)
@@ -492,7 +512,7 @@ async function answerLinkForm(event, api) {
   if (!(await provePassword(event, api, passwordAccount, password))) return
   // The password proves its own account; social ones join at their own next
   // login. (A login that proves its mailbox never reaches this page.)
-  await fold(event, api, [passwordAccount])
+  await fold(event, api, [passwordAccount], deadline)
 }
 
 /** True once the account's password checks out; otherwise the page or a denial has answered. */
@@ -522,7 +542,8 @@ async function provePassword(event, api, account, password) {
 /** Any failure to reach Auth0 or BoxLite ends the login; the next one retries. */
 async function withAccountLink(api, step) {
   try {
-    await step()
+    // Leave time for Auth0 to finish its 20-second trigger after our callback.
+    await step(Date.now() + 17000)
   } catch (error) {
     if (error instanceof AccountLinkPendingError) {
       api.access.deny('BoxLite is still checking the account link. Try signing in again later.')
@@ -539,7 +560,7 @@ async function withAccountLink(api, step) {
 
 exports.onExecutePostLogin = async (event, api) => {
   if (needsAccountLink(event)) {
-    await withAccountLink(api, () => startAccountLink(event, api))
+    await withAccountLink(api, (deadline) => startAccountLink(event, api, deadline))
     return
   }
 
@@ -578,12 +599,12 @@ exports.onContinuePostLogin = async (event, api) => {
 
   if (needsAccountLink(event)) {
     if (event.prompt?.id === ACCOUNT_LINK_FORM_ID) {
-      await withAccountLink(api, () => answerLinkForm(event, api))
+      await withAccountLink(api, (deadline) => answerLinkForm(event, api, deadline))
       return
     }
     // Back from the email Form: its code proved the mailbox.
     if (formId && event.prompt?.id === formId) {
-      await withAccountLink(api, () => planLink(event, api, { mailboxProven: true }))
+      await withAccountLink(api, (deadline) => planLink(event, api, { mailboxProven: true, deadline }))
       return
     }
     api.access.deny('Account linking failed')
