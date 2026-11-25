@@ -38,8 +38,8 @@ impl VmControl {
     /// Reserves an initial pause in `Created`, or posts a pause request for a
     /// running device-less VM and wakes the run driver without waiting. Callers
     /// can observe completion with [`Self::wait_paused`].
-    pub fn pause(&self) -> Result<()> {
-        self.lifecycle.pause()
+    pub fn request_pause(&self) -> Result<()> {
+        self.lifecycle.request_pause()
     }
 
     /// Reopens guest entry for a paused VM after the run driver accepts it.

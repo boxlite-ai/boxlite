@@ -104,7 +104,7 @@ impl ExitGate {
 }
 
 pub(super) fn pause_at_exit(control: &VmControl, release: mpsc::Sender<()>) -> crate::Result<()> {
-    control.pause()?;
+    control.request_pause()?;
     wait_until(|| control.status() == VmStatus::Pausing);
     release.send(()).unwrap();
     control.wait_paused(WAIT)
@@ -118,7 +118,7 @@ fn initial_pause_prevents_guest_entry_and_running_pauses_are_reversible() {
         let entries = backend.entries();
         let mut vm = bare(backend, count);
         let control = vm.control();
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         assert_eq!(control.status(), VmStatus::Created);
 
         let exit = run_with_control(&mut vm, |control| {
@@ -131,7 +131,7 @@ fn initial_pause_prevents_guest_entry_and_running_pauses_are_reversible() {
                 control.resume().unwrap();
                 assert_eq!(control.status(), VmStatus::Running);
                 wait_until(|| entries.lock().unwrap().len() > previous);
-                control.pause().unwrap();
+                control.request_pause().unwrap();
                 control.wait_paused(WAIT).unwrap();
                 assert_eq!(control.status(), VmStatus::Paused);
                 control.wait_paused(Duration::ZERO).unwrap();
@@ -174,7 +174,7 @@ fn stop_or_drop_before_run_ends_an_initial_pause_without_guest_entry() {
         let log = backend.log();
         let mut vm = bare(backend, 2);
         let control = vm.control();
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         thread::scope(|scope| {
             let waiter = scope.spawn(|| control.wait_paused(WAIT));
             if run {
@@ -201,7 +201,7 @@ fn stop_or_drop_before_run_ends_an_initial_pause_without_guest_entry() {
 #[test]
 fn guest_shutdown_after_resume_is_the_run_outcome() {
     let mut vm = bare(MockVm::with_scripts(vec![vec![Step::Shutdown]]), 1);
-    vm.control().pause().unwrap();
+    vm.control().request_pause().unwrap();
     let exit = run_with_control(&mut vm, |control| {
         control.wait_paused(WAIT).unwrap();
         let resumed = control.resume();
@@ -230,13 +230,17 @@ fn pause_capability_uses_the_composed_chipset() {
     )
     .unwrap();
     assert_error(
-        vm.control().pause(),
-        "pause",
+        vm.control().request_pause(),
+        "request_pause",
         ControlReason::UnsupportedDevice,
     );
     let exit = run_with_control(&mut vm, |control| {
         wait_until(|| control.status() == VmStatus::Running);
-        assert_error(control.pause(), "pause", ControlReason::UnsupportedDevice);
+        assert_error(
+            control.request_pause(),
+            "request_pause",
+            ControlReason::UnsupportedDevice,
+        );
     });
     assert_eq!(exit.unwrap(), VmExit::StopRequested);
 }
@@ -282,6 +286,13 @@ enum PauseFault {
     NotifyStopped {
         peer_parked: Arc<AtomicBool>,
         kicks: Arc<AtomicUsize>,
+    },
+    GatedKickError {
+        gate: Arc<ExitGate>,
+        kind: io::ErrorKind,
+        fail_kicks: Arc<AtomicBool>,
+        attempts: Arc<AtomicUsize>,
+        kicked: mpsc::Sender<()>,
     },
 }
 
@@ -387,9 +398,24 @@ impl VcpuHandle for FaultyKick {
             PauseFault::Startup { release, .. } => {
                 let _ = release.send(());
             }
+            PauseFault::GatedKickError {
+                kind,
+                fail_kicks,
+                attempts,
+                kicked,
+                ..
+            } if fail_kicks.load(Ordering::Acquire) => {
+                attempts.fetch_add(1, Ordering::Release);
+                let _ = kicked.send(());
+                return Err(boxlite_hypervisor::Error::KickVcpu {
+                    id: self.id,
+                    source: (*kind).into(),
+                });
+            }
             PauseFault::CompleteIo(_)
             | PauseFault::SplitIo { .. }
-            | PauseFault::TerminalKick { .. } => {}
+            | PauseFault::TerminalKick { .. }
+            | PauseFault::GatedKickError { .. } => {}
         }
         self.handle.kick()
     }
@@ -417,6 +443,10 @@ impl Vcpu for FailingCpu {
             } = &self.fault
         {
             shutdown.wait();
+        }
+        if let PauseFault::GatedKickError { gate, .. } = &self.fault {
+            gate.wait();
+            return Ok(VcpuExit::Interrupted);
         }
         self.vcpu.run()
     }
@@ -494,7 +524,7 @@ fn failed_io_completion_ends_the_vm_and_rejects_the_in_flight_pause() {
 
     let exit = run_with_control(&mut vm, move |control| {
         ready.recv_timeout(WAIT).unwrap();
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         assert_error(
             control.wait_paused(WAIT),
             "wait_paused",
@@ -523,7 +553,7 @@ fn failed_stop_notification_releases_a_parked_peer_despite_a_kick_panic() {
         },
     );
     let lifecycle = Arc::clone(vm.lifecycle());
-    vm.control().pause().unwrap();
+    vm.control().request_pause().unwrap();
     let (finished, result) = mpsc::channel();
     let runner = thread::spawn(move || finished.send(vm.run()).unwrap());
 
@@ -557,7 +587,7 @@ fn pause_kick_panic_releases_vcpus_before_unwinding() {
     });
 
     wait_until(|| entries.lock().unwrap().len() == 2);
-    control.pause().unwrap();
+    control.request_pause().unwrap();
     let wait = control.wait_paused(WAIT);
     assert!(
         result
@@ -586,7 +616,7 @@ fn transient_pause_kick_retries_and_allows_resume() {
 
     let exit = run_with_control(&mut vm, |control| {
         wait_until(|| entries.lock().unwrap().len() == 2);
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         control
             .wait_paused(WAIT)
             .expect("transient kick should still allow the VM to pause");
@@ -643,7 +673,7 @@ fn assert_terminal_during_pause_retries_shutdown_kick(expected: VmExit) {
     }
 
     let wait = thread::scope(|scope| {
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         let waiter = scope.spawn(|| control.wait_paused(WAIT));
         pause_kick_started.recv_timeout(WAIT).unwrap();
         assert_eq!(control.status(), VmStatus::Pausing);
@@ -698,7 +728,7 @@ fn single_vcpu_pause_distinguishes_interrupted_and_fatal_kicks() {
 
         let exit = run_with_control(&mut vm, |control| {
             wait_until(|| entries.lock().unwrap().len() == 1);
-            control.pause().unwrap();
+            control.request_pause().unwrap();
             let paused = control.wait_paused(Duration::from_secs(5));
             if kind == io::ErrorKind::Interrupted {
                 let kicks = {
@@ -754,7 +784,7 @@ fn pause_during_vcpu_startup_parks_every_worker_before_guest_entry() {
 
         // The kick batch starts with only vCPU 0's handle. Its kick lets
         // vCPU 1 finish configuring and both workers leave the start gate.
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         control.wait_paused(WAIT).unwrap();
         assert_eq!(control.status(), VmStatus::Paused);
         assert_eq!(lifecycle.state().acknowledgements, 0b11);
@@ -841,4 +871,83 @@ fn stop_drains_split_mmio_before_worker_exit() {
     });
     assert_eq!(exit.unwrap(), VmExit::StopRequested);
     assert_eq!(completions.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn shutdown_non_retryable_kick_error_exits_without_hanging() {
+    let (gate, entered, release) = ExitGate::new();
+    let (kicked_tx, kicked_rx) = mpsc::channel();
+    let fail_kicks = Arc::new(AtomicBool::new(true));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut vm = faulty_vm(
+        MockVm::new(),
+        1,
+        PauseFault::GatedKickError {
+            gate,
+            kind: io::ErrorKind::PermissionDenied,
+            fail_kicks,
+            attempts: Arc::clone(&attempts),
+            kicked: kicked_tx,
+        },
+    );
+
+    let observed = Arc::clone(&attempts);
+    let exit = run_with_control(&mut vm, move |control| {
+        entered.recv_timeout(WAIT).unwrap();
+        control.stop();
+        kicked_rx.recv_timeout(WAIT).unwrap();
+
+        // Wait >2x KICK_RETRY (10ms) to confirm StopVcpus::drop removed the
+        // handle after the single non-retryable kick error.
+        thread::sleep(Duration::from_millis(25));
+        assert_eq!(observed.load(Ordering::Acquire), 1);
+
+        // Let the vCPU exit guest execution and observe the stop latch.
+        release.send(()).unwrap();
+    });
+    assert_eq!(exit.unwrap(), VmExit::StopRequested);
+    assert_eq!(attempts.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn self_exiting_vcpu_clears_pending_kicks_upon_pause_completion() {
+    let (gate, entered, release) = ExitGate::new();
+    let (kicked_tx, kicked_rx) = mpsc::channel();
+    let fail_kicks = Arc::new(AtomicBool::new(true));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut vm = faulty_vm(
+        MockVm::new(),
+        1,
+        PauseFault::GatedKickError {
+            gate,
+            kind: io::ErrorKind::WouldBlock,
+            fail_kicks: Arc::clone(&fail_kicks),
+            attempts: Arc::clone(&attempts),
+            kicked: kicked_tx,
+        },
+    );
+
+    let exit = run_with_control(&mut vm, move |control| {
+        entered.recv_timeout(WAIT).unwrap();
+        control.request_pause().unwrap();
+        kicked_rx.recv_timeout(WAIT).unwrap();
+
+        // Simulate the vCPU exiting on its own without a successful kick, then
+        // parking and acknowledging the pause at `checkpoint`.
+        release.send(()).unwrap();
+        control.wait_paused(WAIT).unwrap();
+        assert_eq!(control.status(), VmStatus::Paused);
+
+        let kicks_at_pause = attempts.load(Ordering::Acquire);
+        assert!(kicks_at_pause >= 1);
+
+        // Wait several kick-retry intervals (10ms each) to verify `pending_kicks`
+        // was cleared once the VM reached `Paused`.
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(attempts.load(Ordering::Acquire), kicks_at_pause);
+
+        // Allow the shutdown kick to succeed when StopOnDrop runs.
+        fail_kicks.store(false, Ordering::Release);
+    });
+    assert_eq!(exit.unwrap(), VmExit::StopRequested);
 }

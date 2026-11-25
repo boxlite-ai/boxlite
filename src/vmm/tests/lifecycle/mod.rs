@@ -144,7 +144,7 @@ fn start_checkpoint(
             .unwrap()
             .is_none()
     );
-    control.pause().unwrap();
+    control.request_pause().unwrap();
     assert!(lifecycle.begin_run().unwrap());
     (events, lifecycle, control, chipset, cpu)
 }
@@ -175,7 +175,7 @@ fn checkpoint_dispatches_both_split_mmio_fragments_before_pausing() {
 #[test]
 fn checkpoint_reparks_when_it_wakes_in_a_new_pause_epoch() {
     let (mut events, lifecycle, control) = fixture(true);
-    control.pause().unwrap();
+    control.request_pause().unwrap();
     assert!(lifecycle.begin_run().unwrap());
 
     thread::scope(|scope| {
@@ -335,7 +335,11 @@ fn stop_latches_one_event_and_is_idempotent_after_exit() {
 #[test]
 fn created_pause_reservation_survives_wait_timeouts_and_disallows_resume() {
     let (_, _, control) = fixture(false);
-    assert_error(control.pause(), "pause", ControlReason::UnsupportedDevice);
+    assert_error(
+        control.request_pause(),
+        "request_pause",
+        ControlReason::UnsupportedDevice,
+    );
 
     let (_, lifecycle, control) = fixture(true);
     assert_error(control.resume(), "resume", ControlReason::InvalidState);
@@ -344,9 +348,13 @@ fn created_pause_reservation_survives_wait_timeouts_and_disallows_resume() {
         "wait_paused",
         ControlReason::InvalidState,
     );
-    control.pause().unwrap();
+    control.request_pause().unwrap();
     assert_eq!(control.status(), VmStatus::Created);
-    assert_error(control.pause(), "pause", ControlReason::InvalidState);
+    assert_error(
+        control.request_pause(),
+        "request_pause",
+        ControlReason::InvalidState,
+    );
     assert_error(control.resume(), "resume", ControlReason::InvalidState);
     for timeout in [Duration::ZERO, Duration::from_millis(10), Duration::ZERO] {
         assert_error(
@@ -363,12 +371,12 @@ fn created_pause_has_one_winner_and_stop_or_exit_releases_waiters() {
     for stop in [true, false] {
         let (_, lifecycle, control) = fixture(true);
         let other = control.clone();
-        let contender = thread::spawn(move || other.pause());
-        let first = control.pause();
+        let contender = thread::spawn(move || other.request_pause());
+        let first = control.request_pause();
         let second = contender.join().unwrap();
         match (first, second) {
             (Ok(()), rejected) | (rejected, Ok(())) => {
-                assert_error(rejected, "pause", ControlReason::InvalidState);
+                assert_error(rejected, "request_pause", ControlReason::InvalidState);
             }
             results => panic!("expected one initial pause reservation: {results:?}"),
         }
@@ -401,7 +409,11 @@ fn created_pause_has_one_winner_and_stop_or_exit_releases_waiters() {
             }
             assert!(terminating.elapsed() < WAIT / 2);
         });
-        assert_error(control.pause(), "pause", ControlReason::InvalidState);
+        assert_error(
+            control.request_pause(),
+            "request_pause",
+            ControlReason::InvalidState,
+        );
         assert_error(control.resume(), "resume", ControlReason::InvalidState);
     }
 }
@@ -410,11 +422,15 @@ fn created_pause_has_one_winner_and_stop_or_exit_releases_waiters() {
 fn driver_requires_a_distinct_ack_from_every_vcpu_in_the_current_epoch() {
     for count in [1, 64] {
         let (mut events, lifecycle, control) = fixture(true);
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         assert!(lifecycle.begin_run().unwrap());
         assert!(matches!(lifecycle.begin_run(), Err(Error::AlreadyRan)));
         assert_eq!(control.status(), VmStatus::Pausing);
-        assert_error(control.pause(), "pause", ControlReason::InvalidState);
+        assert_error(
+            control.request_pause(),
+            "request_pause",
+            ControlReason::InvalidState,
+        );
         assert_error(control.resume(), "resume", ControlReason::InvalidState);
         let epoch = lifecycle.state().epoch;
         for id in 0..count - 1 {
@@ -457,7 +473,11 @@ fn epoch_overflow_rejects_pause_without_claiming_the_slot() {
     let (_, lifecycle, control) = fixture(true);
     lifecycle.begin_run().unwrap();
     lifecycle.state().epoch = u64::MAX;
-    assert_error(control.pause(), "pause", ControlReason::InvalidState);
+    assert_error(
+        control.request_pause(),
+        "request_pause",
+        ControlReason::InvalidState,
+    );
     assert_eq!(control.status(), VmStatus::Running);
     assert!(lifecycle.state().command.is_none());
 }
@@ -466,9 +486,13 @@ fn epoch_overflow_rejects_pause_without_claiming_the_slot() {
 fn running_pause_posts_without_blocking_and_survives_wait_timeouts() {
     let (mut events, lifecycle, control) = fixture(true);
     lifecycle.begin_run().unwrap();
-    control.pause().unwrap();
+    control.request_pause().unwrap();
     assert_eq!(control.status(), VmStatus::Running);
-    assert_error(control.pause(), "pause", ControlReason::InvalidState);
+    assert_error(
+        control.request_pause(),
+        "request_pause",
+        ControlReason::InvalidState,
+    );
     for timeout in [Duration::ZERO, Duration::from_millis(10)] {
         assert_error(
             control.wait_paused(timeout),
@@ -483,7 +507,11 @@ fn running_pause_posts_without_blocking_and_survives_wait_timeouts() {
 
     assert!(lifecycle.drive(1));
     assert_eq!(control.status(), VmStatus::Pausing);
-    assert_error(control.pause(), "pause", ControlReason::InvalidState);
+    assert_error(
+        control.request_pause(),
+        "request_pause",
+        ControlReason::InvalidState,
+    );
     assert_error(
         control.wait_paused(Duration::ZERO),
         "wait_paused",
@@ -501,11 +529,11 @@ fn competing_clones_claim_only_one_command_slot() {
 
     for (operation, request) in [
         (
-            "pause",
-            VmControl::pause as fn(&VmControl) -> crate::Result<()>,
+            "request_pause",
+            VmControl::request_pause as fn(&VmControl) -> crate::Result<()>,
         ),
         ("resume", VmControl::resume),
-        ("pause", VmControl::pause),
+        ("request_pause", VmControl::request_pause),
     ] {
         let start = Arc::new(Barrier::new(2));
         let (done, result) = mpsc::channel();
@@ -516,7 +544,7 @@ fn competing_clones_claim_only_one_command_slot() {
                 done.send(request(&control)).unwrap();
             })
         });
-        if operation == "pause" {
+        if operation == "request_pause" {
             let outcomes = [
                 result.recv_timeout(WAIT).unwrap(),
                 result.recv_timeout(WAIT).unwrap(),
@@ -557,10 +585,14 @@ fn competing_clones_claim_only_one_command_slot() {
 
 #[test]
 fn terminal_stop_rejects_queued_and_accepted_operations() {
-    for (operation, accepted) in [("pause", false), ("pause", true), ("resume", false)] {
+    for (operation, accepted) in [
+        ("request_pause", false),
+        ("request_pause", true),
+        ("resume", false),
+    ] {
         let (mut events, lifecycle, control) = fixture(true);
         if operation == "resume" {
-            control.pause().unwrap();
+            control.request_pause().unwrap();
         }
         lifecycle.begin_run().unwrap();
         if operation == "resume" {
@@ -570,8 +602,8 @@ fn terminal_stop_rejects_queued_and_accepted_operations() {
 
         let other = control.clone();
         let (ready, waiting) = mpsc::channel();
-        let (wait_op, request) = if operation == "pause" {
-            control.pause().unwrap();
+        let (wait_op, request) = if operation == "request_pause" {
+            control.request_pause().unwrap();
             let lifecycle = Arc::clone(&lifecycle);
             (
                 "wait_paused",
@@ -591,7 +623,7 @@ fn terminal_stop_rejects_queued_and_accepted_operations() {
         } else {
             ("resume", thread::spawn(move || other.resume()))
         };
-        if operation == "pause" {
+        if operation == "request_pause" {
             waiting.recv_timeout(WAIT).unwrap();
         }
         assert!(events.wait(Some(WAIT)).unwrap().is_none());
@@ -697,4 +729,72 @@ fn device_less_validation_rejects_each_userspace_device() {
             }
         ));
     }
+}
+
+#[test]
+fn paused_state_rejects_request_pause() {
+    let (_, lifecycle, control) = fixture(true);
+    control.request_pause().unwrap();
+    lifecycle.begin_run().unwrap();
+    lifecycle.state().acknowledge(1, 0);
+    assert!(!lifecycle.drive(1));
+    assert_eq!(control.status(), VmStatus::Paused);
+
+    assert_error(
+        control.request_pause(),
+        "request_pause",
+        ControlReason::InvalidState,
+    );
+    assert_eq!(control.status(), VmStatus::Paused);
+    assert!(lifecycle.state().command.is_none());
+}
+
+#[test]
+fn wait_paused_succeeds_for_epoch_1_after_resume_and_epoch_2_request() {
+    let (_, lifecycle, control) = fixture(true);
+    lifecycle.begin_run().unwrap();
+    control.request_pause().unwrap();
+
+    thread::scope(|scope| {
+        let (ready, waiting) = mpsc::channel();
+        let waiter = {
+            let lifecycle = Arc::clone(&lifecycle);
+            scope.spawn(move || {
+                let state = lifecycle.state();
+                let Some(Command::Park(epoch)) = state.command else {
+                    panic!("pause was never queued");
+                };
+                assert_eq!(epoch, 1);
+                // Signal while holding the lock so the state transitions below
+                // happen while this waiter is blocked in `await_pause`.
+                ready.send(()).unwrap();
+                lifecycle
+                    .await_pause(state, epoch, WAIT)
+                    .map_err(|reason| super::control_error("wait_paused", reason))
+            })
+        };
+
+        waiting.recv_timeout(WAIT).unwrap();
+        {
+            let mut state = lifecycle.state();
+            state.command = None;
+            state.start_pause(1);
+            state.acknowledge(1, 0);
+            state.completed_epoch = 1;
+            state.status = VmStatus::Paused;
+            // Advance through resume and a second pause request before waking
+            // the epoch-1 waiter, so it observes epoch 2 in `Pausing`.
+            state.status = VmStatus::Running;
+            state.start_pause(2);
+            lifecycle.changed.notify_all();
+        }
+
+        waiter.join().unwrap().unwrap();
+        assert_eq!(control.status(), VmStatus::Pausing);
+        assert_error(
+            control.wait_paused(Duration::ZERO),
+            "wait_paused",
+            ControlReason::DeadlineTimeout,
+        );
+    });
 }

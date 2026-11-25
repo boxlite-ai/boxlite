@@ -123,14 +123,17 @@ impl Lifecycle {
         self.changed.notify_all();
     }
 
-    pub(crate) fn pause(&self) -> Result<()> {
+    pub(crate) fn request_pause(&self) -> Result<()> {
         let mut state = self.state();
-        let invalid = || control_error("pause", ControlReason::InvalidState);
+        let invalid = || control_error("request_pause", ControlReason::InvalidState);
         if state.is_terminal() {
             return Err(invalid());
         }
         if !self.device_less {
-            return Err(control_error("pause", ControlReason::UnsupportedDevice));
+            return Err(control_error(
+                "request_pause",
+                ControlReason::UnsupportedDevice,
+            ));
         }
         if state.command.is_some() || !matches!(state.status, VmStatus::Created | VmStatus::Running)
         {

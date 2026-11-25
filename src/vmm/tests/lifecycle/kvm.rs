@@ -49,7 +49,7 @@ fn kvm_device_less_guest_pauses_resumes_and_stops() {
             .load::<u32>(COUNTER, Ordering::Relaxed)
             .unwrap()
     };
-    vm.control().pause().unwrap();
+    vm.control().request_pause().unwrap();
     let exit = run_with_control(&mut vm, |control| {
         control.wait_paused(WAIT).unwrap();
         assert_eq!(counter(), 0);
@@ -58,7 +58,7 @@ fn kvm_device_less_guest_pauses_resumes_and_stops() {
             control.resume().unwrap();
             assert_eq!(control.status(), VmStatus::Running);
             wait_until(|| counter() != previous);
-            control.pause().unwrap();
+            control.request_pause().unwrap();
             control.wait_paused(WAIT).unwrap();
             assert_eq!(control.status(), VmStatus::Paused);
             let paused = counter();

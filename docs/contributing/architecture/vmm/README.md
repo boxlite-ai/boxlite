@@ -505,7 +505,7 @@ logged.
 
 The driver holds exclusive access to `Vm` throughout `run`. `VmControl`
 provides backend-independent runtime controls. External threads use
-`status()`, `stop()`, `pause()`, `wait_paused(timeout)`, `resume()`, and
+`status()`, `stop()`, `request_pause()`, `wait_paused(timeout)`, `resume()`, and
 `resize_disk()` without holding the VM itself. `StopHandle::stop` uses the
 same stop latch.
 
@@ -514,7 +514,7 @@ can reserve its first pause in `Created`. It keeps that status until
 `run` claims the reservation and enters `Pausing` before releasing the
 vCPU start gate. Every vCPU parks before its first guest entry.
 
-During execution, `pause()` posts a command in a single-slot mailbox.
+During execution, `request_pause()` posts a command in a single-slot mailbox.
 The driver accepts it in `Running`, enters `Pausing`, and kicks the vCPUs.
 At `checkpoint`, each vCPU owner dispatches exits from `complete_pending_io`
 until it returns `Ok(IoCompletion::Done)`, then calls `notify_guest_stopped`. A
@@ -526,7 +526,7 @@ The driver publishes `Paused` after one acknowledgement from each vCPU.
 pure poller wake prompts the driver to check the mailbox. Terminal events use
 the same poller and keep their queue priority.
 
-`pause()` posts the request and wakes the driver without waiting.
+`request_pause()` posts the request and wakes the driver without waiting.
 `wait_paused(timeout)` observes the reserved, queued, or active epoch and its
 timeout leaves the pause in place.
 
