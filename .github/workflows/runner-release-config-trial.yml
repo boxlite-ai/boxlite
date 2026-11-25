@@ -1,0 +1,65 @@
+name: BoxLite read-only Go release configuration
+on:
+  push:
+    branches: [ci/boxlite-runner-trials-2833]
+    paths: [.github/workflows/runner-release-config-trial.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  config:
+    runs-on: boxlite
+    timeout-minutes: 10
+    steps:
+      - name: Install release configuration tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gh jq
+      - name: Verify C release producer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          C_REPOSITORY: boxlite-ai/boxlite
+          C_WORKFLOW_ID: '245927919'
+          C_WORKFLOW_PATH: .github/workflows/build-c.yml
+          C_SHA: 06bd5da62f6a9687734577a05964dffac7398ae6
+          C_RUN_ID: '45408256931'
+        run: |
+          set -euo pipefail
+          if [[ "$C_REPOSITORY" != "$GITHUB_REPOSITORY" || ! "$C_SHA" =~ ^[0-9a-f]{40}$ || ! "$C_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo 'Invalid C release repository, commit, or run ID' >&2
+            exit 1
+          fi
+          expected=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/build-c.yml" --jq '.id')
+          if [[ "$C_WORKFLOW_PATH" != .github/workflows/build-c.yml || ! "$expected" =~ ^[0-9]+$ || "$C_WORKFLOW_ID" != "$expected" ]]; then
+            echo 'The triggering run is not the canonical Build C SDK workflow' >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        id: checkout
+        with:
+          ref: 06bd5da62f6a9687734577a05964dffac7398ae6
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify C release tag
+        id: release
+        shell: bash
+        env:
+          C_SHA: 06bd5da62f6a9687734577a05964dffac7398ae6
+          RELEASE_TAG: v0.15.0
+        run: |
+          set -euo pipefail
+          version=$(awk -F '"' '/^\[workspace\.package\]$/ { workspace=1; next } /^\[/ { workspace=0 } workspace && /^version = "/ { print $2; exit }' Cargo.toml)
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "$RELEASE_TAG" != "v$version" ]]; then
+            echo 'The C run did not originate from the canonical workspace release tag' >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")" != "$C_SHA" ]] ||
+             ! git merge-base --is-ancestor "$C_SHA" refs/remotes/origin/main; then
+            echo 'The product tag must point to the C build commit on main' >&2
+            exit 1
+          fi
+          printf 'tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/ci-config
+        id: config
