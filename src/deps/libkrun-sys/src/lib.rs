@@ -141,4 +141,16 @@ extern "C" {
         fstype: *const c_char,
         options: *const c_char,
     ) -> i32;
+
+    /// Pause a running microVM, freezing vCPUs and devices and flushing block storage.
+    pub fn krun_pause(ctx_id: u32) -> i32;
+
+    /// Resume a paused microVM.
+    pub fn krun_resume(ctx_id: u32) -> i32;
+
+    /// Save memory, CPU, and device state of a paused microVM to `file_path`.
+    pub fn krun_save_checkpoint(ctx_id: u32, file_path: *const c_char) -> i32;
+
+    /// Configure a context to restore from a saved checkpoint file before `krun_start_enter`.
+    pub fn krun_build_from_checkpoint(ctx_id: u32, file_path: *const c_char) -> i32;
 }

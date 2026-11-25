@@ -29,3 +29,23 @@ pub(crate) fn check_status(label: &str, status: i32) -> BoxliteResult<()> {
         Ok(())
     }
 }
+
+/// Convert a libkrun return code into an `io::Result`, preserving negative errno
+/// values via [`std::io::Error::from_raw_os_error`].
+pub(crate) fn check_errno_status(label: &str, status: i32) -> std::io::Result<()> {
+    if status < 0 {
+        tracing::error!(function = label, status, "libkrun FFI call failed");
+        let err = status
+            .checked_neg()
+            .map(std::io::Error::from_raw_os_error)
+            .unwrap_or_else(|| {
+                std::io::Error::other(format!(
+                    "libkrun function '{}' failed with status {}",
+                    label, status
+                ))
+            });
+        Err(err)
+    } else {
+        Ok(())
+    }
+}

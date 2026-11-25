@@ -6,18 +6,18 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-use std::{ffi::CString, ptr};
+use std::{ffi::CString, os::unix::ffi::OsStrExt, path::Path, ptr};
 
-use crate::vmm::krun::check_status;
+use crate::vmm::krun::{check_errno_status, check_status};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libkrun_sys::{
     krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs3,
-    krun_add_vsock, krun_add_vsock_port2, krun_check_nested_virt, krun_create_ctx,
-    krun_disable_implicit_vsock, krun_free_ctx, krun_init_log, krun_set_console_output,
-    krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt,
-    krun_set_port_map, krun_set_rlimits, krun_set_root, krun_set_root_disk_remount,
-    krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip,
-    krun_start_enter,
+    krun_add_vsock, krun_add_vsock_port2, krun_build_from_checkpoint, krun_check_nested_virt,
+    krun_create_ctx, krun_disable_implicit_vsock, krun_free_ctx, krun_init_log, krun_pause,
+    krun_resume, krun_save_checkpoint, krun_set_console_output, krun_set_env, krun_set_exec,
+    krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt, krun_set_port_map,
+    krun_set_rlimits, krun_set_root, krun_set_root_disk_remount, krun_set_vm_config,
+    krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip, krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.
@@ -625,6 +625,51 @@ impl KrunContext {
         }
         status
     }
+
+    fn path_to_cstring(path: &Path) -> std::io::Result<CString> {
+        CString::new(path.as_os_str().as_bytes()).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid checkpoint path: {e}"),
+            )
+        })
+    }
+
+    /// Pause a running VM, freezing vCPUs and devices and flushing block storage.
+    ///
+    /// Negative libkrun return codes are preserved via [`std::io::Error::from_raw_os_error`]
+    /// so callers can distinguish `EAGAIN`, `EBUSY`, `ENOTSUP`, and `ESHUTDOWN`.
+    pub fn pause(&self) -> std::io::Result<()> {
+        check_errno_status("krun_pause", unsafe { krun_pause(self.ctx_id) })
+    }
+
+    /// Resume a paused VM.
+    ///
+    /// Negative libkrun return codes are preserved via [`std::io::Error::from_raw_os_error`].
+    pub fn resume(&self) -> std::io::Result<()> {
+        check_errno_status("krun_resume", unsafe { krun_resume(self.ctx_id) })
+    }
+
+    /// Save VM memory, CPU, and device state of a paused VM to `file_path`.
+    ///
+    /// Negative libkrun return codes are preserved via [`std::io::Error::from_raw_os_error`]
+    /// (for example `EAGAIN`, `EBUSY`, `EEXIST`, or `ENOTSUP`).
+    pub fn save_checkpoint(&self, file_path: impl AsRef<Path>) -> std::io::Result<()> {
+        let path_c = Self::path_to_cstring(file_path.as_ref())?;
+        check_errno_status("krun_save_checkpoint", unsafe {
+            krun_save_checkpoint(self.ctx_id, path_c.as_ptr())
+        })
+    }
+
+    /// Configure this context to restore from a saved checkpoint file before `start_enter`.
+    ///
+    /// Negative libkrun return codes are preserved via [`std::io::Error::from_raw_os_error`].
+    pub fn build_from_checkpoint(&self, file_path: impl AsRef<Path>) -> std::io::Result<()> {
+        let path_c = Self::path_to_cstring(file_path.as_ref())?;
+        check_errno_status("krun_build_from_checkpoint", unsafe {
+            krun_build_from_checkpoint(self.ctx_id, path_c.as_ptr())
+        })
+    }
 }
 
 impl Drop for KrunContext {
@@ -638,6 +683,7 @@ impl Drop for KrunContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     #[test]
     fn nested_virtualization_status_maps_libkrun_results() {
@@ -654,5 +700,22 @@ mod tests {
             check_nested_virtualization_status(2),
             Err(BoxliteError::Engine(_))
         ));
+    }
+
+    #[test]
+    fn check_errno_status_preserves_negative_errno() {
+        assert!(check_errno_status("test", 0).is_ok());
+        for errno in [libc::EAGAIN, libc::EBUSY, libc::EEXIST, libc::ENOTSUP] {
+            let err = check_errno_status("test", -errno).unwrap_err();
+            assert_eq!(err.raw_os_error(), Some(errno));
+        }
+    }
+
+    #[test]
+    fn path_to_cstring_rejects_interior_nul() {
+        let bad = Path::new(OsStr::from_bytes(b"bad\0path"));
+        let err = KrunContext::path_to_cstring(bad).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(err.raw_os_error(), None);
     }
 }

@@ -24,7 +24,12 @@ Diagrams of this design:
 BoxLite line references are to commit `42ec1a2a6`. External citations name
 their project; their revisions are pinned under [References](#references).
 `libkrun/` is the vendored copy at `src/deps/libkrun-sys/vendor/libkrun/`
-(upstream `e12b9b3`).
+(upstream `311a45d`).
+
+The `311a45d` pin adds whole-VM checkpoint FFI symbols (`krun_pause`, `krun_resume`,
+`krun_save_checkpoint`, `krun_build_from_checkpoint`) exposed safely on `KrunContext`.
+HVF (macOS arm64) and KVM (Linux x86_64) return `EAGAIN` before start and defer
+restore-file open until launch; Linux arm64 returns `ENOTSUP`.
 
 ## Scope
 
