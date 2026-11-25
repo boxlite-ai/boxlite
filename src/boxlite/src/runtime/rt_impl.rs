@@ -73,6 +73,26 @@ pub(crate) fn stash_exit_file(layout: &BoxFilesystemLayout) {
     }
 }
 
+/// Clear `pending_memory_restore` and delete staged checkpoint files when a prior
+/// restore attempt spawned/ran and the shim is no longer alive.
+fn clear_aborted_checkpoint(
+    box_id: &BoxID,
+    state: &mut BoxState,
+    checkpoint_dir: &std::path::Path,
+) {
+    state.pending_memory_restore = false;
+    if checkpoint_dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(checkpoint_dir)
+    {
+        tracing::warn!(
+            box_id = %box_id,
+            path = %checkpoint_dir.display(),
+            error = %e,
+            "Failed to remove staged checkpoint directory during recovery"
+        );
+    }
+}
+
 /// Move a directory tree, falling back to recursive copy + remove if rename
 /// fails with EXDEV. The import/clone staging dir and the canonical boxes dir
 /// can live on different filesystems (e.g. a tmpfs scratch area vs the on-disk
@@ -1403,10 +1423,38 @@ impl RuntimeImpl {
         resolved_image: Option<crate::images::ResolvedImage>,
         clone_dependency: Option<CloneDependency>,
     ) -> BoxliteResult<LiteBox> {
+        self.provision_box_with_restore(
+            staging_dir,
+            name,
+            options,
+            initial_status,
+            resolved_image,
+            clone_dependency,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Provision a new box, optionally preserving a checkpoint's container ID
+    /// and marking `pending_memory_restore` for one-shot VM state restore.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn provision_box_with_restore(
+        self: &Arc<Self>,
+        staging_dir: std::path::PathBuf,
+        name: Option<String>,
+        options: BoxOptions,
+        initial_status: BoxStatus,
+        resolved_image: Option<crate::images::ResolvedImage>,
+        clone_dependency: Option<CloneDependency>,
+        container_id: Option<ContainerID>,
+        outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
+    ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
         let box_id = BoxIDMint::mint();
-        let container_id = ContainerID::new();
+        let pending_memory_restore = container_id.is_some();
+        let container_id = container_id.unwrap_or_default();
         let now = Utc::now();
 
         // Move staging dir to canonical path (cross-fs safe: staging may be on
@@ -1435,6 +1483,9 @@ impl RuntimeImpl {
         let mut state = BoxState::new();
         state.set_status(initial_status);
         state.resolved_image = resolved_image;
+        state.pending_memory_restore = pending_memory_restore;
+        state.rootfs_initialized = initial_status == BoxStatus::Stopped || pending_memory_restore;
+        state.outbound_policy = outbound_policy;
 
         if let Err(e) = self
             .persist_box_with_locks(
@@ -1657,6 +1708,7 @@ impl RuntimeImpl {
             let original_status = state.status;
             let original_pid = state.pid;
             let original_lock_id = state.lock_id;
+            let original_pending_memory_restore = state.pending_memory_restore;
             if state.lock_id.is_none() {
                 let lock_id = self.lock_manager.allocate()?;
                 self.disk_lock_manager.allocate_and_retrieve(lock_id)?;
@@ -1666,12 +1718,17 @@ impl RuntimeImpl {
             let box_layout = self.layout.box_layout(box_id.as_str(), false)?;
             let pid_path = box_layout.pid_file_path();
             let exit_path = box_layout.exit_file_path();
+            let had_pid_file = pid_path.exists();
             let had_stale_exit = exit_path.exists();
+            let checkpoint_dir = box_layout
+                .root()
+                .join(crate::litebox::archive::CHECKPOINT_DIRNAME);
 
             // Truth-source precedence: a live shim (ProcessIdentity) is
             // ground truth. The exit file is at-best an artifact of a past
             // lifecycle, so it only matters when no shim is alive.
             match PidFileReader::at(&pid_path).process_identity() {
+                // A live shim may still be opening vmstate.krun; leave it in place.
                 ProcessIdentity::Verified(pid) => {
                     state.adopt_recovered_shim(pid);
                     // Live shim wins — archive any prior-lifecycle exit
@@ -1714,6 +1771,9 @@ impl RuntimeImpl {
                 ProcessIdentity::Absent => {
                     // PID is dead or missing — clean the stale PID file.
                     let _ = std::fs::remove_file(&pid_path);
+                    let restore_not_spawned = !had_pid_file
+                        && state.pending_memory_restore
+                        && matches!(state.status, BoxStatus::Configured | BoxStatus::Failed);
 
                     if had_stale_exit && crate::vmm::ExitInfo::from_file(&exit_path).is_some() {
                         // Shim crashed in a prior lifecycle. Surface as
@@ -1727,6 +1787,9 @@ impl RuntimeImpl {
                             None,
                         );
                         state.mark_failed(&report.client_message);
+                        if !restore_not_spawned {
+                            clear_aborted_checkpoint(box_id, &mut state, &checkpoint_dir);
+                        }
                         tracing::error!(
                             box_id = %box_id,
                             "Box crashed in a prior lifecycle:\n{}",
@@ -1749,12 +1812,21 @@ impl RuntimeImpl {
                             &mut state,
                             &box_layout.container_exit_file(config.container.id.as_str()),
                         );
+                        clear_aborted_checkpoint(box_id, &mut state, &checkpoint_dir);
                         tracing::warn!(
                             box_id = %box_id,
                             exit_code = ?state.exit_code,
                             "Shim not verifiable (file missing, process dead, or PID reuse); \
                              marked Stopped"
                         );
+                    } else if !restore_not_spawned
+                        && (had_pid_file || state.status != BoxStatus::Configured)
+                    {
+                        clear_aborted_checkpoint(box_id, &mut state, &checkpoint_dir);
+                        if state.status == BoxStatus::Configured {
+                            // The shim spawned, so restart must reuse the initialized rootfs.
+                            state.mark_stop();
+                        }
                     }
                 }
             }
@@ -1763,6 +1835,7 @@ impl RuntimeImpl {
             if state.status != original_status
                 || state.pid != original_pid
                 || state.lock_id != original_lock_id
+                || state.pending_memory_restore != original_pending_memory_restore
             {
                 self.box_manager.save_box(box_id, &state)?;
             }
@@ -2597,7 +2670,7 @@ mod tests {
     }
 
     /// Create a RuntimeImpl with isolated temp directory.
-    fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
+    pub(super) fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
         let options = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -2842,7 +2915,7 @@ mod tests {
     }
 
     /// Create a BoxState with Running status and a given PID.
-    fn running_state(pid: u32) -> BoxState {
+    pub(super) fn running_state(pid: u32) -> BoxState {
         let mut state = BoxState::new();
         state.status = BoxStatus::Running;
         state.pid = Some(pid);
@@ -2850,7 +2923,7 @@ mod tests {
     }
 
     /// Spawn a dummy sleep process and return its PID.
-    fn spawn_dummy_process() -> (u32, std::process::Child) {
+    pub(super) fn spawn_dummy_process() -> (u32, std::process::Child) {
         let child = std::process::Command::new("sleep")
             .arg("300")
             .spawn()
@@ -2859,7 +2932,7 @@ mod tests {
         (pid, child)
     }
 
-    struct ChildGuard(std::process::Child);
+    pub(super) struct ChildGuard(pub(super) std::process::Child);
 
     impl Drop for ChildGuard {
         fn drop(&mut self) {
@@ -2883,7 +2956,7 @@ mod tests {
 
     /// Create a BoxConfig whose box_home aligns with the runtime's layout.
     /// This is needed for tests that verify PID file operations.
-    fn test_box_config_in_layout(detach: bool, runtime: &RuntimeImpl) -> BoxConfig {
+    pub(super) fn test_box_config_in_layout(detach: bool, runtime: &RuntimeImpl) -> BoxConfig {
         let id = BoxIDMint::mint();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
         BoxConfig {
@@ -3473,7 +3546,7 @@ mod tests {
 
     /// Write a two-line `shim.pid` whose start-time matches the live PID
     /// so the recovery and stop fingerprint checks adopt it.
-    fn write_pid_file_with_fingerprint(pid_file: &std::path::Path, pid: u32) {
+    pub(super) fn write_pid_file_with_fingerprint(pid_file: &std::path::Path, pid: u32) {
         if let Some(parent) = pid_file.parent() {
             std::fs::create_dir_all(parent).expect("create box directory");
         }
@@ -4436,3 +4509,7 @@ mod tests {
 #[cfg(test)]
 #[path = "tests/disk_lock.rs"]
 mod disk_lock_tests;
+
+#[cfg(test)]
+#[path = "tests/recovery_checkpoint.rs"]
+mod recovery_checkpoint_tests;

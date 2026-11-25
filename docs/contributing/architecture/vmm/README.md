@@ -862,3 +862,10 @@ one-shot restore.
 Archive version 8 adds `MemoryCheckpointArchiveMetadata` (`platform`, `container_id`,
 checksums, `outbound_disabled`) and bundles `vmstate.krun` + `guest-rootfs.ext4`.
 `read_archive_manifest()` inspects `manifest.json` before extracting multi-GB payloads.
+
+### Trusted v8 import and crash recovery
+
+`import_box` enforces `ArchiveImportPolicy::Trusted`, host platform match, strict v8
+manifest/checksum validation, and stages `checkpoint/{vmstate.krun, guest-rootfs.ext4}`
+with `pending_memory_restore = true`. `recover_boxes` preserves pre-spawn checkpoints and
+clears aborted post-spawn restores.
