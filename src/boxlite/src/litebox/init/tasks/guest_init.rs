@@ -42,7 +42,7 @@ const MIN_DEVICE_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion =
 /// this gate, a guest that only knows the earlier safe-subpath feature would
 /// ignore the field and turn a read-write cloud mount into fail-on-missing.
 const MIN_VOLUME_MOUNT_OPTIONS_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion =
-    (0, 14, 1);
+    (0, 15, 0);
 
 pub struct GuestInitTask;
 
