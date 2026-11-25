@@ -18,20 +18,20 @@ permissions:
   contents: read
   actions: read
 jobs:
-  config:
-    uses: ./.github/workflows/config.yml
-    permissions:
-      contents: read
-      actions: read
   resolve-ref:
-    name: Resolve build commit
+    name: Prepare build configuration and commit
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
+      platforms: ${{ steps.config.outputs.platforms }}
+      rust-toolchain: ${{ steps.config.outputs.rust-toolchain }}
+      artifact-retention-days: ${{ steps.config.outputs.artifact-retention-days }}
     steps:
-      - name: actions/checkout@v4
-        shell: bash
-        run: printf '%s\n' 'Simulated'
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-config
+        id: config
       - name: Validate build commit
         id: ref
         shell: bash
@@ -44,16 +44,14 @@ jobs:
       actions: read
   build:
     name: Build (${{ matrix.target }})
-    needs:
-      - config
-      - resolve-ref
+    needs: resolve-ref
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include: >-
           ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' ||
-          needs.config.outputs.platforms) }}
+          needs.resolve-ref.outputs.platforms) }}
     steps:
       - name: actions/checkout@v4
         shell: bash

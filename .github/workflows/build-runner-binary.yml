@@ -25,20 +25,19 @@ permissions:
   contents: read
   actions: read
 jobs:
-  config:
-    uses: ./.github/workflows/config.yml
-    permissions:
-      contents: read
-      actions: read
   resolve-ref:
-    name: Resolve build commit
+    name: Prepare build configuration and commit
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
+      go-version: ${{ steps.config.outputs.go-version }}
+      artifact-retention-days: ${{ steps.config.outputs.artifact-retention-days }}
     steps:
-      - name: actions/checkout@v4
-        shell: bash
-        run: printf '%s\n' 'Simulated'
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-config
+        id: config
       - name: Validate build commit
         id: ref
         shell: bash
@@ -63,11 +62,10 @@ jobs:
   build:
     name: Build Runner (linux-amd64)
     needs:
-      - config
       - resolve-ref
       - build-c
     if: >-
-      !cancelled() && needs.config.result == 'success' && needs['resolve-ref'].result == 'success' && (needs['build-c'].result == 'success' ||
+      !cancelled() && needs['resolve-ref'].result == 'success' && (needs['build-c'].result == 'success' ||
       needs['build-c'].result == 'skipped')
     runs-on: ubuntu-latest
     permissions:

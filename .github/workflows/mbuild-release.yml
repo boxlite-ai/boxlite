@@ -397,7 +397,9 @@ jobs:
         shell: bash
         run: printf '%s\n' 'Simulated'
   npm:
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-node"]'), inputs.command) }}
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-node"]'), inputs.command) &&
+      !cancelled() && needs.attach.result == 'success' }}
     name: Publish accepted npm packages
     needs:
       - resolve
@@ -422,7 +424,9 @@ jobs:
         env:
           FAIL: ${{ inputs['simulate-failure'] }}
   pypi:
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) }}
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) &&
+      !cancelled() && needs.attach.result == 'success' }}
     name: Publish to PyPI
     needs:
       - resolve
@@ -453,7 +457,9 @@ jobs:
         shell: bash
         run: printf '%s\n' 'Simulated'
   tag-go-module:
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' &&
+      !cancelled() && needs.attach.result == 'success' }}
     name: Tag Go Module
     needs:
       - resolve
@@ -470,7 +476,9 @@ jobs:
         shell: bash
         run: printf '%s\n' 'Simulated'
   publish_crates:
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' &&
+      !cancelled() && needs.finalize.result == 'success' }}
     name: Publish to crates.io
     needs:
       - resolve
@@ -505,7 +513,10 @@ jobs:
       contents: read
       actions: read
   finalize:
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' &&
+      !cancelled() && needs.npm.result == 'success' &&
+      needs.pypi.result == 'success' && needs.tag-go-module.result == 'success' }}
     name: Publish the verified GitHub Release
     needs:
       - resolve
