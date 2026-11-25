@@ -36,9 +36,10 @@ pub(crate) use outbound_rules::outbound_rule_has_port;
 pub use outbound::{
     CompleteOutboundObservation, CompleteOutboundPolicy, CompleteOutboundSnapshot,
     CompleteOutboundStatus, EffectiveOutboundPolicy, HostedOutboundAttempt, HostedOutboundCommand,
-    HostedOutboundReceipt, OutboundAdmission, OutboundApplicationState, OutboundBootstrap,
-    OutboundCapabilities, OutboundReplaceOutcome, OutboundReplacement, OutboundRevision,
-    OutboundSnapshot, OutboundSnapshotStatus, OutboundStatus, PreparedOutboundCreate,
+    HostedOutboundReceipt, Ipv6LinkPlan, Ipv6Readiness, OutboundAdmission,
+    OutboundApplicationState, OutboundBootstrap, OutboundCapabilities, OutboundReplaceOutcome,
+    OutboundReplacement, OutboundRevision, OutboundSnapshot, OutboundSnapshotStatus,
+    OutboundStatus, PreparedOutboundCreate,
 };
 
 mod outbound_policy;
@@ -441,6 +442,16 @@ pub trait NetworkBackend: Send + Sync + std::fmt::Debug {
         _restore: bool,
     ) -> BoxliteResult<OutboundReplaceOutcome> {
         Err(control_unsupported("replace_complete_outbound_snapshot"))
+    }
+
+    #[doc(hidden)]
+    async fn ipv6_readiness(&self) -> BoxliteResult<Ipv6Readiness> {
+        Err(control_unsupported("ipv6_readiness"))
+    }
+
+    #[doc(hidden)]
+    async fn confirm_ipv6_readiness(&self, _readiness: &Ipv6Readiness) -> BoxliteResult<()> {
+        Err(control_unsupported("confirm_ipv6_readiness"))
     }
 
     async fn set_outbound(

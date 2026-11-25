@@ -29,7 +29,7 @@ type resolveFunc func(ctx context.Context, host string) ([]net.IP, error)
 type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // egressTarget separates the business destination from its approved socket
-// address. A transport receives a literal IPv4 address and must not resolve
+// address. A transport receives a literal address and must not resolve
 // Hostname again; PolicyIP retains the guest's address before NAT or DNS.
 type egressTarget struct {
 	Hostname       string
@@ -56,12 +56,15 @@ type upstreamDial func(ctx context.Context) (net.Conn, error)
 // egressDialer owns controlled resolution and one selected transport. Configure
 // its seams before publishing it to forwarders; flows retain that instance.
 type egressDialer struct {
-	guard     platformGuard
-	filter    *AllowNetFilter // an IP/CIDR rule may re-admit an address unroutableEgress refuses
-	boxSubnet *net.IPNet      // the virtual network itself is never a by-name destination
-	resolve   resolveFunc
-	dial      dialFunc
-	connect   connectFunc // nil selects the direct socket dialer
+	guard         platformGuard
+	filter        *AllowNetFilter // an IP/CIDR rule may re-admit an address unroutableEgress refuses
+	boxSubnet     *net.IPNet      // the virtual network itself is never a by-name destination
+	resolve       resolveFunc
+	dial          dialFunc
+	connect       connectFunc // nil selects the direct socket dialer
+	resolveFamily familyResolver
+	nativeReady   func() bool
+	nativeSubnet  netip.Prefix
 }
 
 func newEgressDialer(filter *AllowNetFilter, subnet string) (*egressDialer, error) {
@@ -112,7 +115,11 @@ func (d *egressDialer) byAddress(target egressTarget) upstreamDial {
 		defer unbind()
 		ctx, cancel := context.WithTimeout(ctx, upstreamDialTimeout)
 		defer cancel()
-		return d.dialTarget(ctx, "tcp", target)
+		network := "tcp"
+		if target.ConnectionIP.Is6() {
+			network = "tcp6"
+		}
+		return d.dialTarget(ctx, network, target)
 	}
 }
 
@@ -123,7 +130,8 @@ func (d *egressDialer) dialTarget(ctx context.Context, network string, target eg
 	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
 		return nil, context.DeadlineExceeded
 	}
-	if !d.guard.active() || d.guard.denies(target.ConnectionIP) {
+	if !d.guard.active() || d.guard.denies(target.ConnectionIP) ||
+		(target.ConnectionIP.Is6() && !d.nativeEligible(target.ConnectionIP)) {
 		return nil, fmt.Errorf("egress destination denied by platform")
 	}
 	target.Protocol = "tcp"
@@ -140,8 +148,7 @@ func (d *egressDialer) dialTarget(ctx context.Context, network string, target eg
 	return d.guard.track(conn)
 }
 
-// DialHost uses the configured resolver and tries permitted IPv4 answers in
-// order until one connects. The guest network and allow_net rules use IPv4.
+// DialHost uses the configured resolver and tries checked literal addresses.
 func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.Conn, error) {
 	return d.dialHost(ctx, target, nil)
 }
@@ -180,10 +187,15 @@ func (d *egressDialer) dialHost(ctx context.Context, target egressTarget, check 
 			}
 			break
 		}
-		attemptCtx, cancelAttempt := context.WithDeadline(ctx,
-			candidateDeadline(time.Now(), deadline, len(ips)-i))
-		target.ConnectionIP = netip.AddrFrom4([4]byte(ip.To4()))
-		conn, err := d.dialTarget(attemptCtx, "tcp4", target)
+		now := time.Now()
+		attemptDeadline := candidateDeadline(now, deadline, len(ips)-i)
+		if i+1 < len(ips) && ip.Is4() != ips[i+1].Is4() {
+			// Leave an alternate family a share even below the legacy floor.
+			attemptDeadline = now.Add(deadline.Sub(now) / 2)
+		}
+		attemptCtx, cancelAttempt := context.WithDeadline(ctx, attemptDeadline)
+		target.ConnectionIP = ip
+		conn, err := d.dialTarget(attemptCtx, socketFamily("tcp", ip), target)
 		cancelAttempt()
 		if err == nil {
 			return conn, nil
@@ -220,19 +232,19 @@ func candidateDeadline(now, deadline time.Time, remaining int) time.Time {
 	return now.Add(share)
 }
 
-func (d *egressDialer) candidates(ctx context.Context, hostname string, check func(netip.Addr) outboundReason) ([]net.IP, error) {
-	resolved, err := d.resolve(ctx, hostname)
+func (d *egressDialer) candidates(ctx context.Context, hostname string, check func(netip.Addr) outboundReason) ([]netip.Addr, error) {
+	resolved, err := d.lookup(ctx, hostname)
 	if err != nil {
 		return nil, fmt.Errorf("resolve %s: %w", hostname, err)
 	}
-	var ips []net.IP
+	var v4, v6 []netip.Addr
 	for _, ip := range resolved {
-		ip4 := ip.To4()
-		if ip4 == nil {
+		address, ok := netip.AddrFromSlice(ip)
+		if !ok {
 			continue
 		}
-		address := netip.AddrFrom4([4]byte(ip4))
-		if d.guard.denies(address) {
+		address = address.Unmap()
+		if d.guard.denies(address) || (address.Is6() && !d.nativeEligible(address)) {
 			logrus.WithField("reason", outboundPlatformDeny).Debug("platform protected DNS candidate denied")
 			continue
 		}
@@ -241,29 +253,42 @@ func (d *egressDialer) candidates(ctx context.Context, hostname string, check fu
 			if decision := check(address); decision != outboundAllowed {
 				reason = string(decision)
 			}
-		} else {
-			reason, _ = d.refuses(ip4)
+		} else if address.Is4() {
+			reason, _ = d.refuses(address.AsSlice())
 		}
 		if reason != "" {
 			logrus.WithFields(logrus.Fields{
 				"hostname": hostname,
-				"resolved": ip4,
+				"resolved": address,
 				"reason":   reason,
 			}).Info("allowNet TCP: blocked (resolved address unroutable)")
 			continue
 		}
-		ips = append(ips, ip4)
+		if address.Is4() {
+			v4 = append(v4, address)
+		} else {
+			v6 = append(v6, address)
+		}
 	}
-	if len(ips) == 0 {
+	if len(v6) == 0 && len(v4) == 0 {
+		if d.nativeReady != nil && d.nativeReady() {
+			return nil, fmt.Errorf("resolve %s: no eligible address", hostname)
+		}
 		return nil, fmt.Errorf("resolve %s: no dialable IPv4 address", hostname)
 	}
-	return ips, nil
+	if len(v6) != 0 && len(v4) != 0 {
+		ordered := []netip.Addr{v6[0], v4[0]}
+		ordered = append(ordered, v6[1:]...)
+		return append(ordered, v4[1:]...), nil
+	}
+	return append(v6, v4...), nil
 }
 
 func (s *outboundSnapshot) egressAddressFacts(ip netip.Addr, candidate bool) outboundAddressFacts {
 	ip = ip.Unmap()
 	if !ip.Is4() {
-		return outboundAddressFacts{address: ip, platformDenied: true}
+		return outboundAddressFacts{address: ip,
+			platformDenied: !s.dialer.nativeEligible(ip) || s.dialer.guard.denies(ip)}
 	}
 	reason, restricted := unroutableEgress(ip.AsSlice())
 	local := reason == "loopback" || reason == "private" || reason == "cgnat"

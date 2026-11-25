@@ -292,13 +292,18 @@ impl BoxImpl {
             if possible.deny && policy.deny_net.is_none() {
                 return Err(BoxliteError::InvalidArgument("deny_net is required while outbound denies may be active".into()));
             }
-            let admission = if possible.admission { OutboundAdmission::ExtendedIpv4 } else { OutboundAdmission::Legacy };
-            let candidate = policy.prepare(admission, revision)?;
+            let candidate = if control.committed.ipv6.is_some() {
+                control.committed.prepare_replacement(&policy, revision)?
+            } else {
+                let admission = if possible.admission { OutboundAdmission::ExtendedIpv4 } else { OutboundAdmission::Legacy };
+                policy.prepare(admission, revision)?
+            };
             let deny_supplied = policy.deny_net.is_some();
             let mut required = possible.union(candidate.requirements());
             required.deny |= deny_supplied;
             capabilities.require(required)?;
             let versioned = required != OutboundCapabilities::default();
+            prepare_ipv6_enable(backend, &live.guest_session, &observed.snapshot, &candidate).await?;
             let mut restoration = control.committed.clone();
             restoration.revision = OutboundRevision::fresh();
             candidate.encode_replacement(deny_supplied, false, versioned)?;
@@ -338,7 +343,10 @@ impl BoxImpl {
                 store.save_complete_outbound(&self.config.id, &reserved).map_err(|restore_error| {
                     restoration_write_error("restoration intent write", &error, restore_error)
                 })?;
-                let restored = apply_complete(backend, &candidate.revision, &restoration, false, true, versioned).await;
+                let restored = match prepare_ipv6_enable(backend, &live.guest_session, &candidate, &restoration).await {
+                    Ok(()) => apply_complete(backend, &candidate.revision, &restoration, false, true, versioned).await,
+                    Err(error) => Err(error),
+                };
                 if !matches!(restored, Ok(OutboundReplaceOutcome::Applied))
                     && !backend_confirms(backend, &restoration).await
                 {
@@ -626,6 +634,34 @@ pub(super) async fn backend_confirms(
         .complete_outbound_snapshot()
         .await
         .is_ok_and(|(observed, _)| confirms(&observed, candidate))
+}
+
+pub(super) async fn prepare_ipv6_enable(
+    backend: &dyn NetworkBackend,
+    guest: &crate::portal::GuestSession,
+    previous: &CompleteOutboundSnapshot,
+    next: &CompleteOutboundSnapshot,
+) -> BoxliteResult<()> {
+    let Some(plan) = &next.ipv6 else {
+        return Ok(());
+    };
+    if previous.policy.mode != crate::runtime::options::NetworkMode::Disabled
+        || next.policy.mode != crate::runtime::options::NetworkMode::Enabled
+    {
+        return Ok(());
+    }
+    let readiness = backend.ipv6_readiness().await?;
+    if readiness.plan != *plan || readiness.revision != previous.revision {
+        return Err(BoxliteError::Network(
+            "Guest IPv6 challenge differs from disabled snapshot".into(),
+        ));
+    }
+    guest
+        .guest()
+        .await?
+        .confirm_ipv6(readiness.guest_check())
+        .await?;
+    backend.confirm_ipv6_readiness(&readiness).await
 }
 
 pub(super) async fn apply_complete(

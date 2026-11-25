@@ -309,10 +309,16 @@ paths:
         initialize the VM, or it will start lazily on first `exec`.
 
         Complete outbound policy uses nested `network.outbound`. Check a fresh
-        `capabilities.complete_outbound_policy_enabled` before sending it. An
-        explicit `deny_net` (including []) requires extended IPv4 and deny
-        support. With omitted deny, a port rule, IPv4-mapped literal, or over
-        ten allow rules uses extended IPv4. Older-shaped requests retain legacy admission.
+        `capabilities.complete_outbound_policy_enabled` before sending it.
+        An explicit `deny_net`, including `[]`, requires deny support.
+
+        A port rule, an address or CIDR written in IPv6 notation, or more than
+        ten allow rules also selects complete admission. Older-shaped requests
+        retain legacy admission.
+
+        A Runner with qualified Cloud inventory v2 uses `extended_dual_stack`.
+        Other supported complete requests use `extended_ipv4`.
+        Native IPv6 rules require `extended_dual_stack`.
 
         After 201, read the committed complete snapshot by the returned Box ID.
         An error with `creation_effect: allocated` retains the allocated Box
@@ -3257,7 +3263,7 @@ components:
 
     CompleteOutboundPolicy:
       type: object
-      description: Complete outbound Box rules. Each list supports up to 64 IPv4 rules.
+      description: Each complete outbound rule list supports up to 64 entries. Native IPv6 rules require dual-stack admission.
       additionalProperties: false
       required: [mode]
       properties:
@@ -3287,7 +3293,25 @@ components:
           pattern: '^[A-Za-z0-9_-]+$'
         admission:
           type: string
-          enum: [legacy, extended_ipv4]
+          enum: [legacy, extended_ipv4, extended_dual_stack]
+        ipv6:
+          type: object
+          readOnly: true
+          description: Persisted Guest link plan returned with extended_dual_stack admission.
+          additionalProperties: false
+          required: [interface, guest, gateway]
+          properties:
+            interface:
+              type: string
+              enum: [eth0]
+            guest:
+              type: string
+              format: ipv6
+              description: Guest ULA in the saved /64.
+            gateway:
+              type: string
+              format: ipv6
+              description: Gateway ULA in the same /64.
         policy:
           allOf:
             - $ref: "#/components/schemas/CompleteOutboundPolicy"

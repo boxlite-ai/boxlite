@@ -819,6 +819,7 @@ async fn grpc_ssh_failure_does_not_hide_mount_or_network_errors() {
                     interface: "ssh-test-missing".into(),
                     ip: None,
                     gateway: None,
+                    ipv6: None,
                 }),
             })
             .await

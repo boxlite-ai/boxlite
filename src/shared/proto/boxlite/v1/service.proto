@@ -35,6 +35,8 @@ service Guest {
   // MUST be called first after connection, before Container.Init
   rpc Init(GuestInitRequest) returns (GuestInitResponse);
 
+  rpc CheckIpv6(GuestIpv6Check) returns (GuestIpv6Check);
+
   // Health check
   rpc Ping(PingRequest) returns (PingResponse);
 
@@ -126,7 +128,9 @@ message GuestInitResponse {
   }
 }
 
-message GuestInitSuccess {}
+message GuestInitSuccess {
+  GuestIpv6Check ipv6 = 1;
+}
 
 message GuestInitError {
   string reason = 1;
@@ -212,6 +216,14 @@ message NetworkInit {
   string interface = 1;        // interface name (e.g., "eth0")
   optional string ip = 2;      // IP address (optional, use DHCP if not set)
   optional string gateway = 3; // gateway address
+  GuestIpv6Check ipv6 = 4;
+}
+
+message GuestIpv6Check {
+  string interface = 1;
+  string guest = 2;
+  string gateway = 3;
+  string epoch = 4;
 }
 
 message PingRequest {}

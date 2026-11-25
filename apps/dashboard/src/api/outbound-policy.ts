@@ -3,15 +3,18 @@ import { z } from 'zod'
 
 const phase = z.enum(['confirmed', 'pending', 'uncertain'])
 const revision = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/)
-const snapshot = z.object({
-  revision,
-  admission: z.enum(['legacy', 'extended_ipv4']),
-  policy: z.object({
-    mode: z.enum(['enabled', 'disabled']),
-    allow_net: z.array(z.string()).max(64),
-    deny_net: z.array(z.string()).max(64),
-  }),
-})
+const snapshot = z
+  .object({
+    revision,
+    admission: z.enum(['legacy', 'extended_ipv4', 'extended_dual_stack']),
+    ipv6: z.object({ interface: z.literal('eth0'), guest: z.string(), gateway: z.string() }).optional(),
+    policy: z.object({
+      mode: z.enum(['enabled', 'disabled']),
+      allow_net: z.array(z.string()).max(64),
+      deny_net: z.array(z.string()).max(64),
+    }),
+  })
+  .refine((value) => (value.admission === 'extended_dual_stack') === Boolean(value.ipv6))
 const status = z.object({
   persisted: snapshot.nullable(),
   runtime_persisted: snapshot.nullable(),
@@ -31,6 +34,9 @@ function sameSnapshot(left: Snapshot, right: Snapshot) {
   return (
     left.revision === right.revision &&
     left.admission === right.admission &&
+    left.ipv6?.interface === right.ipv6?.interface &&
+    left.ipv6?.guest === right.ipv6?.guest &&
+    left.ipv6?.gateway === right.ipv6?.gateway &&
     left.policy.mode === right.policy.mode &&
     sameList(left.policy.allow_net, right.policy.allow_net) &&
     sameList(left.policy.deny_net, right.policy.deny_net)

@@ -313,15 +313,10 @@ Public outbound PUT rejects blank allow entries with both capable and older peer
 Previously persisted legacy policies load with their effective allow lists and an empty deny list.
 Every replacement obeys the omission check.
 
-PR02 tests native IPv6 rule parsing and matching in Go.
-Until dual-stack enforcement is available, hostname dials exclude native IPv6 candidates and make zero connector calls for a native-IPv6-only response.
+IPv4 admission excludes native IPv6 candidates and makes zero connector calls for an AAAA-only response.
+Dual-stack admission binds the Guest address, gateway, and NIC to the installed revision. The forwarder considers native IPv6 targets after Guest readiness and applies platform rules to the original destination and the final literal.
 
-Mapped addresses keep their IPv4 normalization. [Current IPv4 hostname dial](https://github.com/boxlite-ai/boxlite/blob/51b5cf5/src/deps/libgvproxy-sys/gvproxy-bridge/egress_dialer.go#L129-L166)
-
-PR10 validates the virtual link, NDP, and routing.
-PR11 validates native Guest forwarding and hostname dials against permitted and denied IPv6 targets.
-
-Advertise each capability after its own acceptance. [Full dual-stack plan](https://github.com/boxlite-ai/boxlite/issues/2733)
+Mapped addresses keep their IPv4 normalization. [Full dual-stack plan](https://github.com/boxlite-ai/boxlite/issues/2733)
 
 ### Go rule matching
 
@@ -359,7 +354,7 @@ The shared rule fixtures exercise the compiler and matcher. Trusted TCP and UDP 
 
 The bridge's trusted Go controller compiles extended rules into a snapshot shared by TCP and UDP.
 
-Legacy launch selects legacy forwarding. Versioned launch and snapshot replacement carry explicit admission. The bridge advertises extended IPv4 admission, deny rules, destination ports, and expanded rule lists.
+Legacy launch selects legacy forwarding. Versioned launch and snapshot replacement carry explicit admission. The bridge advertises extended IPv4 admission, deny rules, destination ports, expanded rule lists, and native IPv6 support independently.
 
 At flow entry, capture the snapshot and the pre-NAT and translated addresses. For example, an IP allow for `192.0.2.254:8080` can admit a local alias to loopback, subject to the platform check on `127.0.0.1:8080`. A Cloud snapshot refuses that translated socket.
 
@@ -859,7 +854,11 @@ The Box response varies by that header and is private and non-cacheable. When th
 #### Cloud V0 dispatch and recovery
 
 Nested outbound create selects the complete path when `deny_net` is present or the allowlist has more than ten rules.
-An allow rule with a port, IPv4-mapped address, or IPv4-mapped CIDR also selects complete creation with extended IPv4 admission.
+An allow rule with a port, or an address or CIDR written in IPv6 notation, also selects complete creation.
+
+A Runner with qualified Cloud inventory v2 uses `extended_dual_stack`.
+Other supported complete requests use `extended_ipv4`.
+Native IPv6 rules require `extended_dual_stack`.
 
 The deprecated flat form still uses the legacy rules and limit.
 Legacy creation trims surrounding whitespace in allow rules before storage.

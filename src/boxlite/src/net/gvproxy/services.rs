@@ -515,6 +515,37 @@ impl NetworkBackend for GvproxyBackend {
         ))
     }
 
+    async fn ipv6_readiness(&self) -> BoxliteResult<crate::net::Ipv6Readiness> {
+        let (status, body) = self
+            .request(Method::GET, "/network/ipv6-ready", None)
+            .await?;
+        if status != 200 {
+            return Err(BoxliteError::Network(format!(
+                "read Guest IPv6 challenge returned {status}"
+            )));
+        }
+        serde_json::from_str(&body).map_err(|error| {
+            BoxliteError::Network(format!("invalid Guest IPv6 challenge: {error}"))
+        })
+    }
+
+    async fn confirm_ipv6_readiness(
+        &self,
+        readiness: &crate::net::Ipv6Readiness,
+    ) -> BoxliteResult<()> {
+        let body = serde_json::to_string(readiness)
+            .map_err(|error| BoxliteError::Internal(error.to_string()))?;
+        let (status, _) = self
+            .request(Method::POST, "/network/ipv6-ready", Some(body))
+            .await?;
+        if status != 204 {
+            return Err(BoxliteError::Network(format!(
+                "Guest IPv6 confirmation returned {status}"
+            )));
+        }
+        Ok(())
+    }
+
     async fn replace_complete_outbound_snapshot(
         &self,
         expected: &crate::net::OutboundRevision,

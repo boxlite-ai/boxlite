@@ -1,5 +1,6 @@
 //! Guest service interface.
 
+use boxlite_shared::generated::GuestIpv6Check;
 use boxlite_shared::{
     BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestClient, GuestInitRequest,
     NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, ThawRequest, VirtiofsSource, Volume,
@@ -38,13 +39,23 @@ impl GuestInterface {
                 interface: n.interface,
                 ip: n.ip,
                 gateway: n.gateway,
+                ipv6: n.ipv6,
             }),
         };
 
+        let expected_ipv6 = request
+            .network
+            .as_ref()
+            .and_then(|network| network.ipv6.clone());
         let response = self.client.init(request).await?.into_inner();
 
         match response.result {
-            Some(guest_init_response::Result::Success(_)) => {
+            Some(guest_init_response::Result::Success(confirmation)) => {
+                if confirmation.ipv6 != expected_ipv6 {
+                    return Err(BoxliteError::Network(
+                        "Guest did not confirm the IPv6 launch plan".into(),
+                    ));
+                }
                 tracing::debug!("Guest initialized");
                 Ok(())
             }
@@ -59,6 +70,16 @@ impl GuestInterface {
                 "GuestInit response missing result".to_string(),
             )),
         }
+    }
+
+    pub(crate) async fn confirm_ipv6(&mut self, expected: GuestIpv6Check) -> BoxliteResult<()> {
+        let response = self.client.check_ipv6(expected.clone()).await?.into_inner();
+        if response != expected {
+            return Err(BoxliteError::Network(
+                "Guest did not confirm the IPv6 readiness epoch".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Ping the guest (health check).
@@ -325,4 +346,5 @@ pub struct NetworkInitConfig {
     pub ip: Option<String>,
     /// Gateway address (e.g., "192.168.127.1")
     pub gateway: Option<String>,
+    pub(crate) ipv6: Option<GuestIpv6Check>,
 }

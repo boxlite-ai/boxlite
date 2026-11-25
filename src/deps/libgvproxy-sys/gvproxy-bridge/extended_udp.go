@@ -54,7 +54,7 @@ func (p *udpFlowPool) admit(s *stack.Stack, id stack.TransportEndpointID, pkt *s
 			<-p.slots
 			return
 		}
-		go p.relay(gonet.NewUDPConn(&queue, endpoint), target.address(), dial, deadline)
+		go p.relay(gonet.NewUDPConn(&queue, endpoint), target, dial, deadline)
 	})
 	fwd.HandlePacket(id, pkt)
 	// The pinned forwarder retains a request reference without releasing it.
@@ -63,7 +63,7 @@ func (p *udpFlowPool) admit(s *stack.Stack, id stack.TransportEndpointID, pkt *s
 	return true
 }
 
-func (p *udpFlowPool) relay(guest net.Conn, address string, dial dialFunc, deadline time.Time) {
+func (p *udpFlowPool) relay(guest net.Conn, target egressTarget, dial dialFunc, deadline time.Time) {
 	defer func() { <-p.slots }()
 	closeGuest := sync.OnceFunc(func() { guest.Close() })
 	defer closeGuest()
@@ -81,7 +81,7 @@ func (p *udpFlowPool) relay(guest net.Conn, address string, dial dialFunc, deadl
 	if err != nil || setup.Err() != nil || !time.Now().Before(deadline) {
 		return
 	}
-	host, err := dial(setup, "udp4", address)
+	host, err := dial(setup, socketFamily("udp", target.ConnectionIP), target.address())
 	expired := setup.Err() != nil || !time.Now().Before(deadline)
 	cancel()
 	if host == nil {

@@ -219,6 +219,91 @@ async fn enabled_network_runs_with_eth0_and_host_alias_dns() {
     litebox.stop().await.unwrap();
 }
 
+#[cfg(feature = "gvproxy")]
+#[tokio::test]
+#[ignore = "requires VM runtime and BOXLITE_GUEST_DUAL_STACK=1"]
+async fn dual_stack_guest_runtime_confirms_disabled_boot_and_restart() {
+    use boxlite::net::{
+        CompleteOutboundPolicy, OutboundAdmission, OutboundReplaceOutcome, OutboundRevision,
+    };
+    use boxlite::runtime::options::NetworkMode;
+
+    assert_eq!(
+        std::env::var("BOXLITE_GUEST_DUAL_STACK").as_deref(),
+        Ok("1")
+    );
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .unwrap();
+    let litebox = runtime
+        .create_with_outbound_policy(
+            common::alpine_opts(),
+            None,
+            CompleteOutboundPolicy {
+                mode: NetworkMode::Disabled,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    litebox.start().await.unwrap();
+    let network = litebox.network();
+    let disabled = network.complete_outbound_snapshot().await.unwrap();
+    assert_eq!(disabled.admission, OutboundAdmission::ExtendedDualStack);
+    let plan = disabled.ipv6.unwrap();
+    let addresses = run_stdout(&litebox, "ip", &["-6", "addr", "show", "dev", "eth0"]).await;
+    let guest_cidr = format!("{}/64", plan.guest);
+    assert!(
+        addresses
+            .lines()
+            .any(|line| line.contains(&guest_cidr) && !line.contains("tentative")),
+        "planned guest address is absent or tentative: {addresses}"
+    );
+    let route = run_stdout(&litebox, "ip", &["-6", "route", "show", "default"]).await;
+    assert!(route.contains(&format!("default via {}", plan.gateway)));
+    let gateway = plan.gateway.to_string();
+    assert_ne!(
+        run_exit_code(&litebox, "ping6", &["-c", "1", "-W", "1", &gateway]).await,
+        0
+    );
+    let revision = OutboundRevision::fresh();
+    assert_eq!(
+        network
+            .replace_outbound_policy(
+                disabled.revision,
+                revision.clone(),
+                CompleteOutboundPolicy::default(),
+            )
+            .await
+            .unwrap(),
+        OutboundReplaceOutcome::Applied
+    );
+    assert_eq!(
+        run_exit_code(&litebox, "ping6", &["-c", "1", "-W", "2", &gateway]).await,
+        0
+    );
+    let id = litebox.id().to_string();
+    litebox.stop().await.unwrap();
+    let litebox = runtime.get(&id).await.unwrap().unwrap();
+    litebox.start().await.unwrap();
+    let restarted = litebox
+        .network()
+        .complete_outbound_snapshot()
+        .await
+        .unwrap();
+    assert_eq!(restarted.revision, revision);
+    assert_eq!(restarted.ipv6.as_ref(), Some(&plan));
+    assert_eq!(
+        run_exit_code(&litebox, "ping6", &["-c", "1", "-W", "2", &gateway]).await,
+        0
+    );
+    litebox.stop().await.unwrap();
+}
+
 /// Helper: run a command and collect stdout.
 async fn run_stdout(litebox: &boxlite::LiteBox, cmd: &str, args: &[&str]) -> String {
     let mut ex = litebox

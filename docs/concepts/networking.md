@@ -59,9 +59,21 @@ sequenceDiagram
     end
 ```
 
-Public Box startup uses IPv4. Guest IPv6 provisioning and IPv6 host forwarding
-remain unavailable, and policies that contain native IPv6 rules return an
-unsupported error.
+New Local Boxes use IPv4 by default. Set `BOXLITE_GUEST_DUAL_STACK=1` in the host
+Runtime environment before creating a Box to provision a Guest ULA and gateway on
+`eth0`. The Runtime persists the addresses with the Box's outbound revision and
+uses that plan on later starts.
+
+Native IPv6 TCP and UDP use the same outbound rules as IPv4. The Guest checks
+for duplicate addresses and verifies the default route. The IPv4 gateway serves
+AAAA queries after Guest confirmation.
+
+Disabling outbound traffic closes the link, and an enable update requires fresh
+Guest confirmation.
+
+Complete outbound status reports `extended_dual_stack` and the installed link
+plan. Use the complete policy interface for native IPv6 CIDRs and literals.
+With IPv4-only admission, the Runtime rejects native IPv6 rules.
 
 ### Host-protected IPv4 destinations
 
@@ -104,6 +116,11 @@ socket remains available for status and stop operations.
 | The inventory or freshness lease expires | The kernel refuses late renewal and gvproxy closes retired flows. | New socket admission and packets evaluated at the hook are denied. Packets already downstream of the hook can still arrive. |
 
 See [GCP guarded Runner setup](../../apps/infra/docs/gcp/runners.md#guarded-runner-pool).
+
+Cloud complete-policy creation selects dual-stack when the verified Runner uses
+root-owned inventory v2 and the host sample matches the applied route and
+translation topology. Restart and rebuild verify the current v2 authority and
+reuse the exact persisted Guest plan.
 
 ### Secret injection certificates
 

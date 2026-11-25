@@ -221,7 +221,7 @@ impl ApiClient {
             )
             .into());
         }
-        let candidate = policy.prepare(previous.admission, OutboundRevision::initial())?;
+        let candidate = previous.prepare_replacement(&policy, OutboundRevision::initial())?;
         let response = self
             .complete_outbound_request(Method::PUT, &resource(box_id)?)
             .await?
@@ -240,6 +240,7 @@ impl ApiClient {
         if acknowledged.revision == previous.revision
             || acknowledged.revision == OutboundRevision::initial()
             || acknowledged.admission != candidate.admission
+            || acknowledged.ipv6 != candidate.ipv6
             || acknowledged.policy != candidate.policy
         {
             return Err(request_uncertain(

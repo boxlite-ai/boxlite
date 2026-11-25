@@ -34,6 +34,13 @@ func (p *outboundPolicyController) compile(policy outboundPolicy, revision strin
 	if p.resolve != nil {
 		dialer.resolve = p.resolve
 	}
+	if policy.complete != nil && policy.complete.IPv6 != nil {
+		dialer.nativeSubnet, _ = policy.complete.IPv6.prefix()
+		dialer.resolveFamily = p.resolveFamily
+		dialer.nativeReady = func() bool {
+			return p.ipv6Ready.Load() && guestTrafficAllowed(p.guard, p.active.Load)
+		}
+	}
 	rules := policy.tcp
 	policy.tcp = nil
 	snapshot := &outboundSnapshot{

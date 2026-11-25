@@ -102,7 +102,7 @@ func forwardExtendedTCP(r *tcp.ForwarderRequest, target egressTarget, snapshot *
 }
 
 func (d *egressDialer) associateAddress(ctx context.Context, target egressTarget) netip.Addr {
-	resolved, err := d.resolve(ctx, target.Hostname)
+	resolved, err := d.lookup(ctx, target.Hostname)
 	if err == nil {
 		for _, ip := range resolved {
 			if address, ok := netip.AddrFromSlice(ip); ok && address.Unmap() == target.ConnectionIP {

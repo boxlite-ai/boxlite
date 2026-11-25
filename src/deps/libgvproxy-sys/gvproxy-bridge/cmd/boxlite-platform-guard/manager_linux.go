@@ -23,16 +23,17 @@ import (
 var component = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
 type record struct {
-	Box            string            `json:"box"`
-	Instance       string            `json:"instance"`
-	DataSocket     string            `json:"data_socket"`
-	Revision       string            `json:"revision"`
-	Digest         [32]byte          `json:"digest"`
-	HostAddresses  []string          `json:"host_addresses"`
-	AbsoluteCutoff uint64            `json:"absolute_cutoff"`
-	Kernel         guardkernel.Proof `json:"kernel"`
-	ShimPID        int32             `json:"shim_pid,omitempty"`
-	ShimStart      uint64            `json:"shim_start,omitempty"`
+	Box              string            `json:"box"`
+	Instance         string            `json:"instance"`
+	DataSocket       string            `json:"data_socket"`
+	Revision         string            `json:"revision"`
+	InventoryVersion int               `json:"inventory_version,omitempty"`
+	Digest           [32]byte          `json:"digest"`
+	HostAddresses    []string          `json:"host_addresses"`
+	AbsoluteCutoff   uint64            `json:"absolute_cutoff"`
+	Kernel           guardkernel.Proof `json:"kernel"`
+	ShimPID          int32             `json:"shim_pid,omitempty"`
+	ShimStart        uint64            `json:"shim_start,omitempty"`
 }
 
 type manager struct {
@@ -42,6 +43,7 @@ type manager struct {
 	retired                                   map[string]struct{}
 	preparing                                 map[string]struct{}
 	sampler                                   guardinventory.Sampler
+	topologyPaused                            bool
 }
 
 func (m *manager) pinDir(box string) string {
@@ -56,31 +58,53 @@ func (m *manager) recordPath(box string) string {
 	return filepath.Join(m.records, box+".json")
 }
 
-func (m *manager) checkReadiness(ctx context.Context) (err error) {
-	if _, err := m.sampler.Sample(ctx, m.inventory); err != nil {
-		return err
+func (m *manager) checkReadiness(ctx context.Context) (_ int, err error) {
+	m.mu.Lock()
+	paused := m.topologyPaused
+	m.mu.Unlock()
+	if paused {
+		return 0, fmt.Errorf("Cloud topology is paused for maintenance")
+	}
+	initial, err := m.sampler.Sample(ctx, m.inventory)
+	if err != nil {
+		return 0, err
 	}
 	if err := os.MkdirAll(m.cgroups, 0o755); err != nil {
-		return err
+		return 0, err
 	}
 	group, err := os.MkdirTemp(m.cgroups, "guard_probe_")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { err = errors.Join(err, os.Remove(group)) }()
 	pin := m.pinDir(filepath.Base(group))
 	if _, err := guardkernel.Attach(m.object, pin, group); err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { err = errors.Join(err, guardkernel.Remove(pin, group)) }()
 	accepted, err := guardkernel.RenewDeadline(pin, 0, 0)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if accepted {
-		return fmt.Errorf("Cloud guard renewal accepted an unopened lease")
+		return 0, fmt.Errorf("Cloud guard renewal accepted an unopened lease")
 	}
-	return nil
+	current, err := m.sampler.Sample(ctx, m.inventory)
+	if err != nil {
+		return 0, err
+	}
+	if current.Digest != initial.Digest || !slices.Equal(current.HostAddrs, initial.HostAddrs) {
+		return 0, fmt.Errorf("Cloud topology changed during readiness proof")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.topologyPaused {
+		return 0, fmt.Errorf("Cloud topology is paused for maintenance")
+	}
+	if err := m.requireDrainedVersion(current.Version); err != nil {
+		return 0, err
+	}
+	return current.Version, nil
 }
 
 func (m *manager) recover() error {
@@ -116,6 +140,10 @@ func (m *manager) prepare(ctx context.Context, box, instance, dataSocket string)
 		return record{}, fmt.Errorf("invalid Cloud guard launch identity")
 	}
 	m.mu.Lock()
+	if m.topologyPaused {
+		m.mu.Unlock()
+		return record{}, fmt.Errorf("Cloud topology is paused for maintenance")
+	}
 	if _, preparing := m.preparing[box]; preparing {
 		m.mu.Unlock()
 		return record{}, fmt.Errorf("Cloud guard is preparing this Box")
@@ -167,12 +195,17 @@ func (m *manager) install(ctx context.Context, box, instance, dataSocket string)
 	if err != nil {
 		return record{}, err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.requireDrainedVersion(inventory.Version); err != nil {
+		return record{}, err
+	}
 	absolute, err := guardkernel.DeadlineNS(inventory.Expires)
 	if err != nil || absolute == 0 {
 		return record{}, fmt.Errorf("invalid Cloud guard absolute cutoff")
 	}
 	next := record{
-		Box: box, Instance: instance, DataSocket: dataSocket, Revision: inventory.Revision,
+		Box: box, Instance: instance, DataSocket: dataSocket, Revision: inventory.Revision, InventoryVersion: inventory.Version,
 		Digest: inventory.Digest, HostAddresses: inventory.HostAddrs, AbsoluteCutoff: absolute, Kernel: proof,
 	}
 	if err := m.store(next); err != nil {
@@ -271,6 +304,96 @@ func (m *manager) watch(ctx context.Context) {
 	}
 }
 
+func (m *manager) requireDrainedVersion(version int) error {
+	entries, err := os.ReadDir(m.records)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(m.records, entry.Name()))
+		if err != nil {
+			return err
+		}
+		var stored record
+		if err := json.Unmarshal(raw, &stored); err != nil || !component.MatchString(stored.Box) ||
+			entry.Name() != stored.Box+".json" {
+			return fmt.Errorf("invalid recorded Cloud Box authority")
+		}
+		if max(stored.InventoryVersion, 1) == version {
+			continue
+		}
+		if _, preparing := m.preparing[stored.Box]; preparing {
+			return fmt.Errorf("finish Box prepare operations before switching Cloud inventory versions")
+		}
+		if _, active := m.active[stored.Box]; active {
+			return fmt.Errorf("drain Boxes before switching Cloud inventory versions")
+		}
+		if live, err := guardkernel.Populated(m.cgroup(stored.Box)); live ||
+			(err != nil && !errors.Is(err, os.ErrNotExist)) {
+			return fmt.Errorf("drain Boxes before switching Cloud inventory versions")
+		}
+	}
+	return nil
+}
+
+func (m *manager) setTopologyPaused(ctx context.Context, paused bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.preparing) != 0 {
+		return fmt.Errorf("wait for current Cloud Box prepare operations")
+	}
+	marker := filepath.Join(m.records, "topology-paused")
+	if paused {
+		if !m.topologyPaused {
+			file, err := os.OpenFile(marker, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			if err != nil {
+				return err
+			}
+			m.topologyPaused = true
+			if err := errors.Join(file.Sync(), file.Close()); err != nil {
+				return err
+			}
+		}
+		var revokeErr error
+		for box := range m.active {
+			revokeErr = errors.Join(revokeErr, m.revoke(box))
+		}
+		if revokeErr != nil {
+			return revokeErr
+		}
+		for box := range m.retired {
+			if live, err := guardkernel.Populated(m.cgroup(box)); live ||
+				(err != nil && !errors.Is(err, os.ErrNotExist)) {
+				return fmt.Errorf("drain all guarded Boxes before changing Cloud topology")
+			}
+		}
+		return nil
+	}
+	if !m.topologyPaused {
+		return fmt.Errorf("Cloud topology is not paused")
+	}
+	if len(m.active) != 0 {
+		return fmt.Errorf("guarded Boxes remain active")
+	}
+	for box := range m.retired {
+		if live, err := guardkernel.Populated(m.cgroup(box)); live ||
+			(err != nil && !errors.Is(err, os.ErrNotExist)) {
+			return fmt.Errorf("guarded Boxes have not drained")
+		}
+	}
+	if _, err := m.sampler.Sample(ctx, m.inventory); err != nil {
+		return err
+	}
+	if err := os.Remove(marker); err != nil {
+		return err
+	}
+	m.topologyPaused = false
+	return nil
+}
+
 func (m *manager) refresh(current guardinventory.Observation, readErr error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -279,7 +402,7 @@ func (m *manager) refresh(current guardinventory.Observation, readErr error) {
 		lease, readErr = guardkernel.DeadlineNS(current.SampledAt.Add(guardinventory.Freshness))
 	}
 	for box, stored := range m.active {
-		if readErr != nil || lease == 0 || current.Revision != stored.Revision ||
+		if m.topologyPaused || readErr != nil || lease == 0 || current.Revision != stored.Revision ||
 			current.Digest != stored.Digest || !slices.Equal(current.HostAddrs, stored.HostAddresses) {
 			_ = m.revoke(box)
 			continue

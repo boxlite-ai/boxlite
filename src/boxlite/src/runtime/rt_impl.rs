@@ -475,19 +475,39 @@ impl RuntimeImpl {
         }
 
         let exact_revision = matches!(&complete, Some(OutboundCreate::Prepared(_)));
-        let prepared = complete.map(|request| {
+        let implicit = complete.is_none();
+        let local_link = (crate::net::gvproxy::CloudGuardRuntime::from_host()?.is_none()
+            && std::env::var_os("BOXLITE_GUEST_DUAL_STACK").as_deref()
+                == Some(std::ffi::OsStr::new("1")))
+        .then(crate::net::Ipv6LinkPlan::local);
+        let mut prepared = complete.map(|request| {
             if !matches!(&options.network, crate::runtime::options::NetworkSpec::Enabled { allow_net } if allow_net.is_empty()) {
                 return Err(BoxliteError::InvalidArgument("complete outbound policy requires a NIC and no legacy allow rules".into()));
             }
             match request {
-                OutboundCreate::Policy(policy) => PreparedOutboundCreate::new(&policy, OutboundRevision::initial()),
+                OutboundCreate::Policy(policy) => PreparedOutboundCreate::with_link(&policy, OutboundRevision::initial(), local_link.clone()),
                 OutboundCreate::Prepared(prepared) => {
                     prepared.requirements()?;
                     Ok(prepared)
                 }
             }
         }).transpose()?;
+        if implicit
+            && let Some(plan) = local_link
+            && let crate::runtime::options::NetworkSpec::Enabled { allow_net } = &options.network
+        {
+            let policy = CompleteOutboundPolicy {
+                allow_net: allow_net.clone(),
+                ..Default::default()
+            };
+            prepared = Some(PreparedOutboundCreate::with_link(
+                &policy,
+                OutboundRevision::initial(),
+                Some(plan),
+            )?);
+        }
         let snapshot = prepared.as_ref().map(|prepared| &prepared.snapshot);
+        let reuse_snapshot = if implicit { None } else { snapshot };
 
         // Check DB for existing name — use lookup_box to get full (config, state)
         // so we can build the LiteBox directly without a second lookup
@@ -495,7 +515,7 @@ impl RuntimeImpl {
             && let Some((config, state)) = self.box_manager.lookup_box(name)?
         {
             return if reuse_existing {
-                self.check_outbound_reuse(&config.id, snapshot, exact_revision)?;
+                self.check_outbound_reuse(&config.id, reuse_snapshot, exact_revision)?;
                 self.adopt_existing_box(&options, config, state)
             } else {
                 Err(BoxliteError::InvalidArgument(format!(
@@ -512,6 +532,14 @@ impl RuntimeImpl {
 
         let (config, mut state) = self.init_box_variables(&options, name.clone());
         if let Some(prepared) = &prepared {
+            if exact_revision
+                && prepared.snapshot.ipv6.is_some()
+                && !crate::net::gvproxy::CloudGuardRuntime::qualifies_ipv6().await?
+            {
+                return Err(BoxliteError::Unsupported(
+                    "Guest IPv6 requires qualified Cloud inventory v2".into(),
+                ));
+            }
             if let Some(pin) = &prepared.rebuild_pin {
                 crate::vmm::controller::copy_rebuild_shim(
                     self.layout.home_dir(),
@@ -549,7 +577,7 @@ impl RuntimeImpl {
                 && let Some(ref name) = name
                 && let Some((config, state)) = self.box_manager.lookup_box(name)?
             {
-                self.check_outbound_reuse(&config.id, snapshot, exact_revision)?;
+                self.check_outbound_reuse(&config.id, reuse_snapshot, exact_revision)?;
                 return self.adopt_existing_box(&options, config, state);
             }
 
@@ -592,6 +620,7 @@ impl RuntimeImpl {
         if !existing.is_some_and(|state| {
             state.pending.is_none()
                 && state.committed.admission == requested.admission
+                && state.committed.ipv6 == requested.ipv6
                 && state.committed.policy == requested.policy
                 && (!exact_revision || state.committed.revision == requested.revision)
         }) {
@@ -2140,7 +2169,10 @@ impl super::backend::RuntimeBackend for LocalRuntime {
                 "hosted outbound create requires an allocated revision".into(),
             ));
         }
-        let prepared = PreparedOutboundCreate::new(&policy, revision)?;
+        let link = crate::net::gvproxy::CloudGuardRuntime::qualifies_ipv6()
+            .await?
+            .then(crate::net::Ipv6LinkPlan::local);
+        let prepared = PreparedOutboundCreate::with_link(&policy, revision, link)?;
         require_hosted_create_capabilities(&prepared).await?;
         Ok(prepared)
     }

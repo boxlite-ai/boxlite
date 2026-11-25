@@ -13,31 +13,34 @@ const completeOutboundStatusPath = "/network/outbound/complete-status"
 const legacyOutboundRuleLimit = 10
 
 const (
-	legacyAdmission   = "legacy"
-	extendedAdmission = "extended_ipv4"
+	legacyAdmission    = "legacy"
+	extendedAdmission  = "extended_ipv4"
+	dualStackAdmission = "extended_dual_stack"
 )
 
 type outboundCapabilities struct {
-	Admission bool `json:"admission"`
-	Deny      bool `json:"deny"`
-	Port      bool `json:"port"`
-	Capacity  bool `json:"capacity"`
+	Admission  bool `json:"admission"`
+	Deny       bool `json:"deny"`
+	Port       bool `json:"port"`
+	Capacity   bool `json:"capacity"`
+	NativeIPv6 bool `json:"native_ipv6,omitempty"`
 }
 
 func supportedOutboundCapabilities() outboundCapabilities {
-	return outboundCapabilities{Admission: true, Deny: true, Port: true, Capacity: true}
+	return outboundCapabilities{Admission: true, Deny: true, Port: true, Capacity: true, NativeIPv6: true}
 }
 
 func (capabilities outboundCapabilities) contains(required outboundCapabilities) bool {
 	return (!required.Admission || capabilities.Admission) &&
 		(!required.Deny || capabilities.Deny) && (!required.Port || capabilities.Port) &&
-		(!required.Capacity || capabilities.Capacity)
+		(!required.Capacity || capabilities.Capacity) && (!required.NativeIPv6 || capabilities.NativeIPv6)
 }
 
 func (capabilities outboundCapabilities) union(other outboundCapabilities) outboundCapabilities {
 	return outboundCapabilities{Admission: capabilities.Admission || other.Admission,
 		Deny: capabilities.Deny || other.Deny, Port: capabilities.Port || other.Port,
-		Capacity: capabilities.Capacity || other.Capacity}
+		Capacity:   capabilities.Capacity || other.Capacity,
+		NativeIPv6: capabilities.NativeIPv6 || other.NativeIPv6}
 }
 
 type completeOutboundPolicy struct {
@@ -50,6 +53,7 @@ type completeOutboundSnapshot struct {
 	Policy    completeOutboundPolicy `json:"policy"`
 	Revision  string                 `json:"revision"`
 	Admission string                 `json:"admission"`
+	IPv6      *ipv6LinkPlan          `json:"ipv6,omitempty"`
 }
 
 type completeOutboundStartup struct {
@@ -69,25 +73,34 @@ func (snapshot completeOutboundSnapshot) prepare(existingLegacyPolicy bool) (out
 		return outboundPolicy{}, required, fmt.Errorf("complete outbound snapshot requires both rule lists and a valid revision")
 	}
 	policy := outboundPolicy{Mode: snapshot.Policy.Mode, AllowNet: snapshot.Policy.AllowNet}
+	if (snapshot.Admission == dualStackAdmission) != (snapshot.IPv6 != nil) {
+		return outboundPolicy{}, required, fmt.Errorf("dual-stack admission must include its IPv6 link plan")
+	}
+	if snapshot.IPv6 != nil {
+		if _, err := snapshot.IPv6.prefix(); err != nil {
+			return outboundPolicy{}, required, err
+		}
+	}
 	switch snapshot.Admission {
 	case legacyAdmission:
 		if len(snapshot.Policy.DenyNet) != 0 || (!existingLegacyPolicy && len(policy.AllowNet) > legacyOutboundRuleLimit) {
 			return outboundPolicy{}, required, fmt.Errorf("legacy admission cannot enforce complete outbound policy")
 		}
 		return policy, required, policy.validate()
-	case extendedAdmission:
+	case extendedAdmission, dualStackAdmission:
 		compiled, err := compileExtendedOutboundPolicy(policy.Mode, policy.AllowNet, snapshot.Policy.DenyNet)
 		if err != nil {
 			return outboundPolicy{}, required, err
 		}
 		required = outboundCapabilities{
-			Admission: true,
-			Deny:      len(compiled.deny) > 0,
-			Capacity:  len(compiled.allow) > legacyOutboundRuleLimit || len(compiled.deny) > legacyOutboundRuleLimit,
+			Admission:  true,
+			Deny:       len(compiled.deny) > 0,
+			Capacity:   len(compiled.allow) > legacyOutboundRuleLimit || len(compiled.deny) > legacyOutboundRuleLimit,
+			NativeIPv6: snapshot.IPv6 != nil,
 		}
 		for _, rules := range [][]outboundRule{compiled.allow, compiled.deny} {
 			for _, rule := range rules {
-				if rule.prefix.IsValid() && !rule.prefix.Addr().Is4() {
+				if rule.prefix.IsValid() && !rule.prefix.Addr().Is4() && !required.NativeIPv6 {
 					return outboundPolicy{}, required, fmt.Errorf("native IPv6 outbound rules are unavailable")
 				}
 				required.Port = required.Port || rule.port != 0
@@ -156,6 +169,10 @@ func decodeGvproxyStartup(input []byte) (GvproxyConfig, outboundPolicy, error) {
 	}
 	config = envelope.Config
 	config.OutboundRevision = envelope.Outbound.Snapshot.Revision
+	if plan := envelope.Outbound.Snapshot.IPv6; plan != nil {
+		prefix, _ := plan.prefix()
+		config.ipv6Gateway = &prefix
+	}
 	err = config.prepareGuard()
 	return config, policy, err
 }
@@ -181,12 +198,15 @@ func (p *outboundPolicyController) serveCompleteStatus(w http.ResponseWriter, r 
 		http.Error(w, "outbound snapshot has no complete revision identity", http.StatusNotImplemented)
 		return
 	}
+	snapshot := current.completeSnapshot()
+	capabilities := p.capabilities
+	capabilities.NativeIPv6 = snapshot.IPv6 != nil
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		Snapshot     completeOutboundSnapshot `json:"snapshot"`
 		State        string                   `json:"application_state"`
 		Capabilities outboundCapabilities     `json:"capabilities"`
-	}{current.completeSnapshot(), current.state, p.capabilities})
+	}{snapshot, current.state, capabilities})
 }
 
 func (p *outboundPolicyController) replaceComplete(w http.ResponseWriter, r *http.Request, request completeOutboundReplace, current *outboundSnapshot) {
@@ -205,6 +225,10 @@ func (p *outboundPolicyController) replaceComplete(w http.ResponseWriter, r *htt
 		return
 	}
 	previous := current.completeSnapshot()
+	if !sameIPv6Plan(previous.IPv6, request.Snapshot.IPv6) {
+		http.Error(w, "outbound replacement must retain the installed IPv6 link plan", http.StatusConflict)
+		return
+	}
 	requirements = requirements.union(current.policy.required)
 	requirements.Admission = requirements.Admission || current.extended != nil
 	if request.RequestDeny != nil {

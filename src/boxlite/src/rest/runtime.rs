@@ -561,15 +561,31 @@ impl RuntimeBackend for RestRuntime {
             )
             .into());
         }
-        let mut expected =
-            policy.prepare(cloud_create_admission(&policy), OutboundRevision::initial())?;
-        if expected.admission == OutboundAdmission::Legacy {
-            // Cloud stores legacy allow rules with surrounding whitespace removed.
-            for rule in &mut policy.allow_net {
-                *rule = rule.trim().to_owned();
+        let ipv4 =
+            match policy.prepare(cloud_create_admission(&policy), OutboundRevision::initial()) {
+                Ok(mut expected) => {
+                    if expected.admission == OutboundAdmission::Legacy {
+                        // Cloud stores legacy allow rules with surrounding whitespace removed.
+                        for rule in &mut policy.allow_net {
+                            *rule = rule.trim().to_owned();
+                        }
+                        expected.policy.allow_net.clone_from(&policy.allow_net);
+                    }
+                    Some(expected)
+                }
+                Err(BoxliteError::Unsupported(_)) => None,
+                Err(error) => return Err(error.into()),
+            };
+        let matches_policy = |committed: &crate::net::CompleteOutboundSnapshot| {
+            if committed.admission == OutboundAdmission::ExtendedDualStack {
+                return committed
+                    .prepare_replacement(&policy, committed.revision.clone())
+                    .is_ok_and(|expected| expected == *committed);
             }
-            expected.policy.allow_net.clone_from(&policy.allow_net);
-        }
+            ipv4.as_ref().is_some_and(|expected| {
+                committed.admission == expected.admission && committed.policy == expected.policy
+            })
+        };
         self.validate_create(&options).await?;
         if let Some(box_name) = name.as_ref().filter(|_| reuse_existing) {
             if matches!(box_name.as_str(), "" | "." | "..") {
@@ -583,9 +599,7 @@ impl RuntimeBackend for RestRuntime {
                         .client
                         .read_complete_outbound_snapshot(&response.box_id)
                         .await?;
-                    if committed.admission != expected.admission
-                        || committed.policy != expected.policy
-                    {
+                    if !matches_policy(&committed) {
                         return Err(BoxliteError::InvalidState(
                             "cannot reuse the named Box with a different complete outbound policy or admission".into(),
                         ).into());
@@ -600,7 +614,7 @@ impl RuntimeBackend for RestRuntime {
         }
 
         let mut request = CreateBoxRequest::from_options(&options, name);
-        request.set_complete_outbound_policy(policy, &options.inbound_network);
+        request.set_complete_outbound_policy(policy.clone(), &options.inbound_network);
         self.client.require_complete_outbound_policy().await?;
         let response = self.client.create_complete_outbound_box(&request).await?;
         let box_id = response.box_id.clone();
@@ -616,7 +630,7 @@ impl RuntimeBackend for RestRuntime {
             .read_complete_outbound_snapshot(&box_id)
             .await
             .map_err(unverified)?;
-        if committed.admission != expected.admission || committed.policy != expected.policy {
+        if !matches_policy(&committed) {
             return Err(unverified(BoxliteError::InvalidState(
                 "created Box did not commit the requested complete outbound policy or admission"
                     .into(),
@@ -975,6 +989,41 @@ mod tests {
             );
             assert_eq!(body["network"]["inbound"]["mode"], "disabled");
         }
+    }
+
+    #[tokio::test]
+    async fn complete_outbound_dual_stack_create_verifies_native_rules() {
+        let mut snapshot = complete_snapshot("r1", "extended_dual_stack", &[]);
+        snapshot["ipv6"] = serde_json::json!({
+            "interface": "eth0",
+            "guest": "fd42:424f:584c:1::2",
+            "gateway": "fd42:424f:584c:1::1",
+        });
+        snapshot["policy"]["allow_net"] = serde_json::json!(["2606:4700::1111"]);
+        let (port, server) = capture_server_with_etags(vec![
+            (200, COMPLETE_CONFIG.into(), None),
+            (201, BOX_RESPONSE.into(), None),
+            (200, snapshot.to_string(), Some("\"r1\"")),
+        ])
+        .await;
+        complete_runtime(port)
+            .create_with_complete_outbound_policy(
+                BoxOptions::default(),
+                None,
+                CompleteOutboundPolicy {
+                    allow_net: vec!["2606:4700::1111".into()],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let requests = server.await.unwrap();
+        let request: serde_json::Value = serde_json::from_str(&requests[1].1).unwrap();
+        assert_eq!(
+            request["network"]["outbound"]["allow_net"],
+            snapshot["policy"]["allow_net"]
+        );
+        assert!(request["network"]["outbound"].get("ipv6").is_none());
     }
 
     #[tokio::test]

@@ -158,7 +158,17 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		filter, dialer := current.filter, current.dialer
 		localAddress := r.ID().LocalAddress
 		if localAddress.Len() != net.IPv4len {
-			r.Complete(true)
+			ip, ok := netip.AddrFromSlice(localAddress.AsSlice())
+			if !ok || current.extended == nil {
+				r.Complete(true)
+				return
+			}
+			ip = ip.Unmap()
+			target := egressTarget{
+				PolicyIP: ip, ConnectionIP: ip, Port: r.ID().LocalPort,
+				Protocol: "tcp", PolicyRevision: current.revision,
+			}
+			forwardExtendedTCP(r, target, current, inspectionSlots, ca, secretMatcher)
 			return
 		}
 
