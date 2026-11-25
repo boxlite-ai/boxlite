@@ -23,6 +23,34 @@ fn outbound_bootstrap_shim_extracts_identity_and_retains_provisioning_policy() {
 }
 
 #[test]
+fn outbound_bootstrap_shim_wraps_complete_policy_away_from_old_readers() {
+    let mut config = fixture();
+    config.as_object_mut().unwrap().remove("outbound_revision");
+    let wire = serde_json::json!({
+        "config":config,
+        "outbound_v1": {
+            "snapshot": {
+                "policy": {"mode":"disabled","allow_net":[],"deny_net":["192.0.2.0/24:443"]},
+                "revision":"rev-complete",
+                "admission":"extended_ipv4",
+            },
+            "requirements": {"admission":true,"deny":true,"port":true,"capacity":false}
+        }
+    });
+    assert!(parse_config(&wire.to_string()).is_err());
+    let launch = parse_complete_launch(wire).unwrap();
+    assert_eq!(
+        launch.outbound_v1.snapshot.revision.as_str(),
+        "rev-complete"
+    );
+    assert_eq!(
+        launch.outbound_v1.snapshot.policy.deny_net,
+        ["192.0.2.0/24:443"]
+    );
+    assert!(launch.config.network_backend_spec.is_some());
+}
+
+#[test]
 fn outbound_bootstrap_shim_accepts_legacy_messages_and_rejects_bad_metadata() {
     let mut wire = fixture();
     wire.as_object_mut().unwrap().remove("outbound_revision");

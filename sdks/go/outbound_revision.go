@@ -60,7 +60,7 @@ const (
 // OutboundSnapshot reads durable policy and revision without starting a VM.
 func (n *Network) OutboundSnapshot(ctx context.Context) (OutboundSnapshot, error) {
 	var result OutboundSnapshot
-	err := n.readOutbound(ctx, &result, func(handle *C.CBoxNetworkHandle, value **C.char, failure *C.CBoxliteError) C.enum_BoxliteErrorCode {
+	err := n.readNetworkJSON(ctx, &result, func(handle *C.CBoxNetworkHandle, value **C.char, failure *C.CBoxliteError) C.enum_BoxliteErrorCode {
 		return C.boxlite_network_outbound_snapshot(handle, value, failure)
 	})
 	return result, err
@@ -70,13 +70,43 @@ func (n *Network) OutboundSnapshot(ctx context.Context) (OutboundSnapshot, error
 // Cancellation is checked before the blocking native call, as with UpdateOutbound.
 func (n *Network) OutboundStatus(ctx context.Context) (OutboundStatus, error) {
 	var result OutboundStatus
-	err := n.readOutbound(ctx, &result, func(handle *C.CBoxNetworkHandle, value **C.char, failure *C.CBoxliteError) C.enum_BoxliteErrorCode {
+	err := n.readNetworkJSON(ctx, &result, func(handle *C.CBoxNetworkHandle, value **C.char, failure *C.CBoxliteError) C.enum_BoxliteErrorCode {
 		return C.boxlite_network_outbound_status(handle, value, failure)
 	})
 	return result, err
 }
 
-func (n *Network) readOutbound(ctx context.Context, result any, read func(*C.CBoxNetworkHandle, **C.char, *C.CBoxliteError) C.enum_BoxliteErrorCode) error {
+// PublishedPorts reads host bindings without starting the box. A nil slice means unknown.
+func (n *Network) PublishedPorts(ctx context.Context) ([]PublishedPort, error) {
+	var bindings []struct {
+		GuestPort int    `json:"guest_port"`
+		HostIP    string `json:"host_ip"`
+		HostPort  int    `json:"host_port"`
+		Protocol  string `json:"protocol"`
+	}
+	err := n.readNetworkJSON(ctx, &bindings, func(handle *C.CBoxNetworkHandle, value **C.char, failure *C.CBoxliteError) C.enum_BoxliteErrorCode {
+		return C.boxlite_network_published_ports(handle, value, failure)
+	})
+	if err != nil || bindings == nil {
+		return nil, err
+	}
+	ports := make([]PublishedPort, len(bindings))
+	for i, binding := range bindings {
+		var protocol PortProtocol
+		switch binding.Protocol {
+		case "tcp":
+			protocol = PortProtocolTcp
+		case "udp":
+			protocol = PortProtocolUdp
+		default:
+			return nil, &Error{Code: ErrNetwork, Message: "published port response has an invalid protocol"}
+		}
+		ports[i] = PublishedPort{GuestPort: binding.GuestPort, HostIP: binding.HostIP, HostPort: binding.HostPort, Protocol: protocol}
+	}
+	return ports, nil
+}
+
+func (n *Network) readNetworkJSON(ctx context.Context, result any, read func(*C.CBoxNetworkHandle, **C.char, *C.CBoxliteError) C.enum_BoxliteErrorCode) error {
 	if n == nil {
 		return ErrRuntimeClosed
 	}
@@ -97,7 +127,7 @@ func (n *Network) readOutbound(ctx context.Context, result any, read func(*C.CBo
 		return freeError(&failure)
 	}
 	if value == nil {
-		return &Error{Code: ErrNetwork, Message: "outbound response is missing"}
+		return &Error{Code: ErrNetwork, Message: "network response is missing"}
 	}
 	return json.Unmarshal([]byte(C.GoString(value)), result)
 }

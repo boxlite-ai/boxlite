@@ -73,6 +73,9 @@ extern "C" {
     /// Pointer to version string (must be freed with gvproxy_free_string)
     pub fn gvproxy_get_version() -> *mut c_char;
 
+    /// Return the outbound capability bits of this linked Go archive.
+    pub fn gvproxy_outbound_capabilities() -> std::ffi::c_uint;
+
     /// Set the log callback function for routing gvproxy logs to Rust
     ///
     /// When set, Go's slog handler will call this callback for all log messages,

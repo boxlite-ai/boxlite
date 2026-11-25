@@ -354,6 +354,33 @@ impl BoxliteRuntime {
         self.backend.get_or_create(options, name).await
     }
 
+    /// Configure a new local Box with complete outbound policy and extended IPv4 admission.
+    pub async fn create_with_outbound_policy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        policy: crate::net::CompleteOutboundPolicy,
+    ) -> BoxliteResult<LiteBox> {
+        options.sanitize_create()?;
+        self.backend
+            .create_with_outbound_policy(options, name, policy, false)
+            .await
+            .map(|(handle, _)| handle)
+    }
+
+    /// Configure or reuse a local Box whose committed complete policy matches exactly.
+    pub async fn get_or_create_with_outbound_policy(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+        policy: crate::net::CompleteOutboundPolicy,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        options.sanitize_create()?;
+        self.backend
+            .create_with_outbound_policy(options, name, policy, true)
+            .await
+    }
+
     /// Get a handle to an existing box by ID or name.
     ///
     /// The `id_or_name` parameter can be either:

@@ -33,8 +33,8 @@ use crash_capture::CrashCapture;
 #[allow(unused_imports)]
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-use boxlite::net::OutboundRevision;
 use boxlite::net::gvproxy::GvproxyInstance;
+use boxlite::net::{OutboundBootstrap, OutboundRevision};
 
 fn parse_config(json: &str) -> BoxliteResult<(InstanceSpec, Option<OutboundRevision>)> {
     let value: serde_json::Value = serde_json::from_str(json)
@@ -47,6 +47,25 @@ fn parse_config(json: &str) -> BoxliteResult<(InstanceSpec, Option<OutboundRevis
     let config = serde_json::from_value(value)
         .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {e}")))?;
     Ok((config, revision))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompleteLaunch {
+    config: InstanceSpec,
+    outbound_v1: OutboundBootstrap,
+}
+
+fn parse_complete_launch(value: serde_json::Value) -> BoxliteResult<CompleteLaunch> {
+    let launch: CompleteLaunch = serde_json::from_value(value)
+        .map_err(|e| BoxliteError::Engine(format!("Invalid complete shim launch: {e}")))?;
+    GvproxyInstance::outbound_capabilities().require(launch.outbound_v1.requirements)?;
+    if launch.config.network_backend_spec.is_none() || launch.config.disable_network {
+        return Err(BoxliteError::InvalidArgument(
+            "complete outbound launch requires a guest NIC".into(),
+        ));
+    }
+    Ok(launch)
 }
 
 // No CLI args — all config (including engine type) is read from stdin pipe.
@@ -98,8 +117,26 @@ fn main() -> BoxliteResult<()> {
         buf
     };
 
-    #[allow(unused_mut)]
-    let (mut config, outbound_revision) = parse_config(&config_json)?;
+    let value: serde_json::Value = serde_json::from_str(&config_json)
+        .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {e}")))?;
+    if value.get("outbound_policy_probe").is_some() {
+        if value != serde_json::json!({"outbound_policy_probe": 1}) {
+            return Err(BoxliteError::InvalidArgument(
+                "invalid outbound capability probe".into(),
+            ));
+        }
+        let reply = serde_json::to_string(&GvproxyInstance::outbound_capabilities())
+            .map_err(|e| BoxliteError::Internal(e.to_string()))?;
+        println!("{reply}");
+        return Ok(());
+    }
+    let (config, outbound_revision, outbound) = if value.get("outbound_v1").is_some() {
+        let launch = parse_complete_launch(value)?;
+        (launch.config, None, Some(launch.outbound_v1))
+    } else {
+        let (config, revision) = parse_config(&config_json)?;
+        (config, revision, None)
+    };
     timing("config parsed");
 
     // Initialize logging using box_dir derived from exit_file path.
@@ -127,7 +164,13 @@ fn main() -> BoxliteResult<()> {
     let exit_file = config.exit_file.clone();
 
     // Run the shim and handle errors
-    run_shim(config, outbound_revision.as_ref(), timing).inspect_err(|e| {
+    run_shim(
+        config,
+        outbound_revision.as_ref(),
+        outbound.as_ref(),
+        timing,
+    )
+    .inspect_err(|e| {
         let info = ExitInfo::Error {
             exit_code: 1,
             message: e.to_string(),
@@ -144,6 +187,7 @@ fn main() -> BoxliteResult<()> {
 fn run_shim(
     mut config: InstanceSpec,
     revision: Option<&OutboundRevision>,
+    outbound: Option<&OutboundBootstrap>,
     timing: impl Fn(&str),
 ) -> BoxliteResult<()> {
     tracing::debug!(
@@ -164,9 +208,10 @@ fn run_shim(
     // The gvproxy instance is leaked intentionally - it must live for the entire
     // duration of the VM. When the shim process exits, OS cleans up all resources.
     if let Some(ref spec) = config.network_backend_spec {
-        let (gvproxy, endpoint) = match revision {
-            Some(revision) => GvproxyInstance::from_config_with_revision(spec, revision)?,
-            None => GvproxyInstance::from_config(spec)?,
+        let (gvproxy, endpoint) = match (outbound, revision) {
+            (Some(outbound), _) => GvproxyInstance::from_complete_config(spec, outbound)?,
+            (None, Some(revision)) => GvproxyInstance::from_config_with_revision(spec, revision)?,
+            (None, None) => GvproxyInstance::from_config(spec)?,
         };
         config.network_backend_endpoint = Some(endpoint);
         timing("gvproxy created");

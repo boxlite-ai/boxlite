@@ -17,10 +17,19 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
+const (
+	maxLegacyOutboundBody = 64 << 10
+	// Allow the versioned framing around any policy accepted by the flat endpoint.
+	maxCompleteOutboundBody = maxLegacyOutboundBody + (1 << 10)
+)
+
 type outboundPolicy struct {
 	Mode     string   `json:"mode"`
 	AllowNet []string `json:"allow_net"`
 	tcp      *trustedTCPRules
+	complete *completeOutboundSnapshot
+	compiled *extendedOutboundPolicy
+	required outboundCapabilities
 }
 
 type trustedTCPRules struct {
@@ -36,13 +45,14 @@ type nicOperations interface {
 // One controller owns policy replacement for both transports and the NIC.
 // Forwarders capture immutable snapshots, so established flows keep their policy and transport.
 type outboundPolicyController struct {
-	mu      sync.Mutex
-	active  atomic.Pointer[outboundSnapshot]
-	config  *types.Configuration
-	guestIP string
-	stack   *stack.Stack
-	nic     tcpip.NICID
-	nicOps  nicOperations
+	mu           sync.Mutex
+	active       atomic.Pointer[outboundSnapshot]
+	config       *types.Configuration
+	guestIP      string
+	stack        *stack.Stack
+	nic          tcpip.NICID
+	nicOps       nicOperations
+	capabilities outboundCapabilities
 
 	tcpInspectionSlots chan struct{}
 	udpFlows           *udpFlowPool
@@ -59,6 +69,7 @@ func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.Virtual
 	}
 	p := &outboundPolicyController{
 		config: config, guestIP: guestIP, stack: s, nicOps: s,
+		capabilities:       supportedOutboundCapabilities(),
 		tcpInspectionSlots: make(chan struct{}, 10),
 		udpFlows:           newUDPFlowPool(ctx),
 	}
@@ -139,6 +150,10 @@ func (p *outboundPolicyController) applySnapshot(candidate *outboundSnapshot) er
 }
 
 func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == completeOutboundStatusPath {
+		p.serveCompleteStatus(w, r)
+		return
+	}
 	if r.URL.Path == outboundStatusPath {
 		p.serveStatus(w, r)
 		return
@@ -166,17 +181,33 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		current := p.active.Load()
-		var policy outboundPolicy
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&policy); err != nil {
+		var request struct {
+			outboundPolicy
+			Complete json.RawMessage `json:"outbound_v1"`
+		}
+		limit := int64(maxLegacyOutboundBody)
+		if r.URL.Path == outboundSnapshotPath {
+			limit = maxCompleteOutboundBody
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+		if err != nil || decodeOutboundJSON(body, &request) != nil {
 			http.Error(w, "invalid outbound policy", http.StatusBadRequest)
 			return
 		}
-		if err := decoder.Decode(new(any)); err != io.EOF {
-			http.Error(w, "expected one outbound policy", http.StatusBadRequest)
+		if request.Complete != nil {
+			var complete completeOutboundReplace
+			if request.Mode != "" || request.AllowNet != nil || decodeOutboundJSON(request.Complete, &complete) != nil {
+				http.Error(w, "invalid complete outbound request", http.StatusBadRequest)
+				return
+			}
+			p.replaceComplete(w, r, complete, current)
 			return
 		}
+		if len(body) > maxLegacyOutboundBody {
+			http.Error(w, "invalid outbound policy", http.StatusBadRequest)
+			return
+		}
+		policy := request.outboundPolicy
 		if err := policy.validate(); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -200,6 +231,10 @@ func (p *outboundPolicyController) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	snapshot := p.active.Load()
+	if snapshot.policy.complete != nil {
+		http.Error(w, "outbound policy requires complete status", http.StatusNotImplemented)
+		return
+	}
 	if snapshot.state != "confirmed" {
 		http.Error(w, "outbound policy application is "+snapshot.state, http.StatusServiceUnavailable)
 		return

@@ -35,6 +35,7 @@ mod guest_entrypoint;
 mod guest_init;
 mod guest_rootfs;
 mod port_publish;
+pub(crate) use port_publish::observe_published_ports;
 mod vmm_attach;
 mod vmm_spawn;
 

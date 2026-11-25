@@ -67,6 +67,47 @@ fn replacement() -> OutboundReplacement {
 }
 
 #[tokio::test]
+async fn outbound_rest_refuses_empty_extended_identity_on_legacy_routes() {
+    let snapshot =
+        serde_json::json!({"policy":{"mode":"enabled","allow_net":[]},"revision":"rev-a"});
+    let mut observed = snapshot.clone();
+    observed["admission"] = "extended_ipv4".into();
+    observed["application_state"] = "confirmed".into();
+    let body = serde_json::json!({"persisted":snapshot,"observed":observed,"application_state":"confirmed"}).to_string();
+    let (network, request) = peer(200, "", &body).await;
+    let status = network.outbound_status().await;
+    assert!(
+        matches!(status, Err(BoxliteError::Unsupported(_))),
+        "legacy status represented an extended identity: {status:?}"
+    );
+    assert!(
+        request
+            .await
+            .unwrap()
+            .0
+            .starts_with("GET /v1/boxes/policy-box/network/outbound/status ")
+    );
+
+    let (network, request) = peer(
+        200,
+        "ETag: \"rev-a\"\r\n",
+        r#"{"mode":"enabled","allow_net":[],"admission":"extended_ipv4"}"#,
+    )
+    .await;
+    assert!(matches!(
+        network.outbound_snapshot().await,
+        Err(BoxliteError::Unsupported(_))
+    ));
+    assert!(
+        request
+            .await
+            .unwrap()
+            .0
+            .starts_with("GET /v1/boxes/policy-box/network/outbound ")
+    );
+}
+
+#[tokio::test]
 async fn outbound_rest_total_timeout_includes_a_stalled_acknowledgement_body() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let handle = network_at(format!("http://{}", listener.local_addr().unwrap()));

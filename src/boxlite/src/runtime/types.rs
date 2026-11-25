@@ -487,8 +487,8 @@ pub struct BoxInfo {
 
     /// Network configuration and current runtime publication metadata.
     ///
-    /// Local producers always populate this field. `None` indicates metadata
-    /// from an older or remote producer that did not include `network`.
+    /// `None` means the producer could not represent the network in the legacy
+    /// view or did not report it. Use the network handle to read published ports.
     #[serde(default)]
     pub network: Option<NetworkInfo>,
 

@@ -33,6 +33,7 @@ pub struct VmmSpawnTask;
 struct VmmSpawnInputs {
     outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
     outbound_revision: Option<crate::net::OutboundRevision>,
+    complete_outbound: Option<crate::net::OutboundBootstrap>,
     options: BoxOptions,
     layout: BoxFilesystemLayout,
     container_image_config: ContainerImageConfig,
@@ -70,6 +71,7 @@ impl VmmSpawnInputs {
         Ok(Self {
             outbound_policy: ctx.outbound_policy.clone(),
             outbound_revision: ctx.outbound_revision.clone(),
+            complete_outbound: ctx.complete_outbound.clone(),
             options: ctx.config.options.clone(),
             layout,
             container_image_config,
@@ -140,6 +142,7 @@ async fn build_config(
     let VmmSpawnInputs {
         outbound_policy,
         outbound_revision: _,
+        complete_outbound: _,
         options,
         layout,
         container_image_config,
@@ -441,7 +444,9 @@ async fn spawn_vm(
         inputs.layout.clone(),
     )?;
 
-    controller = controller.with_outbound_revision(inputs.outbound_revision.clone());
+    controller = controller
+        .with_outbound_revision(inputs.outbound_revision.clone())
+        .with_complete_outbound(inputs.complete_outbound.clone());
     controller.start(config).await
 }
 

@@ -6,6 +6,7 @@ use std::time::Instant;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::box_impl::BoxImpl;
+use super::state::BoxState;
 use crate::disk::BaseDiskKind;
 use crate::disk::constants::filenames as disk_filenames;
 use crate::disk::{BackingFormat, Qcow2Helper};
@@ -16,14 +17,19 @@ use crate::runtime::types::BoxStatus;
 // ============================================================================
 
 impl BoxImpl {
+    fn copy_source_state(&self) -> BoxliteResult<BoxState> {
+        let (state, _, complete) = self.runtime.box_manager.outbound_state(self.id())?;
+        if complete.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "copy does not support complete outbound policy".into(),
+            ));
+        }
+        Ok(state)
+    }
+
     fn options_for_copy(&self) -> BoxliteResult<crate::runtime::options::BoxOptions> {
         let mut options = self.config.options.clone();
-        if let Some(policy) = self
-            .runtime
-            .box_manager
-            .update_box(self.id())?
-            .outbound_policy
-        {
+        if let Some(policy) = self.copy_source_state()?.outbound_policy {
             options.network = policy.try_into()?;
         }
         Ok(options)
@@ -69,6 +75,7 @@ impl BoxImpl {
 
         let t0 = Instant::now();
         self.with_disk_admission(async {
+            self.copy_source_state()?;
             let rt = Arc::clone(&self.runtime);
             let src_disks = self.config.box_home.join("disks");
             let src_container = src_disks.join(disk_filenames::CONTAINER_DISK);
@@ -185,53 +192,54 @@ impl BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         let t0 = Instant::now();
-        self.with_disk_admission(async {
-            let box_home = self.config.box_home.clone();
-            let runtime_layout = self.runtime.layout.clone();
+        let admission = Arc::new(self.acquire_disk_admission().await?);
+        self.copy_source_state()?;
+        let box_home = self.config.box_home.clone();
+        let runtime_layout = self.runtime.layout.clone();
 
-            // Phase 1: Flatten disks inside quiesce bracket (VM paused only for this).
-            // Flatten reads live qcow2 chains and must see consistent disk state.
-            let flatten_result = self
-                .with_quiesce_async(async {
-                    let bh = box_home.clone();
-                    let rl = runtime_layout.clone();
-                    tokio::task::spawn_blocking(move || do_export_flatten(&bh, &rl))
-                        .await
-                        .map_err(|e| {
-                            BoxliteError::Internal(format!("Export flatten task panicked: {}", e))
-                        })?
+        // Each blocking worker keeps disk admission if the caller cancels.
+        let flatten_admission = Arc::clone(&admission);
+        let flatten_result = self
+            .with_quiesce_async(async {
+                // Flatten reads live qcow2 chains while the VM is paused.
+                tokio::task::spawn_blocking(move || {
+                    let _admission = flatten_admission;
+                    do_export_flatten(&box_home, &runtime_layout)
                 })
-                .await?;
-
-            // Phase 2: Checksum + manifest + archive run with VM resumed.
-            // These only read static temp files, no disk consistency needed.
-            let config_name = self.config.name.clone();
-            let config_options = self.options_for_copy()?;
-            let box_id_str = self.id().to_string();
-            let dest = dest.to_path_buf();
-
-            let result = tokio::task::spawn_blocking(move || {
-                do_export_finalize(
-                    flatten_result,
-                    config_name.as_deref(),
-                    &config_options,
-                    &box_id_str,
-                    &dest,
-                )
+                .await
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("Export flatten task panicked: {}", e))
+                })?
             })
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("Export finalize task panicked: {}", e)))?;
+            .await?;
 
-            tracing::info!(
-                box_id = %self.config.id,
-                elapsed_ms = t0.elapsed().as_millis() as u64,
-                ok = result.is_ok(),
-                "export_box completed"
-            );
+        // Checksum, manifest, and archive run with the VM resumed.
+        let config_name = self.config.name.clone();
+        let config_options = self.options_for_copy()?;
+        let box_id_str = self.id().to_string();
+        let dest = dest.to_path_buf();
 
-            result
+        let result = tokio::task::spawn_blocking(move || {
+            let _admission = admission;
+            do_export_finalize(
+                flatten_result,
+                config_name.as_deref(),
+                &config_options,
+                &box_id_str,
+                &dest,
+            )
         })
         .await
+        .map_err(|e| BoxliteError::Internal(format!("Export finalize task panicked: {}", e)))?;
+
+        tracing::info!(
+            box_id = %self.config.id,
+            elapsed_ms = t0.elapsed().as_millis() as u64,
+            ok = result.is_ok(),
+            "export_box completed"
+        );
+
+        result
     }
 }
 
