@@ -736,7 +736,7 @@ and are excluded from the delegated business request.
 | --- | --- |
 | Original success recorded | Replays original status, bytes, Content-Type and Location, including empty 204 responses |
 | Original execution active | `409 idempotency_in_progress`; no second dispatch |
-| Business input changed | `422 idempotency_payload_mismatch` |
+| Business input changed | `409 idempotency_request_mismatch` |
 | Outcome cannot be confirmed | `422 idempotency_outcome_unknown`; never automatically bypass with a new key |
 | Proven rejection before effects | Allows another attempt with the same key and input |
 

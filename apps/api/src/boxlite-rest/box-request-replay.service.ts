@@ -212,13 +212,13 @@ export class BoxRequestReplayService implements OnModuleDestroy {
     }
     if (result[0] === 'mismatch')
       throw new HttpException(
-        { message: 'Idempotency-Key was already used with a different request', code: 'idempotency_payload_mismatch' },
-        HttpStatus.UNPROCESSABLE_ENTITY,
+        { message: 'Idempotency-Key was already used with a different request', code: 'idempotency_request_mismatch' },
+        HttpStatus.CONFLICT,
       )
     if (result[0] === 'pending')
       throw new HttpException(
         {
-          message: 'The original request is still processing. Retry with the same Idempotency-Key.',
+          message: 'The original request has not recorded a response yet. Retry with the same Idempotency-Key.',
           code: 'idempotency_in_progress',
         },
         HttpStatus.CONFLICT,

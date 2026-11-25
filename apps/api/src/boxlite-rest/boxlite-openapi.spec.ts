@@ -228,7 +228,7 @@ describe('Hosted replay error contract', () => {
   it.each([
     [400, undefined],
     [409, 'idempotency_in_progress'],
-    [422, 'idempotency_payload_mismatch'],
+    [409, 'idempotency_request_mismatch'],
     [422, 'idempotency_outcome_unknown'],
     [503, 'idempotency_storage_unavailable'],
   ] as const)('documents the hosted %i response (%s) for every keyed write', async (status, code) => {

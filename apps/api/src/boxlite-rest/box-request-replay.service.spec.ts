@@ -214,7 +214,8 @@ integration('Replay Redis ownership and storage failures', () => {
         await warm.heartbeat()
         if (state === 'retryable') {
           await expect(reserve(key, 'changed')).rejects.toMatchObject({
-            response: { code: 'idempotency_payload_mismatch' },
+            status: 409,
+            response: { code: 'idempotency_request_mismatch' },
           })
         } else {
           expect(await isolated.exists(record(key))).toBe(0)

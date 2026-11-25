@@ -194,12 +194,13 @@ Equivalent organization-prefixed routes share identity after the prefix is autho
 
 Hosted Box API errors carry HTTP details in the response body. Read `code` at the top level
 to distinguish replay failures from business errors with the same HTTP status.
+The mismatch, pending, and unknown status/code pairs follow [E2B's idempotent creation contract](https://docs.e2b.dev/sandbox/idempotency).
 
 | Condition | Response |
 | --- | --- |
 | Original success recorded | Original status, serialized bytes, Content-Type and Location |
 | Invalid or duplicate key, or a keyed request body with a non-JSON content type | `400` |
-| Same key with changed business input | `422 idempotency_payload_mismatch` |
+| Same key with changed business input | `409 idempotency_request_mismatch` |
 | Original owner still active | `409 idempotency_in_progress` |
 | Outcome cannot be confirmed | `422 idempotency_outcome_unknown`; no redispatch |
 | Reservation storage unavailable | `503 idempotency_storage_unavailable`; no dispatch |

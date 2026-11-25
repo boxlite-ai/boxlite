@@ -2296,7 +2296,7 @@ paths:
         "400":
           $ref: "#/components/responses/WriteBadRequestError"
         "409":
-          description: A login is already held for this registry and prefix, or a hosted request with the same key is still in progress (idempotency_in_progress).
+          description: A login is already held for this registry and prefix, or a hosted key has different input (idempotency_request_mismatch) or is still in progress (idempotency_in_progress).
           content:
             application/json:
               schema:
@@ -2540,7 +2540,7 @@ components:
         successful status, body, Content-Type and Location for the same caller,
         key and business input. Retention is PT24H from first use, without extension.
         Concurrent attempts return 409 idempotency_in_progress; changed input
-        returns 422 idempotency_payload_mismatch; an uncertain outcome returns
+        returns 409 idempotency_request_mismatch; an uncertain outcome returns
         422 idempotency_outcome_unknown and must not be automatically dispatched
         again using a new key. Missing, expired or lost records end the guarantee.
         Omission preserves the operation's ordinary behavior and sends no header.
@@ -2573,8 +2573,9 @@ components:
 
     WriteConflictError:
       description: |
-        Resource state conflict. A hosted write returns idempotency_in_progress while
-        the original request is running. Retry with the same key and input.
+        Resource state conflict. A hosted write returns idempotency_request_mismatch when
+        the same key has different input, or idempotency_in_progress while the original
+        request is running. Retry a pending request with the same key and input.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/WriteErrorResponse"}
@@ -2583,14 +2584,14 @@ components:
             timestamp: "2026-09-02T06:55:28.000Z"
             statusCode: 409
             error: Conflict
-            message: The original request is still processing. Retry with the same Idempotency-Key.
+            message: The original request has not recorded a response yet. Retry with the same Idempotency-Key.
             code: idempotency_in_progress
 
     WriteUnprocessableEntityError:
       description: |
-        The request cannot be processed. A hosted write returns idempotency_payload_mismatch
-        when the same key is used with different input. With idempotency_outcome_unknown,
-        check the resource state before issuing another write.
+        The request cannot be processed. A hosted write returns idempotency_outcome_unknown
+        when the original outcome cannot be established. Check the resource state before
+        issuing another write.
       content:
         application/json:
           schema: {$ref: "#/components/schemas/WriteErrorResponse"}
@@ -3181,7 +3182,7 @@ components:
         message: {type: string}
         code:
           type: string
-          examples: [idempotency_in_progress, idempotency_payload_mismatch, idempotency_outcome_unknown, idempotency_storage_unavailable]
+          examples: [idempotency_in_progress, idempotency_request_mismatch, idempotency_outcome_unknown, idempotency_storage_unavailable]
 
     ErrorResponse:
       type: object

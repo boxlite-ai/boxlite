@@ -34,6 +34,7 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { AuditInterceptor } from '../audit/interceptors/audit.interceptor'
 import { AuditService } from '../audit/services/audit.service'
+import { AllExceptionsFilter } from '../filters/all-exceptions.filter'
 
 class Input {
   @IsString() value!: string
@@ -150,6 +151,7 @@ integration('Replay HTTP contract with shared Redis', () => {
         app.get(AuditInterceptor),
         new RequestReplayInterceptor(module.get(BoxRequestReplayService)),
       )
+      app.useGlobalFilters(new AllExceptionsFilter({} as never))
       await app.listen(0, '127.0.0.1')
       apps.push(app)
       bases.push(await app.getUrl())
@@ -206,8 +208,15 @@ integration('Replay HTTP contract with shared Redis', () => {
       ['probe/other', { b: 2, a: [1, null] }],
       ['probe/target?force=true', { b: 2, a: [1, null] }],
       ['probe/target', { b: 2, a: [null, 1] }],
-    ] as const)
-      expect((await send(key, path, body)).status).toBe(422)
+    ] as const) {
+      const mismatch = await send(key, path, body)
+      expect(mismatch.status).toBe(409)
+      expect(JSON.parse(mismatch.text)).toMatchObject({
+        code: 'idempotency_request_mismatch',
+        message: 'Idempotency-Key was already used with a different request',
+      })
+    }
+    expect((await send(key, 'probe/target', { b: 2, a: [1, null] }, 1)).text).toBe(original.text)
     expect(effects).toBe(before + 1)
     expect((await send(key, 'probe/target', {}, 0, { 'x-user': 'other' })).status).toBe(201)
     expect((await send(key, 'foreign/probe/target')).status).toBe(403)
@@ -296,7 +305,9 @@ integration('Replay HTTP contract with shared Redis', () => {
     const owner = send(key, 'probe/target/slow')
     await entered.promise
     try {
-      expect((await send(key, 'probe/target/slow', {}, 1)).status).toBe(409)
+      const pending = await send(key, 'probe/target/slow', {}, 1)
+      expect(pending.status).toBe(409)
+      expect(JSON.parse(pending.text)).toMatchObject({ code: 'idempotency_in_progress' })
       const hash = createHash('sha256').update(key).digest('hex')
       const [record] = await redis.keys(`replay:${org}:*:${hash}`)
       const initial = await redis.hget(record, 'expected_response_at')
@@ -330,7 +341,9 @@ integration('Replay HTTP contract with shared Redis', () => {
     const failedKey = randomUUID()
     const before = effects
     expect((await send(failedKey, 'probe/target/failure')).status).toBe(400)
-    expect((await send(failedKey, 'probe/target/failure')).status).toBe(422)
+    const unknown = await send(failedKey, 'probe/target/failure')
+    expect(unknown.status).toBe(422)
+    expect(JSON.parse(unknown.text)).toMatchObject({ code: 'idempotency_outcome_unknown' })
     expect(effects).toBe(before + 1)
     const invalid = randomUUID()
     expect((await send(invalid, 'probe/target/validate', { value: 1 })).status).toBe(400)
