@@ -1,133 +1,19 @@
-# E2E suite against a deployed cloud stack — SDK → API → Runner → VM.
-#
-# By default builds Python SDK, Node SDK, and the CLI from source using
-# BOXLITE_DEPS_STUB=1 (skips vendor submodule builds — those only
-# matter inside the runner, not the SDK client), then runs the REST
-# e2e pytest suite against the stage selected by `stage`.
-#
-# Dev also builds C, Go and Rust clients for the shared subdomain cases.
-# Legacy C/Go entry and coverage cases remain excluded below.
-# An optional tag downloads released Python/Node SDKs and CLI instead.
-# Dev retains its C/Go/Rust clients using release SDKs and the published C library;
-# only the Rust SDK and acceptance driver programs still need compilation.
-#
-# Does NOT build or deploy the API or runner — the stage is assumed to
-# be already running the version you want to test against.
-#
-# ── Stages ───────────────────────────────────────────────────────────
-#
-#   dev    api.dev.boxlite.ai, the whole suite. Creates and deletes
-#          boxes freely, probes quotas, and sweeps boxes earlier runs
-#          stranded (see the sweep step).
-#   stage  api.stage.boxlite.ai, separate identities and full suite;
-#          no automatic sweep or dev shared-subdomain fixture.
-#   prod   api.boxlite.ai, `-m smoke` only: the handful of cases marked
-#          in apps/e2e/pytest.ini as safe against a paying stage — one
-#          box at a time, no quota probing, no deliberate error storms.
-#          Nothing is swept there; prod holds customers' boxes.
-#
-# All stages really create boxes on the stage they target, so a prod run
-# costs prod capacity. That is the point — a smoke that mocks the thing
-# it is meant to verify verifies nothing — but it is why prod is a
-# deliberate, narrow subset rather than the full suite.
-#
-# ── Authentication ───────────────────────────────────────────────────
-#
-# Stage-specific API keys in repository secrets:
-#
-#   dev    BOXLITE_DEV_API_KEY
-#          BOXLITE_DEV_P2_API_KEY, BOXLITE_DEV_P2_READONLY_API_KEY
-#   stage  BOXLITE_STAGE_API_KEY
-#          BOXLITE_STAGE_P2_API_KEY, BOXLITE_STAGE_P2_READONLY_API_KEY
-#   prod   BOXLITE_PROD_API_KEY
-#
-# All are named, not inherited, so a run can only ever hold the key for
-# the stage it targets. The repo also carries an older, unreferenced
-# BOXLITE_API_KEY — that one is a *dev* key, so it is no substitute for
-# BOXLITE_PROD_API_KEY: pointing the prod leg at it would authenticate
-# against the wrong organization. BOXLITE_PROD_API_KEY has to be issued and
-# added before the prod leg can run at all; until then it resolves to empty
-# and the credential step says so by name.
-#
-# The main suite reads [profiles.p1]. Dev and stage additionally test private access
-# with p2 as owner, p2_readonly in the same org, and p1 in a different org.
-# The image catalog lane also uses p2, isolating its quota from the main suite.
-# Profiles are written to ~/.boxlite/credentials.toml and every request is
-# `Authorization: Bearer <token>` (apps/e2e/lib/e2e_auth.py).
-# `path_prefix` is derived from the same key via /v1/me, not a second
-# credential. No AWS, no OIDC.
-#
-# Optional repo variables (Settings → Variables → Actions):
-#   - BOXLITE_DEV_API_URL    dev target;  defaults to api.dev.boxlite.ai
-#   - BOXLITE_STAGE_API_URL stage target; defaults to api.stage.boxlite.ai
-#   - BOXLITE_PROD_API_URL   prod target; defaults to api.boxlite.ai
-#
-# Required repository variable for dev subdomain tests:
-#   - BOXLITE_E2E_DOMAIN    full test hostname for p1's organization
-#
-# A key is issued to a maintainer, deliberately. It is therefore
-# mortal: API keys are primary-keyed on (organizationId, userId, name)
-# and ApiKeyStrategy re-reads the user on every request, throwing
-# UnauthorizedException('User not found') once that account is deleted.
-# Redis caches the user lookup, so such a key keeps working for a TTL
-# after the account goes and then fails for good. If this workflow
-# starts 401-ing for no apparent reason, that is the first thing to
-# check — the preflight below says so explicitly.
-#
-# Last known-good: run 29995466177 (2026-07-23) authenticated fine — its
-# credential step passed, and that step is what calls /v1/me. The four
-# failures in that run were test failures, not auth. So a 401 after this
-# date means something changed since, not that the setup never worked.
-#
-# The durable alternative is a key on a principal that is not a person:
-# `boxlite-admin`, which the API provisions for itself on boot
-# (initializeAdminUser in apps/api/src/app.service.ts), or a dedicated
-# service account with a scoped key (CreateApiKeyDto takes `permissions`
-# and `expiresAt`). Both were weighed and declined: a maintainer key is
-# less privileged than boxlite-admin's SystemRole.ADMIN, and a service
-# account needs provisioning work on the stage that nothing else
-# currently needs.
-#
-# Triggers: exactly two, and both require write access to the repo.
-#
-#   workflow_call      deploy-infra.yml, after it applies a stack, on the
-#                      commit it just deployed (the `ref` input). Always
-#                      the dev stage.
-#   workflow_dispatch  a human, against whatever is deployed right now,
-#                      on either stage.
-#
-# Nothing fires on its own. Push-on-main and the label-gated
-# pull_request_target trigger both ran the suite against a dev stack
-# whose deployed commit was unrelated to the commit under test, so a red
-# run said as much about how stale the stack was as about the change.
-# Hanging the suite off a deploy makes client and server the same commit;
-# every other run is someone asking for one.
-#
-# The corollary used to be "there is no fork path left to defend" — that stopped being
-# literally true when deploy-infra started accepting any open PR's head, fork included.
-# It's still safe for the job that builds and runs the tree to hold the API key, on a
-# deliberate, narrower basis: dispatch needs write access, and deploy-infra is itself
-# dispatch-only, so every run of this workflow — whatever commit it builds — was chosen by
-# someone who already had write access, and the `dev` Environment's required reviewer
-# approves before the OIDC role deploy-infra's own job holds is ever configured. A fork PR's
-# test code does get this key, same as a same-repo PR's; that is accepted, not overlooked —
-# scoping it down to a short-lived, narrowly-permissioned key (CreateApiKeyDto takes
-# `permissions` and `expiresAt`) instead of the standing one remains the available follow-up
-# if that trade-off ever needs revisiting. The prod key is held to the same bargain, with a
-# smaller blast radius: only `-m smoke` ever runs with it.
-
+# Shadow rehearsal: fixtures only, with real GitHub Environment approvals and Slack.
 name: E2E cloud
 run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format(' using {0}', inputs.tag) || '' }}
-
-on:
+'on':
   workflow_call:
     outputs:
       release_result:
         description: Outcome of the release acceptance suite
         value: ${{ jobs.e2e.outputs.release_result }}
     inputs:
-      candidate_id: { required: false, type: string }
-      candidate_digest: { required: false, type: string }
+      candidate_id:
+        required: false
+        type: string
+      candidate_digest:
+        required: false
+        type: string
       release_sha:
         description: Exact tagged commit deployed by release acceptance.
         required: false
@@ -137,12 +23,7 @@ on:
         required: false
         type: string
       ref:
-        # The commit the caller deployed. Without it the suite would build
-        # its SDKs from whatever main points at now, while the stack under
-        # test runs the commit deploy-infra selected — that is any commit on
-        # main or an open pull request's head, so the two are not always the
-        # same thing.
-        description: 'Full commit SHA to build the SDKs and CLI from.'
+        description: Full commit SHA to build the SDKs and CLI from.
         required: true
         type: string
       stage:
@@ -151,495 +32,76 @@ on:
         type: string
         default: dev
       tag:
-        description: 'Release client tag, e.g. v0.13.1 (blank = build from source).'
+        description: Release client tag, e.g. v0.13.1 (blank = build from source).
         required: false
         type: string
       sweep:
-        description: 'Reclaim boxes earlier runs stranded (dev only).'
+        description: Reclaim boxes earlier runs stranded (dev only).
         required: false
         type: boolean
         default: true
+      shadow_failure:
+        type: string
+        required: false
     secrets:
       BOXLITE_DEV_API_KEY:
-        # Named rather than inherited. `inherit` passes every secret the
-        # caller holds, whatever that turns out to be — none of the suite's
-        # business, and the list is not this file's to track.
-        # Its AWS access is not a secret and so was never at stake here;
-        # that comes from OIDC, and `permissions` below is what withholds
-        # it.
-        description: 'Dev-stack boxlite API key for profile p1.'
+        description: Dev-stack boxlite API key for profile p1.
         required: false
       BOXLITE_DEV_P2_API_KEY:
-        description: 'Dev key for p2, in a different organization from p1. Required at runtime on dev.'
+        description: Dev key for p2, in a different organization from p1. Required at runtime on dev.
         required: false
       BOXLITE_DEV_P2_READONLY_API_KEY:
-        description: 'Dev read-only key in p2 organization. Required at runtime on dev.'
+        description: Dev read-only key in p2 organization. Required at runtime on dev.
         required: false
       BOXLITE_STAGE_API_KEY:
-        description: 'Stage key for p1.'
+        description: Stage key for p1.
         required: false
       BOXLITE_STAGE_P2_API_KEY:
-        description: 'Stage key for p2 in a different organization.'
+        description: Stage key for p2 in a different organization.
         required: false
       BOXLITE_STAGE_P2_READONLY_API_KEY:
-        description: 'Stage read-only key in the p2 organization.'
+        description: Stage read-only key in the p2 organization.
         required: false
       BOXLITE_PROD_API_KEY:
-        # Declared, not required: the call path only ever targets dev. It is
-        # here so the same expression resolves on both triggers.
-        description: 'Prod-stack boxlite API key for profile p1.'
+        description: Prod-stack boxlite API key for profile p1.
         required: false
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release client tag, e.g. v0.13.1 (blank = build from source)'
-        required: false
-        type: string
-      stage:
-        description: 'Stage to test'
-        required: true
-        default: dev
-        type: choice
-        options:
-          - dev
-          - stage
-          - prod
-      api_url:
-        description: 'API base URL (blank = the stage default)'
-        type: string
-        required: false
-        # Deliberately no default. A default would make inputs.api_url
-        # always non-empty on a dispatch run, so the repo variable would
-        # be silently ignored exactly when someone is trying to dispatch
-        # against the configured stack.
-        #
-        # No `ref` here either: a dispatch already chooses its own ref in
-        # the UI, and github.sha follows it.
-      image:
-        description: 'Box image to run cases against (blank = apps/box-images/VERSION)'
-        type: string
-        required: false
-      sweep:
-        description: 'Reclaim boxes earlier runs stranded (dev only)'
-        type: boolean
-        required: true
-        default: true
-
-# A called workflow inherits the caller's token, and per GitHub's reuse
-# docs permissions "can only be maintained or reduced — not elevated".
-# Declaring the floor here is therefore what keeps deploy-infra's
-# `id-token: write` — its AWS entry — out of the job that builds and runs
-# the tree. Widening this hands that job the deploy role.
 permissions:
   contents: read
   actions: read
-
-# One group per stage: runs against the same stage would race over shared
-# boxes, while dev and prod share nothing.
-#
-# A later run queues behind the in-progress one instead of cancelling it,
-# because a run killed mid-suite strands every box it had open. Two things
-# now bound that damage rather than one: every box the pytest cases create
-# carries auto_stop/auto_delete (apps/e2e/cases/conftest.py), so the stage
-# reclaims it within minutes; and the sweep step below clears what an older
-# run left behind. Older standalone polyglot and CLI cases rely on their own
-# teardown; subdomain clients use the bounded pytest service-box fixture.
-# apps/e2e/README.md describes recovery. This still bounds the risk: GitHub retains
-# only the newest *pending* run per group, so intermediate queued runs are
-# superseded before they ever start.
-#
-# Unverified for the call path: GitHub's reuse-workflows doc says nothing
-# either way about workflow-level concurrency inside a called workflow,
-# and this is the repo's only reusable workflow that declares it. If a
-# deploy turns out not to queue behind a suite already running against
-# the stack it just replaced, this is why.
 concurrency:
   group: e2e-cloud-${{ inputs.stage || 'dev' }}
   cancel-in-progress: false
-
 env:
   BOXLITE_DEPS_STUB: '1'
   STAGE: ${{ inputs.stage || 'dev' }}
   RELEASE_TAG: ${{ inputs.tag || '' }}
-
 jobs:
-  # workflow_call has a string stage; restrict it to supported test stages.
-  # Both call and dispatch remain deliberate runs by repository writers.
   e2e:
-    name: E2E suite (${{ inputs.stage || 'dev' }})
-    if: ${{ contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.candidate_id && 165 || 45 }}
-    cache-mode: read
+    permissions:
+      contents: read
+      actions: read
     outputs:
       release_result: ${{ steps.acceptance.outputs.result }}
-    env:
-      # Precedence: a dispatch input overrides for one run; otherwise the
-      # repo variable is the configured stack; otherwise the built-in
-      # default, so the workflow still runs with nothing configured.
-      API_URL: >-
-        ${{ inputs.api_url
-            || (inputs.stage == 'stage' && (vars.BOXLITE_STAGE_API_URL || 'https://api.stage.boxlite.ai'))
-            || (inputs.stage == 'prod' && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai'))
-            || ((inputs.stage || 'dev') == 'dev' && (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai'))
-            || '' }}
-      # Blank keeps apps/e2e/lib/images.py deriving the ref from
-      # apps/box-images/VERSION, which is right whenever the stage runs the
-      # commit under test. A stage pinned to an older box image needs this.
-      BOXLITE_E2E_IMAGE: ${{ inputs.image || '' }}
     steps:
       - uses: actions/checkout@v5
         with:
-          # On a call, the commit the caller deployed. On a dispatch,
-          # inputs.ref is undefined and github.sha is the ref chosen in the
-          # UI — the same commit either way, never the caller's default.
-          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
-
-      - name: Download the dev deployment's release candidate
-        if: inputs.candidate_id
-        uses: ./.github/actions/release-candidate
+      - uses: ./.github/actions/release-candidate
         with:
           id: ${{ inputs.candidate_id }}
           digest: ${{ inputs.candidate_digest }}
           tag: ${{ inputs.tag }}
           sha: ${{ inputs.release_sha }}
-
-      - name: Locate this run's Linux client artifacts
-        if: inputs.candidate_id
-        id: clients
+      - name: Simulate dev cloud E2E
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ inputs.release_sha }}
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          ids=$(node apps/infra/scripts/release-candidate.mjs client-ids)
-          echo "ids=$ids" >> "$GITHUB_OUTPUT"
-
-      - name: Download only the Linux client artifacts
-        if: inputs.candidate_id
-        uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.clients.outputs.ids }}
-          path: ${{ runner.temp }}/release-clients
-
-      - name: Verify and stage Linux acceptance clients
-        if: inputs.candidate_id
-        env:
-          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
-          TAG: ${{ inputs.tag }}
-          SHA: ${{ inputs.release_sha }}
-          CLIENT_ARTIFACT_DIR: ${{ runner.temp }}/release-clients
-        run: node apps/infra/scripts/release-candidate.mjs clients
-
-      - name: Validate client release
-        if: inputs.tag || inputs.deployment_attempt
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/install-e2e-release.sh validate
-
-      - name: Resolve the published SDK commit
-        id: release_commit
-        if: inputs.deployment_attempt || (inputs.tag && (inputs.stage || 'dev') == 'dev')
-        env:
-          DEPLOYMENT_ATTEMPT: ${{ inputs.deployment_attempt }}
-          RELEASE_SHA: ${{ inputs.release_sha }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          sha=$(gh api "repos/boxlite-ai/boxlite/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] ||
-            { echo '::error::GitHub did not return a full release commit SHA'; exit 1; }
-          if [[ -n "$DEPLOYMENT_ATTEMPT" ]]; then
-            [[ "$DEPLOYMENT_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] ||
-              { echo '::error::Repeat dev deployment before rerunning release E2E'; exit 1; }
-            [[ "$sha" == "$RELEASE_SHA" ]] ||
-              { echo '::error::Release tag differs from the dev deployment'; exit 1; }
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout release SDK sources for subdomain clients
-        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
-        env:
-          RELEASE_SDK_SHA: ${{ steps.release_commit.outputs.sha }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 https://github.com/boxlite-ai/boxlite.git "$RELEASE_SDK_SHA"
-          git worktree add --detach target/e2e-release "$RELEASE_SDK_SHA"
-
-      - name: Require the shared subdomain (dev)
-        if: ${{ (inputs.stage || 'dev') == 'dev' }}
-        env:
-          BOXLITE_E2E_DOMAIN: ${{ vars.BOXLITE_E2E_DOMAIN }}
-        run: test -n "$BOXLITE_E2E_DOMAIN" || { echo 'Set BOXLITE_E2E_DOMAIN in repository Actions Variables'; exit 1; }
-
-      # ── Health check ──────────────────────────────────────────────
-      - name: Probe API health
-        run: |
-          curl -fsS --retry 6 --retry-delay 5 --retry-all-errors --max-time 10 \
-               -o /dev/null "${API_URL}/health"
-          echo "::notice::${API_URL}/health returned 2xx"
-
-      # ── Configure pytest credentials ─────────────────────────────
-      # Written here rather than by apps/e2e/fixture_setup.py,
-      # which the local entry points (make test:e2e:setup, run.sh) use.
-      # That script talks to the stack's Postgres directly — `psql -h
-      # localhost -d boxlite_dev` for snapshot state, and an
-      # `UPDATE organization SET max_*_per_box` for quotas — because, as
-      # its own comment puts it, the fixture lives next to the DB.
-      # Local stack tests run on a host that bootstrapped that DB;
-      # this runs on a GitHub runner against a remote API, so there is no
-      # localhost Postgres and fixture_setup would exit on the quota patch.
-      #
-      # The consequence is deliberate: this workflow never touches the
-      # control plane's rows. It registers no snapshots and rewrites no
-      # quotas — a deployed stage is expected to already have both, and
-      # silently UPDATE-ing a shared environment's rows from CI would be
-      # worse than failing. Its only writes go through the public API: the
-      # boxes the suite creates and deletes, the stale ones the sweep
-      # step reclaims, and bindings on its configured test domain.
-      - name: Configure pytest profiles
-        env:
-          BOXLITE_DEV_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_API_KEY || '' }}
-          BOXLITE_DEV_P2_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_P2_API_KEY || '' }}
-          BOXLITE_DEV_P2_READONLY_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_P2_READONLY_API_KEY || '' }}
-          BOXLITE_STAGE_API_KEY: ${{ inputs.stage == 'stage' && secrets.BOXLITE_STAGE_API_KEY || '' }}
-          BOXLITE_STAGE_P2_API_KEY: ${{ inputs.stage == 'stage' && secrets.BOXLITE_STAGE_P2_API_KEY || '' }}
-          BOXLITE_STAGE_P2_READONLY_API_KEY: ${{ inputs.stage == 'stage' && secrets.BOXLITE_STAGE_P2_READONLY_API_KEY || '' }}
-          BOXLITE_PROD_API_KEY: ${{ inputs.stage == 'prod' && secrets.BOXLITE_PROD_API_KEY || '' }}
-        run: python3 apps/e2e/configure_cloud_profiles.py
-
-      # ── Reclaim what earlier runs stranded (dev only) ─────────────
-      # The org's disk quota is a shared, finite resource, and a box whose
-      # run died before teardown used to sit in it for good: that is what
-      # made run 30787280531 fail 53 tests with "disk limit exceeded".
-      # Candidates are boxes idle for a day AND named with this suite's
-      # `e2e-` prefix. The day is far longer than this job's own 45-minute
-      # ceiling, so a run in flight can never be its own victim; the prefix
-      # is what keeps it off everything else in a shared org — a report
-      # against dev listed five of a colleague's debugging boxes, idle for a
-      # day and identical to a stranded one by age alone. Never on prod
-      # either way, where the boxes belong to customers.
-      #
-      # continue-on-error: housekeeping must not decide the job's result. A
-      # sweep that cannot delete leaves the suite to fail on the quota it was
-      # meant to free, and that failure is the more informative one.
-      - name: Sweep stranded boxes
-        if: ${{ (inputs.stage || 'dev') == 'dev' && inputs.sweep }}
-        continue-on-error: true
-        env:
-          BOXLITE_E2E_PROFILE: p1
-        run: python3 apps/e2e/sweep.py --apply
-
-      # ── System deps ──────────────────────────────────────────────
-      - name: Install system dependencies
-        if: ${{ inputs.tag == '' || (inputs.stage || 'dev') == 'dev' }}
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends protobuf-compiler
-
-      # ── Rust toolchain ───────────────────────────────────────────
-      - name: Setup Rust toolchain
-        if: ${{ inputs.tag == '' || (inputs.stage || 'dev') == 'dev' }}
-        uses: dtolnay/rust-toolchain@stable
-
-      # ── CLI (cargo build, warms the shared boxlite core) ─────────
-      # Only the CLI cases need the binary, and `-m smoke` selects none of
-      # them, so the prod leg skips the build rather than paying for it.
-      - name: Build CLI
-        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') != 'prod' }}
-        run: |
-          cargo build --release -p boxlite-cli
-          sudo install -m 0755 target/release/boxlite /usr/local/bin/boxlite
-          boxlite --version
-
-      - name: Install release CLI
-        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') != 'prod' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/install-e2e-release.sh cli
-
-      # ── Node SDK (napi-rs) ───────────────────────────────────────
-      - name: Setup Node.js
-        if: ${{ (inputs.stage || 'dev') != 'prod' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Build Node SDK (napi + tsc)
-        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') != 'prod' }}
-        run: |
-          cd sdks/node
-          npm install --ignore-scripts
-          npm run build:native
-          npm run build
-          ls -lh native/ dist/
-
-      - name: Install release Node SDK
-        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') != 'prod' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/install-e2e-release.sh node
-
-      - name: Setup Go for subdomain clients
-        if: ${{ (inputs.stage || 'dev') == 'dev' }}
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: ${{ inputs.tag != '' && 'target/e2e-release/sdks/go/go.mod' || 'sdks/go/go.mod' }}
-          cache: false
-
-      - name: Build C, Go and Rust subdomain clients
-        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') == 'dev' }}
-        run: |
-          sudo apt-get install -y --no-install-recommends llvm
-          make build:e2e:drivers SETUP_DONE=1
-
-      - name: Build release C, Go and Rust subdomain clients
-        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          bash scripts/ci/install-e2e-release.sh c
-          make build:e2e:release-drivers
-
-      # ── Python SDK (maturin + PyO3) ──────────────────────────────
-      - name: Build & install Python SDK
-        if: ${{ inputs.tag == '' }}
-        run: |
-          cd sdks/python
-          pip install --break-system-packages --quiet maturin
-          maturin build --release
-          pip install --break-system-packages --force-reinstall ../../target/wheels/boxlite-*.whl
-
-      - name: Setup Python for release wheel
-        if: ${{ inputs.tag != '' }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install release Python SDK
-        if: ${{ inputs.tag != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/install-e2e-release.sh python
-
-      - name: Install pytest dependencies
-        run: pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout greenlet
-
-      # ── Run pytest ───────────────────────────────────────────────
-      # --ignore rationale:
-      #  - Legacy C/Go entry+coverage: separate drivers not built here;
-      #    test_subdomain uses the current-checkout clients built above.
-      #  - node-entry: needs runner journal access (unreachable from GHA
-      #    against a remote stage); node-coverage already covers the Node REST
-      #    surface without journal checks.
-      #  - exec-timeout: the timeout fires and kills the process on time, but
-      #    the guest kills only the direct child — an orphaned grandchild
-      #    (e.g. `sh`'s `sleep`) keeps the stdout pipe open, so the attach
-      #    stream never EOFs and ex.wait() hangs to the 45s bound. Guest-side
-      #    root cause + fix tracked in #910. Un-ignore once that lands. The
-      #    kill itself is covered by sdks/python/tests/test_exec_timeout_sigalrm.py.
-      #  - image catalog: runs separately with p2's independent image quota.
-      # test_path_verification is NOT ignored — despite the name it never
-      # touches the journal; it proves the API→Runner chain via the
-      # X-BoxLite-Api-Version response header + an exec marker.
-      #
-      # The identity lane reuses these builds but owns its boxes in p2's org.
-      # A separate pytest process keeps the session runtime and auth cache scoped.
-      - name: Run identity E2E (dev and stage)
-        if: ${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}
-        timeout-minutes: 5
-        env:
-          BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
-          BOXLITE_E2E_PROFILE: p2
-          BOXLITE_E2E_READONLY_PROFILE: p2_readonly
-          BOXLITE_E2E_FOREIGN_PROFILE: p1
-          BOXLITE_E2E_REQUIRE_IDENTITIES: '1'
-          PYTEST_ADDOPTS: >-
-            --tb=short --no-header -p no:cacheprovider
-            --timeout=180 --timeout-method=thread
-            --junit-xml=${{ github.workspace }}/pytest-identities.xml
-        run: |
-          unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX
-          make test:rest:e2e AUTH=api-key FILTER=preview_private_identity_permissions
-
-      # Catalog lifecycle tests must reach the registry even if the main
-      # suite's organization has exhausted its image slots. Reuse the SDK
-      # builds and p2 profile in a separate process before the p1 suite.
-      - name: Run image catalog E2E (dev and stage)
-        if: ${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}
-        timeout-minutes: 10
-        env:
-          BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
-          BOXLITE_E2E_PROFILE: p2
-          PYTEST_ADDOPTS: >-
-            -s --tb=short --no-header -p no:cacheprovider
-            --timeout=180 --timeout-method=thread
-            --junit-xml=${{ github.workspace }}/pytest-catalog.xml
-        run: |
-          unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX
-          make test:rest:e2e AUTH=api-key FILTER=images_catalog
-
-      - name: Run E2E suite
-        timeout-minutes: 35
-        env:
-          BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
-          BOXLITE_E2E_PROFILE: p1
-          BOXLITE_E2E_DOMAIN: ${{ (inputs.stage || 'dev') == 'dev' && vars.BOXLITE_E2E_DOMAIN || '' }}
-          PYTEST_ADDOPTS: >-
-            --ignore=cases/test_c_entry.py --ignore=cases/test_c_coverage.py
-            --ignore=cases/test_go_entry.py --ignore=cases/test_go_coverage.py
-            --ignore=cases/test_node_entry.py --ignore=cases/test_exec_timeout.py
-            --ignore=cases/test_images_catalog.py
-            -s --tb=short --no-header -p no:cacheprovider
-            --timeout=180 --timeout-method=thread
-            --junit-xml=${{ github.workspace }}/pytest-junit.xml
-        run: |
-          set -euo pipefail
-          selection='not preview_private_identity_permissions'
-          if [ "$STAGE" = prod ]; then
-            export PYTEST_ADDOPTS="$PYTEST_ADDOPTS -m smoke"
-            selection=''
-          fi
-          make test:rest:e2e AUTH=api-key FILTER="$selection"
-
-      - name: Upload pytest junit XML
+          FAIL: ${{ inputs.shadow_failure }}
+        run: test "$FAIL" != e2e
+      - id: acceptance
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-junit-${{ inputs.stage || 'dev' }}
-          path: |
-            pytest-junit.xml
-            pytest-identities.xml
-            pytest-catalog.xml
-          if-no-files-found: ignore
-
-      - name: Record the deployed pins and tested client hashes
-        if: success() && inputs.candidate_id && inputs.deployment_attempt
+        name: Record simulated E2E outcome
+        shell: bash
         env:
-          CANDIDATE: ${{ inputs.candidate_id }}
-          DIGEST: ${{ inputs.candidate_digest }}
-          SHA: ${{ inputs.release_sha }}
-        run: |
-          jq -n --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" --argjson id "$CANDIDATE" \
-            --arg digest "$DIGEST" --arg tag "$RELEASE_TAG" --arg sha "$SHA" --slurpfile clients "$RELEASE_ASSET_DIR/tested-clients.json" \
-            '{run:$run,attempt:$attempt,candidate:$id,digest:$digest,tag:$tag,sha:$sha,clients:$clients[0]}' > acceptance.json
-
-      - name: Save dev acceptance for production retries
-        if: success() && inputs.candidate_id && inputs.deployment_attempt
-        uses: actions/upload-artifact@v4
-        with:
-          name: dev-accepted-${{ inputs.candidate_id }}
-          path: acceptance.json
-          if-no-files-found: error
-          overwrite: true
-
-      - name: Summarize release acceptance
-        id: acceptance
-        if: always() && inputs.deployment_attempt
-        env:
-          E2E_RESULT: ${{ job.status }}
-        run: |
-          echo "result=$E2E_RESULT" >> "$GITHUB_OUTPUT"
-          echo "Dev cloud E2E for $RELEASE_TAG — $E2E_RESULT" >> "$GITHUB_STEP_SUMMARY"
+          RESULT: ${{ job.status }}
+        run: echo "result=$RESULT" >> "$GITHUB_OUTPUT"

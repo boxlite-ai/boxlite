@@ -1,8 +1,7 @@
-# The rollout workflow owns the cloud Environment and stage concurrency.
+# Shadow rehearsal: fixtures only, with real GitHub Environment approvals and Slack.
 name: mbuild-release
-run-name: release ${{ inputs.tag }} to GHCR${{ !inputs['build-only'] && ' · dev acceptance · prod review' || '' }}
-
-on:
+run-name: '[SHADOW] release ${{ inputs.tag }} to GHCR${{ !inputs[''build-only''] && '' · dev acceptance · prod review'' || '''' }}'
+'on':
   workflow_dispatch:
     inputs:
       command:
@@ -10,12 +9,10 @@ on:
         required: true
         default: publish
         type: choice
-        options: [publish, repair-runtime, repair-wheels, repair-node, repair-c]
-      candidate-id:
-        description: 'For repair, the Actions artifact ID of the dev-accepted release candidate'
-        type: string
+        options:
+          - publish
       tag:
-        description: 'Release tag v<X.Y.Z>, naming a commit on main'
+        description: Release tag v<X.Y.Z>, naming a commit on main
         required: true
         type: string
       build-only:
@@ -23,315 +20,160 @@ on:
         required: true
         default: false
         type: boolean
-
+      simulate-failure:
+        description: Fixture outcome to inspect
+        type: choice
+        default: none
+        options:
+          - none
+          - check
+          - dev-deploy
+          - e2e
+          - publish
+          - prod-deploy
 concurrency:
-  group: mbuild-release-${{ inputs.tag }}
+  group: shadow-v2-mbuild-release-${{ inputs.tag }}
   cancel-in-progress: false
-
 permissions:
   contents: read
-
+  actions: read
 env:
   GH_TOKEN: ${{ github.token }}
-
 jobs:
   resolve:
     name: resolve ${{ inputs.tag }}
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      sha: ${{ steps.ref.outputs.sha }}
-      artifacts: ${{ steps.artifacts.outputs.names }}
-      release_id: ${{ steps.draft.outputs.id }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          # Tags and the commits they name, and main, which the containment
-          # check below compares against. A shallow checkout carries neither.
-          fetch-depth: 0
-
-      - name: Validate repair inputs
-        if: inputs.command != 'publish'
-        env:
-          CANDIDATE: ${{ inputs['candidate-id'] }}
-          BUILD_ONLY: ${{ inputs['build-only'] }}
-        run: |
-          [[ "$BUILD_ONLY" == false && "$CANDIDATE" =~ ^[1-9][0-9]*$ ]] || { echo "A component repair requires candidate-id and build-only=false" >&2; exit 1; }
-
-      - name: Require a released version
-        id: version
-        shell: bash
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -Eeuo pipefail
-          # A commit refused by name rather than by shape. It would fail the
-          # version check below anyway, but "must be v<X.Y.Z>" tells an operator
-          # who pasted a SHA nothing about what they actually did wrong: this
-          # workflow releases a tagged version, and resolves the commit itself.
-          if [[ "$TAG" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
-            echo "::error title=tag::'$TAG' looks like a commit. This workflow releases a tagged version — give the v<X.Y.Z> tag, and use mdeploy-all's commit path to deploy bare bytes."
-            exit 1
-          fi
-          # `v` and a stable X.Y.Z, which is how this repository spells a release
-          # tag. The same shape mbuild's RELEASE_VERSION accepts, so what passes
-          # here is what `--version` will take below.
-          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error title=tag::tag must be a release tag of the form v<X.Y.Z>, with no pre-release suffix (got '$TAG')"
-            exit 1
-          fi
-          # Fully qualified, and asserted here rather than left to the resolve
-          # below. `refs/tags/` is what refuses a branch of the same name —
-          # `git rev-parse v1.2.3` answers for either — and a version nobody
-          # tagged has to be refused before a registry is asked about bytes that
-          # were never built.
-          ref="refs/tags/${TAG}"
-          if ! git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
-            near="$(git tag --list "${TAG%%.*}.*" | sort -V | tail -n 3 | tr '\n' ' ')"
-            echo "::error title=tag::no tag ${ref} in this repository; cut the release first${near:+ (this repository has: ${near})}"
-            exit 1
-          fi
-          printf 'ref=%s\n' "$ref" >> "$GITHUB_OUTPUT"
-
-      # `branch` is what refuses a tag whose commit main does not contain — the
-      # release's bytes and the branch that produces them, checked together.
-      - id: ref
-        uses: ./.github/actions/resolve-ref
-        with:
-          ref: ${{ steps.version.outputs.ref }}
-          branch: ${{ github.ref_name }}
-
-      - name: Create or select the release draft
-        id: draft
-        if: ${{ !inputs['build-only'] }}
-        env:
-          TAG: ${{ inputs.tag }}
-          COMMAND: ${{ inputs.command }}
-          SHA: ${{ steps.ref.outputs.sha }}
-        run: |
-          set -euo pipefail
-          version=$(git show "$SHA:Cargo.toml" | awk -F '"' '/^\[workspace\.package\]$/ {workspace=1; next} /^\[/ {workspace=0} workspace && /^version = "/ {print $2}')
-          [[ "$TAG" == "v$version" ]] || { echo 'Tag differs from workspace version' >&2; exit 1; }
-          if [[ "$COMMAND" != publish ]]; then
-            id=$(gh release view "$TAG" --json databaseId --jq '.databaseId')
-            echo "id=$id" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! gh release view "$TAG" --json databaseId >/dev/null; then
-            gh release create "$TAG" --draft --verify-tag --target "$SHA" --generate-notes
-          fi
-          release=$(gh release view "$TAG" --json databaseId,isDraft,tagName)
-          id=$(jq -er --arg tag "$TAG" 'select(.isDraft and .tagName == $tag) | .databaseId' <<< "$release")
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-
-      # Read out of the released commit with `git show` rather than a second
-      # checkout: one file is wanted, and the working tree is still main's.
-      - name: Read the artifacts this release declares
-        id: artifacts
-        shell: bash
-        env:
-          SHA: ${{ steps.ref.outputs.sha }}
-        run: |
-          set -Eeuo pipefail
-          declaration="$(git show "${SHA}:apps/infra/mstage.env.json")"
-          names="$(printf '%s' "$declaration" | jq -c '.artifacts | keys')"
-          if [ "$names" = '[]' ]; then
-            echo "::error title=artifacts::${SHA} declares no artifacts in apps/infra/mstage.env.json"
-            exit 1
-          fi
-          echo "names=$names" >> "$GITHUB_OUTPUT"
-          echo "$SHA declares $names"
-
-  build-runtime:
-    needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' && !inputs['build-only'] }}
-    uses: ./.github/workflows/build-runtime.yml
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    with:
-      ref: ${{ needs.resolve.outputs.sha }}
-      tag: ${{ inputs.tag }}
-
-  build-wheels:
-    needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' && !inputs['build-only'] }}
-    uses: ./.github/workflows/build-wheels.yml
-    with:
-      ref: ${{ needs.resolve.outputs.sha }}
-
-  build-node:
-    needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' && !inputs['build-only'] }}
-    uses: ./.github/workflows/build-node.yml
-    with:
-      ref: ${{ needs.resolve.outputs.sha }}
-
-  build-c:
-    needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
-    uses: ./.github/workflows/build-c.yml
-    with:
-      ref: ${{ needs.resolve.outputs.sha }}
-
-  build-go:
-    needs: [resolve, build-c]
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' && !inputs['build-only'] }}
     permissions:
       contents: read
       actions: read
-    uses: ./.github/workflows/build-go.yml
-    with:
-      ref: ${{ needs.resolve.outputs.sha }}
-
-  build-runner-binary:
-    needs: [resolve, build-c]
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
-    uses: ./.github/workflows/build-runner-binary.yml
-    with:
-      ref: ${{ needs.resolve.outputs.sha }}
-      libboxlite_source: artifact
-      release_tag: ${{ inputs.tag }}
-
-  publish:
-    name: publish ${{ inputs.tag }} · ${{ matrix.artifact }}
-    needs: [resolve]
-    if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/main' }}
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+      release_id: ${{ steps.ref.outputs.release_id }}
+      artifacts: ${{ steps.ref.outputs.artifacts }}
+    steps:
+      - id: ref
+        name: Select synthetic release
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |-
+          set -eu
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'sha=%s\nrelease_id=1\nartifacts=%s\n' "$GITHUB_SHA" '["api","proxy","otel-collector","registry-proxy"]' >> "$GITHUB_OUTPUT"
+  build-runtime:
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      actions: read
+    steps:
+      - name: Simulate build-runtime
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+  build-wheels:
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Simulate build-wheels
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+  build-node:
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Simulate build-node
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+  build-c:
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Simulate build-c
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+  build-go:
+    needs:
+      - resolve
+      - build-c
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Simulate build-go
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+  build-runner-binary:
+    needs:
+      - resolve
+      - build-c
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Simulate build-runner-binary
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+  publish:
+    name: publish ${{ inputs.tag }} · ${{ matrix.artifact }}
+    needs:
+      - resolve
+    if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
     strategy:
       fail-fast: false
       matrix:
         artifact: ${{ fromJSON(needs.resolve.outputs.artifacts) }}
-    env:
-      GHCR_USERNAME: ${{ github.actor }}
-      GHCR_TOKEN: ${{ github.token }}
-    steps:
-      # Keep current publication tooling; old releases need only their build context.
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-          ref: ${{ needs.resolve.outputs.sha }}
-          path: release-source
-      - uses: ./.github/actions/setup-infra
-
-      - name: Keep registry credentials out of HOME
-        run: |
-          set -Eeuo pipefail
-          install -d -m 700 "$RUNNER_TEMP/docker"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >> "$GITHUB_ENV"
-
-      - name: Build and upload
-        working-directory: apps/infra
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          TAG: ${{ inputs.tag }}
-          ARTIFACT: ${{ matrix.artifact }}
-          GHCR_REPOSITORY: ${{ github.repository }}
-          MSTAGE_ENV_CONFIG: ${{ github.workspace }}/release-source/apps/infra/mstage.env.json
-        run: |
-          set -Eeuo pipefail
-          npm run --silent mbuild publish -- --tag "$SHA" --ghcr "$GHCR_REPOSITORY" --artifact "$ARTIFACT" --version "$TAG" \
-            --replace --output "$GITHUB_WORKSPACE/image.json"
-          jq -n --arg sha "$SHA" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{sha: $sha, run: $run, attempt: $attempt}' > "$GITHUB_WORKSPACE/producer.json"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ghcr-${{ matrix.artifact }}
-          overwrite: true
-          if-no-files-found: error
-          path: |
-            image.json
-            producer.json
-
-      - name: Report
-        if: always()
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          TAG: ${{ inputs.tag }}
-          ARTIFACT: ${{ matrix.artifact }}
-          REPOSITORY: ${{ github.repository }}
-          RESULT: ${{ job.status }}
-        run: |
-          set -Eeuo pipefail
-          {
-            echo "### mbuild-release $TAG · $ARTIFACT"
-            echo
-            echo "| field | value |"
-            echo "|---|---|"
-            echo "| image | ghcr.io/${REPOSITORY,,}/$ARTIFACT:$TAG-$SHA |"
-            echo "| result | $RESULT |"
-            echo
-            echo 'Manifest digests are printed by the publication step.'
-            echo 'Image scanning runs after import into the deployment stage.'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  publish-runner:
-    if: ${{ github.ref == 'refs/heads/main' }}
-    name: Publish Runner archive to GHCR
-    needs: [resolve, build-runner-binary]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      actions: read
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: runner-linux-amd64
-      - uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
-        with:
-          version: 1.3.6
-      - name: Push the exact Runner archive
-        env:
-          TAG: ${{ inputs.tag }}
-          SHA: ${{ needs.resolve.outputs.sha }}
-        run: |
-          set -euo pipefail
-          tarball="boxlite-runner-$TAG-linux-amd64.tar.gz"
-          sha256sum --check --strict "$tarball.sha256"
-          repo="ghcr.io/$GITHUB_REPOSITORY/runner"
-          layout="$RUNNER_TEMP/runner-layout:release"
-          oras push --oci-layout "$layout" --artifact-type application/vnd.boxlite.runner.v1 \
-            --annotation "org.opencontainers.image.revision=$SHA" --annotation "org.opencontainers.image.version=$TAG" \
-            --annotation "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$tarball:application/gzip"
-          manifest=$(oras resolve --oci-layout "$layout")
-          archive="sha256:$(sha256sum "$tarball" | cut -d' ' -f1)"
-          registry_config="$RUNNER_TEMP/oras-registry.json"
-          printf '%s' "$GH_TOKEN" | oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin --registry-config "$registry_config"
-          oras cp --from-oci-layout --to-registry-config "$registry_config" "$layout" "$repo:$TAG-$SHA"
-          [[ "$(oras resolve --registry-config "$registry_config" "$repo:$TAG-$SHA")" == "$manifest" ]]
-          oras manifest fetch --registry-config "$registry_config" "$repo@$manifest" | jq -e --arg archive "$archive" \
-            '.layers | length == 1 and .[0].digest == $archive' >/dev/null
-          # A fresh host has no Actions token. Exercise its read boundary before dev approval.
-          printf '{"auths":{}}\n' > "$RUNNER_TEMP/anonymous-registry.json"
-          oras manifest fetch --registry-config "$RUNNER_TEMP/anonymous-registry.json" "$repo@$manifest" >/dev/null
-          oras blob fetch --descriptor --registry-config "$RUNNER_TEMP/anonymous-registry.json" "$repo@$archive" >/dev/null
-          jq -n --arg manifest "$manifest" --arg archive "$archive" '{manifest: $manifest, archive: $archive}' > runner.json
-          jq -n --arg sha "$SHA" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ghcr-runner
-          overwrite: true
-          if-no-files-found: error
-          path: |
-            runner.json
-            producer.json
-
+      - name: Simulate publish
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+  publish-runner:
+    name: Publish Runner archive to GHCR
+    needs:
+      - resolve
+      - build-runner-binary
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Simulate publish-runner
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
   check:
-    if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] }}
-    name: Verify deployment image and Runner digests
-    needs: [resolve, publish, publish-runner]
+    name: Verify release candidate
+    needs:
+      - resolve
+      - publish
+      - publish-runner
+      - build-runtime
+      - build-wheels
+      - build-node
+      - build-c
+      - build-go
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -341,61 +183,31 @@ jobs:
       digest: ${{ steps.stage.outputs.digest }}
       registry_digests: ${{ steps.stage.outputs.pins }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: 'ghcr-*'
-          path: staged
-      - name: Validate the candidate
-        id: stage
+      - id: stage
+        name: Write a local candidate fixture
+        shell: bash
         env:
-          SHA: ${{ needs.resolve.outputs.sha }}
           TAG: ${{ inputs.tag }}
-          IMAGES: ${{ needs.resolve.outputs.artifacts }}
-        run: |
+          PIN: sha256:1111111111111111111111111111111111111111111111111111111111111111
+          FAIL: ${{ inputs['simulate-failure'] }}
+        run: >-
           set -euo pipefail
-          digest=$(node apps/infra/scripts/release-candidate.mjs deployment)
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "pins=$(jq -c '{tag,sha,images,runner}' candidate/release-candidate.json)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
-        id: upload
-        with:
-          name: deployment-candidate-${{ github.run_attempt }}
-          compression-level: 0
-          if-no-files-found: error
-          path: candidate/
 
-  distribution:
-    if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] }}
-    name: Verify complete release distribution
-    needs: [resolve, publish, publish-runner, build-runtime, build-wheels, build-node, build-c]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      candidate_id: ${{ steps.upload.outputs.artifact-id }}
-      digest: ${{ steps.stage.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: '@(runtime-distribution|wheels-*|node-packages|c-sdk-*|runner-linux-amd64|ghcr-*)'
-          path: staged
-      - name: Validate the candidate
-        id: stage
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          TAG: ${{ inputs.tag }}
-          IMAGES: ${{ needs.resolve.outputs.artifacts }}
-        run: |
-          set -euo pipefail
-          digest=$(node apps/infra/scripts/release-candidate.mjs stage)
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          [[ "$FAIL" != check ]]
+
+          mkdir candidate
+
+          printf 'shadow fixture\n' > candidate/sample.txt
+
+          file="sha256:$(sha256sum candidate/sample.txt | cut -d' ' -f1)"
+
+          jq -n --arg tag "$TAG" --arg sha "$GITHUB_SHA" --arg pin "$PIN" --arg file "$file"
+          '{tag:$tag,sha:$sha,images:{api:$pin},runner:{manifest:$pin,archive:$file},assets:{"sample.txt":{digest:$file,group:"shadow"}}}' >
+          candidate/release-candidate.json
+
+          printf 'digest=sha256:%s\n' "$(sha256sum candidate/release-candidate.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+          echo "pins=$(jq -c '{tag,sha,images,runner}' candidate/release-candidate.json)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         id: upload
         with:
@@ -403,17 +215,15 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           path: candidate/
-
   dev:
     name: Dev deployment and acceptance
-    needs: [resolve, check]
-    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
-    permissions: &rollout-permissions
+    needs:
+      - resolve
+      - check
+    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
+    permissions:
       contents: read
       actions: read
-      pull-requests: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/mdeploy-all.yml
     with:
       stage: dev
@@ -425,54 +235,42 @@ jobs:
       components: api+runner
       apply: true
       confirm: true
+      shadow_failure: ${{ inputs['simulate-failure'] }}
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-      BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
-      BOXLITE_DEV_P2_API_KEY: ${{ secrets.BOXLITE_DEV_P2_API_KEY }}
-      BOXLITE_DEV_P2_READONLY_API_KEY: ${{ secrets.BOXLITE_DEV_P2_READONLY_API_KEY }}
-
   accepted-candidate:
     name: Locate the previously accepted candidate
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command != 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command != 'publish' && !inputs['build-only'] }}
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
-    outputs:
-      id: ${{ steps.receipt.outputs.id }}
-      run: ${{ steps.receipt.outputs.run }}
-      digest: ${{ steps.receipt.outputs.digest }}
+      actions: read
     steps:
-      - id: receipt
-        env:
-          ID: ${{ inputs['candidate-id'] }}
-          TAG: ${{ inputs.tag }}
-          SHA: ${{ needs.resolve.outputs.sha }}
-        run: |
-          set -euo pipefail
-          [[ "$ID" =~ ^[1-9][0-9]*$ ]]
-          api="repos/$GITHUB_REPOSITORY/actions"
-          run=$(gh api "$api/artifacts/$ID" --jq 'select(.expired == false and (.name | test("^release-candidate-[0-9]+$"))) | .workflow_run.id')
-          [[ "$run" =~ ^[1-9][0-9]*$ ]]
-          gh api "$api/runs/$run" | jq -e '.path == ".github/workflows/mbuild-release.yml" and .head_branch == "main" and .event == "workflow_dispatch"' >/dev/null
-          gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "dev-accepted-$ID" --dir "$RUNNER_TEMP/accepted"
-          digest=$(jq -er --arg tag "$TAG" --arg sha "$SHA" --argjson id "$ID" --argjson run "$run" '
-            select(.tag == $tag and .sha == $sha and .candidate == $id and .run == $run)
-            | .digest | select(test("^sha256:[0-9a-f]{64}$"))' "$RUNNER_TEMP/accepted/acceptance.json")
-          printf 'id=%s\nrun=%s\ndigest=%s\n' "$ID" "$run" "$digest" >> "$GITHUB_OUTPUT"
-
+      - name: Simulate accepted-candidate
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+    outputs:
+      id: unused
+      run: unused
+      digest: unused
   attach:
     name: Record dev acceptance and attach verified files
-    needs: [resolve, check, distribution, build-go, dev, accepted-candidate]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && ((needs.dev.outputs.accepted_attempt != '' && needs.distribution.result == 'success' && needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success') }}
+    needs:
+      - resolve
+      - check
+      - dev
+      - accepted-candidate
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (needs.dev.outputs.accepted_attempt != '' ||
+      needs.accepted-candidate.result == 'success') }}
     outputs:
       candidate: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
       digest: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
       run: ${{ needs.accepted-candidate.outputs.run || github.run_id }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       actions: read
     steps:
       - uses: actions/checkout@v5
@@ -518,24 +316,19 @@ jobs:
           path: acceptance.json
           overwrite: true
           if-no-files-found: error
-      - name: Verify every draft attachment
-        env:
-          TAG: ${{ inputs.tag }}
-          SHA: ${{ needs.resolve.outputs.sha }}
-          REPAIR_GROUP: ${{ fromJSON('{"repair-runtime":"runtime-distribution","repair-wheels":"wheels-","repair-node":"node-packages","repair-c":"c-sdk-","publish":""}')[inputs.command] }}
-          CANDIDATE_DIGEST: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
-          RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
-        run: node apps/infra/scripts/release-candidate.mjs attach
-
+      - name: Simulate attaching the accepted files
+        shell: bash
+        run: test -s "$RELEASE_ASSET_DIR/sample.txt"
   npm:
-    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","repair-node"]'), inputs.command) }}
     name: Publish accepted npm packages
-    needs: [resolve, attach]
+    needs:
+      - resolve
+      - attach
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-node"]'), inputs.command) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
-      id-token: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -547,229 +340,20 @@ jobs:
           digest: ${{ needs.attach.outputs.digest }}
           tag: ${{ inputs.tag }}
           sha: ${{ needs.resolve.outputs.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          registry-url: https://registry.npmjs.org
-      - name: Publish platform packages before the main package
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          cd "$RELEASE_ASSET_DIR"
-          for file in boxlite-ai-boxlite-*-"${TAG#v}.tgz" "boxlite-ai-boxlite-${TAG#v}.tgz"; do
-            name=$(tar -xOzf "$file" package/package.json | jq -er .name)
-            version=$(tar -xOzf "$file" package/package.json | jq -er .version)
-            [[ "$name" == @boxlite-ai/boxlite* && "$version" == "${TAG#v}" ]]
-            integrity="sha512-$(openssl dgst -sha512 -binary "$file" | openssl base64 -A)"
-            if existing=$(npm view "$name@$version" dist.integrity --json 2> "$RUNNER_TEMP/npm-view.log"); then
-              [[ "$(jq -r . <<< "$existing")" == "$integrity" ]] || exit 1
-            else
-              grep -q E404 "$RUNNER_TEMP/npm-view.log" || { cat "$RUNNER_TEMP/npm-view.log" >&2; exit 1; }
-              npm publish "./$file" --access public --provenance
-              [[ "$(npm view "$name@$version" dist.integrity)" == "$integrity" ]]
-            fi
-          done
-
-  pypi:
-    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) }}
-    name: Publish to PyPI
-    needs: [resolve, attach]
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      actions: read
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/release-candidate
-        with:
-          run: ${{ needs.attach.outputs.run }}
-          id: ${{ needs.attach.outputs.candidate }}
-          digest: ${{ needs.attach.outputs.digest }}
-          tag: ${{ inputs.tag }}
-          sha: ${{ needs.resolve.outputs.sha }}
-      - name: Select accepted wheels
-        run: mkdir dist && cp "$RELEASE_ASSET_DIR"/*.whl dist/
-
-      - name: Check existing PyPI wheels before uploading
-        env:
-          TAG: ${{ inputs.tag }}
-        run: bash scripts/release/verify-pypi-wheels.sh before
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-          skip-existing: true
-      - name: Verify PyPI recorded the accepted wheel hashes
-        env:
-          TAG: ${{ inputs.tag }}
-        run: bash scripts/release/verify-pypi-wheels.sh after
-
-  tag-go-module:
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
-    name: Tag Go Module
-    needs: [resolve, attach]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
-          fetch-depth: 0
-
-      - name: Create Go module tag
+      - name: Simulate package publication
         shell: bash
         env:
-          C_SHA: ${{ needs.resolve.outputs.sha }}
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          product_ref="refs/tags/$RELEASE_TAG"
-          go_ref="refs/tags/sdks/go/$RELEASE_TAG"
-
-          # Fetch the current remote ref because the tag could have moved during the matrix.
-          git fetch --no-tags origin "$product_ref"
-          if [[ "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" != "$C_SHA" ]]; then
-            echo "Product tag $RELEASE_TAG moved during Go release tests" >&2
-            exit 1
-          fi
-
-          if git ls-remote --exit-code --refs origin "$go_ref" >/dev/null; then
-            git fetch --no-tags origin "$go_ref"
-            if [[ "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" != "$C_SHA" ]]; then
-              echo "Go tag $go_ref points to a different commit" >&2
-              exit 1
-            fi
-            echo "Go tag $go_ref already points to $C_SHA"
-            exit 0
-          else
-            status=$?
-            # ls-remote uses 2 for an absent ref. A transport error is not absence.
-            if [[ "$status" != 2 ]]; then exit "$status"; fi
-          fi
-
-          git push origin "$C_SHA:$go_ref"
-
-  publish_crates:
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
-    name: Publish to crates.io
-    needs: [resolve, finalize]
-    runs-on: ubuntu-latest
-    env:
-      BOXLITE_DEPS_STUB: "1"
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve.outputs.sha }}
-
-      - uses: ./.github/actions/setup-rust
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Publish leaf crates (Tier 1)
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          publish_crate() {
-            local crate="$1"
-            shift
-            local extra_args="$*"
-            echo "::group::Publishing $crate"
-            if cargo publish -p "$crate" $extra_args 2>&1 | tee /tmp/publish-"$crate".log; then
-              echo "$crate published successfully"
-            else
-              if grep -q "already uploaded" /tmp/publish-"$crate".log; then
-                echo "$crate already on crates.io, skipping"
-              else
-                echo "::error::Failed to publish $crate"
-                exit 1
-              fi
-            fi
-            echo "::endgroup::"
-          }
-
-          # Pure-Rust crate verifies normally
-          publish_crate boxlite-shared
-
-          # -sys crates skip verification: vendor sources excluded from package,
-          # real build already succeeded in the build job above
-          publish_crate libkrun-sys --no-verify
-          publish_crate e2fsprogs-sys --no-verify
-          publish_crate libgvproxy-sys --no-verify
-          publish_crate bubblewrap-sys --no-verify
-
-          # boxlite-vmm resolves boxlite-hypervisor from crates.io. Give the
-          # index time before publishing the dependent crate.
-          publish_crate boxlite-hypervisor
-          sleep 60
-          publish_crate boxlite-vmm
-
-      - name: Wait for crates.io indexing
-        run: sleep 60
-
-      # boxlite uses --no-verify because the boxlite-shim binary links libkrun,
-      # which isn't available in stub mode. The real build already succeeded in the
-      # build job, so skipping verification is safe.
-      - name: Publish boxlite (Tier 2)
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-          echo "::group::Publishing boxlite"
-          if cargo publish -p boxlite --no-verify 2>&1 | tee /tmp/publish-boxlite.log; then
-            echo "boxlite published successfully"
-          else
-            if grep -q "already uploaded" /tmp/publish-boxlite.log; then
-              echo "boxlite already on crates.io, skipping"
-            else
-              echo "::error::Failed to publish boxlite"
-              exit 1
-            fi
-          fi
-          echo "::endgroup::"
-
-      - name: Wait for boxlite indexing
-        run: sleep 60
-
-      # boxlite-cli uses --no-verify because verification would download the
-      # prebuilt runtime from GitHub Releases (slow and unnecessary since the
-      # real build already succeeded in the build job above).
-      - name: Publish boxlite-cli (Tier 3)
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-          echo "::group::Publishing boxlite-cli"
-          if cargo publish -p boxlite-cli --no-verify 2>&1 | tee /tmp/publish-boxlite-cli.log; then
-            echo "boxlite-cli published successfully"
-          else
-            if grep -q "already uploaded" /tmp/publish-boxlite-cli.log; then
-              echo "boxlite-cli already on crates.io, skipping"
-            else
-              echo "::error::Failed to publish boxlite-cli"
-              exit 1
-            fi
-          fi
-          echo "::endgroup::"
-
-  finalize:
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
-    name: Publish the verified GitHub Release
-    needs: [resolve, distribution, attach, pypi, npm, tag-go-module]
+          FAIL: ${{ inputs['simulate-failure'] }}
+        run: test "$FAIL" != publish
+  pypi:
+    name: Publish to PyPI
+    needs:
+      - resolve
+      - attach
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       actions: read
     steps:
       - uses: actions/checkout@v5
@@ -777,23 +361,73 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/release-candidate
         with:
-          id: ${{ needs.distribution.outputs.candidate_id }}
-          digest: ${{ needs.distribution.outputs.digest }}
+          run: ${{ needs.attach.outputs.run }}
+          id: ${{ needs.attach.outputs.candidate }}
+          digest: ${{ needs.attach.outputs.digest }}
           tag: ${{ inputs.tag }}
           sha: ${{ needs.resolve.outputs.sha }}
-      - name: Recheck release attachments and publish
+      - name: Simulate package publication
+        shell: bash
         env:
-          TAG: ${{ inputs.tag }}
-          SHA: ${{ needs.resolve.outputs.sha }}
-          CANDIDATE_DIGEST: ${{ needs.distribution.outputs.digest }}
-          RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
-        run: node apps/infra/scripts/release-candidate.mjs finalize
-
+          FAIL: ${{ inputs['simulate-failure'] }}
+        run: test "$FAIL" != publish
+  tag-go-module:
+    name: Tag Go Module
+    needs:
+      - resolve
+      - attach
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Simulate tag-go-module
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+  publish_crates:
+    name: Publish to crates.io
+    needs:
+      - resolve
+      - finalize
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Simulate publish_crates
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
+  finalize:
+    name: Publish the verified GitHub Release
+    needs:
+      - resolve
+      - check
+      - attach
+      - pypi
+      - npm
+      - tag-go-module
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Simulate finalize
+        shell: bash
+        run: echo "Simulated $GITHUB_JOB"
   prod:
     name: Production deployment
-    needs: [resolve, check, dev]
-    if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
-    permissions: *rollout-permissions
+    needs:
+      - resolve
+      - check
+      - dev
+      - finalize
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/mdeploy-all.yml
     with:
       stage: prod
@@ -806,13 +440,33 @@ jobs:
       components: api+runner
       apply: true
       confirm: true
+      shadow_failure: ${{ inputs['simulate-failure'] }}
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
   report:
     name: Report release failure
-    needs: [resolve, build-runtime, build-wheels, build-node, build-c, build-go, build-runner-binary, publish, publish-runner, check, distribution, dev, accepted-candidate, attach, pypi, npm, tag-go-module, finalize, publish_crates]
-    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    needs:
+      - resolve
+      - build-runtime
+      - build-wheels
+      - build-node
+      - build-c
+      - build-go
+      - build-runner-binary
+      - publish
+      - publish-runner
+      - check
+      - dev
+      - accepted-candidate
+      - attach
+      - pypi
+      - npm
+      - tag-go-module
+      - finalize
+      - publish_crates
+    if: >-
+      ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (contains(needs.*.result, 'failure') ||
+      contains(needs.*.result, 'cancelled')) }}
     permissions:
       contents: read
       actions: read

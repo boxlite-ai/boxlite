@@ -194,6 +194,7 @@ export const releaseReport = ({ repo, tag, runId, results }) => {
 }
 
 export const sendSlack = async (webhook, payload, request = fetch) => {
+  payload = { ...payload, text: '[SHADOW] ' + payload.text, blocks: payload.blocks.map(block => block.type === 'header' ? { ...block, text: { ...block.text, text: '[SHADOW] ' + block.text.text } } : block) }
   const url = slackWebhook(webhook)
   let response
   try {
