@@ -7,6 +7,8 @@ import { DropAppBoxPointer1794500001000 } from '../migrations/post-deploy/179450
 import { CloudAppResources } from './cloud-app-resources'
 import { Store, type AppRow, type EnvRow } from './engine/db'
 import { deleteApp, purgeApp } from './engine/lifecycle'
+import { consoleAppRoutes } from './engine/routes/console/apps'
+import type { ConsoleKit } from './engine/routes/console/kit'
 import { envRoutes } from './engine/routes/envs'
 import type { Vars } from './engine/auth'
 import type { Ctx } from './engine/ctx'
@@ -77,7 +79,7 @@ describeDatabase('Cloud App Box ownership in PostgreSQL', () => {
   beforeEach(async () => {
     await source.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE; CREATE SCHEMA ${schema};
       CREATE TABLE organization (id uuid PRIMARY KEY);
-      CREATE TABLE box (id text PRIMARY KEY, name text, "organizationId" uuid,
+      CREATE TABLE box (id text PRIMARY KEY, name text, "organizationId" uuid, state text NOT NULL DEFAULT 'started',
         "desiredState" text NOT NULL DEFAULT 'started', "createdAt" timestamptz NOT NULL DEFAULT now());`)
     await source.query('INSERT INTO organization VALUES ($1),($2)', [organizationId, otherOrganizationId])
     await new AddCloudAppPlatform1793780100000().up({
@@ -182,6 +184,38 @@ describeDatabase('Cloud App Box ownership in PostgreSQL', () => {
       [schema],
     )
     expect(column.n).toBe(0)
+  })
+
+  it('sleeps live workers even when previous Boxes have failed or already stopped', async () => {
+    await migrate(expand)
+    await migrate(contract)
+    await source.query(
+      `INSERT INTO box (id,"organizationId",app_id,environment_id,state,"desiredState") VALUES
+      ('worker',$1,'shop','main','started','started'),('asleep',$1,'shop','main','stopped','stopped'),
+      ('failed',$1,'shop','main','error','started')`,
+      [organizationId],
+    )
+    const sleep = jest.fn().mockResolvedValue(undefined)
+    const server = new Hono()
+    consoleAppRoutes(server, {
+      ctx: { store, boxes: resources.boxesForOrganization(organizationId), resources: { sleep } },
+      appOf: async () => app,
+      envOf: async () => (await store.envById(main.id))!,
+      detail: async () => ({}),
+      viewer: () => ({ user: { id: 'owner' } }),
+    } as unknown as ConsoleKit)
+    const post = () => server.request('/apps/shop/sleep', { method: 'POST' })
+    expect((await post()).status).toBe(200)
+    expect(sleep.mock.calls.flat().sort()).toEqual(['web', 'worker'])
+
+    await source.query(`UPDATE box SET state='stopped', "desiredState"='stopped' WHERE id IN ('web','worker')`)
+    sleep.mockClear()
+    expect((await post()).status).toBe(200)
+    expect(sleep).not.toHaveBeenCalled()
+
+    await source.query("UPDATE box SET state='error' WHERE id='web'")
+    await post()
+    expect(sleep).toHaveBeenCalledWith('web')
   })
 
   it('stops and purges every owned Box, including a non-active worker in the same environment', async () => {

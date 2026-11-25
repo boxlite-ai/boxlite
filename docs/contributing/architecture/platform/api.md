@@ -216,6 +216,8 @@ allocation use the platform services and organization limits. App metadata, depl
 logs and callback status live in the platform PostgreSQL schema `cloud_app`; source content lives
 in the configured GCS/S3 bucket. Neon remains the application database provider, through its official API.
 
+Sleeping an environment stops its running Boxes, including workers. An already sleeping environment
+accepts another sleep request. A failed Box from a previous deployment remains available for cleanup.
 Volume file operations from the CLI and Console start the Box if it is asleep.
 
 ```mermaid

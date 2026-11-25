@@ -101,15 +101,18 @@ export class CloudAppResources {
 
   boxesForOrganization(organizationId: string): AppBoxes {
     return {
-      list: async (app, environment) => {
+      list: async (app, environment, operation = 'cleanup') => {
         if (app.org_id !== organizationId || (environment && environment.app_id !== app.id)) {
           throw new NotFoundException('App environment not found')
         }
         const boxes: { id: string }[] = await this.database.query(
           `SELECT id FROM box WHERE "organizationId" = $1 AND app_id = $2
            AND ($3::text IS NULL OR environment_id = $3) AND "desiredState" <> 'destroyed'
+           AND (NOT $4::boolean OR (
+             (state <> 'stopped' OR "desiredState" <> 'stopped') AND (state <> 'error' OR id = $5)
+           ))
            ORDER BY "createdAt", id`,
-          [organizationId, app.id, environment?.id ?? null],
+          [organizationId, app.id, environment?.id ?? null, operation === 'sleep', environment?.active_box_id ?? null],
         )
         return boxes.map((box) => box.id)
       },
