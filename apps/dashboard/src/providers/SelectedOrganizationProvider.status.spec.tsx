@@ -4,13 +4,16 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SelectedOrganizationProvider } from './SelectedOrganizationProvider'
 import { SelectedOrganizationContext, ISelectedOrganizationContext } from '@/contexts/SelectedOrganizationContext'
+import { OrganizationRolePermissionsEnum as Permission } from '@boxlite-ai/api-client'
 const mocks = vi.hoisted(() => ({
   api: { listOrganizationMembers: vi.fn() },
-  organizations: [{ id: 'one', name: 'One' }],
+  organizations: [{ id: 'one', name: 'One' }] as { id: string; name: string; appHostingPermissions?: string[] }[],
   user: { profile: { sub: 'user' } },
 }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ organizationsApi: mocks.api }) }))
-vi.mock('@/hooks/useOrganizations', () => ({ useOrganizations: () => ({ organizations: mocks.organizations }) }))
+vi.mock('@/hooks/useOrganizations', () => ({
+  useOrganizations: () => ({ organizations: mocks.organizations, refreshOrganizations: async () => {} }),
+}))
 vi.mock('@/hooks/queries/useOrganizationBoxLimitsQuery', () => ({ useOrganizationBoxLimitsQuery: () => {} }))
 vi.mock('react-oidc-context', () => ({ useAuth: () => ({ user: mocks.user }) }))
 vi.mock('posthog-js/react', () => ({ usePostHog: () => null }))
@@ -47,6 +50,18 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 describe('key permission readiness', () => {
+  it.each([false, true])(
+    'intersects a non-owner administrator with the current organization grant (admin=%s)',
+    async (admin) => {
+      mocks.organizations[0].appHostingPermissions = ['read:apps']
+      mocks.api.listOrganizationMembers.mockResolvedValueOnce({
+        data: [{ userId: 'user', role: 'member', assignedRoles: [], isSystemAdmin: admin }],
+      })
+      await render()
+      expect(context.authenticatedUserHasPermission(Permission.READ_APPS)).toBe(admin)
+      expect(context.authenticatedUserHasPermission(Permission.WRITE_APPS)).toBe(false)
+    },
+  )
   it('distinguishes failed membership loading from a ready empty result and retries', async () => {
     mocks.api.listOrganizationMembers.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ data: [] })
     await render()

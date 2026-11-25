@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ApiProperty, ApiSchema } from '@nestjs/swagger'
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
 import { OrganizationRoleDto } from './organization-role.dto'
 import { OrganizationUser } from '../entities/organization-user.entity'
@@ -37,6 +37,12 @@ export class OrganizationUserDto {
     enum: OrganizationMemberRole,
   })
   role: OrganizationMemberRole
+
+  @ApiPropertyOptional({
+    readOnly: true,
+    description: 'Set on the authenticated member when they are a system administrator.',
+  })
+  isSystemAdmin?: boolean
 
   @ApiProperty({
     description: 'Whether this organization membership is the user default organization',

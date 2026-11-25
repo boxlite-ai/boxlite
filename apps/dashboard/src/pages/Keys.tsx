@@ -23,6 +23,7 @@ import { toast } from 'sonner'
 import { useAuth } from 'react-oidc-context'
 import { ApiKeyTable } from '../components/ApiKeyTable'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { organizationAllowsScope } from '@/lib/app-hosting-permissions'
 
 /** Lists the selected organization’s keys and limits creation options to the member’s assigned permissions. */
 const Keys: React.FC = () => {
@@ -36,7 +37,7 @@ const Keys: React.FC = () => {
     selectedOrganization,
     authenticatedUserOrganizationMember,
     organizationMembersStatus,
-    refreshOrganizationMembers,
+    refreshOrganizationPermissions,
   } = useSelectedOrganization()
   const revokeApiKeyMutation = useRevokeApiKeyMutation()
   const apiKeysQuery = useApiKeysQuery(selectedOrganization?.id)
@@ -47,16 +48,21 @@ const Keys: React.FC = () => {
     if (!authenticatedUserOrganizationMember) {
       return []
     }
+    const supported = SUPPORTED_API_KEY_PERMISSIONS.filter((scope) =>
+      organizationAllowsScope(scope, selectedOrganization?.appHostingPermissions),
+    )
     if (authenticatedUserOrganizationMember.role === OrganizationUserRoleEnum.OWNER) {
-      return SUPPORTED_API_KEY_PERMISSIONS
+      return supported
     }
     const assignedPermissions = new Set(
       authenticatedUserOrganizationMember.assignedRoles.flatMap((role) => role.permissions),
     )
-    return SUPPORTED_API_KEY_PERMISSIONS.filter(
-      (permission) => permission !== CreateApiKeyPermissionsEnum.WRITE_MEMBERS && assignedPermissions.has(permission),
+    return supported.filter(
+      (permission) =>
+        (permission.endsWith(':apps') && authenticatedUserOrganizationMember.isSystemAdmin) ||
+        (permission !== CreateApiKeyPermissionsEnum.WRITE_MEMBERS && assignedPermissions.has(permission)),
     )
-  }, [authenticatedUserOrganizationMember])
+  }, [authenticatedUserOrganizationMember, selectedOrganization])
 
   const handleRevoke = async (key: ApiKeyList) => {
     if (!selectedOrganization) {
@@ -115,7 +121,7 @@ const Keys: React.FC = () => {
           organizationName={selectedOrganization?.name}
           permissionsStatus={organizationMembersStatus ?? (authenticatedUserOrganizationMember ? 'ready' : 'loading')}
           onRetryPermissions={async () => {
-            await refreshOrganizationMembers()
+            if (selectedOrganization) await refreshOrganizationPermissions(selectedOrganization.id)
           }}
           availablePermissions={availablePermissions}
           apiUrl={apiUrl}
@@ -144,6 +150,7 @@ const Keys: React.FC = () => {
               />
             )}
             <ApiKeyTable
+              appHostingPermissions={selectedOrganization?.appHostingPermissions ?? []}
               data={filteredKeys}
               onClearFilter={needle ? () => setFilter('') : undefined}
               loading={false}

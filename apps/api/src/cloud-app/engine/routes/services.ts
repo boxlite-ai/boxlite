@@ -1,4 +1,6 @@
 import { Hono } from 'hono'
+import { requireAppScope } from '../platform-principal'
+import { assignedAppUrl } from '../origins'
 import { dbCoordinates } from '../services/db'
 import type { Vars } from '../auth'
 import type { Ctx } from '../ctx'
@@ -74,8 +76,10 @@ export function serviceRoutes(ctx: Ctx) {
   })
 
   r.get('/envs/:env/dev-env', async (c) => {
+    requireAppScope('write:apps')
     const app = c.get('app')
     let env = await envOf(ctx, c)
+    assignedAppUrl(env)
     const spec = await ctx.store.spec(env.id)
     if (spec?.database && !env.db_url) {
       await ctx.resources.ensureDatabase(app.id, env.id)

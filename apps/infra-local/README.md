@@ -93,11 +93,14 @@ The `local-hello` App uses two Boxes. Its `main` environment serves HTML. On eac
 request that Box calls `GET /api/version` on the `backend` environment through the
 `local-hello-api.app.localhost` domain. The backend owns the version displayed on the page.
 
-1. Run `make -C apps/infra-local up`. At `http://localhost:3000`, select your organization
-   and create the `local-hello` App. It uses three platform domain slots across both
-   environments: two default domains and one API alias.
-2. Export `BOXLITE_API_URL=http://localhost:3001/api/v1/<organization-id>` and set
-   `BOXLITE_API_KEY` to an organization key with `read:apps` and `write:apps`.
+1. Run `make -C apps/infra-local up`. Select your organization at `http://localhost:3000`.
+   Use a local system administrator to `PUT`
+   `/api/admin/organizations/{organizationId}/app-hosting-permissions` with
+   `{"appHostingPermissions":["read:apps","write:apps"]}`. The example needs three
+   platform domain slots for two default domains and one API alias.
+2. In the Dashboard, create the `local-hello` App and an organization key with
+   `read:apps` and `write:apps`. Export that key as `BOXLITE_API_KEY` and set
+   `BOXLITE_API_URL=http://localhost:3001/api/v1/<organization-id>`.
 3. From the repository root, create the backend environment once:
 
    ```sh

@@ -13,6 +13,7 @@ export interface ISelectedOrganizationContext {
   organizationMembersStatus?: 'loading' | 'ready' | 'error'
   organizationMembers: OrganizationUser[]
   refreshOrganizationMembers: () => Promise<OrganizationUser[]>
+  refreshOrganizationPermissions: (organizationId: string) => Promise<void>
   authenticatedUserOrganizationMember: OrganizationUser | null
   authenticatedUserHasPermission: (permission: OrganizationRolePermissionsEnum) => boolean
   onSelectOrganization: (organizationId: string) => Promise<boolean>

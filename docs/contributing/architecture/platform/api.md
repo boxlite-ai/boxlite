@@ -158,6 +158,7 @@ enabling consumers of this contract.
 | --- | --- | --- |
 | `GET` | `/admin/organizations` | Lists registration metadata, counts and impact without usage reads; `include=memberEmails` adds up to 200 emails per organization. |
 | `GET` | `/admin/organizations/{organizationId}` | Flat registration, member, Box and impact detail; `include=usage,activation` selects optional sections. |
+| `GET`, `PUT` | `/admin/organizations/{organizationId}/app-hosting-permissions` | A system administrator reads or replaces `appHostingPermissions`. Supply an array of the read, write and delete App scopes. An empty array closes access. Both operations return the saved scopes in read, write, delete order. |
 
 The [removal-release notes](../../../../apps/api/README.md#retired-cloud-operations) list retired operations and their remaining alternatives.
 
@@ -169,8 +170,22 @@ Cloud Apps share the platform login, selected organization and API-key system. T
 entry is `/dashboard/apps`, in Applications after CI and at the same level. Management requests use
 `Authorization: Bearer <platform JWT or API key>` with `read:apps`, `write:apps`, or
 `delete:apps` permissions. Organization API keys can manage multiple Apps and other resources
-according to their explicit grants. Their issuer must remain an organization member. App creation
-does not issue a key; credentials are managed on the existing API Keys page.
+according to their explicit grants. Their issuer must remain an organization member. Each request
+requires both the organization's current grant and the caller's permission, including for owners
+and administrators. Removing a grant takes effect on the next request or DB connection.
+Existing Apps, deployments and stored key grants survive. Restoring a grant restores access
+to the same App. Signed-in site visitors follow the site's access policy. An organization
+key presented to the site needs effective `read:apps`.
+
+The Dashboard reads the invitation from `appHostingPermissions` on the organization.
+The organization member list marks the authenticated administrator's own entry with
+`isSystemAdmin: true`, so the Dashboard applies the same ceiling to an administrator
+who holds an ordinary member role in that organization.
+
+Ordinary Open app and SQL in read mode require `read:apps`. Writing SQL, connecting to
+the DB with `?write=1`, opening as a test user, reading the resolved runtime environment,
+restoring an App and deleting a preview environment require `write:apps`. Soft deletion
+and permanent deletion of the entire App require `delete:apps`.
 
 | Method | Path | Behavior |
 | --- | --- | --- |

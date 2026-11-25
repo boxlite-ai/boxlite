@@ -12,6 +12,7 @@ import Keys from './Keys'
 
 const mocks = vi.hoisted(() => ({
   refresh: vi.fn(async () => []),
+  enabledApps: [] as string[],
   status: undefined as 'error' | undefined,
   create: vi.fn(async () => ({ value: 'test-key', permissions: ['write:boxes'] })),
   member: { userId: 'user', role: 'owner', assignedRoles: [] } as {
@@ -25,8 +26,8 @@ vi.mock('react-oidc-context', () => ({ useAuth: () => ({ user: { profile: { sub:
 vi.mock('@/hooks/useConfig', () => ({ useConfig: () => ({ apiUrl: 'https://api.example.com' }) }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
-    selectedOrganization: { id: 'org-1' },
-    refreshOrganizationMembers: mocks.refresh,
+    selectedOrganization: { id: 'org-1', appHostingPermissions: mocks.enabledApps },
+    refreshOrganizationPermissions: mocks.refresh,
     organizationMembersStatus: mocks.status,
     authenticatedUserOrganizationMember: mocks.member,
   }),
@@ -59,6 +60,7 @@ describe('console member key defaults', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.enabledApps = ['read:apps', 'write:apps', 'delete:apps']
     mocks.status = undefined
     mocks.member = { role: 'owner', assignedRoles: [] }
   })
@@ -133,6 +135,24 @@ describe('console member key defaults', () => {
 
     expect(permissions).toEqual(Object.values(P).filter((permission) => permission !== P.UNKNOWN_DEFAULT_OPEN_API))
   })
+
+  it.each([{ scopes: [] as string[] }, { scopes: ['read:apps'] }])(
+    'only offers enabled App permissions for an all-access key: $scopes',
+    async ({ scopes }) => {
+      mocks.enabledApps = scopes
+      const permissions = await createKey(async () => {
+        const adjust = [...document.querySelectorAll('button')].find(
+          (button) => button.textContent === 'Adjust permissions',
+        )!
+        await act(async () => adjust.click())
+        const options = [...document.querySelectorAll('[role="checkbox"]')].map((option) => option.id)
+        for (const permission of ['read:apps', 'write:apps', 'delete:apps']) {
+          expect(options.some((id) => id.endsWith(`-${permission}`))).toBe(scopes.includes(permission))
+        }
+      })
+      expect(permissions.filter((scope: string) => scope.endsWith(':apps'))).toEqual(scopes)
+    },
+  )
 
   it.each(['owner', 'member'])('lets a %s limit an API key to Apps through Adjust permissions', async (role) => {
     const appPermissions = ['read:apps', 'write:apps']

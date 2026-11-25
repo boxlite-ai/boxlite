@@ -23,7 +23,7 @@ async function status(ctx: Ctx): Promise<void> {
     `sign-in on · ${s.providers.map((p) => `${p.name} ${p.status === 'ready' ? 'ready' : p.name === 'email' ? 'needs a mail sender (`app auth email set`)' : 'not configured on this platform yet'}`).join(' · ')}`,
   )
   ctx.out.line(`  protect  ${s.protect.length ? s.protect.join(' ') : '(none: pages decide themselves)'}`)
-  ctx.out.line(`  login    ${s.login_url}`)
+  if (s.login_url) ctx.out.line(`  login    ${s.login_url}`)
   ctx.out.line(`  users    ${s.users}`)
   ctx.out.next('`boxlite-app app auth test-session --email qa@example.com` signs in a test user for curl checks')
 }

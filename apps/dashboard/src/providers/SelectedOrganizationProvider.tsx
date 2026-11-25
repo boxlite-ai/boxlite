@@ -16,6 +16,7 @@ import {
   ORGANIZATION_SESSION_EVENT,
 } from '@/lib/organization-session'
 import { resolveSelectedOrganizationId } from '@/lib/organization-selection'
+import { organizationAllowsScope } from '@/lib/app-hosting-permissions'
 import {
   Organization,
   OrganizationRolePermissionsEnum,
@@ -36,7 +37,7 @@ export function SelectedOrganizationProvider(props: Props) {
   const { organizationsApi } = useApi()
   const posthog = usePostHog()
 
-  const { organizations } = useOrganizations()
+  const { organizations, refreshOrganizations } = useOrganizations()
 
   const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(() =>
     resolveSelectedOrganizationId(organizations, readOrganizationSession(user?.profile.sub)),
@@ -110,7 +111,13 @@ export function SelectedOrganizationProvider(props: Props) {
       // Requests for another organization must not invalidate the active context.
       const request = target === currentOrganizationId.current ? ++membersRequest.current : null
       const isCurrent = () => request === membersRequest.current && currentOrganizationId.current === target
-      if (isCurrent()) setMembersLoad({ organizationId: target, status: 'loading' })
+      if (isCurrent()) {
+        setMembersLoad((previous) =>
+          previous.organizationId === target && previous.status === 'ready'
+            ? previous
+            : { organizationId: target, status: 'loading' },
+        )
+      }
       try {
         const members = await getOrganizationMembers(target)
         if (isCurrent()) {
@@ -147,20 +154,52 @@ export function SelectedOrganizationProvider(props: Props) {
 
   const authenticatedUserHasPermission = useCallback(
     (permission: OrganizationRolePermissionsEnum) => {
+      if (
+        permission.endsWith(':apps') &&
+        (organizationMembersStatus !== 'ready' ||
+          !organizationAllowsScope(permission, selectedOrganization?.appHostingPermissions))
+      )
+        return false
       if (!authenticatedUserOrganizationMember || !authenticatedUserAssignedPermissions) {
         return false
       }
-      if (authenticatedUserOrganizationMember.role === OrganizationUserRoleEnum.OWNER) {
+      if (
+        authenticatedUserOrganizationMember.role === OrganizationUserRoleEnum.OWNER ||
+        (permission.endsWith(':apps') && authenticatedUserOrganizationMember.isSystemAdmin)
+      ) {
         return true
       }
       return authenticatedUserAssignedPermissions.has(permission)
     },
-    [authenticatedUserOrganizationMember, authenticatedUserAssignedPermissions],
+    [
+      authenticatedUserOrganizationMember,
+      authenticatedUserAssignedPermissions,
+      organizationMembersStatus,
+      selectedOrganization,
+    ],
+  )
+
+  const refreshing = useRef<{ id: string; promise: Promise<void> } | null>(null)
+  const refreshOrganizationPermissions = useCallback(
+    async (organizationId: string) => {
+      if (organizationId !== currentOrganizationId.current) return
+      if (refreshing.current?.id === organizationId) return refreshing.current.promise
+      const promise = Promise.all([refreshOrganizations(), refreshOrganizationMembers(organizationId)]).then(
+        () => undefined,
+      )
+      refreshing.current = { id: organizationId, promise }
+      try {
+        await promise
+      } finally {
+        if (refreshing.current?.promise === promise) refreshing.current = null
+      }
+    },
+    [refreshOrganizations, refreshOrganizationMembers],
   )
 
   const handleSelectOrganization = useCallback(
     async (organizationId: string): Promise<boolean> => {
-      const organizationMembers = await getOrganizationMembers(organizationId)
+      const [organizationMembers] = await Promise.all([getOrganizationMembers(organizationId), refreshOrganizations()])
 
       // confirm switch if user is a member of the new organization
       if (organizationMembers.some((member) => member.userId === user?.profile.sub)) {
@@ -181,7 +220,7 @@ export function SelectedOrganizationProvider(props: Props) {
         return false
       }
     },
-    [getOrganizationMembers, user],
+    [getOrganizationMembers, refreshOrganizations, user],
   )
 
   const contextValue: ISelectedOrganizationContext = useMemo(() => {
@@ -190,6 +229,7 @@ export function SelectedOrganizationProvider(props: Props) {
       organizationMembers,
       organizationMembersStatus,
       refreshOrganizationMembers,
+      refreshOrganizationPermissions,
       authenticatedUserOrganizationMember,
       authenticatedUserHasPermission,
       onSelectOrganization: handleSelectOrganization,
@@ -202,6 +242,7 @@ export function SelectedOrganizationProvider(props: Props) {
     authenticatedUserHasPermission,
     handleSelectOrganization,
     refreshOrganizationMembers,
+    refreshOrganizationPermissions,
   ])
 
   return (

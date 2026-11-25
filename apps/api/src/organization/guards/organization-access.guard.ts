@@ -24,7 +24,7 @@ export class OrganizationAccessGuard implements CanActivate {
     private readonly organizationUserService: OrganizationUserService,
   ) {}
 
-  async canActivate(context: ExecutionContext): Promise<boolean> {
+  async canActivate(context: ExecutionContext, currentPermissions = false): Promise<boolean> {
     const request = context.switchToHttp().getRequest()
     // TODO: initialize authContext safely
     const authContext: AuthContext = request.user
@@ -55,7 +55,7 @@ export class OrganizationAccessGuard implements CanActivate {
       organizationIdParam &&
       authContext.apiKey &&
       authContext.apiKey.organizationId !== organizationIdParam &&
-      authContext.role !== SystemRole.ADMIN
+      (authContext.role !== SystemRole.ADMIN || currentPermissions)
     ) {
       this.logger.warn(
         `Organization ID mismatch in the request context. Expected: ${organizationIdParam}, Actual: ${authContext.apiKey.organizationId}`,
@@ -69,7 +69,9 @@ export class OrganizationAccessGuard implements CanActivate {
       return false
     }
 
-    const organization = await this.getCachedOrganization(organizationId)
+    const organization = currentPermissions
+      ? await this.organizationService.findOne(organizationId)
+      : await this.getCachedOrganization(organizationId)
 
     if (!organization) {
       this.logger.warn(`Organization not found. Organization ID: ${organizationId}`)
@@ -83,7 +85,7 @@ export class OrganizationAccessGuard implements CanActivate {
     }
     request.user = organizationAuthContext
 
-    if (authContext.role === SystemRole.ADMIN) {
+    if (authContext.role === SystemRole.ADMIN && !(currentPermissions && authContext.apiKey)) {
       return true
     }
 

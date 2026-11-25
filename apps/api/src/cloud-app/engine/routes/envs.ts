@@ -52,7 +52,9 @@ export function envRoutes(ctx: Ctx) {
         throw err
       }
     }
-    return c.json(await envSummary(ctx, (await store.appById(app.id))!, (await store.envById(id))!), 201)
+    const env = (await store.envById(id))!
+    await ctx.origins.envUrl(env)
+    return c.json(await envSummary(ctx, app, env), 201)
   })
 
   r.get('/envs/:env', async (c) => {

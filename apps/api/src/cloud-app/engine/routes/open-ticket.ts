@@ -4,13 +4,13 @@ import { z } from 'zod'
 import type { Vars } from '../auth'
 import type { Ctx } from '../ctx'
 import { createOpenTicket } from '../proxy/gate'
+import { requireAppScope } from '../platform-principal'
 import { body, envOf } from './util'
 
 /** `/v1/apps/:app/envs/:env/open-ticket` is used by `boxlite-app app open`. */
 export function openTicketRoutes(ctx: Ctx) {
   const r = new Hono<{ Variables: Vars }>()
   r.post('/envs/:env/open-ticket', async (c) => {
-    const env = await envOf(ctx, c)
     const b = c.req.header('content-type')?.includes('json')
       ? await body(
           c,
@@ -26,6 +26,8 @@ export function openTicketRoutes(ctx: Ctx) {
         )
       : {}
     const as = b.as ? { email: b.as, role: b.role ?? ('user' as const) } : undefined
+    requireAppScope(as ? 'write:apps' : 'read:apps')
+    const env = await envOf(ctx, c)
     return c.json(
       await createOpenTicket(ctx, c.get('app'), env, b.next ?? c.req.query('next'), c.get('actor'), as),
       201,

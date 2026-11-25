@@ -136,6 +136,11 @@ function ApiKeyForm({
       // Keep the draft grants stable if a membership refresh changes the available set.
       setPresetId('custom')
     }
+    if (permissionsStatus === 'ready' && invalid.some((permission) => permission.endsWith(':apps'))) {
+      setSelected((previous) =>
+        previous.filter((permission) => !permission.endsWith(':apps') || availablePermissions.includes(permission)),
+      )
+    }
     return () => {
       generation.current += 1
     }
@@ -162,6 +167,7 @@ function ApiKeyForm({
       if (generation.current !== requestGeneration) return
       const failure = cause as { response?: { status?: number }; cause?: { response?: { status?: number } } }
       const status = failure?.response?.status ?? failure?.cause?.response?.status
+      if (status === 403) void refreshPermissions()
       const uncertain = !status || status >= 500
       setUnknownOutcome(uncertain)
       setError(

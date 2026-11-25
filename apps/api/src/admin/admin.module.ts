@@ -27,6 +27,7 @@ import { AdminOrganizationActivationService } from './services/organization-acti
 import { AdminUsageController } from './controllers/usage.controller'
 import { AdminUsageService } from './services/usage.service'
 import { AdminOrganizationNestedVirtualizationController } from './controllers/organization-nested-virtualization.controller'
+import { AdminOrganizationAppHostingPermissionsController } from './controllers/organization-app-hosting-permissions.controller'
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { AdminOrganizationNestedVirtualizationController } from './controllers/o
     AdminProviderController,
     AdminUsageController,
     AdminOrganizationNestedVirtualizationController,
+    AdminOrganizationAppHostingPermissionsController,
   ],
   providers: [
     AdminOrganizationOverviewService,

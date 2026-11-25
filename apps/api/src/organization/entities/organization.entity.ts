@@ -10,6 +10,7 @@ import type { CancellationFeedback } from '../dto/cancellation-feedback'
 import { OrganizationUser } from './organization-user.entity'
 import { OrganizationRole } from './organization-role.entity'
 import { OrganizationInvitation } from './organization-invitation.entity'
+import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
 
 @Entity()
 export class Organization {
@@ -171,6 +172,9 @@ export class Organization {
 
   @Column({ type: 'boolean', default: false })
   nestedVirtualizationEnabled = false
+
+  @Column({ name: 'app_hosting_permissions', type: 'text', array: true, default: () => "'{}'::text[]" })
+  appHostingPermissions: OrganizationResourcePermission[]
 
   @CreateDateColumn({
     type: 'timestamp with time zone',

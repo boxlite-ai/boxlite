@@ -16,7 +16,11 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { AuthContext as IAuthContext } from '../common/interfaces/auth-context.interface'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
-import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
+import {
+  organizationAllowsPermission,
+  OrganizationResourcePermission,
+} from '../organization/enums/organization-resource-permission.enum'
+import { CurrentOrganizationPermissions } from '../organization/decorators/current-organization-permissions.decorator'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { SystemRole } from '../user/enums/system-role.enum'
 import { Audit, TypedRequest } from '../audit/decorators/audit.decorator'
@@ -37,6 +41,7 @@ export class ApiKeyController {
   constructor(private readonly apiKeyService: ApiKeyService) {}
 
   @Post()
+  @CurrentOrganizationPermissions()
   @ApiOperation({
     summary: 'Create API key',
     operationId: 'createApiKey',
@@ -63,7 +68,15 @@ export class ApiKeyController {
     @Body() createApiKeyDto: CreateApiKeyDto,
     @UserContext() ctx: Context,
   ): Promise<ApiKeyResponseDto> {
-    const permissions = createApiKeyDto.permissions ?? Object.values(OrganizationResourcePermission)
+    const enabled = authContext.organization.appHostingPermissions
+    const permissions =
+      createApiKeyDto.permissions ??
+      Object.values(OrganizationResourcePermission).filter((permission) =>
+        organizationAllowsPermission(permission, enabled),
+      )
+    if (permissions.some((permission) => !organizationAllowsPermission(permission, enabled))) {
+      throw new ForbiddenException('App Hosting permission is not enabled for this organization')
+    }
     this.validateRequestedApiKeyPermissions(authContext, permissions)
 
     const { apiKey, value } = await this.apiKeyService.createApiKey(

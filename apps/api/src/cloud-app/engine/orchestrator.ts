@@ -141,6 +141,7 @@ export class Orchestrator implements JobHost {
         started_at: now(),
       })
       let release: number | null
+      if (!env.public_url) await this.ctx.origins.envUrl(env)
       if (dep.kind === 'deploy') release = await runDeploy(job, this.sv)
       else if (dep.kind === 'apply') release = await runApply(job, this.sv)
       else release = await runRollback(job, this.sv)

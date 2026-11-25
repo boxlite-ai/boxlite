@@ -25,6 +25,7 @@ import { Button } from './ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
 interface DataTableProps {
+  appHostingPermissions?: readonly string[]
   data: ApiKeyList[]
   loading: boolean
   isLoadingKey: (key: ApiKeyList) => boolean
@@ -38,7 +39,14 @@ const GRID = 'grid-cols-[minmax(0,1.4fr)_minmax(0,1.6fr)_minmax(150px,1fr)_repea
  * Lists API keys with a confirmation step before calling the owner's revoke handler.
  * Per-key loading state disables revocation while its request is in flight.
  */
-export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilter }: DataTableProps) {
+export function ApiKeyTable({
+  data,
+  loading,
+  isLoadingKey,
+  onRevoke,
+  onClearFilter,
+  appHostingPermissions,
+}: DataTableProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="resource-content scroll-edge">
@@ -91,7 +99,10 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke, onClearFilt
                       {key.value}
                     </span>
                     <span>
-                      <ApiKeyPermissionsSummary permissions={key.permissions} />
+                      <ApiKeyPermissionsSummary
+                        permissions={key.permissions}
+                        appHostingPermissions={appHostingPermissions}
+                      />
                     </span>
                     <span className="font-mono text-meta text-muted-foreground">
                       {getRelativeTimeString(key.createdAt).relativeTimeString}

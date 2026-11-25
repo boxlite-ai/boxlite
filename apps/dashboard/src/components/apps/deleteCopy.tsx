@@ -22,10 +22,10 @@ export function deleteAppBody(name: string) {
 }
 
 /** A deleted app can come back, so the toast offers Undo (the same restore as Recently deleted). */
-export function toastDeleted(name: string, restore: (name: string) => Promise<unknown>) {
+export function toastDeleted(name: string, restore?: (name: string) => Promise<unknown>) {
   toast.success(`${name} deleted`, {
     description: `Restore it from Recently deleted within ${RETENTION_DAYS} days.`,
-    action: {
+    action: restore && {
       label: 'Undo',
       onClick: () =>
         void restore(name)

@@ -59,6 +59,8 @@ import type { CpuIncidentListDto } from '../models';
 import type { CreateRunnerResponse } from '../models';
 // @ts-ignore
 import type { MemoryIncidentListDto } from '../models';
+// @ts-ignore
+import type { OrganizationAppHostingPermissionsDto } from '../models';
 /**
  * AdminApi - axios parameter creator
  */
@@ -258,6 +260,44 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Read organization App Hosting permissions
+         * @param {string} organizationId
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationAppHostingPermissions: async (organizationId: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminGetOrganizationAppHostingPermissions', 'organizationId', organizationId)
+            const localVarPath = `/admin/organizations/{organizationId}/app-hosting-permissions`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
 
             localVarHeaderParameter['Accept'] = 'application/json';
 
@@ -971,6 +1011,49 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
+         *
+         * @summary Replace organization App Hosting permissions
+         * @param {string} organizationId
+         * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminSetOrganizationAppHostingPermissions: async (organizationId: string, organizationAppHostingPermissionsDto: OrganizationAppHostingPermissionsDto, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'organizationId' is not null or undefined
+            assertParamExists('adminSetOrganizationAppHostingPermissions', 'organizationId', organizationId)
+            // verify required parameter 'organizationAppHostingPermissionsDto' is not null or undefined
+            assertParamExists('adminSetOrganizationAppHostingPermissions', 'organizationAppHostingPermissionsDto', organizationAppHostingPermissionsDto)
+            const localVarPath = `/admin/organizations/{organizationId}/app-hosting-permissions`
+                .replace('{organizationId}', encodeURIComponent(String(organizationId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'PUT', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(organizationAppHostingPermissionsDto, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * 
          * @summary Set organization nesting allowlist
          * @param {string} organizationId 
@@ -1125,6 +1208,19 @@ export const AdminApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetJobOverview(id, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetJobOverview']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Read organization App Hosting permissions
+         * @param {string} organizationId
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetOrganizationAppHostingPermissions(organizationId: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<OrganizationAppHostingPermissionsDto>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetOrganizationAppHostingPermissions(organizationId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetOrganizationAppHostingPermissions']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1327,6 +1423,20 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         *
+         * @summary Replace organization App Hosting permissions
+         * @param {string} organizationId
+         * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminSetOrganizationAppHostingPermissions(organizationId: string, organizationAppHostingPermissionsDto: OrganizationAppHostingPermissionsDto, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<OrganizationAppHostingPermissionsDto>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminSetOrganizationAppHostingPermissions(organizationId, organizationAppHostingPermissionsDto, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminSetOrganizationAppHostingPermissions']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * 
          * @summary Set organization nesting allowlist
          * @param {string} organizationId 
@@ -1412,6 +1522,16 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          */
         adminGetJobOverview(id: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminJobOverview> {
             return localVarFp.adminGetJobOverview(id, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Read organization App Hosting permissions
+         * @param {string} organizationId
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetOrganizationAppHostingPermissions(organizationId: string, options?: RawAxiosRequestConfig): AxiosPromise<OrganizationAppHostingPermissionsDto> {
+            return localVarFp.adminGetOrganizationAppHostingPermissions(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1574,6 +1694,17 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminRecoverBox(boxId, options).then((request) => request(axios, basePath));
         },
         /**
+         *
+         * @summary Replace organization App Hosting permissions
+         * @param {string} organizationId
+         * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminSetOrganizationAppHostingPermissions(organizationId: string, organizationAppHostingPermissionsDto: OrganizationAppHostingPermissionsDto, options?: RawAxiosRequestConfig): AxiosPromise<OrganizationAppHostingPermissionsDto> {
+            return localVarFp.adminSetOrganizationAppHostingPermissions(organizationId, organizationAppHostingPermissionsDto, options).then((request) => request(axios, basePath));
+        },
+        /**
          * 
          * @summary Set organization nesting allowlist
          * @param {string} organizationId 
@@ -1655,6 +1786,17 @@ export class AdminApi extends BaseAPI {
      */
     public adminGetJobOverview(id: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminGetJobOverview(id, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Read organization App Hosting permissions
+     * @param {string} organizationId
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetOrganizationAppHostingPermissions(organizationId: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetOrganizationAppHostingPermissions(organizationId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1828,6 +1970,18 @@ export class AdminApi extends BaseAPI {
      */
     public adminRecoverBox(boxId: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminRecoverBox(boxId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Replace organization App Hosting permissions
+     * @param {string} organizationId
+     * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminSetOrganizationAppHostingPermissions(organizationId: string, organizationAppHostingPermissionsDto: OrganizationAppHostingPermissionsDto, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminSetOrganizationAppHostingPermissions(organizationId, organizationAppHostingPermissionsDto, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

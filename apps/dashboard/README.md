@@ -65,11 +65,13 @@ draft without storing environment variables or triggering payment or creation.
 
 See the [UI walkthrough and screenshots](app-hosting-ui.md) for the current mock experience.
 
-Open **Applications → App hosting** and select **Get early access** to see the
-selected organization's Apps. If you followed a link to an App, the button
-opens that App's details. The Dashboard remembers the choice for the browser
-tab, including on refresh. Viewing Apps requires the organization's App read
-permission.
+**Applications → App hosting** appears when the organization has enabled
+`read:apps` and the signed-in member can read Apps. The same check covers direct
+links and the introduction. Select **Get early access** to continue to the list
+or to the App you opened. The Dashboard remembers that choice for the browser tab.
+Creating and editing Apps requires effective `write:apps`. Deleting an entire
+App requires effective `delete:apps`. API key creation offers the App scopes
+enabled for the organization that the current member can grant.
 
 In mock mode, `/dashboard/apps?appHosting=enabled` opens the sample Apps list
 directly. Use `?appHosting=restricted` to show the introduction again.

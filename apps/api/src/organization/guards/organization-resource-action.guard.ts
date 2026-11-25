@@ -18,7 +18,12 @@ import { isRunnerContext } from '../../common/interfaces/runner-context.interfac
 import { isProxyContext } from '../../common/interfaces/proxy-context.interface'
 import { isRegionProxyContext } from '../../common/interfaces/region-proxy.interface'
 import { OR_GUARD_INNER_GUARDS } from '../../auth/or.guard'
-import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
+import {
+  APP_HOSTING_PERMISSIONS,
+  organizationAllowsPermission,
+  OrganizationResourcePermission,
+} from '../enums/organization-resource-permission.enum'
+import { CURRENT_ORGANIZATION_PERMISSIONS } from '../decorators/current-organization-permissions.decorator'
 
 // Machine identities carry no organization — ApiKeyStrategy mints a bare
 // { role } context for the runner, the proxy and the region proxy — so
@@ -54,7 +59,12 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
       return true
     }
 
-    const canActivate = await super.canActivate(context)
+    const currentPermissions =
+      this.reflector.getAllAndOverride<boolean>(CURRENT_ORGANIZATION_PERMISSIONS, [
+        context.getHandler(),
+        context.getClass(),
+      ]) === true
+    const canActivate = await super.canActivate(context, currentPermissions)
 
     // TODO: initialize authContext safely
     const authContext: OrganizationAuthContext = request.user
@@ -66,7 +76,7 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
     // the `super.canActivate` result is consulted — even when the organization
     // cannot be resolved. The policy helper repeats the check for its non-guard
     // callers.
-    if (authContext.role === SystemRole.ADMIN) {
+    if (authContext.role === SystemRole.ADMIN && !currentPermissions) {
       return true
     }
 
@@ -120,7 +130,8 @@ export class OrganizationResourceActionGuard extends OrganizationAccessGuard {
 export type OrganizationResourcePermissionSubject = Pick<
   OrganizationAuthContext,
   'role' | 'organizationUser' | 'apiKey'
->
+> &
+  Partial<Pick<OrganizationAuthContext, 'organization' | 'organizationId'>>
 
 // Single source of truth for "does this credential hold the required resource
 // permissions", shared by OrganizationResourceActionGuard, box volume-attach,
@@ -129,6 +140,17 @@ export function hasOrganizationResourcePermissions(
   subject: OrganizationResourcePermissionSubject,
   required: OrganizationResourcePermission[],
 ): boolean {
+  const appScopes = required.filter((scope) => APP_HOSTING_PERMISSIONS.includes(scope))
+  if (appScopes.some((scope) => !organizationAllowsPermission(scope, subject.organization?.appHostingPermissions)))
+    return false
+  if (
+    appScopes.length &&
+    subject.apiKey &&
+    (!subject.organizationUser ||
+      subject.apiKey.organizationId !== subject.organizationId ||
+      appScopes.some((scope) => !subject.apiKey.permissions?.includes(scope)))
+  )
+    return false
   if (subject.role === SystemRole.ADMIN) return true
   if (!subject.organizationUser) return false
   if (subject.organizationUser.role === OrganizationMemberRole.OWNER && !subject.apiKey) return true
