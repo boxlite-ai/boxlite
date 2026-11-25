@@ -808,8 +808,10 @@ thread. Call `control.resume()` when the guest can enter.
 
 On Linux x86_64 with read/write `/dev/kvm`, run
 `make test:integration:vmm:kvm` for flat-guest round trips, including the
-3073 MiB split-RAM case. Run `make test:integration:vmm:linux` with
-`VMM_KERNEL` set to a readable `vmlinux` for the Linux round trip.
+3073 MiB split-RAM case, which writes the full 3073 MiB RAM file and state
+file under the temporary directory and requires matching free temporary disk
+space. Run `make test:integration:vmm:linux` with `VMM_KERNEL` set to a readable
+`vmlinux` for the Linux round trip.
 
 ## Long-mode entry
 

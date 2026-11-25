@@ -275,18 +275,19 @@ fn ram() -> GuestRam {
     GuestRam::new(&[(GuestAddress(0), 4096)]).unwrap()
 }
 
+struct StopOnDrop<'a>(&'a VmControl);
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
+
 fn drive<H: X86Vm, T>(
     vm: &mut Vm<H>,
     initially_paused: bool,
     test: impl FnOnce(&VmControl, ThreadId) -> T,
 ) -> T {
-    struct StopOnDrop<'a>(&'a VmControl);
-    impl Drop for StopOnDrop<'_> {
-        fn drop(&mut self) {
-            self.0.stop();
-        }
-    }
-
     let control = vm.control();
     if initially_paused {
         control.pause().unwrap();
@@ -509,6 +510,7 @@ fn run_reports_install_failures_wakes_pause_waiters_and_joins_every_started_vcpu
             });
             started.recv_timeout(WAIT).unwrap();
             let driver = scope.spawn(|| vm.run());
+            let _stop = StopOnDrop(control);
             assert!(
                 matches!(
                     result.recv_timeout(WAIT).unwrap(),

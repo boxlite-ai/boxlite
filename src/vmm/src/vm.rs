@@ -237,6 +237,7 @@ impl<H: HostVm> Vm<H> {
             create_workers,
             |chipset, ctx, host_vm| devices(chipset, ctx, &mut config, host_vm),
         )?;
+        vm.vcpu_count = config.vcpu_count;
         vm.boot_regs = boot(&vm.ram, &config)?;
         Ok(vm)
     }
