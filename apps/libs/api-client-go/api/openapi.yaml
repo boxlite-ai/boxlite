@@ -7019,7 +7019,7 @@ components:
         name: my-volume
         organizationId: 123e4567-e89b-12d3-a456-426614174000
         state: ready
-        storageBackend: object_storage
+        storageBackend: standard
         instance: boxlite-dev-shared
         createdAt: 2023-01-01T00:00:00.000Z
         updatedAt: 2023-01-01T00:00:00.000Z
@@ -7044,11 +7044,11 @@ components:
           description: Volume state
           example: ready
         storageBackend:
-          description: The storage backend that owns the volume
+          description: The storage class of the volume
           enum:
-          - object_storage
-          - nfs
-          example: object_storage
+          - standard
+          - performance
+          example: standard
           type: string
         instance:
           description: Filestore instance name; filestore volumes only
@@ -7085,18 +7085,18 @@ components:
     CreateVolume:
       example:
         name: my-data
-        storageBackend: nfs
+        storageBackend: performance
         instance: boxlite-dev-shared
       properties:
         name:
           example: my-data
           type: string
         storageBackend:
-          description: The storage backend that owns the volume; defaults to object_storage
+          description: The storage class of the volume; defaults to standard
           enum:
-          - object_storage
-          - nfs
-          example: nfs
+          - standard
+          - performance
+          example: performance
           type: string
         instance:
           description: The Filestore instance the volume stores its data on; filestore

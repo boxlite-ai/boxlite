@@ -291,7 +291,7 @@ describe('VolumeService filestore volumes', () => {
 
     const volume = await service.create(
       organization,
-      { name: 'nfs-data', storageBackend: 'nfs', instance: 'ml-scratch' },
+      { name: 'nfs-data', storageBackend: 'performance', instance: 'ml-scratch' },
       Context.user(),
     )
 
@@ -311,7 +311,7 @@ describe('VolumeService filestore volumes', () => {
     await expect(
       service.create(
         organization,
-        { name: 'nfs-data', storageBackend: 'nfs', instance: 'ml-scratch' },
+        { name: 'nfs-data', storageBackend: 'performance', instance: 'ml-scratch' },
         Context.user(),
       ),
     ).rejects.toThrow('already exists')
@@ -328,7 +328,7 @@ describe('VolumeService filestore volumes', () => {
     await expect(
       service.create(
         organization,
-        { name: 'nfs-data', storageBackend: 'nfs', instance: 'ml-scratch' },
+        { name: 'nfs-data', storageBackend: 'performance', instance: 'ml-scratch' },
         Context.user(),
       ),
     ).rejects.toBeInstanceOf(ForbiddenException)
@@ -345,7 +345,7 @@ describe('VolumeService filestore volumes', () => {
       ],
     )
 
-    const volume = await service.create(organization, { name: 'nfs-data', storageBackend: 'nfs' }, Context.user())
+    const volume = await service.create(organization, { name: 'nfs-data', storageBackend: 'performance' }, Context.user())
 
     const [selected, source] = filestoreInstanceResolver.resolve.mock.calls[0]
     expect(volume.instance).toBe(selected)
@@ -356,7 +356,7 @@ describe('VolumeService filestore volumes', () => {
   it('rejects Filestore placement when no instances are configured', async () => {
     const { service, volumeRepository } = createService(null, [], [])
 
-    await expect(service.create(organization, { storageBackend: 'nfs' }, Context.user())).rejects.toBeInstanceOf(
+    await expect(service.create(organization, { storageBackend: 'performance' }, Context.user())).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     )
     expect(volumeRepository.save).not.toHaveBeenCalled()
@@ -368,7 +368,7 @@ describe('VolumeService filestore volumes', () => {
     ], false)
 
     await expect(
-      service.create(organization, { name: 'nfs-data', storageBackend: 'nfs' }, Context.user()),
+      service.create(organization, { name: 'nfs-data', storageBackend: 'performance' }, Context.user()),
     ).rejects.toMatchObject({
       constructor: NotImplementedException,
       response: { code: 'unsupported', message: expect.stringContaining('not supported') },
@@ -384,7 +384,7 @@ describe('VolumeService filestore volumes', () => {
     await expect(
       service.create(
         organization,
-        { name: 'nfs-data', storageBackend: 'nfs', instance: 'ml-scratch' },
+        { name: 'nfs-data', storageBackend: 'performance', instance: 'ml-scratch' },
         Context.user(),
       ),
     ).rejects.toBeInstanceOf(BadRequestError)
@@ -398,7 +398,7 @@ describe('VolumeService filestore volumes', () => {
     )
 
     await expect(
-      service.create(organization, { name: 'nfs-data', storageBackend: 'nfs' }, Context.user()),
+      service.create(organization, { name: 'nfs-data', storageBackend: 'performance' }, Context.user()),
     ).rejects.toBeInstanceOf(ServiceUnavailableException)
     expect(volumeRepository.save).not.toHaveBeenCalled()
   })
@@ -407,7 +407,7 @@ describe('VolumeService filestore volumes', () => {
     const { service, volumeRepository } = createService(null)
 
     await expect(service.create(organization, { instance: 'ml-scratch' }, Context.user())).rejects.toThrow(
-      'instance is valid only when storageBackend is "nfs"',
+      'instance is valid only when storageBackend is "performance"',
     )
     expect(volumeRepository.save).not.toHaveBeenCalled()
   })

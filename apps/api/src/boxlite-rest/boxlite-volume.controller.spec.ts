@@ -50,7 +50,7 @@ describe('BoxliteVolumeController', () => {
       id: volume.id,
       name: volume.name,
       state: volume.state,
-      storage_backend: 'object_storage',
+      storage_backend: 'standard',
       created_at: createdAt.toISOString(),
       updated_at: updatedAt.toISOString(),
       last_used_at: lastUsedAt.toISOString(),
@@ -97,7 +97,7 @@ describe('BoxliteVolumeController', () => {
           id: volume.id,
           name: volume.name,
           state: volume.state,
-          storage_backend: 'object_storage',
+          storage_backend: 'standard',
           created_at: createdAt.toISOString(),
         },
       ],
@@ -112,7 +112,7 @@ describe('BoxliteVolumeController', () => {
       id: volume.id,
       name: volume.name,
       state: volume.state,
-      storage_backend: 'object_storage',
+      storage_backend: 'standard',
       created_at: createdAt.toISOString(),
       updated_at: updatedAt.toISOString(),
       last_used_at: lastUsedAt.toISOString(),
@@ -126,7 +126,7 @@ describe('BoxliteVolumeController', () => {
     volumeService.findOne.mockResolvedValue({ ...volume, instance: 'ml-scratch' })
 
     await expect(controller.get(volume.id)).resolves.toMatchObject({
-      storage_backend: 'nfs',
+      storage_backend: 'performance',
       instance: 'ml-scratch',
     })
   })

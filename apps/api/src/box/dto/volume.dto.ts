@@ -39,9 +39,9 @@ export class VolumeDto {
   state: VolumeState
 
   @ApiProperty({
-    description: 'The storage backend that owns the volume',
+    description: 'The storage class of the volume',
     enum: VOLUME_STORAGE_BACKENDS,
-    example: 'object_storage',
+    example: 'standard',
   })
   storageBackend: VolumeStorageBackend
 
@@ -83,7 +83,7 @@ export class VolumeDto {
       name: volume.name,
       organizationId: volume.organizationId,
       state: volume.state,
-      storageBackend: isFilestoreVolume(volume) ? 'nfs' : 'object_storage',
+      storageBackend: isFilestoreVolume(volume) ? 'performance' : 'standard',
       instance: volume.instance || undefined,
       createdAt: volume.createdAt?.toISOString(),
       updatedAt: volume.updatedAt?.toISOString(),

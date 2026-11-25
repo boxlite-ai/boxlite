@@ -35,7 +35,7 @@ export interface VolumeDto {
      */
     'state': VolumeState;
     /**
-     * The storage backend that owns the volume
+     * The storage class of the volume
      */
     'storageBackend': VolumeDtoStorageBackendEnum;
     /**
@@ -61,8 +61,8 @@ export interface VolumeDto {
 }
 
 export const VolumeDtoStorageBackendEnum = {
-    OBJECT_STORAGE: 'object_storage',
-    NFS: 'nfs',
+    STANDARD: 'standard',
+    PERFORMANCE: 'performance',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

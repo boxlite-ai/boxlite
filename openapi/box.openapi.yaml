@@ -3576,11 +3576,11 @@ components:
           $ref: "#/components/schemas/VolumeState"
         storage_backend:
           type: string
-          enum: [object_storage, nfs]
+          enum: [standard, performance]
           description: |
-            The cloud backend that owns the volume, derived from whether
+            The cloud storage class of the volume, derived from whether
             `instance` is present. Absent for local directory volumes.
-          example: nfs
+          example: performance
         created_at:
           type: string
           format: date-time
@@ -3619,20 +3619,20 @@ components:
           example: my-data
         storageBackend:
           type: string
-          enum: [object_storage, nfs]
-          default: object_storage
+          enum: [standard, performance]
+          default: standard
           description: |
-            The backend that owns the volume. `object_storage` stores data in
-            `boxlite-volume-<id>`; `nfs` stores it in an NFS data
+            The storage class of the volume. `standard` stores data in
+            `boxlite-volume-<id>`; `performance` stores it in an NFS data
             directory on the selected or automatically assigned Filestore
             instance. This field, not the presence of `instance`, selects the
-            backend.
+            storage class.
         instance:
           type: string
           pattern: "^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
           description: |
             The Filestore instance the volume's data directory lives on.
-            Valid only when storageBackend is nfs. When omitted, the
+            Valid only when storageBackend is performance. When omitted, the
             API assigns an instance by hashing its configured names. The
             instance must exist in GCP and in the API's FILESTORE_INSTANCES
             configuration, checked at create and dispatch time.
@@ -3654,11 +3654,11 @@ components:
           $ref: "#/components/schemas/VolumeState"
         storage_backend:
           type: string
-          enum: [object_storage, nfs]
+          enum: [standard, performance]
           description: |
-            The cloud backend that owns the volume, derived from whether
+            The cloud storage class of the volume, derived from whether
             `instance` is present. Absent for local directory volumes.
-          example: nfs
+          example: performance
         created_at:
           type: string
           format: date-time

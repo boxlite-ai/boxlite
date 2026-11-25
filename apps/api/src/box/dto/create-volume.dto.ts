@@ -36,7 +36,7 @@ export const VOLUME_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/
  */
 export const FILESTORE_INSTANCE_PATTERN = FILESTORE_INSTANCE_NAME_PATTERN
 
-export const VOLUME_STORAGE_BACKENDS = ['object_storage', 'nfs'] as const
+export const VOLUME_STORAGE_BACKENDS = ['standard', 'performance'] as const
 
 export type VolumeStorageBackend = (typeof VOLUME_STORAGE_BACKENDS)[number]
 
@@ -55,9 +55,9 @@ export class CreateVolumeDto {
   name?: string
 
   @ApiPropertyOptional({
-    description: 'The storage backend that owns the volume; defaults to object_storage',
+    description: 'The storage class of the volume; defaults to standard',
     enum: VOLUME_STORAGE_BACKENDS,
-    example: 'nfs',
+    example: 'performance',
   })
   @ValidateIf((_, value) => value !== undefined)
   @IsEnum(VOLUME_STORAGE_BACKENDS)
@@ -65,7 +65,7 @@ export class CreateVolumeDto {
 
   /**
    * The Filestore instance this volume's data directory lives on. It is
-   * accepted only with `storageBackend: "nfs"`; if omitted, Filestore
+   * accepted only with `storageBackend: "performance"`; if omitted, Filestore
    * placement is assigned from the configured instances.
    */
   @ApiPropertyOptional({

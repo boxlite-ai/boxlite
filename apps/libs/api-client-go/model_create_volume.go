@@ -21,7 +21,7 @@ var _ MappedNullable = &CreateVolume{}
 // CreateVolume struct for CreateVolume
 type CreateVolume struct {
 	Name *string `json:"name,omitempty"`
-	// The storage backend that owns the volume; defaults to object_storage
+	// The storage class of the volume; defaults to standard
 	StorageBackend *string `json:"storageBackend,omitempty"`
 	// The Filestore instance the volume stores its data on; filestore volumes only. Omit to assign from configured instances.
 	Instance *string `json:"instance,omitempty"`

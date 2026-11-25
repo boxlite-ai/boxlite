@@ -51,7 +51,7 @@ describe('CreateVolumeDto filestore instance', () => {
   it('validates names matching the runner path-safety grammar', async () => {
     for (const instance of ['ml-scratch', 'a', 'vol-1']) {
       expect(await validate(plainToInstance(CreateVolumeDto, { instance }))).toHaveLength(0)
-      expect(await validate(plainToInstance(CreateVolumeDto, { storageBackend: 'nfs', instance }))).toHaveLength(
+      expect(await validate(plainToInstance(CreateVolumeDto, { storageBackend: 'performance', instance }))).toHaveLength(
         0,
       )
     }
@@ -60,7 +60,7 @@ describe('CreateVolumeDto filestore instance', () => {
   it.each(['ML', '-x', 'a/b', 'a:b', ''])(
     'rejects a Filestore instance outside the path-safety grammar (%s)',
     async (instance) => {
-      expect(await errorsFor({ storageBackend: 'nfs', instance })).toContain('matches')
+      expect(await errorsFor({ storageBackend: 'performance', instance })).toContain('matches')
     },
   )
 

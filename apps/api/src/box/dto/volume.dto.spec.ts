@@ -18,14 +18,14 @@ describe('VolumeDto', () => {
   it('derives an object-storage backend from an absent instance', () => {
     const dto = VolumeDto.fromVolume(volume())
 
-    expect(dto.storageBackend).toBe('object_storage')
+    expect(dto.storageBackend).toBe('standard')
     expect(dto.instance).toBeUndefined()
   })
 
   it('derives a Filestore backend and preserves only the logical instance name', () => {
     const dto = VolumeDto.fromVolume(volume({ instance: 'ml-scratch' }))
 
-    expect(dto.storageBackend).toBe('nfs')
+    expect(dto.storageBackend).toBe('performance')
     expect(dto.instance).toBe('ml-scratch')
   })
 })

@@ -29,7 +29,7 @@ type VolumeDto struct {
 	OrganizationId string `json:"organizationId"`
 	// Volume state
 	State VolumeState `json:"state"`
-	// The storage backend that owns the volume
+	// The storage class of the volume
 	StorageBackend string `json:"storageBackend"`
 	// Filestore instance name; filestore volumes only
 	Instance *string `json:"instance,omitempty"`

@@ -17,7 +17,7 @@
 export interface CreateVolume {
     'name'?: string;
     /**
-     * The storage backend that owns the volume; defaults to object_storage
+     * The storage class of the volume; defaults to standard
      */
     'storageBackend'?: CreateVolumeStorageBackendEnum;
     /**
@@ -27,8 +27,8 @@ export interface CreateVolume {
 }
 
 export const CreateVolumeStorageBackendEnum = {
-    OBJECT_STORAGE: 'object_storage',
-    NFS: 'nfs',
+    STANDARD: 'standard',
+    PERFORMANCE: 'performance',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
