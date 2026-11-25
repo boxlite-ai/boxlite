@@ -303,8 +303,6 @@ password field, and `NewRegistryCredential` prints `Password:[redacted]` with
 - `WithNetwork(boxlite.NetworkSpec{Outbound: boxlite.OutboundNetworkSpec{Mode: boxlite.NetworkModeDisabled}})` disables the guest network interface entirely.
 - `WithNetwork(boxlite.NetworkSpec{Inbound: boxlite.InboundNetworkSpec{Mode: boxlite.NetworkModeEnabled}})` permits proxy access subject to each tunnel's policy. Inbound access is disabled by default, including when `Inbound.Mode` is unset. The two directions are independent.
 - The deprecated flat fields `NetworkSpec{Mode, AllowNet}` still configure the outbound direction. Setting them together with `Outbound` is rejected when the options are built. `NetworkInfo.Mode` and `NetworkInfo.AllowNet` likewise remain readable as views onto `NetworkInfo.Outbound`.
-- `WithPort(boxlite.PortSpec{Guest: 3000})` publishes TCP locally on an OS-selected host port; after checking `BoxInfo.Network != nil`, read the concrete binding from `Network.PublishedPorts`.
-- A nil `PublishedPorts` slice means the current handle does not know the bindings; a non-nil empty slice means there are no active publications. `Box.Info`, `Runtime.GetInfo`, and `Runtime.ListInfo` use callback-backed runtime operations and honor context cancellation.
 - `WithSecret(boxlite.Secret{...})` injects a secret into outbound HTTPS requests to required `Hosts`; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`. Set `Headers: map[string]string{"x-goog-api-key": "{value}"}` for a custom template. `Headers` is required; nil and empty maps are rejected.
 - Container capabilities live under advanced options:
 
@@ -319,8 +317,16 @@ password field, and `NewRegistryCredential` prints `Password:[redacted]` with
   box, err := runtime.Create(ctx, "alpine:latest", boxlite.WithAdvancedOptions(advanced))
   ```
 
-Port publication is local-only. Remote runtimes reject it with guidance to use
-the existing network tunnel API. Each tunnel handle is one-shot.
+### Published ports
+
+`WithPort(boxlite.PortSpec{Guest: 3000})` publishes TCP locally on an OS-selected host port. Read the assigned host port from `BoxInfo.Network.PublishedPorts` when `BoxInfo.Network` is present.
+
+When `BoxInfo.Network` is absent, call `box.Network()` and read the bindings with `network.PublishedPorts(ctx)`. This also works after promotion to complete outbound policy. The lookup leaves the Box and its listeners in their current state.
+
+A nil `PublishedPorts` slice means the bindings are unknown. A non-nil empty slice means there are no active publications. `Box.Info`, `Runtime.GetInfo`, and `Runtime.ListInfo` use callback-backed runtime operations and honor context cancellation.
+
+Port publication is local-only. Remote runtimes reject it with guidance to use the existing network tunnel API. Each tunnel handle is one-shot.
+
 OCI `EXPOSE` metadata does not publish ports.
 
 ### Fractional CPUs

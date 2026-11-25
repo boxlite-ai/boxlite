@@ -238,9 +238,23 @@ pub trait Locker: Send + Sync {
 
 /// RAII guard holding an exclusive write lock.
 pub struct LockGuard<'a> {
-    lock: &'a dyn Locker,
+    owner: LockOwner<'a>,
     // Fields drop after Drop::drop unlocks the underlying lock.
     _gate: Option<OwnedRwLockWriteGuard<()>>,
+}
+
+enum LockOwner<'a> {
+    Borrowed(&'a dyn Locker),
+    Owned(Arc<dyn Locker>),
+}
+
+impl LockOwner<'_> {
+    fn locker(&self) -> &dyn Locker {
+        match self {
+            Self::Borrowed(lock) => *lock,
+            Self::Owned(lock) => lock.as_ref(),
+        }
+    }
 }
 
 impl<'a> LockGuard<'a> {
@@ -251,11 +265,19 @@ impl<'a> LockGuard<'a> {
     /// single-threaded runtime that must release the gate itself.
     pub fn new(lock: &'a dyn Locker) -> Self {
         lock.lock();
-        Self { lock, _gate: None }
+        Self {
+            owner: LockOwner::Borrowed(lock),
+            _gate: None,
+        }
     }
 
     /// Acquire a write lock without blocking the executor thread while waiting.
     pub async fn new_async(lock: &'a dyn Locker) -> Self {
+        Self::acquire(LockOwner::Borrowed(lock)).await
+    }
+
+    async fn acquire(owner: LockOwner<'a>) -> Self {
+        let lock = owner.locker();
         let gate = match lock.gate() {
             Some(gate) => Some(gate.clone().write_owned().await),
             None => None,
@@ -263,7 +285,7 @@ impl<'a> LockGuard<'a> {
         while !lock.try_lock() {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        Self { lock, _gate: gate }
+        Self { owner, _gate: gate }
     }
 
     /// Try to create a new guard without blocking.
@@ -275,16 +297,26 @@ impl<'a> LockGuard<'a> {
             None => None,
         };
         if lock.try_lock() {
-            Some(Self { lock, _gate: gate })
+            Some(Self {
+                owner: LockOwner::Borrowed(lock),
+                _gate: gate,
+            })
         } else {
             None
         }
     }
 }
 
+impl LockGuard<'static> {
+    /// Acquire a write lock that can move with work dispatched to another thread.
+    pub(crate) async fn new_owned(lock: Arc<dyn Locker>) -> Self {
+        Self::acquire(LockOwner::Owned(lock)).await
+    }
+}
+
 impl Drop for LockGuard<'_> {
     fn drop(&mut self) {
-        self.lock.unlock();
+        self.owner.locker().unlock();
     }
 }
 

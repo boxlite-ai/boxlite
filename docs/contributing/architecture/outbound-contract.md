@@ -348,7 +348,8 @@ The shared rule fixtures exercise the compiler and matcher. Trusted TCP and UDP 
 ### Extended TCP enforcement
 
 The bridge's trusted Go controller compiles extended rules into a snapshot shared by TCP and UDP.
-Current wire inputs still select the legacy transport policy. The bridge advertises the complete extended capability after its owning integration slices.
+
+Legacy launch selects legacy forwarding. Versioned launch and snapshot replacement carry explicit admission. The bridge advertises extended IPv4 admission, deny rules, destination ports, and expanded rule lists.
 
 At flow entry, capture the snapshot and the pre-NAT and translated addresses. For example, an IP allow for `192.0.2.254:8080` can admit a local alias to loopback, subject to the platform check on `127.0.0.1:8080`. A Cloud snapshot refuses that translated socket.
 
@@ -385,14 +386,14 @@ An HTTP/1.1 upgrade keeps its tunnel open for bidirectional traffic. Closing the
 
 An extended DNS route screens raw answers with the captured policy. Only approved IPv4 literals reach the chosen connector. An address route keeps its translated socket and requires a matching controlled DNS answer when the matcher requests name association.
 
-Trusted replacement publishes through the NIC transition. Both wire PUT resources return 409 for a valid incomplete write when a trusted snapshot is configured, including while disabled. While disabled, both reads project an empty legacy allow list, and re-enable restores the preserved legacy projection.
+Trusted replacement publishes through the NIC transition. Both PUT resources return 409 for a valid legacy-shaped write while extended admission is active, including while disabled.
 
 | Requested transition | Before NIC call | On success | On NIC failure |
 | --- | --- | --- | --- |
 | Disable | Publish candidate with disabled gate and pending status | Confirm disabled candidate | Keep disabled gate and report uncertain status |
 | Re-enable | Keep previous disabled gate and publish pending status | Publish and confirm enabled candidate | Keep previous disabled gate and report uncertain status |
 
-Policy GET returns 503 while either operation is pending or uncertain. The status resource reports the snapshot and its application state.
+When the policy has a legacy view, policy GET returns 503 while either operation is pending or uncertain. Complete status reports the snapshot and its application state.
 
 [TCP design and acceptance](https://github.com/boxlite-ai/boxlite/issues/2880)
 
@@ -487,8 +488,8 @@ Enabled traffic continues through the existing filter-table chains, including th
 
 Disabling publishes a rejecting snapshot before NIC suspension; enabling retains that gate until the NIC has enabled successfully.
 NIC errors retain the disabled gate and mark application uncertain.
-Policy GET returns 503 while application is pending or uncertain, and successful GET/PUT retain the existing policy JSON shape.
-The separate status resource reports the observed snapshot identity and application state without changing the policy body.
+
+Policy and status responses use the shapes in the bridge revision protocol below.
 
 The registered-DNS regression fixture binds native gVisor UDP/TCP endpoints on port 5353 and forwards received DNS messages to a test-owned host listener.
 It exercises endpoint demultiplexing without replacing the global mode gate, and includes a new query on an established TCP DNS connection.
@@ -498,10 +499,11 @@ Controlled NIC pauses separately verify the interval before suspension and the i
 
 | Control resource | Contract |
 | --- | --- |
-| `GET /network/outbound` | Existing policy JSON plus a strong ETag; 503 while application is pending or uncertain. |
-| `PUT /network/outbound` | Existing complete policy replacement, optional HTTP `If-Match`; the bridge chooses a fresh revision. |
-| `PUT /network/outbound/snapshot` | Version-required internal replacement; one strong expected revision in `If-Match` and a fresh candidate in `X-Boxlite-Outbound-Revision`. |
-| `GET /network/outbound/status` | Policy, observed `revision`, `application_state`, and capabilities including `revision-v1`; no persistence or Internet-connectivity claim. |
+| `GET /network/outbound` | Legacy policy JSON and strong ETag, 503 while legacy application is pending or uncertain, or 501 when the policy requires complete status. |
+| `PUT /network/outbound` | Legacy policy replacement with optional `If-Match`. The bridge chooses a fresh revision. |
+| `PUT /network/outbound/snapshot` | Flat legacy policy or versioned complete replacement. Requires a strong `If-Match` and a fresh `X-Boxlite-Outbound-Revision`. |
+| `GET /network/outbound/status` | Legacy policy, revision, application state, and `revision-v1`. Returns 501 when the policy requires complete status. |
+| `GET /network/outbound/complete-status` | Complete snapshot with admission, rules, and revision, plus application state and supported outbound capabilities. |
 
 Version-aware clients use the dedicated snapshot resource and never fall back to legacy PUT.
 An old handler may ignore extra headers on its existing resource; a new resource makes unsupported peers reject the operation before application, including after a capability-probe/backend-restart race.
@@ -830,15 +832,70 @@ make test:unit:rust FILTER=outbound_recovery RUST_UNIT_CORE_ARGS='-p boxlite --a
 
 ### Runtime bootstrap identity
 
+#### Complete policy in the local Runtime
+
+Use `BoxliteRuntime::create_with_outbound_policy` or `get_or_create_with_outbound_policy` to configure a complete local IPv4 policy without changing existing `BoxOptions` literals. An explicit complete policy selects extended forwarding even when both rule lists are empty. A Box created through `NetworkSpec` uses legacy forwarding.
+
+For example, a complete policy with `mode: enabled`, an empty `allow_net`, and `deny_net: ["192.0.2.0/24:443"]` denies that prefix only on port 443. The Runtime validates the rules and checks the selected shim's capabilities before creating a row. The versioned launch sends the committed policy, revision, admission mode, and the union of capabilities required by any unresolved attempt.
+
+`NetworkHandle::update_outbound_policy` and `replace_outbound_policy` evolve the complete policy under the Box operation lock. `complete_outbound_snapshot` reads durable policy and `complete_outbound_status` compares it with backend observation. An explicit `deny_net: []` requires deny capability for the request and clears user denies without erasing the installed admission mode.
+
+Complete replacements, clones, and exports acquire disk admission before the operation lock. This keeps the copy's policy eligibility valid through publication.
+
+```mermaid
+sequenceDiagram
+    participant E as Export
+    participant W as Archive writer
+    participant P as Complete policy replacement
+    E->>E: Acquire disk admission and read copy options
+    E->>W: Start archive write with disk admission
+    Note over E,W: Caller cancels, writer retains disk admission
+    P->>P: Wait for disk admission
+    W->>W: Finish archive write and release admission
+    P->>P: Acquire disk admission, then the operation lock
+```
+
+The versioned request uses canonical deny rules and preserves whether the caller supplied the field. Its body budget includes framing for an existing policy accepted by the 64 KiB legacy endpoint. Recovery preserves that policy's original allow strings and historical rule count.
+
+An unresolved attempt survives restart as uncertainty. The shim installs the committed snapshot only, and a read never replays the attempt. The Runtime records restoration with its fresh revision before dispatch so a later mutation can confirm the exact restored identity if publication was interrupted.
+
+```mermaid
+sequenceDiagram
+    participant R as Runtime
+    participant D as SQLite
+    participant G as gvproxy
+    R->>D: Reserve the candidate and preserve earlier evidence
+    R->>G: Apply by revision
+    G-->>R: Confirm the complete candidate
+    alt Durable publication succeeds
+        R->>D: Publish policy and revision
+    else Durable publication fails
+        R->>D: Record restoration with a fresh revision
+        R->>G: Restore the predecessor by revision
+        G-->>R: Confirm the restoration
+        Note over R,D: If publication is interrupted, retain both attempts
+    end
+```
+
+Legacy policy interfaces return `Unsupported` for protected snapshots. General Box metadata uses one durable row for the outbound policy and its visibility, even when the Box handle is cached. Metadata omits the network view when it cannot express the policy.
+
+Box listings use one database snapshot for all entries.
+
+`NetworkHandle::published_ports` and Go `Network.PublishedPorts` report the independent lifecycle-verified bindings. A port lookup does not start a VM or repair listeners.
+
+Runtime records with protected policy require a compatible Runtime. A rollback needs a legacy-compatible store with no unresolved extended requirements. Clone, export, and import refuse policy they cannot represent before provisioning or writing the resulting archive.
+
+#### Legacy revision bootstrap
+
 New and restarted VMs receive the persisted revision alongside their persisted policy.
 Records without control metadata use `initial`.
-An unresolved pending candidate is not replayed at startup: the committed policy and revision seed the backend, and the pending record remains available for reconciliation.
-Reattaching to a surviving backend does not replace its live identity.
 
-The revision travels in a private field of the existing stdin launch message, then in the private JSON object passed to gvproxy.
+Startup seeds the backend with the committed policy and revision. The Runtime keeps an unresolved candidate for reconciliation and preserves a surviving backend's live identity on reattach.
+
+The stdin launch message carries the legacy revision in a private field. The shim passes the revision to gvproxy through private JSON.
 `InstanceSpec`, `NetworkBackendSpec`, `GvproxyConfig`, and `BoxState` keep their public fields.
-The existing `GvproxyInstance::from_config` constructor remains available; the explicit revision constructor restores a coordinator-owned identity.
-The shim validates the optional token before starting the backend; absent metadata preserves the legacy launch contract.
+
+The explicit revision constructor restores a coordinator-owned identity. The shim validates an optional token before startup and uses the legacy launch contract when metadata is absent.
 
 The shared `bootstrap-v1.json` example passes through the production launch encoder, shim parser, and gvproxy JSON encoder.
 Real-library tests create gvproxy with a restored revision, verify live readback and conditional replacement, reject a stale replacement, and repeat after backend restart.

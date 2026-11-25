@@ -195,8 +195,9 @@ Disk APIs use the runtime's shared lock manager with persisted box lock IDs in
 an independent `<home>/locks/disk/` namespace, serializing operations across handles.
 Blocking acquisition follows disk → lifecycle → short state guard order, with
 box existence rechecked after disk admission and before disk side effects.
-Clone, export, and snapshot mutations share `with_disk_admission` for acquisition
-and existence rechecks, keeping new entry points on the same admission path.
+Clone, export, and snapshot mutations share disk admission and the existence
+recheck through `acquire_disk_admission`.
+
 If a batch clone fails after staging begins, every unprovisioned staging
 directory is cleaned up, while successfully provisioned clones are retained.
 Snapshot restore queues for disk → lifecycle admission, rechecks that the box is
@@ -204,16 +205,17 @@ inactive after the lifecycle state refresh, and holds both admissions through di
 replacement.
 The quiesce bracket holds lifecycle write admission through freeze, pause, disk
 work, resume, and thaw.
+
 Explicit stop/removal already holding lifecycle admission only tries disk admission
 and returns `InvalidState` when busy, allowing retry without a deadlock. Natural-exit
 cleanup instead waits in disk → lifecycle order, then uses the shared removal core
 with both admissions held.
-Final archive writing releases lifecycle admission but retains disk exclusion
-while its caller awaits it.
-Disk operations execute in the caller's future, so cancellation does not guarantee
-completion of disk work or resume/thaw cleanup: a blocking worker may continue
-after the caller drops its guards.
 Lifecycle-read/disk-write composition is not provided.
+
+Export holds disk admission through flattening and archive writing, even if the
+caller cancels after dispatching a blocking worker. Final archive writing runs
+with lifecycle admission released. Cancellation can interrupt resume and thaw
+cleanup.
 
 Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=operation_lock` for host
 admission and cleanup checks. Stand-in processes and loopback guest RPCs are not

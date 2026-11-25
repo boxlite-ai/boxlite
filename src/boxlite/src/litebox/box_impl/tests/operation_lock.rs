@@ -1452,6 +1452,88 @@ async fn export_cancellation_and_phase_errors_release_admissions() {
 }
 
 #[tokio::test]
+async fn cancelled_export_holds_disk_admission_until_archive_write_finishes() {
+    use std::ffi::CString;
+    use std::fs::OpenOptions;
+    use std::io::{ErrorKind, Read};
+    use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
+
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_owned(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = persistent_disk_test_box(&runtime).await;
+    let bx = disk_test_backend(&source);
+    create_disk_for_test(&bx);
+    let locker = bx.disk_locker().unwrap();
+    let dest = home.path().join("archive.boxlite");
+    let fifo = CString::new(dest.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+
+    // The finalizer writes its manifest before opening the pipe for output.
+    // Keep the pipe closed until after cancelling the export and checking the lock.
+    let scratch = runtime.layout.temp_dir();
+    let manifest_written = async {
+        loop {
+            let manifest = crate::litebox::archive::MANIFEST_FILENAME;
+            if std::fs::read_dir(&scratch)
+                .unwrap()
+                .any(|entry| entry.unwrap().path().join(manifest).is_file())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    let mut export = Box::pin(source.export(Default::default(), &dest));
+    let reached_finalizer = tokio::select! {
+        result = &mut export => panic!("archive write completed before opening pipe: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(5), manifest_written) => result,
+    };
+    drop(export);
+
+    let released_before_write = LockGuard::try_new(locker.as_ref()).is_some();
+    let mut reader = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&dest)
+        .unwrap();
+    if reached_finalizer.is_err() {
+        std::fs::remove_file(&dest).unwrap();
+        panic!("export finalizer did not write its manifest");
+    }
+
+    let mut archive = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match reader.read_to_end(&mut archive) {
+                Ok(_) if !archive.is_empty() => break,
+                Ok(_) => {}
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {}
+                Err(error) => panic!("cannot read exported archive: {error}"),
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("export did not finish writing its archive");
+    assert!(archive.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]));
+
+    let _released = tokio::time::timeout(
+        Duration::from_secs(5),
+        LockGuard::new_async(locker.as_ref()),
+    )
+    .await
+    .expect("disk admission was not released after writing");
+    assert!(
+        !released_before_write,
+        "disk admission released before archive write"
+    );
+}
+
+#[tokio::test]
 async fn snapshot_create_restore_remove_and_marker_failure_release_admission() {
     enable_disk_operation_logs();
     use crate::disk::{BackingFormat, Qcow2Helper, read_backing_file_path};

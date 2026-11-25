@@ -14,7 +14,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use crate::litebox::box_impl::outbound::OutboundControl;
+use crate::litebox::box_impl::outbound::{CompleteOutboundControl, OutboundControl};
 use crate::litebox::config::BoxConfig;
 use crate::runtime::id::BoxID;
 use crate::runtime::types::BoxState;
@@ -129,10 +129,8 @@ impl BoxStore {
 
         match json {
             Some(j) => {
-                let state: BoxState = serde_json::from_str(&j).map_err(|e| {
-                    BoxliteError::Database(format!("Failed to deserialize state: {}", e))
-                })?;
-                Ok(Some(state))
+                let (state, _) = decode_box_state(&j)?;
+                Ok(Some(serde_json::from_value(state).map_err(state_error)?))
             }
             None => Ok(None),
         }
@@ -186,6 +184,7 @@ impl BoxStore {
     // Combined operations
     // ========================================================================
 
+    #[cfg(test)]
     pub(crate) fn outbound_control(&self, box_id: &str) -> BoxliteResult<Option<OutboundControl>> {
         let body: Option<String> =
             db_err!(self.db.conn().query_row(
@@ -206,7 +205,11 @@ impl BoxStore {
     pub(crate) fn outbound_state(
         &self,
         box_id: &str,
-    ) -> BoxliteResult<(BoxState, Option<OutboundControl>)> {
+    ) -> BoxliteResult<(
+        BoxState,
+        Option<OutboundControl>,
+        Option<CompleteOutboundControl>,
+    )> {
         #[derive(serde::Deserialize)]
         struct Stored {
             #[serde(flatten)]
@@ -225,14 +228,59 @@ impl BoxStore {
                 .optional()
         )?
         .ok_or_else(|| BoxliteError::NotFound(box_id.into()))?;
-        let stored: Stored = serde_json::from_str(&body).map_err(|e| {
+        let (state, complete) = decode_box_state(&body)?;
+        let stored: Stored = serde_json::from_value(state).map_err(|e| {
             BoxliteError::Database(format!("invalid outbound state for {box_id}: {e}"))
         })?;
         let control = stored
             .outbound_control
             .map(|value| validate_outbound_control(box_id, value))
             .transpose()?;
-        Ok((stored.state, control))
+        Ok((stored.state, control, complete))
+    }
+
+    pub(crate) fn save_complete_outbound(
+        &self,
+        box_id: &str,
+        complete: &CompleteOutboundControl,
+    ) -> BoxliteResult<()> {
+        if let Some((policy, control)) = complete.legacy() {
+            return self.save_outbound_control(box_id, Some(&control), Some(&policy));
+        }
+        let policy = serde_json::to_string(&CompletePolicyField {
+            outbound_v1: complete.clone(),
+        })
+        .map_err(state_error)?;
+        self.write_outbound_row(box_id, policy, "null".into())
+    }
+
+    pub(crate) fn restore_legacy_outbound(
+        &self,
+        box_id: &str,
+        state: &BoxState,
+        control: Option<&OutboundControl>,
+    ) -> BoxliteResult<()> {
+        self.write_outbound_row(
+            box_id,
+            serde_json::to_string(&state.outbound_policy).map_err(state_error)?,
+            serde_json::to_string(&control).map_err(state_error)?,
+        )
+    }
+
+    fn write_outbound_row(
+        &self,
+        box_id: &str,
+        policy: String,
+        control: String,
+    ) -> BoxliteResult<()> {
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_state SET json = json_set(json, '$.outbound_policy', json(?1), '$.outbound_control', json(?2)) WHERE id = ?3",
+            params![policy, control, box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
+        Ok(())
     }
 
     pub(crate) fn save_outbound_control(
@@ -263,7 +311,17 @@ impl BoxStore {
     ///
     /// Uses a transaction to ensure both inserts succeed or neither does.
     /// Follows Podman pattern of explicit transactions for multi-statement operations.
+    #[cfg(test)]
     pub fn save(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+        self.save_with_outbound(config, state, None)
+    }
+
+    pub(crate) fn save_with_outbound(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        outbound: Option<CompleteOutboundControl>,
+    ) -> BoxliteResult<()> {
         let mut conn = self.db.conn();
         let tx = db_err!(conn.transaction())?;
 
@@ -272,8 +330,12 @@ impl BoxStore {
             .map_err(|e| BoxliteError::Database(format!("Failed to serialize config: {}", e)))?;
 
         // Serialize state
-        let state_json = serde_json::to_string(state)
-            .map_err(|e| BoxliteError::Database(format!("Failed to serialize state: {}", e)))?;
+        let mut state_json = serde_json::to_value(state).map_err(state_error)?;
+        if let Some(outbound_v1) = outbound {
+            state_json["outbound_policy"] =
+                serde_json::to_value(CompletePolicyField { outbound_v1 }).map_err(state_error)?;
+        }
+        let state_json = serde_json::to_string(&state_json).map_err(state_error)?;
 
         // Insert config (name has UNIQUE constraint, will fail on duplicate)
         db_err!(tx.execute(
@@ -314,6 +376,14 @@ impl BoxStore {
     ///
     /// Returns boxes sorted by creation time (newest first).
     pub fn list_all(&self) -> BoxliteResult<Vec<(BoxConfig, BoxState)>> {
+        Ok(self
+            .list_for_info()?
+            .into_iter()
+            .map(|(config, state, _)| (config, state))
+            .collect())
+    }
+
+    pub(crate) fn list_for_info(&self) -> BoxliteResult<Vec<(BoxConfig, BoxState, bool)>> {
         let conn = self.db.conn();
 
         let mut stmt = db_err!(conn.prepare(
@@ -337,10 +407,9 @@ impl BoxStore {
             let config: BoxConfig = serde_json::from_str(&config_json).map_err(|e| {
                 BoxliteError::Database(format!("Failed to deserialize config: {}", e))
             })?;
-            let state: BoxState = serde_json::from_str(&state_json).map_err(|e| {
-                BoxliteError::Database(format!("Failed to deserialize state: {}", e))
-            })?;
-            result.push((config, state));
+            let (state, complete) = decode_box_state(&state_json)?;
+            let state: BoxState = serde_json::from_value(state).map_err(state_error)?;
+            result.push((config, state, complete.is_none()));
         }
 
         Ok(result)
@@ -372,9 +441,8 @@ impl BoxStore {
             let config: BoxConfig = serde_json::from_str(&config_json).map_err(|e| {
                 BoxliteError::Database(format!("Failed to deserialize config: {}", e))
             })?;
-            let state: BoxState = serde_json::from_str(&state_json).map_err(|e| {
-                BoxliteError::Database(format!("Failed to deserialize state: {}", e))
-            })?;
+            let (state, _) = decode_box_state(&state_json)?;
+            let state: BoxState = serde_json::from_value(state).map_err(state_error)?;
             result.push((config, state));
         }
 
@@ -439,6 +507,33 @@ impl BoxStore {
 
         Ok(reset_ids)
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompletePolicyField {
+    outbound_v1: CompleteOutboundControl,
+}
+
+fn state_error(error: serde_json::Error) -> BoxliteError {
+    BoxliteError::Database(format!("invalid JSON for Box state: {error}"))
+}
+
+fn decode_box_state(
+    body: &str,
+) -> BoxliteResult<(serde_json::Value, Option<CompleteOutboundControl>)> {
+    let mut state: serde_json::Value = serde_json::from_str(body).map_err(state_error)?;
+    let Some(policy) = state.get_mut("outbound_policy") else {
+        return Ok((state, None));
+    };
+    if policy.get("outbound_v1").is_none() {
+        return Ok((state, None));
+    }
+    let stored: CompletePolicyField = serde_json::from_value(policy.take()).map_err(state_error)?;
+    stored.outbound_v1.validate().map_err(|error| {
+        BoxliteError::Database(format!("invalid complete outbound state: {error}"))
+    })?;
+    Ok((state, Some(stored.outbound_v1)))
 }
 
 fn validate_outbound_control(

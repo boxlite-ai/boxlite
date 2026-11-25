@@ -408,7 +408,7 @@ impl NetworkHandle {
     /// Enabled with an empty list removes allowlist restrictions. Existing
     /// connections retain their policy; disabled suspends network traffic.
     pub async fn update_outbound(&self, config: OutboundNetworkConfig) -> BoxliteResult<()> {
-        config.validate()?;
+        crate::net::require_legacy_outbound_write(&config)?;
         self.network_backend.update_outbound(config).await
     }
 
@@ -427,8 +427,61 @@ impl NetworkHandle {
         &self,
         replacement: crate::net::OutboundReplacement,
     ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
+        crate::net::require_legacy_outbound_write(&replacement.candidate().policy)?;
         self.network_backend
             .replace_outbound_snapshot(replacement)
+            .await
+    }
+
+    /// Read assigned host bindings without starting the Box or changing listeners.
+    /// `None` means the bindings are unknown. An empty list means none are active.
+    pub async fn published_ports(
+        &self,
+    ) -> BoxliteResult<Option<Vec<crate::runtime::types::PublishedPort>>> {
+        self.network_backend.published_ports().await
+    }
+
+    /// Read the committed outbound policy and its exact effective admission mode.
+    pub async fn complete_outbound_snapshot(
+        &self,
+    ) -> BoxliteResult<crate::net::CompleteOutboundSnapshot> {
+        self.network_backend.complete_outbound_snapshot().await
+    }
+
+    /// Compare complete durable and observed identities without changing the Box.
+    pub async fn complete_outbound_status(
+        &self,
+    ) -> BoxliteResult<crate::net::CompleteOutboundStatus> {
+        self.network_backend.complete_outbound_status().await
+    }
+
+    /// Replace the local outbound policy. Omission cannot clear effective denies.
+    pub async fn update_outbound_policy(
+        &self,
+        policy: crate::net::CompleteOutboundPolicy,
+    ) -> BoxliteResult<()> {
+        use crate::net::{OutboundReplaceOutcome, OutboundRevision};
+        match self
+            .network_backend
+            .replace_complete_outbound(policy, OutboundRevision::fresh(), None)
+            .await?
+        {
+            OutboundReplaceOutcome::Applied => Ok(()),
+            OutboundReplaceOutcome::PreconditionFailed => Err(BoxliteError::InvalidState(
+                "outbound backend revision changed; retry the complete update".into(),
+            )),
+        }
+    }
+
+    /// Compare and replace a complete local policy at a coordinator-owned revision.
+    pub async fn replace_outbound_policy(
+        &self,
+        expected: crate::net::OutboundRevision,
+        revision: crate::net::OutboundRevision,
+        policy: crate::net::CompleteOutboundPolicy,
+    ) -> BoxliteResult<crate::net::OutboundReplaceOutcome> {
+        self.network_backend
+            .replace_complete_outbound(policy, revision, Some(expected))
             .await
     }
 

@@ -1724,6 +1724,12 @@ enum BoxliteErrorCode boxlite_tunnel_forward(CBoxTunnelHandle *tunnel,
                                              CTunnelForwarderHandle **out_forwarder,
                                              CBoxliteError *out_error);
 
+// Read assigned host bindings as a JSON array or null when unknown.
+// On success, release *out_json with boxlite_free_string. On error it is NULL.
+enum BoxliteErrorCode boxlite_network_published_ports(CBoxNetworkHandle *network,
+                                                      char **out_json,
+                                                      CBoxliteError *out_error);
+
 // Read persisted policy and revision as JSON, without claiming live confirmation.
 // On success, release *out_json with boxlite_free_string. On error it is NULL.
 enum BoxliteErrorCode boxlite_network_outbound_snapshot(CBoxNetworkHandle *network,

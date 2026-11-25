@@ -41,7 +41,7 @@ impl LivePublishedPorts {
 /// there are provably none. A live shim can still own listeners even when
 /// persisted state says the box is stopped or failed, so only an absent shim
 /// proves an empty set — running bindings need a publication result retained by
-/// the box handle, which [`super::box_impl::BoxImpl::info`] overlays.
+/// the box handle. [`super::box_impl::BoxImpl::info_from_store`] overlays those bindings.
 pub(crate) fn resolved_from_state(
     config: &BoxConfig,
     state: &BoxState,

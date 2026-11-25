@@ -681,6 +681,20 @@ impl BoxBackend for RestBox {
 
 #[async_trait]
 impl BoxNetworkBackend for RestBox {
+    async fn published_ports(
+        &self,
+    ) -> BoxliteResult<Option<Vec<crate::runtime::types::PublishedPort>>> {
+        let path = format!("/boxes/{}/network/published-ports", self.box_id_str());
+        match self.client.get(&path).await {
+            Err(BoxliteError::NotFound(_) | BoxliteError::Unsupported(_)) => Ok(self
+                .info()
+                .await?
+                .network
+                .and_then(|network| network.published_ports)),
+            result => result,
+        }
+    }
+
     async fn outbound_snapshot(&self) -> BoxliteResult<crate::net::OutboundSnapshot> {
         self.client.read_outbound_snapshot(&self.box_id_str()).await
     }

@@ -1942,6 +1942,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{box_id}/network/inbound", put(network::set_inbound))
         .route("/v1/boxes/{box_id}/network/outbound", get(network::get_outbound).put(network::set_outbound))
         .route("/v1/boxes/{box_id}/network/outbound/status", get(network::outbound_status))
+        .route("/v1/boxes/{box_id}/network/published-ports", get(network::published_ports))
         .route("/v1/boxes/{box_id}/network/outbound/snapshot", put(network::replace_outbound))
         .route(
             "/v1/boxes/{box_id}/start",

@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::net::{OutboundBootstrap, OutboundCapabilities, OutboundRevision};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::ffi;
@@ -18,7 +19,7 @@ use super::stats::NetworkStats;
 ///
 /// ## Logging
 ///
-/// On the first call to `GvproxyInstance::new()`, a logging callback is registered
+/// On the first construction, a logging callback is registered
 /// with the Go side via `gvproxy_set_log_callback`. This causes all Go `slog` logs
 /// to be forwarded to Rust's `tracing` with the target `"gvproxy"`.
 ///
@@ -57,19 +58,21 @@ impl GvproxyInstance {
     /// This automatically initializes the logging bridge on first use.
     ///
     /// [`NetworkBackendSpec`]: super::super::NetworkBackendSpec
+    #[cfg(test)]
     pub(crate) fn new(config: super::config::GvproxyConfig) -> BoxliteResult<Self> {
-        Self::new_with_revision(config, None)
+        Self::new_with_policy(config, None, None)
     }
 
-    fn new_with_revision(
+    fn new_with_policy(
         config: super::config::GvproxyConfig,
-        revision: Option<&crate::net::OutboundRevision>,
+        revision: Option<&OutboundRevision>,
+        outbound: Option<&OutboundBootstrap>,
     ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
 
         let socket_path = config.socket_path.clone();
-        let id = ffi::create_instance(&config, revision)?;
+        let id = ffi::create_instance(&config, revision, outbound)?;
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");
 
@@ -93,20 +96,36 @@ impl GvproxyInstance {
     pub fn from_config(
         spec: &super::super::NetworkBackendSpec,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
-        Self::from_seed(spec, None)
+        Self::from_seed(spec, None, None)
     }
 
     /// Restore a Runtime-owned snapshot identity while provisioning networking.
     pub fn from_config_with_revision(
         spec: &super::super::NetworkBackendSpec,
-        revision: &crate::net::OutboundRevision,
+        revision: &OutboundRevision,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
-        Self::from_seed(spec, Some(revision))
+        Self::from_seed(spec, Some(revision), None)
+    }
+
+    /// Install a committed policy and check the launch capability requirements.
+    #[doc(hidden)]
+    pub fn from_complete_config(
+        spec: &super::super::NetworkBackendSpec,
+        outbound: &OutboundBootstrap,
+    ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
+        Self::from_seed(spec, None, Some(outbound))
+    }
+
+    /// Capabilities advertised by the Go archive statically linked into this process.
+    #[doc(hidden)]
+    pub fn outbound_capabilities() -> OutboundCapabilities {
+        ffi::outbound_capabilities()
     }
 
     fn from_seed(
         spec: &super::super::NetworkBackendSpec,
-        revision: Option<&crate::net::OutboundRevision>,
+        revision: Option<&OutboundRevision>,
+        outbound: Option<&OutboundBootstrap>,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
         let secrets = spec.secrets.iter().map(Into::into).collect();
 
@@ -124,11 +143,7 @@ impl GvproxyInstance {
             config = config.with_ca(cert.to_string(), key.to_string());
         }
 
-        let instance = if revision.is_some() {
-            Self::new_with_revision(config, revision)?
-        } else {
-            Self::new(config)?
-        };
+        let instance = Self::new_with_policy(config, revision, outbound)?;
 
         let connection_type = if cfg!(target_os = "macos") {
             super::super::ConnectionType::UnixDgram

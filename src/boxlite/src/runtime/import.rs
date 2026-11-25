@@ -4,6 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
+use serde_json::Value;
 
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::LiteBox;
@@ -83,6 +85,15 @@ fn options_from_manifest(
         rootfs: RootfsSpec::Image(manifest.image.clone()),
         ..Default::default()
     });
+    if let crate::runtime::options::NetworkSpec::Enabled { allow_net } = &options.network
+        && allow_net
+            .iter()
+            .any(|rule| crate::net::outbound_rule_has_port(rule))
+    {
+        return Err(BoxliteError::Unsupported(
+            "archive contains an outbound rule requiring complete policy".into(),
+        ));
+    }
     // Up to v4 an archive's ports carried no publication semantics: a null
     // host port meant the guest port, and host_ip and protocol were ignored.
     // Canonicalize before sanitize, so the rewritten mappings are validated.
@@ -153,6 +164,68 @@ fn rejected_upload(subject: &str) -> BoxliteError {
     ))
 }
 
+/// Inspect archive fields before configuration deserializers can collapse them.
+struct ArchiveJson(Value);
+
+impl<'de> serde::Deserialize<'de> for ArchiveJson {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ArchiveVisitor;
+
+        impl<'de> Visitor<'de> for ArchiveVisitor {
+            type Value = Value;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("JSON with unique object fields")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut input: A) -> Result<Value, A::Error> {
+                let mut fields = serde_json::Map::new();
+                while let Some(key) = input.next_key::<String>()? {
+                    if fields.contains_key(&key) {
+                        return Err(de::Error::custom(format!("duplicate field `{key}`")));
+                    }
+                    fields.insert(key, input.next_value::<ArchiveJson>()?.0);
+                }
+                Ok(Value::Object(fields))
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut input: A) -> Result<Value, A::Error> {
+                let mut entries = Vec::new();
+                while let Some(ArchiveJson(value)) = input.next_element()? {
+                    entries.push(value);
+                }
+                Ok(Value::Array(entries))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Value, E> {
+                Ok(value.into())
+            }
+
+            fn visit_unit<E>(self) -> Result<Value, E> {
+                Ok(Value::Null)
+            }
+        }
+
+        deserializer.deserialize_any(ArchiveVisitor).map(Self)
+    }
+}
+
 /// Extract archive, parse manifest, verify checksums.
 fn extract_and_validate(
     archive_path: &Path,
@@ -171,6 +244,24 @@ fn extract_and_validate(
     }
 
     let manifest_json = std::fs::read_to_string(&manifest_path)?;
+    let ArchiveJson(raw_manifest) = serde_json::from_str(&manifest_json)
+        .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {e}")))?;
+    if [
+        "/outbound_policy",
+        "/outbound_v1",
+        "/box_options/outbound_policy",
+        "/box_options/network/outbound_v1",
+        "/box_options/network/deny_net",
+        "/box_options/network/Enabled/deny_net",
+        "/box_options/network/outbound/deny_net",
+    ]
+    .iter()
+    .any(|path| raw_manifest.pointer(path).is_some())
+    {
+        return Err(BoxliteError::Unsupported(
+            "archive contains complete outbound policy".into(),
+        ));
+    }
     let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
         .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
 
@@ -693,6 +784,98 @@ mod tests {
 mod required_import_safety_tests {
     use super::*;
     use crate::runtime::options::BoxliteOptions;
+
+    #[tokio::test]
+    async fn outbound_import_refuses_complete_policy_before_provisioning() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().join("runtime"),
+            ..Default::default()
+        })
+        .unwrap();
+        let disk = home.path().join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk, None);
+        let manifest = ArchiveManifest {
+            version: 3,
+            box_name: None,
+            image: "alpine:latest".into(),
+            box_options: Some(BoxOptions::default()),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: sha256_file(&disk).unwrap(),
+            exported_at: "2026-11-19T00:00:00Z".into(),
+        };
+        let manifest_path = home.path().join("manifest.json");
+        let archive_path = home.path().join("policy.boxlite");
+        let mut marked = serde_json::to_value(&manifest).unwrap();
+        marked["box_options"]["outbound_policy"] =
+            serde_json::json!({"mode":"enabled","allow_net":[],"deny_net":[]});
+        std::fs::write(&manifest_path, serde_json::to_vec(&marked).unwrap()).unwrap();
+        crate::litebox::archive::build_zstd_tar_archive(&archive_path, &manifest_path, &disk, 1)
+            .unwrap();
+        let result = import_box(
+            &runtime,
+            BoxArchive::new(&archive_path),
+            Some("protected".into()),
+        )
+        .await;
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        assert!(runtime.list_info().await.unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(runtime.layout.boxes_dir())
+                .unwrap()
+                .count(),
+            0
+        );
+
+        let original = serde_json::to_string(&manifest).unwrap();
+        let network =
+            serde_json::to_string(&manifest.box_options.as_ref().unwrap().network).unwrap();
+        let network_member = format!(r#""network":{network}"#);
+        assert!(original.contains(&network_member));
+        let nested_duplicate = original.replacen(
+            &network_member,
+            &format!("{network_member},{network_member}"),
+            1,
+        );
+        let root_duplicate = format!(r#"{{"version":2,{}"#, original.strip_prefix('{').unwrap());
+        for (field, duplicate) in [("version", root_duplicate), ("network", nested_duplicate)] {
+            std::fs::write(&manifest_path, duplicate).unwrap();
+            crate::litebox::archive::build_zstd_tar_archive(
+                &archive_path,
+                &manifest_path,
+                &disk,
+                1,
+            )
+            .unwrap();
+            let rejected = runtime
+                .import_box(BoxArchive::new(&archive_path), Some("duplicate".into()))
+                .await
+                .err();
+            assert!(
+                matches!(&rejected, Some(BoxliteError::Storage(reason)) if reason.contains(&format!("duplicate field `{field}`"))),
+                "unexpected result for repeated {field}: {rejected:?}"
+            );
+            assert!(runtime.list_info().await.unwrap().is_empty());
+            assert_eq!(
+                std::fs::read_dir(runtime.layout.boxes_dir())
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+
+        std::fs::write(&manifest_path, original).unwrap();
+        crate::litebox::archive::build_zstd_tar_archive(&archive_path, &manifest_path, &disk, 1)
+            .unwrap();
+        let imported = import_box(
+            &runtime,
+            BoxArchive::new(archive_path),
+            Some("legacy".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(imported.name(), Some("legacy"));
+    }
 
     #[tokio::test]
     async fn required_headers_import_preserves_archive_and_store() {

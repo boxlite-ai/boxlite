@@ -8,8 +8,10 @@ use std::ffi::{CStr, CString};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::config::GvproxyConfig;
+use crate::net::{OutboundBootstrap, OutboundCapabilities, OutboundRevision};
 use libgvproxy_sys::{
     gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_stats, gvproxy_get_version,
+    gvproxy_outbound_capabilities,
 };
 
 /// Create a new gvproxy instance with full configuration
@@ -21,9 +23,18 @@ use libgvproxy_sys::{
 /// Instance ID (handle) or error
 pub fn create_instance(
     config: &GvproxyConfig,
-    revision: Option<&crate::net::OutboundRevision>,
+    revision: Option<&OutboundRevision>,
+    outbound: Option<&OutboundBootstrap>,
 ) -> BoxliteResult<i64> {
-    let json = serialize_config(config, revision)?;
+    let json = match outbound {
+        Some(outbound) => {
+            serde_json::to_string(&serde_json::json!({"config": config, "outbound_v1": outbound}))
+                .map_err(|e| {
+                BoxliteError::Network(format!("Failed to serialize complete gvproxy config: {e}"))
+            })?
+        }
+        None => serialize_config(config, revision)?,
+    };
 
     let c_json = CString::new(json)
         .map_err(|e| BoxliteError::Network(format!("Invalid JSON string: {}", e)))?;
@@ -56,6 +67,11 @@ pub fn create_instance(
     tracing::info!(id, "Created gvproxy instance via FFI");
 
     Ok(id)
+}
+
+pub fn outbound_capabilities() -> OutboundCapabilities {
+    // This function returns a value and does not allocate or borrow Go memory.
+    OutboundCapabilities::from_bits(unsafe { gvproxy_outbound_capabilities() })
 }
 
 fn serialize_config(
@@ -172,7 +188,7 @@ mod tests {
         use std::path::PathBuf;
         let socket_path = PathBuf::from("/tmp/test-gvproxy-ffi.sock");
         let config = GvproxyConfig::new(socket_path);
-        let id = create_instance(&config, None).unwrap();
+        let id = create_instance(&config, None, None).unwrap();
 
         // Destroy instance
         destroy_instance(id).unwrap();

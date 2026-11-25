@@ -93,6 +93,36 @@ func TestOutboundRevisionCrossFFI(t *testing.T) {
 	}
 }
 
+func TestOutboundPublishedPortsCrossFFI(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       []PublishedPort
+	}{
+		{"unresolved", "null", nil},
+		{"known-empty", "[]", []PublishedPort{}},
+		{"assigned", `[{"guest_port":3000,"host_ip":"127.0.0.1","host_port":49152,"protocol":"tcp"}]`,
+			[]PublishedPort{{GuestPort: 3000, HostIP: "127.0.0.1", HostPort: 49152, Protocol: PortProtocolTcp}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			network := outboundNetwork(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/v1/boxes/box1/network/published-ports" {
+					t.Errorf("unexpected port lookup request: %s %s", r.Method, r.URL.Path)
+				}
+				_, _ = io.WriteString(w, tc.body)
+			})
+			got, err := network.PublishedPorts(context.Background())
+			if err != nil || (got == nil) != (tc.want == nil) || len(got) != len(tc.want) {
+				t.Fatalf("port lookup = %#v, %v, want %#v", got, err, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("port %d = %#v, want %#v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestOutboundRevisionRefusalsCrossFFI(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
