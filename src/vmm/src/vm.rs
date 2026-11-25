@@ -302,6 +302,13 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             vcpu::{StartGate, Workers},
         };
 
+        const KICK_RETRY: Duration = Duration::from_millis(10);
+
+        fn retryable_kick(error: &boxlite_hypervisor::Error) -> bool {
+            matches!(error, boxlite_hypervisor::Error::KickVcpu { source, .. }
+                if matches!(source.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted))
+        }
+
         self.fresh_vm = false;
         let gate = StartGate::default();
         let kicks = Mutex::new(Vec::new());
@@ -331,16 +338,22 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 fn drop(&mut self) {
                     self.lifecycle.mark_stopping();
                     self.gate.abort();
-                    for kick in self
-                        .kicks
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .iter()
-                    {
-                        match panic::catch_unwind(AssertUnwindSafe(|| kick.kick())) {
-                            Ok(Ok(())) => {}
-                            Ok(Err(error)) => tracing::warn!(%error, "failed to kick a vCPU"),
-                            Err(_) => tracing::warn!("vCPU kick panicked during shutdown"),
+                    // Late registrations cannot enter the guest after the stop latch.
+                    let mut pending = std::mem::take(
+                        &mut *self.kicks.lock().unwrap_or_else(PoisonError::into_inner),
+                    );
+                    while !pending.is_empty() {
+                        pending.retain(|kick| {
+                            match panic::catch_unwind(AssertUnwindSafe(|| kick.kick())) {
+                                Ok(Ok(())) => {}
+                                Ok(Err(error)) if retryable_kick(&error) => return true,
+                                Ok(Err(error)) => tracing::warn!(%error, "failed to kick a vCPU"),
+                                Err(_) => tracing::warn!("vCPU kick panicked during shutdown"),
+                            }
+                            false
+                        });
+                        if !pending.is_empty() {
+                            thread::sleep(KICK_RETRY);
                         }
                     }
                 }
@@ -365,7 +378,6 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     break;
                 }
             }
-            const KICK_RETRY: Duration = Duration::from_millis(10);
             let mut pending_kicks = 0u64;
             loop {
                 let wait = if pending_kicks != 0 {
@@ -395,12 +407,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     }
                     match kick.kick() {
                         Ok(()) => pending_kicks &= !bit,
-                        Err(boxlite_hypervisor::Error::KickVcpu { source, .. })
-                            if matches!(
-                                source.kind(),
-                                ErrorKind::WouldBlock | ErrorKind::Interrupted
-                            ) =>
-                        {
+                        Err(error) if retryable_kick(&error) => {
                             pending_kicks |= bit;
                         }
                         Err(error) => {

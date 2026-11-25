@@ -269,6 +269,12 @@ enum PauseFault {
         kind: io::ErrorKind,
         attempts: Arc<Mutex<KickAttempts>>,
     },
+    TerminalKick {
+        first_kick: Arc<ExitGate>,
+        shutdown: Option<Arc<ExitGate>>,
+        attempts: Arc<AtomicUsize>,
+        handle_ready: mpsc::Sender<MockHandle>,
+    },
     Startup {
         gate: Arc<ExitGate>,
         handle_ready: mpsc::Sender<()>,
@@ -363,10 +369,28 @@ impl VcpuHandle for FaultyKick {
                     });
                 }
             }
+            PauseFault::TerminalKick {
+                first_kick,
+                attempts,
+                ..
+            } if self.id == 0 => {
+                let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+                if attempt == 0 {
+                    first_kick.wait();
+                }
+                if attempt < 2 {
+                    return Err(boxlite_hypervisor::Error::KickVcpu {
+                        id: self.id,
+                        source: io::ErrorKind::WouldBlock.into(),
+                    });
+                }
+            }
             PauseFault::Startup { release, .. } => {
                 let _ = release.send(());
             }
-            PauseFault::CompleteIo(_) | PauseFault::SplitIo { .. } => {}
+            PauseFault::CompleteIo(_)
+            | PauseFault::SplitIo { .. }
+            | PauseFault::TerminalKick { .. } => {}
         }
         self.handle.kick()
     }
@@ -386,6 +410,14 @@ impl Vcpu for FailingCpu {
             let exit = fragments.run()?;
             gate.wait();
             return Ok(exit);
+        }
+        if self.id == 1
+            && let PauseFault::TerminalKick {
+                shutdown: Some(shutdown),
+                ..
+            } = &self.fault
+        {
+            shutdown.wait();
         }
         self.vcpu.run()
     }
@@ -428,8 +460,14 @@ impl Vcpu for FailingCpu {
         {
             handle_ready.send(()).unwrap();
         }
+        let handle = self.vcpu.handle();
+        if self.id == 0
+            && let PauseFault::TerminalKick { handle_ready, .. } = &self.fault
+        {
+            handle_ready.send(handle.clone()).unwrap();
+        }
         FaultyKick {
-            handle: self.vcpu.handle(),
+            handle,
             id: self.id,
             fault: self.fault.clone(),
         }
@@ -564,6 +602,78 @@ fn transient_pause_kick_retries_and_allows_resume() {
         wait_until(|| entries.lock().unwrap().len() == 4);
     });
     assert_eq!(exit.unwrap(), VmExit::StopRequested);
+}
+
+#[test]
+fn terminal_during_pause_retries_shutdown_kick_after_host_stop() {
+    assert_terminal_during_pause_retries_shutdown_kick(VmExit::StopRequested);
+}
+
+#[test]
+fn terminal_during_pause_retries_shutdown_kick_after_guest_shutdown() {
+    assert_terminal_during_pause_retries_shutdown_kick(VmExit::GuestShutdown);
+}
+
+fn assert_terminal_during_pause_retries_shutdown_kick(expected: VmExit) {
+    let guest_shutdown = expected == VmExit::GuestShutdown;
+    let (first_kick, pause_kick_started, finish_pause_kick) = ExitGate::new();
+    let (shutdown, guest_entered, release_guest) = ExitGate::new();
+    let (handle_ready, handle) = mpsc::channel();
+    let backend = MockVm::with_scripts(vec![vec![], vec![Step::Shutdown]]);
+    let entries = backend.entries();
+    let mut vm = faulty_vm(
+        backend,
+        if guest_shutdown { 2 } else { 1 },
+        PauseFault::TerminalKick {
+            first_kick,
+            shutdown: guest_shutdown.then_some(shutdown),
+            attempts: Arc::default(),
+            handle_ready,
+        },
+    );
+    let control = vm.control();
+    let lifecycle = Arc::clone(vm.lifecycle());
+    let (finished, result) = mpsc::channel();
+    let runner = thread::spawn(move || finished.send(vm.run()).unwrap());
+    let rescue = handle.recv_timeout(WAIT).unwrap();
+    wait_until(|| entries.lock().unwrap().contains(&0));
+    if guest_shutdown {
+        guest_entered.recv_timeout(WAIT).unwrap();
+    }
+
+    let pause = thread::scope(|scope| {
+        let pauser = scope.spawn(|| control.pause());
+        pause_kick_started.recv_timeout(WAIT).unwrap();
+        assert_eq!(control.status(), VmStatus::Pausing);
+        if guest_shutdown {
+            release_guest.send(()).unwrap();
+            wait_until(|| lifecycle.state().is_terminal());
+        } else {
+            control.stop();
+        }
+        // Latch the terminal event before the first kick fails, so the next
+        // attempt is from shutdown, not the pause retry loop.
+        finish_pause_kick.send(()).unwrap();
+        pauser.join().unwrap()
+    });
+
+    let outcome = result.recv_timeout(WAIT);
+    if matches!(outcome, Err(mpsc::RecvTimeoutError::Timeout)) {
+        // Unblock the mock only after the hang is observed, then fail on the
+        // original timeout rather than letting the test strand a worker.
+        rescue.kick().unwrap();
+        let _ = result
+            .recv_timeout(WAIT)
+            .expect("rescue kick did not unblock Vm::run()");
+    }
+    runner.join().unwrap();
+    assert_error(pause, "pause", ControlReason::TerminalOutcome);
+    assert_eq!(
+        outcome
+            .expect("Vm::run() did not return before WAIT")
+            .unwrap(),
+        expected
+    );
 }
 
 #[test]

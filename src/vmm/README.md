@@ -708,9 +708,12 @@ nothing mapped.
    that sends, such as the one whose `0xFE` reached the i8042, never enters
    the guest again. `run` takes the first event from the `EventLoop`, opens
    the start gate for teardown, releases and kicks the vCPUs, and joins them
-   all before it returns. `StopRequested`,
-   `GuestShutdown` and `GuestReset` become `VmExit`, and `VcpuFailed` or
-   `DeviceFailed` its error. Later events are dropped.
+   all before it returns. Before joining, shutdown retries kicks that fail
+   with `WouldBlock` or `Interrupted`, including when the terminal event
+   interrupts a pause. Kicking an exited vCPU is a successful no-op; other
+   kick errors and panics are logged without retrying that kick.
+   `StopRequested`, `GuestShutdown` and `GuestReset` become `VmExit`, and
+   `VcpuFailed` or `DeviceFailed` its error. Later events are dropped.
 
 4. Once every vCPU joins, `run` shuts down the [virtio workers](#virtio-workers),
    which join dispatch and quiesce every device: console drains published TX,
