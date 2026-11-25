@@ -2420,7 +2420,6 @@ components:
     idempotencyKey:
       name: Idempotency-Key
       in: header
-      x-boxlite-hosted-capability: idempotency_operations
       description: |
         Optional client-provided UUID. Hosted deployments advertising this
         operation in capabilities.idempotency_operations replay the original
