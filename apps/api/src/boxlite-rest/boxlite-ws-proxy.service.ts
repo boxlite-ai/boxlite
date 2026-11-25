@@ -103,6 +103,26 @@ export class BoxliteWsProxyService {
           }
           ;(req as RunnerUpgradeRequest).__boxliteAttachAudit?.bind(proxyReq)
         },
+        error: (err: Error, req: IncomingMessage, res) => {
+          // Strip the ticket from the URL before logging: the URL may still
+          // carry it if the proxy failed before `upgrade()` cleaned the path.
+          const url = withoutTicket(req.url ?? '')
+          const runner = (req as RunnerUpgradeRequest).__boxliteRunner
+          const boxId = (req as RunnerUpgradeRequest).__boxliteRunnerBoxId ?? 'unknown'
+          const runnerId = runner?.id ?? 'unknown'
+          const runnerUrl = runner?.apiUrl || (runner as Runner & { proxyUrl?: string })?.proxyUrl || 'unknown'
+          this.logger.warn(
+            `ws proxy error for ${url}: box=${boxId} runner=${runnerId} target=${runnerUrl} error=${(err as NodeJS.ErrnoException).code ?? err.message}`,
+          )
+          // `res` is the raw client socket during a WebSocket upgrade. If the
+          // 101 has not been sent yet, writing an HTTP error gives the client
+          // a real status instead of a Cloud Run-synthesized 503. If the
+          // upgrade already completed, the socket carries WebSocket frames and
+          // cannot accept an HTTP response — destroy is the only safe close.
+          const socket = res as unknown as Socket
+          const body = JSON.stringify({ error: err.message })
+          this.respondAndClose(socket, 502, 'Bad Gateway', body)
+        },
       },
     })
   }
@@ -323,9 +343,10 @@ export class BoxliteWsProxyService {
     }
   }
 
-  private respondAndClose(socket: Socket, status: number, reason: string): void {
+  private respondAndClose(socket: Socket, status: number, reason: string, body = ''): void {
     try {
-      socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+      const contentLength = Buffer.byteLength(body)
+      socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: ${contentLength}\r\n\r\n${body}`)
     } catch {
       // Socket may already be torn down — ignore.
     }
