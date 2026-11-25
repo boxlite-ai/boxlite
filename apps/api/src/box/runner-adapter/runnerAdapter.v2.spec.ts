@@ -276,6 +276,7 @@ describe('RunnerAdapterV2 createBox', () => {
   it('forwards volume mount options in the CREATE_BOX job payload', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    Object.assign(adapter, { config: { get: () => false } })
     await adapter.init({ id: 'runner-1' } as any)
 
     await adapter.createBox(
