@@ -1616,7 +1616,8 @@ for reference syntax and deployment behavior.
 
 Run Node 24 and use `make build:apps:api`. On GCP Cloud Run, background scheduling
 requires CPU allocation while idle and at least one minimum instance. mdeploy adds
-`cpuIdle: false` for custom domains and a service-level minimum of one instance when hosted CI is configured.
+`cpuIdle: false` for custom domains and defaults to one minimum instance when hosted CI is configured.
+An explicit `deploy.api.minInstances` overrides that default, including zero.
 This incurs idle instance costs. The database lease handles restarts and overlapping replicas; minimum instances
 do not guarantee that a process never restarts. These settings and formal hosted-App CI
 still require dev deployment acceptance.

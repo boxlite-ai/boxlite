@@ -104,7 +104,17 @@ The API also requires its existing Commerce connection for subscription eligibil
 Customer CNAME records must use DNS-only mode; see the [DNS guide](../../../../docs/concepts/networking.md#bring-your-own-domain).
 
 Custom domains set Cloud Run `cpuIdle: false`, incurring CPU costs while an instance exists, without adding a minimum instance count.
-Hosted CI independently sets a service-level minimum of one when enabled.
+In the mstage declaration, `"instance": { "cpu": 2, "memoryMiB": 2048 }` under `deploy.api`
+requests 2 vCPU and 2 GiB for each API container. Set both fields together, or omit `instance`
+to leave container limits unspecified. CPU and memory must fit the
+[Cloud Run service limits](https://cloud.google.com/run/docs/configuring/services/memory-limits).
+
+Set `deploy.api.minInstances` in the mstage declaration to override the service-level minimum (for example, `5`).
+An explicit `0` allows scale-to-zero even with hosted CI. When omitted, hosted CI sets a minimum of one; otherwise the minimum is omitted.
+
+Set `deploy.api.maxInstances` to a positive integer (for example, `15`) to cap both the service and its new revision.
+The maximum must be at least the configured minimum. Omitting it leaves the maximum unspecified.
+
 The API task runs at startup and every minute, advancing at most three due confirmed setups and one maintenance round.
 Startup awaits that work; hostname leases coordinate replicas, and shutdown awaits the active round.
 Scale-to-zero pauses progress until the API starts again; no independent Cloud Scheduler or expiration alerts are provisioned.

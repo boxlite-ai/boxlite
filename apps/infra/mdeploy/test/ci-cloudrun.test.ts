@@ -21,7 +21,7 @@ const unwrap = (input: any): any =>
         ? Object.fromEntries(Object.entries(input).map(([key, item]) => [key, unwrap(item)]))
         : input
 
-function capture(configured: boolean) {
+function capture(configured: boolean, minInstances?: number, instance?: { cpu: number; memoryMiB: number }, maxInstances?: number) {
   const records: { type: string; name: string; args: any }[] = []
   const namespace = (path: string): any =>
     new Proxy(function () {}, {
@@ -127,13 +127,13 @@ function capture(configured: boolean) {
     zoneId: 'zone',
     network: value('network') as any,
     runnerAccount: value('runner@example.test') as any,
-  })({ ...channels, image: 'registry.example.test/api:fixture', port: 3000, capabilities: [] } as any)
+  })({ ...channels, minInstances, maxInstances, instance, image: 'registry.example.test/api:fixture', port: 3000, capabilities: [] } as any)
   const service = records.find((r) => r.type === 'gcp.cloudrunv2.Service' && r.name === 'Api')
   assert.ok(service)
   return { service: unwrap(service.args), records }
 }
 
-test('the Cloud Run API retains background CPU and adds a service-level minimum only with CI', () => {
+test('the Cloud Run API retains background CPU and uses the hosted CI default when the minimum is omitted', () => {
   const on = capture(true).service
   assert.deepEqual(on.scaling, { minInstanceCount: 1 })
   assert.equal(on.template.containers[0].resources.cpuIdle, false)
@@ -141,6 +141,22 @@ test('the Cloud Run API retains background CPU and adds a service-level minimum 
   const off = capture(false).service
   assert.equal(off.scaling, undefined)
   assert.equal(off.template.containers[0].resources.cpuIdle, false)
+})
+
+test('the configured service minimum overrides the hosted CI default', () => {
+  assert.deepEqual(capture(true, 0).service.scaling, { minInstanceCount: 0 })
+  assert.deepEqual(capture(true, 5).service.scaling, { minInstanceCount: 5 })
+  assert.deepEqual(capture(false, 5).service.scaling, { minInstanceCount: 5 })
+  const { service } = capture(true, undefined, undefined, 15)
+  assert.deepEqual(service.scaling, { minInstanceCount: 1, maxInstanceCount: 15 })
+  assert.deepEqual(service.template.scaling, { maxInstanceCount: 15 })
+})
+
+test('Cloud Run receives instance limits only when a stage specifies them', () => {
+  assert.deepEqual(capture(false).service.template.containers[0].resources, { cpuIdle: false })
+  const { service } = capture(false, 5, { cpu: 2, memoryMiB: 2048 })
+  assert.deepEqual(service.template.containers[0].resources, { cpuIdle: false, limits: { cpu: '2', memory: '2048Mi' } })
+  assert.deepEqual(service.scaling, { minInstanceCount: 5 })
 })
 
 test('API targeting includes newly configured secret grants absent from the previous state', () => {
