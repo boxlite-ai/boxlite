@@ -876,3 +876,10 @@ When `pending_memory_restore` is set, `BoxBuilder` runs `FilesystemTask -> VmmSp
 GuestConnectTask -> PortPublishTask`, skipping rootfs creation and `GuestInit`.
 `VmmSpawnTask` consumes `pending_memory_restore` after spawn, and `GuestConnectTask` polls
 `Guest.Ping` instead of `ready.sock`.
+
+### Live box capture, staging safety, and restore commit
+
+`BoxImpl::capture_full_checkpoint_to_dir` ensures container init has started, keeps
+`staging_dir` alive across capture cancellation, hard-links live `vdb` inside locks, and
+resets `GuestSession`. `init_live_state` latches `container_start` after disarming cleanup
+and removes `vmstate.krun` after committing `Running`.

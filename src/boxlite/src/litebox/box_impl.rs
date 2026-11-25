@@ -47,7 +47,7 @@ use operations::{StopCommit, StopReason};
 /// Shared reference to BoxImpl.
 pub type SharedBoxImpl = Arc<BoxImpl>;
 
-#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(test, feature = "native", target_os = "linux", target_arch = "x86_64"))]
 #[path = "box_impl/tests/resize.rs"]
 mod resize_tests;
 
@@ -162,8 +162,8 @@ pub(crate) struct BoxImpl {
     /// Runs the container's init exactly once. Booting only *creates* the
     /// container now (docker's create); running its init is a separate step so a
     /// client can attach first. This single-flights that step across every
-    /// implicit-boot caller and an explicit `start()`, and is pre-set when we
-    /// reattach to a box whose init is already running.
+    /// implicit-boot caller and an explicit `start()`, and is pre-set on a
+    /// successful checkpoint restore.
     container_start: Arc<OnceCell<()>>,
 
     #[cfg(test)]
@@ -509,7 +509,7 @@ impl BoxImpl {
         // A box with no command of its own boots the image's default — the
         // cloud's agent daemon, the SDK's boot-and-exec — and waking that is the
         // whole point of the implicit start, so it stays.
-        if self.has_user_main_command() {
+        if !self.state.read().pending_memory_restore && self.has_user_main_command() {
             let already = if status == BoxStatus::Stopped {
                 "its main command has already run, and starting the box again would run it \
                  a second time"
@@ -968,6 +968,10 @@ impl BoxImpl {
                 }
             }
 
+            if !state.status.is_configured() {
+                state.pending_memory_restore = false;
+            }
+
             if was_persisted {
                 // Box was persisted - sync to DB
                 // Note: If the box was already removed (e.g., by cleanup after init failure),
@@ -989,6 +993,23 @@ impl BoxImpl {
                 self.runtime.box_manager.add_box(&self.config, &state)?;
             }
             *current = state;
+        }
+
+        if !self.state.read().status.is_configured() {
+            let checkpoint_dir = self
+                .layout
+                .root()
+                .join(crate::litebox::archive::CHECKPOINT_DIRNAME);
+            if checkpoint_dir.exists()
+                && let Err(error) = std::fs::remove_dir_all(&checkpoint_dir)
+            {
+                tracing::warn!(
+                    box_id = %self.config.id,
+                    path = %checkpoint_dir.display(),
+                    %error,
+                    "Failed to remove checkpoint directory on stop"
+                );
+            }
         }
 
         // Invalidate cache so new handles get fresh BoxImpl
@@ -1359,7 +1380,7 @@ impl BoxImpl {
     /// Run the container's init exactly once. Booting only creates the container;
     /// this is the separate `Container.Start`. Single-flighted via `OnceCell`,
     /// so the implicit-boot funnel and an explicit `start()` cannot double-run it,
-    /// and a box reattached with init already running pre-sets the cell.
+    /// and the guest makes the RPC idempotent across handle adoption.
     async fn ensure_container_started(&self, live: &LiveState) -> BoxliteResult<()> {
         Self::ensure_container_started_owned(
             Arc::clone(&self.container_start),
@@ -1444,10 +1465,8 @@ impl BoxImpl {
             )));
         }
         let is_first_start = state.status == BoxStatus::Configured;
-        // Reattaching to a live box: its init is already running, so mark the
-        // container-start done up front — `ensure_container_started` must not try
-        // to run it a second time.
         let adopting_running = state.status == BoxStatus::Running;
+        let restoring_checkpoint = !adopting_running && state.pending_memory_restore;
 
         // Build the box (lock is held)
         // New and restarted VMs remain guarded until DB persistence succeeds.
@@ -1457,131 +1476,332 @@ impl BoxImpl {
         state.outbound_policy = persisted.outbound_policy;
         let mut config = self.config.clone();
         config.options.disk_size_gb = persisted.disk_size_gb.or(config.options.disk_size_gb);
-        let builder = BoxBuilder::new(Arc::clone(&self.runtime), config, state)?;
-        let crate::litebox::init::BuiltBox {
-            live: live_state,
-            guard: mut cleanup_guard,
-            resolved_image,
-        } = builder.build().await?;
 
-        // The box is up. If we adopted one whose init was already running, that
-        // init needs no `Container.Start`; recording it now keeps
-        // `ensure_container_started` a no-op for this handle.
-        if adopting_running {
-            let _ = self.container_start.set(());
-        }
+        let initialize =
+            async {
+                let builder = BoxBuilder::new(Arc::clone(&self.runtime), config, state)?;
+                let crate::litebox::init::BuiltBox {
+                    live: live_state,
+                    guard: mut cleanup_guard,
+                    resolved_image,
+                } = builder.build().await?;
 
-        // Read PID from file (single source of truth) and update state.
-        //
-        // The PID file is written by pre_exec hook immediately after fork().
-        // This is crash-safe: if we reach this point, the shim is running
-        // and the PID file exists.
-        //
-        // For reattach (status=Running), the PID file was written during
-        // the original spawn and is still valid.
-        // Only a *fresh boot* (Configured/Stopped → start) gets a health probe.
-        // An adopted box — already Running when we reached here — was armed
-        // exit-only by the handout that first observed it, so a probe built here
-        // would be stranded (the watcher's cell is already taken). Adopted boxes
-        // are exit-only by design; see [`BoxWatcher`](super::watcher::BoxWatcher).
-        // Gating here also skips a guest fetch whose result we would discard.
-        //
-        // Fetched before the state lock — the await must not run under it — and
-        // before publishing Running below.
-        let health_guest =
-            if self.config.options.advanced.health_check.is_some() && !adopting_running {
-                Some(live_state.guest_session.guest().await?)
-            } else {
-                None
+                // Read PID from file (single source of truth) and update state.
+                //
+                // The PID file is written by pre_exec hook immediately after fork().
+                // This is crash-safe: if we reach this point, the shim is running
+                // and the PID file exists.
+                //
+                // For reattach (status=Running), the PID file was written during
+                // the original spawn and is still valid.
+                // Only a *fresh boot* (Configured/Stopped → start) gets a health probe.
+                // An adopted box — already Running when we reached here — was armed
+                // exit-only by the handout that first observed it, so a probe built here
+                // would be stranded (the watcher's cell is already taken). Adopted boxes
+                // are exit-only by design; see [`BoxWatcher`](super::watcher::BoxWatcher).
+                // Gating here also skips a guest fetch whose result we would discard.
+                //
+                // Fetched before the state lock — the await must not run under it — and
+                // before publishing Running below.
+                let health_guest =
+                    if self.config.options.advanced.health_check.is_some() && !adopting_running {
+                        Some(live_state.guest_session.guest().await?)
+                    } else {
+                        None
+                    };
+
+                {
+                    // PidFile is the single source of truth for shim identity
+                    // (PID + optional starttime fingerprint). The starttime is
+                    // consumed by recovery, not stored in the DB.
+                    let pid_path = self.layout.pid_file_path();
+                    let record = crate::util::PidFileReader::at(&pid_path).read()?;
+                    let pid = record.pid;
+
+                    let mut state = self.state.write();
+                    // An adopted box can lose its shim between the build's last live
+                    // operation and this publish: the exit-only watcher armed when the
+                    // box was first handed out records `Stopped` here first. Publishing
+                    // `Running` over that would report a live box with a dead PID, and
+                    // the watcher's cell is already taken — nothing would observe the
+                    // death again. A fresh start always publishes from `Configured` or
+                    // `Stopped`, so this check is adoption-only; its cleanup guard is
+                    // already disarmed, so returning here does not tear the box down.
+                    if adopting_running && state.status != BoxStatus::Running {
+                        return Err(BoxliteError::InvalidState(format!(
+                            "Box {} stopped while it was being adopted ({})",
+                            self.config.id, state.status
+                        )));
+                    }
+                    state.set_pid(Some(pid));
+                    state.set_status(BoxStatus::Running);
+                    // A box entering Running publishes its PID, status, and `started_at`
+                    // timestamp atomically. An adopted Running box is the same lifecycle,
+                    // so its existing Some/None value must be preserved.
+                    if !adopting_running {
+                        state.mark_started();
+                    }
+
+                    // This is a fresh run of the box's main command, so the exit code
+                    // recorded for the previous one no longer describes it (docker
+                    // clears ExitCode on start too). The guest drops its matching
+                    // exit file in Container.Init.
+                    state.exit_code = None;
+
+                    state.record_resolved_image(resolved_image);
+                    if restoring_checkpoint {
+                        state.pending_memory_restore = false;
+                    }
+
+                    // Initialize health status if health check is configured
+                    if self.config.options.advanced.health_check.is_some() {
+                        state.init_health_status();
+                    }
+
+                    // Save to DB (cache for queries and recovery)
+                    self.runtime.box_manager.save_box(&self.config.id, &state)?;
+
+                    // Arm the watcher under the *same* lock that publishes Running+pid.
+                    // A concurrent handout runs `arm_watcher(None)`, which reads the state
+                    // first: it either sees a not-yet-Running box and skips, or blocks
+                    // here and finds the watcher already armed. So it can never slip an
+                    // exit-only watcher in ahead of us and strand the health probe.
+                    let health =
+                        health_guest.map(|guest| {
+                            super::watcher::HealthProbe::new(
+                                guest,
+                                self.config.options.advanced.health_check.clone().expect(
+                                    "guest is fetched only when a health check is configured",
+                                ),
+                            )
+                        });
+                    self.spawn_watcher_once(pid, state.started_at, health);
+
+                    tracing::debug!(
+                        box_id = %self.config.id,
+                        pid = pid,
+                        "Read PID from file and saved to DB"
+                    );
+                }
+
+                // All operations succeeded - disarm the cleanup guard
+                cleanup_guard.disarm();
+
+                // A checkpoint contains a started container. Adoption alone cannot
+                // tell: bare attach() publishes Running before Container.Start.
+                if restoring_checkpoint {
+                    let _ = self.container_start.set(());
+                }
+
+                // Reclaim vmstate.krun once Running + pending_memory_restore=false is committed.
+                // Keep guest-rootfs.ext4 while Running so chained export(full) can read live vdb;
+                // finish_stop removes the entire checkpoint directory on stop/exit.
+                if restoring_checkpoint {
+                    let vmstate_path = self
+                        .layout
+                        .root()
+                        .join(crate::litebox::archive::CHECKPOINT_DIRNAME)
+                        .join(crate::litebox::archive::VMSTATE_FILENAME);
+                    if vmstate_path.exists()
+                        && let Err(error) = std::fs::remove_file(&vmstate_path)
+                    {
+                        tracing::warn!(
+                            box_id = %self.config.id,
+                            path = %vmstate_path.display(),
+                            %error,
+                            "Failed to remove staged vmstate.krun after restore"
+                        );
+                    }
+                }
+
+                // Archive any leftover crash artifact from a prior lifecycle so
+                // the next attach preflight doesn't trip on stale evidence.
+                // Stash (rename → exit.previous) preserves forensic data.
+                crate::runtime::rt_impl::stash_exit_file(&self.layout);
+
+                tracing::info!(
+                    box_id = %self.config.id,
+                    "Box booted successfully (first_start={})",
+                    is_first_start
+                );
+                Ok::<_, BoxliteError>(live_state)
             };
+        let result = initialize.await;
 
+        if result.is_err()
+            && let Ok(persisted) = self.runtime.box_manager.update_box(&self.config.id)
         {
-            // PidFile is the single source of truth for shim identity
-            // (PID + optional starttime fingerprint). The starttime is
-            // consumed by recovery, not stored in the DB.
-            let pid_path = self.layout.pid_file_path();
-            let record = crate::util::PidFileReader::at(&pid_path).read()?;
-            let pid = record.pid;
+            *self.state.write() = persisted;
+        }
+        result
+    }
+}
 
-            let mut state = self.state.write();
-            // An adopted box can lose its shim between the build's last live
-            // operation and this publish: the exit-only watcher armed when the
-            // box was first handed out records `Stopped` here first. Publishing
-            // `Running` over that would report a live box with a dead PID, and
-            // the watcher's cell is already taken — nothing would observe the
-            // death again. A fresh start always publishes from `Configured` or
-            // `Stopped`, so this check is adoption-only; its cleanup guard is
-            // already disarmed, so returning here does not tear the box down.
-            if adopting_running && state.status != BoxStatus::Running {
+/// Captured full checkpoint artifacts staged in a per-box temporary directory.
+///
+/// Produced under `with_disk_admission` + `with_operation` while the VM was
+/// atomically paused and resumed; callers finalize checksums and archive
+/// packaging after the VM has already resumed.
+#[allow(dead_code)]
+pub(crate) struct CapturedFullCheckpoint {
+    pub(crate) staging_dir: tempfile::TempDir,
+    pub(crate) disk_path: std::path::PathBuf,
+    pub(crate) vmstate_path: std::path::PathBuf,
+    pub(crate) vmstate_size_bytes: u64,
+    pub(crate) guest_rootfs_path: std::path::PathBuf,
+    pub(crate) outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
+}
+
+impl BoxImpl {
+    /// Capture a full (disk + memory + VM state) checkpoint of this running box
+    /// into `{box_home}/tmp/export-ckpt-*`.
+    ///
+    /// Coordinates disk and lifecycle admission so no concurrent stop, snapshot,
+    /// or remove races with `CaptureCheckpoint` over `vmm.sock`.
+    #[allow(dead_code)]
+    pub(crate) async fn capture_full_checkpoint_to_dir(
+        &self,
+    ) -> BoxliteResult<CapturedFullCheckpoint> {
+        use crate::disk::constants::filenames as disk_filenames;
+        use crate::litebox::archive::{GUEST_ROOTFS_FILENAME, VMSTATE_FILENAME};
+
+        self.with_disk_admission(self.with_operation(async {
+            if crate::litebox::archive::current_checkpoint_platform().is_none() {
+                return Err(BoxliteError::Unsupported(
+                    "full memory checkpoint export is only supported on macos-aarch64-hvf and linux-x86_64-kvm".into(),
+                ));
+            }
+            if self.config.engine_kind != crate::vmm::VmmKind::Libkrun {
+                return Err(BoxliteError::Unsupported(
+                    "full memory checkpoint export requires the libkrun engine".into(),
+                ));
+            }
+            if self.config.options.advanced.nested_virtualization {
+                return Err(BoxliteError::Unsupported(
+                    "full memory checkpoint export does not support nested virtualization".into(),
+                ));
+            }
+
+            let (status, pid, outbound_policy) = {
+                let state = self.state.read();
+                (state.status, state.pid, state.outbound_policy.clone())
+            };
+            if status != BoxStatus::Running {
                 return Err(BoxliteError::InvalidState(format!(
-                    "Box {} stopped while it was being adopted ({})",
-                    self.config.id, state.status
+                    "full memory checkpoint export requires a running box (box {} is {})",
+                    self.id(),
+                    status
                 )));
             }
-            state.set_pid(Some(pid));
-            state.set_status(BoxStatus::Running);
-            // A box entering Running publishes its PID, status, and `started_at`
-            // timestamp atomically. An adopted Running box is the same lifecycle,
-            // so its existing Some/None value must be preserved.
-            if !adopting_running {
-                state.mark_started();
+            let pid = pid.ok_or_else(|| {
+                BoxliteError::InvalidState(format!(
+                    "box {} is running without a shim PID",
+                    self.id()
+                ))
+            })?;
+            if !crate::util::is_process_alive(pid) {
+                return Err(BoxliteError::InvalidState(format!(
+                    "box {} shim process {pid} is not alive",
+                    self.id()
+                )));
             }
 
-            // This is a fresh run of the box's main command, so the exit code
-            // recorded for the previous one no longer describes it (docker
-            // clears ExitCode on start too). The guest drops its matching
-            // exit file in Container.Init.
-            state.exit_code = None;
+            // Attach without starting a new VM if the shim dies during adoption.
+            // Container.Start is idempotent in the guest when init is already running.
+            let live = self.live.get_or_try_init(|| self.init_live_state(false)).await?;
+            self.ensure_container_started(live).await?;
 
-            state.record_resolved_image(resolved_image);
+            self.layout.sockets().ensure()?;
+            let vmm_sock = self.layout.sockets().vmm_sock();
 
-            // Initialize health status if health check is configured
-            if self.config.options.advanced.health_check.is_some() {
-                state.init_health_status();
-            }
+            std::fs::create_dir_all(self.layout.tmp_dir()).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "failed to create box tmp dir {}: {e}",
+                    self.layout.tmp_dir().display()
+                ))
+            })?;
+            let staging_dir = tempfile::Builder::new()
+                .prefix("export-ckpt-")
+                .tempdir_in(self.layout.tmp_dir())
+                .map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "failed to create checkpoint staging dir under {}: {e}",
+                        self.layout.tmp_dir().display()
+                    ))
+                })?;
 
-            // Save to DB (cache for queries and recovery)
-            self.runtime.box_manager.save_box(&self.config.id, &state)?;
+            let vm_state_path = staging_dir.path().join(VMSTATE_FILENAME);
+            let disk_dst_path = staging_dir.path().join(disk_filenames::CONTAINER_DISK);
 
-            // Arm the watcher under the *same* lock that publishes Running+pid.
-            // A concurrent handout runs `arm_watcher(None)`, which reads the state
-            // first: it either sees a not-yet-Running box and skips, or blocks
-            // here and finds the watcher already armed. So it can never slip an
-            // exit-only watcher in ahead of us and strand the health probe.
-            let health = health_guest.map(|guest| {
-                super::watcher::HealthProbe::new(
-                    guest,
-                    self.config
-                        .options
-                        .advanced
-                        .health_check
-                        .clone()
-                        .expect("guest is fetched only when a health check is configured"),
-                )
-            });
-            self.spawn_watcher_once(pid, state.started_at, health);
-
-            tracing::debug!(
-                box_id = %self.config.id,
-                pid = pid,
-                "Read PID from file and saved to DB"
+            #[cfg(unix)]
+            let (reply, staging_dir) = {
+                let vm_state_path = vm_state_path.clone();
+                let disk_dst_path = disk_dst_path.clone();
+                tokio::task::spawn_blocking(move || {
+                    // Keep the directory alive while the shim writes, even if export is cancelled.
+                    let reply = crate::vmm::vmm_socket::request(
+                        &vmm_sock,
+                        crate::vmm::vmm_socket::ControlOp::CaptureCheckpoint {
+                            vm_state_path,
+                            disk_dst_path,
+                        },
+                        Duration::from_secs(120),
+                    );
+                    (reply, staging_dir)
+                })
+                .await
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("checkpoint capture task panicked: {e}"))
+                })?
+            };
+            #[cfg(not(unix))]
+            let reply: BoxliteResult<crate::vmm::vmm_socket::ControlReply> = Err(
+                BoxliteError::Unsupported("full checkpoints require a Unix host".into()),
             );
-        }
 
-        // All operations succeeded - disarm the cleanup guard
-        cleanup_guard.disarm();
+            // libkrun's pause/resume closes and rebinds host vsock connections.
+            // Reset the cached H2 channel so subsequent RPCs on this handle reconnect.
+            live.guest_session.reset().await;
 
-        // Archive any leftover crash artifact from a prior lifecycle so
-        // the next attach preflight doesn't trip on stale evidence.
-        // Stash (rename → exit.previous) preserves forensic data.
-        crate::runtime::rt_impl::stash_exit_file(&self.layout);
+            let (vmstate_size_bytes, guest_rootfs_src) = match reply? {
+                crate::vmm::vmm_socket::ControlReply::CheckpointCaptured {
+                    vm_state_bytes,
+                    guest_rootfs_path,
+                } => (vm_state_bytes, guest_rootfs_path),
+                other => {
+                    return Err(BoxliteError::Engine(format!(
+                        "unexpected VMM control reply for checkpoint capture: {other:?}"
+                    )));
+                }
+            };
 
-        tracing::info!(
-            box_id = %self.config.id,
-            "Box booted successfully (first_start={})",
-            is_first_start
-        );
-        Ok(live_state)
+            let guest_rootfs_src = guest_rootfs_src.ok_or_else(|| BoxliteError::Engine(
+                "VMM did not report live guest rootfs disk path for checkpoint export".into(),
+            ))?;
+            // A subsequent stop can remove the restored guest rootfs before finalization.
+            let guest_rootfs_path = staging_dir.path().join(GUEST_ROOTFS_FILENAME);
+            std::fs::hard_link(&guest_rootfs_src, &guest_rootfs_path)
+                .or_else(|error| {
+                    if error.raw_os_error() == Some(libc::EXDEV) {
+                        std::fs::copy(&guest_rootfs_src, &guest_rootfs_path).map(|_| ())
+                    } else {
+                        Err(error)
+                    }
+                })
+                .map_err(|error| BoxliteError::Storage(format!(
+                    "failed to stage live guest rootfs {}: {error}", guest_rootfs_src.display()
+                )))?;
+
+            Ok(CapturedFullCheckpoint {
+                staging_dir,
+                disk_path: disk_dst_path,
+                vmstate_path: vm_state_path,
+                vmstate_size_bytes,
+                guest_rootfs_path,
+                outbound_policy,
+            })
+        }))
+        .await
     }
 }
 
@@ -2020,11 +2240,11 @@ mod tests {
         }
     }
 
-    struct StartGate {
-        calls: AtomicUsize,
+    pub(super) struct StartGate {
+        pub(super) calls: AtomicUsize,
         should_fail: AtomicBool,
         entered: Semaphore,
-        release: Semaphore,
+        pub(super) release: Semaphore,
     }
 
     impl Default for StartGate {
@@ -2157,8 +2377,8 @@ mod tests {
         (GuestSession::new(BoxTransport::tcp(address.port())), server)
     }
 
-    struct StartFixture {
-        box_impl: Arc<BoxImpl>,
+    pub(super) struct StartFixture {
+        pub(super) box_impl: Arc<BoxImpl>,
         listener: Arc<StartedCounter>,
         _temp_dir: TempDir,
         server: JoinHandle<()>,
@@ -2170,7 +2390,7 @@ mod tests {
         }
     }
 
-    async fn running_box_for_start_test(gate: Arc<StartGate>) -> StartFixture {
+    pub(super) async fn running_box_for_start_test(gate: Arc<StartGate>) -> StartFixture {
         running_box_for_start_test_with_live(gate, |_| {}).await
     }
 
@@ -2838,3 +3058,7 @@ mod tests {
 #[cfg(test)]
 #[path = "ssh_tests.rs"]
 mod ssh_tests;
+
+#[cfg(test)]
+#[path = "tests/checkpoint_box_impl.rs"]
+mod checkpoint_box_impl_tests;

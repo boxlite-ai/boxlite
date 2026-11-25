@@ -7,7 +7,6 @@
 //! shim. Each connection carries one HTTP/1.1 JSON request and response.
 //! Directory registration attaches one open directory via `SCM_RIGHTS`.
 
-#![allow(dead_code)]
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
