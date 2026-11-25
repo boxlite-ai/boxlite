@@ -38,6 +38,7 @@ func installOutboundHandlers(
 	config *types.Configuration,
 	ec2MetadataAccess bool,
 	snapshot snapshotSource,
+	tcpInspectionSlots chan struct{},
 	ca *BoxCA,
 	secretMatcher *SecretHostMatcher,
 ) error {
@@ -46,7 +47,7 @@ func installOutboundHandlers(
 	nat := natTable(config)
 	var natLock sync.Mutex
 
-	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, snapshot, ca, secretMatcher)
+	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, snapshot, tcpInspectionSlots, ca, secretMatcher)
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 	logrus.Info("allowNet TCP: handler overridden with SNI-inspecting forwarder")
 

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"sync"
 	"time"
 
 	logrus "github.com/sirupsen/logrus"
@@ -22,6 +23,17 @@ var upstreamDialTimeout = 30 * time.Second
 // to, never to an address the guest picked.
 // upstreamTLSConfig overrides the TLS config for upstream connections (nil = system defaults).
 func mitmAndForward(guestConn net.Conn, hostname string, dial upstreamDial, ca *BoxCA, secrets []SecretConfig, upstreamTLSConfig ...*tls.Config) {
+	mitmForward(guestConn, hostname, dial, ca, secrets, nil, upstreamTLSConfig...)
+}
+
+func mitmForward(guestConn net.Conn, hostname string, dial upstreamDial, ca *BoxCA, secrets []SecretConfig, setup context.Context, upstreamTLSConfig ...*tls.Config) {
+	var guestClosed context.Context
+	if setup != nil {
+		var notify context.CancelFunc
+		guestClosed, notify = context.WithCancel(context.Background())
+		defer notify()
+		guestConn = mitmGuestConn{Conn: guestConn, onClose: notify}
+	}
 	cert, err := ca.GenerateHostCert(hostname)
 	if err != nil {
 		logrus.WithError(err).WithField("hostname", hostname).Error("MITM: cert generation failed")
@@ -42,6 +54,58 @@ func mitmAndForward(guestConn net.Conn, hostname string, dial upstreamDial, ca *
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return dial(ctx)
 		},
+	}
+	if setup != nil {
+		var admitted bool
+		var admission sync.Mutex
+		stop := context.AfterFunc(setup, func() {
+			admission.Lock()
+			defer admission.Unlock()
+			if !admitted {
+				guestConn.Close()
+			}
+		})
+		defer stop()
+		defer upstreamTransport.CloseIdleConnections()
+		config := upstreamTransport.TLSClientConfig.Clone()
+		config.NextProtos = []string{"h2", "http/1.1"}
+		upstreamTransport.DialTLSContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			deadline := time.Now().Add(upstreamDialTimeout)
+			admission.Lock()
+			initial := !admitted
+			admission.Unlock()
+			if initial {
+				deadline, _ = setup.Deadline()
+			}
+			attempt, cancel := context.WithDeadline(ctx, deadline)
+			defer cancel()
+			if initial {
+				stopCancel := context.AfterFunc(setup, cancel)
+				defer stopCancel()
+			}
+			socket, err := dial(attempt)
+			if err != nil {
+				return nil, err
+			}
+			client := tls.Client(socket, config)
+			err = client.HandshakeContext(attempt)
+			admission.Lock()
+			if err == nil {
+				err = attempt.Err()
+			}
+			if err == nil && !time.Now().Before(deadline) {
+				err = context.DeadlineExceeded
+			}
+			if err == nil {
+				admitted = true
+			}
+			admission.Unlock()
+			if err != nil {
+				socket.Close()
+				return nil, err
+			}
+			return client, nil
+		}
 	}
 
 	proxy := &httputil.ReverseProxy{
@@ -68,7 +132,11 @@ func mitmAndForward(guestConn net.Conn, hostname string, dial upstreamDial, ca *
 		},
 	}
 
-	if err := tlsGuest.Handshake(); err != nil {
+	handshakeCtx := context.Background()
+	if setup != nil {
+		handshakeCtx = setup
+	}
+	if err := tlsGuest.HandshakeContext(handshakeCtx); err != nil {
 		logrus.WithError(err).WithField("hostname", hostname).Debug("MITM: TLS handshake failed")
 		guestConn.Close()
 		return
@@ -83,17 +151,33 @@ func mitmAndForward(guestConn net.Conn, hostname string, dial upstreamDial, ca *
 		// leaking a goroutine blocked in Accept().
 		listener := newSingleConnListener(tlsGuest)
 		srv := &http.Server{Handler: proxy}
+		if guestClosed != nil {
+			// An upgraded HTTP connection closes outside http.Server.
+			stop := context.AfterFunc(guestClosed, func() { _ = listener.Close() })
+			defer stop()
+		}
 		srv.Serve(listener) //nolint:errcheck
 		// Serve returns when the connection closes — shut down to release resources
 		srv.Close()
 	}
 }
 
+type mitmGuestConn struct {
+	net.Conn
+	onClose context.CancelFunc
+}
+
+func (c mitmGuestConn) Close() error {
+	defer c.onClose()
+	return c.Conn.Close()
+}
+
 // singleConnListener serves exactly one pre-accepted connection as a net.Listener.
 type singleConnListener struct {
-	ch     chan net.Conn
-	addr   net.Addr
-	closed chan struct{}
+	ch        chan net.Conn
+	addr      net.Addr
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 func newSingleConnListener(conn net.Conn) *singleConnListener {
@@ -116,11 +200,7 @@ func (l *singleConnListener) Accept() (net.Conn, error) {
 }
 
 func (l *singleConnListener) Close() error {
-	select {
-	case <-l.closed:
-	default:
-		close(l.closed)
-	}
+	l.closeOnce.Do(func() { close(l.closed) })
 	return nil
 }
 

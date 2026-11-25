@@ -78,6 +78,7 @@ func startNetworkWith(t *testing.T, cfg GvproxyConfig) *guestTap {
 type networkSeams struct {
 	ca            *BoxCA
 	secretMatcher *SecretHostMatcher
+	tcp           *trustedTCPRules
 	resolve       resolveFunc
 	dial          dialFunc
 	connect       connectFunc
@@ -120,7 +121,7 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	if err != nil {
 		t.Fatalf("virtualnetwork.New: %v", err)
 	}
-	policy, err := newOutboundPolicyController(vn, tapConfig, cfg.GuestIP, seams.ca, seams.secretMatcher, outboundPolicy{Mode: "enabled", AllowNet: cfg.AllowNet}, cfg.OutboundRevision)
+	policy, err := newOutboundPolicyController(vn, tapConfig, cfg.GuestIP, seams.ca, seams.secretMatcher, outboundPolicy{Mode: "enabled", AllowNet: cfg.AllowNet, tcp: seams.tcp}, cfg.OutboundRevision)
 	if err != nil {
 		t.Fatal(err)
 	}

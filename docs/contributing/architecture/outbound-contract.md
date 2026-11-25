@@ -367,9 +367,59 @@ An association for a different address leaves the decision denied.
 For a restricted local candidate and nonempty allow list, the candidate needs an IP rule covering its actual port.
 The caller selects the connector and enforces transport eligibility.
 
-Existing TCP and UDP callers continue to use the legacy filter until their integration slices.
-The new functions are exercised through the shared rule fixtures.
+The shared rule fixtures exercise the compiler and matcher. Trusted extended TCP snapshots use both functions at guest connection setup.
 [Design and handoff](https://github.com/boxlite-ai/boxlite/issues/2874)
+
+### Extended TCP enforcement
+
+The bridge's trusted Go controller compiles extended TCP rules into a snapshot alongside the legacy UDP filter.
+Current wire inputs still select the legacy transport policy. The bridge advertises the complete extended capability after its owning integration slices.
+
+At flow entry, capture the snapshot and the pre-NAT and translated addresses. For example, an IP allow for `192.0.2.254:8080` can admit a local alias to loopback, subject to the platform check on `127.0.0.1:8080`. A Cloud snapshot refuses that translated socket.
+
+The extended forwarder classifies TLS ClientHello or a complete HTTP/1.x header on any TCP port. It preserves all bytes for relay and releases the inspection slot before resolving or dialing. ECH, incomplete headers, and conflicting authorities leave the name unavailable.
+
+The initial 30-second deadline covers observation, required DNS association, candidate dialing, and the first verified MITM upstream TLS connection. The guest TCP handshake uses gVisor's own timer; a late endpoint closes before inspection or dialing. An MITM guest with no first request also closes at the deadline.
+
+```mermaid
+sequenceDiagram
+    participant G as Guest
+    participant F as TCP forwarder
+    participant U as Selected upstream
+    G->>F: New flow starts 30-second setup budget
+    G->>F: Complete gVisor TCP handshake
+    alt Setup budget expired
+        F-->>G: Close before inspection or dial
+    else Budget remaining
+        F->>F: Inspect if needed and check destination
+        opt Secrets MITM
+            G->>F: Send first request within setup budget
+        end
+        F->>U: Dial approved literal within remaining budget
+        opt Secrets MITM
+            F->>U: Verify first upstream TLS by the same deadline
+        end
+        F-->>G: Relay without the setup deadline
+        Note over F,U: A later MITM socket has its own budget
+    end
+```
+
+Plaintext Host can match user rules. Only TLS SNI on actual port 443 can grant secrets MITM. Subsequent MITM sockets re-resolve and check candidates with the captured policy and a fresh setup deadline.
+
+An HTTP/1.1 upgrade keeps its tunnel open for bidirectional traffic. Closing the guest connection releases the per-flow MITM listener, including after an upgrade.
+
+An extended DNS route screens raw answers with the TCP policy, independent of the legacy UDP allow list. Only approved IPv4 literals reach the chosen connector. An address route keeps its translated socket and requires a matching controlled DNS answer when the matcher requests name association.
+
+Trusted replacement keeps the legacy UDP filter and publishes through the existing NIC transition. Both wire PUT resources return 409 for a valid incomplete write when a trusted TCP snapshot is configured, including while disabled. While disabled, both reads project an empty legacy allow list; re-enable restores the preserved UDP filter and allow list.
+
+| Requested transition | Before NIC call | On success | On NIC failure |
+| --- | --- | --- | --- |
+| Disable | Publish candidate with disabled gate and pending status | Confirm disabled candidate | Keep disabled gate and report uncertain status |
+| Re-enable | Keep previous disabled gate and publish pending status | Publish and confirm enabled candidate | Keep previous disabled gate and report uncertain status |
+
+Policy GET returns 503 while either operation is pending or uncertain. The status resource reports the snapshot and its application state.
+
+[TCP design and acceptance](https://github.com/boxlite-ai/boxlite/issues/2880)
 
 ## Revisions and acknowledgements
 
