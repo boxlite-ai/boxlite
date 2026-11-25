@@ -135,14 +135,21 @@ if ! awk '
   exit 1
 fi
 
-# Structural test: release upload must ship install.sh.sha256 too, otherwise
-# the sidecar exists in CI but never reaches the release page.
-if ! awk '
-  /^      - name: Upload to release/ { in_block = 1; next }
-  in_block && /^      - name: / { exit }
-  in_block { print }
-' "$workflow" | grep -E 'dist/install\.sh\.sha256' >/dev/null; then
-  echo "FAIL: release upload does not include dist/install.sh.sha256" >&2
+# Overlapping upload globs submit the same release asset twice.
+awk '
+  /^      - name: Upload to release$/ { in_upload = 1; next }
+  in_upload && /^          files: \|$/ { in_files = 1; next }
+  in_files && !/^            / { exit }
+  in_files { print $1 }
+' "$workflow" > "$tmp/upload-patterns"
+matches=0
+while IFS= read -r pattern; do
+  case dist/install.sh.sha256 in
+    $pattern) matches=$((matches + 1)) ;;
+  esac
+done < "$tmp/upload-patterns"
+if [ "$matches" -ne 1 ]; then
+  echo "FAIL: expected one release upload match for dist/install.sh.sha256, found $matches" >&2
   exit 1
 fi
 

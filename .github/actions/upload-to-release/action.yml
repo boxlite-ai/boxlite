@@ -9,7 +9,7 @@ description: >-
 
 inputs:
   files:
-    description: Newline-separated globs of artifacts to attach.
+    description: Newline-separated globs of artifacts to attach. Each file must match exactly one glob to avoid concurrent uploads of the same release asset.
     required: true
   tag-name:
     description: >-

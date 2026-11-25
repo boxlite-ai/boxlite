@@ -224,7 +224,8 @@ jobs:
           files: |
             dist/boxlite-runtime-*.tar.gz
             dist/boxlite-cli-*.tar.gz
-            dist/*.sha256
+            dist/boxlite-runtime-*.tar.gz.sha256
+            dist/boxlite-cli-*.tar.gz.sha256
             dist/SHA256SUMS
             dist/install.sh
             dist/install.sh.sha256
