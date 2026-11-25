@@ -417,6 +417,8 @@ describe('REST complete outbound creation classification', () => {
     [{ allow_net: ['::ffff:192.0.2.8'] }, true],
     [{ allow_net: ['::ffff:192.0.2.8/120'] }, true],
     [{ allow_net: ['0:0:0:0:0:ffff:c000:20a'] }, true],
+    [{ allow_net: ['2606:4700::beef'] }, true],
+    [{ allow_net: ['2606:4700::/32'] }, true],
     [{ deny_net: [] }, true],
     [{ deny_net: ['example.com'] }, true],
   ])('selects the exact nested policy contract for %j', async (fields, complete) => {

@@ -137,6 +137,41 @@ identifiers with positive and negative guard results before admitting work.
 For binary rollback, drain the guarded pool and keep placement closed until
 running and new Boxes have verified equivalent protection.
 
+### Qualify a dual-stack pool
+
+Deploy v2-capable API, Runner, Runtime, shim, and host guard readers before
+switching inventory. Set the complete outbound release floor to the verified
+release and renew the Runner enrollment against that floor.
+
+Inventory v2 retains the v1 fields and adds `host` and `translation` to
+`protected_networks`. List every empty group by name in `absent_groups` only
+when the deployed topology confirms that the group is absent.
+
+Use `topology_sha256` to pin the applied network state. The host guard reads the
+Linux routes, policy rules, nftables ruleset, and legacy IPv4 and IPv6 NAT
+tables. Route lifetimes and firewall packet and byte counts are excluded from
+the fingerprint.
+
+The operator attests that these sources cover the pool's routing and
+translation and lists the affected CIDRs in the inventory. An unreadable
+source, missing IPv6 uplink, or mismatched digest blocks qualification.
+
+1. Call `pause-topology` on the root-only
+   `/run/boxlite-platform-guard/control.sock` with an empty Box identity. This
+   revokes running leases and succeeds after all guarded Boxes, including
+   IPv4 Boxes, are drained.
+2. Apply the managed topology change. Send
+   `{"operation":"sample-topology"}` on the same socket and put the returned
+   `topology_sha256` in the new inventory.
+3. Publish the root-owned inventory atomically. Send
+   `{"operation":"resume-topology"}` and keep placement closed until the guard
+   and network-path checks pass. Use the same pause and drain sequence before
+   reverting the pool to inventory v1.
+
+An unexpected inventory swap or changed applied topology retires the live
+epoch. Restart a drained IPv4 Box only after the current inventory and host
+guard provide a fresh startup proof.
+
 ## Verify and recover
 
 Inspect both assignments (only the first for a single-runner stage), including every binary and

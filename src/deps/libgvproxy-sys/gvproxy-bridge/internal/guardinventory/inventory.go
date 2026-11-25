@@ -32,23 +32,29 @@ type Document struct {
 	ExpiresAt         time.Time `json:"expires_at"`
 	ProtectedNetworks Networks  `json:"protected_networks"`
 	ResolverEndpoints []string  `json:"resolver_endpoints"`
+	TopologyDigest    string    `json:"topology_sha256,omitempty"`
+	AbsentGroups      []string  `json:"absent_groups,omitempty"`
 }
 
 type Networks struct {
-	Node         []string `json:"node"`
-	ControlPlane []string `json:"control_plane"`
-	Metadata     []string `json:"metadata"`
-	Services     []string `json:"services"`
+	Node         []string  `json:"node"`
+	ControlPlane []string  `json:"control_plane"`
+	Metadata     []string  `json:"metadata"`
+	Services     []string  `json:"services"`
+	Host         *[]string `json:"host,omitempty"`
+	Translation  *[]string `json:"translation,omitempty"`
 }
 
 type Observation struct {
-	Revision  string
-	Digest    [sha256.Size]byte
-	SampledAt time.Time
-	Expires   time.Time
-	HostAddrs []string
-	Protected []netip.Prefix
-	Resolvers []netip.AddrPort
+	Version        int
+	TopologyDigest string
+	Revision       string
+	Digest         [sha256.Size]byte
+	SampledAt      time.Time
+	Expires        time.Time
+	HostAddrs      []string
+	Protected      []netip.Prefix
+	Resolvers      []netip.AddrPort
 }
 
 func (inventory Observation) Deadline(expiry time.Time) time.Time {
@@ -64,9 +70,10 @@ func minTime(first, second time.Time) time.Time {
 
 // Sampler limits concurrent filesystem work even if an inventory read stalls.
 type Sampler struct {
-	RequireRoot bool
-	once        sync.Once
-	reading     chan struct{}
+	RequireRoot          bool
+	CheckAppliedTopology bool
+	once                 sync.Once
+	reading              chan struct{}
 }
 
 func Sample(parent context.Context, directory string) (Observation, error) {
@@ -92,6 +99,13 @@ func (s *Sampler) Sample(parent context.Context, directory string) (Observation,
 	go func() {
 		defer func() { <-s.reading }()
 		inventory, err := read(directory, sampledAt, s.RequireRoot)
+		if err == nil && inventory.Version == 2 && s.CheckAppliedTopology {
+			var digest string
+			digest, err = AppliedTopology(ctx)
+			if err == nil && digest != inventory.TopologyDigest {
+				err = fmt.Errorf("applied Cloud network topology differs from the inventory")
+			}
+		}
 		results <- result{inventory, err}
 	}()
 	select {
@@ -138,7 +152,14 @@ func read(directory string, sampledAt time.Time, requireRoot bool) (Observation,
 	if err != nil {
 		return Observation{}, fmt.Errorf("read host interface addresses: %w", err)
 	}
-	return Parse(raw, sampledAt, addrs)
+	inventory, err := Parse(raw, sampledAt, addrs)
+	if err != nil {
+		return Observation{}, err
+	}
+	if inventory.Version == 2 && (!rootAuthority(dir) || !rootAuthority(fd)) {
+		return Observation{}, fmt.Errorf("Cloud inventory v2 requires root-owned authority")
+	}
+	return inventory, nil
 }
 
 func rootAuthority(fd int) bool {
@@ -156,8 +177,12 @@ func Parse(raw []byte, sampledAt time.Time, addrs []net.Addr) (Observation, erro
 	if decoder.Decode(new(any)) != io.EOF {
 		return Observation{}, fmt.Errorf("expected one Cloud inventory JSON record")
 	}
-	if document.Version != 1 || !validRevision(document.Revision) || !sampledAt.Before(document.ExpiresAt) {
-		return Observation{}, fmt.Errorf("Cloud inventory requires version 1, a valid revision, and future expiry")
+	if (document.Version != 1 && document.Version != 2) || !validRevision(document.Revision) || !sampledAt.Before(document.ExpiresAt) {
+		return Observation{}, fmt.Errorf("Cloud inventory requires a supported version, a valid revision, and future expiry")
+	}
+	if document.Version == 1 && (document.TopologyDigest != "" || document.AbsentGroups != nil ||
+		document.ProtectedNetworks.Host != nil || document.ProtectedNetworks.Translation != nil) {
+		return Observation{}, fmt.Errorf("Cloud inventory v2 fields require version 2")
 	}
 	resolvers, err := ResolverEndpoints(document.ResolverEndpoints)
 	if err != nil {
@@ -168,27 +193,25 @@ func Parse(raw []byte, sampledAt time.Time, addrs []net.Addr) (Observation, erro
 	}
 	document.ExpiresAt = document.ExpiresAt.UTC()
 	inventory := Observation{
+		Version: document.Version, TopologyDigest: document.TopologyDigest,
 		Revision: document.Revision, SampledAt: sampledAt, Resolvers: resolvers,
 		Expires: sampledAt.Add(document.ExpiresAt.Sub(sampledAt)),
 	}
-	groups := []*[]string{
-		&document.ProtectedNetworks.Node, &document.ProtectedNetworks.ControlPlane,
-		&document.ProtectedNetworks.Metadata, &document.ProtectedNetworks.Services,
+	groups := []networkGroup{
+		{"node", &document.ProtectedNetworks.Node}, {"control_plane", &document.ProtectedNetworks.ControlPlane},
+		{"metadata", &document.ProtectedNetworks.Metadata}, {"services", &document.ProtectedNetworks.Services},
 	}
-	for _, group := range groups {
-		if *group == nil {
-			return Observation{}, fmt.Errorf("Cloud inventory requires node, control-plane, metadata, and service network lists")
+	if document.Version == 2 {
+		if !validTopologyDigest(document.TopologyDigest) {
+			return Observation{}, fmt.Errorf("Cloud inventory v2 requires the applied topology SHA-256")
 		}
-		prefixes, err := IPv4Prefixes(*group)
-		if err != nil {
-			return Observation{}, err
-		}
-		for i, prefix := range prefixes {
-			(*group)[i] = prefix.String()
-		}
-		slices.Sort(*group)
-		*group = slices.Compact(*group)
-		inventory.Protected = append(inventory.Protected, prefixes...)
+		groups = append(groups, networkGroup{"host", document.ProtectedNetworks.Host},
+			networkGroup{"translation", document.ProtectedNetworks.Translation})
+		slices.Sort(document.AbsentGroups)
+	}
+	inventory.Protected, err = protectedNetworks(groups, document.Version, document.AbsentGroups)
+	if err != nil {
+		return Observation{}, err
 	}
 	canonical, err := json.Marshal(document)
 	if err != nil {
@@ -209,8 +232,8 @@ func Parse(raw []byte, sampledAt time.Time, addrs []net.Addr) (Observation, erro
 		}
 		address = address.Unmap()
 		inventory.HostAddrs = append(inventory.HostAddrs, address.String())
-		if address.Is4() {
-			inventory.Protected = append(inventory.Protected, netip.PrefixFrom(address, 32))
+		if address.Is4() || document.Version == 2 {
+			inventory.Protected = append(inventory.Protected, netip.PrefixFrom(address, address.BitLen()))
 		}
 	}
 	slices.Sort(inventory.HostAddrs)

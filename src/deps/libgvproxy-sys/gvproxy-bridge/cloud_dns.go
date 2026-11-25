@@ -28,15 +28,23 @@ func (r *cloudDNSResolver) ResolveDNS(ctx context.Context, question dns.Question
 }
 
 func (r *cloudDNSResolver) lookupHost(ctx context.Context, host string) ([]net.IP, error) {
+	return r.lookupFamily(ctx, "ip4", host)
+}
+
+func (r *cloudDNSResolver) lookupFamily(ctx context.Context, family, host string) ([]net.IP, error) {
 	name := dns.CanonicalName(host)
-	response, err := r.query(ctx, dns.Question{Name: name, Qtype: dns.TypeA, Qclass: dns.ClassINET})
+	qtype := uint16(dns.TypeA)
+	if family == "ip6" {
+		qtype = dns.TypeAAAA
+	}
+	response, err := r.query(ctx, dns.Question{Name: name, Qtype: qtype, Qclass: dns.ClassINET})
 	if err != nil {
 		return nil, err
 	}
 	if response.Rcode != dns.RcodeSuccess {
 		return nil, fmt.Errorf("Cloud DNS returned %s", dns.RcodeToString[response.Rcode])
 	}
-	// A recursive resolver can return an alias chain. Unrelated A records
+	// A recursive resolver can return an alias chain. Unrelated address records
 	// must never become connection candidates for the requested hostname.
 	addresses := make(map[string][]net.IP)
 	aliases := make(map[string]string)
@@ -47,7 +55,11 @@ func (r *cloudDNSResolver) lookupHost(ctx context.Context, host string) ([]net.I
 		owner := dns.CanonicalName(record.Header().Name)
 		switch record := record.(type) {
 		case *dns.A:
-			if address := record.A.To4(); address != nil {
+			if address := record.A.To4(); qtype == dns.TypeA && address != nil {
+				addresses[owner] = append(addresses[owner], address)
+			}
+		case *dns.AAAA:
+			if address := record.AAAA; qtype == dns.TypeAAAA && address.To4() == nil && address.To16() != nil {
 				addresses[owner] = append(addresses[owner], address)
 			}
 		case *dns.CNAME:
@@ -62,7 +74,7 @@ func (r *cloudDNSResolver) lookupHost(ctx context.Context, host string) ([]net.I
 			break
 		}
 	}
-	return nil, fmt.Errorf("Cloud DNS returned no IPv4 address for %s", host)
+	return nil, fmt.Errorf("Cloud DNS returned no %s address for %s", family, host)
 }
 
 func (r *cloudDNSResolver) query(ctx context.Context, question dns.Question) (*dns.Msg, error) {

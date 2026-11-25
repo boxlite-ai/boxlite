@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net"
 	"net/netip"
@@ -35,7 +36,8 @@ func outboundUDPHandler(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			endpoint.HandlePacket(id, pkt)
 			return true
 		}
-		if current.extended != nil || current.dialer.guard.requiresCheckedUDP() {
+		if current.extended != nil || current.dialer.guard.requiresCheckedUDP() ||
+			id.LocalAddress.Len() != net.IPv4len {
 			target, reason := udpAdmission(id, nat, natLock, current)
 			if reason != outboundAllowed {
 				blocked.note(id.LocalAddress, id.LocalPort, reason)
@@ -57,6 +59,12 @@ func (d *egressDialer) dialUDP(ctx context.Context, network, address string) (ne
 	if !d.guard.active() {
 		return nil, net.ErrClosed
 	}
+	if network == "udp6" {
+		target, err := netip.ParseAddrPort(address)
+		if err != nil || !d.nativeEligible(target.Addr()) || d.guard.denies(target.Addr()) {
+			return nil, fmt.Errorf("UDP destination denied by platform")
+		}
+	}
 	conn, err := d.dial(ctx, network, address)
 	if err != nil {
 		return conn, err
@@ -73,18 +81,21 @@ func udpAdmission(id stack.TransportEndpointID, nat map[tcpip.Address]tcpip.Addr
 		translated = address
 	}
 	natLock.Unlock()
-	if original.Len() != net.IPv4len || translated.Len() != net.IPv4len {
+	policyIP, policyValid := netip.AddrFromSlice(original.AsSlice())
+	socketIP, socketValid := netip.AddrFromSlice(translated.AsSlice())
+	if !policyValid || !socketValid {
 		return egressTarget{}, outboundInvalidTarget
 	}
 	target := egressTarget{
-		PolicyIP: netip.AddrFrom4(original.As4()), ConnectionIP: netip.AddrFrom4(translated.As4()),
+		PolicyIP: policyIP.Unmap(), ConnectionIP: socketIP.Unmap(),
 		Port: id.LocalPort, Protocol: "udp", PolicyRevision: snapshot.revision,
 	}
 	if snapshot.dialer.guard.denies(target.PolicyIP) || snapshot.dialer.guard.denies(target.ConnectionIP) {
 		return egressTarget{}, outboundPlatformDeny
 	}
 	if snapshot.extended == nil {
-		if !udpDestinationAllowed(original, snapshot.filter) {
+		if original.Len() != net.IPv4len || !target.ConnectionIP.Is4() ||
+			!udpDestinationAllowed(original, snapshot.filter) {
 			return egressTarget{}, outboundAllowMiss
 		}
 		return target, outboundAllowed

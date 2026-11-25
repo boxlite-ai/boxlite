@@ -1,5 +1,6 @@
 use super::outbound::{
     CompleteOutboundAttempt, CompleteOutboundControl, apply_complete, backend_confirms, confirms,
+    prepare_ipv6_enable,
 };
 use super::*;
 use crate::net::{
@@ -111,6 +112,13 @@ impl BoxImpl {
                 snapshot,
                 pin_backend,
             } => {
+                if snapshot.ipv6.is_some()
+                    && !crate::net::gvproxy::CloudGuardRuntime::qualifies_ipv6().await?
+                {
+                    return Err(BoxliteError::Unsupported(
+                        "Guest IPv6 requires qualified Cloud inventory v2".into(),
+                    ));
+                }
                 let (state, _, control) =
                     self.runtime.box_manager.outbound_state(&self.config.id)?;
                 if self
@@ -153,7 +161,7 @@ impl BoxImpl {
                     return Err(owner_conflict());
                 }
                 let candidate = PreparedOutboundCreate {
-                    snapshot: policy.prepare(previous.admission, revision)?,
+                    snapshot: previous.prepare_replacement(&policy, revision)?,
                     deny_present: policy.deny_net.is_some(),
                     rebuild_pin: None,
                 };
@@ -389,6 +397,16 @@ impl BoxImpl {
                 return Ok(HostedOutboundReceipt::Pending);
             }
             running.capabilities.require(required)?;
+            if candidate.ipv6.is_some() {
+                let live = self.ensure_booted_locked().await?;
+                prepare_ipv6_enable(
+                    running.backend.as_ref(),
+                    &live.guest_session,
+                    &attempt.previous,
+                    candidate,
+                )
+                .await?;
+            }
             let result = apply_complete(
                 running.backend.as_ref(),
                 &attempt.previous.revision,
@@ -450,6 +468,16 @@ impl BoxImpl {
             }
             let required = restored.requirements().union(candidate.requirements());
             running.capabilities.require(required)?;
+            if restored.ipv6.is_some() {
+                let live = self.ensure_booted_locked().await?;
+                prepare_ipv6_enable(
+                    running.backend.as_ref(),
+                    &live.guest_session,
+                    candidate,
+                    &restored,
+                )
+                .await?;
+            }
             let result = apply_complete(
                 running.backend.as_ref(),
                 &candidate.revision,

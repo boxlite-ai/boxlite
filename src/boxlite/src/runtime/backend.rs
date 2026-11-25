@@ -276,7 +276,7 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
                 BoxliteError::InvalidState("outbound revision does not match".into()).into(),
             );
         }
-        let candidate = policy.prepare(previous.admission, OutboundRevision::fresh())?;
+        let candidate = previous.prepare_replacement(&policy, OutboundRevision::fresh())?;
         match self
             .replace_complete_outbound(policy, candidate.revision.clone(), Some(previous.revision))
             .await?

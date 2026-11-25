@@ -481,6 +481,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 					mux.Handle("/network/outbound", policy)
 					mux.Handle(outboundStatusPath, policy)
 					mux.Handle(outboundSnapshotPath, policy)
+					mux.HandleFunc(ipv6ReadinessPath, policy.serveIPv6Readiness)
 					mux.Handle(completeOutboundStatusPath, policy)
 					if policy.guard.epoch != nil {
 						mux.Handle(platformGuardStatus, policy.guard.epoch.status(policy.inventory))
@@ -674,6 +675,9 @@ func gvproxy_outbound_capabilities() C.uint {
 	}
 	if runtime.GOOS == "linux" {
 		bits |= 1 << 5
+	}
+	if capabilities.NativeIPv6 {
+		bits |= 1 << 6
 	}
 	return bits
 }

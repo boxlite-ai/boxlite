@@ -36,6 +36,7 @@ cp -R "$upstream" "$scratch/upstream"
 chmod -R u+w "$scratch/upstream/pkg"
 patch_file="$PWD/gvisor-tap-vsock-dns.patch"
 ipv6_patch_file="$PWD/gvisor-tap-vsock-ipv6.patch"
+dual_stack_patch_file="$PWD/gvisor-tap-vsock-dual-stack.patch"
 (
   # The command may run from a Git hook. Apply only to the temporary module.
   unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
@@ -43,6 +44,7 @@ ipv6_patch_file="$PWD/gvisor-tap-vsock-ipv6.patch"
   cd "$scratch/upstream"
   git apply "$patch_file"
   git apply "$ipv6_patch_file"
+  git apply "$dual_stack_patch_file"
 )
 if [[ "$mode" == vendor ]]; then
   host_os=$(go env GOHOSTOS)
