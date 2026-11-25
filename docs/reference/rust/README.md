@@ -444,7 +444,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start or resume the box |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped policy and tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
-| `resize` | `async fn resize(&self, options: ResizeOptions) -> BoxliteResult<BoxResources>` | Query or grow a running native Linux box's root disk |
+| `resize` | `async fn resize(&self, options: ResizeOptions) -> BoxliteResult<BoxResources>` | Query resources, grow the root disk, or adjust VM memory |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
@@ -464,7 +464,7 @@ use boxlite::ResizeOptions;
 
 # async fn example(bx: &boxlite::LiteBox) -> boxlite::BoxliteResult<()> {
 let current = bx.resize(ResizeOptions::default()).await?;
-let grown = bx.resize(ResizeOptions { disk_size_gb: Some(20) }).await?;
+let grown = bx.resize(ResizeOptions { disk_size_gb: Some(20), ..Default::default() }).await?;
 assert_eq!(grown.disk_size_gb, 20);
 # Ok(())
 # }
@@ -477,6 +477,7 @@ The guest reaps the resize command alongside other executions, so their exit res
 The runtime saves the target in box state after both steps succeed. The creation option keeps its original value.
 
 The operation continues in the runtime if the caller drops its waiting future.
+
 Resize serializes with stop and disk-copy operations; a handle from an earlier VM run is rejected.
 
 If the device reply is lost or times out, the result is unknown and the previously saved target is retained. Retry the same absolute target or query the current image capacity.
@@ -512,6 +513,56 @@ manifest; disk-only archives remain supported through v7.
 Rust source migration: replace `ExportOptions {}` with `ExportOptions::default()`
 for disk-only export. If you construct a disk-only `ArchiveManifest` directly,
 set `memory_checkpoint: None`.
+
+#### Online memory resize
+
+On Linux x86_64, opt in by setting `BoxOptions.max_memory_mib` when creating a native Box.
+Use the [qualified BoxLite ELF kernel](../../../src/vmm/boot/README.md) and a guest agent with memory observation support.
+
+The largest target is the configured ceiling, and boot RAM is the smallest target.
+Targets are absolute VM totals in 128 MiB increments from boot RAM.
+
+This example uses a Box that boots with 512 MiB and has a 2048 MiB ceiling.
+
+```rust,no_run
+use boxlite::ResizeOptions;
+
+# async fn example(bx: &boxlite::LiteBox) -> boxlite::BoxliteResult<()> {
+let resources = bx.resize(ResizeOptions {
+    memory_mib: Some(1024),
+    ..Default::default()
+}).await?;
+let memory = resources.memory.expect("online memory is enabled");
+assert_eq!(memory.completed_mib, 1024);
+assert_eq!(memory.workload_limit_mib, 2048);
+# Ok(())
+# }
+```
+
+The workload's cgroup limit stays at the ceiling while VM capacity changes.
+Usable guest memory also depends on current VM capacity and kernel overhead.
+Host cgroup and address-space limits still apply, including the headroom needed to map the hotplug window.
+
+If the host uses cgroups to limit memory, the runtime needs access to the complete cgroup v2 hierarchy.
+
+An empty request shows the requested target, guest managed memory and VMM mapping progress.
+A shrink can remain incomplete while the guest uses too much memory or KVM retains an empty mapping.
+
+If the 60-second operation times out, query progress and retry the same target.
+The guest may wait longer than one API deadline between unplug attempts.
+A different target is rejected while an earlier target remains incomplete.
+
+A fresh VM restores only the last completed target before starting the workload.
+
+| Event | Durable state | Next action |
+|---|---|---|
+| Target accepted | The runtime saves the pending target before sending it to the VMM. | Wait for the VMM and guest to agree. |
+| Deadline expires | The pending target and last completed target are retained. | Query progress or retry the same target. |
+| Memory converges | The runtime saves the completed target and clears pending. | Request another target if needed. |
+| Fresh VM starts | The runtime reads the last completed target from the prior run. | Restore it before starting the workload. |
+
+Use `..Default::default()` in `BoxOptions` and `ResizeOptions` literals that omit optional fields.
+Use `..` when destructuring only part of a resource result.
 
 #### ExecutionsHandle
 

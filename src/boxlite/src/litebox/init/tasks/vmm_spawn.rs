@@ -296,6 +296,7 @@ async fn build_config(
         // VM resources
         cpus: options.cpu_count()?.map(|cpu| cpu.vcpus()),
         memory_mib: options.memory_mib,
+        hotplug_mib: options.hotplug_mib()?.unwrap_or_default(),
         kernel: prepared_kernel.clone(),
         // Filesystem and devices
         fs_shares: vmm_config.fs_shares,

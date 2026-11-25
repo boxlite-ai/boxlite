@@ -225,6 +225,8 @@ pub struct InstanceSpec {
     pub nested_virtualization: bool,
     pub cpus: Option<u8>,
     pub memory_mib: Option<u32>,
+    #[serde(default)]
+    pub hotplug_mib: u32,
     /// Optional direct Linux boot configuration prepared inside the box before
     /// this specification is assembled.
     #[serde(default)]

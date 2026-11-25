@@ -83,6 +83,25 @@ impl Database {
         self.conn.lock()
     }
 
+    /// Avoid running SQLite's normal busy wait inside a deadline-bound operation.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn try_operation<T>(
+        &self,
+        operation: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> BoxliteResult<T> {
+        use std::time::Duration;
+
+        let conn = self.conn.try_lock().ok_or_else(|| {
+            BoxliteError::Database("SQLite connection is busy; retry the same target".into())
+        })?;
+        let timeout: u32 =
+            db_err!(conn.pragma_query_value(None, "busy_timeout", |row| row.get(0)))?;
+        db_err!(conn.busy_timeout(Duration::ZERO))?;
+        let result = db_err!(operation(&conn));
+        db_err!(conn.busy_timeout(Duration::from_millis(u64::from(timeout))))?;
+        result
+    }
+
     /// Initialize database schema.
     ///
     /// Order of operations:

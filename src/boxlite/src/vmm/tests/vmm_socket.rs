@@ -17,7 +17,7 @@ fn echo_resize(op: ControlOp, directory: Option<File>) -> ControlResponse {
     assert!(directory.is_none());
     match op {
         ControlOp::ResizeDisk { bytes, .. } => Ok(ControlReply::DiskSize(bytes)),
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         _ => panic!("expected a resize request"),
     }
 }
@@ -73,7 +73,7 @@ fn http_resize_reaches_the_handler() {
             assert_eq!(bytes, 4096);
             Ok(ControlReply::DiskSize(bytes))
         }
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         _ => panic!("expected a resize request"),
     })
     .unwrap();
@@ -93,7 +93,7 @@ async fn a_request_reaches_the_handler_and_its_answer_returns() {
         ControlOp::ResizeDisk { block_id, .. } => {
             Err(ControlError::InvalidInput(format!("no disk {block_id}")))
         }
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         _ => panic!("expected a resize request"),
     })
     .unwrap();

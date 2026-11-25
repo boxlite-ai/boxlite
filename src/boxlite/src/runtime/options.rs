@@ -385,6 +385,9 @@ pub struct BoxOptions {
     #[serde(serialize_with = "super::cpu_count::serialize_optional")]
     pub cpus: Option<f64>,
     pub memory_mib: Option<u32>,
+    /// Total VM memory ceiling in MiB for native Linux x86_64 online resize.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_memory_mib: Option<u32>,
     /// Requested virtual capacity of the container rootfs at creation, in GiB.
     ///
     /// A new sparse COW disk is at least as large as the base image.
@@ -684,6 +687,7 @@ impl Default for BoxOptions {
         Self {
             cpus: None,
             memory_mib: None,
+            max_memory_mib: None,
             disk_size_gb: None,
             working_dir: None,
             env: Vec::new(),
@@ -709,6 +713,31 @@ impl Default for BoxOptions {
 }
 
 impl BoxOptions {
+    pub(crate) fn hotplug_mib(&self) -> BoxliteResult<Option<u32>> {
+        let Some(ceiling) = self.max_memory_mib else {
+            return Ok(None);
+        };
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64"))
+            || self.advanced.engine != Some(crate::vmm::VmmKind::Native)
+        {
+            return Err(BoxliteError::Unsupported(
+                "online memory resize requires the local native Linux x86_64 VMM".into(),
+            ));
+        }
+        let boot = self
+            .memory_mib
+            .unwrap_or(crate::runtime::constants::vm_defaults::DEFAULT_MEMORY_MIB);
+        let window = ceiling
+            .checked_sub(boot)
+            .filter(|&window| window != 0 && window.is_multiple_of(128))
+            .ok_or_else(|| {
+                BoxliteError::InvalidArgument(format!(
+                    "max_memory_mib must exceed boot RAM ({boot} MiB) in 128 MiB increments"
+                ))
+            })?;
+        Ok(Some(window))
+    }
+
     /// Resolve the modern and deprecated deletion inputs to one policy.
     #[allow(deprecated)]
     pub(crate) fn effective_auto_delete(&self) -> u32 {

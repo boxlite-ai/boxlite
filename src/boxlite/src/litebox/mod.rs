@@ -14,13 +14,17 @@ mod executions;
 mod init;
 pub(crate) mod local_snapshot;
 mod manager;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod memory_budget;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod memory_resize;
 mod network;
 pub(crate) mod ports;
 mod resize;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
 mod ssh;
-mod state;
+pub(crate) mod state;
 mod watcher;
 
 pub use attach::AttachOptions;
@@ -39,7 +43,7 @@ pub use network::{
 pub use resize::ResizeOptions;
 pub use snapshot::SnapshotHandle;
 pub use ssh::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
-pub use state::{BoxResources, BoxState, BoxStatus, HealthState, HealthStatus};
+pub use state::{BoxMemoryResources, BoxResources, BoxState, BoxStatus, HealthState, HealthStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;
@@ -116,10 +120,11 @@ impl LiteBox {
         self.box_backend.start().await
     }
 
-    /// Grow a running native Linux box's root disk, or query its allocation.
+    /// Resize a running native Linux x86_64 Box or query its resources.
     ///
     /// Explicit targets are 1–1024 GiB and cannot shrink the disk. The runtime
-    /// saves the target in box state after device and guest filesystem growth succeed.
+    /// saves a disk target after device and filesystem growth succeed. Memory targets
+    /// require a startup ceiling and complete when the VMM and guest converge.
     ///
     /// Retry the same target after a partial or uncertain result. The operation
     /// continues if the caller cancels its wait.

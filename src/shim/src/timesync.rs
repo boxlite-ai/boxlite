@@ -245,6 +245,14 @@ mod tests {
             }
         }
 
+        async fn memory_observation(
+            &self,
+            _: tonic::Request<boxlite_shared::MemoryObservationRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::MemoryObservationResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("memory observation"))
+        }
+
         async fn resize_filesystem(
             &self,
             _: tonic::Request<boxlite_shared::ResizeFilesystemRequest>,

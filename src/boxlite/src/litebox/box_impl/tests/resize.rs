@@ -13,11 +13,40 @@ use boxlite_shared::*;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{OnceLock, Weak};
+use std::sync::{Mutex, OnceLock, Weak};
 use tokio::sync::Semaphore;
 use tonic::{Request, Response, Status};
 
+struct MemoryGate {
+    status: Mutex<vmm_socket::MemoryObservation>,
+    managed_bytes: std::sync::atomic::AtomicU64,
+    drop_once: AtomicBool,
+    set_calls: AtomicUsize,
+}
+
+const BOOT_MEMORY: u32 = 512;
+const MAX_MEMORY: u32 = 2048;
+const GUEST_BASELINE: u64 = 500 << 20;
+
+impl MemoryGate {
+    fn new(drop_once: bool) -> Arc<Self> {
+        Arc::new(Self {
+            status: Mutex::new(vmm_socket::MemoryObservation {
+                requested_mib: 0,
+                plugged_mib: 0,
+                mapped_mib: 0,
+                retained_empty_mib: 0,
+            }),
+            managed_bytes: std::sync::atomic::AtomicU64::new(GUEST_BASELINE),
+            drop_once: AtomicBool::new(drop_once),
+            set_calls: AtomicUsize::new(0),
+        })
+    }
+}
+
 struct GuestGate {
+    memory: Option<Arc<MemoryGate>>,
+    legacy_memory_rpc: AtomicBool,
     fail: AtomicBool,
     control_refuses: AtomicBool,
     control_reports_wrong_size: AtomicBool,
@@ -31,7 +60,13 @@ struct GuestGate {
 
 impl GuestGate {
     fn new() -> Arc<Self> {
+        Self::with_memory(None)
+    }
+
+    fn with_memory(memory: Option<Arc<MemoryGate>>) -> Arc<Self> {
         Arc::new(Self {
+            memory,
+            legacy_memory_rpc: AtomicBool::new(false),
             fail: AtomicBool::new(true),
             control_refuses: AtomicBool::new(false),
             control_reports_wrong_size: AtomicBool::new(false),
@@ -107,6 +142,24 @@ impl Guest for ResizeGuest {
     ) -> Result<Response<SyncClockResponse>, Status> {
         Err(Status::unimplemented("unused"))
     }
+    async fn memory_observation(
+        &self,
+        _: tonic::Request<boxlite_shared::MemoryObservationRequest>,
+    ) -> Result<tonic::Response<boxlite_shared::MemoryObservationResponse>, tonic::Status> {
+        if self.0.legacy_memory_rpc.load(Ordering::SeqCst) {
+            return Err(Status::unimplemented("memory observation"));
+        }
+        let memory = self
+            .0
+            .memory
+            .as_ref()
+            .ok_or_else(|| Status::unimplemented("memory observation"))?;
+        Ok(Response::new(MemoryObservationResponse {
+            version: 1,
+            managed_bytes: memory.managed_bytes.load(Ordering::SeqCst),
+        }))
+    }
+
     async fn resize_filesystem(
         &self,
         request: Request<ResizeFilesystemRequest>,
@@ -185,7 +238,7 @@ async fn fixture(gate: Arc<GuestGate>, kind: VmmKind) -> Fixture {
     })
     .unwrap();
     let id = BoxIDMint::mint();
-    let config = BoxConfig {
+    let mut config = BoxConfig {
         id: id.clone(),
         name: None,
         created_at: Utc::now(),
@@ -194,6 +247,8 @@ async fn fixture(gate: Arc<GuestGate>, kind: VmmKind) -> Fixture {
         },
         options: BoxOptions {
             disk_size_gb: Some(10),
+            memory_mib: gate.memory.as_ref().map(|_| BOOT_MEMORY),
+            max_memory_mib: gate.memory.as_ref().map(|_| MAX_MEMORY),
             auto_delete: Some(0),
             detach: true,
             ..Default::default()
@@ -201,6 +256,7 @@ async fn fixture(gate: Arc<GuestGate>, kind: VmmKind) -> Fixture {
         engine_kind: kind,
         box_home: runtime.layout.boxes_dir().join(id.as_str()),
     };
+    config.options.advanced.engine = Some(kind);
     let mut state = BoxState::new();
     state.status = BoxStatus::Running;
     let lock_id = runtime.lock_manager.allocate().unwrap();
@@ -221,13 +277,54 @@ async fn fixture(gate: Arc<GuestGate>, kind: VmmKind) -> Fixture {
     std::fs::create_dir_all(inner.layout.sockets_dir()).unwrap();
     inner.layout.sockets().ensure().unwrap();
     let path = inner.layout.disk_path();
+    if gate.memory.is_some() {
+        let shim = crate::util::PidRecord::current();
+        let mut buf = [0u8; 64];
+        let len = shim.encode(&mut buf);
+        std::fs::write(inner.layout.pid_file_path(), &buf[..len]).unwrap();
+        runtime
+            .box_manager
+            .save_memory_resize(
+                inner.id(),
+                crate::litebox::state::MemoryResizeState {
+                    shim,
+                    baseline_bytes: GUEST_BASELINE,
+                    completed_mib: BOOT_MEMORY,
+                    pending_mib: None,
+                },
+            )
+            .unwrap();
+    }
     let control_gate = gate.clone();
     vmm_socket::serve(&inner.layout.sockets().vmm_sock(), move |op, directory| {
         assert!(directory.is_none());
         let (block_id, bytes) = match op {
             ControlOp::ResizeDisk { block_id, bytes } => (block_id, bytes),
+            ControlOp::Memory { target_mib } => {
+                let memory = control_gate.memory.as_ref().expect("memory fixture");
+                let mut status = memory.status.lock().unwrap();
+                if let Some(target) = target_mib {
+                    memory.set_calls.fetch_add(1, Ordering::SeqCst);
+                    if memory.drop_once.swap(false, Ordering::SeqCst) {
+                        return Err(ControlError::Failed(
+                            "command dropped before submission".into(),
+                        ));
+                    }
+                    *status = vmm_socket::MemoryObservation {
+                        requested_mib: target,
+                        plugged_mib: target,
+                        mapped_mib: target,
+                        retained_empty_mib: 0,
+                    };
+                    memory
+                        .managed_bytes
+                        .store(GUEST_BASELINE + (u64::from(target) << 20), Ordering::SeqCst);
+                    return Ok(ControlReply::MemoryTargetPublished);
+                }
+                return Ok(ControlReply::Memory(*status));
+            }
             #[cfg(feature = "native")]
-            _ => panic!("expected a disk resize request"),
+            _ => panic!("unexpected shim request"),
         };
         assert_eq!(block_id, "vda");
         control_gate.control_calls.fetch_add(1, Ordering::SeqCst);
@@ -307,6 +404,7 @@ async fn copy_fixture() -> (Fixture, tokio::process::Child) {
         .bx
         .resize(crate::ResizeOptions {
             disk_size_gb: Some(SAVED_DISK_GIB),
+            ..crate::ResizeOptions::default()
         })
         .await
         .unwrap();
@@ -434,6 +532,7 @@ async fn resize_persists_after_guest_success_when_caller_cancels() {
     let fixture = fixture(gate.clone(), VmmKind::Native).await;
     let target = crate::ResizeOptions {
         disk_size_gb: Some(20),
+        ..crate::ResizeOptions::default()
     };
     let bx = fixture.bx.clone();
     let first = tokio::spawn(async move { bx.resize(target).await });
@@ -511,6 +610,7 @@ async fn resize_retries_after_guest_timeout_and_late_completion() {
     let fixture = fixture(gate.clone(), VmmKind::Native).await;
     let target = crate::ResizeOptions {
         disk_size_gb: Some(20),
+        ..crate::ResizeOptions::default()
     };
     let bx = fixture.bx.clone();
     let first = tokio::spawn(async move { bx.resize(target).await });
@@ -580,6 +680,7 @@ async fn device_refusal_preserves_disk_capacity_and_saved_target() {
         .bx
         .resize(crate::ResizeOptions {
             disk_size_gb: Some(20),
+            ..crate::ResizeOptions::default()
         })
         .await
         .unwrap_err();
@@ -610,6 +711,7 @@ async fn resize_retries_after_mismatched_device_reply() {
     let fixture = fixture(gate.clone(), VmmKind::Native).await;
     let target = crate::ResizeOptions {
         disk_size_gb: Some(20),
+        ..crate::ResizeOptions::default()
     };
     let error = fixture.bx.resize(target).await.unwrap_err();
     let BoxliteError::Engine(message) = error else {
@@ -637,7 +739,13 @@ async fn resize_retries_after_mismatched_device_reply() {
     gate.fail.store(false, Ordering::SeqCst);
     gate.release.add_permits(1);
     let grown = fixture.bx.resize(target).await.unwrap();
-    assert_eq!(grown, crate::BoxResources { disk_size_gb: 20 });
+    assert_eq!(
+        grown,
+        crate::BoxResources {
+            disk_size_gb: 20,
+            memory: None
+        }
+    );
     assert_eq!(fixture.completed_disk_size_gb(), Some(20));
     assert_eq!(gate.control_calls.load(Ordering::SeqCst), 2);
     assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
@@ -659,6 +767,7 @@ async fn resize_reports_partial_completion_after_database_failure_and_retries() 
         .unwrap();
     let target = crate::ResizeOptions {
         disk_size_gb: Some(20),
+        ..crate::ResizeOptions::default()
     };
     let error = fixture.bx.resize(target).await.unwrap_err();
     let BoxliteError::Database(message) = error else {
@@ -691,7 +800,13 @@ async fn resize_reports_partial_completion_after_database_failure_and_retries() 
         .unwrap();
     gate.release.add_permits(1);
     let grown = fixture.bx.resize(target).await.unwrap();
-    assert_eq!(grown, crate::BoxResources { disk_size_gb: 20 });
+    assert_eq!(
+        grown,
+        crate::BoxResources {
+            disk_size_gb: 20,
+            memory: None
+        }
+    );
     assert_eq!(fixture.completed_disk_size_gb(), Some(20));
     assert_eq!(gate.control_calls.load(Ordering::SeqCst), 2);
     assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
@@ -721,6 +836,7 @@ async fn resize_rejects_a_handle_from_an_earlier_vm_run() {
         .bx
         .resize(crate::ResizeOptions {
             disk_size_gb: Some(20),
+            ..crate::ResizeOptions::default()
         })
         .await;
     assert!(
@@ -745,6 +861,7 @@ async fn resize_serializes_with_disk_operations_and_stop_uses_the_lifecycle_lock
     let mut grow = tokio::spawn(async move {
         bx.resize(crate::ResizeOptions {
             disk_size_gb: Some(20),
+            ..crate::ResizeOptions::default()
         })
         .await
     });
@@ -794,6 +911,7 @@ async fn resize_capacity_is_carried_into_clones_and_exported_options() {
         .bx
         .resize(crate::ResizeOptions {
             disk_size_gb: Some(20),
+            ..crate::ResizeOptions::default()
         })
         .await
         .unwrap();
@@ -848,4 +966,281 @@ async fn resize_capacity_is_carried_into_clones_and_exported_options() {
         }
     }
     assert!(found, "export contains the effective options");
+}
+
+#[tokio::test]
+async fn memory_resize_retries_without_double_publishing_and_rejects_unconverged_targets() {
+    let memory = MemoryGate::new(true);
+    let fixture = fixture(
+        GuestGate::with_memory(Some(memory.clone())),
+        VmmKind::Native,
+    )
+    .await;
+    let grow = crate::ResizeOptions {
+        memory_mib: Some(1024),
+        ..Default::default()
+    };
+    assert!(fixture.bx.resize(grow).await.is_err());
+    let state = fixture
+        .bx
+        .resize(crate::ResizeOptions::default())
+        .await
+        .unwrap()
+        .memory
+        .unwrap();
+    assert_eq!(state.requested_mib, BOOT_MEMORY);
+    assert_eq!(state.pending_mib, Some(1024));
+    assert_eq!(state.completed_mib, BOOT_MEMORY);
+    assert_eq!(
+        fixture
+            .bx
+            .resize(grow)
+            .await
+            .unwrap()
+            .memory
+            .unwrap()
+            .completed_mib,
+        1024
+    );
+    assert_eq!(memory.set_calls.load(Ordering::SeqCst), 2);
+
+    // Model a command published before the runtime lost its response. A retained
+    // empty slot and an offline guest both prevent adoption of a new target.
+    let manager = &fixture.inner.runtime.box_manager;
+    let mut pending = manager.memory_resize(fixture.inner.id()).unwrap().unwrap();
+    pending.pending_mib = Some(768);
+    manager
+        .save_memory_resize(fixture.inner.id(), pending)
+        .unwrap();
+    *memory.status.lock().unwrap() = vmm_socket::MemoryObservation {
+        requested_mib: 256,
+        plugged_mib: 256,
+        mapped_mib: 384,
+        retained_empty_mib: 128,
+    };
+    memory
+        .managed_bytes
+        .store(GUEST_BASELINE + (256 << 20), Ordering::SeqCst);
+    assert!(matches!(
+        fixture.bx.resize(grow).await,
+        Err(BoxliteError::InvalidState(_))
+    ));
+    memory.status.lock().unwrap().retained_empty_mib = 0;
+    memory
+        .managed_bytes
+        .store(GUEST_BASELINE + (128 << 20), Ordering::SeqCst);
+    assert!(matches!(
+        fixture.bx.resize(grow).await,
+        Err(BoxliteError::InvalidState(_))
+    ));
+    memory
+        .managed_bytes
+        .store(GUEST_BASELINE + (256 << 20), Ordering::SeqCst);
+    let shrink = crate::ResizeOptions {
+        memory_mib: Some(768),
+        ..Default::default()
+    };
+    manager
+        .db()
+        .conn()
+        .execute_batch(
+            "CREATE TRIGGER refuse_completion BEFORE UPDATE ON box_state
+         WHEN json_extract(NEW.json, '$.memory_resize.completed_mib') = 768
+         BEGIN SELECT RAISE(ABORT, 'injected memory persistence failure'); END;",
+        )
+        .unwrap();
+    let error = fixture.bx.resize(shrink).await.unwrap_err();
+    assert!(
+        matches!(&error, BoxliteError::Database(message) if message.contains("injected memory persistence failure"))
+    );
+    let progress = fixture
+        .bx
+        .resize(crate::ResizeOptions::default())
+        .await
+        .unwrap()
+        .memory
+        .unwrap();
+    assert_eq!(progress.pending_mib, Some(768));
+    assert_eq!(progress.completed_mib, 1024);
+    manager
+        .db()
+        .conn()
+        .execute_batch("DROP TRIGGER refuse_completion")
+        .unwrap();
+    let shrunk = fixture.bx.resize(shrink).await.unwrap().memory.unwrap();
+    assert_eq!(shrunk.completed_mib, 768);
+    assert_eq!(
+        shrunk.mapped_hotplug_mib, 384,
+        "partially occupied slots may remain mapped"
+    );
+    assert_eq!(shrunk.workload_limit_mib, MAX_MEMORY);
+    assert_eq!(memory.set_calls.load(Ordering::SeqCst), 2);
+    assert!(
+        manager
+            .memory_resize(fixture.inner.id())
+            .unwrap()
+            .unwrap()
+            .pending_mib
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn memory_resize_accepts_aligned_endpoints_and_rejects_invalid_targets() {
+    let memory = MemoryGate::new(false);
+    let fixture = fixture(
+        GuestGate::with_memory(Some(memory.clone())),
+        VmmKind::Native,
+    )
+    .await;
+    let request = |target| crate::ResizeOptions {
+        memory_mib: Some(target),
+        ..Default::default()
+    };
+
+    for target in [BOOT_MEMORY - 128, BOOT_MEMORY + 1, MAX_MEMORY + 128] {
+        let result = fixture.bx.resize(request(target)).await;
+        assert!(
+            matches!(result, Err(BoxliteError::InvalidArgument(_))),
+            "target {target} MiB returned {result:?}"
+        );
+        assert_eq!(memory.set_calls.load(Ordering::SeqCst), 0);
+    }
+    let state = fixture
+        .bx
+        .resize(crate::ResizeOptions::default())
+        .await
+        .unwrap()
+        .memory
+        .unwrap();
+    assert_eq!(state.pending_mib, None);
+    assert_eq!(state.completed_mib, BOOT_MEMORY);
+
+    for (target, calls) in [(MAX_MEMORY, 1), (BOOT_MEMORY, 2)] {
+        let state = fixture
+            .bx
+            .resize(request(target))
+            .await
+            .unwrap()
+            .memory
+            .unwrap();
+        assert_eq!(state.completed_mib, target);
+        assert_eq!(state.plugged_hotplug_mib, target - BOOT_MEMORY);
+        assert_eq!(memory.set_calls.load(Ordering::SeqCst), calls);
+    }
+}
+
+#[tokio::test]
+async fn memory_resize_startup_rejects_a_guest_without_the_observation_rpc() {
+    let memory = MemoryGate::new(false);
+    let gate = GuestGate::with_memory(Some(memory.clone()));
+    gate.legacy_memory_rpc.store(true, Ordering::SeqCst);
+    let fixture = fixture(gate, VmmKind::Native).await;
+    let inner = &fixture.inner;
+    let manager = &inner.runtime.box_manager;
+    let original = manager.memory_resize(inner.id()).unwrap().unwrap();
+    let error = crate::litebox::memory_resize::restore(
+        manager,
+        &inner.config,
+        &inner.layout,
+        &inner.live.get().unwrap().guest_session,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&error, BoxliteError::Unsupported(message) if message.contains("memory observation")),
+        "startup returned {error:?}"
+    );
+    assert_eq!(memory.set_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        manager
+            .memory_resize(inner.id())
+            .unwrap()
+            .unwrap()
+            .baseline_bytes,
+        original.baseline_bytes
+    );
+}
+
+#[tokio::test]
+async fn memory_resize_returns_before_a_contended_write_can_publish_a_target() {
+    let memory = MemoryGate::new(false);
+    let fixture = fixture(
+        GuestGate::with_memory(Some(memory.clone())),
+        VmmKind::Native,
+    )
+    .await;
+    let db_path = fixture.inner.runtime.layout.db_dir().join("boxlite.db");
+    let (locked, ready) = tokio::sync::oneshot::channel();
+    let (unlock, release) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let conn = rusqlite::Connection::open(db_path).unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        locked.send(()).unwrap();
+        let _ = release.recv_timeout(Duration::from_secs(2));
+        conn.execute_batch("ROLLBACK").unwrap();
+    });
+    ready.await.unwrap();
+
+    let request = crate::ResizeOptions {
+        memory_mib: Some(1024),
+        ..Default::default()
+    };
+    let start = std::time::Instant::now();
+    let result = fixture.bx.resize(request).await;
+    let elapsed = start.elapsed();
+    let _ = unlock.send(());
+    holder.join().unwrap();
+
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "SQLite blocked resize: {elapsed:?}"
+    );
+    assert!(matches!(result, Err(BoxliteError::Database(_))));
+    assert_eq!(memory.set_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        fixture
+            .bx
+            .resize(request)
+            .await
+            .unwrap()
+            .memory
+            .unwrap()
+            .completed_mib,
+        1024
+    );
+}
+
+#[tokio::test]
+async fn memory_resize_validates_before_control_and_disk_only_skips_telemetry() {
+    let gate = GuestGate::new();
+    gate.fail.store(false, Ordering::SeqCst);
+    gate.release.add_permits(1);
+    let fixture = fixture(gate.clone(), VmmKind::Native).await;
+    for options in [
+        crate::ResizeOptions {
+            disk_size_gb: Some(20),
+            memory_mib: Some(1024),
+        },
+        crate::ResizeOptions {
+            memory_mib: Some(1024),
+            ..Default::default()
+        },
+    ] {
+        assert!(matches!(
+            fixture.bx.resize(options).await,
+            Err(BoxliteError::InvalidArgument(_))
+        ));
+    }
+    assert_eq!(gate.control_calls.load(Ordering::SeqCst), 0);
+    let disk = fixture
+        .bx
+        .resize(crate::ResizeOptions {
+            disk_size_gb: Some(20),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(disk.disk_size_gb, 20);
+    assert!(disk.memory.is_none());
 }

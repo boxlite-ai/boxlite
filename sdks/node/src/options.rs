@@ -634,6 +634,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
         Ok(BoxOptions {
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
+            max_memory_mib: None,
             disk_size_gb: js_opts.disk_size_gb.map(|v| v as u64),
             working_dir: js_opts.working_dir,
             env,

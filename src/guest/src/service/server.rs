@@ -45,8 +45,8 @@ pub(crate) struct GuestServer {
     /// Mount points frozen by Quiesce RPC, thawed by Thaw RPC.
     pub frozen_mounts: Mutex<Vec<PathBuf>>,
 
-    /// The listener verifies that clock-sync requests come from the host.
-    pub(super) allow_clock_sync: bool,
+    /// The listener restricts the guest service to the host vsock peer.
+    pub(super) host_vsock: bool,
 
     /// Set when a host-driven Shutdown RPC is in progress. The reaper's
     /// init-exit action checks this to avoid powering the VM off underneath a
@@ -78,7 +78,7 @@ impl GuestServer {
             registry: ExecutionRegistry::new(),
             ssh_manager: crate::service::ssh::SshManager::default(),
             frozen_mounts: Mutex::new(Vec::new()),
-            allow_clock_sync: false,
+            host_vsock: false,
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             init_exits: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -109,7 +109,7 @@ impl GuestServer {
         info!("Parsed transport from URI: {:?}", transport);
 
         // Only the vsock listener verifies the host CID before serving RPCs.
-        self.allow_clock_sync = matches!(&transport, BoxTransport::Vsock { .. });
+        self.host_vsock = matches!(&transport, BoxTransport::Vsock { .. });
 
         // Wrap self in Arc for sharing across services
         let server = Arc::new(self);

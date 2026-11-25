@@ -133,6 +133,29 @@ impl GuestInterface {
         Ok(())
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) async fn managed_memory_bytes(&mut self, qualify: bool) -> BoxliteResult<u64> {
+        let observation = self
+            .client
+            .memory_observation(boxlite_shared::MemoryObservationRequest { qualify })
+            .await
+            .map_err(|error| match error.code() {
+                tonic::Code::Unimplemented | tonic::Code::FailedPrecondition => {
+                    BoxliteError::Unsupported(format!(
+                        "guest cannot observe hotplug memory: {error}"
+                    ))
+                }
+                _ => BoxliteError::Engine(format!("guest memory observation failed: {error}")),
+            })?
+            .into_inner();
+        if observation.version != 1 || observation.managed_bytes == 0 {
+            return Err(BoxliteError::Unsupported(
+                "invalid guest memory observation".into(),
+            ));
+        }
+        Ok(observation.managed_bytes)
+    }
+
     /// Fill the container root disk after the kernel observes its new capacity.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub(crate) async fn resize_filesystem(&mut self, minimum_bytes: u64) -> BoxliteResult<()> {

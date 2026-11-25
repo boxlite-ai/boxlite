@@ -152,7 +152,8 @@ impl BoxStore {
             "UPDATE box_state SET status = ?1, pid = ?2, \
              json = json_set(?3, \
                  '$.outbound_policy', json_extract(json, '$.outbound_policy'), \
-                 '$.disk_size_gb', json_extract(json, '$.disk_size_gb')) \
+                 '$.disk_size_gb', json_extract(json, '$.disk_size_gb'), \
+                 '$.memory_resize', json_extract(json, '$.memory_resize')) \
              WHERE id = ?4",
             params![state.status.as_str(), state.pid, json, box_id],
         ))?;
@@ -177,6 +178,44 @@ impl BoxStore {
             "UPDATE box_state SET json = json_set(json, '$.outbound_policy', json(?1)) WHERE id = ?2",
             params![body, box_id],
         ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn memory_resize(
+        &self,
+        box_id: &str,
+    ) -> BoxliteResult<Option<crate::litebox::state::MemoryResizeState>> {
+        let body: Option<String> = self.db.try_operation(|conn| {
+            conn.query_row(
+                "SELECT json_extract(json, '$.memory_resize') FROM box_state WHERE id = ?1",
+                [box_id],
+                |row| row.get(0),
+            )
+        })?;
+        body.map(|json| {
+            serde_json::from_str(&json).map_err(|error| BoxliteError::Database(error.to_string()))
+        })
+        .transpose()
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn update_memory_resize(
+        &self,
+        box_id: &str,
+        state: crate::litebox::state::MemoryResizeState,
+    ) -> BoxliteResult<()> {
+        let body = serde_json::to_string(&state)
+            .map_err(|error| BoxliteError::Database(error.to_string()))?;
+        let changed = self.db.try_operation(|conn| {
+            conn.execute(
+                "UPDATE box_state SET json = json_set(json, '$.memory_resize', json(?1)) WHERE id = ?2",
+                params![body, box_id],
+            )
+        })?;
         if changed == 0 {
             return Err(BoxliteError::NotFound(box_id.into()));
         }

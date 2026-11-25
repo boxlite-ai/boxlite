@@ -98,7 +98,7 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     async fn resize(&self, _options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
         Err(BoxliteError::Unsupported(
-            "this backend does not support online disk resize".into(),
+            "this backend does not support online resize".into(),
         ))
     }
 

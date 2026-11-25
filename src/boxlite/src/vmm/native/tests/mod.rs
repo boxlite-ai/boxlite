@@ -85,6 +85,7 @@ impl TestBox {
             nested_virtualization: false,
             cpus: Some(1),
             memory_mib: Some(256),
+            hotplug_mib: 0,
             kernel,
             fs_shares: FsShares::new(),
             volume_access: Vec::new(),
