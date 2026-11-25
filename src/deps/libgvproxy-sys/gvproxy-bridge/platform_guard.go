@@ -68,13 +68,18 @@ func (guard platformGuard) track(conn net.Conn) (net.Conn, error) {
 	return &guardedConn{Conn: conn, epoch: guard.epoch, stop: stop, close: closeConn}, nil
 }
 
-func (guard platformGuard) runGuestLink(ctx context.Context, conn net.Conn, prefixLen int,
+func (p *outboundPolicyController) runGuestLink(ctx context.Context, conn net.Conn, prefixLen int,
 	rate *RateLimitConfig, accept func(context.Context, net.Conn) error) error {
+	guard := p.guard
 	conn, err := guard.track(conn)
 	if err != nil {
 		return err
 	}
-	return runGuestLink(guard.trafficContext(ctx), conn, prefixLen, rate, accept)
+	var allowIPv6 func() bool
+	if p.config.IPv6Link != nil {
+		allowIPv6 = p.config.IPv6Link.AllowTraffic
+	}
+	return runGuestLink(guard.trafficContext(ctx), conn, prefixLen, rate, allowIPv6, accept)
 }
 
 type guardedConn struct {
