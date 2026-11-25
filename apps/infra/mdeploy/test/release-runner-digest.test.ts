@@ -9,7 +9,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { runnerDigestFile } from '../stack/runner-registry.ts'
+import { registrySetup, runnerDigestFile } from '../stack/runner-registry.ts'
 
 const sha = 'a'.repeat(40)
 function target(manifest: string, archive: string) {
@@ -82,7 +82,7 @@ test('fresh host verifies GHCR bytes without a Release attachment; a replaced di
     }),
     'base64',
   ).toString()
-  const start = boot.indexOf('RUNNER_MANIFEST=')
+  const start = boot.indexOf('RUNNER_TAG=')
   const end = boot.indexOf('tar -xzf /tmp/boxlite-runner.tar.gz', start)
   assert.ok(start >= 0 && end > start)
   const download = boot.slice(start, end).replaceAll('/tmp/boxlite-runner.', dir + '/download.')
@@ -129,4 +129,31 @@ test('fresh host verifies GHCR bytes without a Release attachment; a replaced di
   result = run(guard + '\necho SWAP')
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.stdout, /SWAP/)
+})
+
+test('version-only manual installation reads the same pins from the published receipt', () => {
+  const manual = resolveRunnerBinary({ configRoot: process.cwd(), environment: { VERSION: '1.2.3' } })
+  const receipt = { tag: 'v1.2.3', sha, runner: { manifest: digest('a'), archive: digest('b') } }
+  const script = registrySetup(manual.release!)
+  const read = (data: object) =>
+    spawnSync(
+      'bash',
+      [
+        '-c',
+        `set -euo pipefail
+curl() {
+  [[ "$*" == *"https://github.com/boxlite-ai/boxlite/releases/download/v1.2.3/release-candidate.json" ]] || return 22
+  printf '%s' "$RECEIPT"
+}
+${script}
+printf '%s %s %s' "$RUNNER_MANIFEST" "$RUNNER_ARCHIVE" "$RUNNER_REVISION"`,
+      ],
+      { encoding: 'utf8', env: { ...process.env, RECEIPT: JSON.stringify(data) } },
+    )
+  const selected = read(receipt)
+  assert.equal(selected.status, 0, selected.stderr)
+  assert.equal(selected.stdout, [receipt.runner.manifest, receipt.runner.archive, sha].join(' '))
+  assert.notEqual(read({ ...receipt, tag: 'v1.2.4' }).status, 0)
+  assert.notEqual(read({ ...receipt, runner: { ...receipt.runner, archive: 'invalid' } }).status, 0)
+  assert.throws(() => target(digest('a'), 'invalid'), /Invalid release candidate pins/)
 })

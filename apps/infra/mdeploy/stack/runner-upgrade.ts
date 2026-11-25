@@ -424,7 +424,7 @@ const swapSequence = (target: UpgradeTarget, refused = 'exit 0'): string => {
   return `${downgradeGuard(target.binary.source, refused)}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-${fetchVerifiedRunner(target.binary, '$WORK/runner.tar.gz', '$WORK/runner.sha256', region)}
+${fetchVerifiedRunner(target.binary, 'upgrade', region)}
 tar -xzf "$WORK/runner.tar.gz" -C "$WORK"
 test -x "$WORK/boxlite-runner" || { echo "FATAL: the tarball has no boxlite-runner binary" >&2; exit 1; }
 

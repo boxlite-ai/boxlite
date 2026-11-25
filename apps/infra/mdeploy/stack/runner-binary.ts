@@ -25,7 +25,7 @@
  * each is validated where it enters rather than where it is spent.
  */
 
-import { releaseRunner, runnerRegistry, fetchRegistryRunner, type ReleaseRunner } from './runner-registry.ts'
+import { releaseRunner, runnerRegistry, registryDownload, type ReleaseRunner } from './runner-registry.ts'
 import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
@@ -374,8 +374,11 @@ echo "runner tarball checksum verified ($ACTUAL)"`
 }
 
 /** Render both downloads and verification together so a host cannot install unverified bytes. */
-export function fetchVerifiedRunner(binary: RunnerArtifact, tarball: string, manifest: string, region?: string | null): string {
-  if (binary.release) return fetchRegistryRunner(binary.release, binary, tarball, manifest)
+export function fetchVerifiedRunner(binary: RunnerArtifact, phase: 'boot' | 'upgrade', region?: string | null): string {
+  const [tarball, manifest] = phase === 'boot'
+    ? ['/tmp/boxlite-runner.tar.gz', '/tmp/boxlite-runner.sha256'] as const
+    : ['$WORK/runner.tar.gz', '$WORK/runner.sha256'] as const
+  if (binary.release) return `RUNNER_ARCHIVE_FILE="${tarball}"\nRUNNER_MANIFEST_FILE="${manifest}"\n${registryDownload}`
   return [
     artifactFetchCommand({ artifact: binary, url: binary.tarballUrl, destination: tarball, region }),
     artifactFetchCommand({ artifact: binary, url: binary.checksumUrl, destination: manifest, region }),

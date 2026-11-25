@@ -165,7 +165,7 @@ ${platform.prepareKvm}
 [ -e /dev/kvm ] || { echo "FATAL: /dev/kvm is absent; this host cannot run boxes" >&2; exit 1; }
 
 ${input.binary.release ? registrySetup(input.binary.release) : ''}
-${fetchVerifiedRunner(input.binary, '/tmp/boxlite-runner.tar.gz', '/tmp/boxlite-runner.sha256', region)}
+${fetchVerifiedRunner(input.binary, 'boot', region)}
 tar -xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/
 rm -f /tmp/boxlite-runner.tar.gz /tmp/boxlite-runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
