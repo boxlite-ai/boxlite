@@ -310,7 +310,7 @@ export const MOCK_VOLUMES: VolumeDto[] = [
     state: VolumeState.READY,
     createdAt: daysAgo(3),
     lastUsedAt: hoursAgo(1),
-    storageBackend: 'filestore',
+    storageBackend: 'nfs',
     instance: 'boxlite-dev-shared',
   }),
   buildVolume({

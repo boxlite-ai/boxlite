@@ -309,15 +309,15 @@ export const handlers = [
   http.post(`${API_URL}/volumes`, async ({ request }) => {
     const body = (await request.json()) as {
       name?: string
-      storageBackend?: 'object_storage' | 'filestore'
+      storageBackend?: 'object_storage' | 'nfs'
     }
     const created = {
       id: `vol-${Math.abs(Date.now() % 100000000)}`,
       name: body?.name || 'unnamed-volume',
       organizationId: MOCK_ORGANIZATION.id,
       storageBackend: body?.storageBackend || 'object_storage',
-      instance: body?.storageBackend === 'filestore' ? 'boxlite-dev-shared' : undefined,
-      state: body?.storageBackend === 'filestore' ? 'ready' : 'creating',
+      instance: body?.storageBackend === 'nfs' ? 'boxlite-dev-shared' : undefined,
+      state: body?.storageBackend === 'nfs' ? 'ready' : 'creating',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }

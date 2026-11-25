@@ -407,24 +407,24 @@ describe('Volumes storage selection', () => {
     expect(toast.success).toHaveBeenCalledWith('Creating volume shared-data')
   })
 
-  it('keeps unconfigured FileStore visible but disabled', () => {
+  it('keeps unconfigured NFS visible but disabled', () => {
     renderPage()
     act(() => rowAction('New Volume')?.click())
 
-    expect(document.querySelector<HTMLOptionElement>('option[value="filestore"]')!.disabled).toBe(true)
-    expect(document.body.textContent).toContain('FileStore is not configured on this deployment.')
+    expect(document.querySelector<HTMLOptionElement>('option[value="nfs"]')!.disabled).toBe(true)
+    expect(document.body.textContent).toContain('NFS is not configured on this deployment.')
   })
 
-  it('creates a FileStore volume through server assignment and immediate-ready copy', async () => {
+  it('creates an NFS volume through server assignment and immediate-ready copy', async () => {
     state.capabilities = { object_storage_enabled: true, filestore_enabled: true }
     renderPage()
     await act(async () => rowAction('New Volume')!.click())
     expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('object_storage')
-    selectStorage('filestore')
+    selectStorage('nfs')
     inputText('Volume name', 'nfs-data')
     await act(async () => rowAction('Create')!.click())
 
-    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'filestore' })
+    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'nfs' })
     expect(Object.hasOwn(state.createdVolume!, 'instance')).toBe(false)
     expect(toast.success).toHaveBeenCalledWith('Created volume nfs-data')
     expect(document.body.textContent).not.toContain('It takes a few seconds to become ready.')
@@ -437,7 +437,7 @@ describe('Volumes storage selection', () => {
     )
     renderPage()
     await act(async () => rowAction('New Volume')!.click())
-    selectStorage('filestore')
+    selectStorage('nfs')
     inputText('Volume name', 'nfs-data')
     await act(async () => rowAction('Create')!.click())
 
@@ -452,10 +452,10 @@ describe('Volumes storage selection', () => {
     renderPage()
     await act(async () => rowAction('New Volume')!.click())
 
-    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('filestore')
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('nfs')
     inputText('Volume name', 'nfs-data')
     await act(async () => rowAction('Create')!.click())
-    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'filestore' })
+    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'nfs' })
 
     act(() => root?.unmount())
     root = null
@@ -481,7 +481,7 @@ describe('Volumes storage selection', () => {
     state.capabilities = { object_storage_enabled: true, filestore_enabled: true }
     renderPage()
     act(() => rowAction('New Volume')?.click())
-    selectStorage('filestore')
+    selectStorage('nfs')
     act(() => rowAction('Cancel')?.click())
 
     act(() => rowAction('New Volume')?.click())
@@ -489,11 +489,11 @@ describe('Volumes storage selection', () => {
   })
 
   it('shows only the storage backend', () => {
-    state.storageBackend = 'filestore'
+    state.storageBackend = 'nfs'
     state.instance = 'boxlite-dev-shared'
     renderPage()
 
-    expect(document.body.textContent).toContain('FileStore')
+    expect(document.body.textContent).toContain('NFS')
     expect(document.body.textContent).not.toContain('boxlite-dev-shared')
   })
 })

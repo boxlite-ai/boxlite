@@ -148,10 +148,10 @@ const Volumes: React.FC = () => {
   // not ask users to know one. Falling back to the only available backend
   // avoids opening with a choice that is guaranteed to fail.
   const selectedStorageBackend = objectStorageAvailable
-    ? newStorageBackend === CreateVolumeStorageBackendEnum.FILESTORE && !filestoreAvailable
+    ? newStorageBackend === CreateVolumeStorageBackendEnum.NFS && !filestoreAvailable
       ? CreateVolumeStorageBackendEnum.OBJECT_STORAGE
       : newStorageBackend
-    : CreateVolumeStorageBackendEnum.FILESTORE
+    : CreateVolumeStorageBackendEnum.NFS
   const storageUnavailable = !objectStorageAvailable && !filestoreAvailable
 
   // Exact match, untrimmed: a pasted name with a stray space is exactly the
@@ -176,7 +176,7 @@ const Volumes: React.FC = () => {
       setCreateOpen(false)
       setNewName('')
       toast.success(
-        selectedStorageBackend === CreateVolumeStorageBackendEnum.FILESTORE
+        selectedStorageBackend === CreateVolumeStorageBackendEnum.NFS
           ? `Created volume ${name}`
           : `Creating volume ${name}`,
       )
@@ -308,7 +308,7 @@ const Volumes: React.FC = () => {
                   <StatusMark tone={STATE_TONE[volume.state] ?? 'idle'}>{volume.state}</StatusMark>
                 </span>
                 <span className="font-mono text-meta text-muted-foreground">
-                  {volume.storageBackend === CreateVolumeStorageBackendEnum.FILESTORE ? 'FileStore' : 'ObjectStorage'}
+                  {volume.storageBackend === CreateVolumeStorageBackendEnum.NFS ? 'NFS' : 'ObjectStorage'}
                 </span>
                 <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.createdAt)}</span>
                 <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.lastUsedAt)}</span>
@@ -399,16 +399,16 @@ const Volumes: React.FC = () => {
                 <option value={CreateVolumeStorageBackendEnum.OBJECT_STORAGE} disabled={!objectStorageAvailable}>
                   ObjectStorage
                 </option>
-                <option value={CreateVolumeStorageBackendEnum.FILESTORE} disabled={!filestoreAvailable}>
-                  FileStore
+                <option value={CreateVolumeStorageBackendEnum.NFS} disabled={!filestoreAvailable}>
+                  NFS
                 </option>
               </select>
             </div>
             {!objectStorageAvailable && !filestoreAvailable ? (
               <PanelNote>This deployment has no volume storage configured.</PanelNote>
             ) : !filestoreAvailable ? (
-              <PanelNote>FileStore is not configured on this deployment.</PanelNote>
-            ) : selectedStorageBackend === CreateVolumeStorageBackendEnum.FILESTORE ? (
+              <PanelNote>NFS is not configured on this deployment.</PanelNote>
+            ) : selectedStorageBackend === CreateVolumeStorageBackendEnum.NFS ? (
               <PanelNote>Used to mount this volume into a box. It is ready immediately after creation.</PanelNote>
             ) : (
               <PanelNote>Used to mount this volume into a box. It takes a few seconds to become ready.</PanelNote>
