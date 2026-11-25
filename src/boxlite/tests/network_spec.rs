@@ -1025,3 +1025,269 @@ async fn disabled_network_cannot_reach_host_virtual_ip() {
     server.join().unwrap();
     litebox.stop().await.unwrap();
 }
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod runtime_update {
+    use super::*;
+    use boxlite::litebox::NetworkHandle;
+    use boxlite::net::{
+        CompleteOutboundPolicy, OutboundAdmission, OutboundApplicationState,
+        OutboundReplaceOutcome, OutboundRevision,
+    };
+    use boxlite::runtime::options::{NetworkMode, PortSpec, RootfsSpec};
+    use boxlite::{ExecStdin, Execution, LiteBox};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::time::timeout;
+
+    const WAIT: Duration = Duration::from_secs(5);
+    const GUEST_PORT: u16 = 8080;
+    const GUEST_CLIENT: &str = r#"
+import socket
+import sys
+with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2) as stream:
+    for line in sys.stdin.buffer:
+        stream.sendall(line)
+"#;
+
+    #[cfg(target_os = "linux")]
+    fn listener_identity(port: u16) -> String {
+        let endpoint = format!("0100007F:{port:04X}");
+        std::fs::read_to_string("/proc/net/tcp")
+            .unwrap()
+            .lines()
+            .skip(1)
+            .find_map(|line| {
+                let parts: Vec<_> = line.split_whitespace().collect();
+                (parts.get(1) == Some(&endpoint.as_str()) && parts.get(3) == Some(&"0A"))
+                    .then(|| parts[9].to_string())
+            })
+            .expect("published TCP listener is missing")
+    }
+
+    #[cfg(target_os = "macos")]
+    fn listener_identity(port: u16) -> String {
+        let selector = format!("-iTCP@127.0.0.1:{port}");
+        let output = std::process::Command::new("/usr/sbin/lsof")
+            .args(["-a", "-nP", &selector, "-sTCP:LISTEN"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let endpoint = format!("127.0.0.1:{port}");
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .find_map(|line| {
+                let parts: Vec<_> = line.split_whitespace().rev().collect();
+                match parts.as_slice() {
+                    ["(LISTEN)", local, "TCP", _, device, ..]
+                        if *local == endpoint && device.starts_with("0x") =>
+                    {
+                        Some(device.to_string())
+                    }
+                    _ => None,
+                }
+            })
+            .expect("published TCP socket identifier is missing")
+    }
+
+    async fn apply(
+        network: &NetworkHandle,
+        current: &mut OutboundRevision,
+        mode: NetworkMode,
+        deny: Vec<String>,
+    ) {
+        let next = OutboundRevision::fresh();
+        let policy = CompleteOutboundPolicy {
+            mode: mode.clone(),
+            deny_net: Some(deny.clone()),
+            ..Default::default()
+        };
+        assert_eq!(
+            network
+                .replace_outbound_policy(current.clone(), next.clone(), policy)
+                .await
+                .unwrap(),
+            OutboundReplaceOutcome::Applied
+        );
+        let status = network.complete_outbound_status().await.unwrap();
+        assert_eq!(
+            status.application_state,
+            OutboundApplicationState::Confirmed
+        );
+        assert!(status.pending_revision.is_none());
+        assert_eq!(status.persisted.revision, next);
+        assert_eq!(status.persisted.admission, OutboundAdmission::ExtendedIpv4);
+        assert_eq!(status.persisted.policy.mode, mode);
+        assert!(status.persisted.policy.allow_net.is_empty());
+        assert_eq!(status.persisted.policy.deny_net, deny);
+        assert_eq!(
+            network.complete_outbound_snapshot().await.unwrap(),
+            status.persisted
+        );
+        let observed = status.observed.unwrap();
+        assert_eq!(
+            observed.application_state,
+            OutboundApplicationState::Confirmed
+        );
+        assert_eq!(observed.snapshot, status.persisted);
+        *current = next;
+    }
+
+    async fn guest_tcp(
+        litebox: &LiteBox,
+        listener: &TcpListener,
+    ) -> (Execution, ExecStdin, TcpStream) {
+        let port = listener.local_addr().unwrap().port().to_string();
+        let mut execution = litebox
+            .exec(BoxCommand::new("python3").args(["-c", GUEST_CLIENT, HOST_IP, &port]))
+            .await
+            .unwrap();
+        let input = execution.stdin().unwrap();
+        let (stream, _) = timeout(WAIT, listener.accept())
+            .await
+            .expect("expected an admitted guest connection")
+            .unwrap();
+        (execution, input, stream)
+    }
+
+    async fn expect_delivery(input: &mut ExecStdin, stream: &mut TcpStream, bytes: &[u8]) {
+        input.write_all(bytes).await.unwrap();
+        let mut received = vec![0; bytes.len()];
+        timeout(WAIT, stream.read_exact(&mut received))
+            .await
+            .expect("host did not receive the guest payload")
+            .unwrap();
+        assert_eq!(received, bytes);
+    }
+
+    async fn expect_fresh_denial(litebox: &LiteBox, listener: &TcpListener) {
+        let port = listener.local_addr().unwrap().port().to_string();
+        let mut attempt = litebox
+            .exec(BoxCommand::new("python3").args(["-c", GUEST_CLIENT, HOST_IP, &port]))
+            .await
+            .unwrap();
+        let mut input = attempt.stdin().unwrap();
+        let _ = input.write_all(b"blocked-flow\n").await;
+        input.close();
+        let (arrival, exit) = tokio::join!(
+            timeout(Duration::from_secs(2), listener.accept()),
+            timeout(WAIT, attempt.wait())
+        );
+        assert!(arrival.is_err(), "denied flow reached the host listener");
+        assert_ne!(
+            exit.expect("guest denial probe did not finish")
+                .unwrap()
+                .exit_code,
+            0
+        );
+    }
+
+    async fn inbound_delivers(port: u16) -> bool {
+        let result = timeout(Duration::from_millis(750), async {
+            let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await?;
+            stream.write_all(b"GET / HTTP/1.0\r\n\r\n").await?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await?;
+            std::io::Result::Ok(response.contains("original-inbound-service"))
+        })
+        .await;
+        matches!(result, Ok(Ok(true)))
+    }
+
+    #[tokio::test]
+    #[ignore = "requires VM runtime (run with make test)"]
+    async fn outbound_replacement_preserves_live_flows_and_inbound_listener() {
+        let home = boxlite_test_utils::home::PerTestBoxHome::new();
+        let runtime = BoxliteRuntime::new(BoxliteOptions {
+            home_dir: home.path.clone(),
+            image_registries: common::test_registries(),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut options = common::alpine_opts();
+        options.rootfs = RootfsSpec::Image("python:alpine".into());
+        options.ports.push(PortSpec {
+            guest_port: GUEST_PORT,
+            host_ip: Some("127.0.0.1".into()),
+            ..Default::default()
+        });
+        let litebox = runtime
+            .create_with_outbound_policy(
+                options,
+                None,
+                CompleteOutboundPolicy {
+                    deny_net: Some(vec![]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        litebox.start().await.unwrap();
+        let network = litebox.network();
+        let mut httpd = litebox
+            .exec(BoxCommand::new("sh").args([
+                "-ec",
+                "mkdir -p /tmp/outbound-test-http; echo original-inbound-service >/tmp/outbound-test-http/index.html; exec python3 -u -m http.server --bind 0.0.0.0 --directory /tmp/outbound-test-http 8080",
+            ]))
+            .await
+            .unwrap();
+        let forwards = network.published_ports().await.unwrap().unwrap();
+        let [forward] = forwards.as_slice() else {
+            panic!("expected one inbound publish, got {forwards:?}");
+        };
+        let published = forward.host_port;
+        let ready = timeout(WAIT, async {
+            while !inbound_delivers(published).await {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        if ready.is_err() {
+            let mut stderr = httpd.stderr().unwrap();
+            let detail = timeout(Duration::from_millis(250), stderr.next()).await;
+            panic!("inbound test service did not start: {detail:?}");
+        }
+        let inbound_identity = listener_identity(published);
+
+        let egress = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let mut revision = network.complete_outbound_snapshot().await.unwrap().revision;
+        apply(&network, &mut revision, NetworkMode::Enabled, vec![]).await;
+        let (_old_guest, mut old_input, mut old_stream) = guest_tcp(&litebox, &egress).await;
+        expect_delivery(&mut old_input, &mut old_stream, b"before update\n").await;
+
+        let deny = format!("{HOST_IP}:{}", egress.local_addr().unwrap().port());
+        apply(&network, &mut revision, NetworkMode::Enabled, vec![deny]).await;
+        expect_delivery(&mut old_input, &mut old_stream, b"established flow\n").await;
+        expect_fresh_denial(&litebox, &egress).await;
+        assert_eq!(network.published_ports().await.unwrap().unwrap(), forwards);
+        assert_eq!(listener_identity(published), inbound_identity);
+        assert!(inbound_delivers(published).await);
+
+        apply(&network, &mut revision, NetworkMode::Enabled, vec![]).await;
+        let (_new_guest, mut new_input, mut new_stream) = guest_tcp(&litebox, &egress).await;
+        expect_delivery(&mut new_input, &mut new_stream, b"after clear\n").await;
+
+        apply(&network, &mut revision, NetworkMode::Disabled, vec![]).await;
+        let _ = old_input.write_all(b"while disabled\n").await;
+        let mut bytes = [0; 32];
+        let result = timeout(Duration::from_millis(750), old_stream.read(&mut bytes)).await;
+        assert!(
+            !matches!(result, Ok(Ok(n)) if n > 0),
+            "established guest data reached host while disabled"
+        );
+        expect_fresh_denial(&litebox, &egress).await;
+        assert_eq!(network.published_ports().await.unwrap().unwrap(), forwards);
+        assert_eq!(listener_identity(published), inbound_identity);
+        assert!(!inbound_delivers(published).await);
+
+        apply(&network, &mut revision, NetworkMode::Enabled, vec![]).await;
+        let (_resumed_guest, mut resumed_input, mut resumed_stream) =
+            guest_tcp(&litebox, &egress).await;
+        expect_delivery(&mut resumed_input, &mut resumed_stream, b"after resume\n").await;
+        assert_eq!(network.published_ports().await.unwrap().unwrap(), forwards);
+        assert_eq!(listener_identity(published), inbound_identity);
+        assert!(inbound_delivers(published).await);
+        litebox.stop().await.unwrap();
+    }
+}
