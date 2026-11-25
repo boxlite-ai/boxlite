@@ -15,7 +15,7 @@ jest.mock('@nestjs/common', () => ({
   ValidationPipe: jest.fn(),
 }))
 jest.mock('@nestjs/microservices', () => ({ Transport: {} }))
-jest.mock('typeorm', () => ({ DataSource: class {}, MigrationExecutor: class {} }))
+jest.mock('typeorm', () => ({ DataSource: class {} }))
 jest.mock('kafkajs', () => ({ Partitioners: {} }))
 jest.mock('nestjs-pino', () => ({ Logger: class {}, LoggerErrorInterceptor: jest.fn() }))
 jest.mock('@nestjs/swagger', () => ({
