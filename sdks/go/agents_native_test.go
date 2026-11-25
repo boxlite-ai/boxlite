@@ -221,6 +221,8 @@ func TestAgentUninitializedAndReleasedHandles(t *testing.T) {
 		checkAgentError(t, state, err, ErrInvalidState)
 		turn, err := agent.Send(ctx, "work", AgentSendOptions{})
 		checkAgentError(t, turn, err, ErrInvalidState)
+		stream, err := agent.Events(ctx, AgentEventsOptions{})
+		checkAgentError(t, stream, err, ErrInvalidState)
 	}
 	for _, turn := range []*AgentTurn{nil, {}} {
 		state, err := turn.State()

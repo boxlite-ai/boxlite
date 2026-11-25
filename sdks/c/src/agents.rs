@@ -1117,6 +1117,8 @@ pub unsafe extern "C" fn boxlite_agent_turn_free(handle: *mut CAgentTurn) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_events_free(handle: *mut CAgentEvents) {
     if !handle.is_null() {
+        #[cfg(feature = "test-support")]
+        go_test_support::record_events_free();
         unsafe {
             drop(Box::from_raw(handle));
         }

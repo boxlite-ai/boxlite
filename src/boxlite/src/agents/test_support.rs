@@ -124,7 +124,59 @@ impl AgentBackend for TestBackend {
     }
     async fn events(&self, options: &AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
         use futures::StreamExt;
+        let event = |kind: String| AgentEvent {
+            cursor: None,
+            agent_id: self.id().into(),
+            turn_id: None,
+            kind,
+            data: serde_json::json!({}),
+        };
+        if let Some(size) = options
+            .after
+            .as_deref()
+            .and_then(|s| s.strip_prefix("bytes:"))
+        {
+            let mut items = Vec::new();
+            for size in size.split(',') {
+                let size: usize = size
+                    .parse()
+                    .map_err(|_| BoxliteError::InvalidArgument("invalid test size".into()))?;
+                let mut item = event("sized".into());
+                item.data = serde_json::json!("");
+                let overhead = records::event(&item).to_string().len();
+                let padding = size.checked_sub(overhead).ok_or_else(|| {
+                    BoxliteError::InvalidArgument("test size below record overhead".into())
+                })?;
+                item.data = serde_json::json!("x".repeat(padding));
+                items.push(Ok(item));
+            }
+            return Ok(Box::pin(futures::stream::iter(items)));
+        }
         match options.after.as_deref() {
+            Some("after-response") => {
+                let first = event("first".into());
+                let mut last = event("future".into());
+                last.data = serde_json::from_str("1e+400").unwrap();
+                let mut response = self.wait_gate.subscribe();
+                Ok(Box::pin(futures::stream::iter([Ok(first)]).chain(
+                    futures::stream::once(async move {
+                        response.changed().await.expect("backend owns sender");
+                        Ok(last)
+                    }),
+                )))
+            }
+            Some("open-pending") => std::future::pending().await,
+            Some("many") => Ok(Box::pin(futures::stream::iter(
+                (0..128)
+                    .map(|n| Ok(event(n.to_string())))
+                    .collect::<Vec<_>>(),
+            ))),
+            Some("continuous") => {
+                let item = event("tick".into());
+                Ok(Box::pin(futures::stream::repeat_with(move || {
+                    Ok(item.clone())
+                })))
+            }
             Some("open-error") => Err(BoxliteError::Network("test open failed".into())),
             Some("pending") => Ok(Box::pin(futures::stream::pending())),
             Some("read-error") => Ok(Box::pin(futures::stream::iter(vec![

@@ -9,6 +9,12 @@ BoxliteErrorCode boxlite_test_agents_new(const char*, CBoxliteRuntime**, struct 
 bool boxlite_test_agents_wait_pending(CBoxliteRuntime*);
 bool boxlite_test_agents_wait_queue(CBoxliteRuntime*, size_t);
 void boxlite_test_agents_free_counts(size_t*, size_t*);
+size_t boxlite_test_agents_event_frees(void);
+void boxlite_test_agents_barrier(CBoxliteRuntime*, void (*)(uintptr_t), uintptr_t);
+extern void goBoxliteAgentTestBarrier(uintptr_t);
+static inline void test_agent_barrier(CBoxliteRuntime *rt, uintptr_t token) {
+    boxlite_test_agents_barrier(rt, goBoxliteAgentTestBarrier, token);
+}
 */
 import "C"
 
@@ -82,6 +88,32 @@ func testAgentFreeCounts() (int, int) {
 	return int(agents), int(turns)
 }
 
+func testAgentEventFrees() int { return int(C.boxlite_test_agents_event_frees()) }
+
+type agentTestBarrier struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func testAgentBlockDrainer(r *Runtime) *agentTestBarrier {
+	b := &agentTestBarrier{entered: make(chan struct{}), release: make(chan struct{})}
+	token := cgo.NewHandle(b)
+	r.agentMu.RLock()
+	r.ensureDrainRunning()
+	C.test_agent_barrier(r.handle, C.uintptr_t(token))
+	r.agentMu.RUnlock()
+	return b
+}
+
+//export goBoxliteAgentTestBarrier
+func goBoxliteAgentTestBarrier(token C.uintptr_t) {
+	h := cgo.Handle(token)
+	b := h.Value().(*agentTestBarrier)
+	close(b.entered)
+	<-b.release
+	h.Delete()
+}
+
 // Expose a real buffered native completion to exercise cancellation after dispatch
 // has claimed its cgo token, before the public call consumes the returned handle.
 func testAgentSubmitCreate(a *Agents) (<-chan handleResult[*agentSession], cgo.Handle, error) {
@@ -104,4 +136,12 @@ func testAgentSubmitCreate(a *Agents) (<-chan handleResult[*agentSession], cgo.H
 		return nil, 0, freeError(&cerr)
 	}
 	return op.result, token, nil
+}
+
+// Feed a wire record through the production callback. The typed Rust fixture
+// cannot generate a malformed outer record.
+func testDeliverAgentRecord(s *agentSubscription, record string) {
+	value := C.CString(record)
+	defer C.free(unsafe.Pointer(value))
+	goBoxliteAgentEvent(value, nil, C.uintptr_t(s.token))
 }

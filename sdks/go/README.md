@@ -487,21 +487,37 @@ the box keeps running in the runtime.
 
 ## Development
 
-Agent calls and getters reach the C SDK and Rust core through the
-[shared JSON mapping](../../docs/reference/agents.md#go-json-mapping).
-`Box.Agents()` acquires its namespace lazily. Agent and turn wrappers must not be
-copied after first use; `Runtime.Close` releases their native handles.
-Canceling a call stops the Go wait without canceling submitted agent work;
-late returned handles are released. Canceling an `AgentTurn.Wait` or closing its
-runtime also releases that call’s native observer. Other waits on the same
-turn continue until their own completion, cancellation, or runtime shutdown. `Agent.Close` invokes the core operation
-rather than freeing the local handle. Both event methods return `Unsupported`.
+Agent record conversion uses the [shared JSON mapping](../../docs/reference/agents.md#go-json-mapping).
+The fixture in `testdata/agents.json` comes from the Rust core's record functions;
+the Rust test checks it for drift and the Go tests check conversion against it.
+Agent calls, getters and subscriptions reach the C SDK and Rust core.
+Open events before sending; `Events` returns only after connection. Streams allow
+one `Next` reader and bound buffered JSON to 64 events/4 MiB; overflow preserves
+the accepted prefix and ends with `ErrResourceExhausted`. Stream `Close` is
+non-blocking and does not interrupt work. See [Go event streams](../../docs/reference/agents.md#go-event-streams).
 
-The Go unit and coverage targets enable C `test-support` and the
-`boxlite_agent_test` Go tag. Deterministic tests cross the C/core boundary without
-requiring a VM; normal SDK builds exclude these test entry points.
-Run `make test:unit:go FILTER=Agent` and add `RACE=1` for race checks.
+`Box.Agents()` acquires its native namespace on first use. Agent and turn wrappers
+must not be copied after first use; `Runtime.Close` releases all their native handles.
+`Agent.Close` requests the core close operation, which may return `ErrUnsupported`;
+it does not free the local handle. Canceling a context stops the wait without
+canceling submitted work. Canceling an `AgentTurn.Wait` also releases its native
+observer while other waits on the same turn continue. See [Go ownership and cancellation](../../docs/reference/agents.md#go-json-mapping).
 
+The Go unit and coverage targets build the C SDK with its `test-support` feature and add
+the `boxlite_agent_test` Go build tag. These tests cross the real C/core boundary
+using a deterministic backend, without a VM. Normal `make dev:go` builds exclude
+these test entry points; hosted tests do not verify OpenCode in a real VM.
+
+```bash
+make test:unit:go FILTER=Agent
+make test:unit:rust FILTER=go_json_fixture_matches_core_records
+# Race checks for agent calls, streams and ownership
+make test:unit:go FILTER=Agent RACE=1
+```
+
+After an intentional core format change, regenerate the fixture with
+`BOXLITE_UPDATE_AGENT_FIXTURES=1 make test:unit:rust FILTER=go_json_fixture_matches_core_records`,
+then review the JSON diff and rerun both suites.
 
 Build from source (requires Rust toolchain):
 
@@ -536,3 +552,56 @@ runtime create operation saves the option; `Box.Start(ctx)` keeps that saved val
 Runner reads its feature ENV at startup and chooses this creation option only for
 eligible Cloud requests on supported hosts. This adds no start options or change
 to default local creation. Changing organization policy affects future creates.
+
+Local agent VM acceptance uses the same scripted model and OpenCode 2.2.2 binary
+as the C/Rust tests, comparing normalized results, usage and first-event
+identity relationships. It checks unsupported operations, getters and a running
+turn completing after its local handle is released. It is outside hosted CI.
+
+```bash
+BOXLITE_TEST_OPENCODE_BINARY=/absolute/path/to/linux/opencode make test:integration:go:agents
+```
+
+The target builds C and Go callers, then runs the Rust comparison harness.
+The OpenCode binary must match the VM architecture and use glibc Linux; the
+Debian test image, VM support and complete runtime artifacts must be available.
+
+### Agent VM parity with Rust
+
+`make test:integration:go:agents` runs the three-language result comparison and
+Go equivalents of all 15 cases in
+[`agents_opencode.rs`](../../src/boxlite/tests/agents_opencode.rs).
+`TestGoAgentVMParity` uses the Rust test names as Go subtest names, so a failed
+scenario can be traced directly to its source contract.
+
+| Rust VM scenario | Go assertions |
+|---|---|
+| Concurrent creates, send/events/wait | One registered service, configuration, matching turn event, lookup through another handle |
+| Old turn beyond the first history page | Thirty turns outgrow the 50-message page; the first turn remains readable |
+| Restart with running and queued turns | Reacquire the Box and agent; both original turns complete |
+| Foreign server on the agent port | `ErrInvalidState` identifies the occupied port |
+| Missing OpenCode binary | `ErrExecution` identifies the required version |
+| User-owned ready or frozen service | Refuse takeover; preserve the service URL and PID |
+| Stale service registration | Recover the service without signalling the unrelated PID |
+| Environment reads and questions | `.env.example` is readable, `.env`/`.env.local` stay secret, denied questions do not block later work |
+| Frozen BoxLite service | Report unresponsiveness; after thawing, reuse its PID |
+| Remote service configuration | Refuse local startup and leave no local registration |
+| Delivered binary outside the image PATH | Agent runs from a read-only mount without adding an image executable |
+| Repeated installation | Reuse a single mount |
+| Installation after a failed file lookup | The new executable becomes visible on the existing mount |
+| Restart of a delivered agent | First Go lookup restores its recorded mount |
+| Failed mount after restart | Surface the error, keep the VM running, and retry after removing the blocker |
+
+The five installation scenarios use a `test-support` C fixture that calls the
+existing Rust-only `install_from_host` setup method. It is excluded from
+`boxlite.h` and normal builds; it adds no Go installation API. Subsequent agent
+calls, visibility checks and restart recovery use the real Go SDK and VM.
+
+The security cases observe the shared model's reply, which includes `SECRET`
+only when a tool actually returned it. Service assertions inspect the guest's
+registration and process state. These tests run outside hosted CI and require
+the same complete runtime artifacts and OpenCode binary as the comparison.
+
+For a scenario-only rerun, use `make test:integration:go:agents:parity` with the
+same binary/runtime environment. `BOXLITE_GO_AGENT_VM_FILTER` optionally selects
+a Go test/subtest pattern; omit it for the complete 15-scenario matrix.

@@ -57,7 +57,7 @@ func TestAgentsRequireNativeHandles(t *testing.T) {
 func TestAgentEventsRequireNativeHandles(t *testing.T) {
 	ctx := context.Background()
 	events, err := (&Agent{}).Events(ctx, AgentEventsOptions{})
-	checkAgentError(t, events, err, ErrUnsupported)
+	checkAgentError(t, events, err, ErrInvalidState)
 	events, err = (&AgentTurn{}).Events(ctx, AgentEventsOptions{})
-	checkAgentError(t, events, err, ErrUnsupported)
+	checkAgentError(t, events, err, ErrInvalidState)
 }
