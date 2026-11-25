@@ -293,6 +293,7 @@ async fn build_config(
         box_id: box_id.to_string(),
         security: options.advanced.security.clone(),
         nested_virtualization: options.advanced.nested_virtualization,
+        checkpoint_restore: None,
         // VM resources
         cpus: options.cpu_count()?.map(|cpu| cpu.vcpus()),
         memory_mib: options.memory_mib,

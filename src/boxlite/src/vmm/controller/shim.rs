@@ -325,6 +325,7 @@ impl VmmController for ShimController {
             box_id: self.box_id.to_string(),
             security: self.options.advanced.security.clone(),
             nested_virtualization: config.nested_virtualization,
+            checkpoint_restore: None,
             // VM configuration
             cpus: config.cpus,
             memory_mib: config.memory_mib,

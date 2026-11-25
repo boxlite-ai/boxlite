@@ -26,7 +26,7 @@ pub mod krun;
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub mod native;
 pub mod registry;
-#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+#[cfg(unix)]
 pub(crate) mod vmm_socket;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
@@ -265,6 +265,9 @@ pub struct InstanceSpec {
     /// Whether the box should continue running when the parent process exits.
     /// When false, the shim detects parent death via watchdog pipe POLLHUP.
     pub detach: bool,
+    /// Optional path to a saved checkpoint file to restore from instead of cold booting.
+    #[serde(default)]
+    pub checkpoint_restore: Option<PathBuf>,
 }
 
 /// Entrypoint configuration that the guest should run.

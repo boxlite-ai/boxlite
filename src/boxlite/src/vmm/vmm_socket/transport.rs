@@ -1,17 +1,22 @@
+#![allow(dead_code)]
 use std::fs::File;
 use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "linux")]
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, ready};
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncWrite, Interest, ReadBuf};
 
+#[cfg(target_os = "linux")]
 fn remaining(end: Instant) -> io::Result<Duration> {
     end.checked_duration_since(Instant::now())
         .filter(|d| !d.is_zero())
@@ -19,6 +24,7 @@ fn remaining(end: Instant) -> io::Result<Duration> {
 }
 
 /// A kernel socket timeout is the deadline, whichever loop the kernel interrupted.
+#[cfg(target_os = "linux")]
 fn timed_out(error: io::Error) -> io::Error {
     match error.kind() {
         io::ErrorKind::WouldBlock => {
@@ -28,6 +34,7 @@ fn timed_out(error: io::Error) -> io::Error {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn connect(path: &Path, end: Instant) -> io::Result<UnixStream> {
     let bytes = path.as_os_str().as_bytes();
     // SAFETY: a zeroed address has a NUL-terminated pathname buffer.
@@ -58,6 +65,46 @@ pub(super) fn connect(path: &Path, end: Instant) -> io::Result<UnixStream> {
         return Err(timed_out(io::Error::last_os_error()));
     }
     Ok(stream)
+}
+
+// Set O_NONBLOCK as well as MSG_DONTWAIT: macOS does not reliably honor
+// MSG_DONTWAIT alone. Tokio then owns the socket's readiness and deadlines.
+pub(super) fn prepare_stream(stream: &UnixStream) -> io::Result<()> {
+    stream.set_nonblocking(true)
+}
+
+// Configure the listener before accept. Darwin inherits the flag and can
+// reject setsockopt on an accepted stream whose peer has already disconnected.
+#[cfg(target_os = "macos")]
+pub(super) fn suppress_sigpipe(socket: &impl AsRawFd) -> io::Result<()> {
+    let one: libc::c_int = 1;
+    // SAFETY: the caller owns a live socket and `one` stays live across the call.
+    if unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_NOSIGPIPE,
+            (&one as *const libc::c_int).cast(),
+            size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_cloexec(fd: RawFd) -> io::Result<()> {
+    // SAFETY: `fcntl(F_GETFD)` / `F_SETFD` operate on the open descriptor `fd`.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 // cmsghdr alignment is required even when the byte capacity is sufficient.
@@ -220,7 +267,11 @@ pub(super) fn send_with_file(socket: RawFd, bytes: &[u8], file: RawFd) -> io::Re
         (*header).cmsg_type = libc::SCM_RIGHTS;
         (*header).cmsg_len = libc::CMSG_LEN(size_of::<RawFd>() as _) as _;
         std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), file);
-        libc::sendmsg(socket, &msg, libc::MSG_NOSIGNAL)
+        #[cfg(target_os = "linux")]
+        let flags = libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL;
+        #[cfg(not(target_os = "linux"))]
+        let flags = libc::MSG_DONTWAIT;
+        libc::sendmsg(socket, &msg, flags)
     };
     if sent < 0 {
         return Err(io::Error::last_os_error());
@@ -243,8 +294,12 @@ fn receive_with_file(socket: RawFd, bytes: &mut [u8]) -> io::Result<(usize, Opti
     msg.msg_iovlen = 1;
     msg.msg_control = control.bytes.as_mut_ptr().cast();
     msg.msg_controllen = control.bytes.len() as _;
+    #[cfg(target_os = "linux")]
+    let flags = libc::MSG_DONTWAIT | libc::MSG_CMSG_CLOEXEC;
+    #[cfg(not(target_os = "linux"))]
+    let flags = libc::MSG_DONTWAIT;
     // SAFETY: the iovec and control buffer are live and writable for their declared lengths.
-    let received = unsafe { libc::recvmsg(socket, &mut msg, libc::MSG_CMSG_CLOEXEC) };
+    let received = unsafe { libc::recvmsg(socket, &mut msg, flags) };
     if received < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -256,7 +311,7 @@ fn receive_with_file(socket: RawFd, bytes: &mut [u8]) -> io::Result<(usize, Opti
         // SAFETY: this header was returned by the walk over the live buffer.
         let cmsg = unsafe { &*header };
         let length = cmsg.cmsg_len;
-        #[cfg(target_env = "musl")]
+        #[cfg(any(not(target_os = "linux"), target_env = "musl"))]
         let length = length as usize;
         if length < base {
             invalid = true;
@@ -270,6 +325,11 @@ fn receive_with_file(socket: RawFd, bytes: &mut [u8]) -> io::Result<(usize, Opti
                 // SAFETY: each full FD fits in the payload. Take ownership so
                 // even descriptors from invalid messages are closed.
                 let descriptor = unsafe { File::from_raw_fd(data.add(index).read_unaligned()) };
+                #[cfg(not(target_os = "linux"))]
+                if set_cloexec(descriptor.as_raw_fd()).is_err() {
+                    invalid = true;
+                    continue;
+                }
                 if file.is_some() {
                     invalid = true;
                 } else {
@@ -293,23 +353,46 @@ fn invalid_ancillary() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "VMM control ancillary data")
 }
 
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 /// Whether the peer connected as `owner`, the uid this shim serves.
 pub(super) fn same_user(stream: &UnixStream, owner: libc::uid_t) -> io::Result<bool> {
-    // SAFETY: ucred is initialized before getsockopt writes to it.
-    let mut credentials: libc::ucred = unsafe { zeroed() };
-    let mut length = size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: credentials and length are writable for the supplied size.
-    let result = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut credentials as *mut libc::ucred).cast(),
-            &mut length,
-        )
-    };
-    if result < 0 {
-        return Err(io::Error::last_os_error());
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: ucred is initialized before getsockopt writes to it.
+        let mut credentials: libc::ucred = unsafe { zeroed() };
+        let mut length = size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: credentials and length are writable for the supplied size.
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&mut credentials as *mut libc::ucred).cast(),
+                &mut length,
+            )
+        };
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(length as usize == size_of::<libc::ucred>() && credentials.uid == owner)
     }
-    Ok(length as usize == size_of::<libc::ucred>() && credentials.uid == owner)
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut uid: libc::uid_t = 0;
+        let mut gid: libc::gid_t = 0;
+        // SAFETY: `getpeereid` writes valid uid/gid for a connected Unix stream.
+        if unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(uid == owner)
+    }
 }

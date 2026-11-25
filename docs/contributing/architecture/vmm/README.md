@@ -830,3 +830,9 @@ Host APIs:
 `libkrun` pause/resume resets guest vsock transports, invalidating cached HTTP/2 channels.
 `GuestSession::reset()` clears the `Connection` channel mutex so subsequent RPCs on the
 same handle establish a fresh vsock connection automatically.
+
+### Cross-platform Unix socket transport and `InstanceSpec::checkpoint_restore`
+
+`vmm_socket/transport.rs` adds Darwin `getpeereid`, `SO_NOSIGPIPE`, `FD_CLOEXEC`, and
+`O_NONBLOCK` stream helpers alongside Linux `SO_PEERCRED`/`SCM_RIGHTS`.
+`InstanceSpec::checkpoint_restore` carries the optional `vmstate.krun` path.
