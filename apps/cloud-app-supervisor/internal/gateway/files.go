@@ -265,7 +265,7 @@ func (g *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		defer func() { _ = root.Remove(tmpName) }() // no-op after the rename
+		defer func() { _ = root.Remove(tmpName) }()
 		n, err = io.Copy(tmp, http.MaxBytesReader(w, r.Body, maxUpload))
 		if cerr := tmp.Close(); err == nil {
 			err = cerr
@@ -280,10 +280,18 @@ func (g *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 		owner.apply(root, tmpName)
-		return root.Rename(tmpName, name)
+		err = root.Rename(tmpName, name)
+		if errors.Is(err, syscall.ENOSYS) || errors.Is(err, syscall.EOPNOTSUPP) {
+			return publishStagedObject(root, tmpName, name, n, replaced)
+		}
+		return err
 	})
 	if failStatus != 0 {
 		fileError(w, failStatus, failCode, failMsg)
+		return
+	}
+	if errors.Is(err, fs.ErrExist) {
+		fileError(w, http.StatusConflict, "exists", clean+" already exists")
 		return
 	}
 	if err != nil {
@@ -291,6 +299,36 @@ func (g *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"path": clean, "bytes": n, "replaced": replaced})
+}
+
+// S3 mounts publish sequential writes on sync or close. Read the size-checked
+// upload before opening the destination so a staged read failure preserves it.
+func publishStagedObject(root *os.Root, staged, name string, size int64, replace bool) error {
+	data := make([]byte, size)
+	if len(data) > 0 {
+		source, err := root.OpenFile(staged, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return err
+		}
+		defer source.Close()
+		if _, err := io.ReadFull(source, data); err != nil {
+			return err
+		}
+	}
+
+	mode := os.O_EXCL
+	if replace {
+		mode = os.O_TRUNC
+	}
+	dest, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|syscall.O_NOFOLLOW|mode, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = dest.Write(data)
+	if err == nil {
+		err = dest.Sync()
+	}
+	return errors.Join(err, dest.Close())
 }
 
 // removeFile deletes a file, or a directory with recursive=1, inside a
