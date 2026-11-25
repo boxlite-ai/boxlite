@@ -52,7 +52,7 @@ export type DeployConfig = {
   path: string
   /** The directory holding the committed base file, which is mstage's answer. */
   root: string
-  api?: Pick<ApiRequest, 'minInstances' | 'instance'>
+  api?: Pick<ApiRequest, 'minInstances' | 'maxInstances' | 'instance'>
   database: DatabaseRequest
   cache: CacheRequest
   storage: StorageRequest
@@ -296,10 +296,16 @@ const API_MEMORY_MIB = new Map([
 
 const parseApi = (raw: unknown, where: string): NonNullable<DeployConfig['api']> => {
   const block = assertObject(raw, where)
-  assertKeys(block, ['minInstances', 'instance'], where, { partial: true })
+  assertKeys(block, ['minInstances', 'maxInstances', 'instance'], where, { partial: true })
   const parsed: NonNullable<DeployConfig['api']> = {}
   if ('minInstances' in block) {
     parsed.minInstances = assertWholeNumber(block.minInstances, `${where}.minInstances`, { min: 0, max: 2_147_483_647 })
+  }
+  if ('maxInstances' in block) {
+    parsed.maxInstances = assertWholeNumber(block.maxInstances, `${where}.maxInstances`, { min: 1, max: 2_147_483_647 })
+    if (parsed.minInstances !== undefined && parsed.maxInstances < parsed.minInstances) {
+      throw new DeployConfigError(`${where}.maxInstances must be at least minInstances`)
+    }
   }
   if ('instance' in block) {
     const path = `${where}.instance`

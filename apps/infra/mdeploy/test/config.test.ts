@@ -28,7 +28,7 @@ const valid = {
 const parse = (overrides: Record<string, unknown> = {}) =>
   parseDeployConfig('/repo/apps/infra/mdeploy.config.json', JSON.stringify({ ...valid, ...overrides }))
 
-test('API minimum instances accepts nonnegative integers and may be omitted', () => {
+test('API instance bounds validate configured values and may be omitted', () => {
   assert.equal(parse().api, undefined)
   assert.equal(parse({ api: {} }).api?.minInstances, undefined)
   for (const minInstances of [0, 5]) {
@@ -37,6 +37,9 @@ test('API minimum instances accepts nonnegative integers and may be omitted', ()
   for (const minInstances of [-1, 1.5, '5', null]) {
     assert.throws(() => parse({ api: { minInstances } }), /minInstances must be a whole number/)
   }
+  assert.deepEqual(parse({ api: { maxInstances: 15 } }).api, { maxInstances: 15 })
+  assert.throws(() => parse({ api: { maxInstances: 0 } }), /maxInstances/)
+  assert.throws(() => parse({ api: { minInstances: 16, maxInstances: 15 } }), /maxInstances/)
   assert.throws(() => parse({ api: { minInstance: 5 } }), /does not take minInstance/)
 })
 

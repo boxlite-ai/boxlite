@@ -111,6 +111,10 @@ to leave container limits unspecified. CPU and memory must fit the
 
 Set `deploy.api.minInstances` in the mstage declaration to override the service-level minimum (for example, `5`).
 An explicit `0` allows scale-to-zero even with hosted CI. When omitted, hosted CI sets a minimum of one; otherwise the minimum is omitted.
+
+Set `deploy.api.maxInstances` to a positive integer (for example, `15`) to cap both the service and its new revision.
+The maximum must be at least the configured minimum. Omitting it leaves the maximum unspecified.
+
 The API task runs at startup and every minute, advancing at most three due confirmed setups and one maintenance round.
 Startup awaits that work; hostname leases coordinate replicas, and shutdown awaits the active round.
 Scale-to-zero pauses progress until the API starts again; no independent Cloud Scheduler or expiration alerts are provisioned.

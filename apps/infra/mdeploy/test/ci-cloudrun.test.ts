@@ -21,7 +21,7 @@ const unwrap = (input: any): any =>
         ? Object.fromEntries(Object.entries(input).map(([key, item]) => [key, unwrap(item)]))
         : input
 
-function capture(configured: boolean, minInstances?: number, instance?: { cpu: number; memoryMiB: number }) {
+function capture(configured: boolean, minInstances?: number, instance?: { cpu: number; memoryMiB: number }, maxInstances?: number) {
   const records: { type: string; name: string; args: any }[] = []
   const namespace = (path: string): any =>
     new Proxy(function () {}, {
@@ -127,7 +127,7 @@ function capture(configured: boolean, minInstances?: number, instance?: { cpu: n
     zoneId: 'zone',
     network: value('network') as any,
     runnerAccount: value('runner@example.test') as any,
-  })({ ...channels, minInstances, instance, image: 'registry.example.test/api:fixture', port: 3000, capabilities: [] } as any)
+  })({ ...channels, minInstances, maxInstances, instance, image: 'registry.example.test/api:fixture', port: 3000, capabilities: [] } as any)
   const service = records.find((r) => r.type === 'gcp.cloudrunv2.Service' && r.name === 'Api')
   assert.ok(service)
   return { service: unwrap(service.args), records }
@@ -147,6 +147,9 @@ test('the configured service minimum overrides the hosted CI default', () => {
   assert.deepEqual(capture(true, 0).service.scaling, { minInstanceCount: 0 })
   assert.deepEqual(capture(true, 5).service.scaling, { minInstanceCount: 5 })
   assert.deepEqual(capture(false, 5).service.scaling, { minInstanceCount: 5 })
+  const { service } = capture(true, undefined, undefined, 15)
+  assert.deepEqual(service.scaling, { minInstanceCount: 1, maxInstanceCount: 15 })
+  assert.deepEqual(service.template.scaling, { maxInstanceCount: 15 })
 })
 
 test('Cloud Run receives instance limits only when a stage specifies them', () => {
