@@ -104,6 +104,39 @@ jobs:
           path: sdks/node/artifacts-${{ matrix.target }}.tar
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
+      - name: Pack the native package and the Linux acceptance clients
+        working-directory: sdks/node
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # The native build runs inside manylinux. Install the host tools in a clean checkout.
+          src="$RUNNER_TEMP/npm-release"
+          git worktree add --quiet --detach "$src" HEAD
+          tar xf "artifacts-$TARGET.tar" -C "$src/sdks/node"
+          cd "$src/sdks/node"
+          mkdir -p "$GITHUB_WORKSPACE/sdks/node/packages"
+          dest="$GITHUB_WORKSPACE/sdks/node/packages"
+          if [[ "$TARGET" == linux-x64-gnu ]]; then
+            npm install --ignore-scripts --workspaces=false
+            # The existing prepack hook writes optional dependencies for every supported target.
+            npx --no-install napi create-npm-dirs --npm-dir npm
+            npm run build
+            npm pack --pack-destination "$dest"
+          fi
+          test -s "npm/$TARGET/boxlite.$TARGET.node"
+          npm pack "./npm/$TARGET" --ignore-scripts --pack-destination "$dest"
+          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{sha:$sha,run:$run,attempt:$attempt}' > "$dest/producer.json"
+
+      - name: Stage platform npm packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.target }}
+          overwrite: true
+          if-no-files-found: error
+          path: sdks/node/packages/
+
   # ============================================================================
   # TEST
   # ============================================================================
@@ -170,44 +203,16 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      # Install BEFORE downloading artifacts to avoid EBADPLATFORM error.
-      # (same reason as publish job - npm validates platform restrictions if npm/* exists)
-      - name: Install dependencies
-        run: cd sdks/node && npm install --ignore-scripts
-
-      # Download pre-built artifacts from all platforms (darwin-arm64, linux-x64-gnu)
-      # merge-multiple: true combines artifacts from different matrix jobs into one directory
-      - name: Download all artifacts
+      - name: Collect the packages built by each platform
         uses: actions/download-artifact@v4
         with:
-          path: sdks/node/artifacts
-          pattern: artifacts-*
-          merge-multiple: true
+          pattern: npm-*
+          path: staged-npm
 
-      # Extract all tar archives to restore file permissions
-      - name: Extract artifacts
+      - name: Assemble npm distributions without repacking
         run: |
-          cd sdks/node
-          for tarball in artifacts/*.tar; do
-            echo "Extracting $tarball..."
-            tar -xvf "$tarball"
-          done
-
-      # pack:all creates versioned .tgz files for all packages:
-      # - boxlite-ai-boxlite-X.Y.Z.tgz (main package)
-      # - boxlite-ai-boxlite-darwin-arm64-X.Y.Z.tgz
-      # - boxlite-ai-boxlite-linux-x64-gnu-X.Y.Z.tgz
-      - name: Build and pack packages
-        run: |
-          cd sdks/node
-          npm run build
-          npm run pack:all
-          ls -la packages/
+          mkdir -p sdks/node/packages
+          cp staged-npm/*/*.tgz sdks/node/packages/
 
       - name: Record build origin
         working-directory: sdks/node/packages

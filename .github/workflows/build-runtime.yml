@@ -88,13 +88,21 @@ jobs:
           [ -f "$CLI_BIN" ] || { echo "ERROR: CLI binary not found at $CLI_BIN"; exit 1; }
           tar czf "boxlite-cli-v${VERSION}-${{ matrix.rust_target }}.tar.gz" -C target/release boxlite
 
+      - name: Record CLI build origin
+        if: inputs.tag && matrix.target == 'linux-x64-gnu'
+        run: |
+          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{sha:$sha,run:$run,attempt:$attempt}' > producer.json
+
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
         with:
           overwrite: true
           if-no-files-found: error
           name: cli-${{ matrix.target }}
-          path: boxlite-cli-v*-${{ matrix.rust_target }}.tar.gz
+          path: |
+            boxlite-cli-v*-${{ matrix.rust_target }}.tar.gz
+            producer.json
           retention-days: 7
 
   package:

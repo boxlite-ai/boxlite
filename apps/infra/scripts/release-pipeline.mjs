@@ -158,7 +158,8 @@ export const releaseReport = ({ repo, tag, runId, results }) => {
     ...Object.entries(results).filter(([job]) => job.startsWith('build-')).map(([job, outcome]) => [job, outcome.result]),
     ['Image publication', results.publish?.result],
     ...(results['publish-runner'] ? [['Runner publication', results['publish-runner'].result]] : []),
-    ['Release assets', results.check?.result],
+    ['Deployment pins', results.check?.result],
+    ['Release assets', results.distribution?.result],
   ].map(([label, result]) => [label, result ?? 'not started'])
   if (results.dev && results.dev.result !== 'skipped') {
     const e2e = results.dev.outputs?.e2e_result
@@ -177,7 +178,10 @@ export const releaseReport = ({ repo, tag, runId, results }) => {
   const title = release + ': ' + phase + ' — ' + (stopped?.[1] ?? 'stopped')
   const blocks = [
     { type: 'header', text: { type: 'plain_text', text: title } },
-    { type: 'section', fields: rows.map(([key, value]) => ({ type: 'plain_text', text: key + '\n' + value })) },
+    ...Array.from({ length: Math.ceil(rows.length / 10) }, (_, i) => ({
+      type: 'section',
+      fields: rows.slice(i * 10, i * 10 + 10).map(([key, value]) => ({ type: 'plain_text', text: key + '\n' + value })),
+    })),
     runButton(repo, runId, 'View run logs'),
   ]
   const summary =

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { verifyCandidate } from './release-candidate.mjs'
+import { linuxClients, verifyAcceptedDistribution, verifyCandidate } from './release-candidate.mjs'
 
 const command = fileURLToPath(new URL('./release-candidate.mjs', import.meta.url))
 const config = new URL('../../../.github/ci-config.json', import.meta.url)
@@ -54,13 +54,14 @@ test('stage binds candidate files and GHCR pins to the tagged commit and produce
 case "$*" in
   *commits/refs%2Ftags%2F*) printf '{"sha":"%s"}\\n' "$SHA" ;;
   *actions/runs/10/artifacts*) cat index.json ;;
+  *attempts/2/jobs*) cat jobs.json ;;
   *) exit 2 ;;
 esac
 `,
     { mode: 0o755 },
   )
-  const stage = (output) =>
-    spawnSync(process.execPath, [command, 'stage'], {
+  const stage = (output, mode = 'stage', extra = {}) =>
+    spawnSync(process.execPath, [command, mode], {
       cwd: dir,
       encoding: 'utf8',
       env: {
@@ -73,8 +74,14 @@ esac
         SHA: sha,
         IMAGES: '["api"]',
         RELEASE_ASSET_DIR: output,
+        ...extra,
       },
     })
+  const early = stage('deploy', 'deployment')
+  assert.equal(early.status, 0, early.stderr)
+  const deploy = await verifyCandidate(join(dir, 'deploy'), { tag, sha, fingerprint: early.stdout.trim() })
+  assert.deepEqual(deploy.assets, {})
+  assert.deepEqual(deploy.runner, pins)
   const result = stage('candidate')
   assert.equal(result.status, 0, result.stderr)
   const fingerprint = result.stdout.trim()
@@ -83,6 +90,62 @@ esac
   assert.deepEqual(receipt.images, { api: hash('api') })
   assert.equal(receipt.producers['ghcr-api'].attempt, 1)
   assert.equal(receipt.assets['install.sh.sha256'].group, 'runtime-distribution')
+  const e2e = join(dir, 'linux-clients')
+  const clients = {}
+  for (const [group, files] of Object.entries(linuxClients(tag))) {
+    const path = join(e2e, group)
+    mkdirSync(path, { recursive: true })
+    writeFileSync(join(path, 'producer.json'), JSON.stringify({ run: 10, attempt: 1, sha }))
+    for (const name of files) {
+      const bytes = 'test client ' + name
+      writeFileSync(join(path, name), bytes)
+      clients[name] = hash(bytes)
+    }
+  }
+  const prepare = () => stage('deploy', 'clients', { CLIENT_ARTIFACT_DIR: e2e, CANDIDATE_DIGEST: early.stdout.trim() })
+  const prepared = prepare()
+  assert.equal(prepared.status, 0, prepared.stderr)
+  const tested = JSON.parse(readFileSync(join(dir, 'deploy', 'tested-clients.json')))
+  assert.deepEqual(tested, clients)
+  const full = {
+    ...receipt,
+    assets: {
+      ...receipt.assets,
+      ...Object.fromEntries(Object.entries(clients).map(([name, digest]) => [name, { digest }])),
+    },
+  }
+  const acceptance = { tag, sha, run: 10, clients: tested }
+  verifyAcceptedDistribution(full, acceptance, deploy)
+  assert.throws(() => verifyAcceptedDistribution(full, { ...acceptance, clients: {} }, deploy))
+  const file = Object.keys(tested)[0]
+  assert.throws(
+    () => verifyAcceptedDistribution(full, { ...acceptance, clients: { ...tested, [file]: hash('rebuilt') } }, deploy),
+    /differs from dev/,
+  )
+  assert.throws(() => verifyAcceptedDistribution(full, acceptance, { ...deploy, images: { api: hash('new image') } }))
+  writeFileSync(join(e2e, 'npm-linux-x64-gnu', 'producer.json'), JSON.stringify({ run: 11, attempt: 1, sha }))
+  assert.notEqual(prepare().status, 0)
+  for (const name of Object.keys(linuxClients(tag))) {
+    if (!index.some((item) => item.name === name)) index.push({ name, id: index.length + 1, expired: false })
+  }
+  writeFileSync(join(dir, 'index.json'), JSON.stringify([{ artifacts: index }]))
+  writeFileSync(
+    join(dir, 'jobs.json'),
+    JSON.stringify([{ jobs: [{ name: 'build-runtime / Build Runtime (darwin-arm64)', status: 'in_progress' }] }]),
+  )
+  const ready = stage('unused', 'client-ids')
+  assert.equal(ready.status, 0, ready.stderr)
+  assert.deepEqual(
+    ready.stdout.trim().split(',').map(Number),
+    Object.keys(linuxClients(tag)).map((name) => index.find((item) => item.name === name).id),
+  )
+  writeFileSync(
+    join(dir, 'jobs.json'),
+    JSON.stringify([
+      { jobs: [{ name: 'build-node / Build (linux-x64-gnu)', status: 'completed', conclusion: 'failure' }] },
+    ]),
+  )
+  assert.match(stage('unused', 'client-ids').stderr, /Linux client build failed/)
   writeFileSync(join(dir, 'candidate', archive), 'different')
   await assert.rejects(verifyCandidate(join(dir, 'candidate'), { tag, sha, fingerprint }), /Changed release asset/)
   writeFileSync(join(runtimeDir, 'producer.json'), JSON.stringify({ run: 99, attempt: 1, sha }))

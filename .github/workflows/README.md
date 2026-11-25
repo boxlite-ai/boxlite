@@ -24,11 +24,11 @@ PRODUCT RELEASE (dispatch from main)    mbuild-release creates or selects the dr
                                         │                                              ├─ build-go
                                         │                                              └─ build-runner-binary
                                         └─ publish images to GHCR
-                                        Runner archive to GHCR + staged Actions Artifacts
-                                          ──▶ check candidate ──▶ mdeploy-all (dev) ──▶ e2e-cloud (dev)
-                                          ──▶ attach verified files ──▶ PyPI, npm and Go tag
-                                          ──▶ publish GitHub Release ─┬─▶ crates.io
-                                                                       └─▶ approved mdeploy-all (prod)
+                                        Runner archive to GHCR ──▶ verify pins ──▶ approved dev deployment
+                                                                                  └─▶ dev E2E with Linux clients
+                                                                                          ├─▶ prod approval + deployment
+                                   complete distribution + Go tests + successful dev E2E ─┴─▶ attach files
+                                         ──▶ PyPI, npm and Go tag ──▶ publish GitHub Release ──▶ crates.io
 
 SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go SDK tests
                                         build-runner-binary ──▶ build-c ──▶ Runner link

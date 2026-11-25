@@ -282,6 +282,7 @@ test('prod review combines dev E2E success with the approval button; failed acce
       resolve: { result: 'success' },
       publish: { result: 'success' },
       check: { result: 'failure' },
+      distribution: { result: 'skipped' },
       dev: { result: 'skipped' },
     }),
   })

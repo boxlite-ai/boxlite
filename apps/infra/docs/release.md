@@ -18,10 +18,10 @@ The run creates the draft or selects the existing draft for that tag. Configure 
 | Stage | Outputs and checks |
 | --- | --- |
 | Build | Runtime and CLI, wheels, npm packages and C SDK archives build in parallel and enter Actions Artifacts. Go tests and the Linux Runner build link the C archives from this run. |
-| Prepare dev | `mbuild publish` pushes the declared images to GHCR. The Runner job uploads the original tarball as an OCI layer. The candidate records each image manifest digest, the Runner manifest and archive digests, and the file checksums. |
-| Dev approval and E2E | Approve the dev Environment in the run. The cloud suite installs the candidate CLI and SDKs from Actions Artifacts. |
-| Publish | After dev E2E passes, the release job uploads the accepted files to the draft and checks every remote asset digest. The top-level PyPI and npm jobs publish the accepted packages and the Go job tags the tested commit. |
-| Release and prod | When those publishers succeed, the workflow marks the draft public. Rust crates publish after the runtime becomes public. The prod deployment uses its protected Environment and the accepted candidate. |
+| Prepare dev | `mbuild publish` pushes the declared images to GHCR. The Runner job uploads the original tarball as an OCI layer. As soon as these digests are verified, dev can start while SDK tests and distribution packaging continue. |
+| Dev approval and E2E | Approve the dev Environment in the run. The cloud suite reads only the Linux x64 CLI, Python wheel, C SDK and two npm tarballs from this run. It records their checksums with the accepted deployment digests. |
+| Publish | Dev E2E success opens prod approval immediately. In parallel, publication waits for the complete distribution and Go tests, compares the tested client bytes, and attaches the verified files to the draft. The top-level PyPI and npm jobs publish the accepted packages and the Go job tags the tested commit. |
+| Release and prod | When those publishers succeed, the workflow marks the draft public. Rust crates publish after the runtime becomes public. Approved prod deployment uses the same GHCR digests and can finish while the release is still a draft. |
 
 The Runner package at `ghcr.io/boxlite-ai/boxlite/runner` must allow anonymous pulls from hosts. First boot and in-place upgrade verify the OCI manifest against the release tag, source commit and archive digest before extracting the binary. Dev and prod receive those pins from the candidate. A version-only manual rollout reads the same pins from the published `release-candidate.json`.
 

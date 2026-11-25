@@ -362,3 +362,14 @@ test('component repairs use the accepted candidate and package publishers stay i
   assert.ok(release.jobs.publish_crates.needs.includes('finalize'))
   assert.ok(release.jobs.finalize.if.includes("inputs.command == 'publish'"))
 })
+
+test('GHCR pins unlock dev and dev acceptance independently unlocks prod and publication', () => {
+  const jobs = release.jobs
+  assert.deepEqual(jobs.check.needs, ['resolve', 'publish', 'publish-runner'], 'dev waits for unrelated package or Go builds')
+  assert.deepEqual(jobs.prod.needs, ['resolve', 'check', 'dev'], 'prod waits for release finalization')
+  assert.ok(jobs.attach.needs.includes('dev'))
+  assert.ok(jobs.attach.needs.includes('distribution'))
+  assert.ok(jobs.attach.needs.includes('build-go'))
+  assert.ok(!jobs.attach.needs.includes('prod'))
+  assert.ok(jobs.publish_crates.needs.includes('finalize'))
+})

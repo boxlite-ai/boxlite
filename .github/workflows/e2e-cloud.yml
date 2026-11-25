@@ -269,7 +269,7 @@ jobs:
     name: E2E suite (${{ inputs.stage || 'dev' }})
     if: ${{ contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.candidate_id && 165 || 45 }}
     cache-mode: read
     outputs:
       release_result: ${{ steps.acceptance.outputs.result }}
@@ -304,6 +304,34 @@ jobs:
           digest: ${{ inputs.candidate_digest }}
           tag: ${{ inputs.tag }}
           sha: ${{ inputs.release_sha }}
+
+      - name: Locate this run's Linux client artifacts
+        if: inputs.candidate_id
+        id: clients
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.release_sha }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          ids=$(node apps/infra/scripts/release-candidate.mjs client-ids)
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+
+      - name: Download only the Linux client artifacts
+        if: inputs.candidate_id
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.clients.outputs.ids }}
+          path: ${{ runner.temp }}/release-clients
+
+      - name: Verify and stage Linux acceptance clients
+        if: inputs.candidate_id
+        env:
+          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.release_sha }}
+          CLIENT_ARTIFACT_DIR: ${{ runner.temp }}/release-clients
+        run: node apps/infra/scripts/release-candidate.mjs clients
 
       - name: Validate client release
         if: inputs.tag || inputs.deployment_attempt
@@ -586,6 +614,26 @@ jobs:
             pytest-identities.xml
             pytest-catalog.xml
           if-no-files-found: ignore
+
+      - name: Record the deployed pins and tested client hashes
+        if: success() && inputs.candidate_id && inputs.deployment_attempt
+        env:
+          CANDIDATE: ${{ inputs.candidate_id }}
+          DIGEST: ${{ inputs.candidate_digest }}
+          SHA: ${{ inputs.release_sha }}
+        run: |
+          jq -n --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" --argjson id "$CANDIDATE" \
+            --arg digest "$DIGEST" --arg tag "$RELEASE_TAG" --arg sha "$SHA" --slurpfile clients "$RELEASE_ASSET_DIR/tested-clients.json" \
+            '{run:$run,attempt:$attempt,candidate:$id,digest:$digest,tag:$tag,sha:$sha,clients:$clients[0]}' > acceptance.json
+
+      - name: Save dev acceptance for production retries
+        if: success() && inputs.candidate_id && inputs.deployment_attempt
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-accepted-${{ inputs.candidate_id }}
+          path: acceptance.json
+          if-no-files-found: error
+          overwrite: true
 
       - name: Summarize release acceptance
         id: acceptance

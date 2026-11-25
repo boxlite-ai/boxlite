@@ -31,7 +31,7 @@ test('publishing a runtime includes each sidecar once and resumes without replac
     `#!/usr/bin/env node
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const args=process.argv.slice(2), ledger=process.env.LEDGER;
-if(args.includes('PATCH')) {fs.appendFileSync(ledger+'.patch','P'); fs.writeFileSync(ledger+'.public','1'); process.exit(9)}
+if(args.includes('PATCH')) {if(!args.includes('draft=false')||!args.includes('prerelease=false'))process.exit(10); fs.appendFileSync(ledger+'.patch','P'); fs.writeFileSync(ledger+'.public','1'); process.exit(9)}
 else if(args[0]==='release' && args[1]==='upload') fs.appendFileSync(ledger,path.basename(args[3])+'\\n');
 else if(args.at(-1).endsWith('/assets?per_page=100')) console.log(JSON.stringify([fs.readFileSync(ledger,'utf8').split('\\n').filter(Boolean).map(name=>({name,state:'uploaded',digest:'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(path.join(process.env.RELEASE_ASSET_DIR,name))).digest('hex')}))]));
 else if(args.at(-1).includes('/commits/')) console.log(JSON.stringify({sha:process.env.SHA}));
