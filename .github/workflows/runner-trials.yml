@@ -1,0 +1,209 @@
+name: BoxLite runner qualification
+on:
+  push:
+    branches: [ci/boxlite-runner-trials-2833]
+    paths: [.github/workflows/runner-trials.yml]
+permissions:
+  contents: read
+env:
+  CARGO_INCREMENTAL: '0'
+jobs:
+  apparmor:
+    runs-on: boxlite
+    timeout-minutes: 10
+    steps:
+      - &facts
+        name: Record runner and kernel
+        run: |
+          uname -a
+          id
+          nproc
+          head -1 /proc/meminfo
+          df -h /
+          for f in /sys/module/apparmor/parameters/enabled /sys/kernel/security/lsm /proc/sys/kernel/apparmor_restrict_unprivileged_userns; do
+            if sudo test -e "$f"; then sudo cat "$f"; else echo "Absent: $f"; fi
+          done
+          ls -l /dev/kvm || true
+      - name: Check active AppArmor and enforce a named test profile
+        shell: bash
+        run: |
+          set -eu
+          if ! sudo grep -qx Y /sys/module/apparmor/parameters/enabled; then
+            echo "::error::Guest does not expose an enabled AppArmor module"
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends apparmor apparmor-utils
+          fixture=$(mktemp -d)
+          profile="ci-qualification-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf 'fixture\n' > "$fixture/allow"
+          cp "$fixture/allow" "$fixture/deny"
+          cat > "$fixture/profile" <<EOF
+          #include <tunables/global>
+          profile $profile {
+            #include <abstractions/base>
+            /usr/bin/cat mr,
+            $fixture/allow r,
+            deny $fixture/deny r,
+          }
+          EOF
+          sudo apparmor_parser -a "$fixture/profile"
+          trap 'sudo apparmor_parser -R "$fixture/profile"' EXIT
+          cat "$fixture/deny"
+          sudo aa-exec -p "$profile" -- /usr/bin/cat "$fixture/allow"
+          if sudo aa-exec -p "$profile" -- /usr/bin/cat "$fixture/deny" 2>"$fixture/error"; then exit 1; fi
+          grep -F "$fixture/deny: Permission denied" "$fixture/error"
+  config-and-ref:
+    runs-on: boxlite
+    timeout-minutes: 10
+    steps:
+      - *facts
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/ci-config
+        id: config
+      - name: Check matrix and build commit
+        env:
+          PLATFORMS: ${{ steps.config.outputs.platforms }}
+        run: |
+          jq -e 'any(.[]; .target == "linux-x64-gnu")' <<< "$PLATFORMS"
+          git cat-file -e "$GITHUB_SHA^{commit}"
+  plugins:
+    runs-on: boxlite
+    timeout-minutes: 10
+    steps:
+      - *facts
+      - &checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - &tools
+        uses: ./.github/actions/setup-boxlite-runner
+      - uses: ./.github/actions/setup-python
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --global @anthropic-ai/claude-code@2.1.328
+      - run: make plugin:boxlite:check:cc plugin:boxlite:review-kit
+      - name: Verify plugin archives
+        working-directory: target/plugins
+        run: |
+          version=$(jq -er '.version' ../../plugins/boxlite/plugin.json)
+          sha256sum --check SHA256SUMS
+          sha256sum --check "boxlite-review-kit-$version.zip.sha256"
+  postgres:
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: boxlite
+          POSTGRES_PASSWORD: boxlite
+          POSTGRES_DB: boxlite
+        ports: [5432/tcp]
+        options: >-
+          --health-cmd "pg_isready -U boxlite -d boxlite" --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - *facts
+      - &cpu
+        name: Check requested CPU count
+        run: test "$(getconf _NPROCESSORS_ONLN)" -eq 4
+      - *checkout
+      - *tools
+      - run: sudo apt-get install -y --no-install-recommends gcc libc6-dev
+      - uses: ./.github/actions/setup-go
+      - name: Exercise the Secret Server database
+        env:
+          SECRET_TEST_DATABASE_URL: postgresql://boxlite:boxlite@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/boxlite
+        run: |
+          make coverage:apps:secret-server:integration
+          test -s target/coverage/secret-server-integration.out
+  ssh:
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 45
+    steps:
+      - *facts
+      - *cpu
+      - *checkout
+      - *tools
+      - &namespaces
+        name: Probe unprivileged user and mount namespaces
+        continue-on-error: true
+        run: |
+          if [ "$(id -u)" -eq 0 ]; then
+            sudo -u nobody unshare --user --map-root-user --mount --propagation private true
+          else
+            unshare --user --map-root-user --mount --propagation private true
+          fi
+      - run: sudo apt-get install -y --no-install-recommends build-essential cmake pkg-config libseccomp-dev libssl-dev protobuf-compiler
+      - &rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
+      - &nextest
+        uses: taiki-e/install-action@nextest
+      - run: make test:unit:guest FILTER=ssh NEXTEST_PROFILE=ci
+  rest:
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 45
+    steps:
+      - *facts
+      - *cpu
+      - *checkout
+      - *tools
+      - *namespaces
+      - &kvm
+        name: Check KVM device and API version
+        run: |
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          python3 -c 'import fcntl, os; assert fcntl.ioctl(os.open("/dev/kvm", os.O_RDWR), 0xAE00) == 12'
+      - *rust
+      - *nextest
+      - run: make setup:submodules
+      - run: make setup:build
+      - run: make test:e2e:serve:volume
+        timeout-minutes: 20
+  nix:
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 90
+    steps:
+      - *facts
+      - *cpu
+      - *namespaces
+      - *kvm
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - *tools
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+
+      - uses: ./.github/actions/sccache
+
+      - name: Check the flake
+        run: nix flake check
+
+      # Drop the runner's environment so preinstalled compilers cannot mask a
+      # tool missing from flake.nix. The flake puts $CARGO_HOME/bin first on
+      # PATH, where the runner preinstalls rustup, so both Rust homes start
+      # empty. sccache goes in by absolute path; when its setup failed the
+      # wrapper is unset and the build runs uncached.
+      - name: Build the CLI in the dev shell
+        run: |
+          export CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_HOME="$RUNNER_TEMP/rustup"
+          if [ -n "${RUSTC_WRAPPER:-}" ]; then
+            RUSTC_WRAPPER="$(command -v "$RUSTC_WRAPPER")"
+            export RUSTC_WRAPPER
+          fi
+          nix develop --ignore-environment --keep HOME --keep USER \
+            --keep CARGO_HOME --keep RUSTUP_HOME --keep RUSTC_WRAPPER \
+            --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
+            -c make cli
+
+      - name: Boot a box
+        timeout-minutes: 10
+        run: ./target/debug/boxlite run --rm alpine:latest echo ok
