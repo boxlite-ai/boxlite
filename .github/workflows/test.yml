@@ -699,7 +699,7 @@ jobs:
     name: Go Tests (${{ matrix.platform.target }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.go == 'true' }}
-    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -711,9 +711,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-
-      - uses: ./.github/actions/setup-boxlite-runner
-        if: runner.environment == 'self-hosted'
 
       - uses: ./.github/actions/setup-go
 

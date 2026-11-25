@@ -34,7 +34,6 @@ test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native p
   const { platforms } = JSON.parse(readFileSync(join(REPO_ROOT, '.github/ci-config.json'), 'utf8'))
   const jobs = [
     ['lint.yml', 'clippy', 64],
-    ['test.yml', 'go', 64],
     ['test.yml', 'guest_artifacts', 64],
     ['test.yml', 'python', 30],
     ['test.yml', 'node', 30],
@@ -73,6 +72,7 @@ for (const [name, job, matrix] of [
   ['test.yml', 'api', false],
   ['test.yml', 'nix', false],
   ['test.yml', 'rust', true],
+  ['test.yml', 'go', true],
 ] as const) {
   test(`${name}/${job} uses GitHub-hosted Ubuntu`, () => {
     const selection = workflow(name).jobs[job]['runs-on']

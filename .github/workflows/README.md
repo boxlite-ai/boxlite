@@ -21,8 +21,8 @@ The connection needs permission to register workers and quota for the requested
 | --- | --- |
 | `boxlite` | Lightweight lint and setup, plugin package validation, Go SDK release configuration, status and selected release artifact uploads |
 | `boxlite-4vcpu-16gbmem-30gbdisk` | Python and Node SDK tests, Go SDK release checks, Node release packaging, Go and Python CodeQL, Dashboard tests, Secret Server PostgreSQL integration and API client drift |
-| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, Go coverage, standalone guest artifacts, Actions CodeQL and the non-publishing multiarch Box image build |
-| GitHub-hosted Ubuntu | API tests, native SDK and runtime packaging, Rust coverage, Nix and REST E2E, C/C++, Rust and TypeScript CodeQL, protected publishing and runner recovery |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, standalone guest artifacts, Actions CodeQL and the non-publishing multiarch Box image build |
+| GitHub-hosted Ubuntu | API tests, Go SDK coverage, native SDK and runtime packaging, Rust coverage, Nix and REST E2E, C/C++, Rust and TypeScript CodeQL, protected publishing and runner recovery |
 
 Linux ARM64 and macOS matrix jobs use their native platforms. Building an ARM64
 container image with Buildx exercises a different path from native ARM64 SDK tests.
