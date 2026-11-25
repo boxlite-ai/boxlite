@@ -17,14 +17,5 @@
     "local",
     "mcp",
     "skills"
-  ],
-  "userConfig": {
-    "api_key": {
-      "type": "string",
-      "title": "BoxLite API key",
-      "description": "Optional credential for the Cloud API key connection.",
-      "sensitive": true,
-      "required": false
-    }
-  }
+  ]
 }

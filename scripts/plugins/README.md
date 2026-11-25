@@ -26,9 +26,9 @@ They do not prove host OAuth login, a running VM, or directory approval.
 Archive names follow the synchronized manifest version.
 The packager uses an exact inventory, fixed ZIP metadata and ordering, and excludes private state and caches.
 
-Claude Directory reads `plugins/boxlite-claude` at the published Git ref. Its native manifest declares an optional sensitive API key.
+Claude Directory reads `plugins/boxlite-claude` at the published Git ref.
 
-The OAuth connection has no configured header. The API-key connection uses the same endpoint with the fixed query `?connection=api-key` so Claude discovers both connections.
+Claude ships one MCP endpoint at `https://api.boxlite.ai/mcp` for OAuth. Users choosing an API key configure a project-local Claude Code override at the same URL with a Bearer header. See the [Claude setup skill](../../plugins/boxlite-claude/skills/boxlite-setup/SKILL.md#cloud-api-key) for configuration and switching.
 
 The release build assembles the Codex ZIP from `plugins/boxlite-codex` and shared files in `plugins/boxlite-claude`. Edit cloud operations and authentication checks once in the Claude source. Each host's setup skill supplies its own connection names and credential configuration.
 

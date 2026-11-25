@@ -70,7 +70,7 @@ class PackageTests(unittest.TestCase):
                 self.assertFalse((self.root / name).exists(), name)
                 self.assertEqual(zipped.read(name), (self.claude / name).read_bytes())
 
-    def test_installed_claude_uses_plugin_credentials(self):
+    def test_installed_claude_exposes_one_cloud_endpoint(self):
         output = Path(self.temp.name) / 'output'
         package.build(output, self.root)
         marketplace = output / 'boxlite-marketplace'
@@ -82,14 +82,9 @@ class PackageTests(unittest.TestCase):
         for name in ('skills/boxlite-setup/references/cloud-auth.md', 'skills/boxlite/references/cloud.md'):
             self.assertEqual((codex / name).read_bytes(), (plugin / name).read_bytes())
         config = json.loads((plugin / '.claude-plugin/plugin.json').read_text())
-        key = config['userConfig']['api_key']
-        self.assertEqual((key['type'], key['sensitive'], key['required']), ('string', True, False))
+        self.assertNotIn('userConfig', config)
         servers = json.loads((plugin / '.mcp.json').read_text())['mcpServers']
-        self.assertEqual(servers, {
-            'boxlite': {'type': 'http', 'url': package.MCP_URL},
-            'boxlite-api': {'type': 'http', 'url': package.MCP_URL + '?connection=api-key',
-                            'headers': {'Authorization': 'Bearer ${user_config.api_key}'}},
-        })
+        self.assertEqual(servers, {'boxlite': {'type': 'http', 'url': package.MCP_URL}})
 
     def test_claude_directory_rejects_source_drift(self):
         for name in ('plugin.json', 'missing-hook', '.claude-plugin/plugin.json'):
