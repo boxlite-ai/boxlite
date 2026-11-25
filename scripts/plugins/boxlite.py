@@ -23,7 +23,7 @@ SHARED_SOURCE = {
     'skills/boxlite/scripts/transfer_hosts.py',
 }
 CODEX_SOURCE = {
-    'plugin.json', '.codex-plugin/plugin.json', 'mcp.json', '.mcp.json',
+    'plugin.json', 'mcp.json', '.mcp.json',
     'skills/boxlite/agents/openai.yaml', 'skills/boxlite-setup/SKILL.md',
     'skills/boxlite-setup/agents/openai.yaml',
 }
@@ -89,24 +89,10 @@ def validate_payload(root):
     """Return package files after validating manifests, skills, and package boundaries."""
     files = list(package_files(root))
     manifest = portable_manifest(root)
-    legacy = load_manifest(root, '.codex-plugin/plugin.json')
-    for key in ('name', 'version', 'description'):
-        if required_field(manifest, key, 'portable manifest') != required_field(legacy, key, 'Codex manifest'):
-            raise ValueError(f'Compatibility identity differs: {key}')
     extensions = required_field(manifest, 'extensions', 'portable manifest')
     settings = required_field(extensions, 'com.openai', 'extensions')
     interface = required_field(settings, 'interface', 'OpenAI extension')
-    if interface != required_field(legacy, 'interface', 'Codex manifest'):
-        raise ValueError('Compatibility presentation differs')
-    if legacy.get('skills') != './skills':
-        raise ValueError('Compatibility skill root differs')
-    if legacy.get('mcpServers') != './.mcp.json':
-        raise ValueError('Compatibility MCP path differs')
     onboarding = required_field(settings, 'onboardingSkill', 'OpenAI extension')
-    legacy_extensions = required_field(legacy, 'extensions', 'Codex manifest')
-    legacy_settings = required_field(legacy_extensions, 'com.openai', 'Codex extensions')
-    if required_field(legacy_settings, 'onboardingSkill', 'Codex OpenAI extension') != onboarding:
-        raise ValueError('Compatibility onboarding differs')
     for field in ('composerIcon', 'logo'):
         checked_path(root, required_field(interface, field, 'OpenAI interface'))
     for filename, transport in (('mcp.json', 'streamable-http'), ('.mcp.json', 'http')):

@@ -45,7 +45,8 @@ class PackageTests(unittest.TestCase):
             self.assertIn('plugin.json', zipped.namelist())
             self.assertIn('skills/boxlite/SKILL.md', zipped.namelist())
             self.assertNotIn('.claude-plugin/plugin.json', zipped.namelist())
-            self.assertEqual(len(zipped.namelist()), 18)
+            self.assertNotIn('.codex-plugin/plugin.json', zipped.namelist())
+            self.assertEqual(len(zipped.namelist()), 17)
             self.assertFalse(any('node_modules' in name for name in zipped.namelist()))
             self.assertFalse(any(name.startswith('templates/') for name in zipped.namelist()))
         catalog = json.loads((output / 'boxlite-marketplace/.agents/plugins/marketplace.json').read_text())
@@ -178,15 +179,10 @@ class PackageTests(unittest.TestCase):
             package.validate(self.root)
 
     def test_artifact_names_follow_synchronized_stable_semver(self):
-        for filename in ('plugin.json', '.codex-plugin/plugin.json'):
-            path = self.root / filename
+        for path in (self.root / 'plugin.json', self.claude / '.claude-plugin/plugin.json'):
             manifest = json.loads(path.read_text())
             manifest['version'] = '2.3.4'
             path.write_text(json.dumps(manifest))
-        claude_manifest = self.claude / '.claude-plugin/plugin.json'
-        contents = json.loads(claude_manifest.read_text())
-        contents['version'] = '2.3.4'
-        claude_manifest.write_text(json.dumps(contents))
         output = Path(self.temp.name) / 'output'
         self.assertEqual(package.build(output, self.root).name, 'boxlite-2.3.4.zip')
         self.assertTrue((output / 'boxlite-marketplace-2.3.4.zip').is_file())
@@ -198,32 +194,11 @@ class PackageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'identity/version'):
                 package.build(output, self.root)
 
-    def test_rejects_missing_or_drifted_codex_onboarding(self):
-        """The compatibility host must resolve the same packaged setup skill."""
-        manifest = self.root / '.codex-plugin/plugin.json'
-        original = manifest.read_text()
-        variants = [None, {}, {'com.openai': {}},
-                    {'com.openai': {'onboardingSkill': './skills/boxlite/SKILL.md'}}]
-        for extensions in variants:
-            with self.subTest(extensions=extensions):
-                value = json.loads(original)
-                if extensions is None:
-                    value.pop('extensions', None)
-                else:
-                    value['extensions'] = extensions
-                manifest.write_text(json.dumps(value))
-                try:
-                    with self.assertRaisesRegex(ValueError, 'extensions|com.openai|onboarding'):
-                        package.validate(self.root)
-                finally:
-                    manifest.write_text(original)
-
     def test_rejects_onboarding_outside_distributed_skill_inventory(self):
         """Reject excluded or undiscovered onboarding paths at the real build boundary."""
         portable = self.root / 'plugin.json'
-        codex = self.root / '.codex-plugin/plugin.json'
         skill_text = (self.root / 'skills/boxlite-setup/SKILL.md').read_text()
-        originals = {path: path.read_text() for path in (portable, codex)}
+        original = portable.read_text()
         for relative in ('node_modules/setup/SKILL.md', 'skills/dist/SKILL.md',
                          'references/setup/SKILL.md', 'node_modules/linked/SKILL.md'):
             with self.subTest(path=relative):
@@ -234,16 +209,14 @@ class PackageTests(unittest.TestCase):
                         skill.symlink_to(self.root / 'skills/boxlite-setup/SKILL.md')
                     else:
                         skill.write_text(skill_text)
-                    for manifest in (portable, codex):
-                        value = json.loads(manifest.read_text())
-                        value['extensions']['com.openai']['onboardingSkill'] = './' + relative
-                        manifest.write_text(json.dumps(value))
+                    value = json.loads(original)
+                    value['extensions']['com.openai']['onboardingSkill'] = './' + relative
+                    portable.write_text(json.dumps(value))
                     with self.assertRaisesRegex(ValueError, 'packaged skill'):
                         package.build(Path(self.temp.name) / 'output', self.root)
                 finally:
                     skill.unlink(missing_ok=True)
-                    for manifest, original in originals.items():
-                        manifest.write_text(original)
+                    portable.write_text(original)
 
     def test_rebuild_removes_stale_marketplace_files(self):
         """Rebuild the real marketplace without retaining obsolete resources."""
@@ -270,7 +243,7 @@ class PackageTests(unittest.TestCase):
             package.validate(self.root)
 
     def test_rejects_symlink_and_manifest_path_escape(self):
-        """Reject links, cross-manifest drift, and paths outside the package."""
+        """Reject links and paths outside the package."""
         (self.root / 'outside').symlink_to('/etc/passwd')
         with self.assertRaisesRegex(ValueError, 'Symlink'):
             package.validate(self.root)
@@ -279,59 +252,46 @@ class PackageTests(unittest.TestCase):
         value = json.loads(manifest.read_text())
         value['extensions']['com.openai']['interface']['logo'] = './../secret.png'
         manifest.write_text(json.dumps(value))
-        with self.assertRaisesRegex(ValueError, 'differs'):
+        with self.assertRaisesRegex(ValueError, 'escaping'):
             package.validate(self.root)
         with self.assertRaisesRegex(ValueError, 'escaping'):
             package.checked_path(self.root, './../secret.png')
 
-    def test_rejects_missing_manifest_files(self):
-        """Report absent required manifests as package validation errors."""
-        for relative in ('plugin.json', '.codex-plugin/plugin.json'):
-            path = self.root / relative
-            original = path.read_bytes()
-            with self.subTest(manifest=relative):
-                path.unlink()
-                try:
-                    with self.assertRaisesRegex(ValueError, 'Missing manifest'):
-                        package.validate(self.root)
-                finally:
-                    path.write_bytes(original)
+    def test_rejects_missing_portable_manifest(self):
+        (self.root / 'plugin.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'Missing manifest'):
+            package.validate(self.root)
 
     def test_rejects_non_objects_and_missing_required_fields(self):
         """Validate malformed copies of actual manifests across required boundaries."""
-        fields = {
-            'plugin.json': [('description',), ('extensions',), ('extensions', 'com.openai'),
-                            ('extensions', 'com.openai', 'interface'),
-                            ('extensions', 'com.openai', 'onboardingSkill')],
-            '.codex-plugin/plugin.json': [(key,) for key in ('name', 'version', 'description', 'interface')],
-        }
-        fields['plugin.json'] += [('extensions', 'com.openai', 'interface', key)
-                                  for key in ('composerIcon', 'logo')]
-        for relative, paths in fields.items():
-            path = self.root / relative
-            original = path.read_text()
-            mutations = [None, [], 'invalid', 123, *paths,
-                         *((keys, []) for keys in paths if keys[-1] in ('extensions', 'com.openai', 'interface'))]
-            for mutation in mutations:
-                with self.subTest(manifest=relative, mutation=mutation):
-                    value = json.loads(original)
-                    if isinstance(mutation, tuple):
-                        keys = mutation[0] if isinstance(mutation[0], tuple) else mutation
-                        mapping = value
-                        for key in keys[:-1]:
-                            mapping = mapping[key]
-                        if isinstance(mutation[0], tuple):
-                            mapping[keys[-1]] = mutation[1]
-                        else:
-                            del mapping[keys[-1]]
+        path = self.root / 'plugin.json'
+        original = path.read_text()
+        settings = ('extensions', 'com.openai')
+        paths = [('description',), ('extensions',), settings, (*settings, 'interface'),
+                 (*settings, 'onboardingSkill'), (*settings, 'interface', 'composerIcon'),
+                 (*settings, 'interface', 'logo')]
+        mutations = [None, [], 'invalid', 123, *paths,
+                     *((keys, []) for keys in paths if keys[-1] in ('extensions', 'com.openai', 'interface'))]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                value = json.loads(original)
+                if isinstance(mutation, tuple):
+                    keys = mutation[0] if isinstance(mutation[0], tuple) else mutation
+                    mapping = value
+                    for key in keys[:-1]:
+                        mapping = mapping[key]
+                    if isinstance(mutation[0], tuple):
+                        mapping[keys[-1]] = mutation[1]
                     else:
-                        value = mutation
-                    path.write_text(json.dumps(value))
-                    try:
-                        with self.assertRaises(ValueError):
-                            package.validate(self.root)
-                    finally:
-                        path.write_text(original)
+                        del mapping[keys[-1]]
+                else:
+                    value = mutation
+                path.write_text(json.dumps(value))
+                try:
+                    with self.assertRaises(ValueError):
+                        package.validate(self.root)
+                finally:
+                    path.write_text(original)
 
     @unittest.skipUnless(shutil.which('make'), 'Make is not installed')
     def test_make_targets_use_configured_python(self):

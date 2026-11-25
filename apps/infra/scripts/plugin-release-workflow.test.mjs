@@ -16,7 +16,6 @@ const publishScript = publisher.jobs.publish.steps.find((step) => step.id === 'r
 const { version } = JSON.parse(readFileSync(join(root, 'plugins/boxlite-codex/plugin.json'), 'utf8'))
 const tag = `boxlite-plugin-v${version}`
 const files = [`boxlite-${version}.zip`]
-const checksum = readFileSync(join(root, `scripts/plugins/review/boxlite-${version}.zip.sha256`), 'utf8').trim()
 
 // Exercise the workflow against archives produced by the real package builder.
 before(() => {
@@ -42,9 +41,16 @@ for (const [event, refType, ref, allowed] of [
   ['workflow_dispatch', 'branch', 'main', false],
 ]) {
   test(`plugin package version gate: ${event} ${ref}`, (t) => {
-    const output = join(directory(t), 'output')
+    const checkout = directory(t)
+    const manifests = join(checkout, 'plugins/boxlite-codex')
+    const packages = join(checkout, 'target/plugins')
+    mkdirSync(manifests, { recursive: true })
+    mkdirSync(packages, { recursive: true })
+    copyFileSync(join(root, 'plugins/boxlite-codex/plugin.json'), join(manifests, 'plugin.json'))
+    copyFileSync(join(root, 'target/plugins', files[0]), join(packages, files[0]))
+    const output = join(checkout, 'output')
     const run = spawnSync('bash', ['-c', packageScript], {
-      cwd: root,
+      cwd: checkout,
       encoding: 'utf8',
       timeout: 10_000,
       env: {
@@ -86,7 +92,6 @@ const fault = process.env.RELEASE_FAULT
 const digest = 'sha256:' + 'a'.repeat(64)
 if (command === 'gh' && args[0] === 'api') {
   const endpoint = args[1]
-  if (args.some(arg => arg.includes('/contents/scripts/plugins/review/'))) { console.log(process.env.ZIP_CHECKSUM); process.exit(0) }
   if (fault === 'api-error') process.exit(1)
   if (endpoint.endsWith('/workflows/build-plugins.yml')) console.log('17')
   else if (endpoint.endsWith('/workflows/423888825')) console.log(fault === 'legacy-active' ? 'active' : 'disabled_manually')
@@ -145,7 +150,6 @@ function assertPassword() {
       ...process.env,
       PATH: bin + ':' + process.env.PATH,
       RELEASE_FAULT: fault,
-      ZIP_CHECKSUM: checksum,
       CALL_LOG: log,
       VERSION: version,
       CREATED: '2026-11-20T00:00:00Z',

@@ -124,11 +124,7 @@ jobs:
           image="ghcr.io/$repository"
           reference="$image:$VERSION"
           tag="boxlite-plugin-v$VERSION"
-          checksum="$(gh api -H 'Accept: application/vnd.github.raw+json' \
-            "repos/$GITHUB_REPOSITORY/contents/scripts/plugins/review/boxlite-$VERSION.zip.sha256?ref=$SOURCE_SHA")"
-          expected="${checksum%% *}"
-          [[ "$expected" =~ ^[a-f0-9]{64}$ ]]
-          printf '%s  %s\n' "$expected" "boxlite-$VERSION.zip" | sha256sum --strict --check
+          unzip -tq "boxlite-$VERSION.zip"
           layout="$RUNNER_TEMP/plugin-oci:$VERSION"
           oras push --oci-layout --artifact-type application/vnd.boxlite.plugin.v1 \
             --annotation "org.opencontainers.image.created=$CREATED" \

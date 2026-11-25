@@ -11,8 +11,6 @@ Use Python 3.9+ and the repository make targets:
 make plugin:boxlite:submission
 make plugin:boxlite:dist
 make plugin:boxlite:check:cc
-make plugin:boxlite:review-kit
-make plugin:boxlite:ready
 ```
 
 The Claude check requires `claude` on PATH; it validates both the plugin and marketplace with the native validator.
@@ -21,16 +19,12 @@ They do not prove host OAuth login, a running VM, or directory approval.
 
 | Artifact under `target/plugins` | Use |
 | --- | --- |
-| `boxlite-0.2.0.zip` | OpenAI plugin ZIP; manifests, one remote MCP, shared skills, local launcher, icon, license |
+| `boxlite-0.2.0.zip` | OpenAI plugin ZIP; root `plugin.json`, one remote MCP, shared skills, local launcher, icon, license |
 | `boxlite-marketplace-0.2.0.zip` | Extractable marketplace for native Codex and Claude Code installation |
 | `SHA256SUMS` | SHA-256 of both installable archives |
-| `boxlite-review-kit-0.2.0.zip` | Both archives, checksums, listing text, reviewer instructions, cases, and readiness checklist |
-| `boxlite-review-kit-0.2.0.zip.sha256` | Checksum of the complete handoff archive |
 
 Archive names follow the synchronized manifest version.
 The packager uses an exact inventory, fixed ZIP metadata and ordering, and excludes private state and caches.
-
-The review kit is a handoff archive, not the ZIP to upload as an OpenAI plugin.
 
 Claude Directory reads `plugins/boxlite-claude` at the published Git ref. Its native manifest declares an optional sensitive API key.
 
@@ -38,7 +32,7 @@ The OAuth connection has no configured header. The API-key connection uses the s
 
 The release build assembles the Codex ZIP from `plugins/boxlite-codex` and shared files in `plugins/boxlite-claude`. Edit cloud operations and authentication checks once in the Claude source. Each host's setup skill supplies its own connection names and credential configuration.
 
-Only the Codex submission ZIP is uploaded by Actions. The marketplace, review kit, and their checksums are optional local outputs. Run `make plugin:boxlite:dist` before using the repository-local Codex marketplace entry.
+Only the Codex submission ZIP is uploaded by Actions. The marketplace and archive checksums are optional local outputs. Run `make plugin:boxlite:dist` to generate the local marketplace at `target/plugins/boxlite-marketplace`.
 
 ## Publish versioned packages to GHCR
 
@@ -67,7 +61,7 @@ Check that the repository’s Latest Release contains the runtime `install.sh` b
 
 ### Release a plugin version
 
-Update the version in all three manifests and `scripts/plugins/review/{cases,checklist}.json`. Build the submission, review its contents, and record its SHA-256 in `scripts/plugins/review/boxlite-VERSION.zip.sha256`. Run the package checks.
+Update the version in the Codex and Claude manifests. Build the submission and review its contents. Actions builds the ZIP from the tagged source and the publisher uses that build attempt’s uploaded ZIP.
 
 After the change merges, tag the intended commit on `main` and push the tag. For example, if the manifests contain version `0.2.0`:
 
@@ -115,8 +109,12 @@ Resolve the artifact by version and verify the publisher's signed build commit a
       and .[0].annotations["org.opencontainers.image.revision"] == $commit'
   oras pull "$reference" --output "boxlite-plugin-$version"
   cd "boxlite-plugin-$version"
-  gh api -H "Accept: application/vnd.github.raw+json" \
-    "repos/boxlite-ai/boxlite/contents/scripts/plugins/review/boxlite-$version.zip.sha256?ref=$commit" | sha256sum --check
+  zip="boxlite-$version.zip"
+  checksum="$(printf '%s\n' "$manifest" | jq -er --arg zip "$zip" '
+    .layers | select(length == 1) | .[0]
+    | select(.annotations["org.opencontainers.image.title"] == $zip)
+    | .digest | capture("^sha256:(?<hex>[0-9a-f]{64})$").hex')"
+  printf '%s  %s\n' "$checksum" "$zip" | sha256sum --check
 )
 ```
 
@@ -161,7 +159,6 @@ Run `make plugin:boxlite:preflight:oauth` without credentials to check public me
 Its private report distinguishes public prerequisites from unverified client registration, native login, and workload permissions.
 
 It exits nonzero for missing prerequisites; it never changes Auth0 or reads host credentials.
-The [OAuth runbook](review/OAUTH.md), included in the review kit, separates local contract tests, operator configuration, first-account setup, and native acceptance.
 
 First-time users complete Dashboard registration before connecting with the same identity; MCP-only registration without email is not supported by this candidate.
 
@@ -180,15 +177,10 @@ It preserves data across updates and restart, then removes its recorded Box.
 The test saves a private command transcript in `target/plugins/evidence/local.json`; its runtime home and synthetic files stay under the recorded run directory for diagnosis.
 Image downloads use the selected registry; no cloud account or API credential is needed.
 
-## Release gate
+## Directory submission
 
-Copy [review/checklist.json](review/checklist.json) outside version control and attach the actual evidence for every gate.
-Run `make plugin:boxlite:ready PLUGIN_REVIEW_CHECKLIST=/absolute/private/checklist.json` against that copy.
-The default checklist intentionally fails closed; generating packages does not mark gates complete.
-
-The [reviewer runbook](review/REVIEWER.md) and [eight submission cases](review/cases.json) explain what to submit and exercise.
+Submit the standalone Codex ZIP to OpenAI and the repository path `plugins/boxlite-claude` to Claude Directory.
 Keep reviewer credentials in each portal's private access fields; do not include credentials, private organization IDs, or raw host transcripts in the ZIP.
-The release owner must verify each evidence reference against the exact archive hashes before changing a gate to `passed`.
 
 OpenAI's portal currently supports OAuth connection setup, not API-key onboarding; native hosts configure API keys separately.
 Confirm eligibility for optional local execution before making a combined public-listing claim.

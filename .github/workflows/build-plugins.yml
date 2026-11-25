@@ -55,8 +55,7 @@ jobs:
           fi
           printf 'version=%s\nartifact=boxlite-plugins-%s-%s-%s\n' \
             "$version" "$version" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-          cd target/plugins
-          sha256sum --strict --check "../../scripts/plugins/review/boxlite-$version.zip.sha256"
+          unzip -tq "target/plugins/boxlite-$version.zip"
       - name: Save validated packages for release or PR preview
         uses: actions/upload-artifact@v4
         with:
