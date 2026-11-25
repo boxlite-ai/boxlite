@@ -291,6 +291,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             io::ErrorKind,
             panic::{self, AssertUnwindSafe},
             thread,
+            time::Duration,
         };
 
         use boxlite_hypervisor::VcpuHandle;
@@ -364,9 +365,15 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     break;
                 }
             }
+            const KICK_RETRY: Duration = Duration::from_millis(10);
             let mut pending_kicks = 0u64;
             loop {
-                match events.wait(Some(RECHECK)) {
+                let wait = if pending_kicks != 0 {
+                    KICK_RETRY
+                } else {
+                    RECHECK
+                };
+                match events.wait(Some(wait)) {
                     Ok(Some(event)) => break Ok(event),
                     Err(error) => break Err(error),
                     Ok(None) => {}

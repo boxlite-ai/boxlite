@@ -173,6 +173,64 @@ fn checkpoint_dispatches_both_split_mmio_fragments_before_pausing() {
 }
 
 #[test]
+fn checkpoint_reparks_when_it_wakes_in_a_new_pause_epoch() {
+    let (mut events, lifecycle, control) = fixture(true);
+    control.pause().unwrap();
+    assert!(lifecycle.begin_run().unwrap());
+
+    thread::scope(|scope| {
+        let _stop = StopOnDrop(&control);
+        let worker = scope.spawn(|| {
+            let mut parks = 0;
+            let outcome = lifecycle.checkpoint(0, || {
+                parks += 1;
+                Ok(None)
+            });
+            assert!(outcome.unwrap().is_none());
+            parks
+        });
+
+        assert!(events.wait(Some(WAIT)).unwrap().is_none());
+        assert!(!lifecycle.drive(1));
+        control.wait_paused(Duration::ZERO).unwrap();
+
+        let resume = scope.spawn(|| control.resume());
+        assert!(events.wait(Some(WAIT)).unwrap().is_none());
+        {
+            let mut state = lifecycle.state();
+            assert_eq!((state.status, state.epoch), (VmStatus::Paused, 1));
+            assert_eq!(state.command.take(), Some(Command::Resume(1)));
+            // Apply both driver transitions under one lock: separate drive calls
+            // would let the parked worker observe Running before Pausing(2).
+            state.status = VmStatus::Running;
+            lifecycle.changed.notify_all();
+            state.start_pause(2);
+        }
+        resume.join().unwrap().unwrap();
+
+        assert!(events.wait(Some(WAIT)).unwrap().is_none());
+        {
+            let state = lifecycle.state();
+            assert_eq!((state.status, state.epoch), (VmStatus::Pausing, 2));
+            assert_eq!(
+                state.acknowledgements, 1,
+                "worker did not acknowledge epoch 2"
+            );
+        }
+        assert!(!lifecycle.drive(1));
+        control.wait_paused(Duration::ZERO).unwrap();
+        assert_eq!(lifecycle.state().completed_epoch, 2);
+
+        let resume = scope.spawn(|| control.resume());
+        assert!(events.wait(Some(WAIT)).unwrap().is_none());
+        assert!(!lifecycle.drive(1));
+        resume.join().unwrap().unwrap();
+        assert_eq!(control.status(), VmStatus::Running);
+        assert_eq!(worker.join().unwrap(), 2);
+    });
+}
+
+#[test]
 fn checkpoint_propagates_terminal_exit_or_error_without_acknowledging() {
     for end in [
         CompletionEnd::Shutdown,
@@ -264,11 +322,8 @@ fn stop_latches_one_event_and_is_idempotent_after_exit() {
     ));
     assert!(events.wait(Some(Duration::ZERO)).unwrap().is_none());
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        assert!(matches!(lifecycle.begin_run(), Ok(false)));
-        assert!(matches!(lifecycle.begin_run(), Err(Error::AlreadyRan)));
-    }
+    assert!(matches!(lifecycle.begin_run(), Ok(false)));
+    assert!(matches!(lifecycle.begin_run(), Err(Error::AlreadyRan)));
 
     lifecycle.mark_exited();
     control.stop();

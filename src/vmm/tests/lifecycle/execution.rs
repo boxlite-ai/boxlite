@@ -242,6 +242,20 @@ fn pause_capability_uses_the_composed_chipset() {
     assert_eq!(exit.unwrap(), VmExit::StopRequested);
 }
 
+struct KickAttempts {
+    failures_left: usize,
+    ids: Vec<u32>,
+}
+
+impl KickAttempts {
+    fn new(failures_left: usize) -> Self {
+        Self {
+            failures_left,
+            ids: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone)]
 enum PauseFault {
     CompleteIo(mpsc::Sender<()>),
@@ -251,7 +265,15 @@ enum PauseFault {
         completions: Arc<AtomicUsize>,
     },
     Kick(Arc<AtomicUsize>),
-    TransientKick(Arc<Mutex<Vec<u32>>>),
+    KickError {
+        kind: io::ErrorKind,
+        attempts: Arc<Mutex<KickAttempts>>,
+    },
+    Startup {
+        gate: Arc<ExitGate>,
+        handle_ready: mpsc::Sender<()>,
+        release: mpsc::Sender<()>,
+    },
     NotifyStopped {
         peer_parked: Arc<AtomicBool>,
         kicks: Arc<AtomicUsize>,
@@ -283,6 +305,11 @@ impl boxlite_hypervisor::Vm for FaultyVm {
     }
 
     fn create_vcpu(&self, id: u32) -> boxlite_hypervisor::Result<Self::Vcpu> {
+        if id == 1
+            && let PauseFault::Startup { gate, .. } = &self.1
+        {
+            gate.wait();
+        }
         Ok(FailingCpu {
             vcpu: self.0.create_vcpu(id)?,
             id,
@@ -325,15 +352,19 @@ impl VcpuHandle for FaultyKick {
             PauseFault::Kick(kicks) | PauseFault::NotifyStopped { kicks, .. } => {
                 assert_ne!(kicks.fetch_add(1, Ordering::Relaxed), 0, "test kick panic");
             }
-            PauseFault::TransientKick(attempts) => {
+            PauseFault::KickError { kind, attempts } => {
                 let mut attempts = attempts.lock().unwrap();
-                attempts.push(self.id);
-                if attempts.len() == 1 {
+                attempts.ids.push(self.id);
+                if attempts.failures_left != 0 {
+                    attempts.failures_left -= 1;
                     return Err(boxlite_hypervisor::Error::KickVcpu {
                         id: self.id,
-                        source: io::ErrorKind::WouldBlock.into(),
+                        source: (*kind).into(),
                     });
                 }
+            }
+            PauseFault::Startup { release, .. } => {
+                let _ = release.send(());
             }
             PauseFault::CompleteIo(_) | PauseFault::SplitIo { .. } => {}
         }
@@ -392,6 +423,11 @@ impl Vcpu for FailingCpu {
     }
 
     fn handle(&self) -> Self::Handle {
+        if self.id == 0
+            && let PauseFault::Startup { handle_ready, .. } = &self.fault
+        {
+            handle_ready.send(()).unwrap();
+        }
         FaultyKick {
             handle: self.vcpu.handle(),
             id: self.id,
@@ -500,8 +536,15 @@ fn pause_kick_panic_releases_vcpus_before_unwinding() {
 fn transient_pause_kick_retries_and_allows_resume() {
     let backend = MockVm::new();
     let entries = backend.entries();
-    let attempts = Arc::new(Mutex::new(Vec::new()));
-    let mut vm = faulty_vm(backend, 2, PauseFault::TransientKick(Arc::clone(&attempts)));
+    let attempts = Arc::new(Mutex::new(KickAttempts::new(1)));
+    let mut vm = faulty_vm(
+        backend,
+        2,
+        PauseFault::KickError {
+            kind: io::ErrorKind::WouldBlock,
+            attempts: Arc::clone(&attempts),
+        },
+    );
 
     let exit = run_with_control(&mut vm, |control| {
         wait_until(|| entries.lock().unwrap().len() == 2);
@@ -510,7 +553,7 @@ fn transient_pause_kick_retries_and_allows_resume() {
             .expect("transient kick should still allow the VM to pause");
         assert_eq!(control.status(), VmStatus::Paused);
         {
-            let kicks = attempts.lock().unwrap();
+            let kicks = &attempts.lock().unwrap().ids;
             assert!(
                 matches!(kicks.as_slice(), [first, peer, retry] if first != peer && first == retry),
                 "expected a kick for each vCPU followed by a retry, got {kicks:?}"
@@ -519,6 +562,95 @@ fn transient_pause_kick_retries_and_allows_resume() {
 
         control.resume().unwrap();
         wait_until(|| entries.lock().unwrap().len() == 4);
+    });
+    assert_eq!(exit.unwrap(), VmExit::StopRequested);
+}
+
+#[test]
+fn single_vcpu_pause_distinguishes_interrupted_and_fatal_kicks() {
+    for (kind, failures) in [
+        (io::ErrorKind::Interrupted, 6),
+        (io::ErrorKind::PermissionDenied, 1),
+    ] {
+        let backend = MockVm::new();
+        let entries = backend.entries();
+        let attempts = Arc::new(Mutex::new(KickAttempts::new(failures)));
+        let mut vm = faulty_vm(
+            backend,
+            1,
+            PauseFault::KickError {
+                kind,
+                attempts: Arc::clone(&attempts),
+            },
+        );
+
+        let exit = run_with_control(&mut vm, |control| {
+            wait_until(|| entries.lock().unwrap().len() == 1);
+            let pause = control.pause();
+            if kind == io::ErrorKind::Interrupted {
+                let kicks = {
+                    let mut attempts = attempts.lock().unwrap();
+                    // Let the shutdown kick succeed even if pause timed out with retries left.
+                    attempts.failures_left = 0;
+                    attempts.ids.clone()
+                };
+                // No peer wakes the driver, so six 1-second waits would exceed
+                // the 5-second pause timeout.
+                pause.expect("interrupted kicks should be retried before the pause deadline");
+                assert_eq!(control.status(), VmStatus::Paused);
+                assert_eq!(kicks, [0; 7]);
+                control.resume().unwrap();
+                assert_eq!(control.status(), VmStatus::Running);
+            } else {
+                assert_error(pause, "pause", ControlReason::TerminalOutcome);
+            }
+        });
+        if kind == io::ErrorKind::Interrupted {
+            assert_eq!(exit.unwrap(), VmExit::StopRequested);
+        } else {
+            assert!(matches!(
+                exit,
+                Err(Error::Hypervisor(boxlite_hypervisor::Error::KickVcpu { id: 0, source }))
+                    if source.kind() == kind
+            ));
+        }
+    }
+}
+
+#[test]
+fn pause_during_vcpu_startup_parks_every_worker_before_guest_entry() {
+    let (gate, configuring, release) = ExitGate::new();
+    let (handle_ready, first_handle) = mpsc::channel();
+    let backend = MockVm::new();
+    let entries = backend.entries();
+    let mut vm = faulty_vm(
+        backend,
+        2,
+        PauseFault::Startup {
+            gate,
+            handle_ready,
+            release,
+        },
+    );
+    let lifecycle = Arc::clone(vm.lifecycle());
+
+    let exit = run_with_control(&mut vm, move |control| {
+        configuring.recv_timeout(WAIT).unwrap();
+        first_handle.recv_timeout(WAIT).unwrap();
+        assert_eq!(control.status(), VmStatus::Running);
+
+        // The kick batch starts with only vCPU 0's handle. Its kick lets
+        // vCPU 1 finish configuring and both workers leave the start gate.
+        control.pause().unwrap();
+        assert_eq!(control.status(), VmStatus::Paused);
+        assert_eq!(lifecycle.state().acknowledgements, 0b11);
+        assert!(entries.lock().unwrap().is_empty());
+
+        control.resume().unwrap();
+        wait_until(|| {
+            let entries = entries.lock().unwrap();
+            entries.contains(&0) && entries.contains(&1)
+        });
     });
     assert_eq!(exit.unwrap(), VmExit::StopRequested);
 }

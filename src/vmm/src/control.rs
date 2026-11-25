@@ -49,6 +49,10 @@ impl VmControl {
 
     /// Waits for the current pause epoch, including a reserved initial pause.
     /// A zero timeout checks the current condition while holding the lock.
+    ///
+    /// `Ok(())` here or from [`Self::pause`] on a running VM confirms that the
+    /// target pause epoch completed; callers that need the VM to stay quiescent
+    /// must serialize against concurrent [`Self::resume`] calls on cloned handles.
     pub fn wait_paused(&self, timeout: Duration) -> Result<()> {
         self.lifecycle.wait_paused(timeout)
     }
