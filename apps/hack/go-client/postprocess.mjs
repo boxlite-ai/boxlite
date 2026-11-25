@@ -42,6 +42,18 @@ if (clientName === 'api-client-go' && existsSync(overviewPath)) {
   writeFileSync(indexPath, index.filter((file) => file !== verifiedFile).join('\n'))
 }
 
+// Keep the published constructor signature. A nil slice omits permissions and an empty slice sends [].
+const apiKeyPath = `${projectRoot}/model_create_api_key.go`
+if (clientName === 'api-client-go' && existsSync(apiKeyPath)) {
+  const model = readFileSync(apiKeyPath, 'utf8')
+  const constructor = `func NewCreateApiKey(name string) *CreateApiKey {
+\tthis := CreateApiKey{}`
+  const compatible = `func NewCreateApiKey(name string, permissions []string) *CreateApiKey {
+\tthis := CreateApiKey{Permissions: permissions}`
+  if (!model.includes(constructor)) throw new Error('Unexpected generated NewCreateApiKey constructor')
+  writeFileSync(apiKeyPath, model.replace(constructor, compatible))
+}
+
 writeFileSync(
   `${projectRoot}/version.go`,
   `package ${packageName}

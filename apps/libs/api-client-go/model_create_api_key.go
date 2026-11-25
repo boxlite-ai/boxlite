@@ -24,8 +24,8 @@ var _ MappedNullable = &CreateApiKey{}
 type CreateApiKey struct {
 	// The name of the API key
 	Name string `json:"name"`
-	// The list of organization resource permissions explicitly assigned to the API key
-	Permissions []string `json:"permissions"`
+	// When omitted, requests all non-App permissions and the App Hosting permissions enabled for the organization. The caller must be allowed to grant every requested permission.
+	Permissions []string `json:"permissions,omitempty"`
 	// When the API key expires
 	ExpiresAt NullableTime `json:"expiresAt,omitempty"`
 	AdditionalProperties map[string]interface{}
@@ -38,9 +38,8 @@ type _CreateApiKey CreateApiKey
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
 func NewCreateApiKey(name string, permissions []string) *CreateApiKey {
-	this := CreateApiKey{}
+	this := CreateApiKey{Permissions: permissions}
 	this.Name = name
-	this.Permissions = permissions
 	return &this
 }
 
@@ -76,26 +75,34 @@ func (o *CreateApiKey) SetName(v string) {
 	o.Name = v
 }
 
-// GetPermissions returns the Permissions field value
+// GetPermissions returns the Permissions field value if set, zero value otherwise.
 func (o *CreateApiKey) GetPermissions() []string {
-	if o == nil {
+	if o == nil || IsNil(o.Permissions) {
 		var ret []string
 		return ret
 	}
-
 	return o.Permissions
 }
 
-// GetPermissionsOk returns a tuple with the Permissions field value
+// GetPermissionsOk returns a tuple with the Permissions field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 func (o *CreateApiKey) GetPermissionsOk() ([]string, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.Permissions) {
 		return nil, false
 	}
 	return o.Permissions, true
 }
 
-// SetPermissions sets field value
+// HasPermissions returns a boolean if a field has been set.
+func (o *CreateApiKey) HasPermissions() bool {
+	if o != nil && !IsNil(o.Permissions) {
+		return true
+	}
+
+	return false
+}
+
+// SetPermissions gets a reference to the given []string and assigns it to the Permissions field.
 func (o *CreateApiKey) SetPermissions(v []string) {
 	o.Permissions = v
 }
@@ -153,7 +160,9 @@ func (o CreateApiKey) MarshalJSON() ([]byte, error) {
 func (o CreateApiKey) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["name"] = o.Name
-	toSerialize["permissions"] = o.Permissions
+	if !IsNil(o.Permissions) {
+		toSerialize["permissions"] = o.Permissions
+	}
 	if o.ExpiresAt.IsSet() {
 		toSerialize["expiresAt"] = o.ExpiresAt.Get()
 	}
@@ -171,7 +180,6 @@ func (o *CreateApiKey) UnmarshalJSON(data []byte) (err error) {
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
 		"name",
-		"permissions",
 	}
 
 	allProperties := make(map[string]interface{})
