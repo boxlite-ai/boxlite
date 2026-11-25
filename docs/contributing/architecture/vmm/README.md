@@ -824,3 +824,9 @@ Host APIs:
 - **KVM:** the [KVM API](https://docs.kernel.org/virt/kvm/api.html).
 - **WHP:** the
   [Windows Hypervisor Platform API](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
+
+### Portal session reset after VM pause/resume
+
+`libkrun` pause/resume resets guest vsock transports, invalidating cached HTTP/2 channels.
+`GuestSession::reset()` clears the `Connection` channel mutex so subsequent RPCs on the
+same handle establish a fresh vsock connection automatically.
