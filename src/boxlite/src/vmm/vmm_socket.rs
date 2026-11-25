@@ -8,19 +8,30 @@
 //! Directory registration attaches one open directory via `SCM_RIGHTS`.
 
 #![allow(dead_code)]
+use std::fs::File;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::header::{CONNECTION, CONTENT_TYPE, HOST};
 use hyper::{Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
 use tokio::time::timeout;
 
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 use {
     http_body_util::LengthLimitError,
     hyper::{
@@ -30,23 +41,25 @@ use {
     },
     hyper_util::rt::TokioTimer,
     std::{
-        cell::RefCell,
+        cell::{Cell, RefCell},
         convert::Infallible,
-        fs::File,
         os::unix::net::{UnixListener, UnixStream},
     },
     tokio::{
         runtime::Runtime,
-        time::{Instant, timeout_at},
+        sync::Notify,
+        time::{Instant, sleep, timeout_at},
     },
 };
 
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 use super::controller::mount_control::{ControlMount, MountState};
-#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 mod transport;
 
 const RESIZE_PATH: &str = "/v1/resize-disk";
+const CHECKPOINT_PATH: &str = "/v1/capture-checkpoint";
+const CHECKPOINT_VERSION: u32 = 1;
+const MAX_CHECKPOINT_BODY: usize = 64 * 1024;
 const MAX_BODY: usize = 4096;
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 const MOUNT_PATH: &str = "/v1/mount-control";
@@ -55,14 +68,57 @@ pub(super) const MAX_MOUNT_BODY: usize = 64 * 1024;
 const HTTP_BUFFER: usize = 8192;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(15);
-#[cfg(any(test, feature = "native"))]
+
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 // Allow the request read, ten-second device reply wait, and reply write.
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 const SERVER_TIMEOUT: Duration = Duration::from_secs(14);
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
+const CHECKPOINT_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 const ACCEPT_RETRY_INITIAL: Duration = Duration::from_millis(5);
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 const ACCEPT_RETRY_MAX: Duration = Duration::from_millis(50);
 
 #[derive(Serialize, Deserialize)]
@@ -72,13 +128,25 @@ struct ResizeDiskRequest {
     bytes: u64,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckpointRequest {
+    version: u32,
+    vm_state_path: PathBuf,
+    disk_dst_path: PathBuf,
+}
+
 /// The operations a shim may serve.
-#[cfg(any(test, feature = "native"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum ControlOp {
     /// Grows the disk with the configured `block_id` to `bytes`.
     ResizeDisk { block_id: String, bytes: u64 },
+    /// Pauses the VM, saves VM state and the container disk, then resumes it.
+    CaptureCheckpoint {
+        vm_state_path: PathBuf,
+        disk_dst_path: PathBuf,
+    },
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     RegisterMount {
         source: String,
@@ -102,6 +170,11 @@ pub(crate) type ControlResponse = Result<ControlReply, ControlError>;
 pub(crate) enum ControlReply {
     /// The disk's size in bytes after the operation.
     DiskSize(u64),
+    /// Checkpoint state and flattened disk written; VM resumed.
+    CheckpointCaptured {
+        vm_state_bytes: u64,
+        guest_rootfs_path: Option<PathBuf>,
+    },
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     MountRegistered(ControlMount),
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
@@ -120,14 +193,35 @@ pub(crate) enum ControlError {
     InvalidInput(String),
     #[error("{0}")]
     Failed(String),
+    /// Internal server signal; the wire response is `Failed`.
+    #[serde(skip)]
+    #[cfg(any(test, feature = "krun"))]
+    #[cfg_attr(
+        not(any(
+            test,
+            all(target_os = "linux", target_arch = "x86_64"),
+            all(target_os = "macos", target_arch = "aarch64")
+        )),
+        allow(dead_code)
+    )]
+    #[error("{0}")]
+    ShimShutdown(String),
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     #[error("mount control errno {0}")]
     Mount(i32),
 }
 
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 /// Binds `path` (replacing a stale socket), makes it owner-only, and serves
 /// each connection on a `vmm-control` thread with `handle`.
-#[cfg(any(test, feature = "native"))]
 pub(crate) fn serve(
     path: &Path,
     handle: impl FnMut(ControlOp, Option<File>) -> ControlResponse + Send + 'static,
@@ -136,6 +230,8 @@ pub(crate) fn serve(
         std::fs::remove_file(path)?;
     }
     let listener = UnixListener::bind(path)?;
+    #[cfg(target_os = "macos")]
+    transport::suppress_sigpipe(&listener)?;
     restrict_to_owner(path)?;
     // SAFETY: `geteuid` has no preconditions.
     let owner = unsafe { libc::geteuid() };
@@ -166,7 +262,15 @@ pub(crate) fn serve(
     started.recv().map_err(io::Error::other)?
 }
 
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 fn serve_connections(
     runtime: &Runtime,
     incoming: impl Iterator<Item = io::Result<UnixStream>>,
@@ -202,34 +306,40 @@ fn serve_connections(
                 continue;
             }
         };
-        if let Err(error) = answer(runtime, stream, owner, &mut handle) {
+        if let Err(error) = answer_with_shutdown(runtime, stream, owner, &mut handle, || {
+            std::process::exit(1)
+        }) {
             tracing::debug!(%error, "control connection ended");
         }
     }
 }
 
-#[cfg(any(test, feature = "native"))]
-fn answer(
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
+fn answer_with_shutdown(
     runtime: &Runtime,
     stream: UnixStream,
     owner: libc::uid_t,
     handle: &mut impl FnMut(ControlOp, Option<File>) -> ControlResponse,
+    shutdown: impl FnOnce(),
 ) -> io::Result<()> {
-    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-    let same_user = transport::same_user(&stream, owner)
-        .map_err(|error| error.raw_os_error().unwrap_or(libc::EIO));
-    #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
-    let _ = owner;
-
-    runtime.block_on(async {
-        stream.set_nonblocking(true)?;
+    let same_user = transport::same_user(&stream, owner);
+    transport::prepare_stream(&stream)?;
+    let terminate = Cell::new(false);
+    let result = runtime.block_on(async {
         let stream = tokio::net::UnixStream::from_std(stream)?;
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
         let (stream, received) = transport::AncillaryIo::new(stream, None);
 
-        // One request per connection. The listener owns the mutable handler
-        // and lends it to Hyper only for synchronous dispatch.
+        // The listener lends its handler to Hyper only for synchronous dispatch.
         let handle = RefCell::new(handle);
+        let checkpoint_finished = Notify::new();
         let read_deadline = Instant::now() + READ_TIMEOUT;
         let connection = hyper::server::conn::http1::Builder::new()
             .keep_alive(false)
@@ -241,52 +351,124 @@ fn answer(
                 TokioIo::new(stream),
                 hyper::service::service_fn(|request| async {
                     let reply = handle_http(request, read_deadline, |op| {
-                        #[cfg(all(
-                            feature = "native",
-                            target_os = "linux",
-                            target_arch = "x86_64"
-                        ))]
-                        let file = {
-                            let file = received.take();
-                            check_request(&op, file.is_some(), same_user)?;
-                            file
-                        };
-                        #[cfg(not(all(
-                            feature = "native",
-                            target_os = "linux",
-                            target_arch = "x86_64"
-                        )))]
-                        let file = None;
-                        handle.borrow_mut()(op, file)
+                        let file = received.take();
+                        check_request(&op, file.is_some(), same_user.as_ref().copied())?;
+                        let checkpoint = matches!(op, ControlOp::CaptureCheckpoint { .. });
+                        let response = handle.borrow_mut()(op, file);
+                        if checkpoint {
+                            checkpoint_finished.notify_one();
+                        }
+                        #[cfg(any(test, feature = "krun"))]
+                        if let Err(ControlError::ShimShutdown(message)) = response {
+                            terminate.set(true);
+                            return Err(ControlError::Failed(message));
+                        }
+                        response
                     })
                     .await;
                     Ok::<_, Infallible>(reply)
                 }),
             );
-        timeout(SERVER_TIMEOUT, connection)
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "control connection timed out"))?
-            .map_err(io::Error::other)
-    })
+        tokio::pin!(connection);
+        tokio::select! {
+            biased;
+            result = &mut connection => result.map_err(io::Error::other),
+            // Capture can outlast the native connection deadline. Start a fresh
+            // write deadline after saving, flattening, and resuming the VM.
+            _ = checkpoint_finished.notified() => {
+                tokio::time::timeout(CHECKPOINT_WRITE_TIMEOUT, connection)
+                    .await
+                    .map_err(|_| server_timeout())?
+                    .map_err(io::Error::other)
+            }
+            _ = sleep(SERVER_TIMEOUT) => Err(server_timeout()),
+        }
+    });
+    if terminate.get() {
+        shutdown();
+    }
+    result
 }
 
-#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
+fn server_timeout() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "control connection timed out")
+}
+
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 fn check_request(
     op: &ControlOp,
     has_fd: bool,
-    same_user: Result<bool, i32>,
+    same_user: Result<bool, &io::Error>,
 ) -> Result<(), ControlError> {
-    let register = matches!(op, ControlOp::RegisterMount { .. });
-    if has_fd != register {
-        return Err(ControlError::Mount(libc::EINVAL));
+    match op {
+        ControlOp::ResizeDisk { .. } if has_fd => {
+            #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+            let error = ControlError::Mount(libc::EINVAL);
+            #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
+            let error =
+                ControlError::InvalidInput("unexpected file descriptor in resize request".into());
+            Err(error)
+        }
+        ControlOp::ResizeDisk { .. } => Ok(()),
+        ControlOp::CaptureCheckpoint { .. } => {
+            if has_fd {
+                return Err(ControlError::InvalidInput(
+                    "unexpected file descriptor in checkpoint request".into(),
+                ));
+            }
+            let same_user = same_user.map_err(|error| {
+                ControlError::Failed(format!(
+                    "failed to verify control peer credentials: {error}"
+                ))
+            })?;
+            if !same_user {
+                return Err(ControlError::Failed(
+                    "control request rejected: peer uid does not match shim owner".into(),
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        _ => {
+            if has_fd != matches!(op, ControlOp::RegisterMount { .. }) {
+                return Err(ControlError::Mount(libc::EINVAL));
+            }
+            if !same_user
+                .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap_or(libc::EIO)))?
+            {
+                return Err(ControlError::Mount(libc::EPERM));
+            }
+            Ok(())
+        }
     }
-    if !matches!(op, ControlOp::ResizeDisk { .. }) && !same_user.map_err(ControlError::Mount)? {
-        return Err(ControlError::Mount(libc::EPERM));
-    }
-    Ok(())
 }
 
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 async fn handle_http(
     request: Request<Incoming>,
     read_deadline: Instant,
@@ -295,6 +477,7 @@ async fn handle_http(
     type ParseControlOp = fn(&[u8]) -> Result<ControlOp, ControlError>;
     let (parse, max_body): (ParseControlOp, _) = match request.uri().path() {
         RESIZE_PATH => (parse_resize, MAX_BODY),
+        CHECKPOINT_PATH => (parse_checkpoint, MAX_CHECKPOINT_BODY),
         #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
         MOUNT_PATH => (parse_mount, MAX_MOUNT_BODY),
         _ => return invalid_request(StatusCode::NOT_FOUND, "unknown control path"),
@@ -316,13 +499,23 @@ async fn handle_http(
         Ok(Err(_)) => {
             return invalid_request(StatusCode::BAD_REQUEST, "incomplete control request");
         }
-        Err(_) => return invalid_request(StatusCode::REQUEST_TIMEOUT, "control request timed out"),
+        Err(_) => {
+            return invalid_request(StatusCode::REQUEST_TIMEOUT, "control request timed out");
+        }
     };
     let reply = parse(&body).and_then(handle);
     json_reply(reply_status(&reply), &reply, max_body)
 }
 
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 fn parse_resize(body: &[u8]) -> Result<ControlOp, ControlError> {
     let request: ResizeDiskRequest = serde_json::from_slice(body)
         .map_err(|error| ControlError::InvalidInput(error.to_string()))?;
@@ -332,11 +525,38 @@ fn parse_resize(body: &[u8]) -> Result<ControlOp, ControlError> {
     })
 }
 
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
+fn parse_checkpoint(body: &[u8]) -> Result<ControlOp, ControlError> {
+    let request: CheckpointRequest = serde_json::from_slice(body)
+        .map_err(|error| ControlError::InvalidInput(error.to_string()))?;
+    if request.version != CHECKPOINT_VERSION {
+        return Err(ControlError::Unsupported(format!(
+            "protocol version {}",
+            request.version
+        )));
+    }
+    Ok(ControlOp::CaptureCheckpoint {
+        vm_state_path: request.vm_state_path,
+        disk_dst_path: request.disk_dst_path,
+    })
+}
+
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 fn parse_mount(body: &[u8]) -> Result<ControlOp, ControlError> {
     let op = serde_json::from_slice(body)
         .map_err(|error| ControlError::InvalidInput(error.to_string()))?;
-    if matches!(op, ControlOp::ResizeDisk { .. }) {
+    if matches!(
+        op,
+        ControlOp::ResizeDisk { .. } | ControlOp::CaptureCheckpoint { .. }
+    ) {
         return Err(ControlError::InvalidInput(
             "expected a mount operation".into(),
         ));
@@ -344,7 +564,15 @@ fn parse_mount(body: &[u8]) -> Result<ControlOp, ControlError> {
     Ok(op)
 }
 
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 fn invalid_request(status: StatusCode, message: impl Into<String>) -> Response<Full<Bytes>> {
     json_reply(
         status,
@@ -359,6 +587,8 @@ fn reply_status(reply: &ControlResponse) -> StatusCode {
         Err(ControlError::InvalidInput(_)) => StatusCode::BAD_REQUEST,
         Err(ControlError::Unsupported(_)) => StatusCode::NOT_IMPLEMENTED,
         Err(ControlError::Failed(_)) => StatusCode::INTERNAL_SERVER_ERROR,
+        #[cfg(any(test, feature = "krun"))]
+        Err(ControlError::ShimShutdown(_)) => StatusCode::INTERNAL_SERVER_ERROR,
         #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
         Err(ControlError::Mount(errno)) => match *errno {
             libc::EINVAL | libc::ENOTDIR => StatusCode::BAD_REQUEST,
@@ -371,7 +601,15 @@ fn reply_status(reply: &ControlResponse) -> StatusCode {
     }
 }
 
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 fn json_reply(
     status: StatusCode,
     reply: &ControlResponse,
@@ -392,7 +630,8 @@ fn json_reply(
     response
 }
 
-async fn request(path: &Path, block_id: &str, bytes: u64) -> io::Result<ControlResponse> {
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+async fn request_resize(path: &Path, block_id: &str, bytes: u64) -> io::Result<ControlResponse> {
     let body = serde_json::to_vec(&ResizeDiskRequest {
         block_id: block_id.into(),
         bytes,
@@ -456,8 +695,7 @@ async fn exchange_http(
     }
 }
 
-/// A blocking exchange for the native mount client and shim tests.
-#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+/// A blocking exchange for checkpoint capture and the native mount client.
 pub(crate) fn exchange(
     path: &Path,
     op: ControlOp,
@@ -471,32 +709,83 @@ pub(crate) fn exchange(
             serde_json::to_vec(&ResizeDiskRequest { block_id, bytes })?,
             MAX_BODY,
         ),
+        ControlOp::CaptureCheckpoint {
+            vm_state_path,
+            disk_dst_path,
+        } => (
+            CHECKPOINT_PATH,
+            serde_json::to_vec(&CheckpointRequest {
+                version: CHECKPOINT_VERSION,
+                vm_state_path,
+                disk_dst_path,
+            })?,
+            MAX_CHECKPOINT_BODY,
+        ),
+        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
         op => (MOUNT_PATH, serde_json::to_vec(&op)?, MAX_MOUNT_BODY),
     };
-    // A blocking Unix connect waits on a full listen backlog until the deadline.
+    exchange_blocking_http(path, route, body, max_body, directory, deadline)
+}
+
+fn exchange_blocking_http(
+    path: &Path,
+    route: &'static str,
+    body: Vec<u8>,
+    max_body: usize,
+    directory: Option<&File>,
+    deadline: std::time::Instant,
+) -> io::Result<ControlResponse> {
+    // Linux nonblocking connect fails immediately on a full listener backlog.
+    #[cfg(target_os = "linux")]
     let stream = transport::connect(path, deadline)?;
-    stream.set_nonblocking(true)?;
     let directory = directory.map(File::try_clone).transpose()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
         .build()?;
     runtime.block_on(async {
-        let stream = tokio::net::UnixStream::from_std(stream)?;
-        let (stream, received) = transport::AncillaryIo::new(stream, directory);
-        let reply = timeout_at(
-            Instant::from_std(deadline),
-            exchange_http(TokioIo::new(stream), route, body, max_body),
-        )
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+            #[cfg(not(target_os = "linux"))]
+            let stream = tokio::net::UnixStream::connect(path).await?.into_std()?;
+            #[cfg(target_os = "macos")]
+            transport::suppress_sigpipe(&stream)?;
+            transport::prepare_stream(&stream)?;
+            let stream = tokio::net::UnixStream::from_std(stream)?;
+            let (stream, received) = transport::AncillaryIo::new(stream, directory);
+            let reply = exchange_http(TokioIo::new(stream), route, body, max_body).await?;
+            if received.take().is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "descriptor in control reply",
+                ));
+            }
+            Ok(reply)
+        })
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "VMM control deadline"))??;
-        if received.take().is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "descriptor in control reply",
-            ));
-        }
-        Ok(reply)
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "VMM control deadline"))?
+    })
+}
+
+/// Sends a control operation to the shim with a deadline covering the whole exchange.
+pub(crate) fn request(
+    path: &Path,
+    op: ControlOp,
+    timeout: Duration,
+) -> BoxliteResult<ControlReply> {
+    let response = exchange(path, op, None, timeout).map_err(|error| {
+        BoxliteError::Engine(format!(
+            "VMM control request to {} failed: {error}",
+            path.display()
+        ))
+    })?;
+    response.map_err(|error| match error {
+        ControlError::Unsupported(message) => BoxliteError::Unsupported(message),
+        ControlError::InvalidInput(message) => BoxliteError::InvalidArgument(message),
+        ControlError::Failed(message) => BoxliteError::Engine(message),
+        #[cfg(any(test, feature = "krun"))]
+        ControlError::ShimShutdown(message) => BoxliteError::Engine(message),
+        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        ControlError::Mount(errno) => BoxliteError::Engine(format!("mount control errno {errno}")),
     })
 }
 
@@ -507,10 +796,8 @@ pub(crate) async fn grow_disk(
     block_id: &str,
     bytes: u64,
 ) -> boxlite_shared::BoxliteResult<()> {
-    use boxlite_shared::BoxliteError;
-
     // The worker waits up to ten seconds; allow the bounded exchange to outlast it.
-    let response = timeout(CLIENT_TIMEOUT, request(path, block_id, bytes))
+    let response = timeout(CLIENT_TIMEOUT, request_resize(path, block_id, bytes))
         .await
         .map_err(|_| {
             BoxliteError::Engine(
@@ -538,7 +825,6 @@ pub(crate) async fn grow_disk(
         Err(ControlError::Failed(message)) => Err(BoxliteError::Engine(format!(
             "disk resize completion is unknown: {message}; query allocation or retry the target"
         ))),
-        #[cfg(feature = "native")]
         _ => Err(BoxliteError::Engine(
             "disk resize completion is unknown: unexpected shim reply; retry the target".into(),
         )),
@@ -546,7 +832,15 @@ pub(crate) async fn grow_disk(
 }
 
 /// `fchmodat`, which the shim's seccomp profile allows, rather than `chmod`.
-#[cfg(any(test, feature = "native"))]
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        any(feature = "native", feature = "krun")
+    ),
+    all(feature = "krun", target_os = "macos", target_arch = "aarch64"),
+))]
 fn restrict_to_owner(path: &Path) -> io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;

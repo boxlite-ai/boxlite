@@ -836,3 +836,9 @@ same handle establish a fresh vsock connection automatically.
 `vmm_socket/transport.rs` adds Darwin `getpeereid`, `SO_NOSIGPIPE`, `FD_CLOEXEC`, and
 `O_NONBLOCK` stream helpers alongside Linux `SO_PEERCRED`/`SCM_RIGHTS`.
 `InstanceSpec::checkpoint_restore` carries the optional `vmstate.krun` path.
+
+### Cross-platform `vmm.sock` CaptureCheckpoint control route
+
+`vmm_socket` exposes `ControlOp::CaptureCheckpoint`, `ControlReply::CheckpointCaptured`,
+and `ControlError::ShimShutdown` over the existing HTTP/1.1 Unix control channel across
+macOS arm64 and Linux x86_64.

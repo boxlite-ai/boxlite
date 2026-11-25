@@ -1,9 +1,21 @@
 use super::*;
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 
 const GROW: &[u8] = br#"{"block_id":"container","bytes":4096}"#;
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn answer(
+    runtime: &Runtime,
+    stream: UnixStream,
+    owner: libc::uid_t,
+    handler: &mut impl FnMut(ControlOp, Option<File>) -> ControlResponse,
+) -> io::Result<()> {
+    answer_with_shutdown(runtime, stream, owner, handler, || {
+        panic!("unexpected shim shutdown")
+    })
+}
 
 fn runtime() -> Runtime {
     tokio::runtime::Builder::new_current_thread()
@@ -17,7 +29,6 @@ fn echo_resize(op: ControlOp, directory: Option<File>) -> ControlResponse {
     assert!(directory.is_none());
     match op {
         ControlOp::ResizeDisk { bytes, .. } => Ok(ControlReply::DiskSize(bytes)),
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
         _ => panic!("expected a resize request"),
     }
 }
@@ -73,7 +84,6 @@ fn http_resize_reaches_the_handler() {
             assert_eq!(bytes, 4096);
             Ok(ControlReply::DiskSize(bytes))
         }
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
         _ => panic!("expected a resize request"),
     })
     .unwrap();
@@ -93,7 +103,6 @@ async fn a_request_reaches_the_handler_and_its_answer_returns() {
         ControlOp::ResizeDisk { block_id, .. } => {
             Err(ControlError::InvalidInput(format!("no disk {block_id}")))
         }
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
         _ => panic!("expected a resize request"),
     })
     .unwrap();
@@ -101,14 +110,14 @@ async fn a_request_reaches_the_handler_and_its_answer_returns() {
     assert_eq!(mode & 0o777, 0o600, "the socket is owner-only");
 
     assert_eq!(
-        timeout(TEST_TIMEOUT, request(&path, "container", 4096))
+        timeout(TEST_TIMEOUT, request_resize(&path, "container", 4096))
             .await
             .unwrap()
             .unwrap(),
         Ok(ControlReply::DiskSize(4096))
     );
     assert_eq!(
-        timeout(TEST_TIMEOUT, request(&path, "missing", 4096))
+        timeout(TEST_TIMEOUT, request_resize(&path, "missing", 4096))
             .await
             .unwrap()
             .unwrap(),
@@ -401,7 +410,7 @@ async fn the_client_rejects_an_oversized_reply() {
             .await;
     };
     let (reply, ()) = timeout(TEST_TIMEOUT, async {
-        tokio::join!(request(&path, "container", 4096), peer)
+        tokio::join!(request_resize(&path, "container", 4096), peer)
     })
     .await
     .unwrap();
@@ -453,6 +462,260 @@ fn http_runs_under_the_production_vmm_filter() {
     println!("{DONE}");
 }
 
+fn checkpoint_body(version: u32) -> Vec<u8> {
+    serde_json::to_vec(&CheckpointRequest {
+        version,
+        vm_state_path: "/tmp/state".into(),
+        disk_dst_path: "/tmp/disk".into(),
+    })
+    .unwrap()
+}
+
+#[test]
+fn another_version_is_unsupported_and_the_shim_keeps_serving() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vmm.sock");
+    serve(&path, |op, _| {
+        assert!(matches!(op, ControlOp::CaptureCheckpoint { .. }));
+        Ok(ControlReply::CheckpointCaptured {
+            vm_state_bytes: 1,
+            guest_rootfs_path: None,
+        })
+    })
+    .unwrap();
+    let reply = raw_http(
+        &path,
+        "POST",
+        CHECKPOINT_PATH,
+        &checkpoint_body(CHECKPOINT_VERSION + 1),
+    );
+    assert!(reply.starts_with("HTTP/1.1 501 "), "{reply}");
+    assert!(reply.contains("unsupported"), "{reply}");
+    let reply = raw_http(
+        &path,
+        "POST",
+        CHECKPOINT_PATH,
+        &checkpoint_body(CHECKPOINT_VERSION),
+    );
+    assert!(reply.starts_with("HTTP/1.1 200 "), "{reply}");
+}
+
+#[test]
+fn an_oversized_or_unknown_checkpoint_request_is_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vmm.sock");
+    serve(&path, |op, _| {
+        assert!(matches!(op, ControlOp::CaptureCheckpoint { .. }));
+        Ok(ControlReply::CheckpointCaptured {
+            vm_state_bytes: 1,
+            guest_rootfs_path: None,
+        })
+    })
+    .unwrap();
+    for (body, status) in [
+        (vec![b' '; MAX_CHECKPOINT_BODY + 1], "HTTP/1.1 413 "),
+        (br#"{"version":1,"op":"reboot"}"#.to_vec(), "HTTP/1.1 400 "),
+    ] {
+        let reply = raw_http(&path, "POST", CHECKPOINT_PATH, &body);
+        assert!(reply.starts_with(status), "{reply}");
+    }
+    let partial = UnixStream::connect(&path).unwrap();
+    partial
+        .set_read_timeout(Some(READ_TIMEOUT + Duration::from_secs(1)))
+        .unwrap();
+    (&partial)
+        .write_all(
+            b"POST /v1/capture-checkpoint HTTP/1.1\r\nHost: vmm\r\nContent-Length: 32\r\n\r\n{",
+        )
+        .unwrap();
+    let reply = read_http(&partial);
+    assert!(reply.starts_with("HTTP/1.1 408 "), "{reply}");
+    let reply = raw_http(
+        &path,
+        "POST",
+        CHECKPOINT_PATH,
+        &checkpoint_body(CHECKPOINT_VERSION),
+    );
+    assert!(reply.starts_with("HTTP/1.1 200 "), "{reply}");
+}
+
+#[test]
+fn checkpoint_request_rejects_an_attached_descriptor() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    transport::prepare_stream(&client).unwrap();
+    let file = tempfile::tempfile().unwrap();
+    let request = http_request(
+        "POST",
+        CHECKPOINT_PATH,
+        &checkpoint_body(CHECKPOINT_VERSION),
+    );
+    assert_eq!(
+        transport::send_with_file(client.as_raw_fd(), &request[..1], file.as_raw_fd()).unwrap(),
+        1
+    );
+    client.write_all(&request[1..]).unwrap();
+    client.set_nonblocking(false).unwrap();
+    set_response_timeout(&client);
+    answer(&runtime(), server, owner_uid(), &mut |_, _| {
+        panic!("descriptor must not dispatch")
+    })
+    .unwrap();
+    let reply = read_http(&client);
+    assert!(reply.starts_with("HTTP/1.1 400 "), "{reply}");
+    assert!(reply.contains("unexpected file descriptor"), "{reply}");
+}
+
+#[test]
+fn terminal_checkpoint_failure_replies_before_shim_shutdown() {
+    let (client, server) = UnixStream::pair().unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    write_http(
+        &client,
+        "POST",
+        CHECKPOINT_PATH,
+        &checkpoint_body(CHECKPOINT_VERSION),
+    );
+    let mut terminated = false;
+    answer_with_shutdown(
+        &runtime(),
+        server,
+        // SAFETY: `geteuid` has no preconditions.
+        unsafe { libc::geteuid() },
+        &mut |_, _| Err(ControlError::ShimShutdown("guest terminated".into())),
+        || {
+            let http = read_http(&client);
+            assert!(http.starts_with("HTTP/1.1 500 "), "{http}");
+            let (_, body) = http.split_once("\r\n\r\n").unwrap();
+            let reply: ControlResponse = serde_json::from_str(body).unwrap();
+            assert_eq!(reply, Err(ControlError::Failed("guest terminated".into())));
+            terminated = true;
+        },
+    )
+    .unwrap();
+    assert!(terminated);
+}
+
+#[test]
+fn capture_checkpoint_roundtrips_and_enforces_peer_uid() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vmm.sock");
+    let expected_vm = dir.path().join("tmp/vmstate.krun");
+    let expected_disk = dir.path().join("tmp/disk.qcow2");
+    let expected_rootfs = dir.path().join("bases/guest.ext4");
+
+    let vm_clone = expected_vm.clone();
+    let disk_clone = expected_disk.clone();
+    let rootfs_clone = expected_rootfs.clone();
+    serve(&path, move |op, file| {
+        assert!(file.is_none());
+        match op {
+            ControlOp::CaptureCheckpoint {
+                vm_state_path,
+                disk_dst_path,
+            } => {
+                assert_eq!(vm_state_path, vm_clone);
+                assert_eq!(disk_dst_path, disk_clone);
+                Ok(ControlReply::CheckpointCaptured {
+                    vm_state_bytes: 123_456,
+                    guest_rootfs_path: Some(rootfs_clone.clone()),
+                })
+            }
+            _ => panic!("unexpected op"),
+        }
+    })
+    .unwrap();
+
+    let reply = request(
+        &path,
+        ControlOp::CaptureCheckpoint {
+            vm_state_path: expected_vm.clone(),
+            disk_dst_path: expected_disk.clone(),
+        },
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    assert_eq!(
+        reply,
+        ControlReply::CheckpointCaptured {
+            vm_state_bytes: 123_456,
+            guest_rootfs_path: Some(expected_rootfs),
+        }
+    );
+
+    // A listener owned by a different uid must refuse CaptureCheckpoint.
+    let foreign_sock = dir.path().join("foreign.sock");
+    let listener = UnixListener::bind(&foreign_sock).unwrap();
+    // SAFETY: `geteuid` has no preconditions.
+    let foreign_owner = unsafe { libc::geteuid() } + 1;
+    std::thread::spawn(move || {
+        serve_connections(
+            &runtime(),
+            listener.incoming().take(1),
+            foreign_owner,
+            |_, _| panic!("foreign peer must be rejected before handler"),
+            std::thread::sleep,
+        );
+    });
+    let err = request(
+        &foreign_sock,
+        ControlOp::CaptureCheckpoint {
+            vm_state_path: expected_vm,
+            disk_dst_path: expected_disk,
+        },
+        Duration::from_secs(5),
+    )
+    .unwrap_err();
+    assert!(matches!(err, BoxliteError::Engine(msg) if msg.contains("uid")));
+}
+
+#[test]
+fn large_ancillary_write_times_out_when_peer_does_not_read() {
+    let (sender, peer) = UnixStream::pair().unwrap();
+    transport::prepare_stream(&sender).unwrap();
+    let buffer: libc::c_int = 8 * 1024;
+    // SAFETY: buffer is a live c_int, and sender owns the socket.
+    assert_eq!(
+        unsafe {
+            libc::setsockopt(
+                sender.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                (&buffer as *const libc::c_int).cast(),
+                size_of_val(&buffer) as libc::socklen_t,
+            )
+        },
+        0
+    );
+
+    let timeout = Duration::from_millis(100);
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        runtime().block_on(async {
+            use tokio::io::AsyncWriteExt;
+            let sender = tokio::net::UnixStream::from_std(sender).unwrap();
+            let file = tempfile::tempfile().unwrap();
+            let (mut sender, _) = transport::AncillaryIo::new(sender, Some(file));
+            let start = std::time::Instant::now();
+            let result = tokio::time::timeout(timeout, sender.write_all(&[0; 32 * 1024])).await;
+            let _ = done.send((result, start.elapsed()));
+        });
+    });
+    // Bound the test even on a transport that blocks indefinitely in sendmsg.
+    let result = result.recv_timeout(Duration::from_secs(1));
+    drop(peer);
+    let (result, elapsed) = result.expect("sendmsg blocked beyond the frame deadline");
+    assert!(
+        result.is_err(),
+        "the peer has not drained the socket buffer: {result:?}"
+    );
+    assert!(
+        elapsed >= timeout,
+        "send timed out before the deadline: {elapsed:?}"
+    );
+}
+
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 mod mounts {
     use super::*;
@@ -489,7 +752,7 @@ mod mounts {
     }
 
     #[test]
-    fn mount_route_rejects_unknown_and_resize_operations() {
+    fn mount_route_rejects_unknown_and_non_mount_operations() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("vmm.sock");
         serve(&path, |_, _| {
@@ -499,6 +762,7 @@ mod mounts {
         for body in [
             br#"{"op":"reboot"}"#.as_slice(),
             br#"{"op":"resize_disk","block_id":"vda","bytes":4096}"#.as_slice(),
+            br#"{"op":"capture_checkpoint","vm_state_path":"/tmp/state","disk_dst_path":"/tmp/disk"}"#.as_slice(),
         ] {
             let reply = raw_http(&path, "POST", MOUNT_PATH, body);
             assert!(reply.starts_with("HTTP/1.1 400 "), "{reply}");

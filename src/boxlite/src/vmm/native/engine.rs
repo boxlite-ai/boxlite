@@ -91,6 +91,9 @@ fn handle_control_op(
                 }
                 _ => ControlError::Failed(error.to_string()),
             }),
+        ControlOp::CaptureCheckpoint { .. } => Err(ControlError::Unsupported(
+            "checkpoint capture is not supported by the native engine".into(),
+        )),
         op => mounts
             .ok_or_else(|| ControlError::Unsupported("guest transport is unavailable".into()))?
             .request(
@@ -124,6 +127,9 @@ pub(crate) fn unsupported_requests(spec: &InstanceSpec) -> Vec<&'static str> {
     }
     if spec.nested_virtualization {
         requests.push("nested virtualization");
+    }
+    if spec.checkpoint_restore.is_some() {
+        requests.push("checkpoint restore");
     }
     requests
 }

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::fs::File;
 use std::io;
 use std::mem::{size_of, zeroed};

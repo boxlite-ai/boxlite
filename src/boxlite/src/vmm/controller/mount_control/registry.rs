@@ -139,6 +139,7 @@ impl Registry {
                 Ok(ControlReply::MountUpdated)
             }
             ControlOp::ResizeDisk { .. } => unreachable!("disk resize is dispatched by the VMM"),
+            ControlOp::CaptureCheckpoint { .. } => Err(errno(libc::EOPNOTSUPP)),
         }
     }
 }
