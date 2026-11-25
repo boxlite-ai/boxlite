@@ -172,12 +172,9 @@ test('build-only never enters deployment, checks, or reporting; failed E2E canno
   assert.equal(summary.id, 'acceptance')
   assert.equal(summary.if, 'always() && inputs.deployment_attempt')
   assert.equal(summary.env.E2E_RESULT, '${{ job.status }}')
-  const fallback = new Function('github', 'inputs', 'needs', 'always', 'return ' + expression(release.jobs.report.if))
-  for (const result of ['failure', 'cancelled', 'skipped', 'success'])
-    assert.equal(
-      fallback({ ref: 'refs/heads/main' }, { 'build-only': false }, { dev: { result } }, () => true),
-      result !== 'success',
-    )
+  assert.match(release.jobs.report.if, /contains\(needs\.\*\.result, 'failure'\)/)
+  assert.match(release.jobs.report.if, /contains\(needs\.\*\.result, 'cancelled'\)/)
+  for (const job of ['dev','attach','finalize','pypi','npm','publish_crates']) assert.ok(release.jobs.report.needs.includes(job))
   assert.match(release.jobs.prod.if, /needs\.dev\.outputs\.accepted_attempt != ''/)
 })
 
@@ -253,4 +250,28 @@ test('release SDK worktree uses the verified commit even when the remote has adv
   assert.equal(git('-C', 'suite/target/e2e-release', 'rev-parse', 'HEAD'), sha)
   const common = (path) => git('-C', path, 'rev-parse', '--path-format=absolute', '--git-common-dir')
   assert.equal(common('suite/target/e2e-release'), common('suite'))
+})
+
+test('component repairs use the accepted candidate and package publishers stay in the entry workflow', () => {
+  const commands = release.on.workflow_dispatch.inputs.command.options
+  assert.deepEqual(commands, ['publish', 'repair-runtime', 'repair-wheels', 'repair-node', 'repair-c'])
+  const locate = release.jobs['accepted-candidate']
+  const receipt = locate.steps.find((step) => step.id === 'receipt').run
+  assert.match(receipt, /head_branch == "main"/)
+  assert.match(receipt, /dev-accepted-\$ID/)
+  assert.match(receipt, /\.candidate == \$id and \.run == \$run/)
+  const attach = release.jobs.attach
+  assert.ok(attach.needs.includes('accepted-candidate'))
+  for (const [job, command] of [['npm','repair-node'],['pypi','repair-wheels']]) {
+    const publisher=release.jobs[job]
+    assert.ok(publisher.needs.includes('attach'))
+    assert.equal(publisher.permissions['id-token'],'write')
+    assert.ok(publisher.if.includes(command))
+    const input=publisher.steps.find((step)=>step.uses==='./.github/actions/release-candidate').with
+    assert.equal(input.run,'${{ needs.attach.outputs.run }}')
+    assert.equal(input.id,'${{ needs.attach.outputs.candidate }}')
+    assert.equal(input.digest,'${{ needs.attach.outputs.digest }}')
+  }
+  assert.ok(release.jobs.publish_crates.needs.includes('finalize'))
+  assert.ok(release.jobs.finalize.if.includes("inputs.command == 'publish'"))
 })

@@ -14,6 +14,10 @@ case "$component" in
 esac
 
 if [[ "$component" == validate ]]; then
+    if [[ -n "${RELEASE_ASSET_DIR:-}" ]]; then
+        jq -e --arg tag "$tag" '.tag == $tag' "$RELEASE_ASSET_DIR/release-candidate.json" >/dev/null
+        exit 0
+    fi
     published=$(gh release view "$tag" --repo boxlite-ai/boxlite \
         --json tagName,isDraft --jq 'select(.isDraft == false) | .tagName')
     [[ "$published" == "$tag" ]] || { echo "release $tag is not published" >&2; exit 1; }
@@ -25,6 +29,10 @@ scratch=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/e2e-release.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 version=${tag#v}
 download() {
+    if [[ -n "${RELEASE_ASSET_DIR:-}" ]]; then
+        cp -- "$RELEASE_ASSET_DIR/$1" "$scratch/$1"
+        return
+    fi
     gh release download "$tag" --repo boxlite-ai/boxlite --pattern "$1" --dir "$scratch"
 }
 
@@ -58,9 +66,18 @@ case "$component" in
         )
         ;;
     cli)
-        download install.sh
         install_dir="$root/target/e2e-bin"
-        BOXLITE_VERSION="$tag" BOXLITE_INSTALL_DIR="$install_dir" sh "$scratch/install.sh"
+        if [[ -n "${RELEASE_ASSET_DIR:-}" ]]; then
+            archive="boxlite-cli-$tag-x86_64-unknown-linux-gnu.tar.gz"
+            download "$archive"
+            download "$archive.sha256"
+            (cd "$scratch" && sha256sum --check --strict "$archive.sha256")
+            mkdir -p "$install_dir"
+            tar xzf "$scratch/$archive" -C "$install_dir" boxlite
+        else
+            download install.sh
+            BOXLITE_VERSION="$tag" BOXLITE_INSTALL_DIR="$install_dir" sh "$scratch/install.sh"
+        fi
         "$install_dir/boxlite" --version
         echo "$install_dir" >> "${GITHUB_PATH:?GITHUB_PATH is required}"
         ;;

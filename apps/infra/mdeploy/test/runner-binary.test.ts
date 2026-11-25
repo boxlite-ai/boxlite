@@ -96,8 +96,8 @@ test('a release resolves to the assets the publisher actually uploads', () => {
     selector: { kind: 'release', version: '0.10.0' },
   })
   assert.equal(tarballName, 'boxlite-runner-v0.10.0-linux-amd64.tar.gz')
-  assert.equal(tarballUrl, `https://github.com/boxlite-ai/boxlite/releases/download/v0.10.0/${tarballName}`)
-  assert.equal(checksumUrl, `${tarballUrl}.sha256`)
+  assert.equal(tarballUrl, 'https://ghcr.io/v2/boxlite-ai/boxlite/runner/blobs/$RUNNER_ARCHIVE')
+  assert.equal(checksumUrl, 'https://ghcr.io/v2/boxlite-ai/boxlite/runner/manifests/$RUNNER_MANIFEST')
   assert.equal(transport, 'https')
 })
 

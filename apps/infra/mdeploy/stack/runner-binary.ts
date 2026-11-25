@@ -7,7 +7,7 @@
  *
  * Two sources, one shape:
  *
- *   release → the assets published for a stable X.Y.Z, over public HTTPS
+ *   release → the GHCR manifest and archive pinned by the release candidate
  *   build   → an object staged for one commit, read with the host's own identity
  *             rather than published; S3 on AWS, Cloud Storage on GCP, one key
  *
@@ -18,18 +18,14 @@
  * whatever was current the day someone seeded it, and would drift from the
  * commit the rest of the deploy is shipping.
  *
- * Synchronous, and no network. Both engines evaluate the stack synchronously, so
- * a resolver that reached for a digest could not be called from it at all. What
- * this produces is therefore a *pair of addresses* — the tarball and its
- * `.sha256` sidecar — and the host is what compares the bytes it downloaded
- * against the manifest it fetched beside them. `runner-boot.ts` does that at
- * first boot and `runner-upgrade.ts` does it on every later deploy, from one
- * rendering of the same three lines.
+ * Resolution is synchronous. Hosts verify release manifest and archive digests,
+ * or the staged checksum sidecar for a commit build, before installation.
  *
  * Every string here is interpolated into bash that runs as root on a host, so
  * each is validated where it enters rather than where it is spent.
  */
 
+import { releaseRunner, runnerRegistry, fetchRegistryRunner, type ReleaseRunner } from './runner-registry.ts'
 import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
@@ -39,15 +35,6 @@ export class RunnerBinaryError extends Error {
     this.name = 'RunnerBinaryError'
   }
 }
-
-/**
- * Where a published runner asset lives.
- *
- * A constant rather than a setting, and the same one `artifacts/runner-release
- * .ts` uses: the release is this repository's own, so a stage that could point
- * it elsewhere is a stage that could install a binary nobody here published.
- */
-const RELEASE_DOWNLOAD_ROOT = 'https://github.com/boxlite-ai/boxlite/releases/download'
 
 /** Stable X.Y.Z only. A prerelease has no ordering the upgrade guard can use. */
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
@@ -65,6 +52,7 @@ export type RunnerBinarySelector =
 
 /** The two addresses a source resolves to, and how each is read. */
 export type RunnerArtifact = {
+  release?: ReleaseRunner
   tarballName: string
   tarballUrl: string
   checksumUrl: string
@@ -260,19 +248,22 @@ export const gcpRunnerArtifactsBucket = ({
  */
 export const runnerArtifactFor = ({
   selector,
+  metadata,
   staging = null,
 }: {
   selector: RunnerBinarySelector
+  metadata?: string
   /** Where a build-mode object is staged. The root knows it; a release needs none. */
   staging?: ArtifactStaging | null
 }): RunnerArtifact => {
   if (selector.kind === 'release') {
     const tarballName = `boxlite-runner-v${selector.version}-linux-amd64.tar.gz`
-    const release = `${RELEASE_DOWNLOAD_ROOT}/v${selector.version}`
+    const release = releaseRunner(selector.version, metadata)
     return {
+      release,
       tarballName,
-      tarballUrl: `${release}/${tarballName}`,
-      checksumUrl: `${release}/${tarballName}.sha256`,
+      tarballUrl: `${runnerRegistry}/blobs/${release.pins?.archive ?? '$RUNNER_ARCHIVE'}`,
+      checksumUrl: `${runnerRegistry}/manifests/${release.pins?.manifest ?? '$RUNNER_MANIFEST'}`,
       transport: 'https',
     }
   }
@@ -382,6 +373,16 @@ ACTUAL=$(sha256sum "${tarball}" | awk '{print $1}')
 echo "runner tarball checksum verified ($ACTUAL)"`
 }
 
+/** Render both downloads and verification together so a host cannot install unverified bytes. */
+export function fetchVerifiedRunner(binary: RunnerArtifact, tarball: string, manifest: string, region?: string | null): string {
+  if (binary.release) return fetchRegistryRunner(binary.release, binary, tarball, manifest)
+  return [
+    artifactFetchCommand({ artifact: binary, url: binary.tarballUrl, destination: tarball, region }),
+    artifactFetchCommand({ artifact: binary, url: binary.checksumUrl, destination: manifest, region }),
+    verifyAgainstManifest({ tarballName: binary.tarballName, tarball, manifest }),
+  ].join('\n')
+}
+
 /**
  * One deploy's runner binary, from the checkout to the addresses a host reads.
  *
@@ -406,7 +407,7 @@ export const resolveRunnerBinary = ({
 }): ResolvedRunnerBinary => {
   const selector = selectRunnerBinary({ environment, workspaceVersion: readVersion({ from: configRoot }) })
   return {
-    ...runnerArtifactFor({ selector, staging }),
+    ...runnerArtifactFor({ selector, staging, metadata: environment.BOXLITE_RELEASE_DIGESTS }),
     source: selector.kind,
     version: selector.version,
     identity: selector.kind === 'build' ? `${selector.version}+${selector.ref}` : selector.version,

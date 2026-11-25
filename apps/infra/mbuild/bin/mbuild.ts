@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { writeFile } from 'node:fs/promises'
 
 /*
  * `npm run mbuild publish -- --tag <sha> --stage dev`
@@ -18,7 +19,7 @@
 
 import { loadConfig as loadStageConfig, type StageConfig } from 'mstage/config'
 import { loadArtifactConfig, loadBuildConfig, onlyArtifact, registryFor, type BuildConfig } from '../src/config.ts'
-import { assertTag, ghcrRegistryFor, releaseTagFor, resolveRegistry } from '../src/address.ts'
+import { assertTag, ghcrRegistryFor, releaseImageDigests, releaseTagFor, resolveRegistry } from '../src/address.ts'
 import { assertPromotable, coordinatesOf, type Coordinates } from '../src/coordinates.ts'
 import {
   AuditFailedError,
@@ -188,14 +189,19 @@ const main = async (): Promise<number> => {
     if (command === 'import-release') {
       const stage = required(argv, 'stage')
       const target = resolveRegistry({ config, stage, region: regionOf(stage), ...(await coordinates(config, stage)) })
-      for (const outcome of await promote({ config: selected, tag, from: { stage: 'ghcr', registry }, to: { stage, registry: target }, run, log })) {
+      const pins = process.env.BOXLITE_RELEASE_DIGESTS
+      const digests = pins ? releaseImageDigests(pins, tag) : undefined
+      for (const outcome of await promote({ config: selected, tag, digests, from: { stage: 'ghcr', registry }, to: { stage, registry: target }, run, log })) {
         console.log(`${outcome.artifact}=${outcome.address}`)
       }
     } else {
-      const operation = command === 'publish' ? publish : verifyPublished
-      for (const outcome of await operation({ config: selected, stage: 'ghcr', registry, tag, run, log })) {
-        console.log(`${outcome.artifact}=${outcome.address}`)
-      }
+      const options = { config: selected, stage: 'ghcr', registry, tag, run, log }
+      const outcomes = command === 'publish'
+        ? await publish({ ...options, replace: argv.includes('--replace') })
+        : await verifyPublished(options)
+      for (const outcome of outcomes) console.log(`${outcome.artifact}=${outcome.address}`)
+      const output = option(argv, 'output')
+      if (output && command === 'publish') await writeFile(output, JSON.stringify(outcomes) + '\n')
     }
     return 0
   }

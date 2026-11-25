@@ -155,7 +155,9 @@ export const releaseReport = ({ repo, tag, runId, results }) => {
   const release = VERSION.test(tag) ? tag : '(invalid release tag)'
   const rows = [
     ['Release ref', results.resolve?.result],
+    ...Object.entries(results).filter(([job]) => job.startsWith('build-')).map(([job, outcome]) => [job, outcome.result]),
     ['Image publication', results.publish?.result],
+    ...(results['publish-runner'] ? [['Runner publication', results['publish-runner'].result]] : []),
     ['Release assets', results.check?.result],
   ].map(([label, result]) => [label, result ?? 'not started'])
   if (results.dev && results.dev.result !== 'skipped') {
@@ -163,7 +165,14 @@ export const releaseReport = ({ repo, tag, runId, results }) => {
     if (!e2e || e2e === 'skipped') rows.push(['Dev deployment and acceptance', results.dev.result])
     if (e2e) rows.push(['E2E cloud', e2e])
   }
-  const stopped = rows.find(([, result]) => result !== 'success')
+  for (const [job, label] of Object.entries({
+    attach: 'Draft attachments', pypi: 'PyPI', npm: 'npm', 'tag-go-module': 'Go module tag',
+    finalize: 'GitHub Release', publish_crates: 'crates.io',
+  })) {
+    if (results[job]) rows.push([label, results[job].result])
+  }
+  const stopped = rows.find(([, result]) => ['failure', 'cancelled'].includes(result)) ??
+    rows.find(([, result]) => result !== 'success')
   const phase = stopped?.[0] ?? 'Release'
   const title = release + ': ' + phase + ' — ' + (stopped?.[1] ?? 'stopped')
   const blocks = [

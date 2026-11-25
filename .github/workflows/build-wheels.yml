@@ -1,8 +1,11 @@
 name: Build Wheels
 
 on:
-  release:
-    types: [ published ]
+  workflow_call:
+    inputs:
+      ref:
+        required: true
+        type: string
   workflow_dispatch:  # Allow manual triggering
 
 env:
@@ -27,6 +30,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
 
       - uses: ./.github/actions/setup-rust
@@ -55,63 +59,19 @@ jobs:
             sudo chown -R "$(id -u):$(id -g)" "$SCCACHE_DIR"
           fi
 
+      - name: Record build origin
+        working-directory: wheelhouse
+        run: |
+          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
+
       - name: Upload wheels as artifacts
         uses: actions/upload-artifact@v4
         with:
+          overwrite: true
+          if-no-files-found: error
           name: wheels-${{ matrix.os }}
-          path: ./wheelhouse/*.whl
+          path: |
+            ./wheelhouse/*.whl
+            wheelhouse/producer.json
           retention-days: 7
-
-  # cibuildwheel verifies each installed wheel before build_wheels can succeed.
-  publish:
-    name: Publish to PyPI
-    needs: build_wheels
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published'
-    permissions:
-      id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
-
-    steps:
-      - name: Download all wheels
-        uses: actions/download-artifact@v5
-        with:
-          path: dist
-          pattern: wheels-*
-          merge-multiple: true
-
-      - name: List wheels
-        run: ls -lh dist/
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-          skip-existing: true
-
-  upload_to_release:
-    name: Upload wheels to GitHub Release
-    needs: build_wheels
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published'
-    permissions:
-      contents: write  # Required to upload to releases
-
-    steps:
-      # Before the download, not after: ./.github/actions/upload-to-release below is resolved from
-      # the checked-out tree, and checkout cleans the workspace, which would take the wheels with
-      # it if it ran second.
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false # Only the action.yml is needed; nothing here runs git.
-
-      - name: Download all wheels
-        uses: actions/download-artifact@v5
-        with:
-          path: dist
-          pattern: wheels-*
-          merge-multiple: true
-
-      - name: Upload wheels to release
-        uses: ./.github/actions/upload-to-release
-        with:
-          files: dist/*.whl

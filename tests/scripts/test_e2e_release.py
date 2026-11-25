@@ -102,6 +102,18 @@ class ReleaseInstallTest(unittest.TestCase):
                 self.assertIn("stable vX.Y.Z", result.stderr)
                 self.assertEqual(calls, [])
 
+    def test_draft_acceptance_installs_the_staged_wheel(self):
+        abi = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        wheel = self.assets / f"boxlite-0.13.1-{abi}-{abi}-manylinux_2_28_x86_64.whl"
+        wheel.write_bytes(b"candidate wheel")
+        result, calls = self.run_install("python", RELEASE_ASSET_DIR=str(self.assets), FAIL_TOOL="gh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call["tool"] for call in calls], ["pip"])
+        wheel.unlink()
+        result, calls = self.run_install("python", RELEASE_ASSET_DIR=str(self.assets))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([call["tool"] for call in calls], ["pip"])
+
     def test_validates_exact_published_release_and_propagates_lookup_failure(self):
         result, calls = self.run_install("validate")
         self.assertEqual(result.returncode, 0, result.stderr)

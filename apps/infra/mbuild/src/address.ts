@@ -145,7 +145,7 @@ export const addressFor = ({
   tag: string
 }): string => {
   assertArtifact(config, artifact)
-  assertTag(tag)
+  if (registry.kind === 'ghcr' || !/^sha256-[a-f0-9]{64}$/.test(tag)) assertTag(tag)
   switch (registry.kind) {
     case 'ghcr':
       if (!tag.startsWith('v')) throw new ImageAddressError('GHCR requires a version-qualified release tag')
@@ -166,18 +166,43 @@ export const ghcrRegistryFor = (repository: string): Extract<Registry, { kind: '
   return { kind: 'ghcr', host: 'ghcr.io', repository: normalized }
 }
 
+export const digestTag = (digest: string): string => {
+  if (!/^sha256:[a-f0-9]{64}$/.test(digest)) throw new ImageAddressError('Expected a full SHA-256 image digest')
+  return digest.replace(':', '-')
+}
+
+export const releaseImageDigests = (manifest: string, tag: string): Record<string, string> => {
+  const { tag: version, sha, images } = JSON.parse(manifest)
+  if (releaseTagFor({ version, sha }) !== tag || !images || typeof images !== 'object' || Array.isArray(images)) {
+    throw new ImageAddressError('Release manifest does not identify the selected version and commit')
+  }
+  for (const digest of Object.values(images)) {
+    if (typeof digest !== 'string') throw new ImageAddressError('Invalid image digest in release manifest')
+    digestTag(digest)
+  }
+  return images
+}
+
 /** Every artifact at one commit, which is what a publish iterates over. */
 export const addressesFor = ({
   config,
   registry,
   tag,
+  digests,
 }: {
   config: BuildConfig
   registry: Registry
   tag: string
+  digests?: Record<string, string>
 }): Record<string, string> =>
   Object.fromEntries(
-    Object.keys(config.artifacts).map((artifact) => [artifact, addressFor({ config, registry, artifact, tag })]),
+    Object.keys(config.artifacts).map((artifact) => {
+      const address = addressFor({ config, registry, artifact, tag })
+      if (!digests) return [artifact, address]
+      const digest = digests[artifact] ?? ''
+      digestTag(digest)
+      return [artifact, address.slice(0, address.lastIndexOf(':')) + '@' + digest]
+    }),
   )
 
 /** The ECR host for an account and region; the address shape lives only here. */

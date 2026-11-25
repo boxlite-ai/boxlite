@@ -1,22 +1,6 @@
-# Build the runner Go binary for Linux amd64.
-#
-# Builds against either the libboxlite.a published for a release or the Linux x64 C SDK artifact
-# produced from the same commit in the current workflow run. The latter is the dev path: the
-# Runner binary and its embedded runtime come from the exact checkout the API is deploying.
-#
-# The runner binary is fully self-contained: it links libboxlite.a, which
-# auto-extracts the embedded runtime at startup.
-#
-# Triggers:
-# - workflow_run: After a successful release C SDK build (libboxlite.a is published)
-# - workflow_dispatch: Build the selected commit's C SDK and Runner together
-# - workflow_call: A deploy building a selected commit (deploy-infra.yml)
 name: Build Runner Binary
 
 on:
-  workflow_run:
-    workflows: ["Build C SDK"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       ref:
@@ -25,6 +9,10 @@ on:
         type: string
   workflow_call:
     inputs:
+      release_tag:
+        description: Product release whose runner is assembled from the same-run C artifact.
+        required: false
+        type: string
       libboxlite_source:
         description: 'Explicitly choose artifact for matching-commit deployments or release for published SDKs.'
         required: true
@@ -42,15 +30,9 @@ env:
 
 jobs:
   config:
-    if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
     uses: ./.github/workflows/config.yml
 
   resolve-ref:
-    if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
     name: Resolve build commit
     runs-on: ubuntu-latest
     outputs:
@@ -64,10 +46,9 @@ jobs:
         shell: bash
         env:
           INPUT_REF: ${{ inputs.ref }}
-          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          candidate="${INPUT_REF:-${WORKFLOW_RUN_SHA:-$GITHUB_SHA}}"
+          candidate="${INPUT_REF:-$GITHUB_SHA}"
           [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
           # fetch-depth: 0 above only brings THIS repo's own branches. A commit proposed by an
           # open pull request — same-repo or fork — isn't on any of them, so it isn't here yet;
@@ -83,7 +64,7 @@ jobs:
     # Reusable callers supply a source, even when their event is workflow_dispatch.
     if: github.event_name == 'workflow_dispatch' && !inputs.libboxlite_source
     permissions:
-      contents: write
+      contents: read
     uses: ./.github/workflows/build-c.yml
     with:
       ref: ${{ needs['resolve-ref'].outputs.sha }}
@@ -121,12 +102,18 @@ jobs:
         shell: bash
         env:
           BUILD_SHA: ${{ needs.resolve-ref.outputs.sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           INPUT_SOURCE: ${{ inputs.libboxlite_source || (github.event_name == 'workflow_dispatch' && 'artifact' || 'release') }}
         run: |
           set -euo pipefail
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           SOURCE="${INPUT_SOURCE:-release}"
-          case "$SOURCE" in
+          if [[ -n "$RELEASE_TAG" ]]; then
+            [[ "$RELEASE_TAG" == "v$VERSION" && "$SOURCE" == artifact ]] || exit 1
+            identity="$VERSION"
+            archive="boxlite-runner-$RELEASE_TAG-linux-amd64.tar.gz"
+          else
+            case "$SOURCE" in
             release)
               identity="$VERSION"
               archive="boxlite-runner-v${VERSION}-linux-amd64.tar.gz"
@@ -136,7 +123,8 @@ jobs:
               archive="boxlite-runner-v${VERSION}-${BUILD_SHA}-linux-amd64.tar.gz"
               ;;
             *) echo "libboxlite_source must be release or artifact" >&2; exit 1 ;;
-          esac
+            esac
+          fi
           {
             echo "version=$VERSION"
             echo "source=$SOURCE"
@@ -208,52 +196,20 @@ jobs:
           # Integrity manifest both user-data and the in-place updater verify before installing.
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 
+      - name: Record build origin
+        working-directory: .
+        run: |
+          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
+          overwrite: true
+          if-no-files-found: error
           name: runner-linux-amd64
           path: |
             boxlite-runner-*-linux-amd64.tar.gz
             boxlite-runner-*-linux-amd64.tar.gz.sha256
-          if-no-files-found: error
+            producer.json
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
-
-  upload-to-release:
-    name: Upload to GitHub Release
-    needs: [config, resolve-ref, build]
-    # The manual C build is skipped on releases; publication must also override implicit success().
-    if: >-
-      !cancelled() &&
-      needs.config.result == 'success' &&
-      needs['resolve-ref'].result == 'success' &&
-      needs.build.result == 'success' &&
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.event == 'release'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve-ref.outputs.sha }}
-
-      - name: Determine version
-        id: version
-        run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: runner-*
-          merge-multiple: true
-
-      - uses: ./.github/actions/upload-to-release
-        with:
-          tag-name: v${{ steps.version.outputs.version }}
-          files: |
-            dist/boxlite-runner-v*.tar.gz
-            dist/boxlite-runner-v*.tar.gz.sha256

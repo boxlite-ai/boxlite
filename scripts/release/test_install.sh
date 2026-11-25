@@ -135,14 +135,14 @@ if ! awk '
   exit 1
 fi
 
-# Structural test: release upload must ship install.sh.sha256 too, otherwise
-# the sidecar exists in CI but never reaches the release page.
+# The complete runtime distribution, including the verified installer sidecar,
+# must enter the candidate that acceptance and publication share.
 if ! awk '
-  /^      - name: Upload to release/ { in_block = 1; next }
+  /^      - name: Stage release files/ { in_block = 1; next }
   in_block && /^      - name: / { exit }
   in_block { print }
-' "$workflow" | grep -E 'dist/install\.sh\.sha256' >/dev/null; then
-  echo "FAIL: release upload does not include dist/install.sh.sha256" >&2
+' "$workflow" | grep -Eq '^          path: dist/$'; then
+  echo "FAIL: runtime distribution does not stage the verified dist directory" >&2
   exit 1
 fi
 

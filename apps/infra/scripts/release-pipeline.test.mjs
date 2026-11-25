@@ -152,16 +152,16 @@ test('required assets agree with the real Release snapshot and production consum
   )
   const runner = runnerArtifactFor({ selector: { kind: 'release', version: tag.slice(1) } })
   assert.ok(required.includes(runner.tarballName))
-  assert.ok(required.includes(new URL(runner.checksumUrl).pathname.split('/').at(-1)))
+  assert.ok(required.includes(runner.tarballName + '.sha256'))
   const installer = readFileSync(new URL('scripts/ci/install-e2e-release.sh', root), 'utf8')
   const python = e2eWorkflow.jobs.e2e.steps.find((step) => step.name === 'Setup Python for release wheel').with[
     'python-version'
   ]
   const variables = { tag, version: tag.slice(1), abi: 'cp' + python.replace('.', '') }
   const downloads = [...installer.matchAll(/^\s*(?:wheel|package|platform|archive)="([^"]+)"/gm)].map((match) =>
-    match[1].replace(/\$\{(\w+)\}/g, (_, name) => variables[name]),
+    match[1].replace(/\$\{(\w+)\}|\$(tag)\b/g, (_, name, bare) => variables[name ?? bare]),
   )
-  assert.equal(downloads.length, 4)
+  assert.equal(downloads.length, 5)
   for (const name of downloads) assert.ok(required.includes(name), name)
 })
 

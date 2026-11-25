@@ -18,7 +18,7 @@ test('release publication runs from main with package write access and no cloud 
   assert.equal(workflow.jobs.publish.permissions.packages, 'write')
   assert.equal(workflow.permissions['id-token'], undefined)
   assert.doesNotMatch(commands, /configure-aws-credentials|google-github-actions|mstage login|--stage dev|--to prod/)
-  assert.deepEqual(workflow.on.workflow_dispatch.inputs.command.options, ['publish'])
+  assert.deepEqual(workflow.on.workflow_dispatch.inputs.command.options, ['publish', 'repair-runtime', 'repair-wheels', 'repair-node', 'repair-c'])
   assert.equal(workflow.on.workflow_call, undefined)
 })
 

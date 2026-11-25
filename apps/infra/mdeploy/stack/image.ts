@@ -14,13 +14,17 @@
  * ignorant of registries entirely.
  */
 
-import { addressesFor, resolveRegistry } from 'mbuild/address'
+import { addressesFor, releaseImageDigests, resolveRegistry } from 'mbuild/address'
 import { loadBuildConfig, type BuildConfig } from 'mbuild/config'
 
 export type ImagesRequest = {
   /** The commit being deployed. mbuild refuses anything but a full SHA. */
   tag: string
 }
+
+const imageDigests = (tag: string) => process.env.BOXLITE_RELEASE_DIGESTS
+  ? releaseImageDigests(process.env.BOXLITE_RELEASE_DIGESTS, tag)
+  : undefined
 
 /** Artifact name to the address its runtime pulls from. */
 export type Images = Record<string, $util.Output<string>>
@@ -43,6 +47,7 @@ export const awsImages =
               config,
               registry: resolveRegistry({ config, stage, region, accountId: account }),
               tag: request.tag,
+              digests: imageDigests(request.tag),
             })[artifact]!,
         ),
       ]),
@@ -65,6 +70,6 @@ export const gcpImages =
   (request: ImagesRequest): Images =>
     Object.fromEntries(
       Object.entries(
-        addressesFor({ config, registry: resolveRegistry({ config, stage, region, project }), tag: request.tag }),
+        addressesFor({ config, registry: resolveRegistry({ config, stage, region, project }), tag: request.tag, digests: imageDigests(request.tag) }),
       ).map(([artifact, address]) => [artifact, $util.output(address)]),
     )

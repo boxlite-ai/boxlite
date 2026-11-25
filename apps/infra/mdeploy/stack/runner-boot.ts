@@ -37,7 +37,8 @@
  * the wrapper fetches it like any other secret.
  */
 
-import { artifactFetchCommand, verifyAgainstManifest, type RunnerArtifact } from './runner-binary.ts'
+import { registrySetup, recordRunnerDigest } from './runner-registry.ts'
+import { fetchVerifiedRunner, type RunnerArtifact } from './runner-binary.ts'
 import { kernelDeployment } from './runner-kernel.ts'
 import { renderRunnerEnvironment } from './runner-environment.ts'
 
@@ -101,20 +102,8 @@ export type BootInput = {
   apiUrl: string
   /** Where it ships telemetry. */
   otlpUrl: string
-  /**
-   * What to install: the tarball, and the manifest that has to name it.
-   *
-   * Two addresses rather than a literal digest, because the stack that renders
-   * this is evaluated synchronously and can read neither. See
-   * `runner-binary.ts` — the same pair the in-place upgrade uses, verified by
-   * the same three lines.
-   */
-  binary: {
-    tarballUrl: string
-    checksumUrl: string
-    tarballName: string
-    transport: RunnerArtifact['transport']
-  }
+  /** Release candidate or per-commit artifact verified before extracting. */
+  binary: RunnerArtifact
   /** The region an `s3://` address is read from. Null for a public one. */
   region?: string | null
   /** The port the runner multiplexes everything onto. */
@@ -139,15 +128,6 @@ export const renderRunnerBoot = (input: BootInput): string => {
     ...Object.keys(platform.unitEnvironment),
   ])
   const region = input.region ?? null
-  const fetch = (url: string, destination: string) =>
-    artifactFetchCommand({ artifact: input.binary, url, destination, region })
-  const fetchTarball = fetch(input.binary.tarballUrl, '/tmp/boxlite-runner.tar.gz')
-  const fetchManifest = fetch(input.binary.checksumUrl, '/tmp/boxlite-runner.sha256')
-  const verify = verifyAgainstManifest({
-    tarballName: input.binary.tarballName,
-    tarball: '/tmp/boxlite-runner.tar.gz',
-    manifest: '/tmp/boxlite-runner.sha256',
-  })
   const execStart = platform.startWrapper ? platform.startWrapper.path : '/usr/local/bin/boxlite-runner'
   const unitEnvironment = {
     BOXLITE_API_URL: runnerApiUrl(input.apiUrl),
@@ -184,12 +164,8 @@ ${platform.prepareKvm}
 # box is a silent one.
 [ -e /dev/kvm ] || { echo "FATAL: /dev/kvm is absent; this host cannot run boxes" >&2; exit 1; }
 
-# Fetch the binary and verify it before installing: it runs as root. A mismatch
-# is fatal rather than a warning. The manifest is fetched beside the tarball and
-# has to name it -- runner-binary.ts says what each check catches.
-${fetchTarball}
-${fetchManifest}
-${verify}
+${input.binary.release ? registrySetup(input.binary.release) : ''}
+${fetchVerifiedRunner(input.binary, '/tmp/boxlite-runner.tar.gz', '/tmp/boxlite-runner.sha256', region)}
 tar -xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/
 rm -f /tmp/boxlite-runner.tar.gz /tmp/boxlite-runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
@@ -240,6 +216,7 @@ mkdir -p ${RUNNER_HOME}
 systemctl daemon-reload
 systemctl enable boxlite-runner
 systemctl start boxlite-runner
+${input.binary.release ? recordRunnerDigest : ''}
 
 echo "Runner setup complete"
 `

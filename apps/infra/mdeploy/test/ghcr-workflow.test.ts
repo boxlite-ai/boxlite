@@ -62,72 +62,12 @@ esac
           `runner=${components.includes('runner') && missing ? 'build' : 'skip'}\n`,
       )
       const invoked = readFileSync(calls, 'utf8')
-      if (components.includes('api')) {
-        assert.match(invoked, /mbuild verify/)
-        if (release) assert.match(invoked, /--ghcr example\/fixture --version v1\.2\.3/)
-        else assert.match(invoked, /--tag selected-tag --stage dev/)
+      if (components.includes('api') && !release) {
+        assert.match(invoked, /mbuild verify .*--tag selected-tag --stage dev/)
       } else assert.doesNotMatch(invoked, /mbuild/)
       if (components.includes('runner') && !release) assert.match(invoked, /runner:build .*--check/)
       else assert.doesNotMatch(invoked, /runner:build/)
       assert.doesNotMatch(invoked, /publish|promote|import-release/)
-    })
-  }
-}
-
-for (const stage of ['dev', 'prod']) {
-  for (const [cloudPresent, ghcrStatus] of [
-    [false, 66],
-    [true, 66],
-    [false, 1],
-    [true, 1],
-  ] as const) {
-    test(`${stage} refuses GHCR status ${ghcrStatus} when cloud images are ${cloudPresent ? 'present' : 'absent'}`, (t) => {
-      const directory = mkdtempSync(join(tmpdir(), 'ghcr-plan-'))
-      t.after(() => rmSync(directory, { recursive: true, force: true }))
-      writeFileSync(join(directory, 'calls'), '')
-      writeFileSync(join(directory, 'output'), '')
-      writeFileSync(join(directory, 'summary'), '')
-      writeFileSync(
-        join(directory, 'npm'),
-        `#!/bin/bash
-echo "$*" >> "$PLAN_CALLS"
-if [[ "$*" == *"--ghcr"* ]]; then exit ${ghcrStatus}; fi
-exit ${cloudPresent ? 0 : 66}
-`,
-        { mode: 0o755 },
-      )
-      const step = workflow.jobs.plan.steps.find((candidate: any) => candidate.id === 'plan')
-      const result = spawnSync('bash', ['-c', step.run], {
-        encoding: 'utf8',
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          PATH: `${directory}:${process.env.PATH}`,
-          PLAN_CALLS: join(directory, 'calls'),
-          GITHUB_OUTPUT: join(directory, 'output'),
-          RUNNER_TEMP: directory,
-          GITHUB_STEP_SUMMARY: join(directory, 'summary'),
-          GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
-          GHCR_REPOSITORY: 'boxlite-ai/boxlite',
-          VERSION: 'v1.2.3',
-          SHA: 'a'.repeat(40),
-          IMAGE_TAG: `v1.2.3-${'a'.repeat(40)}`,
-          LINE: 'release v1.2.3',
-          STAGE: stage,
-          COMPONENTS: 'api',
-        },
-      })
-      assert.equal(result.status, 1, `GHCR verification errors must stop planning:\n${result.stdout}\n${result.stderr}`)
-      if (ghcrStatus === 66)
-        assert.match(result.stdout + result.stderr, /Run manually: gh workflow run mbuild-release\.yml/)
-      else {
-        assert.match(result.stdout + result.stderr, /could not read GHCR images/)
-        assert.doesNotMatch(result.stdout + result.stderr, /Run manually|gh workflow run/)
-      }
-      const calls = readFileSync(join(directory, 'calls'), 'utf8')
-      assert.match(calls, /mbuild verify .*--ghcr/)
-      assert.doesNotMatch(calls, /publish|promote|workflow run/)
-      assert.doesNotMatch(readFileSync(join(directory, 'output'), 'utf8'), /release-publish|release-promote|api=build/)
     })
   }
 }

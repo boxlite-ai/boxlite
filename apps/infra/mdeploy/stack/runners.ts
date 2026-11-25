@@ -63,32 +63,8 @@ export type RunnerSlot = {
  */
 export type RunnerAssignment = { slot: RunnerSlot; token: $util.Input<string> }
 
-/**
- * What a host installs: two addresses, and the identity it must then report.
- *
- * One shape for both sources — a published release and a per-commit object —
- * because the host does the same thing with either: fetch the tarball, fetch the
- * `.sha256` sidecar beside it, refuse to install unless the manifest names
- * exactly that tarball and its digest matches.
- *
- * The digest travels as an address rather than a value because the stack is
- * evaluated synchronously by both engines: nothing here can read it. That is
- * also why `identity` is carried separately — the in-place upgrade converges on
- * what a live host *reports*, and a running runner cannot be asked for a digest.
- *
- * Resolved by `runner-binary.ts`, from the checkout, before any machine exists.
- * Plain strings, every one of them: nothing here comes from another resource, so
- * a provider renders the boot script and the upgrade payload without resolving
- * anything — which is also what lets both be tested without an engine.
- */
-export type RunnerBinary = {
-  tarballUrl: string
-  /** The `.sha256` manifest beside it, which the host verifies against. */
-  checksumUrl: string
-  /** The filename the manifest must name. Not derivable from the URL on the host. */
-  tarballName: string
-  /** How both addresses are read: public HTTPS, or an object only a role may read. */
-  transport: RunnerArtifact['transport']
+/** Both providers install the same verified artifact and probe the version reported by the service. */
+export type RunnerBinary = RunnerArtifact & {
   /** Which source this came from. Decides whether ordering can be guarded. */
   source: 'release' | 'build'
   /**

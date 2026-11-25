@@ -155,10 +155,10 @@ test('Go vet and golangci-lint reuse the Linux coverage build', () => {
   assert.ok(!formatting.some((step: any) => /dev:go|setup:build/.test(step.run ?? '')), 'formatting must not build the native runtime')
 })
 
-test('distribution runtime builds retain release, weekly and manual triggers without push rebuilds', () => {
+test('distribution runtime builds retain reusable, weekly and manual triggers without push rebuilds', () => {
   const triggers = workflow('build-runtime.yml').on
   assert.equal('push' in triggers, false)
-  assert.ok('release' in triggers && 'schedule' in triggers && 'workflow_dispatch' in triggers)
+  assert.ok(!('release' in triggers) && 'workflow_call' in triggers && 'schedule' in triggers && 'workflow_dispatch' in triggers)
 })
 
 for (const event of ['pull_request', 'push', 'merge_group', 'schedule', 'workflow_dispatch']) {

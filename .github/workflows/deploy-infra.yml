@@ -507,6 +507,9 @@ jobs:
     name: E2E suite against ${{ inputs.stage }}
     needs: [resolve-ref, deploy]
     if: ${{ inputs.apply }}
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/e2e-cloud.yml
     with:
       ref: ${{ needs.resolve-ref.outputs.sha }}

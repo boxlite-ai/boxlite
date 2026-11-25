@@ -78,10 +78,11 @@ test('component-specific artifact and cloud checks stay aligned with the public 
   assert.equal(steps[gate].if, "inputs.components != 'api+runner' && steps.config.outputs.kind != 'artifact-registry'")
   assert.notEqual(spawnSync('bash', ['-c', steps[gate].run]).status, 0)
   const images = actionSteps('mdeploy').find((step: any) => step.name === 'Verify the images')
-  assert.equal(images.if, "inputs.components != 'runner'")
-  const release = parsed.jobs.resolve.steps.find((step: any) => step.name === 'Require the release this tag names')
-  assert.equal(release.env.COMPONENTS, '${{ inputs.components }}')
-  assert.ok(release.run.indexOf('"$COMPONENTS" = \'api\'') < release.run.indexOf('tarball='))
+  assert.equal(images.if, "inputs.components != 'runner' && inputs.api-route != 'release-import'")
+  const importer = actionSteps('mdeploy').find((s: any) => s.run?.includes('mbuild import-release'))
+  assert.match(importer.if, /release-import/)
+  assert.ok(parsed.jobs.resolve.steps.some((s: any) => s.id === 'pins'))
+
 })
 
 /** What the workflow runs, with the commentary that discusses it removed. */

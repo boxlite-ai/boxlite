@@ -126,6 +126,8 @@ on:
         description: Outcome of the release acceptance suite
         value: ${{ jobs.e2e.outputs.release_result }}
     inputs:
+      candidate_id: { required: false, type: string }
+      candidate_digest: { required: false, type: string }
       release_sha:
         description: Exact tagged commit deployed by release acceptance.
         required: false
@@ -230,6 +232,7 @@ on:
 # the tree. Widening this hands that job the deploy role.
 permissions:
   contents: read
+  actions: read
 
 # One group per stage: runs against the same stage would race over shared
 # boxes, while dev and prod share nothing.
@@ -292,6 +295,15 @@ jobs:
           # UI — the same commit either way, never the caller's default.
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
+
+      - name: Download the dev deployment's release candidate
+        if: inputs.candidate_id
+        uses: ./.github/actions/release-candidate
+        with:
+          id: ${{ inputs.candidate_id }}
+          digest: ${{ inputs.candidate_digest }}
+          tag: ${{ inputs.tag }}
+          sha: ${{ inputs.release_sha }}
 
       - name: Validate client release
         if: inputs.tag || inputs.deployment_attempt

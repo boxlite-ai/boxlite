@@ -25,10 +25,8 @@
  * operator key and the organization-infrastructure flag, none of which a deploy
  * has — the same trade the incumbent path made, recorded rather than implied.
  *
- * What the payload converges on is the identity the runner reports on its own
- * health route, not a file it wrote. A marker file says what an install
- * intended; the health route says what is actually serving, which is the only
- * answer that repairs a host whose last upgrade half-finished.
+ * The health route identifies the running version. For release installs the
+ * verified OCI digests distinguish two builds that report the same version.
  */
 
 import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
@@ -36,7 +34,8 @@ import { CLOUD_RUNNER_KERNEL, kernelDeployment } from './runner-kernel.ts'
 import { renderRunnerEnvironment, RUNNER_ENV_BEGIN, RUNNER_ENV_END } from './runner-environment.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
+import { registrySetup, recordRunnerDigest, runnerDigestFile } from './runner-registry.ts'
+import { fetchVerifiedRunner } from './runner-binary.ts'
 import { runnerDataDiskNameFor, type RunnerBinary, type RunnerSlot } from './runners.ts'
 
 /** Stable X.Y.Z, optionally carrying the commit a build was produced from. */
@@ -179,17 +178,15 @@ export type UpgradeTarget = {
 }
 
 /**
- * Runner identity, artifact name and kernel digest determine when to upgrade.
- * The kernel pin can change independently of the runner package. The runner's
- * own checksum is read on the host, so republishing a runner asset under the
- * same identity is still invisible here; see `runner-binary.ts`.
+ * A manifest change triggers an upgrade even when the reported version stays
+ * the same. Commit builds use their commit-specific archive name.
  *
  * The instance id is added by the provider, because a replaced host is also due
  * an upgrade.
  */
 export const upgradeTrigger = (
-  target: Pick<UpgradeTarget, 'identity' | 'kernel'> & { binary: Pick<RunnerBinary, 'tarballName'> },
-): string => `${target.identity}:${target.binary.tarballName}:${(target.kernel ?? CLOUD_RUNNER_KERNEL).sha256}`
+  target: Pick<UpgradeTarget, 'identity' | 'kernel'> & { binary: Pick<RunnerBinary, 'tarballName' | 'release'> },
+): string => `${target.identity}:${target.binary.release?.pins?.manifest ?? target.binary.tarballName}:${(target.kernel ?? CLOUD_RUNNER_KERNEL).sha256}`
 
 /**
  * Never move a host backwards by accident.
@@ -403,7 +400,7 @@ probe_identity() {
  * environment after it still runs. Passing the statement rather than a code is
  * what keeps one copy of the checks.
  */
-const guards = (satisfied: string, kernelCheck = ''): string => `if [ ! -x /usr/local/bin/boxlite-runner ] ||
+const guards = (target: UpgradeTarget, satisfied: string, kernelCheck = ''): string => `if [ ! -x /usr/local/bin/boxlite-runner ] ||
   [ ! -f /etc/systemd/system/boxlite-runner.service ] ||
   { ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null &&
     ! systemctl is-active --quiet boxlite-runner; }; then
@@ -411,9 +408,10 @@ const guards = (satisfied: string, kernelCheck = ''): string => `if [ ! -x /usr/
   ${satisfied}
 fi
 
+${target.binary.release ? registrySetup(target.binary.release) : ''}
 CURRENT=$(probe_identity || true)
 echo "current identity: \${CURRENT:-<not serving>}"
-if [ "$CURRENT" = "$TARGET" ]${kernelCheck}; then
+if [ "$CURRENT" = "$TARGET" ]${target.binary.release ? ` && [ "$(cat ${runnerDigestFile} 2>/dev/null)" = "$RUNNER_MANIFEST $RUNNER_ARCHIVE" ]` : ''}${kernelCheck}; then
   echo "already serving $TARGET; leaving the unit untouched"
   ${satisfied}
 fi
@@ -423,14 +421,10 @@ fi
 /** Steps 3 to 5, in the shell's own grading: fall off the end, or exit 1. */
 const swapSequence = (target: UpgradeTarget, refused = 'exit 0'): string => {
   const region = target.region ?? null
-  const fetch = (url: string, destination: string) =>
-    artifactFetchCommand({ artifact: target.binary, url, destination, region })
   return `${downgradeGuard(target.binary.source, refused)}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-${fetch(target.binary.tarballUrl, '$WORK/runner.tar.gz')}
-${fetch(target.binary.checksumUrl, '$WORK/runner.sha256')}
-${verifyAgainstManifest({ tarballName: target.binary.tarballName, tarball: '$WORK/runner.tar.gz', manifest: '$WORK/runner.sha256' })}
+${fetchVerifiedRunner(target.binary, '$WORK/runner.tar.gz', '$WORK/runner.sha256', region)}
 tar -xzf "$WORK/runner.tar.gz" -C "$WORK"
 test -x "$WORK/boxlite-runner" || { echo "FATAL: the tarball has no boxlite-runner binary" >&2; exit 1; }
 
@@ -440,6 +434,7 @@ if [ -x /usr/local/bin/boxlite-runner ]; then
   cp -a /usr/local/bin/boxlite-runner /usr/local/bin/boxlite-runner.bak
   HAD_PREVIOUS=true
 fi
+rm -f ${runnerDigestFile}
 systemctl stop boxlite-runner || true
 
 wait_for_target() {
@@ -455,6 +450,7 @@ if install -m 0755 "$WORK/boxlite-runner" /usr/local/bin/boxlite-runner \\
   && systemctl start boxlite-runner \\
   && systemctl is-active --quiet boxlite-runner \\
   && wait_for_target; then
+  ${target.binary.release ? recordRunnerDigest : ''}
   if [ "$HAD_PREVIOUS" = true ]; then rm -f /usr/local/bin/boxlite-runner.bak; fi
   echo "systemd unit: active"
   echo "new identity: $(probe_identity)"
@@ -474,7 +470,7 @@ export const renderUpgradePayload = (target: UpgradeTarget): string => {
   assertUpgradeTarget(target)
   return `set -euo pipefail
 (
-${preamble(target)}${guards('exit 0')}${swapSequence(target)}
+${preamble(target)}${guards(target, 'exit 0')}${swapSequence(target)}
 )
 ${kernelDeployment(target.kernel, target.port).enforce}`
 }
@@ -503,7 +499,7 @@ const SHEBANG = '#!/bin/bash\n'
 export const renderPolicyScripts = (target: UpgradeTarget): UpgradePolicyScripts => {
   assertUpgradeTarget(target)
   return {
-    validate: `${SHEBANG}${preamble(target)}${kernelDeployment(target.kernel, target.port).setup}${guards('exit 100', ' && runner_kernel_matches')}echo "runner binary or kernel needs updating"
+    validate: `${SHEBANG}${preamble(target)}${kernelDeployment(target.kernel, target.port).setup}${guards(target, 'exit 100', ' && runner_kernel_matches')}echo "runner binary or kernel needs updating"
 exit 101
 `,
     /*
@@ -789,7 +785,7 @@ exit 101
 export const renderHostConvergence = (target: UpgradeTarget): string => {
   assertUpgradeTarget(target)
   const binary = `upgrade_binary() {
-${guards('return 0')}${swapSequence(target, 'return 0')}}
+${guards(target, 'return 0')}${swapSequence(target, 'return 0')}}
 `
   const environment = target.apiUrl
     ? `${unitEnvironmentBlock({

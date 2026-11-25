@@ -91,6 +91,7 @@ exec "$AUDIT_TEST_NODE" --import "$AUDIT_TEST_LOADER" --conditions=development "
     GITHUB_RUN_ID: '123',
     GITHUB_RUN_ATTEMPT: '1',
     RUNNER_TEMP: directory,
+    GITHUB_WORKSPACE: directory,
     TAG: 'v1.2.3',
   }
   return {
@@ -153,14 +154,16 @@ for (const [filename, job] of [
       if (filename === 'mbuild-release.yml')
         probe.env.MSTAGE_CONFIG = join(probe.env.MSTAGE_ENV_CONFIG, 'no-cloud-stage')
       const result = probe.run('bash', ['-c', shell])
-      assert.equal(result.status, 1, result.stderr)
+      assert.equal(result.status, filename === 'mbuild-release.yml' ? 65 : 1, result.stderr)
       assert.match(result.stderr, new RegExp(`${manager} audit did not pass`))
       assert.deepEqual(probe.calls(), ['audit'])
-      assert.match(result.stdout, /dependency audit/)
+      if (filename === 'mbuild.yml') assert.match(result.stdout, /dependency audit/)
       assert.doesNotMatch(result.stdout, /retrying/)
     })
   }
 
+  // The release publisher retries the Docker upload itself; ghcr-publication tests that boundary.
+  if (filename === 'mbuild-release.yml') continue
   for (const scanRefused of [true, false]) {
     test(`${filename} ${scanRefused ? 'stops on scan refusal' : 'retries a transient publication failure'}`, (t) => {
       const probe = fixture(t, 'yarn')

@@ -58,13 +58,7 @@ test('staging is not retried, because neither of its failures is transient', () 
 })
 
 test('a release rollout compiles no runner at all', () => {
-  /*
-   * The property the release line exists for. `runnerArtifactFor` addresses
-   * `boxlite-runner-v<X.Y.Z>-linux-amd64.tar.gz` on the GitHub Release, which
-   * is the artifact the release was cut from; rebuilding that commit would
-   * produce different bytes under the same version, because gzip alone stamps
-   * an mtime into the tarball.
-   */
+
   assert.match(
     String(workflow.jobs.plan.steps.find((step: any) => step.uses === './.github/actions/build-staged-runner').if),
     /steps\.plan\.outputs\.runner == 'build'/,
@@ -73,7 +67,7 @@ test('a release rollout compiles no runner at all', () => {
   const plan = source.slice(source.indexOf('- name: Decide'))
   assert.match(
     plan.slice(0, plan.indexOf('printf')),
-    /if \[ -n "\$VERSION" \]; then\n(?:[^\n]*\n)*?\s*echo "\$VERSION installs the runner tarball from its GitHub Release"/,
+    /if \[ -n "\$VERSION" \]; then\n(?:[^\n]*\n)*?\s*echo "\$VERSION installs the Runner pinned by its release candidate from GHCR"/,
     'the plan compiles a runner for a released version',
   )
 })
@@ -117,32 +111,7 @@ test('a run that was not about the runner never installs one this run did not st
   assert.match(plan.slice(0, plan.indexOf('printf')), /case "\$COMPONENTS" in\n\s*\*runner\*\)/)
 })
 
-test('a release is refused unless the tarball it will install is already attached', () => {
-  /*
-   * A git tag is not a release, and a release whose runner build has not
-   * finished carries no tarball. Either way the download 404s on the host at
-   * boot — long after the apply reported success — so both are asked for here,
-   * where the answer costs one API read.
-   *
-   * The names are the publisher's: `build-runner-binary.yml` uploads exactly
-   * these and `runnerArtifactFor` composes them, so a third spelling here would
-   * pass against assets nothing installs.
-   */
-  const gate = source.slice(
-    source.indexOf('- name: Require the release this tag names'),
-    source.indexOf('- id: ref', source.indexOf('- name: Require the release this tag names')),
-  )
-  assert.match(gate, /gh release view "\$VERSION"/, 'a tag is taken as a release')
-  assert.match(gate, /isDraft/, 'a draft release is taken as published')
-  assert.match(gate, /boxlite-runner-\$\{VERSION\}-linux-amd64\.tar\.gz/)
-  assert.match(gate, /"\$\{tarball\}\.sha256"/, 'the checksum is not required')
-
-  // API-only updates leave Runner policies unchanged; every path installing a Runner still checks its assets.
-  assert.match(gate, /if \[ "\$COMPONENTS" = 'api' \]; then exit 0; fi/)
-  const addressing = source.slice(source.indexOf('- name: Address what this deploy installs'))
-  assert.match(
-    addressing.slice(0, addressing.indexOf('GITHUB_ENV')),
-    /elif \[ -n "\$VERSION" \]; then\n\s*(?:#[^\n]*\n\s*)*printf 'VERSION=%s/,
-    'the inline program still needs its explicit release version',
-  )
+test('release apply forwards verified pins to the stack', () => {
+  assert.match(source, /registry-digests: \$\{\{ needs.resolve.outputs.registry_digests/)
+  assert.match(source, /BOXLITE_RELEASE_DIGESTS=%s/)
 })
