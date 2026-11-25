@@ -1,16 +1,24 @@
 # Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: mbuild-release
-run-name: '[SHADOW] release ${{ inputs.tag }} to GHCR${{ !inputs[''build-only''] && '' · dev acceptance · prod review'' || '''' }}'
+run-name: >-
+  [SHADOW] ${{ inputs.command }} ${{ inputs.tag || inputs['source-ref'] || github.ref_name }}${{ inputs['build-only'] && ' · build only' ||
+  '' }}
 'on':
   workflow_dispatch:
     inputs:
       command:
-        description: Run the release or republish an accepted component
+        description: Full release, fresh component publication, or repair from an accepted candidate
         required: true
         default: publish
         type: choice
         options:
           - publish
+          - publish-runtime
+          - publish-wheels
+          - publish-node
+          - publish-c
+          - publish-go
+          - publish-runner
           - repair-runtime
           - repair-wheels
           - repair-node
@@ -19,11 +27,13 @@ run-name: '[SHADOW] release ${{ inputs.tag }} to GHCR${{ !inputs[''build-only'']
         description: For repair, the Actions artifact ID of the dev-accepted release candidate
         type: string
       tag:
-        description: Release tag v<X.Y.Z>, naming a commit on main
-        required: true
+        description: Stable tag on main, required for publication
+        type: string
+      source-ref:
+        description: Optional commit or branch for a standalone build-only run; defaults to main
         type: string
       build-only:
-        description: Build and upload only; skip deployment, E2E and Slack reporting
+        description: Stage standalone build artifacts, or publish only GHCR artifacts for a full build
         required: true
         default: false
         type: boolean
@@ -39,8 +49,9 @@ run-name: '[SHADOW] release ${{ inputs.tag }} to GHCR${{ !inputs[''build-only'']
           - publish
           - prod-deploy
 concurrency:
-  group: shadow-v2-mbuild-release-${{ inputs.tag }}
+  group: shadow-v2-mbuild-release-run-${{ inputs.command == 'publish' && inputs.tag || github.run_id }}
   cancel-in-progress: false
+  queue: max
 permissions:
   contents: read
   actions: read
@@ -53,17 +64,31 @@ jobs:
       contents: read
       actions: read
     outputs:
-      sha: ${{ steps.ref.outputs.sha }}
+      sha: ${{ steps.ref.outputs.sha || steps.source.outputs.sha }}
+      mode: ${{ steps.selection.outputs.mode }}
+      builds: ${{ steps.selection.outputs.builds }}
+      group: ${{ steps.selection.outputs.group }}
+      producer: ${{ steps.selection.outputs.producer }}
+      public_release: ${{ steps.draft.outputs.public }}
       artifacts: ${{ steps.artifacts.outputs.names }}
       release_id: ${{ steps.draft.outputs.id }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Validate repair inputs
-        if: inputs.command != 'publish'
+      - name: Select builds and publication scope
+        id: selection
+        env:
+          COMMAND: ${{ inputs.command }}
+          BUILD_ONLY: ${{ inputs['build-only'] }}
+          CANDIDATE: ${{ inputs['candidate-id'] }}
+          SOURCE: ${{ inputs['source-ref'] }}
+        run: node apps/infra/scripts/release-selection.mjs
+      - name: Resolve standalone build source
+        id: source
+        if: steps.selection.outputs.mode == 'build'
         shell: bash
-        run: printf '%s\n' 'Simulated'
+        run: echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - name: Require a released version
         id: version
         shell: bash
@@ -74,6 +99,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
         env:
           TAG: ${{ inputs.tag }}
+        if: steps.selection.outputs.mode != 'build'
       - name: ./.github/actions/resolve-ref
         id: ref
         shell: bash
@@ -81,14 +107,12 @@ jobs:
           {
             echo "sha=$GITHUB_SHA"
           } >> "$GITHUB_OUTPUT"
+        if: steps.selection.outputs.mode != 'build'
       - name: Create or select the release draft
         id: draft
         if: ${{ !inputs['build-only'] }}
         shell: bash
-        run: |-
-          {
-            echo "id=1"
-          } >> "$GITHUB_OUTPUT"
+        run: printf "id=1\npublic=true\n" >> "$GITHUB_OUTPUT"
       - name: Read the artifacts this release declares
         id: artifacts
         shell: bash
@@ -97,19 +121,23 @@ jobs:
           {
             echo "names=$names"
           } >> "$GITHUB_OUTPUT"
+        if: inputs.command == 'publish'
+    concurrency:
+      group: shadow-v2-mbuild-release-assets-${{ !inputs['build-only'] && inputs.tag || github.run_id }}
+      queue: max
   build-runtime:
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON(needs.resolve.outputs.builds), 'runtime') }}
     uses: ./.github/workflows/build-runtime.yml
     permissions:
       contents: read
       actions: read
     with:
       ref: ${{ needs.resolve.outputs.sha }}
-      tag: ${{ inputs.tag }}
+      tag: ${{ needs.resolve.outputs.mode != 'build' && inputs.tag || '' }}
   build-wheels:
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON(needs.resolve.outputs.builds), 'wheels') }}
     uses: ./.github/workflows/build-wheels.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
@@ -118,7 +146,7 @@ jobs:
       actions: read
   build-node:
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON(needs.resolve.outputs.builds), 'node') }}
     uses: ./.github/workflows/build-node.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
@@ -127,10 +155,11 @@ jobs:
       actions: read
   build-c:
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON(needs.resolve.outputs.builds), 'c') }}
     uses: ./.github/workflows/build-c.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
+      linux_x64_only: ${{ inputs.command == 'publish-runner' }}
     permissions:
       contents: read
       actions: read
@@ -138,7 +167,7 @@ jobs:
     needs:
       - resolve
       - build-c
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON(needs.resolve.outputs.builds), 'go') }}
     permissions:
       contents: read
       actions: read
@@ -149,12 +178,12 @@ jobs:
     needs:
       - resolve
       - build-c
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON(needs.resolve.outputs.builds), 'runner') }}
     uses: ./.github/workflows/build-runner-binary.yml
     with:
       ref: ${{ needs.resolve.outputs.sha }}
       libboxlite_source: artifact
-      release_tag: ${{ inputs.tag }}
+      release_tag: ${{ needs.resolve.outputs.mode != 'build' && inputs.tag || '' }}
     permissions:
       contents: read
       actions: read
@@ -194,8 +223,11 @@ jobs:
         if: always()
         shell: bash
         run: printf '%s\n' 'Simulated'
+    concurrency:
+      group: shadow-v2-mbuild-release-ghcr-${{ matrix.artifact }}-${{ inputs.tag }}
+      queue: max
   publish-runner:
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
+    if: ${{ needs.resolve.outputs.mode != 'build' && github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
     name: Publish Runner archive to GHCR
     needs:
       - resolve
@@ -217,9 +249,17 @@ jobs:
       - name: actions/upload-artifact@v4
         shell: bash
         run: printf '%s\n' 'Simulated'
+    concurrency:
+      group: shadow-v2-mbuild-release-ghcr-runner-${{ inputs.tag }}
+      queue: max
   distribution:
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] }}
-    name: Verify complete release distribution
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && ((needs.resolve.outputs.mode == 'release' &&
+      needs.publish.result == 'success' && needs.publish-runner.result == 'success' && needs.build-runtime.result == 'success' &&
+      needs.build-wheels.result == 'success' && needs.build-node.result == 'success' && needs.build-c.result == 'success') ||
+      (needs.resolve.outputs.mode == 'component' && needs.resolve.outputs.group != '' && needs[needs.resolve.outputs.producer].result ==
+      'success')) }}
+    name: Verify release files
     needs:
       - resolve
       - publish
@@ -269,7 +309,7 @@ jobs:
       - resolve
       - publish
       - publish-runner
-    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
+    if: ${{ needs.resolve.outputs.mode == 'release' && github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
     permissions:
       contents: read
       actions: read
@@ -288,7 +328,7 @@ jobs:
   accepted-candidate:
     name: Locate the previously accepted candidate
     needs: resolve
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command != 'publish' && !inputs['build-only'] }}
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && needs.resolve.outputs.mode == 'repair' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -311,7 +351,7 @@ jobs:
         env:
           ID: ${{ inputs['candidate-id'] }}
   attach:
-    name: Record dev acceptance and attach verified files
+    name: Attach verified release files
     needs:
       - resolve
       - distribution
@@ -320,7 +360,8 @@ jobs:
       - accepted-candidate
     if: >-
       ${{ !cancelled() && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && ((needs.dev.outputs.accepted_attempt != '' &&
-      needs.distribution.result == 'success' && needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success') }}
+      needs.distribution.result == 'success' && needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success' ||
+      (needs.resolve.outputs.mode == 'component' && needs.distribution.result == 'success')) }}
     outputs:
       candidate: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
       digest: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
@@ -348,14 +389,17 @@ jobs:
         if: inputs.command == 'publish'
         shell: bash
         run: printf '%s\n' 'Simulated'
-      - name: Verify every draft attachment
+      - name: Verify selected release attachments
         shell: bash
         run: printf '%s\n' 'Simulated'
+    concurrency:
+      group: shadow-v2-mbuild-release-assets-${{ inputs.tag }}
+      queue: max
   npm:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-node"]'), inputs.command) && !cancelled()
-      && needs.attach.result == 'success' }}
-    name: Publish accepted npm packages
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","publish-node","repair-node"]'),
+      inputs.command) && !cancelled() && needs.attach.result == 'success' }}
+    name: Publish verified npm packages
     needs:
       - resolve
       - attach
@@ -378,10 +422,13 @@ jobs:
         run: test "$FAIL" != publish
         env:
           FAIL: ${{ inputs['simulate-failure'] }}
+    concurrency:
+      group: shadow-v2-mbuild-release-npm-${{ inputs.tag }}
+      queue: max
   pypi:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) && !cancelled()
-      && needs.attach.result == 'success' }}
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","publish-wheels","repair-wheels"]'),
+      inputs.command) && !cancelled() && needs.attach.result == 'success' }}
     name: Publish to PyPI
     needs:
       - resolve
@@ -411,14 +458,18 @@ jobs:
       - name: Verify PyPI recorded the accepted wheel hashes
         shell: bash
         run: printf '%s\n' 'Simulated'
+    concurrency:
+      group: shadow-v2-mbuild-release-pypi-${{ inputs.tag }}
+      queue: max
   tag-go-module:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !cancelled() && needs.attach.result == 'success'
-      }}
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !cancelled() && ((inputs.command == 'publish' && needs.attach.result ==
+      'success') || (inputs.command == 'publish-go' && !inputs['build-only'] && needs.build-go.result == 'success')) }}
     name: Tag Go Module
     needs:
       - resolve
       - attach
+      - build-go
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -430,14 +481,19 @@ jobs:
       - name: Create Go module tag
         shell: bash
         run: printf '%s\n' 'Simulated'
+    concurrency:
+      group: shadow-v2-mbuild-release-go-${{ inputs.tag }}
+      queue: max
   publish_crates:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !cancelled() && needs.finalize.result == 'success'
-      }}
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !cancelled() && ((inputs.command == 'publish' && needs.finalize.result
+      == 'success') || (inputs.command == 'publish-runtime' && needs.resolve.outputs.public_release == 'true' && needs.attach.result ==
+      'success')) }}
     name: Publish to crates.io
     needs:
       - resolve
       - finalize
+      - attach
     runs-on: ubuntu-latest
     steps:
       - name: actions/checkout@v4
@@ -467,10 +523,13 @@ jobs:
     permissions:
       contents: read
       actions: read
+    concurrency:
+      group: shadow-v2-mbuild-release-crates-${{ inputs.tag }}
+      queue: max
   finalize:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !cancelled() && needs.npm.result == 'success' &&
-      needs.pypi.result == 'success' && needs.tag-go-module.result == 'success' }}
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !cancelled() && needs.npm.result ==
+      'success' && needs.pypi.result == 'success' && needs.tag-go-module.result == 'success' }}
     name: Publish the verified GitHub Release
     needs:
       - resolve
@@ -493,12 +552,17 @@ jobs:
       - name: Recheck release attachments and publish
         shell: bash
         run: printf '%s\n' 'Simulated'
+    concurrency:
+      group: shadow-v2-mbuild-release-assets-${{ inputs.tag }}
+      queue: max
   prod:
     name: Production deployment
     needs:
       - resolve
       - dev
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && needs.resolve.outputs.mode == 'release' &&
+      needs.dev.outputs.accepted_attempt != '' }}
     permissions:
       contents: read
       actions: read
@@ -540,8 +604,8 @@ jobs:
       - finalize
       - publish_crates
     if: >-
-      ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (contains(needs.*.result, 'failure') ||
-      contains(needs.*.result, 'cancelled')) }}
+      ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (contains(needs.*.result,
+      'failure') || contains(needs.*.result, 'cancelled')) }}
     permissions:
       contents: read
       actions: read

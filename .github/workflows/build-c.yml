@@ -1,7 +1,6 @@
 # Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: Build C SDK
 'on':
-  workflow_dispatch: null
   workflow_call:
     inputs:
       ref:
@@ -50,8 +49,8 @@ jobs:
       fail-fast: false
       matrix:
         include: >-
-          ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' ||
-          needs.resolve-ref.outputs.platforms) }}
+          ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]'
+          || needs.resolve-ref.outputs.platforms) }}
     steps:
       - name: actions/checkout@v4
         shell: bash

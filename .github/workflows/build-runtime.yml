@@ -11,10 +11,6 @@ name: Build Runtime
       tag:
         required: true
         type: string
-  workflow_dispatch: null
-concurrency:
-  group: shadow-v2-build-runtime-${{ inputs.tag || github.ref }}
-  cancel-in-progress: false
 jobs:
   config:
     uses: ./.github/workflows/config.yml

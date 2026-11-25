@@ -80,6 +80,7 @@ permissions:
 concurrency:
   group: shadow-v2-e2e-cloud-${{ inputs.stage || 'dev' }}
   cancel-in-progress: false
+  queue: max
 jobs:
   e2e:
     name: E2E suite (${{ inputs.stage || 'dev' }})

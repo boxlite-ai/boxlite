@@ -6,7 +6,6 @@ name: Build Wheels
       ref:
         required: true
         type: string
-  workflow_dispatch: null
 jobs:
   config:
     uses: ./.github/workflows/config.yml

@@ -6,7 +6,6 @@ name: Build Node.js
       ref:
         required: true
         type: string
-  workflow_dispatch: null
 permissions:
   contents: read
   actions: read

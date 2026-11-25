@@ -1,8 +1,8 @@
 # Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: mdeploy-all
 run-name: >-
-  ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }} · ${{ inputs.ref || github.sha }} · ${{ inputs.components }}${{ inputs.requested_by
-  != '' && inputs.request_id != '' && format(' · @{0} · {1}', inputs.requested_by, inputs.request_id) || '' }}
+  ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }} · ${{ inputs.ref || github.sha }} · ${{ inputs.components }}${{
+  inputs.requested_by != '' && inputs.request_id != '' && format(' · @{0} · {1}', inputs.requested_by, inputs.request_id) || '' }}
 'on':
   workflow_call:
     inputs:
@@ -99,8 +99,8 @@ run-name: >-
           - runner
       ref:
         description: >-
-          A stable tag (v<X.Y.Z>); a full commit SHA or pull request (#<number>) for dev/stage. Stage builds the commit named by a tag. Empty uses
-          this dispatch's own commit.
+          A stable tag (v<X.Y.Z>); a full commit SHA or pull request (#<number>) for dev/stage. Stage builds the commit named by a tag.
+          Empty uses this dispatch's own commit.
         required: false
       apply:
         description: Apply the change. Off previews it and stops.
@@ -115,14 +115,15 @@ run-name: >-
 concurrency:
   group: shadow-v2-mdeploy-all-${{ inputs.stage }}
   cancel-in-progress: false
+  queue: max
 permissions:
   contents: read
   actions: read
 jobs:
   resolve:
     name: >-
-      ${{ inputs.release_sha && inputs.stage == 'dev' && format('Verify digests and prepare dev deployment {0}', inputs.ref) || format('resolve {0}',
-      inputs.ref || github.sha) }}
+      ${{ inputs.release_sha && inputs.stage == 'dev' && format('Verify digests and prepare dev deployment {0}', inputs.ref) ||
+      format('resolve {0}', inputs.ref || github.sha) }}
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' || inputs.stage == 'dev' || inputs.stage == 'stage' }}
     permissions:
       contents: read
@@ -324,8 +325,8 @@ jobs:
     needs:
       - resolve
     if: >-
-      ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/codex/shadow-release-3069-v2' || inputs.stage == 'dev' || inputs.stage == 'stage')
-      }}
+      ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/codex/shadow-release-3069-v2' || inputs.stage == 'dev' || inputs.stage ==
+      'stage') }}
     environment:
       name: ${{ inputs.stage }}
       deployment: false
@@ -340,6 +341,7 @@ jobs:
     concurrency:
       group: shadow-v2-${{ matrix.component == 'runner' && 'runner-build' || 'mbuild-publish' }}-${{ inputs.stage }}
       cancel-in-progress: false
+      queue: max
     steps:
       - name: Verify dev acceptance for the production candidate
         if: inputs.release_sha && inputs.stage == 'prod'
@@ -450,8 +452,8 @@ jobs:
       - plan
       - notify-deploy
     if: >-
-      ${{ !cancelled() && needs.resolve.result == 'success' && needs.plan.result == 'success' && needs.resolve.outputs.version == '' && (github.ref ==
-      'refs/heads/codex/shadow-release-3069-v2' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
+      ${{ !cancelled() && needs.resolve.result == 'success' && needs.plan.result == 'success' && needs.resolve.outputs.version == '' &&
+      (github.ref == 'refs/heads/codex/shadow-release-3069-v2' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment:
       name: ${{ inputs.stage }}
       deployment: false
@@ -470,8 +472,8 @@ jobs:
       - plan
       - deploy
     if: >-
-      ${{ always() && !cancelled() && inputs.apply && needs.resolve.result != 'skipped' && contains(fromJSON('["dev","stage","prod"]'), inputs.stage)
-      }}
+      ${{ always() && !cancelled() && inputs.apply && needs.resolve.result != 'skipped' && contains(fromJSON('["dev","stage","prod"]'),
+      inputs.stage) }}
     permissions:
       contents: read
       actions: read
@@ -480,8 +482,8 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
       DEPLOY_REF: ${{ inputs.ref || github.sha }}
       DEPLOY_RESULT: >-
-        ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result == 'success')
-        && 'success' || 'failure' }}
+        ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result ==
+        'success') && 'success' || 'failure' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5

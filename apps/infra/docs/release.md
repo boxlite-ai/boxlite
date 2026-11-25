@@ -4,6 +4,8 @@ Start `mbuild-release` on `main` to build a draft release, test its files on dev
 
 ## Shadow rehearsal
 
+Select a single `publish-*` command to rehearse its actual matrix and publication dependencies. The fixture represents a public product Release so `publish-runtime` exercises the crates.io job. All registry, Release, artifact and cloud writes are simulated.
+
 On `codex/shadow-release-3069-v2`, the `mbuild-release` rehearsal simulates builds, uploads, publication, cloud deployment and E2E. The dev preparation job simulates digest verification and produces the synthetic deployment candidate before requesting approval. Its identity and the subsequent acceptance receipt travel through job outputs inside the run. The rehearsal uses the release workflow’s callable build jobs, platform and Node version matrices, job dependencies and step order. Its concurrency groups are exclusive to shadow.
 
 After the simulated attachment succeeds, the rehearsal runs the npm, PyPI and Go tag jobs, followed by GitHub Release publication and the crates.io job. Each publisher uses the same condition as the release workflow.

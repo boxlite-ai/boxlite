@@ -1,12 +1,6 @@
 # Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: Build Runner Binary
 'on':
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: Full commit SHA to build with its matching C SDK.
-        required: false
-        type: string
   workflow_call:
     inputs:
       release_tag:
@@ -48,25 +42,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-  build-c:
-    name: Build manual commit C SDK
-    needs: resolve-ref
-    if: github.event_name == 'workflow_dispatch' && !inputs.libboxlite_source
-    permissions:
-      contents: read
-      actions: read
-    uses: ./.github/workflows/build-c.yml
-    with:
-      ref: ${{ needs['resolve-ref'].outputs.sha }}
-      linux_x64_only: true
   build:
     name: Build Runner (linux-amd64)
-    needs:
-      - resolve-ref
-      - build-c
-    if: >-
-      !cancelled() && needs['resolve-ref'].result == 'success' && (needs['build-c'].result == 'success' ||
-      needs['build-c'].result == 'skipped')
+    needs: resolve-ref
     runs-on: ubuntu-latest
     permissions:
       contents: read
