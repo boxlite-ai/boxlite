@@ -3,6 +3,7 @@
 //! Handles `.boxlite` archive files: zstd-compressed tarballs containing
 //! disk images and a JSON manifest.
 
+#![allow(dead_code)]
 use std::io::Write;
 use std::path::Path;
 
@@ -40,8 +41,39 @@ pub(crate) const FRACTIONAL_CPUS_ARCHIVE_VERSION: u32 = 6;
 /// Managed and typed mounts require a local volume-capable importer.
 pub(crate) const MANAGED_MOUNTS_ARCHIVE_VERSION: u32 = 7;
 
+/// Archive format version carrying full VM memory and device state checkpoint.
+pub(crate) const MEMORY_CHECKPOINT_ARCHIVE_VERSION: u32 = 8;
+
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = MANAGED_MOUNTS_ARCHIVE_VERSION;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = MEMORY_CHECKPOINT_ARCHIVE_VERSION;
+
+/// Per-box checkpoint staging directory name under `box_home/`.
+pub(crate) const CHECKPOINT_DIRNAME: &str = "checkpoint";
+
+/// VM state filename inside v8 archives and `box_home/checkpoint/`.
+pub(crate) const VMSTATE_FILENAME: &str = "vmstate.krun";
+
+/// Guest rootfs disk filename inside v8 archives and `box_home/checkpoint/`.
+pub(crate) const GUEST_ROOTFS_FILENAME: &str = "guest-rootfs.ext4";
+
+/// Return the host checkpoint platform identifier if full memory checkpoints are supported.
+pub(crate) fn current_checkpoint_platform() -> Option<&'static str> {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        Some("macos-aarch64-hvf")
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        Some("linux-x86_64-kvm")
+    }
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "linux", target_arch = "x86_64")
+    )))]
+    {
+        None
+    }
+}
 
 /// Pick the archive format an exported box needs.
 ///
@@ -80,9 +112,10 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v5: `ports` carry publication semantics (automatic host port, bind IP)
 /// v6: fractional `box_options.cpus` requires host CPU bandwidth enforcement
 /// v7: managed/typed mounts require local volume-capable resolution
+/// v8: adds `memory_checkpoint` for full VM memory + device state restore
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1 through 7).
+    /// Archive format version (1 through 8).
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -99,10 +132,32 @@ pub struct ArchiveManifest {
     /// importers, which require the field, can deserialize the manifest instead
     /// of failing with "missing field `guest_disk_checksum`".
     pub guest_disk_checksum: String,
-    /// SHA-256 checksum of the container disk.
+    /// SHA-256 checksum of the container disk; required for memory checkpoints.
     pub container_disk_checksum: String,
+    /// Full VM memory/device checkpoint metadata, required in v8 and absent in v1–v7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_checkpoint: Option<MemoryCheckpointArchiveMetadata>,
     /// Timestamp when the archive was created.
     pub exported_at: String,
+}
+
+/// Full VM memory and device checkpoint metadata stored in v8 manifests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryCheckpointArchiveMetadata {
+    /// Host checkpoint platform identifier (e.g. `"macos-aarch64-hvf"`, `"linux-x86_64-kvm"`).
+    pub platform: String,
+    /// Container ID associated with the saved guest state.
+    pub container_id: String,
+    /// SHA-256 checksum of `vmstate.krun`.
+    pub vmstate_checksum: String,
+    /// Size of `vmstate.krun` in bytes.
+    pub vmstate_size_bytes: u64,
+    /// SHA-256 checksum of `guest-rootfs.ext4`.
+    pub guest_rootfs_checksum: String,
+    /// Preserve a runtime egress block without removing the saved NIC. An empty
+    /// `box_options.network` allowlist alone would allow all outbound traffic.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outbound_disabled: bool,
 }
 
 // ── Build ───────────────────────────────────────────────────────────────
@@ -112,6 +167,40 @@ pub(crate) fn build_zstd_tar_archive(
     output_path: &Path,
     manifest_path: &Path,
     container_disk: &Path,
+    compression_level: i32,
+) -> BoxliteResult<()> {
+    build_zstd_tar_archive_inner(
+        output_path,
+        manifest_path,
+        container_disk,
+        None,
+        compression_level,
+    )
+}
+
+/// Build a zstd-compressed tar archive carrying a full memory/device checkpoint (v8).
+pub(crate) fn build_zstd_tar_archive_with_memory(
+    output_path: &Path,
+    manifest_path: &Path,
+    container_disk: &Path,
+    vmstate_path: &Path,
+    guest_rootfs_path: &Path,
+    compression_level: i32,
+) -> BoxliteResult<()> {
+    build_zstd_tar_archive_inner(
+        output_path,
+        manifest_path,
+        container_disk,
+        Some((vmstate_path, guest_rootfs_path)),
+        compression_level,
+    )
+}
+
+fn build_zstd_tar_archive_inner(
+    output_path: &Path,
+    manifest_path: &Path,
+    container_disk: &Path,
+    memory_artifacts: Option<(&Path, &Path)>,
     compression_level: i32,
 ) -> BoxliteResult<()> {
     let file = std::fs::File::create(output_path).map_err(|e| {
@@ -126,7 +215,12 @@ pub(crate) fn build_zstd_tar_archive(
         .map_err(|e| BoxliteError::Storage(format!("Failed to create zstd encoder: {}", e)))?;
 
     let mut builder = tar::Builder::new(encoder);
-    append_archive_files(&mut builder, manifest_path, container_disk)?;
+    append_archive_files(
+        &mut builder,
+        manifest_path,
+        container_disk,
+        memory_artifacts,
+    )?;
 
     let encoder = builder
         .into_inner()
@@ -142,6 +236,7 @@ fn append_archive_files<W: Write>(
     builder: &mut tar::Builder<W>,
     manifest_path: &Path,
     container_disk: &Path,
+    memory_artifacts: Option<(&Path, &Path)>,
 ) -> BoxliteResult<()> {
     builder
         .append_path_with_name(manifest_path, MANIFEST_FILENAME)
@@ -153,6 +248,20 @@ fn append_archive_files<W: Write>(
             BoxliteError::Storage(format!("Failed to add container disk to archive: {}", e))
         })?;
 
+    if let Some((vmstate_path, guest_rootfs_path)) = memory_artifacts {
+        builder
+            .append_path_with_name(vmstate_path, VMSTATE_FILENAME)
+            .map_err(|e| {
+                BoxliteError::Storage(format!("Failed to add vmstate to archive: {}", e))
+            })?;
+
+        builder
+            .append_path_with_name(guest_rootfs_path, GUEST_ROOTFS_FILENAME)
+            .map_err(|e| {
+                BoxliteError::Storage(format!("Failed to add guest rootfs to archive: {}", e))
+            })?;
+    }
+
     Ok(())
 }
 
@@ -161,9 +270,43 @@ fn append_archive_files<W: Write>(
 /// Zstd magic bytes: `0x28B52FFD` (little-endian in file).
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
-/// Extract an archive, detecting format via magic bytes (zstd or plain tar).
+/// Read and validate the leading manifest before creating the extraction directory.
+pub(crate) fn extract_archive_with_manifest(
+    archive_path: &Path,
+    temp_root: &Path,
+    validate: impl FnOnce(&ArchiveManifest) -> BoxliteResult<()>,
+) -> BoxliteResult<(ArchiveManifest, tempfile::TempDir)> {
+    let mut archive = open_archive(archive_path)?;
+    let mut entries = archive.entries()?;
+    let manifest = {
+        let entry = entries.next().transpose()?.ok_or_else(missing_manifest)?;
+        if entry.path()?.as_ref() != Path::new(MANIFEST_FILENAME)
+            || !carries_file_contents(entry.header().entry_type())
+        {
+            return Err(missing_manifest());
+        }
+        serde_json::from_reader(entry)
+            .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {e}")))?
+    };
+    validate(&manifest)?;
+
+    let temp_dir = tempfile::tempdir_in(temp_root)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to create temp directory: {e}")))?;
+    unpack_file_members(entries, temp_dir.path())?;
+    Ok((manifest, temp_dir))
+}
+
+fn missing_manifest() -> BoxliteError {
+    BoxliteError::Storage("Invalid archive: first member must be manifest.json".into())
+}
+
 pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()> {
-    use std::io::Read;
+    unpack_file_members(open_archive(archive_path)?.entries()?, dest_dir)
+}
+
+/// Open an archive, detecting format via magic bytes (zstd or plain tar).
+fn open_archive(archive_path: &Path) -> BoxliteResult<tar::Archive<Box<dyn std::io::Read>>> {
+    use std::io::{Read, Seek};
 
     let mut file = std::fs::File::open(archive_path).map_err(|e| {
         BoxliteError::Storage(format!(
@@ -181,24 +324,15 @@ pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteRe
             e
         ))
     })?;
-    drop(file);
-
-    // Re-open for extraction (tar/zstd need the file from the beginning).
-    let file = std::fs::File::open(archive_path).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to reopen archive {}: {}",
-            archive_path.display(),
-            e
-        ))
-    })?;
-
-    if magic == ZSTD_MAGIC {
+    file.rewind()?;
+    let reader: Box<dyn Read> = if magic == ZSTD_MAGIC {
         let decoder = zstd::Decoder::new(file)
             .map_err(|e| BoxliteError::Storage(format!("Failed to create zstd decoder: {}", e)))?;
-        unpack_file_members(decoder, dest_dir)
+        Box::new(decoder)
     } else {
-        unpack_file_members(file, dest_dir)
-    }
+        Box::new(file)
+    };
+    Ok(tar::Archive::new(reader))
 }
 
 /// Member types that carry their own contents rather than a reference to
@@ -233,12 +367,10 @@ fn carries_file_contents(entry_type: tar::EntryType) -> bool {
 /// member. Member *names* are deliberately not filtered — archives written
 /// before the guest rootfs became a shared base image carry a third member that
 /// the importer ignores, and rejecting it would strand them.
-fn unpack_file_members<R: std::io::Read>(reader: R, dest_dir: &Path) -> BoxliteResult<()> {
-    let mut archive = tar::Archive::new(reader);
-    let entries = archive
-        .entries()
-        .map_err(|e| BoxliteError::Storage(format!("Failed to read archive: {}", e)))?;
-
+fn unpack_file_members<R: std::io::Read>(
+    entries: tar::Entries<'_, R>,
+    dest_dir: &Path,
+) -> BoxliteResult<()> {
     for entry in entries {
         let mut entry = entry
             .map_err(|e| BoxliteError::Storage(format!("Failed to read archive member: {}", e)))?;
@@ -785,5 +917,88 @@ mod tests {
         assert_eq!(extracted.len() as u64, HOLE_END + 4);
         assert_eq!(&extracted[..4], b"head");
         assert_eq!(&extracted[HOLE_END as usize..], b"tail");
+    }
+
+    #[test]
+    fn memory_checkpoint_manifest_omitted_for_disk_only_and_roundtrips_for_v8() {
+        let disk_only = ArchiveManifest {
+            version: ARCHIVE_VERSION,
+            box_name: Some("disk-only".into()),
+            image: "alpine:latest".into(),
+            box_options: None,
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: "sha256:abc".into(),
+            memory_checkpoint: None,
+            exported_at: "2026-11-25T00:00:00Z".into(),
+        };
+        let disk_only_json = serde_json::to_string(&disk_only).unwrap();
+        assert!(!disk_only_json.contains("memory_checkpoint"));
+
+        let full = ArchiveManifest {
+            version: MEMORY_CHECKPOINT_ARCHIVE_VERSION,
+            box_name: Some("full-ckpt".into()),
+            image: "alpine:latest".into(),
+            box_options: None,
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: "sha256:disk".into(),
+            memory_checkpoint: Some(MemoryCheckpointArchiveMetadata {
+                platform: "linux-x86_64-kvm".into(),
+                container_id: "a".repeat(64),
+                vmstate_checksum: "sha256:vmstate".into(),
+                vmstate_size_bytes: 1234,
+                guest_rootfs_checksum: "sha256:guest".into(),
+                outbound_disabled: true,
+            }),
+            exported_at: "2026-11-25T00:00:00Z".into(),
+        };
+        let full_json = serde_json::to_string(&full).unwrap();
+        let decoded: ArchiveManifest = serde_json::from_str(&full_json).unwrap();
+        assert_eq!(decoded.version, 8);
+        assert_eq!(decoded.memory_checkpoint, full.memory_checkpoint);
+    }
+
+    #[test]
+    fn build_zstd_tar_archive_with_memory_roundtrips_all_members() {
+        let dir = tempdir().unwrap();
+        let archive_path = dir.path().join("full.boxlite");
+        let extract_dir = dir.path().join("extracted");
+        std::fs::create_dir_all(&extract_dir).unwrap();
+
+        let manifest_path = dir.path().join(MANIFEST_FILENAME);
+        let container_path = dir.path().join("container.qcow2");
+        let vmstate_path = dir.path().join(VMSTATE_FILENAME);
+        let guest_rootfs_path = dir.path().join(GUEST_ROOTFS_FILENAME);
+        std::fs::write(&manifest_path, br#"{"version":8}"#).unwrap();
+        std::fs::write(&container_path, b"disk-bytes").unwrap();
+        std::fs::write(&vmstate_path, b"vmstate-bytes").unwrap();
+        std::fs::write(&guest_rootfs_path, b"guest-rootfs-bytes").unwrap();
+
+        build_zstd_tar_archive_with_memory(
+            &archive_path,
+            &manifest_path,
+            &container_path,
+            &vmstate_path,
+            &guest_rootfs_path,
+            3,
+        )
+        .unwrap();
+        extract_archive(&archive_path, &extract_dir).unwrap();
+
+        assert_eq!(
+            std::fs::read(extract_dir.join(MANIFEST_FILENAME)).unwrap(),
+            br#"{"version":8}"#
+        );
+        assert_eq!(
+            std::fs::read(extract_dir.join(disk_filenames::CONTAINER_DISK)).unwrap(),
+            b"disk-bytes"
+        );
+        assert_eq!(
+            std::fs::read(extract_dir.join(VMSTATE_FILENAME)).unwrap(),
+            b"vmstate-bytes"
+        );
+        assert_eq!(
+            std::fs::read(extract_dir.join(GUEST_ROOTFS_FILENAME)).unwrap(),
+            b"guest-rootfs-bytes"
+        );
     }
 }

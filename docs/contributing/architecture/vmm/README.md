@@ -856,3 +856,9 @@ macOS arm64 and Linux x86_64.
 `include_memory: true` with `Unsupported`. `ShimController` forwards `checkpoint_restore`
 and grants RO access to checkpoint files, and `BoxState::pending_memory_restore` tracks
 one-shot restore.
+
+### Archive v8 format and manifest pre-validation
+
+Archive version 8 adds `MemoryCheckpointArchiveMetadata` (`platform`, `container_id`,
+checksums, `outbound_disabled`) and bundles `vmstate.krun` + `guest-rootfs.ext4`.
+`read_archive_manifest()` inspects `manifest.json` before extracting multi-GB payloads.

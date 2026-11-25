@@ -310,6 +310,7 @@ fn do_export_finalize(
         guest_disk_checksum: String::new(),
         container_disk_checksum,
         exported_at: chrono::Utc::now().to_rfc3339(),
+        memory_checkpoint: None,
     };
 
     let manifest_json = serde_json::to_string_pretty(&manifest)
