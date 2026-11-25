@@ -226,6 +226,8 @@ in the configured GCS/S3 bucket. Neon remains the application database provider,
 Sleeping an environment stops its running Boxes, including workers. An already sleeping environment
 accepts another sleep request. A failed Box from a previous deployment remains available for cleanup.
 Volume file operations from the CLI and Console start the Box if it is asleep.
+Uploads create files by default. To replace an existing file, send `overwrite=1`.
+The Supervisor checks the upload size before publishing the file on a managed S3 volume.
 
 ```mermaid
 sequenceDiagram
