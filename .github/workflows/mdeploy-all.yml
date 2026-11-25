@@ -18,6 +18,7 @@ on:
     inputs:
       stage: { required: true, type: string }
       ref: { required: true, type: string }
+      release_images: { required: false, type: string }
       candidate_id: { required: false, type: string }
       candidate_digest: { required: false, type: string }
       registry_digests: { required: false, type: string }
@@ -33,6 +34,15 @@ on:
       BOXLITE_DEV_P2_API_KEY: { required: false }
       BOXLITE_DEV_P2_READONLY_API_KEY: { required: false }
     outputs:
+      candidate_id:
+        description: Immutable Actions artifact containing the deployment candidate
+        value: ${{ jobs.resolve.outputs.candidate_id }}
+      candidate_digest:
+        description: SHA-256 of the deployment candidate manifest
+        value: ${{ jobs.resolve.outputs.candidate_digest }}
+      registry_digests:
+        description: Verified image and Runner digests used by dev
+        value: ${{ jobs.resolve.outputs.registry_digests }}
       accepted_attempt:
         description: Release deployment attempt that passed cloud acceptance
         value: ${{ jobs.e2e.outputs.release_result == 'success' && jobs.plan.outputs.deployment_attempt || '' }}
@@ -114,7 +124,7 @@ jobs:
   # would cost an approval before the run could tell the operator their ref was
   # a typo.
   resolve:
-    name: resolve ${{ inputs.ref || github.sha }}
+    name: ${{ inputs.release_sha && inputs.stage == 'dev' && format('Verify digests and prepare dev deployment {0}', inputs.ref) || format('resolve {0}', inputs.ref || github.sha) }}
     # Dev and stage can exercise candidate workflow branches. Other stages
     # retain the main-only guard; release refs are checked separately below.
     if: ${{ github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage' }}
@@ -133,7 +143,9 @@ jobs:
       sha: ${{ steps.tag.outputs.sha }}
       version: ${{ steps.classify.outputs.version }}
       image_tag: ${{ steps.tag.outputs.image }}
-      registry_digests: ${{ steps.pins.outputs.digests }}
+      candidate_id: ${{ steps.upload.outputs.artifact-id }}
+      candidate_digest: ${{ steps.stage.outputs.digest }}
+      registry_digests: ${{ steps.stage.outputs.pins || steps.pins.outputs.digests }}
       line: ${{ steps.classify.outputs.line }}
       prepare_components: ${{ steps.tag.outputs.prepare_components }}
     steps:
@@ -351,6 +363,34 @@ jobs:
             *) exit 1 ;;
           esac
 
+      - name: Download release digest records
+        if: inputs.release_sha && inputs.stage == 'dev'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: 'ghcr-*'
+          path: staged
+      - name: Verify deployment image and Runner digests
+        if: inputs.release_sha && inputs.stage == 'dev'
+        id: stage
+        env:
+          SHA: ${{ steps.tag.outputs.sha }}
+          TAG: ${{ steps.classify.outputs.version }}
+          IMAGES: ${{ inputs.release_images }}
+        run: |
+          set -euo pipefail
+          digest=$(node apps/infra/scripts/release-candidate.mjs deployment)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "pins=$(jq -c '{tag,sha,images,runner}' candidate/release-candidate.json)" >> "$GITHUB_OUTPUT"
+      - name: Save the deployment candidate
+        if: inputs.release_sha && inputs.stage == 'dev'
+        uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: deployment-candidate-${{ github.run_attempt }}
+          compression-level: 0
+          if-no-files-found: error
+          path: candidate/
+
       - &verify-dev-acceptance
         name: Verify dev acceptance for the production candidate
         if: inputs.release_sha && inputs.stage == 'prod'
@@ -373,7 +413,7 @@ jobs:
 
       - name: Read immutable release image and Runner digests
         id: pins
-        if: steps.classify.outputs.version != ''
+        if: steps.classify.outputs.version != '' && !(inputs.release_sha && inputs.stage == 'dev')
         env:
           TAG: ${{ steps.classify.outputs.version }}
           SHA: ${{ steps.tag.outputs.sha }}
@@ -705,8 +745,8 @@ jobs:
       ref: ${{ github.sha }}
       release_sha: ${{ needs.resolve.outputs.sha }}
       tag: ${{ inputs.ref }}
-      candidate_id: ${{ inputs.candidate_id }}
-      candidate_digest: ${{ inputs.candidate_digest }}
+      candidate_id: ${{ needs.resolve.outputs.candidate_id }}
+      candidate_digest: ${{ needs.resolve.outputs.candidate_digest }}
       deployment_attempt: ${{ needs.plan.outputs.deployment_attempt || 'missing' }}
     secrets:
       BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}

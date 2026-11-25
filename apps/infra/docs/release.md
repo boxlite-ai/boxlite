@@ -18,7 +18,7 @@ The run creates the draft or selects the existing draft for that tag. Configure 
 | Stage | Outputs and checks |
 | --- | --- |
 | Build | Runtime and CLI, wheels, npm packages and C SDK archives build in parallel and enter Actions Artifacts. Go tests and the Linux Runner build link the C archives from this run. |
-| Prepare dev | `mbuild publish` pushes the declared images to GHCR. The Runner job uploads the original tarball as an OCI layer. As soon as these digests are verified, dev can start while SDK tests and distribution packaging continue. |
+| Prepare dev | `mbuild publish` pushes the declared images to GHCR. The Runner job uploads the original tarball as an OCI layer. Once the GHCR producers finish, the dev preparation job verifies image and Runner digests, saves the deployment candidate and requests dev approval. SDK tests and distribution packaging continue in parallel. |
 | Dev approval and E2E | Approve the dev Environment in the run. The cloud suite reads only the Linux x64 CLI, Python wheel, C SDK and two npm tarballs from this run. It records their checksums with the accepted deployment digests. |
 | Publish | Dev E2E success opens prod approval immediately. In parallel, publication waits for the complete distribution and Go tests, compares the tested client bytes, and attaches the verified files to the draft. The top-level PyPI and npm jobs publish the accepted packages and the Go job tags the tested commit. |
 | Release and prod | When those publishers succeed, the workflow marks the draft public. Rust crates publish after the runtime becomes public. Approved prod deployment uses the same GHCR digests and can finish while the release is still a draft. |

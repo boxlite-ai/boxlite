@@ -328,45 +328,6 @@ jobs:
             runner.json
             producer.json
 
-  check:
-    if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] }}
-    name: Verify deployment image and Runner digests
-    needs: [resolve, publish, publish-runner]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      candidate_id: ${{ steps.upload.outputs.artifact-id }}
-      digest: ${{ steps.stage.outputs.digest }}
-      registry_digests: ${{ steps.stage.outputs.pins }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: 'ghcr-*'
-          path: staged
-      - name: Validate the candidate
-        id: stage
-        env:
-          SHA: ${{ needs.resolve.outputs.sha }}
-          TAG: ${{ inputs.tag }}
-          IMAGES: ${{ needs.resolve.outputs.artifacts }}
-        run: |
-          set -euo pipefail
-          digest=$(node apps/infra/scripts/release-candidate.mjs deployment)
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "pins=$(jq -c '{tag,sha,images,runner}' candidate/release-candidate.json)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
-        id: upload
-        with:
-          name: deployment-candidate-${{ github.run_attempt }}
-          compression-level: 0
-          if-no-files-found: error
-          path: candidate/
-
   distribution:
     if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] }}
     name: Verify complete release distribution
@@ -406,7 +367,7 @@ jobs:
 
   dev:
     name: Dev deployment and acceptance
-    needs: [resolve, check]
+    needs: [resolve, publish, publish-runner]
     if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
     permissions: &rollout-permissions
       contents: read
@@ -419,9 +380,7 @@ jobs:
       stage: dev
       ref: ${{ inputs.tag }}
       release_sha: ${{ needs.resolve.outputs.sha }}
-      candidate_id: ${{ needs.check.outputs.candidate_id }}
-      candidate_digest: ${{ needs.check.outputs.digest }}
-      registry_digests: ${{ needs.check.outputs.registry_digests }}
+      release_images: ${{ needs.resolve.outputs.artifacts }}
       components: api+runner
       apply: true
       confirm: true
@@ -464,7 +423,7 @@ jobs:
 
   attach:
     name: Record dev acceptance and attach verified files
-    needs: [resolve, check, distribution, build-go, dev, accepted-candidate]
+    needs: [resolve, distribution, build-go, dev, accepted-candidate]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && ((needs.dev.outputs.accepted_attempt != '' && needs.distribution.result == 'success' && needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success') }}
     outputs:
       candidate: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
@@ -491,9 +450,9 @@ jobs:
           TAG: ${{ inputs.tag }}
           SHA: ${{ needs.resolve.outputs.sha }}
           CANDIDATE_DIGEST: ${{ needs.distribution.outputs.digest }}
-          DEPLOYMENT_ID: ${{ needs.check.outputs.candidate_id }}
-          DEPLOYMENT_DIGEST: ${{ needs.check.outputs.digest }}
-          DEPLOYMENT_PINS: ${{ needs.check.outputs.registry_digests }}
+          DEPLOYMENT_ID: ${{ needs.dev.outputs.candidate_id }}
+          DEPLOYMENT_DIGEST: ${{ needs.dev.outputs.candidate_digest }}
+          DEPLOYMENT_PINS: ${{ needs.dev.outputs.registry_digests }}
           ACCEPTED_ATTEMPT: ${{ needs.dev.outputs.accepted_attempt }}
         run: |
           set -euo pipefail
@@ -802,7 +761,7 @@ jobs:
 
   prod:
     name: Production deployment
-    needs: [resolve, check, dev]
+    needs: [resolve, dev]
     if: ${{ github.ref == 'refs/heads/main' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
     permissions: *rollout-permissions
     uses: ./.github/workflows/mdeploy-all.yml
@@ -810,9 +769,9 @@ jobs:
       stage: prod
       ref: ${{ inputs.tag }}
       release_sha: ${{ needs.resolve.outputs.sha }}
-      candidate_id: ${{ needs.check.outputs.candidate_id }}
-      candidate_digest: ${{ needs.check.outputs.digest }}
-      registry_digests: ${{ needs.check.outputs.registry_digests }}
+      candidate_id: ${{ needs.dev.outputs.candidate_id }}
+      candidate_digest: ${{ needs.dev.outputs.candidate_digest }}
+      registry_digests: ${{ needs.dev.outputs.registry_digests }}
       accepted_attempt: ${{ needs.dev.outputs.accepted_attempt }}
       components: api+runner
       apply: true
@@ -822,7 +781,7 @@ jobs:
 
   report:
     name: Report release failure
-    needs: [resolve, build-runtime, build-wheels, build-node, build-c, build-go, build-runner-binary, publish, publish-runner, check, distribution, dev, accepted-candidate, attach, pypi, npm, tag-go-module, finalize, publish_crates]
+    needs: [resolve, build-runtime, build-wheels, build-node, build-c, build-go, build-runner-binary, publish, publish-runner, distribution, dev, accepted-candidate, attach, pypi, npm, tag-go-module, finalize, publish_crates]
     if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
     permissions:
       contents: read

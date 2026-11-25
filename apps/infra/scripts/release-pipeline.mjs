@@ -158,7 +158,6 @@ export const releaseReport = ({ repo, tag, runId, results }) => {
     ...Object.entries(results).filter(([job]) => job.startsWith('build-')).map(([job, outcome]) => [job, outcome.result]),
     ['Image publication', results.publish?.result],
     ...(results['publish-runner'] ? [['Runner publication', results['publish-runner'].result]] : []),
-    ['Deployment pins', results.check?.result],
     ['Release assets', results.distribution?.result],
   ].map(([label, result]) => [label, result ?? 'not started'])
   if (results.dev && results.dev.result !== 'skipped') {

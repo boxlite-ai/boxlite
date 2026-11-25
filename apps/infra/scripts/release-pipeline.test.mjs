@@ -266,7 +266,6 @@ test('prod review combines dev E2E success with the approval button; failed acce
     const results = {
       resolve: { result: 'success' },
       publish: { result: 'success' },
-      check: { result: 'success' },
       dev: { result: 'failure', outputs: { e2e_result: outcome } },
     }
     const response = cli('report', { RELEASE_RESULTS: JSON.stringify(results) })
@@ -281,11 +280,11 @@ test('prod review combines dev E2E success with the approval button; failed acce
     RELEASE_RESULTS: JSON.stringify({
       resolve: { result: 'success' },
       publish: { result: 'success' },
-      check: { result: 'failure' },
       distribution: { result: 'skipped' },
-      dev: { result: 'skipped' },
+      dev: { result: 'failure' },
     }),
   })
+  assert.match(preflight.summary, /Dev deployment and acceptance \| failure/)
   const preflightButton = preflight.requests.find((r) => r.url === webhook).body.blocks.at(-1).elements[0]
   assert.equal(preflightButton.text.text, 'View run logs')
   assert.equal(preflightButton.url, 'https://github.com/' + repo + '/actions/runs/10')

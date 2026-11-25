@@ -18,7 +18,7 @@ test('release deployment is a native dependency in the publisher run', () => {
     ['dev', 'prod'],
     'release dispatches deployment outside its workflow run',
   )
-  assert.ok(release.jobs.dev.needs.includes('check'))
+  assert.ok(release.jobs.dev.needs.includes('publish-runner'))
   assert.ok(release.jobs.prod.needs.includes('dev'))
   assert.equal(rollout.jobs.e2e.uses, './.github/workflows/e2e-cloud.yml')
   assert.ok(rollout.jobs.e2e.needs.includes('plan'))
@@ -237,7 +237,7 @@ test('PyPI publication rejects conflicting wheels before the upload action can r
 })
 
 test('build-only never enters deployment, checks, or reporting; failed E2E cannot stamp acceptance', () => {
-  for (const id of ['check', 'dev', 'prod', 'report']) assert.match(release.jobs[id].if, /!inputs\['build-only'\]/)
+  for (const id of ['distribution', 'dev', 'prod', 'report']) assert.match(release.jobs[id].if, /!inputs\['build-only'\]/)
   assert.equal(rollout.concurrency.group, 'mdeploy-all-${{ inputs.stage }}')
   assert.notEqual(release.concurrency.group, rollout.concurrency.group)
   const outputs = rollout.on.workflow_call.outputs
@@ -365,8 +365,30 @@ test('component repairs use the accepted candidate and package publishers stay i
 
 test('GHCR pins unlock dev and dev acceptance independently unlocks prod and publication', () => {
   const jobs = release.jobs
-  assert.deepEqual(jobs.check.needs, ['resolve', 'publish', 'publish-runner'], 'dev waits for unrelated package or Go builds')
-  assert.deepEqual(jobs.prod.needs, ['resolve', 'check', 'dev'], 'prod waits for release finalization')
+  assert.deepEqual(jobs.dev.needs, ['resolve', 'publish', 'publish-runner'], 'dev must prepare as soon as GHCR producers finish')
+  assert.equal(jobs.check, undefined)
+  const prepare = rollout.jobs.resolve
+  const validate = prepare.steps.findIndex((step) => step.run?.includes('release-candidate.mjs deployment'))
+  const upload = prepare.steps.findIndex((step) => step.with?.name?.startsWith('deployment-candidate-'))
+  const approve = prepare.steps.findIndex((step) => step.name === 'Notify release reviewers')
+  const download = prepare.steps.findIndex((step) => step.with?.pattern === 'ghcr-*')
+  assert.ok(download >= 0 && download < validate && validate < upload && upload < approve)
+  for (const index of [download, validate, upload]) {
+    const stageCandidate = new Function('inputs', 'return ' + prepare.steps[index].if)
+    assert.ok(stageCandidate({ stage: 'dev', release_sha: 'release-commit' }))
+    assert.ok(!stageCandidate({ stage: 'prod', release_sha: 'release-commit' }))
+    assert.ok(!stageCandidate({ stage: 'dev' }))
+  }
+  for (const key of ['candidate_id', 'candidate_digest', 'registry_digests']) {
+    assert.equal(rollout.on.workflow_call.outputs[key].value, '$' + '{{ jobs.resolve.outputs.' + key + ' }}')
+    assert.equal(jobs.prod.with[key], '$' + '{{ needs.dev.outputs.' + key + ' }}')
+  }
+  for (const key of ['candidate_id', 'candidate_digest']) {
+    assert.equal(rollout.jobs.e2e.with[key], '$' + '{{ needs.resolve.outputs.' + key + ' }}')
+  }
+  assert.equal(jobs.dev.with.release_images, '$' + '{{ needs.resolve.outputs.artifacts }}')
+  assert.equal(prepare.steps[validate].env.IMAGES, '$' + '{{ inputs.release_images }}')
+  assert.deepEqual(jobs.prod.needs, ['resolve', 'dev'], 'prod waits for release finalization')
   assert.ok(jobs.attach.needs.includes('dev'))
   assert.ok(jobs.attach.needs.includes('distribution'))
   assert.ok(jobs.attach.needs.includes('build-go'))
