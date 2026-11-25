@@ -326,6 +326,67 @@ async fn outbound_complete_round_trips_through_sqlite_and_real_gvproxy_restart()
     );
     assert!(cleared.persisted.policy.deny_net.is_empty());
     assert_eq!(cleared.persisted.admission, OutboundAdmission::ExtendedIpv4);
+
+    let expected = cleared.persisted.revision;
+    let left_revision = OutboundRevision::fresh();
+    let right_revision = OutboundRevision::fresh();
+    let left_rule = "192.0.2.0/24:443";
+    let right_rule = "203.0.113.0/24:443";
+    let policy = |rule: &str| CompleteOutboundPolicy {
+        deny_net: Some(vec![rule.into()]),
+        ..Default::default()
+    };
+    let disk_locker = reacquired.disk_locker().unwrap();
+    let admission = crate::lock::LockGuard::new_async(disk_locker.as_ref()).await;
+    let mut left = Box::pin(reacquired.replace_complete_outbound(
+        policy(left_rule),
+        left_revision.clone(),
+        Some(expected.clone()),
+    ));
+    let mut right = Box::pin(reacquired.replace_complete_outbound(
+        policy(right_rule),
+        right_revision.clone(),
+        Some(expected),
+    ));
+    assert!(futures::poll!(left.as_mut()).is_pending());
+    assert!(futures::poll!(right.as_mut()).is_pending());
+    drop(admission);
+    let (left, right) = tokio::join!(left, right);
+    let (winner, rule) = match (left.unwrap(), right.unwrap()) {
+        (OutboundReplaceOutcome::Applied, OutboundReplaceOutcome::PreconditionFailed) => {
+            (left_revision, left_rule)
+        }
+        (OutboundReplaceOutcome::PreconditionFailed, OutboundReplaceOutcome::Applied) => {
+            (right_revision, right_rule)
+        }
+        outcome => panic!("expected exactly one writer to apply: {outcome:?}"),
+    };
+    let settled = reacquired.complete_outbound_status().await.unwrap();
+    assert_eq!(
+        settled.application_state,
+        OutboundApplicationState::Confirmed
+    );
+    assert!(settled.pending_revision.is_none());
+    assert_eq!(settled.persisted.revision, winner);
+    assert_eq!(settled.persisted.policy.deny_net, [rule]);
+    assert_eq!(
+        settled.observed.as_ref().unwrap().snapshot,
+        settled.persisted
+    );
+    assert!(matches!(
+        reacquired
+            .replace_complete_outbound(
+                CompleteOutboundPolicy::default(),
+                OutboundRevision::fresh(),
+                Some(winner),
+            )
+            .await,
+        Err(BoxliteError::InvalidArgument(_))
+    ));
+    assert_eq!(
+        reacquired.complete_outbound_status().await.unwrap(),
+        settled
+    );
     drop(instance);
     wait_for_cleanup(&config).await;
 }
@@ -554,9 +615,13 @@ async fn outbound_complete_recovery_after_restoration_ack() {
         let db = original.runtime.box_manager.db();
         db.conn()
             .execute_batch(
-                "CREATE TRIGGER reject_publication BEFORE UPDATE ON box_state
-             WHEN json_extract(NEW.json, '$.outbound_policy.outbound_v1.pending') IS NULL
-             BEGIN SELECT RAISE(ABORT, 'policy publication interrupted'); END;",
+                "CREATE TRIGGER reject_candidate_publication BEFORE UPDATE ON box_state
+                 WHEN json_extract(NEW.json, '$.outbound_policy.outbound_v1.committed.revision') = 'applied-candidate'
+                 BEGIN SELECT RAISE(ABORT, 'candidate publication interrupted'); END;
+                 CREATE TRIGGER reject_restoration_publication BEFORE UPDATE ON box_state
+                 WHEN json_extract(OLD.json, '$.outbound_policy.outbound_v1.pending.restoration.revision')
+                    = json_extract(NEW.json, '$.outbound_control.revision')
+                 BEGIN SELECT RAISE(ABORT, 'restored publication interrupted'); END;",
             )
             .unwrap();
 
@@ -571,12 +636,11 @@ async fn outbound_complete_recovery_after_restoration_ack() {
                 None,
             )
             .await;
-        assert!(
-            matches!(result, Err(BoxliteError::Database(_))),
-            "{result:?}"
-        );
+        let Err(BoxliteError::Database(message)) = result else {
+            panic!("expected database error, got {result:?}");
+        };
         db.conn()
-            .execute_batch("DROP TRIGGER reject_publication")
+            .execute_batch("DROP TRIGGER reject_candidate_publication; DROP TRIGGER reject_restoration_publication;")
             .unwrap();
         let (_, control) = coordinator.read_complete_control().unwrap();
         let attempt = control.pending.as_ref().unwrap();
@@ -589,6 +653,17 @@ async fn outbound_complete_recovery_after_restoration_ack() {
         assert_eq!(
             observed.application_state,
             OutboundApplicationState::Confirmed
+        );
+        assert!(
+            [
+                "candidate publication interrupted",
+                "restored publication interrupted",
+                "restored snapshot commit failed",
+                "application is uncertain",
+            ]
+            .into_iter()
+            .all(|detail| message.contains(detail)),
+            "incomplete restoration diagnostic: {message}"
         );
         drop(coordinator);
 
@@ -649,4 +724,658 @@ async fn outbound_complete_recovery_after_restoration_ack() {
         drop(instance);
         wait_for_cleanup(&config).await;
     }
+}
+
+#[tokio::test]
+async fn outbound_complete_recovery_when_restoration_intent_cannot_be_saved() {
+    use crate::net::CompleteOutboundPolicy;
+
+    let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let original = &fixture.box_impl;
+    original.layout.prepare().unwrap();
+    let config = NetworkBackendConfig {
+        outbound_disabled: false,
+        socket_path: original.layout.net_backend_socket_path(),
+        allow_net: vec![],
+        secrets: vec![],
+        ca_dir: original.layout.ca_dir(),
+        rate_limit: Default::default(),
+    };
+    let backend = GvproxyBackend::from_config(&config);
+    let (instance, _) =
+        GvproxyInstance::from_config_with_revision(&backend.spec(), &OutboundRevision::initial())
+            .unwrap();
+    let coordinator = reacquire(original);
+    attach_test_vm(&coordinator, original, &backend);
+    let predecessor = coordinator.complete_outbound_snapshot().await.unwrap();
+    let db = original.runtime.box_manager.db();
+    db.conn()
+        .execute_batch(
+            "CREATE TRIGGER reject_candidate_publication BEFORE UPDATE ON box_state
+             WHEN json_extract(NEW.json, '$.outbound_policy.outbound_v1.committed.revision') = 'applied-candidate'
+             BEGIN SELECT RAISE(ABORT, 'candidate publication interrupted'); END;
+             CREATE TRIGGER reject_restoration_intent BEFORE UPDATE ON box_state
+             WHEN json_extract(NEW.json, '$.outbound_policy.outbound_v1.pending.restoration') IS NOT NULL
+             BEGIN SELECT RAISE(ABORT, 'intent write interrupted'); END;",
+        )
+        .unwrap();
+
+    let revision = OutboundRevision::parse("applied-candidate").unwrap();
+    let result = coordinator
+        .replace_complete_outbound(
+            CompleteOutboundPolicy {
+                deny_net: Some(vec!["192.0.2.0/24:443".into()]),
+                ..Default::default()
+            },
+            revision.clone(),
+            Some(predecessor.revision.clone()),
+        )
+        .await;
+    let Err(BoxliteError::Database(message)) = result else {
+        panic!("expected database error, got {result:?}");
+    };
+
+    let (_, control) = coordinator.read_complete_control().unwrap();
+    let attempt = control.pending.as_ref().unwrap();
+    assert!(attempt.restoration.is_none());
+    assert_eq!(attempt.candidate.revision, revision);
+    let status = coordinator.complete_outbound_status().await.unwrap();
+    assert_eq!(status.persisted, predecessor);
+    assert_eq!(status.pending_revision, Some(revision));
+    assert_eq!(
+        status.application_state,
+        OutboundApplicationState::Uncertain
+    );
+    let observed = status.observed.unwrap();
+    assert_eq!(observed.snapshot, attempt.candidate);
+    assert_eq!(
+        observed.application_state,
+        OutboundApplicationState::Confirmed
+    );
+    assert!(
+        [
+            "candidate publication interrupted",
+            "intent write interrupted",
+            "restoration intent write failed",
+            "application is uncertain",
+        ]
+        .into_iter()
+        .all(|detail| message.contains(detail)),
+        "incomplete restoration diagnostic: {message}"
+    );
+    drop(instance);
+    wait_for_cleanup(&config).await;
+}
+
+async fn accept_complete_request(
+    listener: &tokio::net::UnixListener,
+    request_line: &str,
+) -> (tokio::net::UnixStream, Vec<u8>) {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+
+    let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+        .await
+        .expect("missing control request")
+        .unwrap();
+    let mut stream = BufReader::new(stream);
+    let mut line = String::new();
+    stream.read_line(&mut line).await.unwrap();
+    assert_eq!(line.trim_end(), request_line);
+
+    let mut length = 0;
+    loop {
+        line.clear();
+        assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+        if line == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse().unwrap();
+        }
+    }
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body).await.unwrap();
+    (stream.into_inner(), body)
+}
+
+async fn write_complete_response(
+    mut stream: tokio::net::UnixStream,
+    status: &str,
+    headers: &str,
+    body: &str,
+) {
+    use tokio::io::AsyncWriteExt;
+
+    let response = format!(
+        "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n{body}",
+        body.len()
+    );
+    stream.write_all(response.as_bytes()).await.unwrap();
+}
+
+async fn readback_complete(
+    listener: &tokio::net::UnixListener,
+    snapshot: &crate::net::CompleteOutboundSnapshot,
+    phase: OutboundApplicationState,
+) {
+    let (stream, _) =
+        accept_complete_request(listener, "GET /network/outbound/complete-status HTTP/1.1").await;
+    let body = serde_json::json!({
+        "snapshot": snapshot,
+        "application_state": phase,
+        "capabilities": { "admission": true, "deny": true, "port": true, "capacity": true },
+    });
+    write_complete_response(stream, "200 OK", "", &body.to_string()).await;
+}
+
+fn complete_control_peer(original: &BoxImpl) -> (GvproxyBackend, tokio::net::UnixListener) {
+    original.layout.prepare().unwrap();
+    let config = NetworkBackendConfig {
+        outbound_disabled: false,
+        socket_path: original.layout.net_backend_socket_path(),
+        allow_net: vec![],
+        secrets: vec![],
+        ca_dir: original.layout.ca_dir(),
+        rate_limit: Default::default(),
+    };
+    let listener =
+        tokio::net::UnixListener::bind(control_socket_path(&config.socket_path)).unwrap();
+    (GvproxyBackend::from_config(&config), listener)
+}
+
+async fn acknowledge_complete(
+    stream: tokio::net::UnixStream,
+    snapshot: &crate::net::CompleteOutboundSnapshot,
+) {
+    let headers = format!("ETag: \"{}\"\r\n", snapshot.revision.as_str());
+    let body = serde_json::to_string(snapshot).unwrap();
+    write_complete_response(stream, "200 OK", &headers, &body).await;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CandidateReply {
+    Refused,
+    LostBeforeApply,
+    LostAfterApply,
+    LostWhilePending,
+    WrongPolicy,
+    WrongAdmission,
+}
+
+#[tokio::test]
+async fn outbound_complete_unix_readback_requires_the_exact_confirmed_snapshot() {
+    use crate::litebox::box_impl::outbound::CompleteOutboundControl;
+    use crate::net::{CompleteOutboundPolicy, OutboundAdmission};
+
+    for reply in [
+        CandidateReply::Refused,
+        CandidateReply::LostBeforeApply,
+        CandidateReply::LostAfterApply,
+        CandidateReply::LostWhilePending,
+        CandidateReply::WrongPolicy,
+        CandidateReply::WrongAdmission,
+    ] {
+        let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let original = &fixture.box_impl;
+        let (backend, listener) = complete_control_peer(original);
+        let empty = CompleteOutboundPolicy {
+            deny_net: Some(vec![]),
+            ..Default::default()
+        };
+        let admission = OutboundAdmission::ExtendedIpv4;
+        let predecessor = empty
+            .clone()
+            .prepare(admission, OutboundRevision::fresh())
+            .unwrap();
+        let request = CompleteOutboundPolicy {
+            deny_net: Some(if reply == CandidateReply::WrongAdmission {
+                vec![]
+            } else {
+                vec!["192.0.2.0/24:443".into()]
+            }),
+            ..Default::default()
+        };
+        let candidate = request
+            .clone()
+            .prepare(admission, OutboundRevision::fresh())
+            .unwrap();
+        original
+            .runtime
+            .box_manager
+            .save_complete_outbound(
+                original.id(),
+                &CompleteOutboundControl {
+                    committed: predecessor.clone(),
+                    pending: None,
+                },
+            )
+            .unwrap();
+        let coordinator = reacquire(original);
+        attach_test_vm(&coordinator, original, &backend);
+
+        let mut observed = candidate.clone();
+        match reply {
+            CandidateReply::Refused | CandidateReply::LostBeforeApply => {
+                observed = predecessor.clone();
+            }
+            CandidateReply::WrongPolicy => observed.policy.allow_net.push("example.com".into()),
+            CandidateReply::WrongAdmission => observed.admission = OutboundAdmission::Legacy,
+            CandidateReply::LostAfterApply | CandidateReply::LostWhilePending => {}
+        }
+        let phase = if reply == CandidateReply::LostWhilePending {
+            OutboundApplicationState::Pending
+        } else {
+            OutboundApplicationState::Confirmed
+        };
+        let server = {
+            let predecessor = predecessor.clone();
+            let candidate = candidate.clone();
+            let observed = observed.clone();
+            tokio::spawn(async move {
+                readback_complete(&listener, &predecessor, OutboundApplicationState::Confirmed)
+                    .await;
+                let (connection, body) =
+                    accept_complete_request(&listener, "PUT /network/outbound/snapshot HTTP/1.1")
+                        .await;
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(
+                    body["outbound_v1"]["snapshot"],
+                    serde_json::to_value(&candidate).unwrap()
+                );
+                if reply == CandidateReply::Refused {
+                    write_complete_response(connection, "412 Precondition Failed", "", "").await;
+                } else {
+                    drop(connection);
+                    readback_complete(&listener, &observed, phase).await;
+                }
+                readback_complete(&listener, &observed, phase).await;
+                if reply == CandidateReply::LostBeforeApply {
+                    for _ in 0..2 {
+                        readback_complete(
+                            &listener,
+                            &predecessor,
+                            OutboundApplicationState::Confirmed,
+                        )
+                        .await;
+                    }
+                    for _ in 0..3 {
+                        readback_complete(
+                            &listener,
+                            &candidate,
+                            OutboundApplicationState::Confirmed,
+                        )
+                        .await;
+                    }
+                }
+            })
+        };
+
+        let outcome = coordinator
+            .replace_complete_outbound(
+                request,
+                candidate.revision.clone(),
+                Some(predecessor.revision.clone()),
+            )
+            .await;
+        let status = coordinator.complete_outbound_status().await.unwrap();
+        assert_eq!(status.observed.unwrap().snapshot, observed, "{reply:?}");
+        match reply {
+            CandidateReply::Refused => {
+                assert_eq!(outcome.unwrap(), OutboundReplaceOutcome::PreconditionFailed);
+                assert_eq!(status.persisted, predecessor);
+                assert!(status.pending_revision.is_none());
+                assert_eq!(
+                    status.application_state,
+                    OutboundApplicationState::Confirmed
+                );
+            }
+            CandidateReply::LostAfterApply => {
+                assert_eq!(outcome.unwrap(), OutboundReplaceOutcome::Applied);
+                assert_eq!(status.persisted, candidate);
+                assert!(status.pending_revision.is_none());
+                assert_eq!(
+                    status.application_state,
+                    OutboundApplicationState::Confirmed
+                );
+            }
+            _ => {
+                assert!(
+                    matches!(outcome, Err(BoxliteError::Network(ref error)) if error.contains("application is uncertain")),
+                    "{reply:?}: {outcome:?}"
+                );
+                assert_eq!(status.persisted, predecessor);
+                assert_eq!(status.pending_revision, Some(candidate.revision.clone()));
+                assert_eq!(
+                    status.application_state,
+                    if phase == OutboundApplicationState::Pending {
+                        OutboundApplicationState::Pending
+                    } else {
+                        OutboundApplicationState::Uncertain
+                    }
+                );
+            }
+        }
+        if reply == CandidateReply::LostBeforeApply {
+            for (expected, conditional) in
+                [(Some(predecessor.revision.clone()), true), (None, false)]
+            {
+                let outcome = coordinator
+                    .replace_complete_outbound(
+                        CompleteOutboundPolicy::default(),
+                        OutboundRevision::fresh(),
+                        expected,
+                    )
+                    .await;
+                if conditional {
+                    assert!(matches!(outcome, Err(BoxliteError::InvalidState(_))));
+                } else {
+                    assert!(matches!(outcome, Err(BoxliteError::InvalidArgument(_))));
+                }
+            }
+            assert_eq!(
+                coordinator
+                    .replace_complete_outbound(
+                        CompleteOutboundPolicy::default(),
+                        OutboundRevision::fresh(),
+                        Some(predecessor.revision),
+                    )
+                    .await
+                    .unwrap(),
+                OutboundReplaceOutcome::PreconditionFailed
+            );
+            assert!(matches!(
+                coordinator
+                    .replace_complete_outbound(
+                        CompleteOutboundPolicy::default(),
+                        OutboundRevision::fresh(),
+                        None,
+                    )
+                    .await,
+                Err(BoxliteError::InvalidArgument(_))
+            ));
+            let reconciled = coordinator.complete_outbound_status().await.unwrap();
+            assert_eq!(reconciled.persisted, candidate);
+            assert!(reconciled.pending_revision.is_none());
+            assert_eq!(
+                reconciled.application_state,
+                OutboundApplicationState::Confirmed
+            );
+        }
+        server.await.unwrap();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RestorationReply {
+    Applied,
+    Refused,
+    Pending,
+    MissingAtIntent,
+    MissingAtCommit,
+}
+
+#[tokio::test]
+async fn outbound_complete_restoration_uses_live_phase_and_preserves_not_found() {
+    use crate::net::{CompleteOutboundPolicy, CompleteOutboundSnapshot, OutboundAdmission};
+
+    for reply in [
+        RestorationReply::Applied,
+        RestorationReply::Refused,
+        RestorationReply::Pending,
+        RestorationReply::MissingAtIntent,
+        RestorationReply::MissingAtCommit,
+    ] {
+        let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let original = &fixture.box_impl;
+        let (backend, listener) = complete_control_peer(original);
+        let coordinator = reacquire(original);
+        attach_test_vm(&coordinator, original, &backend);
+        let predecessor = coordinator.complete_outbound_snapshot().await.unwrap();
+        let request = CompleteOutboundPolicy {
+            deny_net: Some(vec!["192.0.2.0/24:443".into()]),
+            ..Default::default()
+        };
+        let candidate = request
+            .clone()
+            .prepare(
+                OutboundAdmission::ExtendedIpv4,
+                OutboundRevision::parse("gated-candidate").unwrap(),
+            )
+            .unwrap();
+        let db = original.runtime.box_manager.db();
+        let box_id = original.id().to_string();
+        db.conn()
+            .execute_batch(
+                "CREATE TRIGGER reject_candidate_publication BEFORE UPDATE ON box_state
+                 WHEN json_extract(NEW.json, '$.outbound_policy.outbound_v1.committed.revision') = 'gated-candidate'
+                 BEGIN SELECT RAISE(ABORT, 'candidate publication interrupted'); END;",
+            )
+            .unwrap();
+        let server = {
+            let predecessor = predecessor.clone();
+            let candidate = candidate.clone();
+            let box_id = box_id.clone();
+            tokio::spawn(async move {
+                readback_complete(&listener, &predecessor, OutboundApplicationState::Confirmed)
+                    .await;
+                let (stream, body) =
+                    accept_complete_request(&listener, "PUT /network/outbound/snapshot HTTP/1.1")
+                        .await;
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(
+                    body["outbound_v1"]["snapshot"],
+                    serde_json::to_value(&candidate).unwrap()
+                );
+                if reply == RestorationReply::MissingAtIntent {
+                    assert_eq!(
+                        db.conn()
+                            .execute("DELETE FROM box_state WHERE id = ?1", [&box_id])
+                            .unwrap(),
+                        1
+                    );
+                    acknowledge_complete(stream, &candidate).await;
+                    return None;
+                }
+                acknowledge_complete(stream, &candidate).await;
+
+                let (stream, body) =
+                    accept_complete_request(&listener, "PUT /network/outbound/snapshot HTTP/1.1")
+                        .await;
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                let replacement = &body["outbound_v1"];
+                assert_eq!(replacement["restore"], true);
+                let restored: CompleteOutboundSnapshot =
+                    serde_json::from_value(replacement["snapshot"].clone()).unwrap();
+                assert_ne!(restored.revision, candidate.revision);
+                assert_ne!(restored.revision, predecessor.revision);
+                assert_eq!(restored.policy, predecessor.policy);
+                assert_eq!(restored.admission, predecessor.admission);
+                let saved: String = db.conn().query_row(
+                    "SELECT json_extract(json, '$.outbound_policy.outbound_v1.pending.restoration.revision')
+                     FROM box_state WHERE id = ?1",
+                    [&box_id],
+                    |row| row.get(0),
+                ).unwrap();
+                assert_eq!(saved, restored.revision.as_str());
+
+                let (observed, phase) = match reply {
+                    RestorationReply::Applied => {
+                        acknowledge_complete(stream, &restored).await;
+                        (&restored, OutboundApplicationState::Confirmed)
+                    }
+                    RestorationReply::Refused => {
+                        write_complete_response(stream, "412 Precondition Failed", "", "").await;
+                        readback_complete(
+                            &listener,
+                            &candidate,
+                            OutboundApplicationState::Confirmed,
+                        )
+                        .await;
+                        (&candidate, OutboundApplicationState::Confirmed)
+                    }
+                    RestorationReply::Pending => {
+                        drop(stream);
+                        readback_complete(&listener, &restored, OutboundApplicationState::Pending)
+                            .await;
+                        (&restored, OutboundApplicationState::Pending)
+                    }
+                    RestorationReply::MissingAtCommit => {
+                        assert_eq!(
+                            db.conn()
+                                .execute("DELETE FROM box_state WHERE id = ?1", [&box_id])
+                                .unwrap(),
+                            1
+                        );
+                        acknowledge_complete(stream, &restored).await;
+                        return None;
+                    }
+                    RestorationReply::MissingAtIntent => unreachable!(),
+                };
+                readback_complete(&listener, observed, phase).await;
+                Some(restored)
+            })
+        };
+
+        let result = coordinator
+            .replace_complete_outbound(
+                request,
+                candidate.revision.clone(),
+                Some(predecessor.revision.clone()),
+            )
+            .await;
+        if matches!(
+            reply,
+            RestorationReply::MissingAtIntent | RestorationReply::MissingAtCommit
+        ) {
+            assert!(matches!(result, Err(BoxliteError::NotFound(id)) if id == box_id));
+            assert!(server.await.unwrap().is_none());
+            continue;
+        }
+        let status = coordinator.complete_outbound_status().await.unwrap();
+        let restored = server.await.unwrap().unwrap();
+        let observed = status.observed.unwrap();
+        if reply == RestorationReply::Applied {
+            assert!(matches!(
+                result,
+                Err(BoxliteError::Database(message)) if message == "candidate publication interrupted"
+            ));
+            assert_eq!(status.persisted, restored);
+            assert!(status.pending_revision.is_none());
+            assert_eq!(
+                status.application_state,
+                OutboundApplicationState::Confirmed
+            );
+            assert_eq!(observed.snapshot, restored);
+        } else {
+            assert!(matches!(
+                result,
+                Err(BoxliteError::InvalidState(message)) if message.contains("restoration is uncertain")
+            ));
+            assert_eq!(status.persisted, predecessor);
+            assert_eq!(status.pending_revision, Some(restored.revision.clone()));
+            if reply == RestorationReply::Pending {
+                assert_eq!(status.application_state, OutboundApplicationState::Pending);
+                assert_eq!(
+                    observed.application_state,
+                    OutboundApplicationState::Pending
+                );
+                assert_eq!(observed.snapshot, restored);
+            } else {
+                assert_eq!(
+                    status.application_state,
+                    OutboundApplicationState::Uncertain
+                );
+                assert_eq!(
+                    observed.application_state,
+                    OutboundApplicationState::Confirmed
+                );
+                assert_eq!(observed.snapshot, candidate);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn hosted_outbound_prepare_requires_an_explicit_clear_of_existing_denies() {
+    use crate::litebox::box_impl::outbound::CompleteOutboundControl;
+    use crate::net::{
+        CompleteOutboundPolicy, HostedOutboundCommand, HostedOutboundReceipt, OutboundAdmission,
+    };
+
+    let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let original = &fixture.box_impl;
+    let (backend, listener) = complete_control_peer(original);
+    let predecessor = CompleteOutboundPolicy {
+        deny_net: Some(vec!["192.0.2.0/24:443".into()]),
+        ..Default::default()
+    }
+    .prepare(OutboundAdmission::ExtendedIpv4, OutboundRevision::fresh())
+    .unwrap();
+    original
+        .runtime
+        .box_manager
+        .save_complete_outbound(
+            original.id(),
+            &CompleteOutboundControl {
+                committed: predecessor.clone(),
+                pending: None,
+            },
+        )
+        .unwrap();
+    let mut coordinator = reacquire(original);
+    coordinator.config.name = Some(original.id().to_string());
+    attach_test_vm(&coordinator, original, &backend);
+    let server = {
+        let predecessor = predecessor.clone();
+        tokio::spawn(async move {
+            for _ in 0..3 {
+                readback_complete(&listener, &predecessor, OutboundApplicationState::Confirmed)
+                    .await;
+            }
+        })
+    };
+    let omitted = coordinator
+        .hosted_outbound(HostedOutboundCommand::Prepare {
+            previous: predecessor.clone(),
+            revision: OutboundRevision::fresh(),
+            policy: CompleteOutboundPolicy::default(),
+        })
+        .await;
+    assert!(matches!(
+        omitted,
+        Err(BoxliteError::InvalidArgument(message)) if message.contains("deny_net is required")
+    ));
+    let revision = OutboundRevision::fresh();
+    let prepared = coordinator
+        .hosted_outbound(HostedOutboundCommand::Prepare {
+            previous: predecessor.clone(),
+            revision: revision.clone(),
+            policy: CompleteOutboundPolicy {
+                deny_net: Some(vec![]),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+    let HostedOutboundReceipt::Prepared { candidate } = prepared else {
+        panic!("expected a prepared candidate: {prepared:?}");
+    };
+    assert!(candidate.deny_present);
+    assert_eq!(candidate.snapshot.revision, revision);
+    assert_eq!(
+        candidate.snapshot.admission,
+        OutboundAdmission::ExtendedIpv4
+    );
+    assert!(candidate.snapshot.policy.deny_net.is_empty());
+    let status = coordinator.complete_outbound_status().await.unwrap();
+    assert_eq!(
+        status.application_state,
+        OutboundApplicationState::Confirmed
+    );
+    assert_eq!(status.persisted, predecessor);
+    assert_eq!(status.observed.unwrap().snapshot, predecessor);
+    assert!(status.pending_revision.is_none());
+    server.await.unwrap();
 }

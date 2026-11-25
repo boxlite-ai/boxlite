@@ -335,14 +335,18 @@ impl BoxImpl {
                 if let Some(pending) = &mut reserved.pending {
                     pending.restoration = Some(restoration.clone());
                 }
-                store.save_complete_outbound(&self.config.id, &reserved)?;
+                store.save_complete_outbound(&self.config.id, &reserved).map_err(|restore_error| {
+                    restoration_write_error("restoration intent write", &error, restore_error)
+                })?;
                 let restored = apply_complete(backend, &candidate.revision, &restoration, false, true, versioned).await;
                 if !matches!(restored, Ok(OutboundReplaceOutcome::Applied))
                     && !backend_confirms(backend, &restoration).await
                 {
                     return Err(BoxliteError::InvalidState(format!("outbound persistence failed ({error}); restoration is uncertain ({restored:?})")));
                 }
-                self.confirm_complete_outbound(&restoration)?;
+                self.confirm_complete_outbound(&restoration).map_err(|restore_error| {
+                    restoration_write_error("restored snapshot commit", &error, restore_error)
+                })?;
                 return Err(error);
             }
             Ok(OutboundReplaceOutcome::Applied)
@@ -590,6 +594,19 @@ impl BoxImpl {
         }
         self.state.write().outbound_policy = Some(policy.clone());
         Ok(OutboundReplaceOutcome::Applied)
+    }
+}
+
+fn restoration_write_error(
+    step: &str,
+    publication_error: &BoxliteError,
+    restore_error: BoxliteError,
+) -> BoxliteError {
+    match restore_error {
+        BoxliteError::Database(details) => BoxliteError::Database(format!(
+            "outbound persistence failed ({publication_error}); {step} failed ({details}); application is uncertain"
+        )),
+        other => other,
     }
 }
 
