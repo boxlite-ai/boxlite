@@ -39,6 +39,7 @@ import {
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError, AxiosInstance } from 'axios'
 import { BoxliteError } from './errors'
+import { couponClaimReceipt, CouponClaimUnconfirmedError, type CouponClaimReceipt } from './coupon-claim'
 import type { DomainList, HeldDomain, CustomDomain, CustomDomainList } from './domain-types'
 import type { Checkpoint, CheckpointPage } from './checkpoint-types'
 import { readTunnelDescriptor, tunnelOperationError, TunnelRequestError, type TunnelDescriptor } from './tunnel'
@@ -85,6 +86,12 @@ function clearReauthAttempted(): void {
 // Prefer bash when the image has it; every image has sh.
 const LOGIN_SHELL = 'if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi'
 
+export interface CancellationFeedbackInput {
+  reasons: string[]
+  intent: string | null
+  note: string
+}
+
 export interface OrganizationOnboarding {
   useCase: FirstRunUseCase
   note: string
@@ -99,7 +106,37 @@ export interface PromptDraft {
 
 const activityHeaders = { 'X-BoxLite-Source': 'dashboard' }
 
+class ReauthenticationStartError extends BoxliteError {}
+
 export class ApiClient {
+  public async claimCoupon(
+    organizationId: string,
+    claim: { eventId: string; couponCode: string },
+  ): Promise<CouponClaimReceipt> {
+    const response = await this.http
+      .post<unknown>(`/organizations/${encodeURIComponent(organizationId)}/coupon-claims`, claim, {
+        ...this.v1Config(),
+        timeout: 10_000,
+      })
+      .catch((error: BoxliteError) => {
+        if (error instanceof ReauthenticationStartError) throw error
+        const { cause } = error
+        if (axios.isAxiosError(cause) && cause.response && cause.response.status < 500) throw error
+        throw new CouponClaimUnconfirmedError()
+      })
+    const receipt = couponClaimReceipt.safeParse(response.data)
+    if (response.status !== 202 || !receipt.success) throw new CouponClaimUnconfirmedError()
+    return receipt.data
+  }
+
+  public async saveCancellationFeedback(org: string, feedback: CancellationFeedbackInput): Promise<void> {
+    const response = await this.http.put(`/organizations/${encodeURIComponent(org)}/cancellation-feedback`, feedback, {
+      ...this.v1Config(),
+      timeout: 10_000,
+    })
+    if (response.status !== 204) throw new BoxliteError('Feedback save was not confirmed')
+  }
+
   public async register(turnstileToken: string): Promise<User> {
     return (await this.http.post<User>('/auth/register', { turnstileToken }, { ...this.v1Config(), timeout: 30_000 }))
       .data
@@ -374,8 +411,8 @@ export class ApiClient {
       },
       (error) => {
         // A 401 means the access token is no longer accepted — it expired, or
-        // (the common case in the local Dex stack) it was signed by a key that
-        // rotated when the Dex box was recreated. oidc-client-ts only tracks
+        // (the common case in the local stack) it was signed by a key that
+        // rotated when the Rauthy box was recreated. oidc-client-ts only tracks
         // local expiry, so it still believes the user is signed in and keeps
         // replaying the dead token on every reload. Drop the session and bounce
         // to a fresh login instead of a dead-end "Unauthorized" screen.
@@ -472,8 +509,8 @@ export class ApiClient {
     } catch (handlerError) {
       isHandlingUnauthorized = false
       clearReauthAttempted()
-      throw BoxliteError.fromString('Failed to start re-authentication.', {
-        cause: handlerError instanceof Error ? handlerError : undefined,
+      throw new ReauthenticationStartError('Failed to start re-authentication. Please sign in again.', {
+        cause: handlerError,
       })
     }
 
@@ -657,6 +694,7 @@ export class ApiClient {
 
   public setAccessToken(accessToken: string) {
     this.config.accessToken = accessToken
+    this._billingApi.setAccessToken(accessToken)
   }
 
   public get boxApi() {

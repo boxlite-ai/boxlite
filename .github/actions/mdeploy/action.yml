@@ -1,0 +1,309 @@
+name: Verify and deploy a stage
+description: Verify selected artifacts and apply or preview the target stage
+inputs:
+  ref:
+    description: Original deployment request for the summary
+    default: ''
+  stage:
+    description: Target stage
+    required: true
+  sha:
+    description: Full resolved commit SHA
+    required: true
+  version:
+    description: Stable release selector or empty for a commit
+    default: ''
+  image-tag:
+    description: Resolved image identity
+    required: true
+  line:
+    description: Resolved ref summary
+    required: true
+  components:
+    description: Requested API and Runner selection
+    required: true
+  api-route:
+    description: Image route chosen by planning
+    required: true
+  apply:
+    description: Apply when true and preview otherwise
+    default: 'false'
+  confirm:
+    description: Protected stage confirmation
+    default: 'false'
+  stage-config:
+    description: Target Environment stage declaration
+    required: true
+  aws-account-id:
+    description: Target AWS account when using ECR
+    default: ''
+  gcp-workload-identity-provider:
+    description: Target GCP workload identity provider
+    default: ''
+  gcp-deployer:
+    description: Target GCP deployer service account
+    default: ''
+  gcp-image-publisher:
+    description: Target GCP image publisher service account
+    default: ''
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-infra
+      id: infra
+      with:
+        stages: ${{ inputs.stage }}
+        stage-config: ${{ inputs.stage-config }}
+
+    # What this job deploys, as an address rather than as the name it was
+    # given. The runner half says which of the two artifacts the stack
+    # installs: a release names the version whose GitHub Release carries the
+    # tarball, a commit names the object this run staged in the bucket. Both
+    # are set explicitly so the mode is readable in the run rather than
+    # inferred from an absence.
+    - name: Address what this deploy installs
+      shell: bash
+      env:
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        VERSION: ${{ inputs.version }}
+        SHA: ${{ inputs.sha }}
+        COMPONENTS: ${{ inputs.components }}
+      run: |
+        set -Eeuo pipefail
+        # Build mode only when this run actually staged one. `plan` leaves the
+        # runner alone for `components: api`, so naming a build-mode binary
+        # there would point the fleet at `runner/<sha>/` in a bucket nothing
+        # wrote to — `runnerArtifactFor` composes that address without asking
+        # whether it exists, so the apply reports success and the host 404s at
+        # boot.
+        #
+        # VERSION still supplies valid program inputs for the full graph;
+        # component targeting determines which workload actually changes.
+        source=release
+        case "$COMPONENTS" in
+          *runner*) [ -z "$VERSION" ] && source=build ;;
+        esac
+        {
+          printf 'BOXLITE_IMAGE_TAG=%s\n' "$IMAGE_TAG"
+          printf 'RUNNER_ARTIFACT_SOURCE=%s\n' "$source"
+          if [ "$source" = 'build' ]; then
+            printf 'RUNNER_ARTIFACT_REF=%s\n' "$SHA"
+          elif [ -n "$VERSION" ]; then
+            # `VERSION` is the selector `stack/runner-binary.ts` honours; it
+            # strips the leading v itself. Left unset on a commit rollout that
+            # was not about the runner, where the workspace version is the
+            # release the stage already installs.
+            printf 'VERSION=%s\n' "$VERSION"
+          fi
+        } >> "$GITHUB_ENV"
+
+    # ----------------------------------------------------------- 1/5
+    # Which cloud this stage deploys to, and where in it. One file says both,
+    # and nothing after this point knows the answer in advance.
+    - name: Resolve the stage
+      id: config
+      working-directory: apps/infra
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        if ! output="$(npm run --silent mbuild inspect -- --stage "${{ inputs.stage }}" 2>&1)"; then
+          echo "::error title=stage::$output"
+          exit 1
+        fi
+        echo "$output"
+        echo "$output" >> "$GITHUB_OUTPUT"
+
+    # ----------------------------------------------------------- 2/5
+    # An identity for that cloud. GitHub's OIDC token is the only thing this
+    # runner can prove, so federation goes through the provider's own action;
+    # mstage cannot mint a session it holds no token for.
+    - name: Federate an AWS identity
+      if: steps.config.outputs.kind == 'ecr'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        # Composed from the stage's AWS_ACCOUNT_ID, not a stored role ARN: the
+        # role name is fixed per stage (bootstrap/environment.ts's
+        # githubDeployRoleName), so only the account id has to be configured.
+        role-to-assume: arn:aws:iam::${{ inputs.aws-account-id }}:role/boxlite-${{ inputs.stage }}-github-deploy
+        aws-region: ${{ steps.config.outputs.region }}
+        role-session-name: mdeploy-all-deploy-${{ github.run_id }}
+
+    - name: Federate a GCP identity
+      if: steps.config.outputs.kind == 'artifact-registry'
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-deployer }}
+
+    # The apply asks Certificate Manager what this project already holds
+    # before it changes anything (`src/dns-authorization.ts`), and it asks
+    # through the CLI — which the federation above writes a credential for but
+    # does not install. Without it the check reports that it could not read
+    # and lets the apply through, which is the guard never running at all.
+    # The checks below shell out to the same CLI.
+    - name: Install gcloud
+      if: steps.config.outputs.kind == 'artifact-registry'
+      uses: google-github-actions/setup-gcloud@v2
+
+    # ----------------------------------------------------------- 3/5
+    # A read, so a transient failure says nothing about the answer: retried.
+    - name: Verify the session through mstage
+      working-directory: apps/infra
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        for attempt in 1 2 3; do
+          if npm run --silent mstage login; then exit 0; fi
+          echo "mstage reports no usable session (attempt $attempt/3); retrying in $((attempt * 5))s"
+          sleep $((attempt * 5))
+        done
+        echo "::error title=mstage::No usable session for ${{ steps.config.outputs.kind }} after 3 attempts"
+        exit 1
+
+    # Both of these answer about the stage's own contents, so a second ask
+    # returns the same answer: neither is retried.
+    - name: Verify the stage configuration still matches its own fingerprint
+      working-directory: apps/infra
+      shell: bash
+      run: npm run --silent mstage env digest -- --stage "${{ inputs.stage }}"
+
+    # ----------------------------------------------------------- 4/5
+    # Does this stage hold these images yet? mbuild answers, because mbuild
+    # composes the address the deploy resolves — a check that built its own
+    # string could pass against an address nothing pulls.
+    - name: Use the GCP image publisher for release import
+      if: inputs.api-route == 'release-import' && steps.config.outputs.kind == 'artifact-registry'
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-image-publisher }}
+
+    - name: Import release images from GHCR
+      if: inputs.api-route == 'release-import'
+      working-directory: apps/infra
+      env:
+        SHA: ${{ inputs.sha }}
+        VERSION: ${{ inputs.version }}
+        GHCR_REPOSITORY: ${{ github.repository }}
+        STAGE: ${{ inputs.stage }}
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        install -d -m 700 "$RUNNER_TEMP/docker"
+        export DOCKER_CONFIG="$RUNNER_TEMP/docker"
+        npm run --silent mbuild import-release -- --tag "$SHA" --version "$VERSION" --ghcr "$GHCR_REPOSITORY" --stage "$STAGE"
+
+    - name: Restore the GCP deployment identity
+      if: inputs.api-route == 'release-import' && steps.config.outputs.kind == 'artifact-registry'
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-deployer }}
+
+    - name: Verify the images
+      if: inputs.components != 'runner'
+      working-directory: apps/infra
+      env:
+        STAGE: ${{ inputs.stage }}
+      shell: bash
+      run: npm run --silent mbuild verify -- --tag "$BOXLITE_IMAGE_TAG" --stage "$STAGE"
+
+    # ----------------------------------------------------------- 5/5
+    # Read through mstage's own loader, out of the declaration setup-infra
+    # restored — the same reader mdeploy refuses on (src/run.ts's
+    # `scope.protect`). The point of asking here is when rather than whether:
+    # a refusal in the apply comes after this job has federated an identity
+    # and taken the stage's concurrency group.
+    - name: Confirm a protected stage
+      working-directory: apps/infra
+      env:
+        STAGE: ${{ inputs.stage }}
+        CONFIRMED: ${{ inputs.confirm }}
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        protected="$(node -e "
+          const { loadConfig, stageIn } = require('mstage/config');
+          process.stdout.write(String(Boolean(stageIn(loadConfig(), process.env.STAGE).protect)))
+        ")"
+        if [ "$protected" = 'true' ] && [ "$CONFIRMED" != 'true' ]; then
+          echo "::error title=protected::$STAGE is protected; re-dispatch with confirm"
+          exit 1
+        fi
+
+    # Never retried. A run killed mid-apply can leave the per-stage lock held,
+    # and a second attempt then fails on the lock rather than on the cause
+    # worth reading. Clearing it by hand is a first-class command:
+    # `npm run mstage state unlock -- --stage <stage>`.
+    - name: Apply
+      working-directory: apps/infra
+      env:
+        COMPONENTS: ${{ inputs.components }}
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        if [ "${{ inputs.apply }}" = "true" ]; then
+          npm run mdeploy -- --stage "${{ inputs.stage }}" --components "$COMPONENTS" ${{ inputs.confirm == 'true' && '--confirm' || '' }}
+        else
+          npm run mdeploy -- --stage "${{ inputs.stage }}" --components "$COMPONENTS" --diff
+        fi
+
+    # Apply can generate the platform. Save it before returning to a caller
+    # that may change the workspace, retaining the key from this restore.
+    - name: Save the prepared SST platform
+      if: >-
+        steps.infra.outputs.platform-cache-hit != 'true'
+        && steps.infra.outputs.platform-cache-key != ''
+        && hashFiles('apps/infra/mdeploy/.sst/platform/**') != ''
+      uses: actions/cache/save@v4
+      with:
+        path: apps/infra/mdeploy/.sst/platform
+        key: ${{ steps.infra.outputs.platform-cache-key }}
+
+    - name: Report
+      if: always()
+      env:
+        LINE: ${{ inputs.line }}
+        SHA: ${{ inputs.sha }}
+      shell: bash
+      run: |
+        set -Eeuo pipefail
+        # `if: always()`, so this also renders after a checkout or a setup
+        # that failed before "Address what this deploy installs" wrote its
+        # variables. Under `set -u` a bare expansion would abort the summary
+        # in exactly the runs it was added for, so an unwritten value is
+        # named as one and the rows around it still render.
+        unchosen='(never addressed)'
+        # Which of the two artifacts the fleet installs, and the selector it
+        # was addressed by — the pair is what an operator checks when a host
+        # comes up on the wrong binary.
+        runner="$unchosen"
+        if [ -n "${RUNNER_ARTIFACT_SOURCE:-}" ]; then
+          runner="$RUNNER_ARTIFACT_SOURCE at ${VERSION:-${RUNNER_ARTIFACT_REF:-the workspace version}}"
+        fi
+        images="${BOXLITE_IMAGE_TAG:-$unchosen}"
+        case "${{ inputs.components }}" in
+          api) runner='not selected (unchanged)' ;;
+          runner) images='not selected (unchanged)' ;;
+        esac
+        {
+          echo "### ${{ inputs.apply == 'true' && 'deploy' || 'preview' }} ${{ inputs.stage }} · $LINE"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          echo "| asked for | \`${{ inputs.ref || github.sha }}\` |"
+          echo "| resolved | \`$LINE\` |"
+          echo "| commit | \`$SHA\` |"
+          echo "| components | \`${{ inputs.components }}\` |"
+          echo "| images | \`$images\` |"
+          echo "| runner | \`$runner\` |"
+          echo "| cloud | \`${{ steps.config.outputs.kind == 'ecr' && 'aws' || 'gcp' }}\` in \`${{ steps.config.outputs.region }}\` |"
+          echo "| intent | \`${{ inputs.apply == 'true' && 'apply' || 'preview' }}\` |"
+          echo "| result | \`${{ job.status }}\` |"
+          echo
+          echo "From a checkout:"
+          echo
+          echo '```'
+          echo "npm run mdeploy -- --stage ${{ inputs.stage }} --components ${{ inputs.components }} --diff"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"

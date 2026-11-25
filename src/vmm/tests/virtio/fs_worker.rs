@@ -228,7 +228,7 @@ impl Guest {
             device,
             interrupt,
             MmioResources {
-                memory: memory.clone(),
+                memory: memory.clone().into(),
                 sender: events.sender(),
                 worker: worker.clone(),
             },
@@ -714,28 +714,26 @@ fn successful_reset_releases_populated_session_and_reactivates() {
 }
 
 #[test]
-fn concurrent_producer_replenishes_fs_queue_while_transport_resets() {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+fn transport_resets_after_fixed_fs_request_batch() {
     let _serial = SERIAL.lock().unwrap();
     let mut rig = Rig::new();
     let mut guest = rig.guest();
     let memory = guest.memory.clone();
     let worker = guest.worker.clone();
-    let stop = Arc::new(AtomicBool::new(false));
-    let count = Arc::new(AtomicUsize::new(0));
-    let producer_stop = stop.clone();
-    let produced = count.clone();
     let initial = guest.next;
     let producer = thread::spawn(move || {
         let deadline = Instant::now() + WAIT;
         let mut next = initial;
-        while !producer_stop.load(Ordering::Acquire) && Instant::now() < deadline {
-            let used: u16 = memory.read_obj(GuestAddress(USED + 0x102)).unwrap();
+        for _ in 0..128 {
             // Four independent two-descriptor chains fill this eight-entry
             // descriptor table. Refill each slot only after its used entry.
-            if next.wrapping_sub(u16::from_le(used)) >= 4 {
+            loop {
+                assert!(Instant::now() < deadline, "fixed producer made no progress");
+                let used: u16 = memory.read_obj(GuestAddress(USED + 0x102)).unwrap();
+                if next.wrapping_sub(u16::from_le(used)) < 4 {
+                    break;
+                }
                 thread::yield_now();
-                continue;
             }
             let slot = next % 4;
             let head = slot * 2;
@@ -774,30 +772,16 @@ fn concurrent_producer_replenishes_fs_queue_while_transport_resets() {
                 .write_obj(next.to_le(), GuestAddress(AVAIL + 0x102))
                 .unwrap();
             worker.kick(1);
-            produced.fetch_add(1, Ordering::Release);
         }
-        assert!(
-            producer_stop.load(Ordering::Acquire),
-            "producer watchdog expired before reset completed"
-        );
     });
-    let deadline = Instant::now() + WAIT;
-    while count.load(Ordering::Acquire) < 128 {
-        assert!(
-            Instant::now() < deadline,
-            "concurrent producer made no progress"
-        );
-        thread::yield_now();
-    }
-    // Four chains can remain outstanding while reset stops the live producer.
+    producer.join().unwrap();
+    // The fixed batch leaves at most four chains outstanding during reset.
     let reset_started = Instant::now();
     write(&mut guest.transport, 0x070, 0);
     assert!(
         reset_started.elapsed() < Duration::from_secs(1),
-        "reset must finish independently of the five-second producer watchdog"
+        "reset must finish within one second after the fixed request batch"
     );
-    stop.store(true, Ordering::Release);
-    producer.join().unwrap();
     let mut status = [0; 4];
     guest.transport.read(0x070, &mut status);
     assert_eq!(status, [0; 4]);

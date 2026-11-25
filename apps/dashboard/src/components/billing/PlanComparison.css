@@ -1,0 +1,90 @@
+/* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+.plans-section {
+  container-type: inline-size;
+}
+
+.plan-comparison-scroll {
+  /* Keep absolute screen-reader labels inside this scroll boundary. */
+  position: relative;
+  overflow: auto;
+  max-height: max(320px, calc(100svh - 340px));
+}
+
+.plan-comparison-table {
+  min-width: var(--plan-table-width);
+}
+
+/* The ribbon sits inside the action's existing 32px row. Its available width
+   follows the button, including when a catalogue price requires Contact us. */
+.plan-trial-space {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  container: plan-trial / inline-size;
+}
+
+.plan-trial-ribbon {
+  position: absolute;
+  inset: 0 auto auto 0;
+  transform: translateY(-50%);
+  width: max-content;
+  max-width: 100%;
+  color: #3d2a0f;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 13px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.plan-trial-ribbon::before {
+  content: '';
+  position: absolute;
+  right: 100%;
+  top: 2px;
+  border: solid transparent;
+  border-width: 0 0 4px 3px;
+  border-bottom-color: #906221;
+}
+
+.plan-trial-face {
+  display: block;
+  overflow: hidden;
+  padding: 2px 7px 2px 4px;
+  background: linear-gradient(109deg, #d4a75b, #f9e5b6 32%, #edca87 80%, #f9e5b6);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 5px) 50%, 100% 100%, 0 100%);
+}
+
+.plan-trial-face > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+@container plan-trial (min-width: 108px) {
+  .plan-trial-face {
+    padding-block: 5px;
+    text-overflow: ellipsis;
+  }
+  .plan-trial-face > span {
+    display: inline;
+  }
+}
+
+/* Use the page's vertical scroll when the comparison fits the available content
+   width. Narrow layouts retain local scrolling and a pinned feature column. */
+@container (min-width: 1000px) {
+  .plan-comparison-scroll {
+    overflow: visible;
+    max-height: none;
+  }
+
+  .plan-comparison-table {
+    min-width: 0;
+  }
+
+  .plan-comparison-table thead {
+    top: calc(var(--app-header-height, 64px) + var(--app-banner-height, 0px));
+  }
+}

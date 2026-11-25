@@ -152,6 +152,7 @@ describe('ImageController routing', () => {
         targetId: 'quay.io/acme/app',
         organizationId: ORGANIZATION.id,
       }),
+      expect.any(Number),
     )
   })
 

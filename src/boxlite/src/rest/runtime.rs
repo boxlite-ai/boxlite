@@ -8,7 +8,7 @@ use crate::metrics::RuntimeMetrics;
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::options::{BoxArchive, BoxOptions};
-use crate::{BoxInfo, LiteBox};
+use crate::{BoxInfo, CheckpointKind, CheckpointOptions, LiteBox};
 
 use super::client::ApiClient;
 use super::litebox::RestBox;
@@ -43,6 +43,14 @@ impl RestRuntime {
             .get::<BoxResponse>(&format!("/boxes/{box_name}"))
             .await?;
         options.sanitize_remote()?;
+        // Legacy read-write volumes allow name-based reuse. For explicit mounts or
+        // read-only volumes, the response lacks the metadata needed to verify reuse.
+        if !options.mounts.is_empty() || options.volumes.iter().any(|volume| volume.read_only) {
+            return Err(BoxliteError::Unsupported(format!(
+                "cannot reuse box {box_name:?}: the REST response does not expose its \
+                 existing mount configuration; use a different name or recreate the box"
+            )));
+        }
         let actual = response.privileged.ok_or_else(|| {
             BoxliteError::Unsupported(format!(
                 "cannot reuse box {box_name:?}: the server did not report its \
@@ -73,22 +81,47 @@ impl crate::runtime::checkpoints::CheckpointBackend for RestRuntime {
         &self,
         source: &str,
         name: Option<String>,
+        options: CheckpointOptions,
     ) -> BoxliteResult<crate::CheckpointInfo> {
+        let kind = match options.kind {
+            None | Some(CheckpointKind::Disk) => None,
+            Some(CheckpointKind::Full) => {
+                self.client.require_memory_checkpoints_enabled().await?;
+                Some(CheckpointKind::Full)
+            }
+            Some(CheckpointKind::Unknown) => {
+                return Err(BoxliteError::InvalidArgument(
+                    "unknown checkpoint kind".into(),
+                ));
+            }
+        };
+
         #[derive(serde::Serialize)]
         struct Capture<'a> {
             source_box_id: &'a str,
             #[serde(skip_serializing_if = "Option::is_none")]
             name: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            kind: Option<CheckpointKind>,
         }
-        self.client
+        let info: crate::CheckpointInfo = self
+            .client
             .post(
                 "/checkpoints",
                 &Capture {
                     source_box_id: source,
                     name,
+                    kind,
                 },
             )
-            .await
+            .await?;
+        if kind == Some(CheckpointKind::Full) && info.kind != CheckpointKind::Full {
+            return Err(BoxliteError::Unsupported(format!(
+                "Remote server returned checkpoint {} without confirming full capture",
+                info.id
+            )));
+        }
+        Ok(info)
     }
 
     async fn list(&self) -> BoxliteResult<Vec<crate::CheckpointInfo>> {
@@ -411,16 +444,12 @@ impl BoxOptions {
             ));
         }
 
-        // Mounts. `BoxOptions::sanitize` is local-only, so
-        // `VolumeSpec::validate` — the "exactly one origin" invariant that C and
-        // Go callers can violate by setting the fields directly — has no other
-        // chance to run before the request goes out.
-        //
-        // A host bind has no meaning against a REST runtime either: the path
-        // names the *server's* filesystem, not the caller's. The rejected path
-        // is deliberately not quoted back — the caller already knows what they
-        // asked for, and echoing a server-side path into a client error is a
-        // leak, not a diagnostic.
+        if !self.volumes.is_empty() && !self.mounts.is_empty() {
+            return Err(BoxliteError::InvalidArgument(
+                "volumes and mounts must not both be non-empty; use typed mounts for new requests"
+                    .to_string(),
+            ));
+        }
 
         for volume in &self.volumes {
             volume.validate()?;
@@ -438,26 +467,15 @@ impl BoxOptions {
             ));
         }
 
-        // The server rejects `read_only: true` on a managed mount. Refusing here
-        // says so plainly instead of surfacing a field-level 400, and — more to the
-        // point — never lets a caller believe a writable mount is protected.
-        if let Some(volume) = self
-            .volumes
-            .iter()
-            .find(|volume| volume.read_only)
-            .and_then(|volume| volume.managed_volume.as_deref())
-        {
-            return Err(BoxliteError::Unsupported(format!(
-                "read-only managed volumes are not supported yet; mount {volume:?} read-write"
-            )));
-        }
-
-        // REST runtimes send no typed mounts yet(TODO): refused here, before
-        // any request, rather than left out of it.
-        if !self.mounts.is_empty() {
-            return Err(BoxliteError::Unsupported(
-                "typed mounts are not supported by REST runtimes yet".to_string(),
-            ));
+        for mount in &self.mounts {
+            mount.validate()?;
+            if mount.mount_type == crate::runtime::options::MountType::Bind {
+                return Err(BoxliteError::Unsupported(
+                    "host bind mounts are only supported by the local runtime; create a volume \
+                     and mount it by id or name instead"
+                        .to_string(),
+                ));
+            }
         }
 
         Ok(())
@@ -499,6 +517,17 @@ impl RuntimeBackend for RestRuntime {
         if options.advanced.privileged {
             self.client.require_privileged_enabled().await?;
         }
+        let uses_mounts_field_for_new_mountspec = !options.mounts.is_empty();
+        let has_read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
+            || options.mounts.iter().any(|mount| mount.read_only);
+        if uses_mounts_field_for_new_mountspec || has_read_only_mounts {
+            self.client
+                .require_mount_capabilities(
+                    uses_mounts_field_for_new_mountspec,
+                    has_read_only_mounts,
+                )
+                .await?;
+        }
 
         let req = CreateBoxRequest::from_options(&options, name);
         let resp = self.client.create_box(&req).await?;
@@ -520,6 +549,17 @@ impl RuntimeBackend for RestRuntime {
             ));
         }
         options.sanitize_remote()?;
+        let uses_mounts_field_for_new_mountspec = !options.mounts.is_empty();
+        let has_read_only_mounts = options.volumes.iter().any(|volume| volume.read_only)
+            || options.mounts.iter().any(|mount| mount.read_only);
+        if uses_mounts_field_for_new_mountspec || has_read_only_mounts {
+            self.client
+                .require_mount_capabilities(
+                    uses_mounts_field_for_new_mountspec,
+                    has_read_only_mounts,
+                )
+                .await?;
+        }
 
         if let Some(ref box_name) = name {
             match self.adopt_named_box(&options, box_name).await {
@@ -1034,6 +1074,280 @@ mod tests {
         serde_json::from_str(body).unwrap()
     }
 
+    const CHECKPOINT_RESPONSE: &str = r#"{"id":"disk","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512}"#;
+    const FULL_CHECKPOINT_CREATING: &str = r#"{"id":"full","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":0,"state":"creating","kind":"full"}"#;
+    const MEMORY_CHECKPOINTS_ENABLED: &str =
+        r#"{"capabilities":{"memory_checkpoints_enabled":true}}"#;
+    const MEMORY_CHECKPOINTS_DISABLED: &str =
+        r#"{"capabilities":{"checkpoints_enabled":true,"memory_checkpoints_enabled":false}}"#;
+    const FULL_CHECKPOINT_OPTIONS: CheckpointOptions = CheckpointOptions {
+        kind: Some(CheckpointKind::Full),
+    };
+
+    #[tokio::test]
+    async fn checkpoint_disk_create_uses_legacy_json() {
+        use crate::BoxliteRuntime;
+
+        for (name, expected) in [
+            (None, serde_json::json!({"source_box_id": "source"})),
+            (
+                Some("backup".to_owned()),
+                serde_json::json!({"source_box_id": "source", "name": "backup"}),
+            ),
+        ] {
+            let (port, server) = exchange_server(vec![(201, CHECKPOINT_RESPONSE); 3]).await;
+            let runtime =
+                BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let checkpoints = runtime.checkpoints();
+            let default = checkpoints.create("source", name.clone()).await.unwrap();
+            let empty_options = checkpoints
+                .create_with_options("source", name.clone(), CheckpointOptions::default())
+                .await
+                .unwrap();
+            let explicit_disk = checkpoints
+                .create_with_options(
+                    "source",
+                    name,
+                    CheckpointOptions {
+                        kind: Some(CheckpointKind::Disk),
+                    },
+                )
+                .await
+                .unwrap();
+
+            for info in [default, empty_options, explicit_disk] {
+                assert_eq!(info.kind, CheckpointKind::Disk);
+                assert_eq!(info.memory_size_bytes, None);
+            }
+            let requests = server.await.unwrap();
+            assert_eq!(requests.len(), 3);
+            for (line, body) in requests {
+                assert_eq!(line, "POST /v1/checkpoints HTTP/1.1");
+                assert_eq!(json_body(&body), expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_unknown_create_fails_before_transport() {
+        use crate::runtime::checkpoints::CheckpointBackend;
+
+        let options = BoxliteRestOptions::new("http://127.0.0.1:1");
+        let backend = RestRuntime::new(&options).unwrap();
+        let unknown = CheckpointBackend::create(
+            &backend,
+            "source",
+            None,
+            CheckpointOptions {
+                kind: Some(CheckpointKind::Unknown),
+            },
+        )
+        .await;
+        assert!(
+            matches!(unknown, Err(BoxliteError::InvalidArgument(_))),
+            "{unknown:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_full_requires_advertised_capability() {
+        for config in [
+            "{}",
+            r#"{"capabilities":{"checkpoints_enabled":true}}"#,
+            MEMORY_CHECKPOINTS_DISABLED,
+        ] {
+            let (port, server) = json_server(vec![config, CHECKPOINT_RESPONSE]).await;
+            let runtime = crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!(
+                "http://127.0.0.1:{port}"
+            )))
+            .unwrap();
+            let checkpoints = runtime.checkpoints();
+            let result = checkpoints
+                .create_with_options("source", None, FULL_CHECKPOINT_OPTIONS)
+                .await;
+            assert!(
+                matches!(result, Err(BoxliteError::Unsupported(_))),
+                "{result:?}"
+            );
+
+            // A final read keeps the listener open to detect any unexpected request.
+            checkpoints.get("disk").await.unwrap();
+            assert_eq!(
+                server.await.unwrap(),
+                [
+                    "GET /v1/config HTTP/1.1",
+                    "GET /v1/checkpoints/disk HTTP/1.1"
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_full_sends_kind_and_accepts_creating_response() {
+        for (name, expected_body) in [
+            (
+                None,
+                serde_json::json!({"source_box_id": "source", "kind": "full"}),
+            ),
+            (
+                Some("backup".to_owned()),
+                serde_json::json!({"source_box_id": "source", "name": "backup", "kind": "full"}),
+            ),
+        ] {
+            let (port, server) = exchange_server(vec![
+                (200, MEMORY_CHECKPOINTS_ENABLED),
+                (201, FULL_CHECKPOINT_CREATING),
+            ])
+            .await;
+            let runtime = crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!(
+                "http://127.0.0.1:{port}"
+            )))
+            .unwrap();
+            let info = runtime
+                .checkpoints()
+                .create_with_options("source", name, FULL_CHECKPOINT_OPTIONS)
+                .await
+                .unwrap();
+            assert_eq!(info.kind, CheckpointKind::Full);
+            assert_eq!(info.state, crate::CheckpointState::Creating);
+            assert_eq!(info.memory_size_bytes, None);
+
+            let requests = server.await.unwrap();
+            assert_eq!(
+                requests[0],
+                ("GET /v1/config HTTP/1.1".into(), String::new())
+            );
+            assert_eq!(requests[1].0, "POST /v1/checkpoints HTTP/1.1");
+            assert_eq!(json_body(&requests[1].1), expected_body);
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_full_rechecks_capability_for_each_create() {
+        let (port, server) = http_server(vec![
+            (200, MEMORY_CHECKPOINTS_ENABLED),
+            (201, FULL_CHECKPOINT_CREATING),
+            (200, MEMORY_CHECKPOINTS_DISABLED),
+            (200, CHECKPOINT_RESPONSE),
+        ])
+        .await;
+        let runtime = crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!(
+            "http://127.0.0.1:{port}"
+        )))
+        .unwrap();
+        let checkpoints = runtime.checkpoints();
+        checkpoints
+            .create_with_options("source", None, FULL_CHECKPOINT_OPTIONS)
+            .await
+            .unwrap();
+        let result = checkpoints
+            .create_with_options("source", None, FULL_CHECKPOINT_OPTIONS)
+            .await;
+        assert!(
+            matches!(result, Err(BoxliteError::Unsupported(_))),
+            "{result:?}"
+        );
+        checkpoints.get("disk").await.unwrap();
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/config HTTP/1.1",
+                "POST /v1/checkpoints HTTP/1.1",
+                "GET /v1/config HTTP/1.1",
+                "GET /v1/checkpoints/disk HTTP/1.1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_full_rejects_unconfirmed_kind_without_cleanup_or_retry() {
+        const LEGACY: &str = r#"{"id":"legacy-id","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512}"#;
+        const DISK: &str = r#"{"id":"disk-id","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"disk"}"#;
+        const FUTURE: &str = r#"{"id":"future-id","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"future"}"#;
+        for (body, id) in [
+            (LEGACY, "legacy-id"),
+            (DISK, "disk-id"),
+            (FUTURE, "future-id"),
+        ] {
+            let (port, server) = http_server(vec![
+                (200, MEMORY_CHECKPOINTS_ENABLED),
+                (201, body),
+                (200, body),
+            ])
+            .await;
+            let runtime = crate::BoxliteRuntime::rest(BoxliteRestOptions::new(format!(
+                "http://127.0.0.1:{port}"
+            )))
+            .unwrap();
+            let checkpoints = runtime.checkpoints();
+            let error = checkpoints
+                .create_with_options("source", None, FULL_CHECKPOINT_OPTIONS)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&error, BoxliteError::Unsupported(message) if message.contains(id)),
+                "{error:?}"
+            );
+
+            assert_eq!(checkpoints.get(id).await.unwrap().id, id);
+            assert_eq!(
+                server.await.unwrap(),
+                [
+                    "GET /v1/config HTTP/1.1".to_string(),
+                    "POST /v1/checkpoints HTTP/1.1".to_string(),
+                    format!("GET /v1/checkpoints/{id} HTTP/1.1"),
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_get_and_list_decode_archive_metadata() {
+        use crate::BoxliteRuntime;
+
+        const FULL: &str = r#"{"id":"full","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"full","memory_size_bytes":256}"#;
+        const DISK: &str = r#"{"id":"disk","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"disk"}"#;
+        const FUTURE: &str = r#"{"id":"future","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"future_mode"}"#;
+        let (port, server) = json_server(vec![FULL, DISK, FUTURE]).await;
+        let runtime =
+            BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                .unwrap();
+        let checkpoints = runtime.checkpoints();
+        let mut expected = Vec::new();
+        for (id, kind, size) in [
+            ("full", CheckpointKind::Full, Some(256)),
+            ("disk", CheckpointKind::Disk, None),
+            ("future", CheckpointKind::Unknown, None),
+        ] {
+            let info = checkpoints.get(id).await.unwrap();
+            assert_eq!(info.id, id);
+            assert_eq!(info.kind, kind);
+            assert_eq!(info.memory_size_bytes, size);
+            expected.push(info);
+        }
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/checkpoints/full HTTP/1.1",
+                "GET /v1/checkpoints/disk HTTP/1.1",
+                "GET /v1/checkpoints/future HTTP/1.1",
+            ]
+        );
+
+        const LIST: &str = r#"{"checkpoints":[
+            {"id":"full","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"full","memory_size_bytes":256},
+            {"id":"disk","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"disk"},
+            {"id":"future","name":"backup","source_box_id":"source","created_at":"2026-01-01T00:00:00Z","size_bytes":512,"kind":"future_mode"}
+        ]}"#;
+        let (port, server) = json_server(vec![LIST]).await;
+        let runtime =
+            BoxliteRuntime::rest(BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                .unwrap();
+        assert_eq!(runtime.checkpoints().list().await.unwrap(), expected);
+        assert_eq!(server.await.unwrap(), ["GET /v1/checkpoints HTTP/1.1"]);
+    }
+
     #[tokio::test]
     async fn create_from_a_checkpoint_sends_only_the_checkpoint_and_name() {
         let (port, server) = exchange_server(vec![(201, BOX_RESPONSE)]).await;
@@ -1380,37 +1694,43 @@ mod tests {
         );
     }
 
-    /// Until REST runtimes send typed mounts, create refuses them before any
-    /// network I/O rather than leaving them out of the request.
+    /// Typed mounts can only be sent to a server that advertises the wire
+    /// contract. The probe happens before the create request so an older
+    /// server cannot drop the field silently.
     #[tokio::test]
-    async fn create_refuses_typed_mounts_until_rest_sends_them() {
+    async fn create_requires_typed_mount_advertisement() {
         use crate::runtime::options::MountSpec;
 
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                .expect("failed to create REST runtime");
         let box_options = BoxOptions {
             mounts: vec![MountSpec::volume_mount("run42", "/workspace")],
             ..Default::default()
         };
 
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("typed mounts must be refused before network I/O");
+        let error = match RuntimeBackend::create(&runtime, box_options, None).await {
+            Err(error) => error,
+            Ok(_) => panic!("unadvertised typed mounts must be rejected before creation"),
+        };
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("typed mounts"), "{error}");
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
     }
 
-    /// The server rejects `read_only: true` on a managed mount. Refusing it
-    /// here keeps a caller from believing a writable mount is protected — the
-    /// failure mode that matters is the silent downgrade, not the 400.
+    /// Read-only is a safety property, not a cosmetic flag. If an older server
+    /// cannot advertise it, the client refuses to ask rather than assume both
+    /// sides agree on writable data.
     #[tokio::test]
-    async fn create_rejects_read_only_managed_volume() {
+    async fn create_requires_read_only_advertisement() {
         use crate::runtime::options::VolumeSpec;
 
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                .expect("failed to create REST runtime");
         let box_options = BoxOptions {
             volumes: vec![VolumeSpec {
                 read_only: true,
@@ -1419,13 +1739,276 @@ mod tests {
             ..Default::default()
         };
 
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("read-only managed volumes must be rejected before network I/O");
+        let error = match RuntimeBackend::create(&runtime, box_options, None).await {
+            Err(error) => error,
+            Ok(_) => panic!("unadvertised read-only mounts must be rejected before creation"),
+        };
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("read-only"), "{error}");
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn create_sends_typed_read_only_mount_after_both_capabilities() {
+        use crate::runtime::options::MountSpec;
+
+        let (port, server) = capture_server(vec![
+            (
+                200,
+                r#"{"capabilities":{"typed_mounts_enabled":true,"volume_read_only_enabled":true}}"#,
+            ),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            mounts: vec![MountSpec {
+                read_only: true,
+                sub_path: Some("team/backend".into()),
+                ..MountSpec::volume_mount("workspace", "/workspace")
+            }],
+            ..Default::default()
+        };
+
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .expect("both advertised capabilities permit the create");
+
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap())
+                .collect::<Vec<_>>(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+        let body: serde_json::Value = serde_json::from_str(&requests[1].1).unwrap();
+        assert_eq!(
+            body["mounts"][0],
+            serde_json::json!({
+                "type": "volume",
+                "source": "workspace",
+                "target": "/workspace",
+                "read_only": true,
+                "sub_path": "team/backend",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_writable_mount_requires_only_typed_mount_capability() {
+        use crate::runtime::options::MountSpec;
+
+        let (port, server) = capture_server(vec![
+            (200, r#"{"capabilities":{"typed_mounts_enabled":true}}"#),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            mounts: vec![MountSpec::volume_mount("workspace", "/workspace")],
+            ..Default::default()
+        };
+
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .expect("writable typed mounts do not need the read-only capability");
+        assert_eq!(
+            server
+                .await
+                .unwrap()
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap().to_owned())
+                .collect::<Vec<_>>(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_sends_legacy_read_only_volume_after_capability() {
+        use crate::runtime::options::VolumeSpec;
+
+        let (port, server) = capture_server(vec![
+            (200, r#"{"capabilities":{"volume_read_only_enabled":true}}"#),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            volumes: vec![VolumeSpec {
+                read_only: true,
+                ..VolumeSpec::managed_volume("workspace", "/workspace")
+            }],
+            ..Default::default()
+        };
+
+        RuntimeBackend::create(&runtime, options, None)
+            .await
+            .expect("advertised read-only support permits the legacy create");
+
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap())
+                .collect::<Vec<_>>(),
+            ["GET /v1/config HTTP/1.1", "POST /v1/boxes HTTP/1.1"]
+        );
+        let body = json_body(&requests[1].1);
+        assert_eq!(
+            body["volumes"],
+            serde_json::json!([{
+                "managed_volume": "workspace",
+                "guest_path": "/workspace",
+                "read_only": true
+            }])
+        );
+        assert!(body.get("mounts").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_or_create_requires_mount_capabilities_before_lookup() {
+        use crate::runtime::options::{MountSpec, VolumeSpec};
+
+        for options in [
+            BoxOptions {
+                mounts: vec![MountSpec::volume_mount("workspace", "/workspace")],
+                ..Default::default()
+            },
+            BoxOptions {
+                volumes: vec![VolumeSpec {
+                    read_only: true,
+                    ..VolumeSpec::managed_volume("workspace", "/workspace")
+                }],
+                ..Default::default()
+            },
+        ] {
+            let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+
+            let error = RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+                .await
+                .err()
+                .expect("an old server must not reuse or create a mounted box");
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+            assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_or_create_reuses_legacy_read_write_volume_without_mount_metadata() {
+        use crate::runtime::options::VolumeSpec;
+
+        let mut response = serde_json::from_str::<serde_json::Value>(BOX_RESPONSE).unwrap();
+        response["privileged"] = false.into();
+        let response = Box::leak(response.to_string().into_boxed_str());
+        let (port, server) = json_server(vec![response]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            volumes: vec![VolumeSpec::managed_volume("workspace", "/workspace")],
+            ..Default::default()
+        };
+
+        let (litebox, created) =
+            RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+                .await
+                .expect("legacy read-write volumes preserve name-based reuse");
+
+        assert!(!created);
+        assert_eq!(litebox.id().as_str(), "01HJK4TNRPQSXYZ8WM6NCVT9R5");
+        assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_mount_reuse_without_configuration_metadata() {
+        use crate::runtime::options::{MountSpec, VolumeSpec};
+
+        for options in [
+            BoxOptions {
+                volumes: vec![VolumeSpec {
+                    read_only: true,
+                    ..VolumeSpec::managed_volume("workspace", "/workspace")
+                }],
+                ..Default::default()
+            },
+            BoxOptions {
+                mounts: vec![MountSpec::volume_mount("workspace", "/workspace")],
+                ..Default::default()
+            },
+            BoxOptions {
+                mounts: vec![MountSpec {
+                    read_only: true,
+                    sub_path: Some("team/backend".into()),
+                    ..MountSpec::volume_mount("workspace", "/workspace")
+                }],
+                ..Default::default()
+            },
+        ] {
+            let mut response = serde_json::from_str::<serde_json::Value>(BOX_RESPONSE).unwrap();
+            response["privileged"] = false.into();
+            let response = Box::leak(response.to_string().into_boxed_str());
+            let (port, server) = capture_server(vec![
+                (
+                    200,
+                    r#"{"capabilities":{"typed_mounts_enabled":true,"volume_read_only_enabled":true}}"#,
+                ),
+                (200, response),
+            ])
+            .await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+
+            let error = RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+                .await
+                .err()
+                .expect("reuse must not assume the existing mount configuration matches");
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+            assert!(error.to_string().contains("mount configuration"), "{error}");
+
+            let requests = server.await.unwrap();
+            assert_eq!(
+                requests
+                    .iter()
+                    .map(|(headers, _)| headers.lines().next().unwrap())
+                    .collect::<Vec<_>>(),
+                ["GET /v1/config HTTP/1.1", "GET /v1/boxes/named HTTP/1.1"]
+            );
+        }
+    }
+
+    #[test]
+    fn create_box_request_carries_typed_volume_mount() {
+        use crate::runtime::options::MountSpec;
+
+        let options = BoxOptions {
+            mounts: vec![MountSpec {
+                read_only: true,
+                sub_path: Some("team/backend".to_string()),
+                ..MountSpec::volume_mount("workspace", "/workspace")
+            }],
+            ..Default::default()
+        };
+        let request = CreateBoxRequest::from_options(&options, None);
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(
+            json["mounts"],
+            serde_json::json!([{
+                "type": "volume",
+                "source": "workspace",
+                "target": "/workspace",
+                "read_only": true,
+                "sub_path": "team/backend"
+            }])
+        );
     }
 
     /// The guard is about host paths, not about mounts: a managed volume gets

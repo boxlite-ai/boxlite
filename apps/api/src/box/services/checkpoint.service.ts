@@ -82,14 +82,18 @@ export class CheckpointService {
           String(box.state) !== String(box.desiredState) ||
           box.state !== BoxState.STOPPED
         ) {
-          throw new ConflictException(
-            'Checkpoint source must be idle and stopped; stop the Box before creating a checkpoint',
-          )
+          throw new ConflictException({
+            message: 'Checkpoint source must be idle and stopped; stop the Box before creating a checkpoint',
+            code: 'invalid_state',
+          })
         }
         if (box.volumes?.length || box.secrets?.length)
           throw new BadRequestException('Checkpoints with volumes or secrets are not supported')
         if (await manager.exists(BoxMigration, { where: { boxId: box.id, state: Not(BoxMigrationState.COMPLETED) } })) {
-          throw new ConflictException('Checkpoint source is migrating')
+          throw new ConflictException({
+            message: 'Checkpoint source is migrating',
+            code: 'invalid_state',
+          })
         }
         const runner = box.runnerId
           ? await manager.findOneBy(Runner, {
@@ -110,7 +114,10 @@ export class CheckpointService {
             },
           })
         ) {
-          throw new ConflictException('Source box already has an unfinished job')
+          throw new ConflictException({
+            message: 'Source box already has an unfinished job',
+            code: 'invalid_state',
+          })
         }
         if ((await manager.countBy(Checkpoint, { organizationId })) >= settings.maxPerOrganization)
           throw new ConflictException('Checkpoint limit reached')
@@ -141,6 +148,7 @@ export class CheckpointService {
         sourceBox = box
         return checkpoint
       })
+      await this.jobs.notifyRunner(checkpoint.sourceRunnerId, checkpoint.exportJobId!)
       if (sourceBox) this.cache.invalidate(sourceBox)
       return checkpoint
     } catch (error) {

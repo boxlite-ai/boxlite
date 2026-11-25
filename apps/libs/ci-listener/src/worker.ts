@@ -35,19 +35,25 @@ export interface WorkerState {
   box_id: string
   status: string
   exit_code?: number | null
+  /** The trusted host can reconcile an interrupted JIT operation on this Box. */
+  recoverableJit?: boolean
 }
 
 /** Host adapters use this marker only for a known original Box ID under verified original authority. */
 export class ConfirmedWorkerAbsent extends Error {
   readonly confirmedBoxAbsent = true
-  constructor() {
+  constructor(readonly creation?: { boxId: string; effect: string }) {
     super('Original CI Box is confirmed absent')
   }
 }
 
 /** A trusted host recorded that this exact creation operation produced no Box. */
 export class ConfirmedWorkerCreationRejected extends Error {
-  constructor(readonly rejectedCreationEffect: string) {
+  constructor(
+    readonly rejectedCreationEffect: string,
+    readonly reason: 'admission' | 'before-persistence' | 'undispatched' | 'recorded' = 'recorded',
+    readonly platformStatus?: number,
+  ) {
     super('Original CI Box creation was definitively rejected')
     if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(rejectedCreationEffect))
       throw new Error('Original CI creation operation required')
@@ -65,4 +71,5 @@ export interface WorkerExecutor {
   stop(name: string): Promise<void>
   remove(name: string): Promise<void>
   deliverJit(name: string, configuration: string, signal?: AbortSignal): Promise<void>
+  recoverJit?(name: string, effect: string, signal?: AbortSignal): Promise<'replace' | 'delivered' | 'unknown'>
 }

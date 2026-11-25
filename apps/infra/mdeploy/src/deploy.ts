@@ -24,6 +24,7 @@ import type { StoreBackend } from 'mstage/env'
 import type { Scope } from 'mstage/scope'
 import { awsTarget } from './sst.ts'
 import { gcpTarget } from './pulumi.ts'
+import type { Components } from './components.ts'
 
 /**
  * What the engine is asked to do. A preview reads; the other two write.
@@ -40,6 +41,7 @@ export type Engine = 'sst' | 'pulumi'
 
 /** One run, in the words every engine understands. */
 export type DeployRequest = {
+  components?: Components
   /**
    * Deploy, preview, or tear down. The same environment and the same config in
    * every case: a preview that resolved its inputs differently would be

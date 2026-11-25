@@ -1,67 +1,48 @@
 //! File upload/download handlers (tar-based).
 //!
-//! Downloads preserve guest-provided symbolic links as link entries. The
-//! host-side response packer must not dereference them, because the link
-//! target was chosen inside the guest and may name a host file.
+//! Tar bytes pass directly between HTTP and the backend. Guest-provided link
+//! entries stay in the archive; their targets must not be opened on the host.
 
 use std::sync::Arc;
 
-use axum::body::Bytes;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use futures::StreamExt;
 
 use boxlite::CopyOptions;
 
 use super::super::types::FileQuery;
-use super::super::{AppState, error_from_boxlite, error_response, get_or_resume_box};
+use super::super::{AppState, error_from_boxlite, get_or_resume_box};
 
 pub(in crate::commands::serve) async fn upload_files(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
     Query(query): Query<FileQuery>,
-    body: Bytes,
+    body: Body,
 ) -> Response {
     let litebox = match get_or_resume_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
 
-    // Extract tar to temp dir, then copy into container
-    let temp_dir = match tempfile::tempdir() {
-        Ok(d) => d,
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to create temp dir: {e}"),
-                "InternalError",
-                "internal",
-            );
-        }
-    };
-
-    let extract_dir = temp_dir.path().join("extracted");
-    if let Err(e) = std::fs::create_dir_all(&extract_dir) {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to create extract dir: {e}"),
-            "InternalError",
-            "internal",
-        );
-    }
-
-    let mut archive = tar::Archive::new(&body[..]);
-    if let Err(e) = archive.unpack(&extract_dir) {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            format!("failed to extract tar: {e}"),
-            "InvalidArgumentError",
-            "invalid_argument",
-        );
-    }
-
+    // Preserve entry order and duplicates so the guest enforces the policy
+    // against each original entry, including earlier writes in this upload.
+    let stream = body.into_data_stream().map(|chunk| {
+        chunk
+            .map(|bytes| bytes.to_vec())
+            .map_err(std::io::Error::other)
+    });
     if let Err(e) = litebox
-        .copy_into(&extract_dir, &query.path, CopyOptions::default())
+        .copy_in_stream(
+            stream,
+            &query.path,
+            CopyOptions {
+                overwrite: query.overwrite.unwrap_or(true),
+                ..CopyOptions::default()
+            },
+        )
         .await
     {
         return error_from_boxlite(&e);
@@ -80,59 +61,26 @@ pub(in crate::commands::serve) async fn download_files(
         Err(resp) => return resp,
     };
 
-    let temp_dir = match tempfile::tempdir() {
-        Ok(d) => d,
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to create temp dir: {e}"),
-                "InternalError",
-                "internal",
-            );
-        }
-    };
-
-    if let Err(e) = litebox
-        .copy_out(&query.path, temp_dir.path(), CopyOptions::default())
+    let stream = match litebox
+        .copy_out_stream(&query.path, CopyOptions::default())
         .await
     {
-        return error_from_boxlite(&e);
-    }
-
-    // Create tar from extracted files
-    let mut builder = tar::Builder::new(Vec::new());
-    builder.follow_symlinks(false);
-    if let Err(e) = builder.append_dir_all(".", temp_dir.path()) {
-        return error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to create tar: {e}"),
-            "InternalError",
-            "internal",
-        );
-    }
-
-    let tar_bytes = match builder.into_inner() {
-        Ok(b) => b,
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to finalize tar: {e}"),
-                "InternalError",
-                "internal",
-            );
-        }
+        Ok(stream) => stream,
+        Err(e) => return error_from_boxlite(&e),
     };
 
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/x-tar")
-        .body(axum::body::Body::from(tar_bytes))
+        .body(Body::from_stream(stream))
         .unwrap()
 }
 
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
+    mod streaming;
+
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -216,7 +164,6 @@ mod tests {
                     Response::builder()
                         .status(StatusCode::OK)
                         .header("content-type", "application/x-tar")
-                        .header("x-boxlite-source-is-dir", "true")
                         .body(axum::body::Body::from(guest_tar.clone()))
                         .expect("build guest download response")
                 }),
@@ -246,6 +193,7 @@ mod tests {
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
+            browser_sessions: Default::default(),
         });
 
         let response = download_files(
@@ -253,6 +201,7 @@ mod tests {
             Path(BOX_ID.to_string()),
             Query(FileQuery {
                 path: "/probe".to_string(),
+                overwrite: None,
             }),
         )
         .await;

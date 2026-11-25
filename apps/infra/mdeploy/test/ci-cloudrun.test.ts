@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { apiEnvironmentFrom } from '../src/api-environment.ts'
 import { gcpApiProvider } from '../stack/providers/gcp/api.ts'
+import * as gcpSdk from '@pulumi/gcp'
+import { componentTargets } from '../src/components.ts'
 
 class Value {
   constructor(readonly __output: any) {}
@@ -19,7 +21,7 @@ const unwrap = (input: any): any =>
         ? Object.fromEntries(Object.entries(input).map(([key, item]) => [key, unwrap(item)]))
         : input
 
-function capture(configured: boolean) {
+function capture(configured: boolean, minInstances?: number, instance?: { cpu: number; memoryMiB: number }, maxInstances?: number) {
   const records: { type: string; name: string; args: any }[] = []
   const namespace = (path: string): any =>
     new Proxy(function () {}, {
@@ -125,13 +127,13 @@ function capture(configured: boolean) {
     zoneId: 'zone',
     network: value('network') as any,
     runnerAccount: value('runner@example.test') as any,
-  })({ ...channels, image: 'registry.example.test/api:fixture', port: 3000, capabilities: [] } as any)
+  })({ ...channels, minInstances, maxInstances, instance, image: 'registry.example.test/api:fixture', port: 3000, capabilities: [] } as any)
   const service = records.find((r) => r.type === 'gcp.cloudrunv2.Service' && r.name === 'Api')
   assert.ok(service)
   return { service: unwrap(service.args), records }
 }
 
-test('the Cloud Run API retains background CPU and adds a service-level minimum only with CI', () => {
+test('the Cloud Run API retains background CPU and uses the hosted CI default when the minimum is omitted', () => {
   const on = capture(true).service
   assert.deepEqual(on.scaling, { minInstanceCount: 1 })
   assert.equal(on.template.containers[0].resources.cpuIdle, false)
@@ -139,6 +141,43 @@ test('the Cloud Run API retains background CPU and adds a service-level minimum 
   const off = capture(false).service
   assert.equal(off.scaling, undefined)
   assert.equal(off.template.containers[0].resources.cpuIdle, false)
+})
+
+test('the configured service minimum overrides the hosted CI default', () => {
+  assert.deepEqual(capture(true, 0).service.scaling, { minInstanceCount: 0 })
+  assert.deepEqual(capture(true, 5).service.scaling, { minInstanceCount: 5 })
+  assert.deepEqual(capture(false, 5).service.scaling, { minInstanceCount: 5 })
+  const { service } = capture(true, undefined, undefined, 15)
+  assert.deepEqual(service.scaling, { minInstanceCount: 1, maxInstanceCount: 15 })
+  assert.deepEqual(service.template.scaling, { maxInstanceCount: 15 })
+})
+
+test('Cloud Run receives instance limits only when a stage specifies them', () => {
+  assert.deepEqual(capture(false).service.template.containers[0].resources, { cpuIdle: false })
+  const { service } = capture(false, 5, { cpu: 2, memoryMiB: 2048 })
+  assert.deepEqual(service.template.containers[0].resources, { cpuIdle: false, limits: { cpu: '2', memory: '2048Mi' } })
+  assert.deepEqual(service.scaling, { minInstanceCount: 5 })
+})
+
+test('API targeting includes newly configured secret grants absent from the previous state', () => {
+  const { records } = capture(true)
+  const service = records.find((record) => record.type === 'gcp.cloudrunv2.Service' && record.name === 'Api')!
+  const prefix = 'urn:pulumi:ci-test::boxlite::'
+  const apiType = (gcpSdk.cloudrunv2.Service as any).__pulumiType
+  const targets = componentTargets({
+    components: 'api',
+    app: 'boxlite',
+    stage: 'ci-test',
+    environment: {},
+    resources: [{ type: apiType, urn: `${prefix}${apiType}::${service.name}` }],
+  })
+  const grants = records.filter((record) => record.type === 'gcp.secretmanager.SecretIamMember')
+  const grantType = (gcpSdk.secretmanager.SecretIamMember as any).__pulumiType
+  assert.ok(grants.some((grant) => grant.name === 'ApiSecretAccess-CI_GITHUB_APP_PRIVATE_KEY'))
+  for (const grant of grants) {
+    const urn = `${prefix}${grantType}::${grant.name}`
+    assert.ok(urn.startsWith(targets[1]!.slice(0, -1)), `${grant.name} is outside the target scope`)
+  }
 })
 
 test('CI refs reach actual Cloud Run envs and per-secret grants, without plaintext payloads', () => {

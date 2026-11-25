@@ -9,7 +9,6 @@ use reqwest::Method;
 use serde::Serialize;
 use tokio::sync::mpsc;
 
-use boxlite_shared::constants::files::FALLBACK_CAP_BYTES;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use futures::StreamExt;
 use std::io;
@@ -47,7 +46,17 @@ pub(crate) struct RestBox {
     name: Option<String>,
 }
 
+/// Retain the transport error class across tar extraction's I/O error mapping.
+struct TarDownload {
+    stream: boxlite_shared::BoxByteStream,
+    transport_fault: Arc<Mutex<Option<BoxliteError>>>,
+}
+
 impl RestBox {
+    pub(crate) fn agent_client(&self) -> &ApiClient {
+        &self.client
+    }
+
     pub fn new(client: ApiClient, info: BoxInfo) -> Self {
         Self {
             client,
@@ -68,6 +77,83 @@ impl RestBox {
             )));
         }
         Ok(info)
+    }
+
+    fn validate_upload(opts: &CopyOptions) -> BoxliteResult<()> {
+        // Older runners ignore overwrite=false. Until server support can be
+        // established reliably, retain the SDK's safe refusal before sending
+        // data; blindly forwarding false could silently replace remote files.
+        if !opts.overwrite {
+            return Err(BoxliteError::Unsupported(
+                "copy_into with overwrite=false is not supported over the REST backend; \
+                 remote overwrite protection cannot be confirmed. \
+                 Use the local backend for protected copies."
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn upload_stream(
+        &self,
+        stream: boxlite_shared::BoxByteStream,
+        container_dst: &str,
+    ) -> BoxliteResult<()> {
+        let body = reqwest::Body::wrap_stream(stream.map(|r| r.map(bytes::Bytes::from)));
+        let encoded_dst = urlencoding::encode(container_dst);
+        let path = format!("/boxes/{}/files?path={}", self.box_id_str(), encoded_dst);
+        let resp = self
+            .client
+            .authorized_request(Method::PUT, &path)
+            .await?
+            .header("Content-Type", "application/x-tar")
+            .body(body)
+            .send()
+            .await
+            .map_err(transport_error)?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(map_http_body(status, &text));
+        }
+        Ok(())
+    }
+
+    async fn download_stream(&self, container_src: &str) -> BoxliteResult<TarDownload> {
+        let encoded_src = urlencoding::encode(container_src);
+        let path = format!("/boxes/{}/files?path={}", self.box_id_str(), encoded_src);
+        let resp = self
+            .client
+            .authorized_request(Method::GET, &path)
+            .await?
+            .header("Accept", "application/x-tar")
+            .send()
+            .await
+            .map_err(transport_error)?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(map_http_body(status, &text));
+        }
+
+        // Extraction converts I/O failures to Storage. Keep the original
+        // transport classification in a slot independent of task drop timing.
+        let transport_fault = Arc::new(Mutex::new(None));
+        let fault_slot = Arc::clone(&transport_fault);
+        let stream = Box::pin(resp.bytes_stream().map(move |r| {
+            r.map(|b| b.to_vec()).map_err(|e| {
+                let classified = transport_error(e);
+                let message = classified.to_string();
+                if let Ok(mut slot) = fault_slot.lock() {
+                    *slot = Some(classified);
+                }
+                io::Error::other(message)
+            })
+        }));
+        Ok(TarDownload {
+            stream,
+            transport_fault,
+        })
     }
 
     /// Wire an already-open attach WebSocket into an `Execution`.
@@ -454,29 +540,10 @@ impl BoxBackend for RestBox {
         container_dst: &str,
         opts: CopyOptions,
     ) -> BoxliteResult<()> {
-        let box_id = self.box_id_str();
-
-        // Honor overwrite=false at the REST boundary. The runner's
-        // upload handler always extracts the tar over whatever's at
-        // container_dst (the test in apps/e2e/cases/test_files_io.py::
-        // test_copy_in_overwrite_false_rejects_conflict was catching
-        // 'overwrite=False replaced guest content'). The test contract
-        // explicitly accepts a raised exception OR a no-op — the
-        // invariant is "guest content must be unchanged". We can't
-        // express the per-entry "skip if dst exists" semantics over
-        // the current single-tar upload protocol, so refuse the call
-        // outright instead of silently clobbering.
-        if !opts.overwrite {
-            return Err(BoxliteError::Unsupported(
-                "copy_into with overwrite=false is not supported over the REST backend; \
-                 the current upload protocol cannot express per-entry skip-if-exists. \
-                 Use the FFI backend or pre-check the destination before calling."
-                    .into(),
-            ));
-        }
+        Self::validate_upload(&opts)?;
 
         // Stream a tar of the host source straight into the request body.
-        let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
+        let tar = boxlite_shared::tar::pack_stream(
             host_src.to_path_buf(),
             boxlite_shared::tar::PackContext {
                 follow_symlinks: opts.follow_symlinks,
@@ -485,29 +552,7 @@ impl BoxBackend for RestBox {
         )
         .await?;
 
-        let body = reqwest::Body::wrap_stream(tar.map(|r| r.map(bytes::Bytes::from)));
-
-        // Upload tar to server, carrying the archive-shape hint.
-        let encoded_dst = urlencoding::encode(container_dst);
-        let path = format!(
-            "/boxes/{}/files?path={}&source_is_dir={}",
-            box_id, encoded_dst, source_is_dir
-        );
-        let builder = self
-            .client
-            .authorized_request(Method::PUT, &path)
-            .await?
-            .header("Content-Type", "application/x-tar")
-            .body(body);
-
-        let resp = builder.send().await.map_err(transport_error)?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(map_http_body(status, &text));
-        }
-        Ok(())
+        self.upload_stream(tar, container_dst).await
     }
 
     async fn copy_out(
@@ -516,64 +561,10 @@ impl BoxBackend for RestBox {
         host_dst: &Path,
         _opts: CopyOptions,
     ) -> BoxliteResult<()> {
-        let box_id = self.box_id_str();
-
-        // Download tar from server
-        let encoded_src = urlencoding::encode(container_src);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_src);
-        let builder = self
-            .client
-            .authorized_request(Method::GET, &path)
-            .await?
-            .header("Accept", "application/x-tar");
-
-        let resp = builder.send().await.map_err(transport_error)?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(map_http_body(status, &text));
-        }
-
-        // The archive shape is carried on the response header (newer servers);
-        // absence means the peer predates it → capped buffered fallback.
-        let source_is_dir = resp
-            .headers()
-            .get("x-boxlite-source-is-dir")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<bool>().ok());
-
-        let Some(source_is_dir) = source_is_dir else {
-            // Legacy peer: without the shape hint we must buffer to detect it.
-            let bytes = read_capped(resp, FALLBACK_CAP_BYTES).await?;
-            return extract_tar_to_path(&bytes, host_dst);
-        };
-        // The header carries the *source* shape; the destination's own
-        // signals — an existing directory, or a trailing slash naming one —
-        // must still win for a single file, matching the file-based `unpack`
-        // and Unix cp semantics.
-        let dest_wants_dir = host_dst.as_os_str().to_string_lossy().ends_with('/');
-        let force_directory = source_is_dir || host_dst.is_dir() || dest_wants_dir;
-
-        // A severed body must stay classified as a transport fault so callers
-        // retry instead of filing a bug. `unpack_stream` flattens the byte
-        // stream's `io::Error` into its own storage message, so park the
-        // classified error in a shared slot and prefer it if the unpack then
-        // fails. A `Mutex` (not `OnceLock` + `Arc::try_unwrap`) because the
-        // forwarding task inside `unpack_stream` may still hold a clone of the
-        // slot when we read it back — we must not depend on Arc drop timing.
-        let transport_fault: Arc<Mutex<Option<BoxliteError>>> = Arc::new(Mutex::new(None));
-        let fault_slot = Arc::clone(&transport_fault);
-        let stream: boxlite_shared::BoxByteStream = Box::pin(resp.bytes_stream().map(move |r| {
-            r.map(|b| b.to_vec()).map_err(|e| {
-                let classified = transport_error(e);
-                let message = classified.to_string();
-                if let Ok(mut slot) = fault_slot.lock() {
-                    *slot = Some(classified);
-                }
-                io::Error::other(message)
-            })
-        }));
+        let TarDownload {
+            stream,
+            transport_fault,
+        } = self.download_stream(container_src).await?;
 
         let unpacked = boxlite_shared::tar::unpack_stream(
             stream,
@@ -581,7 +572,9 @@ impl BoxBackend for RestBox {
             boxlite_shared::tar::UnpackContext {
                 overwrite: true,
                 mkdir_parents: true,
-                force_directory,
+                // The archive's first entry decides how it lands; `host_dst`
+                // keeps any trailing '/' for the landing to read.
+                force_directory: false,
             },
         )
         .await;
@@ -593,6 +586,24 @@ impl BoxBackend for RestBox {
                 Err(fault.unwrap_or(unpack_err))
             }
         }
+    }
+
+    async fn copy_in_stream(
+        self: Arc<Self>,
+        stream: boxlite_shared::BoxByteStream,
+        container_dst: String,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()> {
+        Self::validate_upload(&opts)?;
+        self.upload_stream(stream, &container_dst).await
+    }
+
+    async fn copy_out_stream(
+        self: Arc<Self>,
+        container_src: String,
+        _opts: CopyOptions,
+    ) -> BoxliteResult<boxlite_shared::BoxByteStream> {
+        Ok(self.download_stream(&container_src).await?.stream)
     }
 
     async fn clone_box(
@@ -1346,127 +1357,6 @@ async fn emit_or_fallback(
 }
 
 // ============================================================================
-// Tar Helpers
-// ============================================================================
-
-/// Read a tar response body into memory, enforcing a size cap.
-///
-/// Used only as a fallback when the server predates the `source_is_dir`
-/// hint and therefore cannot stream end-to-end; past the cap we error
-/// instead of buffering unboundedly. Takes the `Response` rather than a
-/// byte stream so a severed body keeps its transport classification.
-async fn read_capped(resp: reqwest::Response, cap: u64) -> BoxliteResult<Vec<u8>> {
-    let mut stream = resp.bytes_stream();
-    let mut out: Vec<u8> = Vec::new();
-    while let Some(item) = stream.next().await {
-        let chunk = item.map_err(transport_error)?;
-        if out.len() as u64 + chunk.len() as u64 > cap {
-            return Err(BoxliteError::Unsupported(format!(
-                "copy_out exceeds {} MiB fallback cap; upgrade the server to stream end-to-end",
-                cap / (1024 * 1024)
-            )));
-        }
-        out.extend_from_slice(&chunk);
-    }
-    Ok(out)
-}
-
-/// Extract a tar archive to a host path.
-///
-/// When the archive contains exactly one regular file (the common case
-/// for `copy_out("/guest/file", "/host/file")`), the file is written
-/// at `host_dst` directly so the caller sees the layout they asked
-/// for. When the archive contains multiple entries (or any directory
-/// entry), `host_dst` is treated as a destination directory and the
-/// tree is unpacked into it.
-///
-/// Pre-fix this always called `archive.unpack(host_dst)`, which
-/// always treats `host_dst` as a directory and produces the wrong
-/// shape on single-file `copy_out` (callers received `/host/file/`
-/// as a directory containing the actual file under it).
-fn extract_tar_to_path(tar_bytes: &[u8], host_dst: &Path) -> BoxliteResult<()> {
-    // Probe the archive once to decide single-file vs multi-entry.
-    // tar::Archive iterators consume the underlying reader, so we
-    // re-open a fresh Archive for the actual extraction step.
-    let mut probe = tar::Archive::new(tar_bytes);
-    let mut file_count = 0usize;
-    let mut other_count = 0usize;
-    let mut single_entry_path: Option<std::path::PathBuf> = None;
-    for entry in probe
-        .entries()
-        .map_err(|e| BoxliteError::Internal(format!("failed to read tar archive: {}", e)))?
-    {
-        let entry = entry
-            .map_err(|e| BoxliteError::Internal(format!("failed to read tar entry: {}", e)))?;
-        let header = entry.header();
-        match header.entry_type() {
-            tar::EntryType::Regular => {
-                file_count += 1;
-                if single_entry_path.is_none() {
-                    single_entry_path =
-                        Some(entry.path().map(|c| c.into_owned()).unwrap_or_default());
-                }
-            }
-            _ => other_count += 1,
-        }
-    }
-
-    if file_count == 1 && other_count == 0 {
-        if let Some(parent) = host_dst.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                BoxliteError::Internal(format!(
-                    "failed to create directory {}: {}",
-                    parent.display(),
-                    e
-                ))
-            })?;
-        }
-        // Re-read the (single) entry from a fresh Archive and copy
-        // its bytes into host_dst directly.
-        let mut archive = tar::Archive::new(tar_bytes);
-        for entry in archive
-            .entries()
-            .map_err(|e| BoxliteError::Internal(format!("failed to re-read tar archive: {}", e)))?
-        {
-            let mut entry = entry.map_err(|e| {
-                BoxliteError::Internal(format!("failed to re-read tar entry: {}", e))
-            })?;
-            if entry.header().entry_type() != tar::EntryType::Regular {
-                continue;
-            }
-            let mut out = std::fs::File::create(host_dst).map_err(|e| {
-                BoxliteError::Internal(format!("failed to create {}: {}", host_dst.display(), e))
-            })?;
-            std::io::copy(&mut entry, &mut out).map_err(|e| {
-                BoxliteError::Internal(format!("failed to write {}: {}", host_dst.display(), e))
-            })?;
-            return Ok(());
-        }
-        // Probe said one regular file but the second pass found
-        // none — defensive fallthrough; shouldn't happen.
-        let _ = single_entry_path;
-    }
-
-    // Multi-entry archive: treat host_dst as a directory and unpack
-    // the tree into it. Matches the historical contract.
-    std::fs::create_dir_all(host_dst).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "failed to create directory {}: {}",
-            host_dst.display(),
-            e
-        ))
-    })?;
-    let mut archive = tar::Archive::new(tar_bytes);
-    archive.unpack(host_dst).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "failed to extract tar to {}: {}",
-            host_dst.display(),
-            e
-        ))
-    })
-}
-
-// ============================================================================
 // Metrics Conversion
 // ============================================================================
 
@@ -2017,51 +1907,8 @@ mod tests {
         server.await.unwrap();
     }
 
-    /// The streaming path (server sends the shape hint) must preserve the same
-    /// transport-fault classification the buffered fallback gives. Exercises the
-    /// shared fault slot, not just `read_capped`.
-    #[tokio::test]
-    async fn copy_out_streaming_truncation_classifies_as_network() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut head = Vec::new();
-            while !head.ends_with(b"\r\n\r\n") {
-                head.push(socket.read_u8().await.unwrap());
-            }
-            // Streaming peer: carries the shape hint, promises 4 KiB, hangs up.
-            socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\n\
-                      Content-Type: application/x-tar\r\n\
-                      X-Boxlite-Source-Is-Dir: false\r\n\
-                      Content-Length: 4096\r\n\
-                      Connection: close\r\n\r\nhi",
-                )
-                .await
-                .unwrap();
-        });
-
-        let rest_box = rest_box_for(port, "box1");
-        let host_dst = std::env::temp_dir().join("boxlite-copy-out-stream-truncated");
-
-        let error = rest_box
-            .copy_out("/tmp/archive", &host_dst, CopyOptions::default())
-            .await
-            .expect_err("a truncated streaming download must fail");
-
-        assert!(
-            matches!(&error, BoxliteError::Network(_)),
-            "a severed streaming download must classify as transport, got {error:?}"
-        );
-        server.await.unwrap();
-    }
-
-    /// Streaming copy_out must fold the destination's directory-ness back into
-    /// the archive shape: a single-file source whose destination is an existing
-    /// directory lands *inside* it (Unix cp semantics), not at the directory
-    /// path — as the file-based `unpack` lands it.
+    /// A single-file source whose destination is an existing directory lands
+    /// *inside* it (Unix cp semantics), not at the directory path.
     #[tokio::test]
     async fn copy_out_places_single_file_inside_existing_directory() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2093,7 +1940,6 @@ mod tests {
                     format!(
                         "HTTP/1.1 200 OK\r\n\
                          Content-Type: application/x-tar\r\n\
-                         X-Boxlite-Source-Is-Dir: false\r\n\
                          Content-Length: {}\r\n\
                          Connection: close\r\n\r\n",
                         tar_bytes.len()
@@ -2124,7 +1970,8 @@ mod tests {
 
     /// POL-593 on a hosted box: a directory copied out to a missing
     /// destination becomes it, as `docker cp` lands it, rather than nesting
-    /// under its own name.
+    /// under its own name. The response carries no shape header: the
+    /// archive's first entry decides.
     #[tokio::test]
     async fn copy_out_lands_a_directory_as_a_missing_destination() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2136,7 +1983,7 @@ mod tests {
             follow_symlinks: false,
             include_parent: true,
         };
-        let (_, tar) = boxlite_shared::tar::pack_stream(tree, pack).await.unwrap();
+        let tar = boxlite_shared::tar::pack_stream(tree, pack).await.unwrap();
         let tar_bytes: Vec<u8> = tar.map(Result::unwrap).concat().await;
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2150,7 +1997,6 @@ mod tests {
             let response = format!(
                 "HTTP/1.1 200 OK\r\n\
                  Content-Type: application/x-tar\r\n\
-                 X-Boxlite-Source-Is-Dir: true\r\n\
                  Content-Length: {}\r\n\
                  Connection: close\r\n\r\n",
                 tar_bytes.len()
@@ -2214,9 +2060,8 @@ mod tests {
     }
 
     /// A destination with a trailing slash names a directory even when it
-    /// does not exist yet: a single-file source must land *inside* it (the
-    /// file-based `unpack` trailing-slash rule), not fail to
-    /// unpack at the directory-designated path.
+    /// does not exist yet: a single-file source must land *inside* it, not
+    /// fail to unpack at the directory-designated path.
     #[tokio::test]
     async fn copy_out_trailing_slash_forces_directory_mode() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2248,7 +2093,6 @@ mod tests {
                     format!(
                         "HTTP/1.1 200 OK\r\n\
                          Content-Type: application/x-tar\r\n\
-                         X-Boxlite-Source-Is-Dir: false\r\n\
                          Content-Length: {}\r\n\
                          Connection: close\r\n\r\n",
                         tar_bytes.len()
@@ -3322,40 +3166,5 @@ mod tests {
         server.await.unwrap();
     }
 
-    /// Agents refuse a REST Box before any request: its tunnels can publish
-    /// the agent's server beyond this host.
-    #[tokio::test]
-    async fn agents_refuse_a_remote_box_before_any_request() {
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let rest_box = Arc::new(rest_box_for(port, "remote-box"));
-        let agents = crate::Agents::new(rest_box.clone(), rest_box);
-        let bound = Duration::from_secs(5);
-
-        let created = tokio::time::timeout(
-            bound,
-            agents.create("opencode", crate::agents::AgentCreateOptions::default()),
-        )
-        .await
-        .expect("create must not wait on the server")
-        .err();
-        let fetched = tokio::time::timeout(bound, agents.get("ses_test"))
-            .await
-            .expect("get must not wait on the server")
-            .err();
-        // Input a local runtime would reject is still refused for the runtime.
-        let malformed_id = agents.get("not-a-session").await.err();
-        let mut bad_model = crate::agents::AgentCreateOptions::default();
-        bad_model.config.model = Some("no-provider".into());
-        let malformed_model = agents.create("opencode", bad_model).await.err();
-
-        for error in [created, fetched, malformed_id, malformed_model] {
-            assert!(
-                matches!(&error, Some(BoxliteError::Unsupported(message)) if message == "agents require a local runtime"),
-                "{error:?}"
-            );
-        }
-        let connected = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
-        assert!(connected.is_err(), "no request reached the server");
-    }
+    mod agents;
 }

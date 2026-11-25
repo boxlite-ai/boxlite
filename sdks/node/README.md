@@ -4,6 +4,10 @@ Embeddable VM runtime for secure, isolated code execution environments.
 
 Access the [agent API](../../docs/reference/agents.md) through `JsBox.agents`
 and `SimpleBox.agents` for agent and turn methods, grouped options and error handling.
+On a local runtime, retain the stream with `const events = agent.events()` and
+await `events.opened()` before sending work when the first live event matters.
+Read from that same `events` stream, use `read({ signal })` to cancel one read,
+and call `events.return()` to close it.
 
 **Think "SQLite for sandboxing"** - a lightweight library embedded directly in your application without requiring a daemon or root privileges.
 
@@ -16,16 +20,21 @@ and `SimpleBox.agents` for agent and turn methods, grouped options and error han
 
 ## Managed checkpoints
 
-A checkpoint is a source for a new box, like an image: pass it to the ordinary
-create call. The checkpoint handle only manages checkpoints. Archive import is a
-separate operation for local `.boxlite` files and is unchanged. The CLI form is
+Pass a checkpoint to the ordinary create call to use it as the source for a new
+box. The checkpoint handle manages checkpoint archives. Archive import loads
+local `.boxlite` files. The CLI form for creating a box from a checkpoint is
 `boxlite create --checkpoint ID [--name NAME]`.
 
-The source must be stopped before `create`; stop it and wait for `stopped` first.
-Checkpoint creation rejects other states and never stops the source automatically.
+In `CheckpointOptions`, `kind: "disk"` captures a stopped, idle source and is
+the default. `kind: "full"` captures disk and memory from a running source.
+Before requesting full capture, the SDK checks that the REST server advertises
+`memory_checkpoints_enabled`.
 
-The REST runtime's `checkpoints` handle exposes `create`, `list`,
-`get` and `remove` as promises. Checkpoints survive their source box.
+The REST runtime's `checkpoints` handle exposes `create(source, name?, options?)`,
+`list()`, `get(key)`, and `remove(key, force?)` as promises. Checkpoints survive
+source deletion. `CheckpointInfo.kind` is `"disk"`, `"full"`, or `"unknown"` for
+an unrecognized server kind. `CheckpointInfo.memorySizeBytes` is absent when
+omitted by the server and preserves a reported zero.
 
 ```typescript
 const checkpoint = await runtime.checkpoints.create("source", "dev-base");
@@ -711,9 +720,17 @@ do not build the native module and exclude these integration tests.
 
 From the repository root, run
 `make test:integration:node FILTER='agent namespace'`. The native Box getter test
-obtains a handle from a loopback REST server and checks namespace access without
-starting a VM or sending agent requests. Separate tests reject plain-object and
-prototype-only method receivers before the agent operation runs.
+gets a Box from a loopback REST server and reads `box.agents`. It checks that
+the result is a native `Agents` instance and the server received only the
+initial Box lookup. The
+[Rust REST client tests](../../src/boxlite/src/rest/litebox/tests/agents.rs)
+cover the HTTP requests issued by `agents.create()` and `agents.get()`.
+Separate Node tests reject plain-object and prototype-only method receivers
+before the agent operation runs.
+
+To compare Node and Python agent results with Rust in real OpenCode VMs, set
+`BOXLITE_TEST_OPENCODE_BINARY` to the OpenCode 2.2.2 Linux binary and run
+`make test:integration:agent-sdk-parity` from the repository root.
 
 These receiver tests exercise napi-rs callback unwrapping. They do not exercise
 the generated `FromNapiRef` and `FromNapiMutRef` conversions flagged by CodeQL,

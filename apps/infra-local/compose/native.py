@@ -298,7 +298,7 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "BOXLITE_API_URL": f"http://localhost:{PORT_API}/api",
                 "OIDC_CLIENT_ID": "boxlite",
                 "OIDC_AUDIENCE": "boxlite",
-                "OIDC_DOMAIN": "http://localhost:25556/dex",
+                "OIDC_DOMAIN": "http://localhost:25556/auth/v1",
                 "REDIS_HOST": "127.0.0.1",
                 "REDIS_PORT": "26379",
                 "SHUTDOWN_TIMEOUT_SEC": "10",
@@ -674,7 +674,7 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         err("stack incomplete — inspect make status and component logs")
     print(f"  Dashboard:    http://localhost:{PORT_DASHBOARD}")
     print(f"  API:          http://localhost:{PORT_API}/api")
-    print(f"  Dex (OIDC):   http://localhost:25556/dex")
+    print(f"  Rauthy (OIDC): http://localhost:25556/auth/v1")
     print(f"  Logs at:      {p.logs}/")
     return 0 if healthy else 1
 
@@ -729,7 +729,7 @@ def status(cfg: InfraConfig) -> int:
     print(f"{_BOLD}URLs{_RESET}")
     print(f"  Dashboard:      http://localhost:{PORT_DASHBOARD}")
     print(f"  API:            http://localhost:{PORT_API}/api")
-    print(f"  Dex (OIDC):     http://localhost:25556/dex")
+    print(f"  Rauthy (OIDC):  http://localhost:25556/auth/v1")
     print(f"  Caddy (entry):  http://localhost:28080")
     print()
     print(f"{_BOLD}Logs{_RESET}: {p.logs}/")
@@ -763,8 +763,8 @@ def restart(cfg: InfraConfig, names: list[str]) -> int:
     """Restart L2 process(es) and/or recreate L1 box(es), by name.
 
     L2 components (see ALL_COMPONENTS) are stopped + restarted; the Go ones
-    (see _GO_BUILDS) rebuild their binary first. L1 box names (dex/registry/...) are
-    destroyed + recreated — the surgical fix for one wedged box (e.g. dex after
+    (see _GO_BUILDS) rebuild their binary first. L1 box names (rauthy/registry/...) are
+    destroyed + recreated — the surgical fix for one wedged box (e.g. rauthy after
     the host sleeps and its clock drifts). The host data volume survives.
     """
     p = _paths(cfg)
@@ -826,7 +826,7 @@ def reset(cfg: InfraConfig, *, hard: bool = False) -> int:
             err("migrations failed after schema reset — the schema may be incomplete")
             return 1
         ok("hard reset complete (schema rebuilt — identity wiped)")
-        warn("browser must re-login: clear sessionStorage + localStorage, then sign in via dex")
+        warn("browser must re-login: clear sessionStorage + localStorage, then sign in via rauthy")
     else:
         # Preserve identity + infra (user/org/region/runner/api_key); clear only
         # runtime/user-created state. Keeps OIDC sessions alive.

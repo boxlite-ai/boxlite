@@ -10,6 +10,7 @@ use std::{
     thread,
     time::Duration,
 };
+use vm_memory::GuestAddressSpace as _;
 
 use boxlite_hypervisor::{KvmVcpu, KvmVm, VcpuExit, VcpuHandle as _, X86BootRegisters, X86Segment};
 use vm_memory::{Bytes, GuestAddress};
@@ -37,7 +38,7 @@ impl FlatGuest {
         let mut ram = GuestRam::new(&ram_ranges(2)).unwrap();
         let vm = Arc::new(KvmVm::new().expect("create KVM VM"));
         ram.map(&*vm).expect("map guest RAM");
-        let regs = load(ram.memory(), program);
+        let regs = load(&ram.memory().memory(), program);
         let mut vcpu = vm.create_vcpu(0).expect("create vCPU");
         vcpu.set_boot_registers(&regs).unwrap();
         Self { vcpu, vm, ram }
@@ -83,6 +84,7 @@ impl FlatGuest {
     /// Reads guest RAM at `addr`.
     pub(crate) fn read(&self, addr: u64, data: &mut [u8]) {
         self.ram
+            .memory()
             .memory()
             .read_slice(data, GuestAddress(addr))
             .unwrap();

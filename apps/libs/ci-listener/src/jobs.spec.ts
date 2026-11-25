@@ -1,6 +1,8 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { GitHubCredential } from './github-app'
 import { GitHubJobs, jobMatches } from './jobs'
+import type { JobNotice, WorkflowJob } from './jobs'
+import { GitHubRequestError } from './github'
 
 describe('CI shared GitHub jobs', () => {
   const original = global.fetch,
@@ -31,6 +33,185 @@ describe('CI shared GitHub jobs', () => {
     global.fetch = original
   })
   const notice = { repository: 21, run: 33, job: 55 }
+  const pending = (notices: readonly JobNotice[]) =>
+    (reader as unknown as { pending(notices: readonly JobNotice[]): Promise<WorkflowJob[]> }).pending(notices)
+  it('reads notified run jobs once and fetches a missing first-page job directly', async () => {
+    reply = (url) => {
+      if (url.pathname === '/repositories/21') return repository
+      if (url.pathname.endsWith('/runs/33/jobs')) return { total_count: 101, jobs: [queued()] }
+      if (url.pathname.endsWith('/jobs/56')) return queued({ id: 56 })
+      throw new Error('Unexpected enumeration: ' + url.pathname)
+    }
+    expect(await pending([notice, { ...notice, job: 56 }])).toEqual([
+      expect.objectContaining({ job: 55 }),
+      expect.objectContaining({ job: 56 }),
+    ])
+    expect(calls).toEqual([
+      '/repositories/21',
+      '/repos/owner/repo/actions/runs/33/jobs?filter=latest&per_page=100&page=1',
+      '/repos/owner/repo/actions/jobs/56',
+      '/repositories/21',
+    ])
+  })
+  it.each([{ repository: 22 }, { run: 0 }, { job: 0 }])(
+    'rejects an out-of-scope notified batch %j before HTTP',
+    async (change) => {
+      await expect(pending([{ ...notice, ...change }])).rejects.toThrow('original repository')
+      expect(calls).toEqual([])
+    },
+  )
+  it('rejects a notified job whose returned run identity changed', async () => {
+    reply = (url) => (url.pathname === '/repositories/21' ? repository : queued({ run_id: 34 }))
+    await expect(pending([notice])).rejects.toThrow('workflow job')
+  })
+  it.each([
+    { total_count: 1, jobs: [queued(), queued({ id: 56 })] },
+    { total_count: 2, jobs: [queued(), queued()] },
+  ])('rejects a malformed or duplicate notified-run inventory: %j', async (inventory) => {
+    reply = (url) => (url.pathname === '/repositories/21' ? repository : inventory)
+    await expect(pending([notice, { ...notice, job: 56 }])).rejects.toThrow(/inventory|Duplicate/)
+    expect(calls.filter((path) => path === '/repositories/21')).toHaveLength(1)
+  })
+  it('rejects a point lookup returning another job from the same run', async () => {
+    reply = (url) => (url.pathname === '/repositories/21' ? repository : queued({ id: 56 }))
+    await expect(pending([notice])).rejects.toThrow('identity changed')
+  })
+  it('cancels notified-job reads through the caller signal before returning evidence', async () => {
+    const controller = new AbortController()
+    let started!: () => void
+    const reading = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    global.fetch = jest.fn(async (input, options) => {
+      if (new URL(String(input)).pathname === '/repositories/21') return new Response(JSON.stringify(repository))
+      started()
+      return new Promise<Response>((_resolve, reject) => {
+        options!.signal!.addEventListener('abort', () => reject(options!.signal!.reason), { once: true })
+      })
+    }) as typeof fetch
+    const reason = new Error('caller stopped')
+    const result = reader.pending([notice], controller.signal)
+    const rejected = expect(result).rejects.toBe(reason)
+    await reading
+    controller.abort(reason)
+    await rejected
+  })
+  it('drains aborted sibling requests before credential close and preserves the initiating 429', async () => {
+    let started = 0,
+      settled = 0,
+      release!: () => void
+    const ready = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const owned = GitHubCredential.installation(
+      {
+        token: 'test-only-token',
+        permissions: { actions: 'read' },
+        repositories: [{ id: 21 }],
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+      },
+      { actions: 'read' },
+      21,
+      Date.now,
+    )
+    reader = new GitHubJobs(owned, repository)
+    let settledAtClose = -1
+    global.fetch = jest.fn(async (input, options) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/installation/token') {
+        settledAtClose = settled
+        return new Response(null, { status: 204 })
+      }
+      if (url.pathname === '/repositories/21') return new Response(JSON.stringify(repository))
+      if (url.searchParams.get('status') === 'queued')
+        return new Response(JSON.stringify({ total_count: 0, workflow_runs: [] }))
+      if (++started === 4) release()
+      if (url.searchParams.get('status') === 'in_progress') {
+        await ready
+        return new Response(null, { status: 429, headers: { 'retry-after': '60' } })
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        options!.signal!.addEventListener(
+          'abort',
+          () =>
+            setImmediate(() => {
+              settled++
+              reject(new Error('aborted sibling'))
+            }),
+          { once: true },
+        )
+      })
+    }) as typeof fetch
+    const before = Date.now()
+    const error = await reader
+      .queued()
+      .finally(() => owned.close())
+      .catch((error) => error)
+    expect(error).toBeInstanceOf(GitHubRequestError)
+    expect(error.status).toBe(429)
+    expect(error.retryAt).toBeGreaterThanOrEqual(before + 60000)
+    expect(settledAtClose).toBe(3)
+  })
+  it('finishes queued sampling before overlapping the four remaining active-status reads', async () => {
+    let releaseQueued!: () => void, releaseOthers!: () => void, entered!: () => void, allStarted!: () => void
+    const queuedHeld = new Promise<void>((resolve) => {
+      releaseQueued = resolve
+    })
+    const othersHeld = new Promise<void>((resolve) => {
+      releaseOthers = resolve
+    })
+    const queuedStarted = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const othersStarted = new Promise<void>((resolve) => {
+      allStarted = resolve
+    })
+    const started: string[] = []
+    global.fetch = jest.fn(async (input) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/repositories/21') return new Response(JSON.stringify(repository))
+      const status = url.searchParams.get('status')!
+      started.push(status)
+      if (status === 'queued') {
+        entered()
+        await queuedHeld
+      } else {
+        if (started.length === 5) allStarted()
+        await othersHeld
+      }
+      return new Response(JSON.stringify({ total_count: 0, workflow_runs: [] }))
+    }) as typeof fetch
+    const reading = reader.queued()
+    try {
+      await queuedStarted
+      expect(started).toEqual(['queued'])
+      releaseQueued()
+      await othersStarted
+      expect(started.slice(1).sort()).toEqual(['in_progress', 'pending', 'requested', 'waiting'])
+    } finally {
+      releaseQueued()
+      releaseOthers()
+      await reading
+    }
+  })
+  it('retains a queued job while its run moves from queued to in_progress between status responses', async () => {
+    let transitioned = false
+    global.fetch = jest.fn(async (input) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/repositories/21') return new Response(JSON.stringify(repository))
+      if (url.pathname.endsWith('/runs/33/jobs'))
+        return new Response(JSON.stringify({ total_count: 1, jobs: [queued()] }))
+      const status = url.searchParams.get('status')
+      if (status === 'queued') {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        const runs = transitioned ? [] : [{ id: 33, repository: { id: 21 } }]
+        return new Response(JSON.stringify({ total_count: runs.length, workflow_runs: runs }))
+      }
+      if (status === 'in_progress') transitioned = true
+      return new Response(JSON.stringify({ total_count: 0, workflow_runs: [] }))
+    }) as typeof fetch
+    expect(await reader.queued()).toEqual([expect.objectContaining({ job: 55, status: 'queued' })])
+  })
   it('reads the original job between repository identity checks', async () => {
     expect(await reader.job(notice)).toMatchObject({ ...notice, status: 'queued', runner: null })
     expect(calls).toEqual(['/repositories/21', '/repos/owner/repo/actions/jobs/55', '/repositories/21'])

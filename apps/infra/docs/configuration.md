@@ -78,12 +78,22 @@ the secret does not. Use `.env.example` for the names and defaults.
 
 ## Runner sizing
 
-`deploy.runners` in the stage declaration requires `size` (`small`, `medium` or `large`) and
-`rootDiskGb`. GCP also accepts optional `dataDiskGb` for a new runner's separate data disk:
+`deploy.runners.size` selects `small`, `medium`, `large`, `xlarge` or `2xlarge`.
+The two largest tiers default to `n4-standard-32` and `n4-standard-64` on GCP,
+and `c8i.4xlarge` and `c8i.8xlarge` on AWS.
+
+In each stage, optional
+`machineTypes` entries override the cloud machine for individual tiers. Choose
+machines that support nested virtualization and the runner's disk configuration.
+For example, a GCP stage can configure its runners as follows:
 
 ```json
 {
-  "size": "large",
+  "size": "xlarge",
+  "machineTypes": {
+    "xlarge": "n4d-standard-32",
+    "2xlarge": "n4d-standard-64"
+  },
   "rootDiskGb": 100,
   "dataDiskGb": 2048
 }
@@ -141,6 +151,11 @@ admission disabled. Changing the stage store alone does not update an existing A
 An array group makes every key required. An object distinguishes `required` from `optional`.
 Missing required values fail before deployment. Optional values enable features only when supplied.
 The exact key list lives in the manifest; avoid maintaining a second list in a runbook.
+
+## API database connection pool
+
+Set `DB_POOL_MAX` in the stage store to limit the number of PostgreSQL connections per API instance.
+Redeploy the API to deliver the value, for example `25`, through the optional API environment group.
 
 ## Invitation link lifetime
 

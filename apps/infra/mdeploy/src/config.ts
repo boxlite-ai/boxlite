@@ -29,11 +29,12 @@
 
 import { dirname } from 'node:path'
 import { loadConfig as loadMstageConfig, stageIn } from 'mstage/config'
+import type { ApiRequest } from '../stack/api.ts'
 import type { AlarmRequest, AlarmThreshold } from '../stack/alarms.ts'
 import type { CacheRequest, CacheSize } from '../stack/cache.ts'
 import type { ClickHouseMode, ClickHouseRequest } from '../stack/clickhouse.ts'
 import type { DatabaseRequest, DatabaseSize } from '../stack/database.ts'
-import type { RunnerRequest, RunnerSize } from '../stack/runners.ts'
+import { RUNNER_SIZES, type RunnerRequest } from '../stack/runners.ts'
 import type { StorageRequest } from '../stack/storage.ts'
 
 export class DeployConfigError extends Error {
@@ -44,13 +45,14 @@ export class DeployConfigError extends Error {
 }
 
 /** The runner settings a config file decides. The fleet and the binary do not. */
-export type RunnerSettings = Pick<RunnerRequest, 'size' | 'rootDiskGb' | 'dataDiskGb'>
+export type RunnerSettings = Pick<RunnerRequest, 'size' | 'rootDiskGb' | 'dataDiskGb' | 'machineTypes'>
 
 export type DeployConfig = {
   /** The stage file the block was read out of. */
   path: string
   /** The directory holding the committed base file, which is mstage's answer. */
   root: string
+  api?: Pick<ApiRequest, 'minInstances' | 'maxInstances' | 'instance'>
   database: DatabaseRequest
   cache: CacheRequest
   storage: StorageRequest
@@ -93,7 +95,6 @@ const VOLUME_PREFIX = 'boxlite-volume'
 
 const DATABASE_SIZES: DatabaseSize[] = ['small', 'standard', 'medium']
 const CACHE_SIZES: CacheSize[] = ['small', 'medium']
-const RUNNER_SIZES: RunnerSize[] = ['small', 'medium', 'large']
 const CLICKHOUSE_MODES: ClickHouseMode[] = ['self-hosted', 'managed', 'disabled']
 
 /** RDS keeps at most 35 days of automated backups; below one means none. */
@@ -249,13 +250,22 @@ const parseClickHouse = (
 
 const parseRunners = (raw: unknown, where: string, { partial }: { partial: boolean }): Partial<RunnerSettings> => {
   const block = assertObject(raw, where)
-  assertKeys(block, ['size', 'rootDiskGb', 'dataDiskGb'], where, { partial: true })
+  assertKeys(block, ['size', 'rootDiskGb', 'dataDiskGb', 'machineTypes'], where, { partial: true })
   const missing = ['size', 'rootDiskGb'].filter((key) => !(key in block))
   if (!partial && missing.length) throw new DeployConfigError(`${where} must set ${missing.join(', ')}`)
   const parsed: Partial<RunnerSettings> = {}
   if ('size' in block) parsed.size = assertOneOf(block.size, RUNNER_SIZES, `${where}.size`)
   if ('rootDiskGb' in block) parsed.rootDiskGb = assertWholeNumber(block.rootDiskGb, `${where}.rootDiskGb`, DISK_BOUNDS)
   if ('dataDiskGb' in block) parsed.dataDiskGb = assertWholeNumber(block.dataDiskGb, `${where}.dataDiskGb`, DISK_BOUNDS)
+  if ('machineTypes' in block) {
+    const path = `${where}.machineTypes`
+    const types = assertObject(block.machineTypes, path)
+    assertKeys(types, RUNNER_SIZES, path, { partial: true })
+    parsed.machineTypes = {}
+    for (const size of RUNNER_SIZES) {
+      if (size in types) parsed.machineTypes[size] = assertPattern(types[size], /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, `${path}.${size}`)
+    }
+  }
   return parsed
 }
 
@@ -271,6 +281,42 @@ const parseAlarms = (raw: unknown, where: string, { partial }: { partial: boolea
       threshold: assertWholeNumber(alarm.threshold, `${where}.${name}.threshold`, { min: 1, max: 1_000_000 }),
       periods: assertWholeNumber(alarm.periods, `${where}.${name}.periods`, { min: 1, max: 100 }),
     } satisfies AlarmThreshold
+  }
+  return parsed
+}
+
+// Cloud Run service limits with instance-based billing (cpuIdle: false).
+const API_MEMORY_MIB = new Map([
+  [1, { min: 512, max: 4096 }],
+  [2, { min: 512, max: 8192 }],
+  [4, { min: 2048, max: 16384 }],
+  [6, { min: 4096, max: 24576 }],
+  [8, { min: 4096, max: 32768 }],
+])
+
+const parseApi = (raw: unknown, where: string): NonNullable<DeployConfig['api']> => {
+  const block = assertObject(raw, where)
+  assertKeys(block, ['minInstances', 'maxInstances', 'instance'], where, { partial: true })
+  const parsed: NonNullable<DeployConfig['api']> = {}
+  if ('minInstances' in block) {
+    parsed.minInstances = assertWholeNumber(block.minInstances, `${where}.minInstances`, { min: 0, max: 2_147_483_647 })
+  }
+  if ('maxInstances' in block) {
+    parsed.maxInstances = assertWholeNumber(block.maxInstances, `${where}.maxInstances`, { min: 1, max: 2_147_483_647 })
+    if (parsed.minInstances !== undefined && parsed.maxInstances < parsed.minInstances) {
+      throw new DeployConfigError(`${where}.maxInstances must be at least minInstances`)
+    }
+  }
+  if ('instance' in block) {
+    const path = `${where}.instance`
+    const instance = assertObject(block.instance, path)
+    assertKeys(instance, ['cpu', 'memoryMiB'], path, { partial: false })
+    const cpu = instance.cpu
+    const bounds = typeof cpu === 'number' && API_MEMORY_MIB.get(cpu)
+    if (typeof cpu !== 'number' || !bounds) {
+      throw new DeployConfigError(`${path}.cpu must be one of ${[...API_MEMORY_MIB.keys()].join(', ')}`)
+    }
+    parsed.instance = { cpu, memoryMiB: assertWholeNumber(instance.memoryMiB, `${path}.memoryMiB`, bounds) }
   }
   return parsed
 }
@@ -292,12 +338,14 @@ export const parseDeployConfig = (path: string, contents: string): DeployConfig 
     throw new DeployConfigError(`${path} is not valid JSON: ${(error as Error).message}`)
   }
   const root = assertObject(raw, path)
-  assertKeys(root, [...SECTIONS], path, { partial: true })
+  assertKeys(root, [...SECTIONS, 'api'], path, { partial: true })
   const defaults = Object.fromEntries(
     SECTIONS.map((section) => [section, PARSERS[section](root[section], `${path}: "${section}"`, { partial: false })]),
   ) as Pick<DeployConfig, (typeof SECTIONS)[number]>
 
-  return { path, root: dirname(path), ...defaults }
+  const config: DeployConfig = { path, root: dirname(path), ...defaults }
+  if ('api' in root) config.api = parseApi(root.api, `${path}: "api"`)
+  return config
 }
 
 /**

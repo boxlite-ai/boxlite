@@ -135,6 +135,24 @@ others continue to provide protection.
 **Note**: macOS provides weaker isolation than Linux. Production deployments
 requiring maximum security should use Linux.
 
+#### Shared shim cache
+
+The jailer stages the shim and adjacent `libkrunfw.*` files in
+`<home>/shims/<digest>/`. Each jailed shim receives read-only access to its
+digest directory. The jailer also grants access to the original binary's
+library directory for dynamic linking. If staging fails, the jailer runs the
+installed shim inside the sandbox; when that fallback binary or adjacent
+`libkrunfw.*` entries are symlinks (such as `target/<profile>/runtime/`), the
+jailer grants single-file read-only access to each resolved target without
+exposing parent directories, and Bubblewrap mounts those resolved files into
+`/run/boxlite-shim` so relative symlinks do not dangle.
+Custom macOS `sandbox_profile` policies must grant read access to `<home>/shims/`.
+
+Boxes under the same `BOXLITE_HOME` share `boxlite-shim` and `libkrunfw.*`
+pages, which read-only binds on Linux and Seatbelt rules on macOS keep
+immutable to guests. Sharing eliminates per-box disk copies, avoids `ETXTBSY`
+during upgrades, and reduces macOS per-inode code-signature validation overhead.
+
 ### Layer 3: Resource Limits
 
 **Mechanism**: cgroups (Linux), rlimits (both platforms)
@@ -142,10 +160,19 @@ requiring maximum security should use Linux.
 | Resource | Limit Type | Purpose |
 |----------|------------|---------|
 | Open files | RLIMIT_NOFILE | Prevent FD exhaustion |
-| File size | RLIMIT_FSIZE | Prevent disk filling |
+| File size | RLIMIT_FSIZE | Cap growth of individual host files |
 | Processes | RLIMIT_NPROC | Prevent fork bombs |
 | Memory | RLIMIT_AS | Prevent OOM |
 | CPU time | RLIMIT_CPU | Prevent CPU monopolization |
+
+At startup, the jailer sets both `RLIMIT_FSIZE` limits to the configured
+`ResourceLimits.max_file_size` in bytes. If the setting is absent, the shim
+inherits both limits from the host launcher.
+
+The VMM checks guest block I/O against the current virtual capacity. The host
+kernel enforces the shim's soft limit on individual files. A sparse image can
+grow in virtual capacity before later writes extend the host file and reach
+that limit.
 
 ### Layer 4: Environment Sanitization
 

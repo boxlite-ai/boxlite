@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Optional
 
-from ..exec import ExecResult
+from ..exec import ExecResult, _close_exec_stdin
 from ._agents import SyncAgents
 
 if TYPE_CHECKING:
@@ -45,7 +45,13 @@ class SyncSimpleBox:
     @property
     def agents(self) -> SyncAgents:
         """Get the agent namespace without starting the Box."""
-        return SyncAgents()
+
+        def resolve():
+            if self._box is None:
+                raise RuntimeError("Box not started")
+            return self._box
+
+        return SyncAgents(resolve)
 
     def __init__(
         self,
@@ -199,6 +205,8 @@ class SyncSimpleBox:
             execution = await async_box.exec(
                 cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
             )
+
+            await _close_exec_stdin(execution)
 
             stdout_lines = []
             stderr_lines = []

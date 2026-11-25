@@ -8,8 +8,7 @@
 //! The trait is `#[async_trait]` like the other capability backends
 //! ([`ImageBackend`](crate::runtime::images::ImageBackend),
 //! [`AuthBackend`](crate::runtime::auth::AuthBackend)) so REST backends can
-//! perform network calls. The concrete backend is not implemented yet — every
-//! operation currently returns `Unsupported`.
+//! perform network calls. LocalRuntime delegates to `LocalVolumeStore`.
 
 use std::sync::Arc;
 
@@ -20,8 +19,7 @@ use crate::volumes::VolumeInfo;
 
 /// Internal trait for named-volume management.
 ///
-/// Implemented by both `LocalRuntime` and the REST runtime. Both return
-/// `Unsupported` until a managed volume backend is wired up.
+/// Implemented by `LocalRuntime` and the REST runtime.
 #[allow(
     clippy::double_must_use,
     reason = "async_trait generates a must-use boxed future"

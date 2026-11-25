@@ -5,6 +5,9 @@ use std::os::unix::fs::PermissionsExt;
 
 use super::*;
 
+const DEFAULT_MEMORY_MIB: u32 = 512;
+const SIX_GIB_MIB: u32 = 6144;
+
 fn guest_root(test_box: &TestBox) -> crate::disk::Disk {
     let root = test_box.home.path().join("guest-root");
     for path in ["dev", "proc", "sys", "tmp", "var/tmp", "run"] {
@@ -21,7 +24,7 @@ fn guest_root(test_box: &TestBox) -> crate::disk::Disk {
     crate::disk::create_ext4_from_dir(&root, &bases.join("guest.ext4"), 0).unwrap()
 }
 
-async fn boot(scenario: &str) -> String {
+async fn boot(scenario: &str, memory_mib: u32) -> String {
     let test_box = TestBox::new();
     let root_disk = guest_root(&test_box);
     let kernel = fs::read(std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL")).unwrap();
@@ -50,7 +53,7 @@ async fn boot(scenario: &str) -> String {
         disk_path: root_disk.path().to_path_buf(),
         device_path: Some("/dev/vdb".to_string()),
     };
-    spec.memory_mib = Some(512);
+    spec.memory_mib = Some(memory_mib);
     spec.guest_entrypoint.args.push(scenario.to_string());
 
     let exit = test_box.run_shim(&spec).await;
@@ -68,14 +71,21 @@ async fn boot(scenario: &str) -> String {
 #[tokio::test]
 #[ignore = "requires native shim, KVM, VMM_KERNEL, VMM_GUEST and VMM_GUEST_PROBE"]
 async fn init_bootstraps_the_real_guest_and_serves_unix_rpc() {
-    let console = boot("fresh").await;
+    let console = boot("fresh", DEFAULT_MEMORY_MIB).await;
+    assert!(console.contains("BOXLITE_GUEST_BOOT_OK"), "{console}");
+}
+
+#[tokio::test]
+#[ignore = "requires native shim, KVM, VMM_KERNEL, VMM_GUEST and VMM_GUEST_PROBE"]
+async fn a_six_gib_guest_boots_and_prints_the_boot_ok_marker() {
+    let console = boot("fresh", SIX_GIB_MIB).await;
     assert!(console.contains("BOXLITE_GUEST_BOOT_OK"), "{console}");
 }
 
 #[tokio::test]
 #[ignore = "requires native shim, KVM, VMM_KERNEL, VMM_GUEST and VMM_GUEST_PROBE"]
 async fn init_reuses_existing_mounts_and_applies_hostname() {
-    let console = boot("premounted").await;
+    let console = boot("premounted", DEFAULT_MEMORY_MIB).await;
     assert!(console.contains("BOXLITE_GUEST_BOOT_OK"), "{console}");
 }
 
@@ -87,7 +97,7 @@ async fn init_restarts_on_argument_and_startup_errors() {
         ("help", "BoxLite Guest Agent", 0),
         ("bad-uri", "Invalid listen URI", 1),
     ] {
-        let console = boot(scenario).await;
+        let console = boot(scenario, DEFAULT_MEMORY_MIB).await;
         assert!(console.contains(diagnostic), "{console}");
         assert!(
             console.contains(&format!("PID 1 restarting (status {status})")),
@@ -109,7 +119,7 @@ async fn init_rejects_incorrect_mount_types_without_overmounting() {
             "/run is mounted as proc, expected tmpfs",
         ),
     ] {
-        let console = boot(scenario).await;
+        let console = boot(scenario, DEFAULT_MEMORY_MIB).await;
         assert!(console.contains(diagnostic), "{console}");
         assert!(console.contains("PID 1 restarting (status 1)"), "{console}");
         assert!(!console.contains("zygote started"), "{console}");

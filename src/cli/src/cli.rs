@@ -782,7 +782,7 @@ pub enum Commands {
     Signal(crate::commands::signal::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
-    /// Manage disk checkpoints on the selected REST server.
+    /// Manage checkpoints on the selected REST server.
     Checkpoint(crate::commands::checkpoint::CheckpointArgs),
     /// Import a .boxlite archive into a new box.
     Import(crate::commands::import::ImportArgs),
@@ -1615,6 +1615,10 @@ pub struct VolumeFlags {
     /// BOX_PATH[:options] for an anonymous volume
     #[arg(short = 'v', long = "volume", value_name = "VOLUME")]
     pub volume: Vec<String>,
+
+    /// Mount a managed volume by explicit type, optionally read-only or below a sub_path
+    #[arg(long = "mount", value_name = "MOUNT", conflicts_with = "volume")]
+    pub mount: Vec<String>,
 }
 
 /// Resolve base directory for anonymous volumes: explicit home, or BOXLITE_HOME, or ~/.boxlite, or temp dir.
@@ -1668,14 +1672,6 @@ impl VolumeFlags {
             let spec = match mount.origin {
                 // Held as written; the server resolves an id or a name.
                 crate::volumespec::MountOrigin::ManagedVolume(volume) => {
-                    // Neither the server nor the REST client accepts one yet;
-                    // saying so here beats a downgrade the caller never sees.
-                    if mount.read_only {
-                        anyhow::bail!(
-                            "read-only managed volumes are not supported yet; \
-                             mount {volume:?} read-write"
-                        );
-                    }
                     VolumeSpec::managed_volume(volume, mount.guest_path)
                 }
 
@@ -1699,6 +1695,9 @@ impl VolumeFlags {
                 read_only: mount.read_only,
                 ..spec
             });
+        }
+        for value in &self.mount {
+            opts.mounts.push(crate::mountspec::parse(value)?);
         }
         Ok(())
     }
@@ -2824,6 +2823,7 @@ mod tests {
                 "/host/data:/guest/data".to_string(),
                 "/readonly:/ro:ro".to_string(),
             ],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2843,6 +2843,7 @@ mod tests {
                 r"C:\host\data:/guest/data".to_string(),
                 r"D:\readonly:/ro:ro".to_string(),
             ],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2865,6 +2866,7 @@ mod tests {
                 "my-data:/data".to_string(),
                 "vol_01K2EXAMPLE:/cache".to_string(),
             ],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2881,24 +2883,37 @@ mod tests {
         assert_eq!(opts.volumes[1].guest_path, "/cache");
     }
 
-    /// `:ro` on a managed volume is refused, not quietly downgraded. Neither
-    /// the server nor the REST client accepts one, and a caller who believes a
-    /// mount is protected when it is writable is the failure worth preventing.
     #[test]
-    fn test_volume_flags_reject_read_only_managed_volume() {
+    fn test_typed_mount_flags_apply_to() {
         let flags = VolumeFlags {
-            volume: vec!["my-data:/data:ro".to_string()],
+            volume: Vec::new(),
+            mount: vec![
+                "type=volume,source=workspace,target=/workspace,readonly,sub_path=team/backend"
+                    .to_string(),
+            ],
         };
         let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
 
-        let error = flags
-            .apply_to(&mut opts, None)
-            .expect_err("read-only managed volumes must be refused")
-            .to_string();
-
-        assert!(error.contains("read-only"), "{error}");
-        assert!(error.contains("my-data"), "{error}");
         assert!(opts.volumes.is_empty());
+        assert_eq!(opts.mounts.len(), 1);
+        assert_eq!(opts.mounts[0].source.as_deref(), Some("workspace"));
+        assert!(opts.mounts[0].read_only);
+        assert_eq!(opts.mounts[0].sub_path.as_deref(), Some("team/backend"));
+    }
+
+    #[test]
+    fn test_volume_flags_allow_read_only_managed_volume() {
+        let flags = VolumeFlags {
+            volume: vec!["my-data:/data:ro".to_string()],
+            mount: Vec::new(),
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts, None).unwrap();
+
+        assert_eq!(opts.volumes.len(), 1);
+        assert_eq!(opts.volumes[0].managed_volume.as_deref(), Some("my-data"));
+        assert!(opts.volumes[0].read_only);
     }
 
     /// A host bind may still be read-only — the restriction is specific to
@@ -2907,6 +2922,7 @@ mod tests {
     fn test_volume_flags_still_allow_read_only_host_binds() {
         let flags = VolumeFlags {
             volume: vec!["/host/data:/data:ro".to_string()],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2921,6 +2937,7 @@ mod tests {
     fn test_volume_flags_apply_to_leaves_host_binds_unmanaged() {
         let flags = VolumeFlags {
             volume: vec!["/host/data:/guest/data".to_string()],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, None).unwrap();
@@ -2934,6 +2951,7 @@ mod tests {
         let base = std::env::temp_dir();
         let flags = VolumeFlags {
             volume: vec!["/data".to_string(), "/cache:ro".to_string()],
+            mount: Vec::new(),
         };
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts, Some(&base)).unwrap();

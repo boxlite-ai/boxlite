@@ -28,7 +28,11 @@ const drainTimeoutMs = 100
 
 // Runtime manages BoxLite boxes. Create one with NewRuntime.
 type Runtime struct {
-	handle *C.CBoxliteRuntime
+	handle       *C.CBoxliteRuntime
+	closeOnce    sync.Once
+	agentMu      sync.RWMutex
+	agentClosed  bool
+	agentHandles map[agentResource]struct{}
 
 	drainMu   sync.Mutex
 	drainOnce sync.Once
@@ -99,23 +103,36 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 
 // Close releases the runtime. Implements io.Closer.
 //
-// Order matters: closing the `r.closing` channel first wakes every in-flight
-// async caller that's parked on its result channel. They return
-// ErrRuntimeClosed and release their per-call resources before the drain
-// goroutine and native runtime are stopped.
+// Closing admission wakes pending agent calls before the drainer stops.
+// Native agent handles are released after dispatch joins and before the native
+// runtime is freed; detached cleanup state makes that release idempotent.
 func (r *Runtime) Close() error {
-	if r.handle == nil {
-		return nil
-	}
-
-	r.closingOnce.Do(func() {
-		if r.closing != nil {
-			close(r.closing)
+	r.closeOnce.Do(func() {
+		r.agentMu.Lock()
+		r.agentClosed = true
+		r.closingOnce.Do(func() {
+			if r.closing != nil {
+				close(r.closing)
+			}
+		})
+		r.agentMu.Unlock()
+		r.stopDrain()
+		r.agentMu.Lock()
+		handles := make([]agentResource, 0, len(r.agentHandles))
+		for h := range r.agentHandles {
+			handles = append(handles, h)
 		}
+		r.agentMu.Unlock()
+		for _, h := range handles {
+			h.release()
+		}
+		r.agentMu.Lock()
+		if r.handle != nil {
+			C.boxlite_runtime_free(r.handle)
+			r.handle = nil
+		}
+		r.agentMu.Unlock()
 	})
-	r.stopDrain()
-	C.boxlite_runtime_free(r.handle)
-	r.handle = nil
 	return nil
 }
 

@@ -31,4 +31,26 @@ describe('RunnerController privilege heartbeat', () => {
       )
     },
   )
+
+  it('forwards reported capabilities to health persistence', async () => {
+    const updateRunnerHealth = jest.fn().mockResolvedValue(undefined)
+    const controller = Object.create(RunnerController.prototype) as RunnerController
+    Object.assign(controller, { runnerService: { updateRunnerHealth } })
+    const report = Object.assign(new RunnerHealthcheckDto(), { appVersion: 'dev', capabilities: ['filestore'] })
+
+    await controller.runnerHealthcheck({ runnerId: 'runner-1' } as any, report)
+
+    expect(updateRunnerHealth).toHaveBeenCalledWith(
+      'runner-1',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'dev',
+      undefined,
+      { nestedVirtualizationEnabled: undefined, capabilities: ['filestore'] },
+      undefined,
+    )
+  })
 })

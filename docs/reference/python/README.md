@@ -48,6 +48,7 @@ from boxlite import Boxlite, Options, BoxOptions, ImageRegistry
 | `metrics()` | `async () -> RuntimeMetrics` | Get runtime-wide metrics |
 | `images` | property `-> ImageHandle` | The images this runtime can boot from; see [`boxlite.ImageHandle`](#boxliteimagehandle) |
 | `registries` | property `-> RegistryHandle` | The server's registry logins; raises `UnsupportedError` on a local runtime. See [`boxlite.RegistryHandle`](#boxliteregistryhandle) |
+| `checkpoints` | property `-> CheckpointHandle` | Manage checkpoint archives on a REST runtime |
 
 #### Example
 
@@ -76,6 +77,22 @@ box = await runtime.create(BoxOptions(image="alpine:latest"))
 for info in await runtime.list_info():
     print(f"{info.id}: {info.state.status}")
 ```
+
+### `boxlite.CheckpointHandle`
+
+`Boxlite.checkpoints` provides async `create(source, name=None, options=None)`,
+`list()`, `get(key)`, and `remove(key, force=False)`. `SyncBoxlite.checkpoints`
+returns a `boxlite.SyncCheckpointHandle` with the same methods and arguments.
+Checkpoint operations on local runtimes raise `UnsupportedError`.
+
+`boxlite.CheckpointOptions(kind=None)` defaults to `"disk"` for a stopped box.
+Use `CheckpointOptions(kind="full")` to capture disk, guest memory, and VM state
+from a running box. Full capture requires server support. Invalid kinds raise
+`InvalidArgumentError`.
+
+`create` and `get` return a `boxlite.CheckpointInfo`. `list` returns a list of them.
+`kind` is `"disk"`, `"full"`, or `"unknown"` for unrecognized server values.
+`memory_size_bytes` is the archived guest memory size in bytes, or `None` if absent.
 
 ### `boxlite.ImageHandle`
 
@@ -676,6 +693,11 @@ Result of a completed execution.
 | `exit_code` | `int` | Process exit code (0 = success) |
 
 **Note:** For higher-level APIs (`SimpleBox.exec()`), the result also includes `stdout` and `stderr` strings.
+
+`SimpleBox.exec()` and `SyncSimpleBox.exec()` close stdin before collecting output.
+Commands that read stdin therefore receive EOF. To send input, use the
+lower-level `Box.exec()` or `SyncBox.exec()` and write through
+`Execution.stdin()` before closing it.
 
 ---
 

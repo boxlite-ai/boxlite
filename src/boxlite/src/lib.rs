@@ -39,13 +39,14 @@ mod default_runtime_dir;
 
 pub use agents::{Agent, AgentTurn, Agents};
 pub use litebox::{
-    BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
-    TunnelOptions,
+    BoxConnection, BoxReader, BoxResources, BoxTunnel, BoxWriter, LiteBox, ResizeOptions,
+    SocketAddress, TunnelForwarder, TunnelOptions,
 };
 pub use portal::GuestSession;
 pub use runtime::{
-    AuthHandle, BoxliteRuntime, CheckpointHandle, CheckpointInfo, CheckpointState, Domain,
-    DomainHandle, DomainList, DomainTarget, ImageHandle, Principal,
+    AuthHandle, BoxliteRuntime, CheckpointHandle, CheckpointInfo, CheckpointKind,
+    CheckpointOptions, CheckpointState, Domain, DomainHandle, DomainList, DomainTarget,
+    ImageHandle, Principal,
 };
 
 pub use boxlite_shared::BoxByteStream;
@@ -57,8 +58,8 @@ pub use litebox::SnapshotHandle;
 pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
-    AttachOptions, BoxCommand, CopyOptions, CopySourceKind, ExecResult, ExecStderr, ExecStdin,
-    ExecStdout, Execution, ExecutionId, ExecutionInfo, ExecutionsHandle, HealthState, HealthStatus,
+    AttachOptions, BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout,
+    Execution, ExecutionId, ExecutionInfo, ExecutionsHandle, HealthState, HealthStatus,
 };
 pub use litebox::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
 pub use metrics::{BoxMetrics, RuntimeMetrics};

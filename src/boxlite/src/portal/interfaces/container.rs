@@ -1,7 +1,7 @@
 //! Container service interface.
 
 use boxlite_shared::{
-    BindMount, BoxliteError, BoxliteResult, CaCert,
+    BindMount, BindMountKind, BoxliteError, BoxliteResult, CaCert,
     ContainerAdvancedOptions as ProtoContainerAdvancedOptions,
     ContainerCapabilities as ProtoContainerCapabilities, ContainerClient,
     ContainerConfig as ProtoContainerConfig, ContainerDevice, ContainerInitErrorKind,
@@ -173,13 +173,27 @@ impl ContainerInterface {
         // Uses convention-based paths - guest will construct full path from volume_name
         let proto_mounts: Vec<BindMount> = mounts
             .into_iter()
-            .map(|m| BindMount {
-                volume_name: m.volume_name,
-                destination: m.destination,
-                read_only: m.read_only,
-                owner_uid: m.owner_uid,
-                owner_gid: m.owner_gid,
-                subpath: m.subpath.unwrap_or_default(),
+            .map(|m| {
+                let (kind, subpath) = match m.payload {
+                    crate::volumes::ContainerMountPayload::WholeDirectory => {
+                        (BindMountKind::WholeDirectory, String::new())
+                    }
+                    crate::volumes::ContainerMountPayload::SingleFile { file_name } => {
+                        (BindMountKind::SingleFile, file_name)
+                    }
+                    crate::volumes::ContainerMountPayload::ManagedSubDirectory { sub_path } => {
+                        (BindMountKind::ManagedSubDirectory, sub_path)
+                    }
+                };
+                BindMount {
+                    volume_name: m.volume_name,
+                    destination: m.destination,
+                    read_only: m.read_only,
+                    owner_uid: m.owner_uid,
+                    owner_gid: m.owner_gid,
+                    kind: kind as i32,
+                    subpath,
+                }
             })
             .collect();
 
@@ -231,6 +245,10 @@ impl ContainerInterface {
                     Ok(ContainerInitErrorKind::Unsupported) => {
                         Err(BoxliteError::Unsupported(reason))
                     }
+                    Ok(ContainerInitErrorKind::InvalidArgument) => {
+                        Err(BoxliteError::InvalidArgument(reason))
+                    }
+                    Ok(ContainerInitErrorKind::NotFound) => Err(BoxliteError::NotFound(reason)),
                     _ => Err(BoxliteError::Internal(reason)),
                 }
             }
@@ -306,8 +324,58 @@ impl ContainerInterface {
                 source: source.to_string(),
                 destination: destination.to_string(),
                 read_only: true,
+                // Legacy share delivery only; aggregate delivery carries
+                // export_key and device_tag (M6 runtime coordination).
+                export_key: String::new(),
+                device_tag: String::new(),
             })
             .await?;
+        Ok(())
+    }
+
+    /// M6 aggregate delivery: bind the export `export_key` beneath the
+    /// aggregate root of `device_tag` at `destination` in the running
+    /// container. `read_only` gates the guest bind mode; content policy
+    /// stays with the host backend.
+    pub async fn mount_aggregate(
+        &mut self,
+        container_id: &str,
+        export_key: &str,
+        device_tag: &str,
+        destination: &str,
+        read_only: bool,
+    ) -> BoxliteResult<()> {
+        self.client
+            .mount(boxlite_shared::ContainerMountRequest {
+                container_id: container_id.to_string(),
+                source: String::new(),
+                destination: destination.to_string(),
+                read_only,
+                export_key: export_key.to_string(),
+                device_tag: device_tag.to_string(),
+            })
+            .await
+            .map_err(map_mount_status)?;
+        Ok(())
+    }
+
+    /// Lazily detach the runtime mount at `destination`: the destination
+    /// leaves the container mount table while descriptors opened before the
+    /// detach keep working.
+    pub async fn detach(
+        &mut self,
+        container_id: &str,
+        destination: &str,
+        export_key: &str,
+    ) -> BoxliteResult<()> {
+        self.client
+            .detach(boxlite_shared::ContainerDetachRequest {
+                container_id: container_id.to_string(),
+                destination: destination.to_string(),
+                export_key: export_key.to_string(),
+            })
+            .await
+            .map_err(map_mount_status)?;
         Ok(())
     }
 }
@@ -319,17 +387,37 @@ fn map_container_init_status(status: tonic::Status) -> BoxliteError {
     status.into()
 }
 
+fn map_mount_status(status: tonic::Status) -> BoxliteError {
+    if status.code() == tonic::Code::Unimplemented {
+        return BoxliteError::Unsupported(status.message().to_owned());
+    }
+    status.into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use boxlite_shared::{
-        Container as ContainerService, ContainerInitRequest, ContainerInitResponse,
-        ContainerInitSuccess, ContainerServer, ContainerStartRequest, ContainerStartResponse,
-        ContainerStartSuccess, container_init_response, container_start_response,
+        Container as ContainerService, ContainerInitError, ContainerInitRequest,
+        ContainerInitResponse, ContainerInitSuccess, ContainerServer, ContainerStartRequest,
+        ContainerStartResponse, ContainerStartSuccess, container_init_response,
+        container_start_response,
     };
     use std::sync::{Arc, Mutex};
     use tonic::transport::{Endpoint, Server};
     use tonic::{Request, Response, Status};
+
+    #[test]
+    fn unsupported_mounts_preserve_the_capability_error_category() {
+        assert!(
+            matches!(map_mount_status(tonic::Status::unimplemented("CAP_SYS_ADMIN")),
+            BoxliteError::Unsupported(message) if message == "CAP_SYS_ADMIN")
+        );
+        assert!(matches!(
+            map_mount_status(tonic::Status::unavailable("guest disconnected")),
+            BoxliteError::Rpc(_)
+        ));
+    }
 
     #[test]
     fn container_init_preserves_invalid_argument_status() {
@@ -355,8 +443,11 @@ mod tests {
 
     struct StubGuest {
         start_reply: StartReply,
+        init_error: Option<ContainerInitErrorKind>,
         /// Last `Container.Init` request the stub saw, for wire assertions.
         seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
+        seen_mounts: Arc<Mutex<Vec<boxlite_shared::ContainerMountRequest>>>,
+        seen_detaches: Arc<Mutex<Vec<boxlite_shared::ContainerDetachRequest>>>,
     }
 
     #[tonic::async_trait]
@@ -368,6 +459,14 @@ mod tests {
             let request = request.into_inner();
             let container_id = request.container_id.clone();
             *self.seen_init.lock().unwrap() = Some(request);
+            if let Some(kind) = self.init_error {
+                return Ok(Response::new(ContainerInitResponse {
+                    result: Some(container_init_response::Result::Error(ContainerInitError {
+                        reason: format!("injected {kind:?}"),
+                        kind: kind.into(),
+                    })),
+                }));
+            }
             Ok(Response::new(ContainerInitResponse {
                 result: Some(container_init_response::Result::Success(
                     ContainerInitSuccess { container_id },
@@ -393,21 +492,50 @@ mod tests {
 
         async fn mount(
             &self,
-            _: Request<boxlite_shared::ContainerMountRequest>,
+            request: Request<boxlite_shared::ContainerMountRequest>,
         ) -> Result<Response<boxlite_shared::ContainerMountResponse>, Status> {
-            Err(Status::unimplemented("not used by these tests"))
+            self.seen_mounts.lock().unwrap().push(request.into_inner());
+            Ok(Response::new(boxlite_shared::ContainerMountResponse {}))
+        }
+        async fn detach(
+            &self,
+            request: Request<boxlite_shared::ContainerDetachRequest>,
+        ) -> Result<Response<boxlite_shared::ContainerDetachResponse>, Status> {
+            self.seen_detaches
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            Ok(Response::new(boxlite_shared::ContainerDetachResponse {}))
         }
     }
 
     /// Serve `StubGuest` on an ephemeral loopback port and return a
     /// `ContainerInterface` wired to it.
     async fn interface_for(start_reply: StartReply) -> ContainerInterface {
-        interface_recording(start_reply, Arc::new(Mutex::new(None))).await
+        interface_recording(start_reply, None, Arc::new(Mutex::new(None))).await
     }
 
     async fn interface_recording(
         start_reply: StartReply,
+        init_error: Option<ContainerInitErrorKind>,
         seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
+    ) -> ContainerInterface {
+        interface_delivering(
+            start_reply,
+            init_error,
+            seen_init,
+            Arc::default(),
+            Arc::default(),
+        )
+        .await
+    }
+
+    async fn interface_delivering(
+        start_reply: StartReply,
+        init_error: Option<ContainerInitErrorKind>,
+        seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
+        seen_mounts: Arc<Mutex<Vec<boxlite_shared::ContainerMountRequest>>>,
+        seen_detaches: Arc<Mutex<Vec<boxlite_shared::ContainerDetachRequest>>>,
     ) -> ContainerInterface {
         // Bind with std to learn a free port, then hand the address to tonic.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -418,7 +546,10 @@ mod tests {
             Server::builder()
                 .add_service(ContainerServer::new(StubGuest {
                     start_reply,
+                    init_error,
                     seen_init,
+                    seen_mounts,
+                    seen_detaches,
                 }))
                 .serve(addr)
                 .await
@@ -441,6 +572,47 @@ mod tests {
             }
         };
         ContainerInterface::new(channel)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delivery_requests_preserve_incarnation_modes_and_legacy_source_on_wire() {
+        let mounts = Arc::new(Mutex::new(Vec::new()));
+        let detaches = Arc::new(Mutex::new(Vec::new()));
+        let mut iface = interface_delivering(
+            StartReply::Success,
+            None,
+            Arc::default(),
+            Arc::clone(&mounts),
+            Arc::clone(&detaches),
+        )
+        .await;
+        iface.mount("box", "agents", "/opt/agents").await.unwrap();
+        for read_only in [false, true] {
+            iface
+                .mount_aggregate("box", "export-42", "boxlite", "/data", read_only)
+                .await
+                .unwrap();
+        }
+        iface.detach("box", "/data", "export-42").await.unwrap();
+        let mounts = mounts.lock().unwrap();
+        assert_eq!(mounts.len(), 3);
+        assert_eq!(mounts[0].source, "agents");
+        assert!(mounts[0].read_only);
+        assert!(mounts[0].export_key.is_empty());
+        assert!(mounts[0].device_tag.is_empty());
+        for (request, read_only) in mounts[1..].iter().zip([false, true]) {
+            assert_eq!(request.container_id, "box");
+            assert!(request.source.is_empty());
+            assert_eq!(request.export_key, "export-42");
+            assert_eq!(request.device_tag, "boxlite");
+            assert_eq!(request.destination, "/data");
+            assert_eq!(request.read_only, read_only);
+        }
+        let detaches = detaches.lock().unwrap();
+        assert_eq!(detaches.len(), 1);
+        assert_eq!(detaches[0].container_id, "box");
+        assert_eq!(detaches[0].destination, "/data");
+        assert_eq!(detaches[0].export_key, "export-42");
     }
 
     /// #988 regression: a guest agent that predates `Container.Start` answers
@@ -477,6 +649,58 @@ mod tests {
         assert!(iface.start("box-ok").await.is_ok());
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_init_sends_explicit_mount_kinds() {
+        let seen = Arc::new(Mutex::new(None));
+        let mut iface = interface_recording(StartReply::Success, None, Arc::clone(&seen)).await;
+        let mount = |payload| ContainerMount {
+            volume_name: "uservol0".to_string(),
+            destination: "/data".to_string(),
+            read_only: false,
+            owner_uid: 0,
+            owner_gid: 0,
+            payload,
+        };
+
+        iface
+            .init(ContainerInitConfig {
+                container_id: "container-1".to_string(),
+                image: crate::images::ContainerImageConfig::default(),
+                rootfs: ContainerRootfsInitConfig::Merged,
+                mounts: vec![
+                    mount(crate::volumes::ContainerMountPayload::WholeDirectory),
+                    mount(crate::volumes::ContainerMountPayload::SingleFile {
+                        file_name: "app.conf".to_string(),
+                    }),
+                    mount(crate::volumes::ContainerMountPayload::ManagedSubDirectory {
+                        sub_path: "team/backend".to_string(),
+                    }),
+                ],
+                ca_certs: Vec::new(),
+                tty: false,
+                devices: Vec::new(),
+                resources: ContainerResources::default(),
+                advanced: ContainerAdvancedConfig::default(),
+            })
+            .await
+            .unwrap();
+
+        let request = seen.lock().unwrap().take().expect("guest saw Init");
+        let expected = [
+            (boxlite_shared::BindMountKind::WholeDirectory, ""),
+            (boxlite_shared::BindMountKind::SingleFile, "app.conf"),
+            (
+                boxlite_shared::BindMountKind::ManagedSubDirectory,
+                "team/backend",
+            ),
+        ];
+        assert_eq!(request.mounts.len(), expected.len());
+        for (mount, (kind, subpath)) in request.mounts.iter().zip(expected) {
+            assert_eq!(mount.kind, kind as i32);
+            assert_eq!(mount.subpath, subpath);
+        }
+    }
+
     /// Devices are container-scoped, so they must reach the guest on the
     /// request itself rather than inside the process config — and init's
     /// session id must equal the container id, the rule `LiteBox::attach()`
@@ -484,7 +708,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn container_init_sends_devices_and_session_id() {
         let seen = Arc::new(Mutex::new(None));
-        let mut iface = interface_recording(StartReply::Success, Arc::clone(&seen)).await;
+        let mut iface = interface_recording(StartReply::Success, None, Arc::clone(&seen)).await;
 
         iface
             .init(ContainerInitConfig {
@@ -563,5 +787,44 @@ mod tests {
         assert_eq!(mount.source, "/sys");
         assert_eq!(mount.destination, "/sys");
         assert!(!mount.options.contains(&"rro".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn container_init_maps_guest_error_kinds() {
+        for kind in [
+            ContainerInitErrorKind::InvalidArgument,
+            ContainerInitErrorKind::NotFound,
+            ContainerInitErrorKind::Unsupported,
+        ] {
+            let mut iface =
+                interface_recording(StartReply::Success, Some(kind), Arc::new(Mutex::new(None)))
+                    .await;
+            let error = iface
+                .init(ContainerInitConfig {
+                    container_id: "container-1".to_string(),
+                    image: crate::images::ContainerImageConfig::default(),
+                    rootfs: ContainerRootfsInitConfig::Merged,
+                    mounts: Vec::new(),
+                    ca_certs: Vec::new(),
+                    tty: false,
+                    devices: Vec::new(),
+                    resources: ContainerResources::default(),
+                    advanced: ContainerAdvancedConfig::default(),
+                })
+                .await
+                .expect_err("injected guest error must reach the caller");
+            match kind {
+                ContainerInitErrorKind::InvalidArgument => {
+                    assert!(matches!(error, BoxliteError::InvalidArgument(_)))
+                }
+                ContainerInitErrorKind::NotFound => {
+                    assert!(matches!(error, BoxliteError::NotFound(_)))
+                }
+                ContainerInitErrorKind::Unsupported => {
+                    assert!(matches!(error, BoxliteError::Unsupported(_)))
+                }
+                _ => panic!("unexpected test kind"),
+            }
+        }
     }
 }

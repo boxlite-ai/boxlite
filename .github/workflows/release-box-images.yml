@@ -1,6 +1,6 @@
 name: Release Box Images
 
-# The only workflow that writes to GHCR. Driven by an `apps/box-images/vMAJOR.MINOR.PATCH` tag so
+# Driven by an `apps/box-images/vMAJOR.MINOR.PATCH` tag so
 # the box images keep a release line independent of the product version (same convention as the
 # existing `sdks/go/v*` tags). Publishing refuses to move a version tag that already exists, so a
 # rebuild can never silently replace the bytes a running box pulls.

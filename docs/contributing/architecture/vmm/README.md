@@ -310,7 +310,7 @@ On x86_64 the layout uses the values most surveyed VMMs share.
 | `0xE000_0000`–`0xF000_0000` | PCI ECAM, reserved for M9 | alioth |
 | `0xFEC0_0000`, `0xFEE0_0000` | IOAPIC and local APIC, both in the kernel on KVM; WHP (M10) emulates only the local APIC | architectural |
 | above RAM | hotplug memory (M7), then a 64-bit PCI BAR window (M9) | as on arm64 |
-| ports `0x3F8`, `0x70`–`0x71`, `0x60` and `0x64` | 8250 UART on GSI 4, CMOS RTC, i8042 | PC standard |
+| ports `0x3F8`, `0x70`–`0x71`, `0x60` and `0x64` | 8250 UART on GSI 4, CMOS RTC with its alarm on GSI 8, i8042 | PC standard |
 
 x86_64 guests boot without ACPI or a device tree, so the command line announces
 each virtio-mmio device (`virtio_mmio.device=4K@0xd0000000:5`), as libkrun does
@@ -486,9 +486,9 @@ engine adapter calls it from
 `VmmInstance::enter`:
 
 ```rust
-let mut vm = Vm::new(config, console)?; // validate, create the host VM, map RAM, load the kernel, build devices
-let stop = vm.stop_handle();   // Clone + Send; the shim's SIGTERM path calls stop.stop()
-let exit = vm.run()?;          // VmExit::GuestShutdown, GuestReset or StopRequested
+let mut vm = Vm::new(config, console)?;
+let control = vm.control(); // Clone for runtime control.
+let exit = vm.run()?;       // Blocks on the thread that owns the VM.
 ```
 
 `run` returns once: a second call fails with `AlreadyRan`, since a VM never
@@ -496,6 +496,30 @@ restarts. `console` is a `Box<dyn Write + Send>` that receives the guest's
 serial output through a bounded queue; `run` waits up to one second for the
 sink to take the rest, and bytes it never takes are counted as dropped and
 logged.
+
+The driver holds exclusive access to `Vm` throughout `run`. `VmControl`
+provides backend-independent runtime controls. External threads use `status()`,
+`stop()`, and `resize_disk()` without holding the VM itself.
+`StopHandle::stop` uses the same latch.
+
+`VmStatus` starts at `Created`, advances to `Running` as the driver starts,
+and becomes `Stopping` on a stop request or when the driver processes a
+terminal event. A stop in `Created` goes directly to `Stopping`, so the
+first `run` skips vCPU creation and takes the usual cleanup path.
+The first terminal event determines the outcome of an active run.
+
+On teardown, the driver joins all scoped vCPUs, shuts down virtio workers,
+finishes the console, and publishes `Exited`. A worker join timeout leaves
+the VM in `Stopping` until drop. The VM owns the RAM mappings until drop,
+which also publishes `Exited` if the VM was never run.
+
+On Linux x86_64, the crate-internal `#[cfg(test)]` helper
+`Vm::new_device_less(config)` shares KVM preflight, RAM registration, and
+kernel and initramfs loading with `Vm::new`.
+It builds an empty chipset and starts no console worker. Configuring disks,
+filesystem, vsock, network, virtio console, or `hotplug_mib` (virtio-mem)
+returns `Error::Control` with `ControlReason::UnsupportedDevice` before KVM
+setup. Its empty disk registry makes `resize_disk()` return `InvalidInput`.
 
 - **`run` reports how the VM ended, not the box's exit code.**
   - The guest agent writes the box's exit code to `exit.json` on the SHARED
@@ -531,10 +555,8 @@ logged.
   - `create_engine` reports an engine missing from the build as
     `BoxliteError::Unsupported`, so a shim built without the `native` feature
     fails a native box the same typed way.
-- **The stop handle is not wired to SIGTERM yet.** The shim's SIGTERM handler
-  asks the guest to shut down over gRPC and re-raises the signal, which ends the
-  process with the VM inside it; `StopHandle::stop` joins that path once the
-  guest agent can answer.
+- **SIGTERM.** The shim asks the guest to shut down over gRPC and re-raises
+  the signal to end the process.
 
 ### Where the engine plugs in (M2)
 
@@ -554,13 +576,42 @@ logged.
   attach order (`vda` container, `vdb` guest root), and defaults to `console=hvc0`.
   The single filesystem device exports logical shares below its aggregate root;
   matching mount instructions are sent only for the native engine.
+- **Runtime control.** The host-only `vmm.sock` serves HTTP/1.1 over a serial
+  control thread. `POST /v1/resize-disk` routes a target size by `block_id`
+  through [`VmControl::resize_disk`](../../../../src/vmm/README.md#virtio-block-device).
+  `POST /v1/mount-control` accepts [directory delivery](../../../../src/vmm/README.md#host-directory-delivery)
+  operations, with a directory descriptor attached when registering a mount.
+
+  The `box.sock` listener forwards guest RPCs, including Mount and Detach.
+- **Runtime resize.** `LiteBox::resize` confirms the requested device size,
+  runs `resize2fs` in the guest, and saves the completed target in box state.
+  Queries read the image capacity, and callers can retry the same target
+  after an uncertain or partial result.
+- **File size limits.** The VMM bounds guest I/O by virtual disk capacity.
+  The host kernel enforces the shim's configured or inherited
+  [`RLIMIT_FSIZE` soft limit](../../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
 - **libkrun assumptions outside `krun/`.**
-  - The jailer copies libkrunfw into every box
-    (`src/boxlite/src/jailer/shim_copy.rs:103-105`).
+  - The jailer stages the shim and its adjacent libkrunfw files together under
+    `<home>/shims/<digest>/`. The sandbox receives read-only access to that
+    directory, and libkrun loads the firmware from beside the shim.
   - The network socket name derives from libkrun's `-krun.sock` suffix
     (`src/boxlite/src/net/socket_path.rs:51-59`).
   - The Linux seccomp filter is written for libkrun's threads
     (`src/boxlite/src/jailer/seccomp.rs:239-243`).
+
+### Shared shim cache
+
+```text
+Installed shim + libkrunfw → content digest → <home>/shims/<digest>/
+                                                  ├─ read-only → Box A shim
+                                                  └─ read-only → Box B shim
+```
+
+The cache hashes filenames, lengths, and contents in filename order. The
+runtime can reuse a digest in-process when source file metadata matches and the
+timestamps were stable before hashing. A cold start copies into a staging
+directory and renames it into place after writing the completion stamp. Boxes
+using the same shim and firmware share one published directory.
 
 ## Guest boot contract
 
@@ -579,7 +630,7 @@ from the new VMM.
 | Network | virtio-net to gvproxy in the shim (a stream socket with 4-byte length prefixes on Linux, datagrams with the `VFKT` handshake on macOS), with 192.168.127.2/24 set by the agent | unchanged; no TSI | M2 |
 | Console | virtio-console `hvc0` into `console.log`, truncated at each boot | unchanged; M1 first boots on the PL011 or 8250 | M1–M2 |
 | Other devices | virtio-rng, and virtio-balloon with free page reporting (`libkrun/src/devices/src/virtio/balloon/device.rs:28-30`) | unchanged | M2 |
-| Wall clock | PL031 (arm64) or CMOS (x86_64) at boot; on macOS, resync over vsock datagram port 123 | the same at boot; M2 chooses the resync mechanism | M1–M2 |
+| Wall clock | PL031 (arm64) or kvm-clock (x86_64) at boot; on macOS, resync over vsock datagram port 123 | the same at boot, with the CMOS RTC registered as `rtc0` on x86_64; M2 chooses the resync mechanism | M1–M2 |
 | End of the VM | the agent writes `exit.json`, syncs and calls `reboot(RESTART)`; libkrun then exits the process | the same guest steps; `run()` returns `GuestReset` | M2 |
 | Start failure | libkrun reports every error as `-EINVAL`, and the adapter probes the hypervisor for the cause | typed errors | M2 |
 

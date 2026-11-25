@@ -98,6 +98,12 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     async fn start(&self) -> BoxliteResult<()>;
 
+    async fn resize(&self, _options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support online disk resize".into(),
+        ))
+    }
+
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
     async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>>;
@@ -148,6 +154,20 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
         host_dst: &Path,
         opts: CopyOptions,
     ) -> BoxliteResult<()>;
+
+    /// Raw tar operations own the backend so their futures can outlive a handle.
+    async fn copy_in_stream(
+        self: Arc<Self>,
+        stream: boxlite_shared::BoxByteStream,
+        container_dst: String,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()>;
+
+    async fn copy_out_stream(
+        self: Arc<Self>,
+        container_src: String,
+        opts: CopyOptions,
+    ) -> BoxliteResult<boxlite_shared::BoxByteStream>;
 
     async fn clone_box(
         &self,

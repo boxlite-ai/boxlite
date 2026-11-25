@@ -1,6 +1,7 @@
 #![allow(unsafe_op_in_unsafe_fn, non_local_definitions)]
 
 mod advanced_options;
+mod agents;
 mod box_handle;
 mod checkpoints;
 mod domains;
@@ -83,6 +84,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVolumeInfo>()?;
     m.add_class::<crate::checkpoints::PyCheckpointHandle>()?;
     m.add_class::<crate::checkpoints::PyCheckpointInfo>()?;
+    m.add_class::<crate::checkpoints::PyCheckpointOptions>()?;
     m.add_class::<PyRegistryHandle>()?;
     m.add_class::<PyRegistryCredential>()?;
     m.add_class::<PyBoxInfo>()?;

@@ -113,17 +113,10 @@ export default function WelcomeCreditsStep({
       <div className="border-t border-border pt-7 lg:border-l lg:border-t-0 lg:pl-14 lg:pt-1">
         {!ready && (
           <>
-            <p className="font-sans text-label text-muted-foreground">WELCOME CREDIT</p>
-            <p className="mt-5 flex items-start tracking-[-0.06em]">
-              <span className="sr-only">$100</span>
-              <span aria-hidden className="mr-1.5 mt-2 text-[32px] font-normal leading-none sm:mt-3 sm:text-[40px]">
-                $
-              </span>
-              <span aria-hidden className="text-[76px] font-medium leading-[0.95] sm:text-[96px]">
-                100
-              </span>
+            <h2 className="mt-3 text-em font-medium">Connect your card</h2>
+            <p className="mt-7 text-body leading-6 text-muted-foreground">
+              Connect a payment method or redeem a promo code to get started.
             </p>
-            <h2 className="mt-3 text-em font-medium">in free BoxLite credits</h2>
           </>
         )}
         {ready && (
@@ -174,7 +167,7 @@ export default function WelcomeCreditsStep({
             >
               <span className="flex items-center gap-2.5">
                 {!busy && <CreditCardIcon aria-hidden className="size-4 shrink-0" />}
-                {busy ? 'Please wait…' : 'Verify card & claim $100'}
+                {busy ? 'Please wait…' : 'Verify card'}
               </span>
               {!busy && <ArrowRightIcon aria-hidden className="size-4" />}
             </AsciiButton>
@@ -186,7 +179,8 @@ export default function WelcomeCreditsStep({
         {!ready && isOwner && (
           <>
             <p className="mt-5 text-meta leading-5 text-muted-foreground">
-              No verification fee. No paid plan is activated.
+              We place a temporary $0.50 hold, which is released automatically after verification. No paid plan is
+              activated.
             </p>
             {(checkoutStarted || wallet.isError) && (
               <button

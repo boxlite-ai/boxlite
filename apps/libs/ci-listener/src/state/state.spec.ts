@@ -8,6 +8,7 @@ import { Json, StateDatabase, StateConflict, StateCorrupt, LeaseLost } from './d
 import { ExecutionLease, ListenerState } from './store'
 import { PostgresStateDatabase, postgresStateTable } from './postgres'
 import { SqliteStateDatabase } from './sqlite'
+import { ExecutionJournal } from '../execution/journal'
 
 for (const backend of ['sqlite', 'postgres'] as const) {
   const suite = backend === 'postgres' && !process.env.DB_HOST ? describe.skip : describe
@@ -53,6 +54,101 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           pg = undefined
         }
       }
+    })
+    it.each(['batch', 'fallback'])(
+      'preserves ordered reads and duplicate ingress keys with %s storage',
+      async (mode) => {
+        await state.ingest([
+          { key: 'notice/a', expected: null, payload: 1 },
+          { key: 'notice/z', expected: null, payload: 2 },
+        ])
+        const compatible = new ListenerState(
+          {
+            transaction: (ns, work, txMode) =>
+              database.transaction(
+                ns,
+                (tx) => {
+                  const wrapped = Object.create(tx) as typeof tx
+                  if (mode === 'fallback') {
+                    Object.defineProperty(wrapped, 'getMany', { value: undefined })
+                    Object.defineProperty(wrapped, 'insertMany', { value: undefined })
+                  }
+                  return work(wrapped)
+                },
+                txMode,
+              ),
+          },
+          namespace,
+        )
+        await compatible.ingest([
+          { key: 'notice/bulk-null', expected: null, payload: null },
+          { key: 'notice/bulk-false', expected: null, payload: false },
+        ])
+        expect((await compatible.read(['notice/bulk-null', 'notice/bulk-false'])).map((row) => row.payload)).toEqual([
+          null,
+          false,
+        ])
+        expect((await compatible.read(['notice/z', 'notice/missing', 'notice/a'])).map((row) => row.key)).toEqual([
+          'notice/z',
+          'notice/a',
+        ])
+        await compatible.ingress('ordered', async (tx) => {
+          expect(await tx.read([])).toEqual([])
+          expect((await tx.read(['notice/z', 'notice/missing', 'notice/a', 'notice/z'])).map((row) => row.key)).toEqual(
+            ['notice/z', 'notice/a', 'notice/z'],
+          )
+        })
+      },
+    )
+    it('bounds ordinary insert batches and supports empty batch reads', async () => {
+      await database.transaction(namespace, async (tx) => {
+        const getMany = Reflect.get(tx, 'getMany'),
+          insertMany = Reflect.get(tx, 'insertMany')
+        if (!getMany || !insertMany) throw new Error('Batch storage methods required')
+        const read = getMany.bind(tx)
+        const insert = insertMany.bind(tx)
+        expect(await read([])).toEqual([])
+        await expect(insert([])).rejects.toThrow('Invalid ordinary state insert batch')
+        await expect(insert([{ key: '@owner', version: randomUUID(), schema: 1, payload: null }])).rejects.toThrow(
+          'Invalid ordinary state insert batch',
+        )
+        await expect(
+          insert(
+            Array.from({ length: 101 }, (_, index) => ({
+              key: `notice/bound/${index}`,
+              version: randomUUID(),
+              schema: 1,
+              payload: index,
+            })),
+          ),
+        ).rejects.toThrow('Invalid ordinary state insert batch')
+      })
+    })
+    it('rolls back earlier insert batches when a later absent-key write conflicts', async () => {
+      const lease = await owner()
+      await state.ingest([{ key: 'notice/existing', expected: null, payload: 'original' }])
+      await expect(
+        state.ingress(
+          'batch-rollback',
+          async (tx) => {
+            await tx.write(
+              Array.from({ length: 100 }, (_, i) => ({
+                key: `notice/new/${i}`,
+                expected: null,
+                payload: i,
+              })),
+            )
+            await tx.write([
+              { key: 'notice/after', expected: null, payload: true },
+              { key: 'notice/existing', expected: null, payload: 'replacement' },
+            ])
+          },
+          lease,
+        ),
+      ).rejects.toBeInstanceOf(StateConflict)
+      expect(await state.recover(lease, 1000, ['notice/'])).toEqual([
+        expect.objectContaining({ key: 'notice/existing', payload: 'original' }),
+      ])
     })
     const owner = async (): Promise<ExecutionLease> => (await state.acquire(randomUUID(), 10_000))!
     const roots = () =>
@@ -421,6 +517,18 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await state.read([policy.key])).toEqual([policy])
       expect((await state.read(['worker/guarded']))[0].payload).toEqual({ admitted: true })
     })
+    it('rejects an invalid or duplicate scope refresh before committing any worker', async () => {
+      const lease = await owner()
+      const worker = { key: 'worker/refresh', expected: null, payload: { admitted: true } }
+      const activity = 'scope-state/' + '1'.repeat(64)
+      await expect(state.commit(lease, [worker], [], 'worker/other')).rejects.toThrow('Invalid scope activity refresh')
+      await expect(
+        state.commit(lease, [worker, { key: activity, expected: null, payload: {} }], [], activity),
+      ).rejects.toThrow('Invalid scope activity refresh')
+      const batch = Array.from({ length: 100 }, (_, i) => ({ ...worker, key: 'worker/batch-' + i }))
+      await expect(state.commit(lease, batch, [], activity)).rejects.toThrow('Invalid scope activity refresh')
+      expect(await state.read([worker.key, activity, batch[0].key])).toEqual([])
+    })
     it('quota fence rejects a stale policy before any allocation write', async () => {
       const lease = await owner()
       const [policy] = await state.commit(lease, [{ key: 'quota/tenant', expected: null, payload: { limit: 2 } }])
@@ -706,12 +814,15 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await state.recover(lease)).toEqual([replacement])
     })
     it('keeps unknown effects and permanent scopes through owner turnover', async () => {
-      const first = (await state.acquire('first', 100))!
+      const first = await owner()
       await state.commit(first, [
         { key: 'worker/unknown', expected: null, payload: { phase: 'requested', operation: randomUUID() } },
         { key: 'scope/1', expected: null, payload: { organization: 'original' } },
       ])
-      await new Promise((resolve) => setTimeout(resolve, 160))
+      await database.transaction(namespace, async (tx) => {
+        const expiry = (await tx.get('@lease'))!
+        await tx.put({ ...expiry, version: randomUUID(), payload: { until: 0 } }, expiry.version)
+      })
       await expect(state.renew(first, 10_000)).rejects.toBeInstanceOf(LeaseLost)
       const next = (await state.acquire('next', 10_000))!
       expect(next.epoch).toBe(first.epoch + 1)
@@ -794,6 +905,151 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         expect((await state.recover(await owner()))[0].key).toBe('notice/restart')
       })
     if (backend === 'postgres') {
+      it.each(['acquire', 'initialize and acquire'])('allows standby %s during a guarded transaction', async (path) => {
+        const lease = await owner()
+        await state.commit(lease, [{ key: 'journal/format', expected: null, payload: { version: 2 } }])
+        const standby = new ListenerState(
+          new PostgresStateDatabase({
+            transaction: (isolation, work) =>
+              pg!.transaction(isolation, async (tx) => {
+                await tx.query("SET LOCAL lock_timeout='250ms'")
+                return work(tx)
+              }),
+          }),
+          namespace,
+        )
+        await state.ingress(
+          'hold-owner-fence',
+          async () => {
+            if (path === 'initialize and acquire') {
+              await new ExecutionJournal(standby).initialize()
+              expect(await standby.superseded()).toBe(false)
+            }
+            expect(await standby.acquire('standby', 10000)).toBeUndefined()
+          },
+          lease,
+        )
+      })
+      it('renews concurrent heartbeats while a guarded worker transaction is open', async () => {
+        const lease = await owner()
+        const before = await roots()
+        const now = await state.now(lease)
+        const heartbeat = new ListenerState(
+          new PostgresStateDatabase({
+            transaction: (isolation, work) =>
+              pg!.transaction(isolation, async (tx) => {
+                await tx.query("SET LOCAL lock_timeout='250ms'")
+                return work(tx)
+              }),
+          }),
+          namespace,
+        )
+        await state.ingress(
+          'busy-worker',
+          async (tx) => {
+            await tx.write([{ key: 'notice/busy-worker', expected: null, payload: true }])
+            const results = await Promise.allSettled([heartbeat.renew(lease, 60000), heartbeat.renew(lease, 20000)])
+            expect(results).toEqual([
+              { status: 'fulfilled', value: undefined },
+              { status: 'fulfilled', value: undefined },
+            ])
+          },
+          lease,
+        )
+        const after = await roots()
+        expect(after.owner).toEqual(before.owner)
+        expect((after.lease!.payload as { until: number }).until).toBeGreaterThanOrEqual(now + 60000)
+        expect(await state.read(['notice/busy-worker'], lease)).toHaveLength(1)
+      })
+      it('rejects expired proof even when its record version still matches', async () => {
+        const lease = await owner()
+        const [proof] = await state.commit(lease, [{ key: 'notice/proof', expected: null, payload: true }])
+        const check = Object.assign(
+          { key: proof.key, version: proof.version },
+          { expiresAt: (await state.now(lease)) - 1 },
+        )
+        await expect(
+          state.commit(lease, [{ key: 'worker/expired-proof', expected: null, payload: true }], [check]),
+        ).rejects.toBeInstanceOf(StateConflict)
+        expect(await state.read(['worker/expired-proof'], lease)).toEqual([])
+        await expect(
+          state.commit(
+            lease,
+            [{ key: 'worker/live-proof', expected: null, payload: true }],
+            [Object.assign({}, check, { expiresAt: (await state.now(lease)) + 1000 })],
+          ),
+        ).resolves.toHaveLength(1)
+      })
+      it.each(['read', 'scan', 'recover', 'now', 'commit', 'ingress'] as const)(
+        'allows independent %s during a guarded read',
+        async (operation) => {
+          const lease = await owner()
+          await state.commit(lease, [{ key: 'worker/held', expected: null, payload: 'original' }])
+          let entered!: () => void, release!: () => void
+          const hasRead = new Promise<void>((resolve) => {
+            entered = resolve
+          })
+          const released = new Promise<void>((resolve) => {
+            release = resolve
+          })
+          const holding = new ListenerState(
+            {
+              transaction: (ns, work, mode) =>
+                database.transaction(
+                  ns,
+                  (tx) => {
+                    const wrapped = Object.create(tx) as typeof tx
+                    wrapped.getMany = async (keys) => {
+                      if (keys.includes('worker/held')) {
+                        entered()
+                        await released
+                      }
+                      return tx.getMany!(keys)
+                    }
+                    return work(wrapped)
+                  },
+                  mode,
+                ),
+            },
+            namespace,
+          ).read(['worker/held'], lease)
+          const bounded = new ListenerState(
+            new PostgresStateDatabase({
+              transaction: (isolation, work) =>
+                pg!.transaction(isolation, async (tx) => {
+                  await tx.query("SET LOCAL lock_timeout='250ms'")
+                  return work(tx)
+                }),
+            }),
+            namespace,
+          )
+          const operations = {
+            read: () => bounded.read(['worker/held'], lease),
+            scan: () => bounded.scan(lease, { prefix: 'worker/' }),
+            recover: () => bounded.recover(lease),
+            now: () => bounded.now(lease),
+            commit: () => bounded.commit(lease, [{ key: 'worker/other', expected: null, payload: true }]),
+            ingress: () =>
+              bounded.ingress(
+                'independent',
+                (tx) => tx.write([{ key: 'notice/other', expected: null, payload: true }]),
+                lease,
+              ),
+          }
+          try {
+            await Promise.race([
+              hasRead,
+              holding.then(() => {
+                throw new Error('The guarded read finished before its barrier')
+              }),
+            ])
+            await expect(operations[operation]()).resolves.toBeDefined()
+          } finally {
+            release()
+            await holding
+          }
+        },
+      )
       it('checks actual lease time after waiting for the owner row lock', async () => {
         const lease = (await state.acquire('waiting-owner', 500))!
         let locked!: () => void, release!: () => void

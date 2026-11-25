@@ -53,6 +53,7 @@ export type ApiCapability =
    * cloud keeps no per-host data disk and is handed none of this.
    */
   | { kind: 'resize-runner-disks' }
+  | { kind: 'read-filestore-instances'; projects: readonly string[] }
 
 /*
  * The two public names, from the one module that composes them.
@@ -65,6 +66,9 @@ export type ApiCapability =
 export { publicHostsFor, type PublicHosts } from './hosts.ts'
 
 export type ApiRequest = {
+  minInstances?: number
+  maxInstances?: number
+  instance?: { cpu: number; memoryMiB: number }
   image: $util.Input<string>
   port: number
   /** The stage's own domain. `publicHostsFor` turns it into the two names served. */

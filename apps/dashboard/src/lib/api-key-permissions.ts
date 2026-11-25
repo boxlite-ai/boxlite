@@ -50,7 +50,7 @@ export function apiKeyExpirationLabel(expiresAt?: string | Date | null): string 
 }
 export function apiKeyExpirationDate(expiresAt?: string | Date | null): string {
   return expiresAt
-    ? new Date(expiresAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'long' })
+    ? new Date(expiresAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'long' })
     : 'No expiration'
 }
 

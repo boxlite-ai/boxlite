@@ -58,12 +58,12 @@ pub(super) struct CreateBoxRequest {
     /// `build_box_options`, matching the Go SDK's own default.
     #[serde(default)]
     pub secrets: Option<Vec<SecretSpecRequest>>,
-    /// Managed volumes are not supported by `boxlite serve` (no volume
-    /// backend). Accepted here only so a combined secrets+volumes request does
-    /// not fail deserialization on an unrelated field; rejected explicitly in
-    /// `build_box_options` when non-empty.
+    /// The pre-typed managed-volume field. Kept for callers written against the
+    /// old API; the server still rejects a host path at its security boundary.
     #[serde(default)]
-    pub volumes: Option<Vec<serde_json::Value>>,
+    pub volumes: Option<Vec<VolumeSpecRequest>>,
+    #[serde(default)]
+    pub mounts: Option<Vec<MountSpecRequest>>,
     // `security` / `security_settings` are intentionally absent from
     // the REST wire schema. Sandbox security is the operator's
     // policy, set server-side. Because the struct carries
@@ -226,12 +226,15 @@ pub(super) struct ListBoxesResponse {
 pub(super) struct VolumeResponse {
     pub id: String,
     pub name: String,
+    pub state: String,
     pub created_at: String,
+    pub updated_at: String,
     pub size_bytes: Option<u64>,
 }
 
 /// Body for `POST /v1/volumes`. An absent body means an unnamed volume.
-#[derive(Deserialize, Default)]
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(super) struct CreateVolumeRequest {
     #[serde(default)]
     pub name: Option<String>,
@@ -240,6 +243,38 @@ pub(super) struct CreateVolumeRequest {
 #[derive(Serialize)]
 pub(super) struct ListVolumesResponse {
     pub volumes: Vec<VolumeResponse>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct VolumeSpecRequest {
+    #[serde(default)]
+    pub managed_volume: Option<String>,
+    #[serde(default)]
+    pub host_path: Option<String>,
+    pub guest_path: String,
+    #[serde(default)]
+    pub read_only: bool,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum MountTypeRequest {
+    Bind,
+    Volume,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MountSpecRequest {
+    #[serde(rename = "type")]
+    pub mount_type: MountTypeRequest,
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub sub_path: Option<String>,
 }
 
 /// One reference, as `GET /v1/images` lists it.
@@ -356,6 +391,7 @@ pub(super) struct ServerConfig {
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
     pub checkpoints_enabled: bool,
+    pub memory_checkpoints_enabled: bool,
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
     pub snapshots_enabled: bool,
@@ -363,6 +399,8 @@ pub(super) struct ServerCapabilities {
     pub export_enabled: bool,
     pub import_enabled: bool,
     pub exec_user_enabled: bool,
+    pub volume_read_only_enabled: bool,
+    pub typed_mounts_enabled: bool,
 }
 
 // ============================================================================
@@ -494,6 +532,24 @@ pub(super) struct RemoveQuery {
 #[derive(Deserialize)]
 pub(super) struct FileQuery {
     pub path: String,
+    pub overwrite: Option<bool>,
+}
+
+#[cfg(test)]
+mod upload_query_tests {
+    use super::FileQuery;
+
+    #[test]
+    fn upload_overwrite_defaults_and_false_remain_distinct() {
+        let missing: FileQuery = serde_json::from_str(r#"{"path":"/app"}"#).unwrap();
+        let disabled: FileQuery =
+            serde_json::from_str(r#"{"path":"/app","overwrite":false}"#).unwrap();
+        assert!(missing.overwrite.unwrap_or(true));
+        assert!(!disabled.overwrite.unwrap_or(true));
+        assert!(
+            serde_json::from_str::<FileQuery>(r#"{"path":"/app","overwrite":"invalid"}"#).is_err()
+        );
+    }
 }
 
 #[cfg(test)]

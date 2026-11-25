@@ -10,6 +10,8 @@ import { resolve } from 'node:path'
 import { parse } from 'yaml'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { RegistriesService } from '../registry/services/registries.service'
+import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
+import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { BoxliteImageController } from './boxlite-image.controller'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
@@ -26,6 +28,56 @@ function validator(name: string) {
   if (!validate) throw new Error(`Missing Box API schema: ${name}`)
   return validate
 }
+
+describe('Box API checkpoint schemas', () => {
+  it('accepts omission or known kinds in a closed capture request', () => {
+    const validate = validator('CreateCheckpointRequest')
+    const request = { source_box_id: 'source' }
+    expect(validate(request)).toBe(true)
+    for (const kind of ['disk', 'full']) expect(validate({ ...request, kind })).toBe(true)
+    for (const kind of [null, 'bogus', 123]) expect(validate({ ...request, kind })).toBe(false)
+    expect(validate({ ...request, kind: 'full', extra: true })).toBe(false)
+  })
+
+  it('accepts omitted metadata and a known zero memory size, and rejects nulls and negative sizes', () => {
+    const validate = validator('Checkpoint')
+    const checkpoint = {
+      id: 'checkpoint',
+      name: 'backup',
+      source_box_id: 'source',
+      created_at: '2026-10-01T00:00:00Z',
+      size_bytes: 512,
+      state: 'ready',
+    }
+    expect(validate(checkpoint)).toBe(true)
+    expect(validate({ ...checkpoint, kind: 'full', memory_size_bytes: 0 })).toBe(true)
+    expect(validate({ ...checkpoint, kind: null })).toBe(false)
+    expect(validate({ ...checkpoint, kind: 'full', memory_size_bytes: null })).toBe(false)
+    expect(validate({ ...checkpoint, kind: 'full', memory_size_bytes: -1 })).toBe(false)
+  })
+
+  it('validates actual checkpoint and config controller responses', async () => {
+    const record = {
+      id: 'checkpoint',
+      name: 'backup',
+      sourceBoxId: 'source',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      state: 'creating',
+    }
+    const service = {
+      create: jest.fn().mockResolvedValue(record),
+      get: jest.fn().mockResolvedValue(record),
+      list: jest.fn().mockResolvedValue({ checkpoints: [record] }),
+    }
+    const controller = new BoxliteCheckpointController(service as never)
+    const auth = { organizationId: 'org-1' } as never
+    expect(validator('Checkpoint')(await controller.create(auth, { source_box_id: 'source' }))).toBe(true)
+    expect(validator('Checkpoint')(await controller.get(auth, 'checkpoint'))).toBe(true)
+    const page = JSON.parse(JSON.stringify(await controller.list(auth)))
+    expect(validator('CheckpointList')(page)).toBe(true)
+    expect(validator('ServerConfig')(new BoxliteConfigController().getConfig())).toBe(true)
+  })
+})
 
 describe('Box API JSON Schema nullability', () => {
   const nullableFields = {
@@ -135,11 +187,17 @@ describe('Box API JSON Schema nullability', () => {
         domains: [
           {
             hostname: 'demo1.app.test',
+            kind: 'platform',
             url: 'https://demo1.app.test',
             target: { type: 'box', box: 'box-1', port: 3000 },
           },
-          { hostname: 'spare.app.test', url: 'https://spare.app.test', target: null },
-          { hostname: 'shop.app.test', url: 'https://shop.app.test', target: { type: 'app', app: 'shop' } },
+          { hostname: 'spare.app.test', kind: 'platform', url: 'https://spare.app.test', target: null },
+          {
+            hostname: 'shop.app.test',
+            kind: 'platform',
+            url: 'https://shop.app.test',
+            target: { type: 'app', app: 'shop' },
+          },
         ],
         limit: 3,
         used: 3,

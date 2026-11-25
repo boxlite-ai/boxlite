@@ -1,5 +1,6 @@
 """Exercise managed E2E configuration and lifecycle boundaries without a VM."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import signal
@@ -278,9 +279,53 @@ class LocalE2ETest(unittest.TestCase):
                     os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
 
+    def check_shared_shim_reaping(self, *, use_bwrap_parent):
+        home = self.state / "runtime"
+        shim = str(home / "shims/0123456789abcdef/boxlite-shim")
+        recoverable = home / "boxes/recoverable"
+        recoverable.mkdir(parents=True)
+        (recoverable / "shim.pid").write_text("101\n42\n")
+        argv = {101: [shim], 102: [shim]}
+        if use_bwrap_parent:
+            argv[201] = ["/usr/bin/bwrap", str(recoverable / "tmp"), shim]
+            argv[202] = ["/usr/bin/bwrap", str(home / "boxes/lost/tmp"), shim]
+            environments = {101: b"BOXLITE_BOX_ID=lost", 102: b"BOXLITE_BOX_ID=recoverable"}
+        else:
+            argv[201] = ["/usr/bin/bwrap", str(self.state / "other/boxes/lost/tmp")]
+            environments = {101: b"BOXLITE_BOX_ID=recoverable", 102: b"BOXLITE_BOX_ID=lost"}
+        real_read_text = Path.read_text
+
+        def read_text(path):
+            if path.name == "stat" and path.parent.parent == Path("/proc"):
+                pid = int(path.parent.name)
+                return f"{pid} (shim ) name) S {pid + 100} " + "0 " * 17 + "42"
+            return real_read_text(path)
+
+        def read_bytes(path):
+            self.assertEqual(path.name, "environ")
+            return b"OTHER=ignored\0" + environments[int(path.parent.name)] + b"\0"
+
+        with patch.object(local, "RUNTIME_HOME", home), \
+                patch.object(local, "box_processes", return_value=[101, 102]), \
+                patch.object(local, "_argv", side_effect=lambda pid: argv.get(pid, [])), \
+                patch.object(Path, "read_text", read_text), \
+                patch.object(Path, "read_bytes", read_bytes), \
+                patch.object(local.os, "kill") as check_pid, \
+                patch.object(local, "stop_orphaned_boxes", return_value=[]) as reap:
+            local.reap_unrecoverable_boxes()
+
+        check_pid.assert_called_once_with(101, 0)
+        reap.assert_called_once_with(pids=[102])
+
+    def test_reap_shared_shims_attributed_by_bwrap_parent(self):
+        self.check_shared_shim_reaping(use_bwrap_parent=True)
+
+    def test_reap_shared_shims_attributed_by_box_id_environment(self):
+        self.check_shared_shim_reaping(use_bwrap_parent=False)
+
     def test_compose_declares_all_dependency_services(self):
         compose = (local.E2E / "compose.yaml").read_text()
-        for service in ("postgres", "redis", "registry", "dex", "minio"):
+        for service in ("postgres", "redis", "registry", "rauthy", "rustfs"):
             self.assertIn(f"  {service}:", compose)
 
     def test_environment_has_persistent_unpredictable_credentials_and_loopback_binding(self):
@@ -290,10 +335,17 @@ class LocalE2ETest(unittest.TestCase):
         self.assertNotEqual(env["ADMIN_API_KEY"], "e2e-admin-key")
         self.assertEqual(env["ADMIN_API_KEY"], local.base_env()["ADMIN_API_KEY"])
         self.assertEqual(env["PGPASSWORD"], env["POSTGRES_PASSWORD"])
-        self.assertEqual(env["S3_SECRET_KEY"], env["MINIO_PASSWORD"])
+        self.assertEqual(env["S3_SECRET_KEY"], env["RUSTFS_PASSWORD"])
         self.assertEqual(env["BOXLITE_HOME"], str(local.STATE / "client-home"))
         with patch.object(local, "STATE", self.state / "other"):
             self.assertNotEqual(env["ADMIN_API_KEY"], local.base_env()["ADMIN_API_KEY"])
+
+    def test_existing_credentials_gain_new_keys_without_rotating_old_ones(self):
+        (self.state / "credentials.json").write_text(json.dumps({"ADMIN_KEY": "kept"}))
+        first = local.load_credentials()
+        self.assertEqual(first["ADMIN_KEY"], "kept")
+        self.assertEqual(set(first), set(local.CREDENTIALS))
+        self.assertEqual(local.load_credentials(), first)
 
     def test_status_cannot_observe_truncated_pid_records(self):
         local.save_pids({"api": {"pid": 123, "starttime": "456"}})
@@ -330,7 +382,7 @@ class LocalE2ETest(unittest.TestCase):
                 mocks.enter_context(patch.object(local, name))
             build = mocks.enter_context(patch.object(local, "build"))
             start = mocks.enter_context(patch.object(local, "start"))
-            mocks.enter_context(patch.object(local, "compose", return_value="postgres redis registry dex minio"))
+            mocks.enter_context(patch.object(local, "compose", return_value="postgres redis registry rauthy rustfs"))
             mocks.enter_context(patch.object(local, "compose_services", return_value=set()))
             mocks.enter_context(patch.object(local, "box_processes", return_value=[]))
             mocks.enter_context(patch.object(local, "process_matches", return_value=True))
@@ -420,7 +472,7 @@ class LocalE2ETest(unittest.TestCase):
                 patch.object(local, "prune_box_dirs"):
             with self.assertRaisesRegex(local.Failure, "readiness"):
                 local.up({})
-        self.assertIn(("down",), events)
+        self.assertIn(("down", "--remove-orphans"), events)
         stop.assert_called()
 
     def test_build_failure_does_not_stop_existing_stack(self):
@@ -463,10 +515,12 @@ class LocalE2ETest(unittest.TestCase):
                 patch.object(local, "stop_orphaned_boxes", return_value=[]):
             with self.assertRaises(KeyboardInterrupt):
                 local.up({})
-        self.assertNotIn(["down"], events)
+        self.assertEqual([args for args in events if args[:1] == ["down"]], [])
         removed = [args for args in events if args[:3] == ["rm", "-s", "-f"]]
         self.assertEqual(len(removed), 1)
         self.assertNotIn("postgres", removed[0])
+        # Services dropped from compose.yaml (dex, minio) must not keep their ports.
+        self.assertIn(["up", "-d", "--remove-orphans"], events)
 
 
     def test_owned_process_is_scoped_to_this_checkout(self):
@@ -476,6 +530,12 @@ class LocalE2ETest(unittest.TestCase):
         self.assertFalse(local.owned_process(["/tmp/elsewhere/boxes/abc/bin/boxlite-shim"]))
         self.assertFalse(local.owned_process([f"{home}/boxes/abc/bin/python3"]))
         self.assertFalse(local.owned_process([]))
+
+    def test_owned_process_matches_shared_shims_in_this_checkout(self):
+        home = str(local.RUNTIME_HOME)
+        self.assertTrue(local.owned_process([f"{home}/shims/0123456789abcdef/boxlite-shim"]))
+        self.assertFalse(local.owned_process(["/tmp/elsewhere/shims/0123456789abcdef/boxlite-shim"]))
+        self.assertFalse(local.owned_process([f"{home}/shims/abc/python3"]))
 
     def test_prune_box_dirs_removes_only_box_directories(self):
         with tempfile.TemporaryDirectory() as tmp:

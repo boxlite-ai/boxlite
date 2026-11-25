@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apiKeyExpirationDate, apiKeyExpirationLabel, apiKeyPermissionSummary } from './api-key-permissions'
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
 
 describe('API key inventory labels', () => {
   it.each([
@@ -26,7 +29,18 @@ describe('API key inventory labels', () => {
     expect(apiKeyExpirationLabel('2026-11-17T00:00:01Z')).toBe('In 2 days')
     expect(apiKeyExpirationDate(null)).toBe('No expiration')
     expect(apiKeyExpirationDate('2026-11-17T00:00:01Z')).toBe(
-      new Date('2026-11-17T00:00:01Z').toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'long' }),
+      new Date('2026-11-17T00:00:01Z').toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'long' }),
     )
   })
+})
+
+it('formats API key expiration in English even with a Chinese browser default', () => {
+  const original = Date.prototype.toLocaleString
+  const format = vi.spyOn(Date.prototype, 'toLocaleString').mockImplementation(function (locales, options) {
+    return original.call(this, locales ?? 'zh-CN', options)
+  })
+  const label = apiKeyExpirationDate('2026-12-19T12:28:04Z')
+  expect(label).toContain('Dec')
+  expect(label).not.toMatch(/[年月日]/)
+  expect(format).toHaveBeenCalledWith('en-US', { dateStyle: 'medium', timeStyle: 'long' })
 })

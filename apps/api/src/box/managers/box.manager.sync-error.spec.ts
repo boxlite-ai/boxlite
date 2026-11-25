@@ -32,6 +32,7 @@ function makeManager(startFailure: Error) {
     {} as never,
     {} as never,
     imagePullFailureService as never,
+    { get: () => undefined } as never,
   )
   return { manager, boxRepository, imagePullFailureService, start }
 }

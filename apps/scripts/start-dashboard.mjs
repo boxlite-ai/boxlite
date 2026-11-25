@@ -32,10 +32,6 @@ const targets = {
     label: `local dashboard + local API via /api proxy → ${API_TARGETS.local}`,
     proxyTarget: API_TARGETS.local,
   },
-  dex: {
-    label: `local dashboard + local API/Dex via /api proxy → ${API_TARGETS.local}`,
-    proxyTarget: API_TARGETS.local,
-  },
   prod: {
     label: 'local dashboard + PROD API (controlled)',
     proxyTarget: API_TARGETS.prod, // undefined until configured; guarded below
@@ -111,7 +107,6 @@ function printHelp() {
   npm run start:local      # local API (localhost:3001)
   npm run start:prod       # PROD API — controlled, requires --yes-prod
   npm run start:mock       # MSW mocks, no backend, no login
-  npm run start:dex        # local API/Dex
   npm run start -- --api=https://any.example.com   # proxy to ANY API URL
 
 How it works:

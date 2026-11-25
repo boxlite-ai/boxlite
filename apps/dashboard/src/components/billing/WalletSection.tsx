@@ -17,6 +17,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { useRedeemCouponMutation } from '@/hooks/mutations/useRedeemCouponMutation'
+import { useRemovePaymentMethodMutation } from '@/hooks/mutations/useRemovePaymentMethodMutation'
+import { useSetDefaultPaymentMethodMutation } from '@/hooks/mutations/useSetDefaultPaymentMethodMutation'
 import { useSetAutomaticTopUpMutation } from '@/hooks/mutations/useSetAutomaticTopUpMutation'
 import { useTopUpWalletMutation } from '@/hooks/mutations/useTopUpWalletMutation'
 import { useConnectCard } from '@/hooks/useConnectCard'
@@ -28,14 +30,17 @@ import {
   useOwnerWalletTransactionsQuery,
   useOwnerWalletQuery,
 } from '@/hooks/queries/billingQueries'
+import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn, formatAmount } from '@/lib/utils'
 import { ArrowUpRight } from '@/components/ui/icon'
+import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { NumericFormat } from 'react-number-format'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 import { PaymentMethodsPanel } from './PaymentMethodsPanel'
+import { WalletCouponClaim } from './WalletCouponClaim'
 
 /** Commerce rejects anything smaller, so the form says so before the round trip. */
 export const MIN_TOP_UP_DOLLARS = 10
@@ -253,13 +258,24 @@ function Count({ value }: { value?: number }) {
  * Main wallet section component displaying balance, payment methods, billing history, and credit activity.
  * Manages state for top-ups, auto-reload settings, and coupon redemption.
  *
+ * @param linkCouponCode - Reward code provided by the shareable coupon link.
+ * @param onCouponClaimAccepted - Removes the accepted reward code from the URL.
  * @returns The complete wallet section component
  */
-export function WalletSection() {
-  const { selectedOrganization } = useSelectedOrganization()
+export function WalletSection({
+  linkCouponCode,
+  onCouponClaimAccepted,
+}: { linkCouponCode?: string; onCouponClaimAccepted?: () => void } = {}) {
+  const {
+    selectedOrganization,
+    authenticatedUserOrganizationMember,
+    organizationMembersStatus,
+    refreshOrganizationMembers,
+  } = useSelectedOrganization()
+  const { organizations } = useOrganizations()
   const { user } = useAuth()
   const [automaticTopUp, setAutomaticTopUp] = useState<AutomaticTopUp | undefined>(undefined)
-  const [couponCode, setCouponCode] = useState<string>('')
+  const [couponCode, setCouponCode] = useState('')
   const [redeemCouponError, setRedeemCouponError] = useState<string | null>(null)
   const [redeemCouponSuccess, setRedeemCouponSuccess] = useState<string | null>(null)
   const [oneTimeTopUpAmount, setOneTimeTopUpAmount] = useState<number | undefined>(undefined)
@@ -279,6 +295,8 @@ export function WalletSection() {
   const setAutomaticTopUpMutation = useSetAutomaticTopUpMutation()
   const redeemCouponMutation = useRedeemCouponMutation()
   const topUpWalletMutation = useTopUpWalletMutation()
+  const setDefaultPaymentMethodMutation = useSetDefaultPaymentMethodMutation()
+  const removePaymentMethodMutation = useRemovePaymentMethodMutation()
 
   useEffect(() => {
     if (!wallet) {
@@ -305,6 +323,36 @@ export function WalletSection() {
     }
   }, [selectedOrganization, automaticTopUp, setAutomaticTopUpMutation])
 
+  const handleSetDefaultPaymentMethod = useCallback(
+    async (paymentMethodId: string) => {
+      if (!selectedOrganization) {
+        return
+      }
+
+      try {
+        await setDefaultPaymentMethodMutation.mutateAsync({ organizationId: selectedOrganization.id, paymentMethodId })
+      } catch (error) {
+        toast.error('Failed to set the default card', { description: String(error) })
+      }
+    },
+    [selectedOrganization, setDefaultPaymentMethodMutation],
+  )
+
+  const handleRemovePaymentMethod = useCallback(
+    async (paymentMethodId: string) => {
+      if (!selectedOrganization) {
+        return
+      }
+
+      try {
+        await removePaymentMethodMutation.mutateAsync({ organizationId: selectedOrganization.id, paymentMethodId })
+      } catch (error) {
+        toast.error('Failed to remove the card', { description: String(error) })
+      }
+    },
+    [selectedOrganization, removePaymentMethodMutation],
+  )
+
   const handleRedeemCoupon = useCallback(async () => {
     if (!selectedOrganization || !couponCode) {
       return
@@ -322,9 +370,11 @@ export function WalletSection() {
       setTimeout(() => {
         setRedeemCouponSuccess(null)
       }, 3000)
+      toast.success(message)
       setCouponCode('')
     } catch (error) {
       setRedeemCouponError(String(error))
+      toast.error(`Coupon ${couponCode} was not redeemed`, { description: String(error) })
       console.error('Failed to redeem coupon:', error)
     }
   }, [selectedOrganization, couponCode, redeemCouponMutation])
@@ -394,6 +444,37 @@ export function WalletSection() {
 
   return (
     <div className="flex flex-col gap-8">
+      {linkCouponCode && !user?.profile.email_verified && (
+        <Panel className="px-[22px] py-4">Verify your email to claim coupon code {linkCouponCode}.</Panel>
+      )}
+      {linkCouponCode && user?.profile.email_verified && organizationMembersStatus === 'error' && (
+        <Panel className="flex flex-wrap items-center justify-between gap-3 px-[22px] py-4">
+          <p role="alert">Couldn’t verify your organization role.</p>
+          <AsciiButton onClick={() => void refreshOrganizationMembers().catch(() => undefined)}>
+            Retry verification
+          </AsciiButton>
+        </Panel>
+      )}
+      {user?.profile.email_verified &&
+        organizationMembersStatus === 'ready' &&
+        (selectedOrganization &&
+        user.profile.sub &&
+        authenticatedUserOrganizationMember?.role === OrganizationUserRoleEnum.OWNER ? (
+          <WalletCouponClaim
+            key={JSON.stringify([user.profile.sub, selectedOrganization.id])}
+            accountId={user.profile.sub}
+            organizationId={selectedOrganization.id}
+            organizationName={selectedOrganization.name}
+            code={linkCouponCode}
+            automatic={organizations.length === 1 && organizations[0].id === selectedOrganization.id}
+            cardConnected={walletQuery.isPlaceholderData ? undefined : wallet?.creditCardConnected}
+            connectCard={connectCard}
+            connectingCard={isCheckoutUrlLoading}
+            onAccepted={onCouponClaimAccepted}
+          />
+        ) : (
+          linkCouponCode && <Panel className="px-[22px] py-4">Only an organization owner can claim this reward.</Panel>
+        ))}
       {isBillingLoading && (
         <div className="flex flex-col gap-8">
           <div className="flex flex-col gap-4 border border-border bg-card p-[22px]">
@@ -418,14 +499,14 @@ export function WalletSection() {
 
       {wallet && (
         <div className="flex flex-col gap-8">
-          {/* Card enumeration is its own read model; checkout remains the one action. */}
           <PaymentMethodsPanel
             paymentMethods={paymentMethodsQuery.data ?? []}
             isLoading={paymentMethodsQuery.isLoading}
             isError={paymentMethodsQuery.isError}
-            hasConnectedCard={cardConnected}
-            isActionLoading={isCheckoutUrlLoading}
-            onAction={connectCard}
+            isAddLoading={isCheckoutUrlLoading}
+            onAdd={connectCard}
+            onSetDefault={handleSetDefaultPaymentMethod}
+            onRemove={handleRemovePaymentMethod}
           />
 
           <section>
@@ -694,7 +775,7 @@ export function WalletSection() {
                           <span className="font-sans text-meta text-success">{redeemCouponSuccess}</span>
                         ) : (
                           <span className="font-sans text-meta text-muted-foreground">
-                            Enter a coupon code to redeem your credits.
+                            Credits go to {selectedOrganization?.name ?? 'this organization'}.
                           </span>
                         )}
                       </div>

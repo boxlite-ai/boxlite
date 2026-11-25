@@ -560,6 +560,25 @@ fn test_run_with_volume_success() {
 }
 
 #[test]
+fn test_run_with_single_file_volume() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("app.conf");
+    std::fs::write(&file, "single-file\n").unwrap();
+
+    let mut ctx = common::boxlite();
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "-v",
+        &format!("{}:/etc/app.conf", file.to_str().unwrap()),
+        "alpine:latest",
+        "cat",
+        "/etc/app.conf",
+    ]);
+    ctx.cmd.assert().success().stdout("single-file\n");
+}
+
+#[test]
 fn test_run_with_volume_short_flag() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path();

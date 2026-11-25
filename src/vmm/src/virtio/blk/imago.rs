@@ -7,8 +7,8 @@
 use std::{io, path::Path};
 
 use imago::{
-    DynStorage, FormatAccess, FormatDriverBuilder, PermissiveImplicitOpenGate, qcow2::Qcow2,
-    raw::Raw,
+    DynStorage, FormatAccess, FormatDriverBuilder, PermissiveImplicitOpenGate,
+    format::PreallocateMode, qcow2::Qcow2, raw::Raw,
 };
 
 use super::{
@@ -85,6 +85,27 @@ impl DiskBackend for ImagoBackend {
         })
     }
 
+    fn resize_grow(&mut self, bytes: u64) -> io::Result<DiskInfo> {
+        #[cfg(target_os = "linux")]
+        match self.image.inner().format() {
+            imago::format::Format::Qcow2 => {
+                // Temporary allowance based on measurements of fresh qcow2
+                // images. Existing cluster layouts can require more space.
+                const GIB: u64 = 1 << 30;
+                const METADATA_BYTES_PER_GIB: u64 = 1 << 20;
+                let metadata_reserve = bytes.div_ceil(GIB) * METADATA_BYTES_PER_GIB;
+                check_file_size_limit(bytes, metadata_reserve)?;
+            }
+            imago::format::Format::Raw => check_file_size_limit(bytes, 0)?,
+            _ => {}
+        }
+        // `None` only grows metadata and the file length: the new range reads
+        // as zeroes because it maps nothing, even past a shorter backing file.
+        self.image.resize_grow(bytes, PreallocateMode::None)?;
+        self.disk_info.capacity_sectors = self.image.size() >> SECTOR_SHIFT;
+        Ok(self.disk_info)
+    }
+
     fn completions(&mut self, _out: &mut Vec<CompletedRequest>) {}
 
     fn event_source(&mut self) -> Option<Box<dyn EventSource>> {
@@ -95,4 +116,29 @@ impl DiskBackend for ImagoBackend {
         self.image.flush()?;
         self.image.sync()
     }
+}
+
+#[cfg(target_os = "linux")]
+fn check_file_size_limit(bytes: u64, metadata_reserve: u64) -> io::Result<()> {
+    let mut limit = libc::rlimit64 {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit64 writes the calling process's limits to this struct.
+    if unsafe { libc::getrlimit64(libc::RLIMIT_FSIZE, &mut limit) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let soft_limit = limit.rlim_cur;
+    let required = u128::from(bytes) + u128::from(metadata_reserve);
+    if soft_limit != u64::MAX && required > u128::from(soft_limit) {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            format!(
+                "Resize to {bytes} bytes needs an estimated host file size of {required} bytes \
+                 (including {metadata_reserve} bytes for metadata), above the RLIMIT_FSIZE \
+                 soft limit of {soft_limit} bytes"
+            ),
+        ));
+    }
+    Ok(())
 }

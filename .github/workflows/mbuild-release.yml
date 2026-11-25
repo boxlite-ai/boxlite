@@ -1,6 +1,6 @@
-# Release publication is independent of deployment environments and cloud registries.
+# Release publication and dispatch orchestration hold no cloud Environment.
 name: mbuild-release
-run-name: publish ${{ inputs.tag }} to GHCR
+run-name: publish ${{ inputs.tag }} to GHCR${{ !inputs['build-only'] && ' · dev acceptance · prod review' || '' }}
 
 on:
   workflow_dispatch:
@@ -15,6 +15,11 @@ on:
         description: 'Release tag v<X.Y.Z>, naming a commit on main'
         required: true
         type: string
+      build-only:
+        description: Build and upload only; skip deployment, E2E and Slack reporting
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: mbuild-release-${{ inputs.tag }}
@@ -184,3 +189,79 @@ jobs:
             echo 'Manifest digests are printed by the publication step.'
             echo 'Image scanning runs after import into the deployment stage.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  assets:
+    name: Wait for release assets
+    needs: [resolve, publish]
+    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 185
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate optional release webhook and require release assets
+        env:
+          TAG: ${{ inputs.tag }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: node apps/infra/scripts/release-pipeline.mjs assets
+
+  pipeline:
+    name: Validate dev and request prod review
+    needs: [resolve, assets]
+    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 250
+    concurrency:
+      group: mbuild-release-dev-validation
+      cancel-in-progress: false
+    outputs:
+      phase: ${{ steps.pipeline.outputs.phase }}
+      dev_run_id: ${{ steps.pipeline.outputs.dev_run_id }}
+      dev_result: ${{ steps.pipeline.outputs.dev_result }}
+      e2e_run_id: ${{ steps.pipeline.outputs.e2e_run_id }}
+      e2e_result: ${{ steps.pipeline.outputs.e2e_result }}
+      prod_run_id: ${{ steps.pipeline.outputs.prod_run_id }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Dispatch existing workflows
+        id: pipeline
+        env:
+          TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: node apps/infra/scripts/release-pipeline.mjs run
+
+  report:
+    name: Report release results
+    permissions:
+      contents: read
+      actions: read
+    needs: [resolve, publish, assets, pipeline]
+    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Publish summary and Slack notification
+        env:
+          TAG: ${{ inputs.tag }}
+          RELEASE_RESULTS: ${{ toJSON(needs) }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: node apps/infra/scripts/release-pipeline.mjs report

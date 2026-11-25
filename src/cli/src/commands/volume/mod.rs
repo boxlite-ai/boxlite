@@ -5,9 +5,8 @@
 //! mountable in place of the id (`-v my-data:/data`).
 //!
 //! Each leaf module owns its own `Args` struct and `run()`; this module holds
-//! the subcommand enum and dispatches. Volumes are a REST-runtime capability:
-//! the local runtime has no volume backend and every command returns
-//! "not supported" against it.
+//! the subcommand enum and dispatches. LocalRuntime uses `LocalVolumeStore`;
+//! REST runtimes use the selected server's volume API.
 
 use clap::{Args, Subcommand};
 

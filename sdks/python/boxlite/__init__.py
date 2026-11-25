@@ -21,6 +21,7 @@ try:
         BoxStateInfo,
         CheckpointHandle,
         CheckpointInfo,
+        CheckpointOptions,
         CloneOptions,
         ContainerCapabilities,
         CopyOptions,
@@ -87,6 +88,7 @@ try:
         "Boxlite",
         "CheckpointHandle",
         "CheckpointInfo",
+        "CheckpointOptions",
         "NetworkSpec",
         "OutboundNetworkSpec",
         "InboundNetworkSpec",
@@ -158,6 +160,7 @@ from .agents import (  # noqa: F401 - re-exported through __all__ below
     AgentCreateOptions,
     AgentEvent,
     AgentEventsOptions,
+    AgentEventStream,
     AgentRequest,
     AgentResponse,
     AgentResult,
@@ -178,6 +181,7 @@ __all__.extend(
         "AgentControlOptions",
         "AgentCreateOptions",
         "AgentEvent",
+        "AgentEventStream",
         "AgentEventsOptions",
         "AgentRequest",
         "AgentResponse",
@@ -254,6 +258,7 @@ except ImportError:
 try:
     from .sync_api import (  # noqa: F401
         SyncAgent,
+        SyncAgentEventStream,
         SyncAgents,
         SyncAgentTurn,
         SyncBox,
@@ -276,6 +281,7 @@ try:
     __all__.extend(
         [
             "SyncAgent",
+            "SyncAgentEventStream",
             "SyncAgentTurn",
             "SyncAgents",
             "SyncBox",

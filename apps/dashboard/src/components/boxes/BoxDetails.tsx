@@ -80,6 +80,8 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
     useSelectedOrganization()
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [startFailed, setStartFailed] = useState(false)
+  const [startInProgress, setStartInProgress] = useState(false)
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
   const [copiedName, setCopiedName] = useState(false)
   const [sshRefreshSignal, setSshRefreshSignal] = useState(0)
@@ -133,14 +135,20 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
   const transitioning = box ? isTransitioning(box) : false
   const anyMutating =
     startMutation.isPending || stopMutation.isPending || recoverMutation.isPending || deleteMutation.isPending
-  const actionsDisabled = anyMutating || transitioning
+  const actionsDisabled = anyMutating || transitioning || startInProgress
+
+  useEffect(() => setStartFailed(false), [box?.state])
 
   const handleStart = async () => {
-    if (!box) return
+    if (!box || !writePermitted || !isStartable(box) || actionsDisabled) return
+    setStartFailed(false)
+    setStartInProgress(true)
     try {
       await startMutation.mutateAsync({ boxId: box.id, detailRef: boxId })
+      await refetch()
       toast.success('Box started')
     } catch (error) {
+      setStartFailed(true)
       handleApiError(error, 'Failed to start box', {
         action:
           error instanceof OrganizationSuspendedError &&
@@ -151,6 +159,8 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
             </Button>
           ) : undefined,
       })
+    } finally {
+      setStartInProgress(false)
     }
   }
 
@@ -210,8 +220,8 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
   return (
     <div
       className={cn(
-        'page-container flex max-w-[1232px] min-w-0 flex-col gap-3 pb-6 pt-4 font-sans text-body',
-        page === 'terminal'
+        'page-container flex min-w-0 flex-col gap-3 pb-6 pt-4 font-sans text-body',
+        page === 'terminal' && box && isStoppable(box)
           ? 'h-[var(--app-content-height,calc(100svh_-_60px))] min-h-[640px]'
           : 'min-h-[var(--app-content-height,calc(100svh_-_60px))]',
       )}
@@ -286,7 +296,7 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
                   <RotateCcw className="size-[14px]" /> Recover
                 </Button>
               )}
-              {writePermitted && isStartable(box) && (
+              {page !== 'terminal' && writePermitted && isStartable(box) && (
                 <Button variant="outline" type="button" onClick={handleStart} disabled={actionsDisabled}>
                   <Play className="size-[14px]" /> Start
                 </Button>
@@ -354,8 +364,19 @@ function BoxDetailsPage({ page }: { page: 'overview' | 'terminal' }) {
           <BoxPageNavigation boxId={boxId ?? box.id} current={page} />
 
           {page === 'terminal' ? (
-            <div className="flex min-h-[360px] min-w-0 flex-1 flex-col overflow-hidden border border-border/60">
-              <BoxTerminalSession box={box} />
+            <div
+              className={cn(
+                'flex min-w-0 flex-col',
+                isStoppable(box) && 'min-h-[360px] flex-1 overflow-hidden border border-border/60',
+              )}
+            >
+              <BoxTerminalSession
+                box={box}
+                onStart={handleStart}
+                startDisabled={actionsDisabled}
+                starting={startMutation.isPending || startInProgress}
+                startFailed={startFailed}
+              />
             </div>
           ) : (
             <BoxOverview box={box} canManage={writePermitted} sshStatusRef={setSshStatusContainer} />

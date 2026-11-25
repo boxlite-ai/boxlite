@@ -188,9 +188,15 @@ impl Harness {
             })
             .collect();
         ActivationContext {
-            memory: self.memory.clone(),
-            queues: VirtQueues::prepare(queues, SPEC.queue_max, false, false, self.memory.clone())
-                .unwrap(),
+            memory: self.memory.clone().into(),
+            queues: VirtQueues::prepare(
+                queues,
+                SPEC.queue_max,
+                false,
+                false,
+                self.memory.clone().into(),
+            )
+            .unwrap(),
             interrupt: self.interrupt.clone(),
             events: self.registrar.clone(),
             waker: Arc::new(|| {}),
@@ -890,7 +896,7 @@ fn tx_disconnect_and_invalid_activation_do_not_leave_a_source() {
                 &[QUEUE_SIZE],
                 false,
                 false,
-                h.memory.clone(),
+                h.memory.clone().into(),
             )
             .unwrap();
         } else {
@@ -902,7 +908,7 @@ fn tx_disconnect_and_invalid_activation_do_not_leave_a_source() {
                 SPEC.queue_max,
                 false,
                 false,
-                h.memory.clone(),
+                h.memory.clone().into(),
             )
             .unwrap();
         }

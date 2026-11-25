@@ -57,7 +57,7 @@ import { McpModule } from './mcp/mcp.module'
           pinoHttp: {
             autoLogging: logConfig.requests.enabled,
             level: logConfig.level,
-            redact: ['req.headers.authorization', 'req.body.turnstileToken'],
+            redact: ['req.headers.authorization', 'req.body.turnstileToken', 'req.body.token'],
             hooks: {
               logMethod: swapMessageAndObject,
             },

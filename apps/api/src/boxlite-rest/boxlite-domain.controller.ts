@@ -31,14 +31,14 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
-import { HeldDomain, DomainService } from '../box/services/domain.service'
+import { HeldDomain, HeldDomains, DomainService } from '../box/services/domain.service'
 import { DomainTargetDto } from './dto/domain-target.dto'
 import { ClaimDomainDto } from './dto/claim-domain.dto'
 
 type RestDomain = HeldDomain
 
 type RestDomainList = {
-  domains: RestDomain[]
+  domains: HeldDomains['domains']
   limit: number
   used: number
   remaining: number

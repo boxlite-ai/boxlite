@@ -17,12 +17,12 @@ usize_is_size_t = true
 parse_deps = false
 
 # Keep these enums in the header even though the ABI carries them as int32_t
-# (the copy-in source kind parameter, `CDomainTarget.type`): C callers cast the
-# enum constants to the integer the ABI expects, so the names must remain
-# exported.
+# (`CDomainTarget.type` and agent send mode):
+# C callers use the enum constants with the integer fields and parameters, so
+# the names must remain exported.
 [export]
-include = ["BoxliteCopySourceKind", "BoxliteDomainTargetType"]
-exclude = ["sockaddr_storage"]
+include = ["BoxliteDomainTargetType", "CAgentSendMode"]
+exclude = ["sockaddr_storage", "boxlite_test_agents_new", "boxlite_test_agents_wait_pending", "boxlite_test_agents_wait_queue", "boxlite_test_agents_free_counts"]
 
 [export.rename]
 sockaddr_storage = "struct sockaddr_storage"

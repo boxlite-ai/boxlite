@@ -10,7 +10,7 @@ from enum import IntEnum
 from typing import TYPE_CHECKING, Optional
 
 from .agents import Agents
-from .exec import ExecResult
+from .exec import ExecResult, _close_exec_stdin
 
 if TYPE_CHECKING:
     from .boxlite import (
@@ -147,7 +147,16 @@ class SimpleBox:
     @property
     def agents(self) -> Agents:
         """Get the agent namespace without starting the Box."""
-        return Agents()
+
+        def resolve():
+            if not self._started:
+                raise RuntimeError(
+                    "Box not started. Use 'async with SimpleBox(...) as box:' "
+                    "or call 'await box.start()' first."
+                )
+            return self._box.agents
+
+        return Agents(resolve=resolve)
 
     def __init__(
         self,
@@ -271,7 +280,9 @@ class SimpleBox:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit - delegates to Box.__aexit__ (returns awaitable)."""
-        return await self._box.__aexit__(exc_type, exc_val, exc_tb)
+        result = await self._box.__aexit__(exc_type, exc_val, exc_tb)
+        self._started = False
+        return result
 
     @property
     def id(self) -> str:
@@ -367,6 +378,8 @@ class SimpleBox:
         execution = await self._box.exec(
             cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
         )
+
+        await _close_exec_stdin(execution)
 
         # Get streams from Rust execution
         try:

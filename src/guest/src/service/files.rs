@@ -11,244 +11,11 @@ use boxlite_shared::{
     files_server::Files, BoxByteStream, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
 use futures::StreamExt;
-use nix::fcntl::OFlag;
-use std::collections::HashSet;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, OwnedRwLockReadGuard};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
-
-const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB safety cap
-
-/// A staged upload, deleted whenever it goes out of scope.
-///
-/// The guest's temp dir is RAM-backed, and a request leaves through half a
-/// dozen `?`s between creating this file and finishing with it — the size cap,
-/// a write error, a mount refusal, a failed extraction. Deleting at the end of
-/// the happy path only meant every one of those stranded up to
-/// [`MAX_UPLOAD_BYTES`] of guest memory for the life of the VM.
-///
-/// Hand-rolled rather than `tempfile::TempPath`: `tempfile` is a dev-dependency
-/// here, and this is not worth adding to what ships inside the VM.
-struct StagedTar(PathBuf);
-
-impl StagedTar {
-    fn new(path: PathBuf) -> Self {
-        Self(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for StagedTar {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-/// Open `rel` under `root`, with every symlink confined to `root`.
-///
-/// `fchownat(None, "/abs/path", …, AT_SYMLINK_NOFOLLOW)` guards only the final
-/// component; every directory above it is resolved by the kernel, symlinks
-/// followed. So a workload that swaps a directory this copy just extracted for
-/// a symlink — after extraction, while the ownership hand-off is still working
-/// through its list — redirects the chown to whatever the link names. Naming a
-/// path and then acting on it is two operations, and the box gets to move the
-/// target in between; runc's CVE-2025-52565 is the same shape, and its fix was
-/// likewise to stop passing paths and start carrying descriptors.
-///
-/// `RESOLVE_IN_ROOT` is what makes the descriptor safe to chown through: the
-/// kernel resolves the whole path in one step and reinterprets every absolute
-/// symlink and `..` against `root`, so a swapped ancestor lands back inside the
-/// rootfs instead of outside it. Confining rather than refusing is deliberate —
-/// images ship symlinked directories (`/lib -> usr/lib` on `python:3-slim`,
-/// `/var/run -> ../run` on `redis:7.4-alpine`), and refusing those would leave
-/// a copy to `/lib/x` extracted but still root-owned, which is the ownership
-/// bug this hand-off exists to fix.
-///
-/// `O_PATH` because this fd is only ever a resolution anchor — never read,
-/// never written. `openat2` needs 5.6 and the guest kernel is vendored and
-/// pinned well past it (`src/deps/libkrun-sys/vendor/libkrunfw/Makefile`), so
-/// its absence is not a case this has to carry.
-fn open_dir_in_root(root: RawFd, rel: &Path) -> nix::Result<OwnedFd> {
-    let how = nix::fcntl::OpenHow::new()
-        .flags(OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC)
-        .resolve(nix::fcntl::ResolveFlag::RESOLVE_IN_ROOT);
-
-    // `openat2` rejects an empty path, so a target sitting directly in the
-    // rootfs anchors on the root itself.
-    let path = if rel.as_os_str().is_empty() {
-        Path::new(".")
-    } else {
-        rel
-    };
-
-    // SAFETY: `openat2` returns a fresh descriptor this scope owns; wrapping it
-    // immediately is what closes it on every exit.
-    Ok(unsafe { OwnedFd::from_raw_fd(nix::fcntl::openat2(root, path, how)?) })
-}
-
-/// Give one path inside the rootfs to `uid:gid`, or refuse it.
-///
-/// The whole hand-off is this, once per target: prove the path is inside the
-/// boundary, reach its parent with every link confined to the rootfs, and
-/// change the leaf through that parent's descriptor. Kept as one function so
-/// the composition — and not merely [`open_dir_in_root`] underneath it — is
-/// what the tests hold.
-///
-/// What this bounds and what it does not: a swapped ancestor can no longer
-/// steer the chown out of the rootfs, but it can still steer it onto another
-/// path *within* the rootfs, so a workload can spend its own copy's hand-off on
-/// a file of its choosing inside its own filesystem. `RESOLVE_BENEATH` would
-/// refuse that too, and cannot be used: images ship absolute symlinked
-/// directories (`/var/run -> /run` on `python:3-slim`), which `BENEATH` rejects
-/// as an escape. Bounded to the box, in exchange for images working, is the
-/// trade — and it is why nothing here treats the resolved path as evidence of
-/// what the copy wrote.
-///
-/// `EXDEV` for a target outside the rootfs: [`DestBefore::created`] filters
-/// those lexically already, so reaching here means the two disagree, and the
-/// honest answer is to refuse rather than to chown on a lexical say-so.
-fn chown_within_rootfs(
-    anchor: RawFd,
-    rootfs_root: &Path,
-    target: &Path,
-    uid: u32,
-    gid: u32,
-) -> nix::Result<()> {
-    let rel = target
-        .strip_prefix(rootfs_root)
-        .map_err(|_| nix::errno::Errno::EXDEV)?;
-    let leaf = rel.file_name().ok_or(nix::errno::Errno::EINVAL)?;
-    let parent = open_dir_in_root(anchor, rel.parent().unwrap_or(Path::new("")))?;
-
-    nix::unistd::fchownat(
-        Some(parent.as_raw_fd()),
-        Path::new(leaf),
-        Some(nix::unistd::Uid::from_raw(uid)),
-        Some(nix::unistd::Gid::from_raw(gid)),
-        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
-    )
-}
-
-/// Ancestors of `path`, outermost first, that do not exist yet.
-///
-/// Sampled before extraction so the directories `mkdir_parents` conjures can be
-/// told apart from ones the image already shipped.
-fn missing_ancestors(path: &Path) -> Vec<PathBuf> {
-    let mut missing: Vec<PathBuf> = path
-        .ancestors()
-        .skip(1)
-        .take_while(|ancestor| !ancestor.exists())
-        .map(Path::to_path_buf)
-        .collect();
-    missing.reverse();
-    missing
-}
-
-/// What the destination looked like *before* anything was extracted onto it.
-///
-/// Sampled up front because afterwards there is no telling a directory this
-/// copy created from one the image already shipped — and only the former is
-/// ours to hand to the box user.
-struct DestBefore {
-    /// Ancestors of the destination that `mkdir_parents` had to conjure,
-    /// outermost first.
-    created_dirs: Vec<PathBuf>,
-    /// The destination itself was already there.
-    dest_existed: bool,
-    /// Absolute paths of archive entries that were already directories.
-    ///
-    /// A set, not a list: [`Self::created`] tests every target against it, and
-    /// the caller sizes both — as a list, re-copying a large tree over itself
-    /// made that scan `entries × existing directories`.
-    existing_dirs: HashSet<PathBuf>,
-}
-
-impl DestBefore {
-    /// The streamed-arm variant: all facts are captured while they still
-    /// describe the tree before extraction creates each path.
-    fn recorded(
-        created_dirs: Vec<PathBuf>,
-        dest_existed: bool,
-        existing_dirs: HashSet<PathBuf>,
-    ) -> Self {
-        Self {
-            created_dirs,
-            dest_existed,
-            existing_dirs,
-        }
-    }
-
-    /// Sample off the async worker: one `stat` per archive entry, and the
-    /// caller chooses how many entries there are — the same reason
-    /// [`boxlite_shared::tar::entry_paths`] runs on a blocking thread.
-    #[allow(clippy::result_large_err)]
-    async fn sample(dest_root: PathBuf, entry_paths: Arc<[PathBuf]>) -> Result<Self, Status> {
-        tokio::task::spawn_blocking(move || Self::sample_blocking(&dest_root, &entry_paths))
-            .await
-            .map_err(|e| Status::internal(format!("sample task join error: {e}")))
-    }
-
-    fn sample_blocking(dest_root: &Path, entry_paths: &[PathBuf]) -> Self {
-        Self {
-            created_dirs: missing_ancestors(dest_root),
-            dest_existed: dest_root.exists(),
-            existing_dirs: entry_paths
-                .iter()
-                .map(|rel| dest_root.join(rel))
-                .filter(|path| path.is_dir())
-                .collect(),
-        }
-    }
-
-    /// Absolute paths this upload created — exactly the set that may change
-    /// owner. Reads `dest_root` as it stands *after* extraction, so a
-    /// destination the copy conjured is classified by what it became.
-    ///
-    /// Every entry the archive carried, the parent directories extraction had
-    /// to make, and the destination itself when we made it. Directories the
-    /// image already shipped are left alone whether the request names one
-    /// (`copy_in("./x", "/usr/local/bin/")`) or the archive does
-    /// (`copy_in("./dist/.", "/usr/local")` carrying `bin/tool`) — handing either
-    /// to the box user is a permission change nobody asked for. Files are
-    /// always ours, existing or not: extraction just overwrote them.
-    fn created(&self, dest_root: &Path, entry_paths: &[PathBuf]) -> Vec<PathBuf> {
-        let dest_is_dir = if self.dest_existed {
-            dest_root.is_dir()
-        } else {
-            dest_root
-                .symlink_metadata()
-                .is_ok_and(|metadata| metadata.is_dir())
-        };
-        let mut targets = self.created_dirs.clone();
-        if !dest_is_dir || !self.dest_existed {
-            targets.push(dest_root.to_path_buf());
-        }
-        targets.extend(entry_paths.iter().map(|rel| {
-            if dest_is_dir {
-                dest_root.join(rel)
-            } else {
-                dest_root.to_path_buf()
-            }
-        }));
-
-        // Second line of defence behind sanitize_entry_path: nothing outside the
-        // destination gets chowned, whatever the archive claimed its names were.
-        targets.retain(|target| {
-            (target.starts_with(dest_root) || self.created_dirs.contains(target))
-                && !self.existing_dirs.contains(target)
-        });
-        targets
-    }
-}
 
 // ── Refusal wording ───────────────────────────────────────────────
 //
@@ -303,6 +70,17 @@ fn unreadable_subtree_message(src_in_container: &Path, mount: &Path) -> String {
         mount.display(),
         src_in_container.display(),
     )
+}
+
+/// The status an upload's extraction error goes back as: a mount refusal from
+/// [`CopyTarget::payload_refusal`] as `failed_precondition`, like the other
+/// mount refusals, and anything else as the landing classifies it.
+fn payload_refusal_status(error: BoxliteError) -> Status {
+    match error {
+        BoxliteError::AlreadyExists(message) => Status::already_exists(message),
+        BoxliteError::Unsupported(message) => Status::failed_precondition(message),
+        error => error.into_validation_status(),
+    }
 }
 
 /// Normalize a request path to how the container sees it: absolute, no `..`.
@@ -407,24 +185,28 @@ impl CopyTarget {
         &self.on_rootfs
     }
 
-    /// Refuse an upload whose payload would land under a mount.
+    /// A veto for landing paths relative to the destination, refusing entries
+    /// hidden by a container mount.
     ///
     /// The root can be perfectly reachable while the payload is not:
     /// `copy_in(dir, "/etc")` where `dir` contains `hosts` would write the
-    /// image's `/etc/hosts` beneath the bind, invisible to the box. Checked
-    /// against the archive's own entries so a single file to `/etc` — which
-    /// lands at `/etc/motd.txt`, under no mount — still works.
-    #[allow(clippy::result_large_err)]
-    fn refuse_shadowed_payload(&self, entry_paths: &[PathBuf]) -> Result<(), Status> {
-        for rel in entry_paths {
-            let landed = self.in_container.join(rel);
-            if let Some(mount) = deepest_covering(&landed, &self.mounts) {
-                return Err(Status::failed_precondition(unreachable_payload_message(
+    /// image's `/etc/hosts` beneath the bind, invisible to the box. Asked per
+    /// entry so a single file to `/etc` — which lands at `/etc/motd.txt`,
+    /// under no mount — still works. A refused entry is never written;
+    /// entries before it stay. The refusal travels as `Unsupported`, which
+    /// [`payload_refusal_status`] turns back into `failed_precondition`.
+    fn payload_refusal(&self) -> impl Fn(&Path) -> Result<(), BoxliteError> + Send + Sync {
+        let in_container = self.in_container.clone();
+        let mounts = self.mounts.clone();
+        move |relative: &Path| {
+            let landed = in_container.join(relative);
+            match deepest_covering(&landed, &mounts) {
+                Some(mount) => Err(BoxliteError::Unsupported(unreachable_payload_message(
                     &landed, &mount,
-                )));
+                ))),
+                None => Ok(()),
             }
         }
-        Ok(())
     }
 
     /// Refuse a read-out whose subtree contains a mount.
@@ -485,184 +267,61 @@ impl Files for GuestServer {
         // Overwrite / mkdir flags
         let mkdir_parents = first.mkdir_parents;
         let overwrite = first.overwrite;
-        let source_is_dir = first.source_is_dir;
+        let container = self
+            .containers
+            .lock()
+            .await
+            .get(&container_id)
+            .cloned()
+            .ok_or_else(|| {
+                Status::failed_precondition(format!("container not found: {container_id}"))
+            })?;
+        let owner = container.lock().await.user();
         let first_data = first.data;
-
-        match source_is_dir {
-            // Streaming path: unpack directly from the byte stream. The hint
-            // carries the *source* shape, but the destination can still force
-            // directory mode — same as the staged path's `unpack`. Fold the
-            // destination-side signals back in here so "single file →
-            // existing directory" keeps landing inside it (Unix cp
-            // semantics), not overwriting the directory path.
-            Some(source_is_dir) => {
-                let force_directory =
-                    source_is_dir || dest_path.ends_with('/') || dest_root.is_dir();
-                let tar_stream: BoxByteStream = Box::pin(async_stream::stream! {
-                    if !first_data.is_empty() {
-                        yield Ok(first_data);
-                    }
-                    loop {
-                        match stream.message().await {
-                            Ok(Some(chunk)) => {
-                                if !chunk.data.is_empty() {
-                                    yield Ok(chunk.data);
-                                }
-                            }
-                            Ok(None) => break,
-                            Err(e) => {
-                                yield Err(std::io::Error::other(e));
-                                break;
-                            }
+        // The archive's first entry decides how it lands; only a trailing
+        // '/' the resolved path dropped has to be passed along.
+        let force_directory = dest_path.ends_with('/');
+        let tar_stream: BoxByteStream = Box::pin(async_stream::stream! {
+            if !first_data.is_empty() {
+                yield Ok(first_data);
+            }
+            loop {
+                match stream.message().await {
+                    Ok(Some(chunk)) => {
+                        if !chunk.data.is_empty() {
+                            yield Ok(chunk.data);
                         }
                     }
-                });
-
-                // The two pre-extraction facts the streamed path can still
-                // sample — whether the destination existed, and which
-                // ancestors mkdir_parents still has to conjure. Both must be
-                // captured BEFORE extraction: afterwards the ancestors exist
-                // and are indistinguishable from ones the image shipped.
-                let dest_existed = dest_root.exists();
-                let created_dirs = missing_ancestors(&dest_root);
-                let report = boxlite_shared::tar::unpack_stream(
-                    tar_stream,
-                    dest_root.clone(),
-                    boxlite_shared::tar::UnpackContext {
-                        overwrite,
-                        mkdir_parents,
-                        force_directory,
-                    },
-                )
-                .await
-                // An archive the landing refuses is the caller's to fix.
-                .map_err(BoxliteError::into_validation_status)?;
-                let boxlite_shared::tar::UnpackReport {
-                    entry_paths,
-                    preexisting_dirs,
-                } = report;
-                let existing_dirs = preexisting_dirs
-                    .into_iter()
-                    .map(|rel| dest_root.join(rel))
-                    .collect();
-                let entry_paths: Arc<[PathBuf]> = entry_paths.into();
-
-                // The stream cannot be pre-scanned without spooling, so the
-                // mount-shadow refusal runs after extraction: weaker than the
-                // hintless arm's refuse-before (a refused copy may have
-                // partially landed), but the failure surfaces instead of a
-                // silent write beneath the mount.
-                dest.refuse_shadowed_payload(&entry_paths)?;
-
-                // Hand the recorded paths to the box user, plus the
-                // ancestors captured above — the recording names what the
-                // archive made, the pre-sampled ancestors name what
-                // mkdir_parents made.
-                self.chown_to_container_user(
-                    &container_id,
-                    dest_root.clone(),
-                    Arc::clone(&entry_paths),
-                    DestBefore::recorded(created_dirs, dest_existed, existing_dirs),
-                )
-                .await;
-            }
-            // Legacy fallback for older hosts/runners that omit the hint:
-            // buffer to a size-capped temp file and detect the shape by peeking.
-            None => {
-                // Temp file to hold the tar stream. `StagedTar` owns the
-                // deletion, because every step from here to the end can leave
-                // through a `?`. Created only here — the hinted arm streams
-                // straight into extraction and never stages.
-                let staged = StagedTar::new(
-                    std::env::temp_dir()
-                        .join(format!("boxlite-upload-{}.tar", uuid::Uuid::new_v4())),
-                );
-                let mut file = File::create(staged.path())
-                    .await
-                    .map_err(|e| Status::internal(format!("failed to create temp file: {}", e)))?;
-
-                let mut total: u64 = 0;
-                if !first_data.is_empty() {
-                    total += first_data.len() as u64;
-                    if total > MAX_UPLOAD_BYTES {
-                        return Err(Status::resource_exhausted("upload too large"));
+                    Ok(None) => break,
+                    Err(e) => {
+                        yield Err(std::io::Error::other(e));
+                        break;
                     }
-                    file.write_all(&first_data).await.map_err(|e| {
-                        Status::internal(format!("failed to write temp file: {}", e))
-                    })?;
                 }
-
-                while let Some(chunk) = stream.message().await? {
-                    let len = chunk.data.len() as u64;
-                    total += len;
-                    if total > MAX_UPLOAD_BYTES {
-                        return Err(Status::resource_exhausted("upload too large"));
-                    }
-                    file.write_all(&chunk.data).await.map_err(|e| {
-                        Status::internal(format!("failed to write temp file: {}", e))
-                    })?;
-                }
-
-                file.flush()
-                    .await
-                    .map_err(|e| Status::internal(format!("failed to flush temp file: {}", e)))?;
-
-                // dest_path may have a trailing '/' indicating directory mode.
-                let force_directory = dest_path.ends_with('/');
-
-                // Names the archive carries, read once: the mount check below
-                // and the ownership hand-off afterwards must agree on what
-                // this copy wrote. Shared rather than cloned — an archive may
-                // carry a great many names.
-                let entry_paths: Arc<[PathBuf]> = boxlite_shared::tar::entry_paths(
-                    staged.path().to_path_buf(),
-                    dest_root.clone(),
-                    force_directory,
-                )
-                .await
-                .map_err(BoxliteError::into_validation_status)?
-                .into();
-
-                // The root cleared the mount check, but individual entries may
-                // still land under one. Refuse before touching the rootfs — a
-                // partially applied copy is worse than a refused one.
-                dest.refuse_shadowed_payload(&entry_paths)?;
-
-                // What is not there yet — unpack is about to create it, and it
-                // needs the same owner as the payload. Must be sampled *before*
-                // extraction, since afterwards there is no way to tell what we
-                // made from what the image already shipped.
-                let before =
-                    DestBefore::sample(dest_root.clone(), Arc::clone(&entry_paths)).await?;
-
-                boxlite_shared::tar::unpack(
-                    staged.path().to_path_buf(),
-                    dest_root.clone(),
-                    boxlite_shared::tar::UnpackContext {
-                        overwrite,
-                        mkdir_parents,
-                        force_directory,
-                    },
-                )
-                .await
-                .map_err(BoxliteError::into_validation_status)?;
-
-                // Hand the payload to the user the box actually runs as. tar
-                // preserves neither owner (it extracts as this process, root)
-                // nor any notion of who will read the file, so without this
-                // every copy_in lands root-owned and a non-root workload
-                // cannot open it.
-                self.chown_to_container_user(&container_id, dest_root.clone(), entry_paths, before)
-                    .await;
             }
-        }
+        });
 
-        info!(
-            dest = %dest_root.display(),
-            container_id = %container_id,
-            "upload completed"
-        );
+        boxlite_shared::tar::unpack_stream_owned(
+            tar_stream,
+            dest_root.clone(),
+            boxlite_shared::tar::UnpackContext {
+                overwrite,
+                mkdir_parents,
+                force_directory,
+            },
+            // Parent resolution must stay inside the container rootfs.
+            self.layout
+                .shared()
+                .container(&container_id)
+                .rootfs_dir()
+                .to_path_buf(),
+            owner,
+            dest.payload_refusal(),
+        )
+        .await
+        .map_err(payload_refusal_status)?;
 
+        info!(dest = %dest_root.display(), container_id = %container_id, "upload completed");
         Ok(Response::new(UploadResponse {
             success: true,
             error: None,
@@ -697,9 +356,9 @@ impl Files for GuestServer {
         let include_parent = req.include_parent;
         let follow_symlinks = req.follow_symlinks;
 
-        // Stream the tar directly from disk (no temp file); the first chunk
-        // carries the source_is_dir shape hint.
-        let (source_is_dir, tar_stream) = boxlite_shared::tar::pack_stream(
+        // Stream the tar directly from disk (no temp file). Its first entry
+        // tells the receiver how it lands.
+        let tar_stream = boxlite_shared::tar::pack_stream(
             src_path,
             boxlite_shared::tar::PackContext {
                 follow_symlinks,
@@ -711,16 +370,11 @@ impl Files for GuestServer {
 
         let (tx, rx) = mpsc::channel::<Result<DownloadChunk, Status>>(4);
         tokio::spawn(async move {
-            let mut first = true;
             let mut stream = tar_stream;
             while let Some(item) = stream.next().await {
                 match item {
                     Ok(data) => {
-                        let chunk = DownloadChunk {
-                            data,
-                            source_is_dir: if first { Some(source_is_dir) } else { None },
-                        };
-                        first = false;
+                        let chunk = DownloadChunk { data };
                         if tx.send(Ok(chunk)).await.is_err() {
                             break;
                         }
@@ -758,102 +412,7 @@ impl GuestServer {
         Err("container_id required when multiple containers present".into())
     }
 
-    /// Give everything this upload created to the container's own user.
-    ///
-    /// [`DestBefore::created`] decides the scope; this only carries it out.
-    ///
-    /// Best-effort throughout: the bytes are already on disk by the time this
-    /// runs, so a failure here must not be reported as the copy failing.
-    async fn chown_to_container_user(
-        &self,
-        container_id: &str,
-        dest_root: PathBuf,
-        entry_paths: Arc<[PathBuf]>,
-        before: DestBefore,
-    ) {
-        let container_arc = {
-            let containers = self.containers.lock().await;
-            containers.get(container_id).cloned()
-        };
-        let Some(container_arc) = container_arc else {
-            tracing::warn!(
-                container_id = %container_id,
-                "container vanished before copied files could be given to its user"
-            );
-            return;
-        };
-        let (uid, gid) = {
-            let container = container_arc.lock().await;
-            container.user()
-        };
-        if (uid, gid) == (0, 0) {
-            return;
-        }
-        let rootfs_root = self
-            .layout
-            .shared()
-            .container(container_id)
-            .rootfs_dir()
-            .to_path_buf();
-
-        // Scoping the targets and changing them are both one syscall per
-        // archive entry, so this runs on a blocking thread for the same reason
-        // the sampling did.
-        let handoff = tokio::task::spawn_blocking(move || {
-            let targets = before.created(&dest_root, &entry_paths);
-            let (mut changed, mut failed) = (0usize, 0usize);
-
-            // Anchored at the rootfs rather than at `dest_root`: the parents
-            // `mkdir_parents` conjured sit above the destination, and the
-            // rootfs is the boundary none of them may cross.
-            let anchor = match std::fs::File::open(&rootfs_root) {
-                Ok(dir) => dir,
-                Err(e) => {
-                    tracing::warn!(
-                        rootfs = %rootfs_root.display(), error = %e,
-                        "copied paths could not be given to the container user"
-                    );
-                    return (0, targets.len());
-                }
-            };
-
-            for target in &targets {
-                match chown_within_rootfs(anchor.as_raw_fd(), &rootfs_root, target, uid, gid) {
-                    Ok(()) => changed += 1,
-                    Err(_) => failed += 1,
-                }
-            }
-            (changed, failed)
-        })
-        .await;
-
-        let (changed, failed) = match handoff {
-            Ok(counts) => counts,
-            Err(e) => {
-                tracing::warn!(
-                    container_id = %container_id,
-                    uid, gid, error = %e,
-                    "copied paths could not be given to the container user"
-                );
-                return;
-            }
-        };
-        if failed > 0 {
-            tracing::warn!(
-                container_id = %container_id,
-                uid, gid, changed, failed,
-                "some copied paths could not be given to the container user"
-            );
-        }
-    }
-
-    /// Mount destinations of the container: those of the OCI spec it was
-    /// created with, plus those `Container.Mount` added since.
-    ///
-    /// Asked once per copy, by [`CopyTarget::resolve`], which then answers
-    /// every later question from the list it holds. The answer costs only the
-    /// clone: `Container` keeps the list in memory, so nothing here reads a
-    /// file while holding the container's lock on the guest's async runtime.
+    /// Hold the mount gate while sampling the destinations visible to a copy.
     ///
     /// Also returns the read side of the container's mount lock, taken before
     /// the list is read and without holding the container's own lock, the same
@@ -881,6 +440,7 @@ impl GuestServer {
 mod tests {
     use super::*;
     use boxlite_shared::tar;
+    use std::sync::Arc;
 
     /// `/etc` holds the `/etc/hosts` bind but is not itself a mount, so naming
     /// it is fine — only paths at or below a mount are unreachable.
@@ -962,13 +522,14 @@ mod tests {
         // The root itself is clear — `/etc` merely contains a mount.
         assert!(deepest_covering(Path::new("/etc"), &etc.mounts).is_none());
 
-        let err = etc
-            .refuse_shadowed_payload(&[PathBuf::from("motd.txt"), PathBuf::from("hosts")])
-            .expect_err("an entry landing on the bind must be refused");
+        let refuse = etc.payload_refusal();
+        let err = payload_refusal_status(
+            refuse(Path::new("hosts")).expect_err("an entry landing on the bind must be refused"),
+        );
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition, "{err:?}");
         assert!(err.message().contains("'/etc/hosts' mount"), "{err:?}");
 
-        etc.refuse_shadowed_payload(&[PathBuf::from("motd.txt")])
-            .expect("an entry under no mount still copies");
+        refuse(Path::new("motd.txt")).expect("an entry under no mount still copies");
     }
 
     /// Reading out a directory that *contains* a mount would tar the shadowed
@@ -1027,278 +588,188 @@ mod tests {
         }
     }
 
-    /// Nothing the image shipped changes owner, however the copy reaches it.
-    ///
-    /// A destination directory is the shape the *request* names; an entry
-    /// directory is the shape the *archive* names, which
-    /// `copy_in("./dist/.", "/usr/local")` produces. Only the second was
-    /// unguarded: `/usr/local/bin` is the image's, `bin/tool` is ours.
-    #[test]
-    fn directories_the_image_shipped_keep_their_owner() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dest = tmp.path().join("local");
-        std::fs::create_dir_all(dest.join("bin")).unwrap();
-        let entries = vec![PathBuf::from("bin"), PathBuf::from("bin/tool")];
-
-        let before = DestBefore::sample_blocking(&dest, &entries);
-        std::fs::write(dest.join("bin/tool"), b"payload").unwrap();
-
-        assert_eq!(
-            before.created(&dest, &entries),
-            vec![dest.join("bin/tool")],
-            "only the file this copy wrote is ours to hand over"
-        );
+    async fn extract(dest: &Path, bytes: Vec<u8>, overwrite: bool) -> Result<(), BoxliteError> {
+        tar::unpack_stream_owned(
+            Box::pin(tokio_stream::iter([Ok(bytes)])),
+            dest.to_path_buf(),
+            tar::UnpackContext {
+                overwrite,
+                mkdir_parents: true,
+                force_directory: false,
+            },
+            PathBuf::from("/"),
+            (
+                nix::unistd::Uid::current().as_raw(),
+                nix::unistd::Gid::current().as_raw(),
+            ),
+            |_| Ok(()),
+        )
+        .await
     }
 
-    /// The other half: what the copy did conjure is all in scope — the
-    /// destination it made, the parents `mkdir_parents` made for it, and the
-    /// directories the archive named that were not there before.
-    #[test]
-    fn everything_the_copy_conjured_is_handed_over() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dest = tmp.path().join("srv/probe");
-        let entries = vec![PathBuf::from("pkg"), PathBuf::from("pkg/file.txt")];
-
-        let before = DestBefore::sample_blocking(&dest, &entries);
-        std::fs::create_dir_all(dest.join("pkg")).unwrap();
-        std::fs::write(dest.join("pkg/file.txt"), b"payload").unwrap();
-
-        assert_eq!(
-            before.created(&dest, &entries),
-            vec![
-                tmp.path().join("srv"),
-                dest.clone(),
-                dest.join("pkg"),
-                dest.join("pkg/file.txt"),
-            ]
-        );
-    }
-
-    /// A destination *file* is ours whether or not it was there: extraction
-    /// just overwrote it, and single-file mode lands every entry on it.
-    #[test]
-    fn an_existing_destination_file_is_still_ours() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dest = tmp.path().join("payload.txt");
-        std::fs::write(&dest, b"old").unwrap();
-        let entries = vec![PathBuf::from("payload.txt")];
-
-        let before = DestBefore::sample_blocking(&dest, &entries);
-        std::fs::write(&dest, b"new").unwrap();
-
-        let created = before.created(&dest, &entries);
-        assert!(!created.is_empty());
-        assert!(created.iter().all(|target| target == &dest), "{created:?}");
-    }
-
-    async fn unpack_ownership_targets(
-        tar_path: &Path,
-        dest: &Path,
-        streamed: bool,
-    ) -> Vec<PathBuf> {
-        let opts = tar::UnpackContext {
-            overwrite: true,
-            mkdir_parents: true,
-            force_directory: false,
-        };
-        let (before, entries) = if streamed {
-            let dest_existed = dest.exists();
-            let created_dirs = missing_ancestors(dest);
-            let bytes = std::fs::read(tar_path).unwrap();
-            let report = tar::unpack_stream(
-                Box::pin(tokio_stream::iter([Ok(bytes)])),
-                dest.to_path_buf(),
-                opts,
-            )
-            .await
-            .unwrap();
-            let before = DestBefore::recorded(
-                created_dirs,
-                dest_existed,
-                report
-                    .preexisting_dirs
-                    .iter()
-                    .map(|rel| dest.join(rel))
-                    .collect(),
-            );
-            (before, report.entry_paths)
-        } else {
-            let entries = tar::entry_paths(tar_path.to_path_buf(), dest.to_path_buf(), false)
-                .await
-                .unwrap();
-            let before = DestBefore::sample_blocking(dest, &entries);
-            tar::unpack(tar_path.to_path_buf(), dest.to_path_buf(), opts)
-                .await
-                .unwrap();
-            (before, entries)
-        };
-        before.created(dest, &entries)
-    }
-
-    async fn assert_new_symlink_ownership(streamed: bool) {
-        let tmp = tempfile::tempdir().unwrap();
-        let rootfs = tmp.path().join("rootfs");
-        std::fs::create_dir_all(rootfs.join("etc")).unwrap();
-        std::fs::write(rootfs.join("etc/passwd"), b"image-owned file").unwrap();
-        let source = tmp.path().join("passwd");
-        std::os::unix::fs::symlink("etc", &source).unwrap();
-        let archive = tmp.path().join("input.tar");
+    async fn packed(source: &Path, include_parent: bool) -> Vec<u8> {
+        let archive = tempfile::NamedTempFile::new().unwrap();
         tar::pack(
-            source,
-            archive.clone(),
+            source.to_path_buf(),
+            archive.path().to_path_buf(),
             tar::PackContext {
                 follow_symlinks: false,
-                include_parent: true,
+                include_parent,
             },
         )
         .await
         .unwrap();
+        std::fs::read(archive.path()).unwrap()
+    }
 
-        let dest = rootfs.join("link");
-        let targets = unpack_ownership_targets(&archive, &dest, streamed).await;
-        assert_eq!(std::fs::read_link(&dest).unwrap(), Path::new("etc"));
-        assert!(!targets.is_empty());
-        assert!(
-            targets.iter().all(|target| target == &dest),
-            "only the copied link may change owner, not link/passwd: {targets:?}"
+    #[tokio::test]
+    async fn extraction_preserves_image_directories_and_file_permissions() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        let dest = rootfs.join("local");
+        std::fs::create_dir_all(dest.join("bin")).unwrap();
+        std::fs::set_permissions(dest.join("bin"), std::fs::Permissions::from_mode(0o751)).unwrap();
+        let before = std::fs::metadata(dest.join("bin")).unwrap();
+        let source = tmp.path().join("source");
+        std::fs::create_dir_all(source.join("bin")).unwrap();
+        std::fs::write(source.join("bin/tool"), b"payload").unwrap();
+        std::fs::set_permissions(
+            source.join("bin/tool"),
+            std::fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+        extract(&dest, packed(&source, false).await, false)
+            .await
+            .unwrap();
+        let after = std::fs::metadata(dest.join("bin")).unwrap();
+        assert_eq!(
+            (after.uid(), after.gid(), after.mode()),
+            (before.uid(), before.gid(), before.mode())
+        );
+        assert_eq!(std::fs::read(dest.join("bin/tool")).unwrap(), b"payload");
+        assert_eq!(
+            std::fs::metadata(dest.join("bin/tool")).unwrap().mode() & 0o777,
+            0o640
         );
     }
 
     #[tokio::test]
-    async fn staged_copy_owns_new_symlink_not_its_target() {
-        assert_new_symlink_ownership(false).await;
+    async fn extraction_follows_image_directory_symlinks_in_request_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        std::fs::create_dir_all(rootfs.join("usr/lib")).unwrap();
+        std::os::unix::fs::symlink("usr/lib", rootfs.join("lib")).unwrap();
+        let source = tmp.path().join("tool");
+        std::fs::write(&source, b"payload").unwrap();
+        extract(&rootfs.join("lib"), packed(&source, true).await, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(rootfs.join("usr/lib/tool")).unwrap(),
+            b"payload"
+        );
     }
 
     #[tokio::test]
-    async fn streamed_copy_owns_new_symlink_not_its_target() {
-        assert_new_symlink_ownership(true).await;
+    async fn extraction_copies_a_symlink_without_modifying_its_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        std::fs::create_dir(&rootfs).unwrap();
+        std::fs::write(rootfs.join("target"), b"image payload").unwrap();
+        let source = tmp.path().join("source");
+        std::os::unix::fs::symlink("target", &source).unwrap();
+        extract(&rootfs.join("link"), packed(&source, true).await, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_link(rootfs.join("link")).unwrap(),
+            Path::new("target")
+        );
+        assert_eq!(
+            std::fs::read(rootfs.join("target")).unwrap(),
+            b"image payload"
+        );
     }
 
     #[tokio::test]
-    async fn copy_into_existing_directory_symlink_owns_the_child() {
-        for streamed in [false, true] {
-            let tmp = tempfile::tempdir().unwrap();
-            let rootfs = tmp.path().join("rootfs");
-            std::fs::create_dir_all(rootfs.join("usr/lib")).unwrap();
-            let dest = rootfs.join("lib");
-            std::os::unix::fs::symlink("usr/lib", &dest).unwrap();
-            let source = tmp.path().join("tool");
-            std::fs::write(&source, b"copied payload").unwrap();
-            let archive = tmp.path().join("input.tar");
-            tar::pack(
-                source,
-                archive.clone(),
-                tar::PackContext {
-                    follow_symlinks: false,
-                    include_parent: true,
-                },
+    async fn empty_upload_preserves_files_and_creates_no_parents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path();
+        let dest = rootfs.join("payload");
+        std::fs::write(&dest, b"existing").unwrap();
+        for overwrite in [false, true] {
+            extract(&dest, vec![0; 1024], overwrite).await.unwrap();
+            extract(
+                &rootfs.join("missing/parent/file"),
+                vec![0; 1024],
+                overwrite,
             )
             .await
             .unwrap();
-
-            let targets = unpack_ownership_targets(&archive, &dest, streamed).await;
-            assert_eq!(
-                std::fs::read(rootfs.join("usr/lib/tool")).unwrap(),
-                b"copied payload"
-            );
-            assert_eq!(targets, vec![dest.join("tool")]);
+            assert_eq!(std::fs::read(&dest).unwrap(), b"existing");
+            assert!(!rootfs.join("missing").exists());
         }
     }
 
-    /// A symlinked directory the *image* shipped must still get the hand-off.
-    ///
-    /// `python:3-slim` ships `/lib -> usr/lib`, `redis:7.4-alpine` ships
-    /// `/var/run -> ../run`. Neither is a mount, so a copy to `/lib/x` is
-    /// reachable and extraction writes it — through the link, into `usr/lib`.
-    /// Refusing to follow that link would leave the file root-owned, which is
-    /// the ownership bug this hand-off exists to fix, so confining the
-    /// resolution has to mean following it, not rejecting it.
-    #[test]
-    fn a_symlink_ancestor_inside_the_rootfs_still_gets_the_hand_off() {
+    #[tokio::test]
+    async fn partial_conflict_preserves_completed_payload_and_permissions() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let tmp = tempfile::tempdir().unwrap();
         let rootfs = tmp.path().join("rootfs");
-        // Both shapes real images ship. The absolute one is the load-bearing
-        // case: `RESOLVE_BENEATH` refuses it as an escape, so it is the only
-        // form that fails if the resolver is ever "hardened" to BENEATH — the
-        // relative one resolves under either flag and would not notice.
-        std::fs::create_dir_all(rootfs.join("usr/lib")).unwrap();
-        std::os::unix::fs::symlink("usr/lib", rootfs.join("lib")).unwrap();
-        std::fs::write(rootfs.join("usr/lib/payload"), b"x").unwrap();
-
-        std::fs::create_dir_all(rootfs.join("run")).unwrap();
-        std::fs::create_dir_all(rootfs.join("var")).unwrap();
-        std::os::unix::fs::symlink("/run", rootfs.join("var/run")).unwrap();
-        std::fs::write(rootfs.join("run/payload"), b"x").unwrap();
-
-        let anchor = std::fs::File::open(&rootfs).unwrap();
-        let (uid, gid) = (
-            nix::unistd::Uid::current().as_raw(),
-            nix::unistd::Gid::current().as_raw(),
+        std::fs::create_dir(&rootfs).unwrap();
+        let first = tmp.path().join("first");
+        let conflict = tmp.path().join("conflict");
+        std::fs::write(&first, b"completed").unwrap();
+        std::fs::set_permissions(&first, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&conflict, b"replacement").unwrap();
+        std::fs::write(rootfs.join("conflict"), b"existing").unwrap();
+        // Each packed file has one 512-byte header and one padded data block.
+        let mut bytes = packed(&first, true).await;
+        bytes.truncate(1024);
+        bytes.extend(packed(&conflict, true).await);
+        let error = extract(&rootfs, bytes, false).await.unwrap_err();
+        assert_eq!(
+            payload_refusal_status(error).code(),
+            tonic::Code::AlreadyExists
         );
+        assert_eq!(std::fs::read(rootfs.join("first")).unwrap(), b"completed");
+        let completed = std::fs::metadata(rootfs.join("first")).unwrap();
+        assert_eq!(completed.mode() & 0o777, 0o600);
+        assert_eq!(
+            (completed.uid(), completed.gid()),
+            (
+                nix::unistd::Uid::current().as_raw(),
+                nix::unistd::Gid::current().as_raw()
+            )
+        );
+        assert_eq!(std::fs::read(rootfs.join("conflict")).unwrap(), b"existing");
+    }
 
-        for through in ["lib/payload", "var/run/payload"] {
-            chown_within_rootfs(anchor.as_raw_fd(), &rootfs, &rootfs.join(through), uid, gid)
-                .unwrap_or_else(|e| {
-                    panic!("a copy through an image-shipped symlink ({through}) must still be handed over, got {e:?}")
-                });
+    #[tokio::test]
+    async fn extraction_creates_parents_and_replaces_existing_file_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs");
+        std::fs::create_dir(&rootfs).unwrap();
+        let source = tmp.path().join("source");
+        std::fs::write(&source, b"new payload").unwrap();
+        let dest = rootfs.join("srv/probe/payload");
+        let bytes = packed(&source, true).await;
+        extract(&dest, bytes.clone(), true).await.unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new payload");
+        std::fs::write(&dest, b"old payload").unwrap();
+        extract(&dest, bytes, true).await.unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new payload");
+
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        for include_parent in [false, true] {
+            let dest = rootfs.join(format!("empty-{include_parent}/dest"));
+            extract(&dest, packed(&empty, include_parent).await, true)
+                .await
+                .unwrap();
+            assert!(dest.is_dir());
         }
-    }
-
-    /// The hand-off must not reach a file outside the rootfs through a
-    /// directory the workload swapped for a symlink after extraction.
-    ///
-    /// The discriminating assertion is the refusal itself: with the fix reverted
-    /// to `fchownat(None, target, …)` this call returns `Ok`, because
-    /// `AT_SYMLINK_NOFOLLOW` guards only the leaf. An unprivileged test cannot
-    /// observe a cross-uid change, so proving *where* it landed is not available
-    /// here — that the escape is refused at all is.
-    #[test]
-    fn the_hand_off_does_not_chown_through_a_swapped_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let rootfs = tmp.path().join("rootfs");
-        let elsewhere = tmp.path().join("elsewhere");
-        std::fs::create_dir_all(rootfs.join("app")).unwrap();
-        std::fs::create_dir_all(&elsewhere).unwrap();
-        std::fs::write(elsewhere.join("passwd"), b"outside").unwrap();
-
-        let target = rootfs.join("app/passwd");
-        std::fs::write(&target, b"payload").unwrap();
-
-        let anchor = std::fs::File::open(&rootfs).unwrap();
-        let (uid, gid) = (
-            nix::unistd::Uid::current().as_raw(),
-            nix::unistd::Gid::current().as_raw(),
-        );
-
-        // The path extraction actually produced is handed over.
-        chown_within_rootfs(anchor.as_raw_fd(), &rootfs, &target, uid, gid)
-            .expect("a path this copy created is ours to hand over");
-
-        // The workload swaps the directory for a link out of the rootfs. The
-        // absolute target is reinterpreted against the rootfs, so the same
-        // request can no longer name the outside file.
-        std::fs::remove_file(&target).unwrap();
-        std::fs::remove_dir(rootfs.join("app")).unwrap();
-        std::os::unix::fs::symlink(&elsewhere, rootfs.join("app")).unwrap();
-
-        chown_within_rootfs(anchor.as_raw_fd(), &rootfs, &target, uid, gid)
-            .expect_err("the hand-off must not reach through a swapped directory");
-    }
-
-    /// A target the lexical filter should already have dropped is refused here
-    /// too, rather than chowned on a lexical say-so.
-    #[test]
-    fn a_target_outside_the_rootfs_is_refused() {
-        let tmp = tempfile::tempdir().unwrap();
-        let rootfs = tmp.path().join("rootfs");
-        std::fs::create_dir_all(&rootfs).unwrap();
-        let outside = tmp.path().join("outside.txt");
-        std::fs::write(&outside, b"x").unwrap();
-
-        let anchor = std::fs::File::open(&rootfs).unwrap();
-        let err = chown_within_rootfs(anchor.as_raw_fd(), &rootfs, &outside, 0, 0)
-            .expect_err("a target outside the rootfs must be refused");
-        assert_eq!(err, nix::errno::Errno::EXDEV, "{err:?}");
     }
 
     #[test]
@@ -1310,33 +781,4 @@ mod tests {
         assert_eq!(to_container_path("tmp/x").unwrap(), PathBuf::from("/tmp/x"));
         assert!(to_container_path("/a/../b").is_err());
     }
-}
-
-/// The spool tar must be removed on drop — covering every error path of
-/// the hintless upload arm, not just the success path. The guest agent's
-/// /tmp is not visible to container processes, so this is asserted here
-/// rather than from the copy integration tests.
-#[test]
-fn staged_tar_removes_file_on_drop() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path: std::path::PathBuf = dir.path().join("spool.tar");
-    std::fs::write(&path, b"partial tar").unwrap();
-
-    {
-        let _guard = StagedTar::new(path.clone());
-        assert!(path.exists(), "guard must not remove the file while alive");
-    }
-
-    assert!(!path.exists(), "guard must remove the file on drop");
-}
-
-/// Dropping a guard whose file was already removed (or never created) is
-/// harmless — the error-path cleanup must not panic.
-#[test]
-fn staged_tar_tolerates_missing_file() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path: std::path::PathBuf = dir.path().join("never-created.tar");
-
-    let _guard = StagedTar::new(path);
-    // Dropping happens at end of scope; no panic is the assertion.
 }

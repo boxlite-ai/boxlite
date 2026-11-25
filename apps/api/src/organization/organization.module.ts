@@ -5,6 +5,10 @@
  */
 
 import { OnboardingController } from './controllers/onboarding.controller'
+import { CancellationFeedbackController } from './controllers/cancellation-feedback.controller'
+import { CancellationFeedbackService } from './services/cancellation-feedback.service'
+import { CouponClaimsController } from './controllers/coupon-claims.controller'
+import { CouponClaimsService } from './services/coupon-claims.service'
 import { OnboardingService } from './services/onboarding.service'
 import { QuickstartPromptDraft, QuickstartPromptHandoff } from './entities/quickstart-prompt.entity'
 import { Module } from '@nestjs/common'
@@ -54,6 +58,8 @@ import { UsageController } from '../usage/controllers/usage.controller'
     UsageModule,
   ],
   controllers: [
+    CancellationFeedbackController,
+    CouponClaimsController,
     OnboardingController,
     OrganizationController,
     OrganizationRoleController,
@@ -63,6 +69,8 @@ import { UsageController } from '../usage/controllers/usage.controller'
     UsageController,
   ],
   providers: [
+    CancellationFeedbackService,
+    CouponClaimsService,
     OnboardingService,
     OrganizationBoxLimitsService,
     OrganizationService,

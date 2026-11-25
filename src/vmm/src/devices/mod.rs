@@ -4,9 +4,12 @@
 //! The devices behind the buses, and the platform code that adds them.
 
 pub(crate) mod balloon;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod cmos;
 pub(crate) mod console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod i8042;
+pub(crate) mod mem;
 #[cfg(unix)]
 pub(crate) mod net;
 #[cfg(target_arch = "x86_64")]
@@ -25,6 +28,7 @@ use crate::{
     chipset::ChipsetBuilder,
     config::VmConfig,
     error::Result,
+    hotplug::{HotplugMemory, HotplugWindow},
     memory::ReclaimPolicy,
     virtio::{
         DeviceContext, blk, fs,
@@ -32,23 +36,30 @@ use crate::{
     },
 };
 
+/// Defaults for automatically onlining hotplugged memory in removable zones.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const HOTPLUG_CMDLINE: &str =
+    "memhp_default_state=online memory_hotplug.online_policy=auto-movable";
+
 /// Adds every device the configuration names, in slot order: the legacy
 /// platform devices, disks, reporting balloon, and optional filesystem,
-/// vsock, network and console.
+/// vsock, network, console and virtio-mem.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn add_all(
+pub(crate) fn add_all<H: boxlite_hypervisor::Vm + Send + Sync + 'static>(
     chipset: &mut ChipsetBuilder,
-    ctx: DeviceContext<'_>,
+    mut ctx: DeviceContext<'_>,
     config: &mut VmConfig,
     console: ConsoleWriter,
+    host_vm: &Arc<H>,
+    hotplug_window: Option<HotplugWindow>,
 ) -> Result<()> {
-    add_legacy_devices(chipset, console.clone())?;
+    add_legacy_devices(chipset, console.clone(), Box::new(cmos::host_clock))?;
 
     let mut slots = Slots::new();
     let mut used = Vec::new();
     for (index, disk) in config.disks.iter().enumerate() {
         add_slot_device(&mut slots, &mut used, |slot| {
-            blk::add_disk(chipset, &ctx, disk, index, slot)
+            blk::add_disk(chipset, &mut ctx, disk, index, slot)
         })?;
     }
     // The balloon follows the disks so it never renumbers them: the guest
@@ -85,6 +96,17 @@ pub(crate) fn add_all(
         add_slot_device(&mut slots, &mut used, |slot| {
             mmio::add_device(chipset, &ctx, "virtio-console", slot, device)
         })?;
+    }
+    if let Some(window) = hotplug_window {
+        let hotplug = HotplugMemory::new(Arc::clone(host_vm), ctx.memory.clone(), window);
+        add_slot_device(&mut slots, &mut used, |slot| {
+            mem::add(chipset, &mut ctx, slot, hotplug)
+        })?;
+        // Keep the defaults before the caller's kernel and init arguments.
+        config.cmdline = match config.cmdline.as_str() {
+            "" => HOTPLUG_CMDLINE.to_owned(),
+            caller => format!("{HOTPLUG_CMDLINE} {caller}"),
+        };
     }
     // The next device is one more `add_slot_device` line here. A device that
     // must keep slot 0 goes before the disk loop.

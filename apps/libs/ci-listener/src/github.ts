@@ -17,6 +17,7 @@ export class GitHubRequestError extends Error {
     readonly status: number | undefined,
     readonly uncertain: boolean,
     readonly retryAt?: number,
+    readonly rateLimited = false,
   ) {
     super('GitHub request failed')
   }
@@ -27,7 +28,7 @@ interface GitHubRequest {
   oauthApp?: { clientId: string; clientSecret: string }
   json?: Json
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
-  response?: 'json' | 'empty' | 'page'
+  response?: 'json' | 'empty' | 'no-content' | 'page'
   signal?: AbortSignal
 }
 
@@ -76,17 +77,11 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
       body: options.json === undefined ? undefined : JSON.stringify(options.json),
     })
     status = response.status
-    if (status === 403 || status === 429) {
-      const after = response.headers.get('retry-after'),
-        reset = response.headers.get('x-ratelimit-reset')
-      if (after && /^\d{1,10}$/.test(after)) retryAt = Date.now() + Number(after) * 1000
-      if (response.headers.get('x-ratelimit-remaining') === '0' && reset && /^\d{1,12}$/.test(reset))
-        retryAt = Math.max(retryAt ?? 0, Number(reset) * 1000)
-      if (status === 429 && retryAt === undefined) retryAt = Date.now() + 60000
-    }
-    if (!response.ok || options.response === 'empty') {
+    if (!response.ok) retryAt = await githubErrorRetryAt(response)
+    if (!response.ok || options.response === 'empty' || options.response === 'no-content') {
       await response.body?.cancel()
-      if (!response.ok) throw new Error('GitHub HTTP failure')
+      if (!response.ok || (options.response === 'no-content' && status !== 204))
+        throw new Error('GitHub HTTP acknowledgement is not definitive')
       return undefined
     }
     const link = response.headers.get('link')
@@ -94,25 +89,7 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
       await response.body?.cancel()
       throw new Error('GitHub pagination header limit')
     }
-    if (!response.body) throw new Error('Missing GitHub JSON response')
-    const reader = response.body.getReader(),
-      chunks: Uint8Array[] = []
-    let bytes = 0
-    try {
-      for (;;) {
-        const chunk = await reader.read()
-        if (chunk.done) break
-        bytes += chunk.value.byteLength
-        if (bytes > 1_048_576) {
-          await reader.cancel()
-          throw new Error('GitHub response limit')
-        }
-        chunks.push(chunk.value)
-      }
-    } finally {
-      reader.releaseLock()
-    }
-    const text = Buffer.concat(chunks).toString('utf8')
+    const text = await readGitHubBody(response)
     if (options.response !== 'page') return JSON.parse(text)
     // Decimal IDs may change under Number#toString even when their binary value is exact.
     const data: unknown = JSON.parse(text, (_key, value: unknown, context?: { source?: string }) =>
@@ -121,12 +98,82 @@ export async function githubRequest(options: GitHubRequest): Promise<unknown> {
         : value,
     )
     return { data, link }
-  } catch {
+  } catch (error) {
+    if (
+      method === 'GET' &&
+      options.signal?.aborted &&
+      (status === undefined || (status >= 200 && status < 300)) &&
+      (error === options.signal.reason || (error instanceof Error && error.name === 'AbortError'))
+    ) {
+      throw options.signal.reason
+    }
     // A successful-but-unreadable POST can still have produced a remote effect.
     throw new GitHubRequestError(
       status,
       attempted && method !== 'GET' && (status === undefined || status >= 500 || (status >= 200 && status < 300)),
       retryAt,
+      retryAt !== undefined,
     )
   }
+}
+
+/** Report selected response fields only. GitHub messages can interpolate repository names, URLs and credentials. */
+export async function githubErrorMessage(response: Response): Promise<string | undefined> {
+  try {
+    const data: unknown = JSON.parse(await readGitHubBody(response, 8192))
+    if (data === null || typeof data !== 'object' || !('message' in data) || typeof data.message !== 'string')
+      return undefined
+    if (/^API rate limit exceeded\b/i.test(data.message)) return 'API rate limit exceeded'
+    if (/secondary rate limit/i.test(data.message)) return 'Secondary rate limit exceeded'
+    if (['Bad credentials', 'Not Found', 'Resource not accessible by integration'].includes(data.message))
+      return data.message
+  } catch {
+    /* A missing or unreadable error body does not change the observed status. */
+  }
+  return undefined
+}
+
+export async function githubErrorRetryAt(response: Response): Promise<number | undefined> {
+  const fromHeaders = githubRetryAt(response)
+  if (fromHeaders !== undefined || response.status !== 403) return fromHeaders
+  return githubRetryAt(response, await githubErrorMessage(response))
+}
+
+export function githubRetryAt(response: Response, githubMessage?: string): number | undefined {
+  let retryAt: number | undefined
+  if (response.status === 403 || response.status === 429) {
+    const after = response.headers.get('retry-after'),
+      reset = response.headers.get('x-ratelimit-reset')
+    if (after && /^\d{1,10}$/.test(after)) retryAt = Date.now() + Number(after) * 1000
+    if (response.headers.get('x-ratelimit-remaining') === '0' && reset && /^\d{1,12}$/.test(reset))
+      retryAt = Math.max(retryAt ?? 0, Number(reset) * 1000)
+    const limited =
+      response.status === 429 ||
+      githubMessage === 'API rate limit exceeded' ||
+      githubMessage === 'Secondary rate limit exceeded'
+    if (limited && retryAt === undefined) retryAt = Date.now() + 60000
+  }
+  return retryAt
+}
+
+export async function readGitHubBody(response: Response, maxBytes = 1_048_576): Promise<string> {
+  if (!response.body) throw new Error('Missing GitHub JSON response')
+  const reader = response.body.getReader(),
+    chunks: Uint8Array[] = []
+  let bytes = 0
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > maxBytes) {
+        await reader.cancel()
+        throw new Error('GitHub response limit')
+      }
+      chunks.push(chunk.value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }

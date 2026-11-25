@@ -659,6 +659,10 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * appear without failing anything.
    */
   const WILDCARD_RESOURCE_STATEMENTS: Array<[string, string]> = [
+    [
+      'DisassociateCredentialIngressInThisRegion',
+      'WAF disassociation requires *; exact action and region are pinned below',
+    ],
     ['BoxLiteAwsControlPlane', 'the control-plane calls SST makes have no resource-level ARNs'],
     ['RunnerCommandStatus', 'SSM command-history APIs are list-shaped and take no resource'],
     ['ReadIamAndAccountMetadata', 'account and IAM reads SST performs before it knows any resource'],
@@ -678,6 +682,14 @@ test('the grants that are NOT stage-scoped are the documented ones, and only tho
    * specific API, not of its spelling — a new one has to be added here deliberately.
    */
   const RESOURCELESS_SECRETSMANAGER = ['secretsmanager:ListSecrets', 'secretsmanager:GetRandomPassword']
+
+  assert.deepEqual(findStatement(statements, 'DisassociateCredentialIngressInThisRegion'), {
+    Sid: 'DisassociateCredentialIngressInThisRegion',
+    Effect: 'Allow',
+    Action: 'wafv2:DisassociateWebACL',
+    Resource: '*',
+    Condition: { StringEquals: { 'aws:RequestedRegion': '<REGION>' } },
+  })
 
   for (const [sid] of WILDCARD_RESOURCE_STATEMENTS) {
     const statement = statements.find((candidate: any) => candidate.Sid === sid)
@@ -1977,11 +1989,11 @@ test('a job calling a reusable workflow grants at least what that workflow asks 
       checked += 1
     }
   }
-  // The same twelve the input sweep below counts: five `config.yml` loads,
-  // deploy-infra's four, mdeploy-all's one, and two manual SDK builds. The exact count, not a
+  // The same eleven the input sweep below counts: five `config.yml` loads,
+  // deploy-infra's four and two manual SDK builds. The exact count, not a
   // floor, so a call that stops being swept fails here rather than being
   // absorbed — and adding one means changing this number in the same commit.
-  assert.equal(checked, 12, `expected every local reusable call to be swept, saw ${checked}`)
+  assert.equal(checked, 11, `expected every local reusable call to be swept, saw ${checked}`)
 })
 
 test('every reusable workflow is called with the inputs it declares', () => {
@@ -2023,12 +2035,12 @@ test('every reusable workflow is called with the inputs it declares', () => {
   }
   // Every local `uses:` in the directory, not just the deploy path's: five
   // build workflows load `config.yml`, `deploy-infra.yml` calls four, and
-  // mdeploy-all calls only its commit image builder, and the manual Runner and Go builds each call
+  // the manual Runner and Go builds each call
   // build-c to pair their SDK sources with the native library from that commit.
   // The exact count, not a floor: a call that stops being swept is the drop
   // this exists to catch, and one that appears is a caller nobody reviewed.
   // Adding a legitimate one means changing this number in the same commit.
-  assert.equal(checked, 12, `expected every reusable-workflow call swept, saw ${checked}`)
+  assert.equal(checked, 11, `expected every reusable-workflow call swept, saw ${checked}`)
 })
 
 /**
@@ -2071,15 +2083,15 @@ test('every workflow that selects a deployment Environment does so from an allow
         selected || !environment.includes('${{'),
         `${where} selects an Environment through an expression this guard cannot follow: ${environment}`,
       )
-      // A workflow with no dispatch has no dispatcher, and the allowlist exists
-      // to stop one reaching an Environment through a typo. It could not pass
-      // the check either way: `workflow_call` inputs take only boolean, number
-      // and string, so `choice` is a shape a callee cannot declare. What covers
-      // it instead is this same sweep reaching its caller — mdeploy-all binds
-      // the stage from its own allowlisted input. So the rule here is that the
-      // workflow really is unreachable by hand.
+      // Automatic plugin publication has one fixed credential environment.
+      // Reusable deploy workflows inherit an allowlisted stage from their callers.
       const byHand = workflow.on?.workflow_dispatch !== undefined
-      if (!byHand) {
+      if (workflow.on?.workflow_run !== undefined) {
+        assert.deepEqual(Object.keys(workflow.on), ['workflow_run'], `${where} can also be triggered outside its builder`)
+        assert.equal(entry, 'publish-plugins.yml', `${where} is not an allowed automatic publisher`)
+        assert.equal(environment, 'boxlite-plugin-ghcr', `${where} must use the fixed plugin environment`)
+        assert.equal(job.needs, 'verify', `${where} can reach the environment without verifying its build`)
+      } else if (!byHand) {
         assert.ok(
           workflow.on?.workflow_call !== undefined,
           `${where} is reachable by neither dispatch nor call, so nothing can run it`,
@@ -2120,7 +2132,7 @@ test('every workflow that selects a deployment Environment does so from an allow
     // line. Listed here deliberately: the point of pinning the set is that a
     // seventh deploy workflow is a reviewed addition rather than one that
     // appeared.
-    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild.yml', 'mdeploy-all.yml'],
+    ['build-apps-api-image.yml', 'deploy-infra.yml', 'deploy-release.yml', 'mbuild.yml', 'mdeploy-all.yml', 'publish-plugins.yml'],
     'the swept set no longer matches the deployment workflows',
   )
 })
@@ -2135,53 +2147,39 @@ test('every workflow that selects a deployment Environment does so from an allow
  */
 const SESSION_CHECKING = /npm run (?:--silent )?(?:mstage login|mdeploy|runner:build|runner:promote|runner:update)\b/
 
-test('every step that asks mstage for a session is given a token to answer with', () => {
-  /*
-   * `gh` ships on a runner and is never signed in, and a stage declaration names
-   * github a required provider — so a tool that checks the session first refuses
-   * with `Required sign-ins are missing` wherever GH_TOKEN is out of scope.
-   *
-   * What it cost: a runner build that had federated its cloud identity and
-   * passed `mstage login` one step earlier, then died on the session anyway,
-   * because the token was that step's rather than the whole workflow's. Scope is
-   * the thing asserted, not placement — a step may carry its own.
-   */
+test('every workflow and composite session-checking step receives its caller token', () => {
   const workflowDirectory = join(REPO_ROOT, '.github/workflows')
   let checked = 0
-
-  for (const entry of readdirSync(workflowDirectory)) {
-    if (!/\.ya?ml$/.test(entry)) continue
-    const workflow: any = load(readFileSync(join(workflowDirectory, entry), 'utf8'))
-
-    for (const [jobName, job] of entries(workflow.jobs ?? {})) {
-      for (const step of job.steps ?? []) {
-        // Comments and the lines that only print a command: neither runs one,
-        // and both mention these scripts where a deploy tells an operator what
-        // to rerun by hand.
-        const invoked = String(step.run ?? '')
-          .split('\n')
-          .filter((line: string) => !/^\s*(#|echo\b)/.test(line))
-          .join('\n')
-        if (!SESSION_CHECKING.test(invoked)) continue
-
-        const where = `${entry} job '${jobName}' step '${step.name ?? step.id ?? invoked.trim().slice(0, 40)}'`
-        assert.ok(
-          'GH_TOKEN' in (workflow.env ?? {}) || 'GH_TOKEN' in (job.env ?? {}) || 'GH_TOKEN' in (step.env ?? {}),
-          `${where} runs a tool that checks the mstage session with no GH_TOKEN in scope`,
-        )
-        checked += 1
+  const inspect = (steps: any[], inherited: Record<string, unknown>, location: string, seen = new Set<string>()) => {
+    for (const step of steps) {
+      const env = { ...inherited, ...step.env }
+      const where = location + ' / ' + (step.name ?? step.id ?? step.uses ?? 'run')
+      const invoked = String(step.run ?? '')
+        .split('\n')
+        .filter((line: string) => !/^\s*(#|echo\b)/.test(line))
+        .join('\n')
+      if (SESSION_CHECKING.test(invoked)) {
+        assert.ok('GH_TOKEN' in env, where + ' checks the mstage session without GH_TOKEN')
+        checked++
+      }
+      if (step.uses?.startsWith('./.github/actions/')) {
+        assert.ok(!seen.has(step.uses), where + ' has a composite cycle')
+        const action: any = load(readFileSync(join(REPO_ROOT, step.uses, 'action.yml'), 'utf8'))
+        if (action.runs?.using === 'composite') {
+          inspect(action.runs.steps, env, where, new Set([...seen, step.uses]))
+        }
       }
     }
   }
-
-  // Six: mbuild's session check; then the five in
-  // mdeploy-all's three tool-reaching jobs — `plan`'s `--check` read,
-  // `build-runner`'s session check and its build, `deploy`'s session check and
-  // its apply.
-  // The exact count, not a floor: a step that stops being swept is exactly the
-  // drop this exists to catch, and one that appears is a tool call nobody
-  // reviewed. Adding a legitimate one means changing this number with it.
-  assert.equal(checked, 6, `expected every session-checking step swept, saw ${checked}`)
+  for (const entry of readdirSync(workflowDirectory).filter((file) => /\.ya?ml$/.test(file))) {
+    const workflow: any = load(readFileSync(join(workflowDirectory, entry), 'utf8'))
+    for (const [jobName, job] of entries(workflow.jobs ?? {})) {
+      inspect(job.steps ?? [], { ...workflow.env, ...job.env }, entry + ' / ' + jobName)
+    }
+  }
+  // Plan read; grouped image check; Runner check/build; two apply callers;
+  // and the reusable image wrapper's session check.
+  assert.equal(checked, 9, `expected every session-checking step swept, saw ${checked}`)
 })
 
 test('API publishing builds once and promotes that exact image without rebuilding', () => {

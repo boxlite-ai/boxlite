@@ -1,0 +1,398 @@
+{
+  "answer": {
+    "data": {
+      "count": 0,
+      "enabled": false,
+      "items": [],
+      "nested": {
+        "value": null
+      },
+      "numbers": [
+        9007199254740992,
+        9007199254740993,
+        -9223372036854775808,
+        9223372036854775807,
+        18446744073709551615,
+        0.123456789012345678901,
+        0.123456789012345678902
+      ]
+    },
+    "text": "yes",
+    "type": "answer"
+  },
+  "approval": {
+    "approved": true,
+    "type": "permission"
+  },
+  "capabilities": {
+    "idempotency_retention_seconds": 1.5,
+    "input_kinds": [
+      "text"
+    ],
+    "max_pending_steering": null,
+    "max_queued_turns": 0,
+    "operations": [
+      "agent.send"
+    ]
+  },
+  "capabilities_max": {
+    "idempotency_retention_seconds": 9223372036.854775807,
+    "input_kinds": [
+      "text"
+    ],
+    "max_pending_steering": null,
+    "max_queued_turns": 0,
+    "operations": [
+      "agent.send"
+    ]
+  },
+  "capabilities_overflow": {
+    "idempotency_retention_seconds": 9223372036.854775808,
+    "input_kinds": [
+      "text"
+    ],
+    "max_pending_steering": null,
+    "max_queued_turns": 0,
+    "operations": [
+      "agent.send"
+    ]
+  },
+  "capabilities_unknown": {
+    "idempotency_retention_seconds": null,
+    "input_kinds": [],
+    "max_pending_steering": null,
+    "max_queued_turns": null,
+    "operations": []
+  },
+  "config": {
+    "instructions": "be brief",
+    "limits": 0,
+    "mcp": [
+      "files"
+    ],
+    "model": "fake/model",
+    "output_schema": {
+      "nested": null,
+      "properties": {},
+      "required": []
+    },
+    "permissions": false,
+    "reasoning": "high",
+    "tools": []
+  },
+  "config_default": {
+    "mcp": [],
+    "tools": []
+  },
+  "denial": {
+    "approved": false,
+    "type": "permission"
+  },
+  "event": {
+    "agent_id": "agent-1",
+    "cursor": null,
+    "data": {
+      "count": 0,
+      "enabled": false,
+      "items": [],
+      "nested": {
+        "value": null
+      },
+      "numbers": [
+        9007199254740992,
+        9007199254740993,
+        -9223372036854775808,
+        9223372036854775807,
+        18446744073709551615,
+        0.123456789012345678901,
+        0.123456789012345678902
+      ]
+    },
+    "kind": "progress",
+    "turn_id": null
+  },
+  "event_null": {
+    "agent_id": "agent-1",
+    "cursor": null,
+    "data": null,
+    "kind": "progress",
+    "turn_id": null
+  },
+  "numeric_config": {
+    "limits": [
+      9007199254740992,
+      9007199254740993,
+      -9223372036854775808,
+      9223372036854775807,
+      18446744073709551615,
+      0.123456789012345678901,
+      0.123456789012345678902
+    ],
+    "mcp": [],
+    "output_schema": [
+      9007199254740992,
+      9007199254740993,
+      -9223372036854775808,
+      9223372036854775807,
+      18446744073709551615,
+      0.123456789012345678901,
+      0.123456789012345678902
+    ],
+    "permissions": [
+      9007199254740992,
+      9007199254740993,
+      -9223372036854775808,
+      9223372036854775807,
+      18446744073709551615,
+      0.123456789012345678901,
+      0.123456789012345678902
+    ],
+    "tools": []
+  },
+  "numeric_data": [
+    9007199254740992,
+    9007199254740993,
+    -9223372036854775808,
+    9223372036854775807,
+    18446744073709551615,
+    0.123456789012345678901,
+    0.123456789012345678902
+  ],
+  "receipt": {
+    "id": "steer-1",
+    "status": "applied",
+    "turn_id": "turn-1"
+  },
+  "requests": [
+    {
+      "id": "question-1",
+      "kind": {
+        "schema": null,
+        "text": "continue?",
+        "type": "question"
+      },
+      "turn_id": "turn-1"
+    },
+    {
+      "id": "permission-1",
+      "kind": {
+        "arguments": {
+          "count": 0,
+          "enabled": false,
+          "items": [],
+          "nested": {
+            "value": null
+          },
+          "numbers": [
+            9007199254740992,
+            9007199254740993,
+            -9223372036854775808,
+            9223372036854775807,
+            18446744073709551615,
+            0.123456789012345678901,
+            0.123456789012345678902
+          ]
+        },
+        "tool": "shell",
+        "type": "permission"
+      },
+      "turn_id": "turn-1"
+    }
+  ],
+  "requests_null": [
+    {
+      "id": "permission-null",
+      "kind": {
+        "arguments": null,
+        "tool": "shell",
+        "type": "permission"
+      },
+      "turn_id": "turn-1"
+    }
+  ],
+  "result": {
+    "artifacts": [],
+    "data": {
+      "count": 0,
+      "enabled": false,
+      "items": [],
+      "nested": {
+        "value": null
+      },
+      "numbers": [
+        9007199254740992,
+        9007199254740993,
+        -9223372036854775808,
+        9223372036854775807,
+        18446744073709551615,
+        0.123456789012345678901,
+        0.123456789012345678902
+      ]
+    },
+    "error": null,
+    "outcome": "answer",
+    "status": "completed",
+    "text": "done",
+    "turn_id": "turn-1",
+    "usage": {
+      "tokens": 0
+    }
+  },
+  "result_unknown": {
+    "artifacts": [],
+    "data": null,
+    "error": null,
+    "outcome": null,
+    "status": "unknown",
+    "text": null,
+    "turn_id": "turn-2",
+    "usage": null
+  },
+  "state": {
+    "active_turn_id": "turn-1",
+    "cursor": null,
+    "id": "agent-1",
+    "queued_turn_ids": [
+      "turn-2"
+    ],
+    "requests": [
+      {
+        "id": "question-1",
+        "kind": {
+          "schema": null,
+          "text": "continue?",
+          "type": "question"
+        },
+        "turn_id": "turn-1"
+      },
+      {
+        "id": "permission-1",
+        "kind": {
+          "arguments": {
+            "count": 0,
+            "enabled": false,
+            "items": [],
+            "nested": {
+              "value": null
+            },
+            "numbers": [
+              9007199254740992,
+              9007199254740993,
+              -9223372036854775808,
+              9223372036854775807,
+              18446744073709551615,
+              0.123456789012345678901,
+              0.123456789012345678902
+            ]
+          },
+          "tool": "shell",
+          "type": "permission"
+        },
+        "turn_id": "turn-1"
+      }
+    ],
+    "status": "busy",
+    "steering": [
+      {
+        "id": "steer-1",
+        "status": "applied",
+        "turn_id": "turn-1"
+      }
+    ]
+  },
+  "state_empty": {
+    "active_turn_id": null,
+    "cursor": null,
+    "id": "agent-1",
+    "queued_turn_ids": [],
+    "requests": [],
+    "status": "ready",
+    "steering": []
+  },
+  "turn": {
+    "agent_id": "agent-1",
+    "cursor": null,
+    "id": "turn-1",
+    "requests": [
+      {
+        "id": "question-1",
+        "kind": {
+          "schema": null,
+          "text": "continue?",
+          "type": "question"
+        },
+        "turn_id": "turn-1"
+      },
+      {
+        "id": "permission-1",
+        "kind": {
+          "arguments": {
+            "count": 0,
+            "enabled": false,
+            "items": [],
+            "nested": {
+              "value": null
+            },
+            "numbers": [
+              9007199254740992,
+              9007199254740993,
+              -9223372036854775808,
+              9223372036854775807,
+              18446744073709551615,
+              0.123456789012345678901,
+              0.123456789012345678902
+            ]
+          },
+          "tool": "shell",
+          "type": "permission"
+        },
+        "turn_id": "turn-1"
+      }
+    ],
+    "result": {
+      "artifacts": [],
+      "data": {
+        "count": 0,
+        "enabled": false,
+        "items": [],
+        "nested": {
+          "value": null
+        },
+        "numbers": [
+          9007199254740992,
+          9007199254740993,
+          -9223372036854775808,
+          9223372036854775807,
+          18446744073709551615,
+          0.123456789012345678901,
+          0.123456789012345678902
+        ]
+      },
+      "error": null,
+      "outcome": "answer",
+      "status": "completed",
+      "text": "done",
+      "turn_id": "turn-1",
+      "usage": {
+        "tokens": 0
+      }
+    },
+    "status": "completed",
+    "steering": [
+      {
+        "id": "steer-1",
+        "status": "applied",
+        "turn_id": "turn-1"
+      }
+    ]
+  },
+  "turn_queued": {
+    "agent_id": "agent-1",
+    "cursor": null,
+    "id": "turn-2",
+    "requests": [],
+    "result": null,
+    "status": "queued",
+    "steering": []
+  }
+}

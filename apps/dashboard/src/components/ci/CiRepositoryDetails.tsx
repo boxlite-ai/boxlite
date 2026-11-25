@@ -39,6 +39,7 @@ export function CiRepositoryDetails({
   installation,
   account,
   managementUrl,
+  variant = 'details',
 }: {
   api: Pick<ApiClient, 'getCiRepositories'>
   organization: string
@@ -46,6 +47,7 @@ export function CiRepositoryDetails({
   installation: number
   account: string
   managementUrl?: string
+  variant?: 'details' | 'summary'
 }) {
   const cache = useQueryClient(),
     [page, setPage] = useState(1),
@@ -127,7 +129,7 @@ export function CiRepositoryDetails({
             Retry
           </AsciiButton>
         </div>
-      ) : (
+      ) : variant === 'details' ? (
         <ul className="divide-y divide-border/60 border-y border-border/60">
           {query.data.repositories.map((repo) => (
             <li key={repo.id} className="flex min-w-0 items-center justify-between gap-3 py-2.5">
@@ -141,8 +143,8 @@ export function CiRepositoryDetails({
             <li className="py-4 text-muted-foreground">No repositories authorized for this App.</li>
           )}
         </ul>
-      )}
-      {(page > 1 || query.data?.next_page) && (
+      ) : null}
+      {variant === 'details' && (page > 1 || query.data?.next_page) && (
         <div className="flex items-center justify-end gap-3">
           <span className="text-muted-foreground">Page {page}</span>
           <AsciiButton

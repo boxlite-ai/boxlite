@@ -56,13 +56,26 @@ npm run auth0:configure-email -- \
   --apply
 ```
 
-The email reconciler creates the SES provider only when none exists and creates
-the `verify_email_by_code` and `reset_email_by_code` templates only when they
-are absent. It refuses to replace a different provider or customized template.
+The email reconciler creates the SES provider only when none exists, and it
+refuses to replace a different provider. The checked-in
+`verify_email_by_code` and `reset_email_by_code` templates are the source of
+truth: a missing template is created, and one that differs is updated. Preview
+lists each template as `create`, `reuse` or `update`, and names the fields an
+update would overwrite.
+
 Its mode-`0600` receipt under `.sst/auth0-backups/` contains the SES region and
-sender but never the access key. Rollback disables templates created by the run
-and deletes the provider only when the run created it and its non-secret
-fingerprint is unchanged.
+sender but never the access key. Before updating a template, it records the
+tenant's previous values for the fields it writes.
+
+Rollback works through the receipt:
+
+- **Created templates:** disabled, since Auth0 cannot delete them.
+- **Updated templates:** restored to the recorded values, unless edited after the run.
+- **Provider:** deleted only when the run created it and its non-secret fingerprint is unchanged.
+
+The verify email puts the code in its subject so it shows in notifications. The
+reset email keeps the code out of the subject and first line, because a
+lock-screen preview could expose a code that resets the password.
 
 For an existing external sender, keep that provider and use the shared
 [templates-only procedure](../identity-and-mail.md#auth0-email-first-login-policy).

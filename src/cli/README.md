@@ -165,9 +165,13 @@ Explicit defaults such as `--auto-delete 0` and `--network enabled` also reject;
 global connection options remain available.
 
 Checkpoints are managed by the selected REST server. Local runtimes return
-an unsupported-operation error. Each checkpoint captures a stopped box's disk
-and execution configuration, survives source deletion, and can create multiple
-boxes. It does not capture memory or running processes.
+an unsupported-operation error. Checkpoints capture disk and execution
+configuration, survive source deletion, and can create multiple boxes.
+
+`checkpoint create --kind <disk|full>` selects the capture type. `disk` is the
+default and requires a stopped, idle box. `full` also captures guest memory and
+VM state and requires a running box. Before requesting a full capture, the CLI
+checks that `GET /v1/config` reports `memory_checkpoints_enabled: true`.
 
 ```bash
 # Use a REST context, or pass --url with the selected server.
@@ -193,9 +197,9 @@ replace an existing box from a checkpoint; remove the box and create a new one.
 
 Storage and capture coordination belong to the server.
 The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
-The separate `import ARCHIVE` command keeps the native archive workflow unchanged.
-Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
-management routes. Existing binary archive export/import remains available.
+Local `serve` reports `checkpoints_enabled: false` and
+`memory_checkpoints_enabled: false` and exposes no checkpoint management routes.
+Use `import ARCHIVE` to import a binary archive.
 The cloud runner verifies the downloaded artifact SHA before ordinary native
 import, which owns archive validation; this creates no local
 checkpoint catalog or recovery records.
@@ -429,7 +433,7 @@ win over server values; `OIDC_CLIENT_ID` is a fallback, not an override for
 `/api/config`. Do not provide a client secret. An `unauthorized_client` error
 can mean an unknown/wrong client or a disabled grant: check the CLI client ID
 and issuer, then ask the IdP administrator to verify the Device Code grant.
-For Dex, enable `oauth2.deviceFlow: {}` in `apps/dex/config.yaml`.
+The local Rauthy client in `apps/rauthy/bootstrap/clients.json` enables it.
 
 Device login prints the verification URL and one-time user code on stderr.
 Complete authorization in a browser while the CLI polls. Ctrl-C cancels polling;
@@ -530,6 +534,7 @@ as completed executions with status `126` or `127`.
 | `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
+| `--mount type=volume,source=NAME,target=PATH[,readonly][,sub_path=DIR]` | | Typed managed-volume mount; mutually exclusive with `-v` |
 | `--cpus N` | | CPU allocation, e.g. `2` or `0.5`; fractional values require a Linux execution host |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
@@ -592,6 +597,7 @@ default, and `exec` still starts it on demand.
 | `--entrypoint EXEC` | | Override the image entrypoint |
 | `--publish PORT` | `-p` | Publish a TCP box port locally (`80` = automatic host port, `8080:80` = fixed) |
 | `--volume VOLUME` | `-v` | Mount a volume: `name:/box` for a managed volume, `./path:/box` for a host bind, `/box` for anonymous |
+| `--mount type=volume,source=NAME,target=PATH[,readonly][,sub_path=DIR]` | | Typed managed-volume mount; mutually exclusive with `-v` |
 | `--cpus N` | | CPU allocation, e.g. `2` or `0.5`; fractional values require a Linux execution host |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--disk-size GB` | | Sparse rootfs disk size; smaller values than the base image are ignored |
@@ -742,6 +748,11 @@ List cached images.
 | `--format FMT` | | Output format: `table`, `json`, `yaml`; conflicts with `--quiet` |
 
 ### `boxlite cp`
+
+Native copies stream tar chunks while packing or extracting, without staging a
+complete archive. Transfers can leave partial destination files on failure;
+failed uploads can also leave root-owned files because ownership is adjusted
+after successful extraction. Older remote peers may buffer transfers.
 
 Copy files or directories between host and box.
 

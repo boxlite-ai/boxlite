@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Link, useLocation } from 'react-router-dom'
 import LandingPage from './LandingPage'
+import LoadingFallback from '@/components/LoadingFallback'
 
 const Logout = () => {
   const { user, isLoading, removeUser, signoutRedirect, signinRedirect, stopSilentRenew } = useAuth()
@@ -62,23 +63,7 @@ const Logout = () => {
     void leaveAccount()
   }, [isLoading, leaveAccount, request, user])
 
-  if (!failure)
-    return (
-      <AccountEntryLayout
-        size="compact"
-        title={request.switching ? 'Switching accounts…' : 'Signing out of BoxLite'}
-        description={
-          request.switching
-            ? 'We’re closing your current session before you choose another account.'
-            : 'We’re closing your current session.'
-        }
-      >
-        <p role="status" className="flex items-center gap-3 text-body text-muted-foreground">
-          <span aria-hidden className="size-3 border border-current motion-safe:animate-pulse" />
-          Please wait…
-        </p>
-      </AccountEntryLayout>
-    )
+  if (!failure) return <LoadingFallback />
   if (cleared && request.switching) return <LandingPage />
   return (
     <AccountEntryLayout

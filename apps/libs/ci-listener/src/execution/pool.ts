@@ -1,10 +1,12 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { randomUUID } from 'node:crypto'
-import { JobNotice, jobMatches, WorkflowJob } from '../jobs'
-import { GitHubRunners, JitRegistration, RunnerEffect, RunnerObservation } from '../runners'
+import { JobNotice } from '../jobs'
+import type { ScaleTarget } from '../scale-set-controller'
+import { JitRegistration, RunnerEffect, RunnerIdentity } from '../runners'
 import { ExecutionLease, StateCheck } from '../state/store'
 import { LeaseLost, StateConflict, StateCorrupt } from '../state/database'
 import {
+  ConfirmedWorkerAbsent,
   ConfirmedWorkerCreationRejected,
   DEFAULT_WORKER_DISK_GIB,
   validateWorkerResources,
@@ -14,25 +16,29 @@ import {
 import { DEFAULT_RESOURCE_LABEL, parseResourceLabels, selectRunnerLabels } from '../resource-labels'
 import { AllocationChange, AllocationRow, ExecutionJournal } from './journal'
 import { EffectKind, ExecutionScope } from './model'
-import { CapacityPolicy, captureCapacity } from '../capacity'
-import { DemandUncertain, LabelDemand } from '../demand'
+import { CapacityPolicy } from '../capacity'
+import { WorkQueue } from './work-queue'
 
 export interface RunnerSession {
-  registry: Pick<GitHubRunners, 'create' | 'lookup' | 'remove'> & Partial<Pick<GitHubRunners, 'list'>>
+  registry: {
+    create(name: string, signal?: AbortSignal): Promise<JitRegistration>
+    lookup(identity: { id?: number; name: string }, signal?: AbortSignal): Promise<RunnerIdentity | null>
+    remove(identity: RunnerIdentity, signal?: AbortSignal): Promise<void>
+    retireIdle?(identity: RunnerIdentity, signal?: AbortSignal, checkRetirement?: () => void): Promise<boolean | null>
+  }
   close(): Promise<void>
 }
 /** Hosts enforce authority again at actual Box/GitHub effects, including native onPersist. */
 export interface PoolBackend {
-  inventory?(signal?: AbortSignal): Promise<RunnerObservation[]>
   retire?(name: string): Promise<void>
   workers: WorkerExecutor
   admit(signal?: AbortSignal): Promise<void>
-  job(notice: JobNotice, signal?: AbortSignal): Promise<WorkflowJob>
   runners(
     beforeMutation: (effect: RunnerEffect) => Promise<void>,
     signal?: AbortSignal,
     labels?: readonly string[],
     name?: string,
+    scaleSet?: number,
   ): Promise<RunnerSession>
 }
 export interface PoolSettings {
@@ -49,6 +55,12 @@ export interface WorkerEvent {
     | 'ci-worker-recovery-deferred'
     | 'ci-worker-released'
     | 'ci-worker-create-rejected'
+    | 'ci-worker-reserved'
+    | 'ci-worker-box-known'
+    | 'ci-worker-runner-known'
+    | 'ci-worker-jit-delivered'
+    | 'ci-worker-execution-started'
+    | 'ci-worker-execution-settled'
   level: 'info' | 'warn'
   scope: string
   binding: string
@@ -60,41 +72,102 @@ export interface WorkerEvent {
   name: string
   boxId: string | null
   runnerId: number | null
-  trigger: JobNotice
+  trigger: JobNotice | null
+  scaleSet?: number
   boxPhase: string
   runnerPhase: string
   effect: EffectKind | null
   status?: string
   exitCode?: number | null
   errorType?: string
+  reason?: ConfirmedWorkerCreationRejected['reason']
+  platformStatus?: number
+  queueWaitMs?: number
+  durationMs?: number
 }
 const RUNNER_BOOTSTRAP_SECONDS = 300
-const bootstrap = `set -eu
+const bootstrap = String.raw`set -eu
+export DOCKER_HOST=unix:///var/run/docker.sock
+unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+docker_pid=
+docker_log=/tmp/boxlite-ci-dockerd.log
+docker_deadline=$((SECONDS + 120))
+
+# Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2329
+cleanup_docker() {
+  local bootstrap_status=$?
+  if ((bootstrap_status != 0)) && [[ -f "$docker_log" ]]; then
+    tail -n 60 "$docker_log" >&2 || true
+  fi
+  if [[ -n "$docker_pid" ]]; then
+    kill "$docker_pid" >/dev/null 2>&1 || true
+    wait "$docker_pid" 2>/dev/null || true
+  fi
+}
+trap 'cleanup_docker' EXIT
+
+docker_ready() {
+  local remaining=$((docker_deadline - SECONDS))
+  ((remaining > 0)) || return 1
+  ((remaining <= 5)) || remaining=5
+  timeout "$remaining" setpriv --reuid=runner --regid=docker --init-groups \
+    env HOME=/home/runner USER=runner LOGNAME=runner docker info >/dev/null 2>&1
+}
+
+if ! docker_ready; then
+  if ! command -v iptables >/dev/null 2>&1; then
+    timeout "$((docker_deadline - SECONDS))" /bin/sh -ec '
+      apt-get update -qq
+      apt-get install -y --no-install-recommends iptables
+    '
+  fi
+  dockerd --host="$DOCKER_HOST" --group=docker \
+    --storage-driver=overlay2 --dns-search=. >"$docker_log" 2>&1 &
+  docker_pid=$!
+  until docker_ready; do
+    if ((SECONDS >= docker_deadline)) || ! kill -0 "$docker_pid" 2>/dev/null; then
+      printf 'CI Docker daemon failed to become ready within 120 seconds\n' >&2
+      exit 1
+    fi
+    sleep 1
+  done
+fi
+
 for ((attempt=0; attempt<${RUNNER_BOOTSTRAP_SECONDS}; attempt++)); do
   if [[ -f /home/runner/.boxlite-jitconfig.ready && -r /home/runner/.boxlite-jitconfig ]]; then
     ACTIONS_RUNNER_INPUT_JITCONFIG="$(cat /home/runner/.boxlite-jitconfig)"
     export ACTIONS_RUNNER_INPUT_JITCONFIG
     rm -f /home/runner/.boxlite-jitconfig /home/runner/.boxlite-jitconfig.ready
-    exec /home/runner/run.sh
+    exec setpriv --reuid=runner --regid=docker --init-groups \
+      env HOME=/home/runner USER=runner LOGNAME=runner /home/runner/run.sh
   fi
   sleep 1
 done
+printf 'CI runner JIT configuration timed out\n' >&2
 exit 1`
 
 /** One scope supplies ephemeral runner capacity; a triggering job is not a runner assignment. */
 export class WorkerPool {
-  private busy = false
-  private recovery = { lease: '', after: '', version: '', seen: 0, failed: false, ready: false }
   private readonly settings: PoolSettings
+  private readonly setCharges = new Map<number, number>()
   private readonly jit = new Map<string, JitRegistration>()
+  private readonly abandonedJit = new Set<string>()
   private readonly sessions = new Set<RunnerSession>()
-  private demandAfter = 0
+  private readonly pendingDeliveries = new Map<number, ScaleTarget>()
+  // The scope planner is serialized; execution can release a row after its journal page was read.
+  private releasedSinceScan?: Set<string>
+  private executionAfter = 0
+  private readonly idleRetryAt = new Map<string, number>()
+  private readonly declinedRetirements = new Map<number, Set<string>>()
+  private readonly creationFailures = new Map<string, { attempts: number; retryAt: number }>()
   constructor(
     private readonly journal: ExecutionJournal,
     private readonly scopeKey: string,
     private readonly backend: (scope: ExecutionScope, lease: ExecutionLease) => Promise<PoolBackend>,
     settings: PoolSettings,
     private readonly observe: (event: WorkerEvent) => void = () => {},
+    private readonly execution?: { queue: WorkQueue; wake(): void },
   ) {
     validateWorkerResources(settings)
     if (
@@ -107,98 +180,6 @@ export class WorkerPool {
       throw new Error('Invalid CI worker settings')
     this.settings = { ...settings, labels: [...settings.labels] }
   }
-  async tick(lease: ExecutionLease, policy: CapacityPolicy, demand?: JobNotice, signal?: AbortSignal): Promise<void> {
-    lease = { ...lease }
-    policy = captureCapacity(policy)
-    demand = demand ? { ...demand } : undefined
-    if (this.busy) throw new Error('CI pool reconciliation is already running')
-    this.busy = true
-    try {
-      signal?.throwIfAborted()
-      const identity = JSON.stringify(lease)
-      if (this.recovery.lease !== identity)
-        this.recovery = { lease: identity, after: '', version: '', seen: 0, failed: false, ready: false }
-      const scope = await this.journal.scope(lease, this.scopeKey)
-      if (this.recovery.version !== scope.activity.version) this.recovery.ready = false
-      if (!scope.active && !demand) {
-        this.recovery = {
-          lease: identity,
-          after: '',
-          version: scope.activity.version,
-          seen: 0,
-          failed: false,
-          ready: true,
-        }
-        return
-      }
-      await this.close()
-      const backend = await this.backend(scope.scope, lease)
-      const failures: unknown[] = []
-      // Only a completed clean round grants a single admission attempt. Starting
-      // another round expires that permit; page rotation alone cannot clear debt.
-      if (!demand || !this.recovery.ready) {
-        this.recovery.ready = false
-        if (!this.recovery.after) {
-          this.recovery.failed = false
-          this.recovery.seen = 0
-          this.recovery.version = scope.activity.version
-        }
-        if (scope.activity.version !== this.recovery.version) this.recovery.failed = true
-        const page = await this.journal.workers(lease, this.scopeKey, this.recovery.after)
-        for (const row of page.rows) {
-          const key = row.record.key
-          try {
-            await this.reconcile(lease, row, backend, scope.scope, signal)
-          } catch (error) {
-            if (
-              error instanceof LeaseLost ||
-              error instanceof StateCorrupt ||
-              error instanceof StateConflict ||
-              signal?.aborted ||
-              this.sessions.size
-            )
-              throw error
-            const current = await this.journal.allocation(lease, key)
-            if (!current) throw error
-            this.event(scope.scope, current, 'ci-worker-recovery-deferred', 'warn', {
-              errorType: error instanceof Error ? error.constructor.name : 'Unknown',
-            })
-            // Only a confirmed-absent Box's registration debt may coexist with
-            // fresh admission. Other failures retain capacity and block this scope.
-            if (current.value.box.phase !== 'absent') {
-              this.recovery.failed = true
-              failures.push(error)
-            }
-          }
-        }
-        this.recovery.seen += page.rows.length
-        this.recovery.after = page.after
-        // Membership can change while a page awaits external effects, including
-        // our own final releases. A new clean round must cover that membership.
-        const current = await this.journal.scope(lease, this.scopeKey)
-        if (current.activity.version !== this.recovery.version) this.recovery.failed = true
-        if (!page.after && current.activity.version === this.recovery.version && this.recovery.seen !== current.active)
-          throw new StateCorrupt()
-        this.recovery.ready = !page.after && !this.recovery.failed
-      }
-      if (failures.length) throw failures[0]
-      if (demand && this.recovery.ready) {
-        this.recovery.ready = false
-        await backend.admit(signal)
-        const current = await backend.job(demand, signal)
-        if (current.repository !== demand.repository || current.run !== demand.run || current.job !== demand.job)
-          throw new Error('Original job identity changed at admission')
-        if (!jobMatches(current, this.settings.labels)) return
-        const allocation = await this.journal.reserve(lease, this.scopeKey, demand, {
-          ...policy,
-          checks: [...(policy.checks ?? []), { key: scope.activity.key, version: this.recovery.version }],
-        })
-        if (allocation) await this.reconcile(lease, allocation, backend, scope.scope, signal)
-      }
-    } finally {
-      this.busy = false
-    }
-  }
   async close(): Promise<void> {
     this.jit.clear()
     for (const session of this.sessions) {
@@ -206,150 +187,234 @@ export class WorkerPool {
       this.sessions.delete(session)
     }
   }
-  /** Count compatible supply once, reserve missing capacity, then advance independent resources. */
-  async balance(
-    lease: ExecutionLease,
-    policy: CapacityPolicy,
-    demands: readonly LabelDemand[],
-    signal?: AbortSignal,
-    verified = false,
-  ): Promise<void> {
-    lease = { ...lease }
-    policy = captureCapacity(policy)
-    demands = demands.map((demand) => ({ ...demand, labels: [...demand.labels], job: { ...demand.job } }))
-    if (this.busy) throw new Error('CI pool reconciliation is already running')
-    this.busy = true
-    try {
-      signal?.throwIfAborted()
-      const scope = await this.journal.scope(lease, this.scopeKey)
-      if (!scope.active && demands.every((demand) => demand.queued === 0 && !demand.dirty)) return
-      const backend = await this.backend(scope.scope, lease)
-      const allocations: AllocationRow[] = []
-      let after = ''
-      do {
-        const page = await this.journal.workers(lease, this.scopeKey, after)
-        allocations.push(...page.rows)
-        after = page.after
-      } while (after)
-      let inventory: Map<number, RunnerObservation>
-      try {
-        if (!backend.inventory) throw new Error('CI runner supply inventory is unavailable')
-        inventory = new Map((await backend.inventory(signal)).map((runner) => [runner.id, runner]))
-      } catch (error) {
-        if (
-          error instanceof LeaseLost ||
-          error instanceof StateCorrupt ||
-          error instanceof StateConflict ||
-          signal?.aborted
-        )
-          throw error
-        await this.reconcileAll(lease, allocations, backend, scope.scope, signal)
-        throw error
-      }
-      const supplied = new Map<string, number>()
-      const claims = await this.journal.claimedRunners(
-        lease,
-        scope.scope,
-        allocations.flatMap((row) =>
-          row.value.runner.id !== null && inventory.get(row.value.runner.id)?.busy ? [row.value.runner.id] : [],
-        ),
-      )
-      const unknownBusy = new Set<string>()
-      for (const [index, row] of allocations.entries()) {
-        if (row.value.closing || row.value.box.phase === 'absent') continue
-        // Legacy records have no label snapshot; only their recovery uses job details.
-        const labels = row.value.supply?.labels ?? (await backend.job(row.value.job, signal)).labels
-        const selection = selectRunnerLabels(labels, this.settings.labels)
-        if (!selection) throw new StateCorrupt()
-        const runner = row.value.runner.id === null ? undefined : inventory.get(row.value.runner.id)
-        if (runner && runner.name !== row.value.name) throw new StateCorrupt()
-        if (row.value.runner.phase === 'known' && (!runner || (runner.status === 'offline' && !runner.busy))) {
-          if (Date.now() - (row.value.runner.registeredAt ?? row.value.createdAt) >= RUNNER_BOOTSTRAP_SECONDS * 1000) {
-            allocations[index] = await this.journal.advance(lease, row.record.key, row.record.version, {
-              closing: true,
-            })
-          } else {
-            // JIT delivery does not prove the runner has connected. Pending startup
-            // consumes the same demand and quota until its bounded grace expires.
-            supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
-          }
-          continue
-        }
-        if (runner?.busy) {
-          if (!claims.has(runner.id)) unknownBusy.add(selection.label)
-          continue
-        }
-        if (runner && !selection.labels.every((label) => runner.labels.includes(label.toLowerCase())))
-          throw new StateCorrupt()
-        supplied.set(selection.label, (supplied.get(selection.label) ?? 0) + 1)
-      }
-      const requested = new Map<
-        string,
-        { count: number; demand: LabelDemand; labels: readonly string[]; checks: StateCheck[] }
-      >()
-      // Reserve one database check for the journal's scope fence. Omitted
-      // counters contribute no demand; a later round starts at the first omission.
-      const demandBudget = 99 - (policy.checks?.length ?? 0)
-      let nextDemand: number | undefined
-      for (let offset = 0; offset < demands.length; offset++) {
-        const index = (this.demandAfter + offset) % demands.length,
-          demand = demands[index]
-        if (demand.dirty) throw new StateCorrupt()
-        const selection = selectRunnerLabels(demand.labels, this.settings.labels)
-        if (!selection || !demand.queued) continue
-        const existing = requested.get(selection.label)
-        const checks = demand.key && demand.version ? [{ key: demand.key, version: demand.version }] : []
-        if ((existing?.checks.length ?? 0) + checks.length > demandBudget) {
-          nextDemand ??= index
-          continue
-        }
-        requested.set(selection.label, {
-          count: (existing?.count ?? 0) + demand.queued,
-          demand,
-          labels: selection.labels,
-          checks: [...(existing?.checks ?? []), ...checks],
-        })
-      }
-      this.demandAfter = nextDemand ?? 0
-      if (
-        !verified &&
-        [...requested].some(([label, target]) => unknownBusy.has(label) && target.count > (supplied.get(label) ?? 0)) &&
-        (await this.journal.hasCapacity(lease, this.scopeKey, policy))
-      )
-        throw new DemandUncertain('Runner claims arrived without matching demand observations')
-      let pending = true
-      while (pending) {
-        pending = false
-        for (const [label, target] of requested) {
-          const available = supplied.get(label) ?? 0
-          if (available >= target.count) continue
-          signal?.throwIfAborted()
-          await backend.admit(signal)
-          const notice = {
-            repository: target.demand.repositoryId,
-            run: target.demand.job.runId,
-            job: target.demand.job.id,
-          }
-          const row = await this.journal.reserve(
-            lease,
-            this.scopeKey,
-            notice,
-            { ...policy, checks: [...(policy.checks ?? []), ...target.checks] },
-            { labels: [...target.labels] },
-          )
-          if (!row) {
-            pending = false
-            break
-          }
-          allocations.push(row)
-          supplied.set(label, available + 1)
-          pending = true
-        }
-      }
-      await this.reconcileAll(lease, allocations, backend, scope.scope, signal)
-    } finally {
-      this.busy = false
+  chargedInSet(id: number): number {
+    return this.setCharges.get(id) ?? 0
+  }
+  private trackSupply(target: ScaleTarget, key: string): void {
+    const delivery = target.delivery
+    if ((delivery.spent ?? 0) >= target.assigned) return
+    if (!delivery.candidates) {
+      delivery.candidates = new Set()
+      this.pendingDeliveries.set(target.id, target)
     }
+    if (delivery.candidates.has(key)) return
+    delivery.candidates.add(key)
+    delivery.covered = Math.min(target.assigned, (delivery.spent ?? 0) + delivery.candidates.size)
+  }
+  /** Update coverage after the journal returns Box quota, even if runner cleanup is still pending. */
+  releaseSupply(row: AllocationRow): void {
+    const set = row.value.supply?.scaleSet
+    if (!set) return
+    const abandoned = this.abandonedJit.delete(row.record.key)
+    this.releasedSinceScan ??= new Set()
+    this.releasedSinceScan.add(row.record.key)
+    const target = this.pendingDeliveries.get(set)
+    if (!target) return
+    const delivery = target.delivery
+    if (!delivery.candidates?.delete(row.record.key)) return
+    // A JIT delivery with a lost reply may already have served an assignment.
+    if (row.value.runner.worked || (row.value.delivery !== 'none' && !abandoned))
+      delivery.spent = (delivery.spent ?? 0) + 1
+    delivery.covered = Math.min(target.assigned, (delivery.spent ?? 0) + delivery.candidates.size)
+    if (!delivery.candidates.size || delivery.spent === target.assigned) {
+      this.pendingDeliveries.delete(set)
+      delivery.candidates = undefined
+    }
+  }
+  /** Reconcile the assigned count including charged reservations which have not reached GitHub yet. */
+  async balanceScaleSets(
+    lease: ExecutionLease,
+    targets: readonly ScaleTarget[],
+    policy: CapacityPolicy,
+    signal: AbortSignal,
+    drain?: StateCheck,
+  ): Promise<void> {
+    this.releasedSinceScan = undefined
+    const scope = await this.journal.scope(lease, this.scopeKey)
+    const backend = await this.backend(scope.scope, lease)
+    const rows: AllocationRow[] = []
+    let after = ''
+    while (scope.active) {
+      const page = await this.journal.workers(lease, this.scopeKey, after)
+      rows.push(...page.rows)
+      if (!page.after) break
+      after = page.after
+    }
+    // A membership change invalidates the count used to admit the next worker.
+    let activity = scope.activity
+    const snapshot = await this.journal.scope(lease, this.scopeKey)
+    if (activity.version !== snapshot.activity.version || rows.length !== snapshot.active) throw new StateConflict()
+    for (const row of rows) {
+      if (row.value.supply?.scaleSet && drain && row.value.box.phase === 'none' && !row.value.closing) {
+        Object.assign(
+          row,
+          await this.journal.advance(lease, row.record.key, row.record.version, { closing: true }, [drain]),
+        )
+      }
+    }
+    this.setCharges.clear()
+    for (const row of rows) {
+      const set = row.value.supply?.scaleSet
+      if (set && row.value.box.phase !== 'absent') this.setCharges.set(set, this.chargedInSet(set) + 1)
+    }
+    const checks = new Map<number, StateCheck[]>()
+    let admissionFailure: { cause: unknown } | undefined
+    const waitingForAssignment = new Set<string>()
+    const fullyDispatched = new Set<ScaleTarget>()
+    const retire = new Set<string>()
+    for (const row of rows)
+      if (drain && row.value.supply?.scaleSet && row.value.delivery === 'done' && !row.value.closing)
+        retire.add(row.record.key)
+    for (const target of targets) {
+      signal.throwIfAborted()
+      const selection = selectRunnerLabels(target.labels, this.settings.labels)
+      if (!selection) throw new StateCorrupt()
+      const original = rows.filter(
+        (row) =>
+          row.value.supply?.scaleSet === target.id &&
+          !row.value.closing &&
+          row.value.box.phase !== 'absent' &&
+          !this.releasedSinceScan?.has(row.record.key),
+      )
+      // Keep an acquired slot charged while its service assignment is pending.
+      // Count dispatched workers first so a queued reservation cannot start a surplus Box.
+      const undispatched: AllocationRow[] = []
+      const delivery = target.delivery
+      const previous = this.pendingDeliveries.get(target.id)
+      if (previous && previous.delivery !== delivery) this.pendingDeliveries.delete(target.id)
+      for (const row of original) {
+        if (row.value.box.phase === 'none') undispatched.push(row)
+        this.trackSupply(target, row.record.key)
+      }
+      if (!undispatched.length) fullyDispatched.add(target)
+      const ready = this.creationReady(selection.label)
+      const remaining = target.assigned - (delivery.offline ? (delivery.spent ?? 0) : 0)
+      const grants = ready ? Math.max(0, remaining - (original.length - undispatched.length)) : 0
+      for (const row of undispatched.slice(grants)) waitingForAssignment.add(row.record.key)
+      const proof = [...(policy.checks ?? []), target.check]
+      checks.set(target.id, proof)
+      // Withdraw undispatched reservations first. An in-flight Box keeps its immutable identity.
+      const surplus = Math.max(0, original.length - target.assigned - target.held)
+      for (const row of this.surplusCandidates(target.id, original, surplus)) {
+        if (row.value.box.phase === 'none') {
+          const changed = await this.journal.advance(
+            lease,
+            row.record.key,
+            row.record.version,
+            { closing: true },
+            proof,
+          )
+          Object.assign(row, changed)
+        } else if (row.value.delivery === 'done') retire.add(row.record.key)
+      }
+      if (!ready || admissionFailure) continue
+      for (
+        let count = original.length;
+        count < target.assigned && (!delivery.offline || delivery.covered < target.assigned);
+        count++
+      ) {
+        try {
+          await backend.admit(signal)
+        } catch (error) {
+          if (
+            error instanceof LeaseLost ||
+            error instanceof StateCorrupt ||
+            error instanceof StateConflict ||
+            signal.aborted
+          )
+            throw error
+          admissionFailure = { cause: error }
+          break
+        }
+        const row = await this.journal.reserve(
+          lease,
+          this.scopeKey,
+          null,
+          {
+            ...policy,
+            checks: [...proof, { key: activity.key, version: activity.version }],
+          },
+          { labels: target.labels, scaleSet: target.id },
+        )
+        if (!row) break
+        this.trackSupply(target, row.record.key)
+        delivery.waitingForDispatch = true
+        fullyDispatched.delete(target)
+        const next = await this.journal.scope(lease, this.scopeKey)
+        // A concurrent release may have changed the count; a new pass takes a complete snapshot.
+        if (next.active !== rows.length + 1) throw new StateConflict()
+        activity = next.activity
+        rows.push(row)
+        this.setCharges.set(target.id, this.chargedInSet(target.id) + 1)
+        this.event(scope.scope, row, 'ci-worker-reserved', 'info')
+      }
+    }
+    await this.reconcileAll(
+      lease,
+      rows.filter((row) => row.value.supply?.scaleSet),
+      backend,
+      scope.scope,
+      signal,
+      retire,
+      true,
+      (row, retiring) => {
+        const set = row.value.supply?.scaleSet
+        if (waitingForAssignment.has(row.record.key) && !row.value.closing) return undefined
+        if ((row.value.box.phase === 'none' && !row.value.closing) || retiring)
+          return retiring && drain ? [drain] : set ? checks.get(set) : undefined
+        return []
+      },
+      true,
+    )
+    if (admissionFailure) throw admissionFailure.cause
+    // Enqueuing a Box create is not a durable dispatch. A later pass observes the committed creation intent.
+    for (const target of targets) target.delivery.waitingForDispatch = !fullyDispatched.has(target)
+  }
+  private surplusCandidates(set: number, original: AllocationRow[], surplus: number): AllocationRow[] {
+    if (!surplus) return []
+    const declined = this.declinedRetirements.get(set)
+    const pending: AllocationRow[] = []
+    const unused: AllocationRow[] = []
+    const untried: AllocationRow[] = []
+    const retry = new Map<string, AllocationRow>()
+    const now = Date.now()
+    for (let index = original.length - 1; index >= 0; index--) {
+      const row = original[index]
+      const key = row.record.key
+      if (row.value.box.phase === 'none') unused.push(row)
+      else if (row.value.delivery === 'done') {
+        // A queued DELETE or a lost reply still owns one shrink opportunity.
+        if (this.retirementQueued(row) || (row.value.effect?.kind === 'runner-retire' && !declined?.has(key))) {
+          pending.push(row)
+        } else if (!declined?.has(key)) untried.push(row)
+        else if ((this.idleRetryAt.get(key) ?? 0) <= now) retry.set(key, row)
+      }
+    }
+    const selected = [...pending, ...unused, ...untried].slice(0, surplus)
+    if (selected.length < surplus && retry.size && declined) {
+      for (const key of declined) {
+        const row = retry.get(key)
+        if (row) selected.push(row)
+        if (selected.length === surplus) break
+      }
+    }
+    return selected
+  }
+  private forgetDecline(set: number, key: string): void {
+    const declined = this.declinedRetirements.get(set)
+    if (declined?.delete(key) && !declined.size) this.declinedRetirements.delete(set)
+  }
+  creationReady(label: string): boolean {
+    return (this.creationFailures.get(label)?.retryAt ?? 0) <= Date.now()
+  }
+  private creationRejected(label: string): void {
+    const attempts = (this.creationFailures.get(label)?.attempts ?? 0) + 1
+    this.creationFailures.delete(label)
+    this.creationFailures.set(label, {
+      attempts,
+      retryAt: Date.now() + (attempts >= 3 ? 60000 : 1000 * 2 ** (attempts - 1)),
+    })
+    if (this.creationFailures.size > 4096) this.creationFailures.delete(this.creationFailures.keys().next().value!)
   }
   private async reconcileAll(
     lease: ExecutionLease,
@@ -357,12 +422,36 @@ export class WorkerPool {
     backend: PoolBackend,
     scope: ExecutionScope,
     signal?: AbortSignal,
+    retiring: ReadonlySet<string> = new Set(),
+    allowCreate = true,
+    proof?: (row: AllocationRow, retire: boolean) => readonly StateCheck[] | undefined,
+    completePlan = false,
   ): Promise<void> {
+    if (this.execution) {
+      for (let offset = 0; offset < allocations.length; offset++) {
+        const index = (this.executionAfter + offset) % allocations.length
+        const row = allocations[index]
+        if (!allowCreate && row.value.box.phase === 'none' && !row.value.closing) continue
+        const retire = retiring.has(row.record.key)
+        const checks = proof?.(row, retire)
+        if (proof && checks === undefined) continue
+        if (!this.dispatch(lease, row, backend, scope, signal, retire, checks, completePlan)) {
+          this.executionAfter = (index + 1) % allocations.length
+          break
+        }
+        if (offset === allocations.length - 1) this.executionAfter = (index + 1) % allocations.length
+      }
+      return
+    }
     const results = await Promise.allSettled(
       allocations.map(async (row) => {
+        if (!allowCreate && row.value.box.phase === 'none' && !row.value.closing) return
+        const retire = retiring.has(row.record.key)
+        const checks = proof?.(row, retire)
+        if (proof && checks === undefined) return
         await backend.retire?.(row.value.name)
         try {
-          await this.reconcile(lease, row, backend, scope, signal)
+          await this.reconcile(lease, row, backend, scope, signal, retire, checks)
         } finally {
           await backend.retire?.(row.value.name)
         }
@@ -379,6 +468,68 @@ export class WorkerPool {
           errorType: error instanceof Error ? error.constructor.name : 'Unknown',
         })
     }
+    const failed = results.find((result) => result.status === 'rejected')
+    if (failed?.status === 'rejected') throw failed.reason
+  }
+  private retirementQueued(row: AllocationRow): boolean {
+    const revision = this.execution?.queue.revision(row.record.key)
+    if (!revision) return false
+    // Recording the running retirement's intent advances the allocation version.
+    return (
+      revision.startsWith(row.record.version + '/retire/') ||
+      (row.value.effect?.kind === 'runner-retire' && /^[^/]+\/retire\//.test(revision))
+    )
+  }
+  private dispatch(
+    lease: ExecutionLease,
+    planned: AllocationRow,
+    backend: PoolBackend,
+    scope: ExecutionScope,
+    signal?: AbortSignal,
+    retireIdle = false,
+    checks: readonly StateCheck[] = [],
+    replaceRetirement = false,
+  ): boolean {
+    const queue = this.execution!.queue
+    const key = planned.record.key
+    const retirement = planned.record.version + '/retire/'
+    if (!replaceRetirement && !retireIdle && this.retirementQueued(planned)) return true
+    const revision = (retireIdle ? retirement : planned.record.version + '/recover/') + JSON.stringify(checks)
+    const accepted = queue.enqueue(key, revision, async (queueWaitMs) => {
+      signal?.throwIfAborted()
+      const current = await this.journal.allocation(lease, planned.record.key)
+      if (!current) return
+      if (retireIdle && current.record.version !== planned.record.version) return
+      const startedAt = Date.now()
+      const timed = current.value.delivery !== 'done' || current.value.closing || retireIdle
+      let failure: { errorType: string } | undefined
+      if (timed) this.event(scope, current, 'ci-worker-execution-started', 'info', { queueWaitMs })
+      try {
+        await backend.retire?.(current.value.name)
+        const checkRetirement = retireIdle
+          ? () => {
+              if (!queue.isCurrent(key, revision)) throw new StateConflict()
+            }
+          : undefined
+        await this.reconcile(lease, current, backend, scope, signal, retireIdle, checks, checkRetirement)
+      } catch (error) {
+        if (!signal?.aborted) failure = { errorType: error instanceof Error ? error.constructor.name : 'Unknown' }
+        throw error
+      } finally {
+        try {
+          await backend.retire?.(current.value.name)
+        } finally {
+          const latest = await this.journal.allocation(lease, planned.record.key)
+          if (failure) this.event(scope, latest ?? current, 'ci-worker-recovery-deferred', 'warn', failure)
+          if (latest?.record.version !== current.record.version) this.execution!.wake()
+          if (timed)
+            this.event(scope, latest ?? current, 'ci-worker-execution-settled', 'info', {
+              durationMs: Date.now() - startedAt,
+            })
+        }
+      }
+    })
+    return accepted
   }
   private async reconcile(
     lease: ExecutionLease,
@@ -386,30 +537,37 @@ export class WorkerPool {
     backend: PoolBackend,
     scope: ExecutionScope,
     signal?: AbortSignal,
+    retireIdle = false,
+    checks: readonly StateCheck[] = [],
+    checkRetirement?: () => void,
   ): Promise<void> {
     let row = initial
     let selection: ReturnType<typeof selectRunnerLabels> | undefined
-    const select = async () => {
-      if (row.value.supply) {
-        selection = selectRunnerLabels(row.value.supply.labels, this.settings.labels)
-        if (!selection) throw new StateCorrupt()
-        return selection
-      }
-      const original = row.value.job
-      const current = await backend.job(original, signal)
-      if (current.repository !== original.repository || current.run !== original.run || current.job !== original.job)
-        throw new Error('Original job identity changed at creation')
-      selection = jobMatches(current, this.settings.labels)
-        ? selectRunnerLabels(current.labels, this.settings.labels)
-        : null
-      if (!selection) await update({ closing: true })
+    const select = () => {
+      if (!row.value.supply?.scaleSet) throw new StateCorrupt()
+      selection = selectRunnerLabels(row.value.supply.labels, this.settings.labels)
+      if (!selection) throw new StateCorrupt()
       return selection
     }
     const update = async (change: AllocationChange) => {
+      const previous = row.value
       row = await this.journal.advance(lease, row.record.key, row.record.version, change)
+      if (previous.box.phase !== 'known' && row.value.box.phase === 'known')
+        this.event(scope, row, 'ci-worker-box-known', 'info')
+      if (previous.runner.phase !== 'known' && row.value.runner.phase === 'known')
+        this.event(scope, row, 'ci-worker-runner-known', 'info')
+      if (previous.delivery !== 'done' && row.value.delivery === 'done')
+        this.event(scope, row, 'ci-worker-jit-delivered', 'info')
     }
-    const intent = async (kind: EffectKind, change: AllocationChange = {}) =>
-      update({ ...change, effect: { id: randomUUID(), kind } })
+    const intent = async (kind: EffectKind, change: AllocationChange = {}) => {
+      row = await this.journal.advance(
+        lease,
+        row.record.key,
+        row.record.version,
+        { ...change, effect: { id: randomUUID(), kind } },
+        kind === 'box-create' || kind === 'runner-retire' ? checks : [],
+      )
+    }
     const admit = async () => {
       try {
         await backend.admit(signal)
@@ -418,7 +576,10 @@ export class WorkerPool {
         throw error
       }
     }
-    const registry = async <T>(work: (registry: RunnerSession['registry']) => Promise<T>): Promise<T> => {
+    const registry = async <T>(
+      work: (registry: RunnerSession['registry']) => Promise<T>,
+      idleRetirement = false,
+    ): Promise<T> => {
       const session = await backend.runners(
         async (effect) => {
           if (effect.name !== row.value.name) throw new Error('Original CI runner name changed')
@@ -430,12 +591,25 @@ export class WorkerPool {
           } else {
             if (row.value.runner.phase !== 'known' || row.value.runner.id !== effect.id)
               throw new Error('Known original CI runner required for removal')
-            await intent('runner-remove')
+            if (idleRetirement) {
+              checkRetirement?.()
+              if (row.value.effect?.kind !== 'runner-retire') await intent('runner-retire')
+              else {
+                row = await this.journal.advance(
+                  lease,
+                  row.record.key,
+                  row.record.version,
+                  { effect: row.value.effect },
+                  checks,
+                )
+              }
+            } else await intent('runner-remove')
           }
         },
         signal,
         selection?.labels,
         row.value.name,
+        ...(row.value.supply?.scaleSet ? [row.value.supply.scaleSet] : []),
       )
       this.sessions.add(session)
       try {
@@ -449,8 +623,9 @@ export class WorkerPool {
     try {
       if (row.value.box.phase === 'none' && !row.value.closing) {
         await admit()
-        const selected = await select()
+        const selected = select()
         if (selected) {
+          if (row.value.supply?.scaleSet && !this.creationReady(selected.label)) return
           await intent('box-create', { box: { phase: 'requested', id: null } })
           const launch: WorkerLaunch = {
             name: row.value.name,
@@ -463,18 +638,33 @@ export class WorkerPool {
           }
           const created = await backend.workers.create(launch)
           await update({ box: { phase: 'known', id: created.box_id } })
+          if (!row.value.supply?.scaleSet) this.creationFailures.delete(selected.label)
         }
       }
       if (row.value.box.phase === 'requested') {
-        // A positive host ledger lookup may recover an original ID. No absence
-        // response can settle an unknown create, and the POST is never repeated.
-        const observed = await backend.workers.get(row.value.name)
-        await update({ box: { phase: 'known', id: observed.box_id } })
+        let originalId: string
+        try {
+          originalId = (await backend.workers.get(row.value.name)).box_id
+        } catch (error) {
+          const proof = error instanceof ConfirmedWorkerAbsent && error.creation
+          if (!proof || row.value.effect?.kind !== 'box-create' || proof.effect !== row.value.effect.id) throw error
+          originalId = proof.boxId
+        }
+        // Persist the recovered identity before the normal known-Box check can release quota.
+        await update({ box: { phase: 'known', id: originalId } })
       }
     } catch (error) {
       if (!(error instanceof ConfirmedWorkerCreationRejected)) throw error
       await this.journal.rejectCreation(lease, row.record.key, row.record.version, error.rejectedCreationEffect)
-      this.event(scope, row, 'ci-worker-create-rejected', 'warn')
+      this.releaseSupply(row)
+      this.creationRejected(
+        selectRunnerLabels(row.value.supply?.labels ?? selection?.labels ?? this.settings.labels, this.settings.labels)!
+          .label,
+      )
+      this.event(scope, row, 'ci-worker-create-rejected', 'warn', {
+        reason: error.reason,
+        ...(error.platformStatus === undefined ? {} : { platformStatus: error.platformStatus }),
+      })
       return
     }
     let status: string | undefined, exitCode: number | null | undefined
@@ -484,6 +674,29 @@ export class WorkerPool {
         if (observed.box_id !== row.value.box.id) throw new Error('Original CI Box identity changed')
         status = observed.status
         exitCode = observed.exit_code
+        if (
+          status === 'running' &&
+          !row.value.closing &&
+          row.value.runner.phase === 'known' &&
+          row.value.delivery === 'requested' &&
+          row.value.effect?.kind === 'jit-deliver' &&
+          observed.recoverableJit &&
+          backend.workers.recoverJit
+        ) {
+          if (row.value.runner.worked) await update({ delivery: 'done' })
+          else {
+            const result = await backend.workers.recoverJit(row.value.name, row.value.effect.id, signal)
+            if (result === 'replace') {
+              // The host sealed this delivery before the runner could start. Count the shortfall when quota returns.
+              if (row.value.supply?.scaleSet && !this.abandonedJit.has(row.record.key)) {
+                this.abandonedJit.add(row.record.key)
+                this.creationRejected(select().label)
+              }
+              await update({ closing: true })
+            }
+            if (result === 'delivered') await update({ delivery: 'done' })
+          }
+        }
       } catch (error) {
         if (error instanceof Error && (error as Error & { confirmedBoxAbsent?: boolean }).confirmedBoxAbsent === true) {
           const unexpected = !row.value.closing
@@ -492,6 +705,9 @@ export class WorkerPool {
         } else throw error
       }
     }
+    if (row.value.closing && row.value.box.phase === 'none') await update({ box: { phase: 'absent', id: null } })
+    // A committed absence also proves quota was returned if the original write acknowledgement was lost.
+    if (row.value.box.phase === 'absent') this.releaseSupply(row)
     if (row.value.runner.phase === 'requested') {
       const found = await registry((client) => client.lookup({ name: row.value.name }, signal))
       if (found) {
@@ -502,13 +718,74 @@ export class WorkerPool {
     }
     if ((status === 'stopped' || status === 'error') && !row.value.closing) {
       await update({ closing: true })
+      if (row.value.supply?.scaleSet) {
+        const label = selectRunnerLabels(row.value.supply.labels, this.settings.labels)!.label
+        if (row.value.runner.worked) this.creationFailures.delete(label)
+        else this.creationRejected(label)
+      }
       this.event(scope, row, 'ci-worker-exited', status === 'stopped' && exitCode === 0 ? 'info' : 'warn', {
         status,
         ...(exitCode === undefined ? {} : { exitCode }),
       })
     }
+    if (
+      !row.value.closing &&
+      !retireIdle &&
+      row.value.effect?.kind === 'runner-retire' &&
+      row.value.runner.phase === 'known' &&
+      status === 'running' &&
+      (this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now()
+    ) {
+      this.idleRetryAt.set(row.record.key, Date.now() + 60000)
+      const identity = { name: row.value.name, id: row.value.runner.id! }
+      const original = await registry((client) => client.lookup(identity, signal))
+      if (!original) await update({ closing: true, runner: { phase: 'absent', id: identity.id } })
+    }
+    if (!row.value.closing && retireIdle && row.value.runner.phase === 'known' && status === 'running') {
+      if ((this.idleRetryAt.get(row.record.key) ?? 0) <= Date.now()) {
+        this.idleRetryAt.set(row.record.key, Date.now() + 60000)
+        const set = row.value.supply?.scaleSet
+        if (set === undefined) throw new StateCorrupt()
+        const previousEffect = row.value.effect
+        const pendingDelete =
+          previousEffect?.kind === 'runner-retire' && !this.declinedRetirements.get(set)?.has(row.record.key)
+        this.forgetDecline(set, row.record.key)
+        let withdrawn = false
+        const beforeDelete = () => {
+          try {
+            checkRetirement?.()
+          } catch (error) {
+            withdrawn = true
+            throw error
+          }
+        }
+        let retired: boolean | null
+        try {
+          retired = await registry(
+            (client) =>
+              client.retireIdle?.({ id: row.value.runner.id!, name: row.value.name }, signal, beforeDelete) ??
+              Promise.resolve(false),
+            true,
+          )
+        } catch (error) {
+          if (withdrawn && previousEffect?.kind !== 'runner-retire' && row.value.effect?.kind === 'runner-retire')
+            await update({ effect: previousEffect })
+          throw error
+        }
+        if (retired) {
+          if (row.value.effect?.kind !== 'runner-retire') throw new StateCorrupt()
+          await update({ runner: { phase: 'absent', id: row.value.runner.id }, closing: true })
+          this.idleRetryAt.delete(row.record.key)
+        } else if (retired === false || !pendingDelete) {
+          // A REST 404 cannot free an earlier DELETE's slot until membership confirms absence.
+          const declined = this.declinedRetirements.get(set) ?? new Set<string>()
+          declined.add(row.record.key)
+          this.declinedRetirements.set(set, declined)
+        }
+      }
+    }
     if (!row.value.closing && status === 'running' && row.value.runner.phase === 'none') {
-      if (selection === undefined) await select()
+      if (selection === undefined) select()
       if (selection) {
         const registration = await registry((client) => client.create(row.value.name, signal))
         this.jit.set(row.record.key, registration)
@@ -531,7 +808,6 @@ export class WorkerPool {
     }
     if (!row.value.closing) return
     this.jit.delete(row.record.key)
-    if (row.value.box.phase === 'none') await update({ box: { phase: 'absent', id: null } })
     if (row.value.box.phase === 'known') {
       if (status === 'running' || status === 'starting' || status === 'created') {
         await intent('box-stop')
@@ -553,6 +829,8 @@ export class WorkerPool {
     }
     if (row.value.runner.phase === 'absent') {
       await this.journal.release(lease, row.record.key, row.record.version)
+      this.idleRetryAt.delete(row.record.key)
+      if (row.value.supply?.scaleSet !== undefined) this.forgetDecline(row.value.supply.scaleSet, row.record.key)
       this.event(scope, row, 'ci-worker-released', 'info')
     }
   }
@@ -561,7 +839,10 @@ export class WorkerPool {
     row: AllocationRow,
     event: WorkerEvent['event'],
     level: WorkerEvent['level'],
-    details: Pick<WorkerEvent, 'status' | 'exitCode' | 'errorType'> = {},
+    details: Pick<
+      WorkerEvent,
+      'status' | 'exitCode' | 'errorType' | 'queueWaitMs' | 'durationMs' | 'reason' | 'platformStatus'
+    > = {},
   ): void {
     const value = row.value
     this.observe({
@@ -577,7 +858,8 @@ export class WorkerPool {
       name: value.name,
       boxId: value.box.id,
       runnerId: value.runner.id,
-      trigger: { ...value.job },
+      trigger: value.job && { ...value.job },
+      ...(value.supply?.scaleSet ? { scaleSet: value.supply.scaleSet } : {}),
       boxPhase: value.box.phase,
       runnerPhase: value.runner.phase,
       effect: value.effect?.kind ?? null,

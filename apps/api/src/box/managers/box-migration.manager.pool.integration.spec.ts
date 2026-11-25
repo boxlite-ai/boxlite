@@ -9,6 +9,7 @@ import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
+import { JobService } from '../services/job.service'
 import { Job } from '../entities/job.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
@@ -39,6 +40,8 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
   let migrations: Repository<BoxMigration>
   let jobs: Repository<Job>
   let ownsSchema = false
+  let observer: DataSource
+  const notifications: boolean[] = []
 
   beforeAll(async () => {
     dataSource = await new DataSource({
@@ -69,6 +72,7 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
     boxes = dataSource.getRepository(Box)
     migrations = dataSource.getRepository(BoxMigration)
     jobs = dataSource.getRepository(Job)
+    observer = await new DataSource({ ...dataSource.options, entities: [] } as any).initialize()
   })
 
   afterAll(async () => {
@@ -80,6 +84,7 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
         await dataSource.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`)
       }
     } finally {
+      await observer?.destroy()
       await dataSource.destroy()
     }
   })
@@ -117,8 +122,8 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
   /**
    * The manager with real Postgres and stubs that keep the connection behaviour
    * honest: the scheduler stub queries through the same DataSource (as
-   * `RunnerService.getRandomAvailableRunner` does), and the job stub writes
-   * through the entity manager it is handed (as `JobService.createJob` does).
+   * `RunnerService.getRandomAvailableRunner` does), and the real JobService writes
+   * through that transaction. An independent observer checks notification visibility.
    */
   function makeManager(): BoxMigrationManager {
     const runnerService = {
@@ -127,13 +132,16 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
         return { id: targetRunnerId }
       },
     } as any
-    const jobService = {
-      createJob: async (manager: any, type: JobType, runnerId: string, resourceType: any, resourceId: string) => {
-        const job = new Job({ type, runnerId, resourceType, resourceId })
-        await manager.getRepository(Job).insert(job)
-        return job
-      },
-    } as any
+    const jobService = new JobService(
+      jobs,
+      {
+        lpush: async (_queue: string, id: string) => {
+          const [row] = await observer.query('SELECT EXISTS (SELECT 1 FROM job WHERE id=$1) AS visible', [id])
+          notifications.push(row.visible)
+        },
+      } as any,
+      {} as any,
+    )
     const redisLockProvider = {
       lock: async () => true,
       unlock: async () => undefined,
@@ -159,6 +167,7 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
 
       expect(outcome).toBe('completed')
       const job = await jobs.findOneByOrFail({ resourceId: box.id })
+      expect(notifications).toEqual([true])
       expect(job.type).toBe(JobType.IMPORT_BOX)
       expect(job.runnerId).toBe(targetRunnerId)
     },

@@ -100,11 +100,15 @@ pub(crate) struct ServerCapabilities {
     pub privileged_enabled: Option<bool>,
     pub linux_capabilities_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
+    pub checkpoints_enabled: Option<bool>,
+    pub memory_checkpoints_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
     pub import_enabled: Option<bool>,
     pub private_tunnels_enabled: Option<bool>,
     pub exec_user_enabled: Option<bool>,
+    pub volume_read_only_enabled: Option<bool>,
+    pub typed_mounts_enabled: Option<bool>,
 }
 
 // ============================================================================
@@ -142,6 +146,8 @@ pub(crate) struct CreateBoxRequest {
     pub secrets: Option<Vec<CreateBoxSecret>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volumes: Option<Vec<CreateBoxVolumeSpec>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mounts: Option<Vec<CreateBoxMountSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detach: Option<bool>,
     /// A terminal for the main command (`run -t`). Only sent when asked for:
@@ -197,6 +203,17 @@ impl CreateBoxRequest {
                     .collect(),
             )
         };
+        let mounts = if options.mounts.is_empty() {
+            None
+        } else {
+            Some(
+                options
+                    .mounts
+                    .iter()
+                    .map(CreateBoxMountSpec::from)
+                    .collect(),
+            )
+        };
 
         // SecurityOptions is intentionally NOT carried on the wire.
         // Sandbox security is the operator's policy and is set
@@ -224,6 +241,7 @@ impl CreateBoxRequest {
             user: options.user.clone(),
             secrets,
             volumes,
+            mounts,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
             // Guest privilege and capability policy cross the wire. Like `security`,
@@ -267,6 +285,32 @@ pub(crate) struct CreateBoxVolumeSpec {
     pub managed_volume: String,
     pub guest_path: String,
     pub read_only: bool,
+}
+
+/// Typed mount on the wire. Server-side bind paths are never accepted; the
+/// client refuses them before the request instead of sending a server path.
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateBoxMountSpec {
+    #[serde(rename = "type")]
+    pub mount_type: crate::runtime::options::MountType,
+    pub source: String,
+    pub target: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_path: Option<String>,
+}
+
+impl From<&crate::runtime::options::MountSpec> for CreateBoxMountSpec {
+    fn from(mount: &crate::runtime::options::MountSpec) -> Self {
+        Self {
+            mount_type: mount.mount_type,
+            source: mount.source.clone().unwrap_or_default(),
+            target: mount.target.clone(),
+            read_only: mount.read_only,
+            sub_path: mount.sub_path.clone(),
+        }
+    }
 }
 
 impl From<&crate::runtime::options::VolumeSpec> for CreateBoxVolumeSpec {

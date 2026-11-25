@@ -263,7 +263,8 @@ impl Active {
             Ok(Completion::Deferred)
         })?;
         let pending = &mut self.tx;
-        let memory = &self.ctx.memory;
+        let snapshot = vm_memory::GuestAddressSpace::memory(&self.ctx.memory);
+        let memory: &crate::memory::GuestMemoryMmap = &snapshot;
         let limit = self.ctx.queues.max_size(TX).unwrap() as usize;
         self.ctx.queues.drain(TX, |chain| {
             if pending.len() >= limit || chain.clone().any(|descriptor| descriptor.is_write_only())
@@ -271,7 +272,7 @@ impl Active {
                 return Err(bad_queue());
             }
             let head = chain.head_index();
-            let mut reader = Reader::new(memory.as_ref(), chain).map_err(|_| bad_queue())?;
+            let mut reader = Reader::new(memory, chain).map_err(|_| bad_queue())?;
             let packet = Packet::read(&mut reader).map_err(|_| bad_queue())?;
             pending.push_back((head, packet));
             Ok(Completion::Deferred)
@@ -323,7 +324,10 @@ impl Active {
             header.len = count as u32;
             let mut bytes = header.encode().to_vec();
             bytes.extend_from_slice(&packet.payload[..count]);
-            buffer.write(&self.ctx.memory, &bytes)?;
+            buffer.write(
+                &vm_memory::GuestAddressSpace::memory(&self.ctx.memory),
+                &bytes,
+            )?;
             if count == packet.payload.len() {
                 self.backend.outgoing.pop_front();
             } else {

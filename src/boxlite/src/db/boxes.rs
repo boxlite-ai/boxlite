@@ -14,6 +14,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use crate::BaseDiskID;
 use crate::litebox::config::BoxConfig;
 use crate::runtime::id::BoxID;
 use crate::runtime::types::BoxState;
@@ -139,7 +140,7 @@ impl BoxStore {
 
     /// Update box state.
     ///
-    /// Updates both queryable columns and JSON blob.
+    /// Updates queryable columns and JSON while preserving runtime overrides from the row.
     /// Returns error if box doesn't exist (Podman pattern: verify RowsAffected).
     pub fn update_state(&self, box_id: &str, state: &BoxState) -> BoxliteResult<()> {
         let conn = self.db.conn();
@@ -149,7 +150,9 @@ impl BoxStore {
 
         let rows_affected = db_err!(conn.execute(
             "UPDATE box_state SET status = ?1, pid = ?2, \
-             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy')) \
+             json = json_set(?3, \
+                 '$.outbound_policy', json_extract(json, '$.outbound_policy'), \
+                 '$.disk_size_gb', json_extract(json, '$.disk_size_gb')) \
              WHERE id = ?4",
             params![state.status.as_str(), state.pid, json, box_id],
         ))?;
@@ -180,6 +183,21 @@ impl BoxStore {
         Ok(())
     }
 
+    /// Save a completed resize target in box state.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub fn update_disk_size(&self, box_id: &str, disk_size_gb: u64) -> BoxliteResult<()> {
+        let disk_size_gb = i64::try_from(disk_size_gb)
+            .map_err(|_| BoxliteError::InvalidArgument("disk size exceeds SQLite range".into()))?;
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_state SET json = json_set(json, '$.disk_size_gb', ?1) WHERE id = ?2",
+            params![disk_size_gb, box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.to_string()));
+        }
+        Ok(())
+    }
+
     // ========================================================================
     // Combined operations
     // ========================================================================
@@ -189,6 +207,24 @@ impl BoxStore {
     /// Uses a transaction to ensure both inserts succeed or neither does.
     /// Follows Podman pattern of explicit transactions for multi-statement operations.
     pub fn save(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+        self.save_impl(config, state, None)
+    }
+
+    pub(crate) fn save_clone(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: &BaseDiskID,
+    ) -> BoxliteResult<()> {
+        self.save_impl(config, state, Some(base_disk_id))
+    }
+
+    fn save_impl(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: Option<&BaseDiskID>,
+    ) -> BoxliteResult<()> {
         let mut conn = self.db.conn();
         let tx = db_err!(conn.transaction())?;
 
@@ -217,6 +253,14 @@ impl BoxStore {
             params![config.id, state.status.as_str(), state.pid, state_json],
         ))?;
 
+        // A clone and its backing-disk dependency become visible together.
+        if let Some(base_disk_id) = base_disk_id {
+            db_err!(tx.execute(
+                "INSERT INTO base_disk_ref (base_disk_id, box_id) VALUES (?1, ?2)",
+                params![base_disk_id, config.id],
+            ))?;
+        }
+
         // Commit transaction
         db_err!(tx.commit())?;
 
@@ -233,6 +277,22 @@ impl BoxStore {
             (Some(c), Some(s)) => Ok(Some((c, s))),
             _ => Ok(None),
         }
+    }
+
+    /// List every persisted box configuration without requiring a state row.
+    pub fn list_configs(&self) -> BoxliteResult<Vec<BoxConfig>> {
+        let conn = self.db.conn();
+        let mut stmt = db_err!(conn.prepare("SELECT json FROM box_config"))?;
+        let rows = db_err!(stmt.query_map([], |row| row.get::<_, String>(0)))?;
+        let mut configs = Vec::new();
+        for row in rows {
+            let json = db_err!(row)?;
+            let config = serde_json::from_str(&json).map_err(|error| {
+                BoxliteError::Database(format!("Failed to deserialize config: {error}"))
+            })?;
+            configs.push(config);
+        }
+        Ok(configs)
     }
 
     /// List all boxes as (config, state) pairs.
@@ -440,7 +500,7 @@ mod tests {
     const TEST_ID_3: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R3";
 
     #[test]
-    fn network_policy_survives_stale_lifecycle_writes_and_reopen() {
+    fn runtime_overrides_survive_stale_lifecycle_writes_and_reopen() {
         use crate::runtime::options::{NetworkMode, OutboundNetworkConfig};
         let (store, dir) = create_test_db();
         let config = create_test_config(TEST_ID_1);
@@ -451,12 +511,30 @@ mod tests {
             allow_net: vec!["example.com".into()],
         };
         store.update_outbound(TEST_ID_1, &policy).unwrap();
+        store
+            .db
+            .conn()
+            .execute(
+                "UPDATE box_state SET json = json_set(json, '$.disk_size_gb', 20) WHERE id = ?1",
+                [TEST_ID_1],
+            )
+            .unwrap();
         stale.status = BoxStatus::Stopped;
         store.update_state(TEST_ID_1, &stale).unwrap();
         let reopened = BoxStore::new(Database::open(&dir.path().join("test.db")).unwrap());
         let (config, state) = reopened.load(TEST_ID_1).unwrap().unwrap();
         assert_eq!(state.status, BoxStatus::Stopped);
         assert_eq!(state.outbound_policy, Some(policy));
+        let saved_target: Option<i64> = reopened
+            .db
+            .conn()
+            .query_row(
+                "SELECT json_extract(json, '$.disk_size_gb') FROM box_state WHERE id = ?1",
+                [TEST_ID_1],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved_target, Some(20));
         let info = crate::BoxInfo::new(&config, &state);
         assert_eq!(info.network.unwrap().outbound.allow_net, ["example.com"]);
         assert!(

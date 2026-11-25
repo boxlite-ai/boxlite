@@ -29,7 +29,7 @@ import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
+import { chargedNativeTombstone, pendingDeletionTarget } from '../constants/checkpoint-deletion'
 import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxExitCodeService } from './box-exit-code.service'
 import { BoxError } from '../../exceptions/box-error.exception'
@@ -106,6 +106,7 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { SecretServerClient } from './secret-server-client'
 import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
 import {
@@ -131,6 +132,8 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  /** Authenticated creator, supplied by the caller rather than the request DTO. */
+  createdBy?: string
   /** Internal transactional admission/ownership; never accepted from a public DTO. */
   onPersist?: (manager: EntityManager, box: Box) => Promise<void>
 }
@@ -223,6 +226,7 @@ export class BoxService {
     private readonly imagePreparationService: ImagePreparationService,
     private readonly imagePullFailureService: ImagePullFailureService,
     private readonly organizationBoxLimits: OrganizationBoxLimitsService,
+    private readonly secretServerClient: SecretServerClient,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -418,7 +422,6 @@ export class BoxService {
       box.entrypoint = createBoxDto.entrypoint
       box.cmd = createBoxDto.cmd
       box.env = createBoxDto.env || {}
-      box.secrets = createBoxDto.secrets || []
       box.labels = createBoxDto.labels || {}
 
       box.image = image
@@ -456,6 +459,15 @@ export class BoxService {
       }
 
       box.pending = true
+
+      // Complete local validation before transferring values. Only references
+      // may reach insertion, transactional callbacks, or creation events.
+      box.secrets = await this.secretServerClient.storeBoxSecrets(
+        box.id,
+        organization.id,
+        options.createdBy,
+        createBoxDto.secrets || [],
+      )
 
       // No caller-provided name -> assign a fun default (e.g. "cozy-otter"),
       // falling back to "cozy-otter-{boxId}" if it collides with the per-org
@@ -1412,10 +1424,13 @@ export class BoxService {
     const twentyFourHoursAgo = new Date()
     twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24)
 
-    const destroyedBoxs = await this.boxRepository.delete({
-      state: BoxState.DESTROYED,
-      updatedAt: LessThan(twentyFourHoursAgo),
-    })
+    const retained = chargedNativeTombstone(this.configService.get('ci.githubClientId'))
+    const destroyedBoxs = await this.boxRepository
+      .createQueryBuilder()
+      .delete()
+      .where({ state: BoxState.DESTROYED, updatedAt: LessThan(twentyFourHoursAgo) })
+      .andWhere(`NOT ${retained.sql}`, retained.parameters)
+      .execute()
 
     if (destroyedBoxs.affected > 0) {
       this.logger.debug(`Cleaned up ${destroyedBoxs.affected} destroyed boxes`)
@@ -1429,11 +1444,12 @@ export class BoxService {
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
+    const target = pendingDeletionTarget(this.configService.get('ci.githubClientId'))
     const result = await this.boxRepository
       .createQueryBuilder()
       .delete()
       .where({ state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED, updatedAt: LessThan(sevenDaysAgo) })
-      .andWhere(`NOT ${CANCELLED_CHECKPOINT_TARGET_SQL}`)
+      .andWhere(`NOT ${target.sql}`, target.parameters)
       .execute()
 
     if (result.affected > 0) {

@@ -3,17 +3,21 @@
 //! `create` translates the `InstanceSpec` into a `VmConfig`; `enter` builds
 //! the VM and runs it until the guest resets or powers off.
 
-use std::{fs::File, io, path::PathBuf};
+use std::{fs::File, io, path::PathBuf, time::Duration};
 
 use crate::experimental::custom_kernel::KernelFormat;
 use crate::rootfs::guest::Strategy;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
+use crate::vmm::controller::mount_control::Registry;
+use crate::vmm::vmm_socket::{self, ControlError, ControlOp, ControlReply, ControlResponse};
 use crate::vmm::{
     DiskFormat, InstanceSpec, Vmm, VmmConfig, VmmInstance, VmmKind, engine::VmmInstanceImpl,
     guest_args, registry::EngineFactoryRegistration,
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use boxlite_vmm::{DiskConfig, FsConfig, FsShareConfig, NetConfig, Vm, VmConfig, VsockConfig};
+use boxlite_vmm::{
+    DiskConfig, FsConfig, FsShareConfig, NetConfig, Vm, VmConfig, VmControl, VsockConfig,
+};
 
 /// The command line when the box brings no custom one: the virtio console, a
 /// reset on panic and on `reboot`, as the VMM's own boot tests use.
@@ -34,6 +38,8 @@ impl Native {
 struct NativeVmmInstance {
     config: VmConfig,
     console: Option<PathBuf>,
+    /// Where the host reaches this VM's control channel.
+    vmm_socket_path: PathBuf,
 }
 
 impl VmmInstanceImpl for NativeVmmInstance {
@@ -47,10 +53,52 @@ impl VmmInstanceImpl for NativeVmmInstance {
             })?),
             None => Box::new(io::sink()),
         };
+        let mut mounts = self.config.vsock.is_some().then(Registry::default);
         let mut vm = Vm::new(self.config, sink).map_err(map_vmm_error)?;
+        let vm_control = vm.control();
+        if let Err(error) = vmm_socket::serve(&self.vmm_socket_path, move |op, directory| {
+            handle_control_op(&vm_control, mounts.as_mut(), op, directory)
+        }) {
+            tracing::warn!(
+                %error,
+                path = %self.vmm_socket_path.display(),
+                "VMM control socket unavailable"
+            );
+        }
         let exit = vm.run().map_err(map_vmm_error)?;
         tracing::info!(?exit, "native VM ended");
         Ok(())
+    }
+}
+
+/// How long a grow may wait for the block device's worker.
+const GROW_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Serves host requests against this VM and its mount records.
+fn handle_control_op(
+    vm: &VmControl,
+    mounts: Option<&mut Registry>,
+    op: ControlOp,
+    directory: Option<File>,
+) -> ControlResponse {
+    match op {
+        ControlOp::ResizeDisk { block_id, bytes } => vm
+            .resize_disk(&block_id, bytes, GROW_TIMEOUT)
+            .map(ControlReply::DiskSize)
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::InvalidInput | io::ErrorKind::PermissionDenied => {
+                    ControlError::InvalidInput(error.to_string())
+                }
+                _ => ControlError::Failed(error.to_string()),
+            }),
+        op => mounts
+            .ok_or_else(|| ControlError::Unsupported("guest transport is unavailable".into()))?
+            .request(
+                boxlite_shared::constants::mount_tags::AGGREGATE,
+                op,
+                directory,
+            )
+            .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap_or(libc::EIO))),
     }
 }
 
@@ -105,6 +153,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
         .devices()
         .iter()
         .map(|device| DiskConfig {
+            block_id: device.block_id.clone(),
             path: device.disk_path.clone(),
             format: match device.format {
                 DiskFormat::Raw => boxlite_vmm::DiskFormat::Raw,
@@ -120,7 +169,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
         cmdline: build_cmdline(spec, kernel.command_line.as_deref()),
         initramfs: kernel.initramfs.clone(),
         disks,
-        filesystem: (!spec.fs_shares.shares().is_empty()).then(|| FsConfig {
+        filesystem: Some(FsConfig {
             tag: boxlite_shared::constants::mount_tags::AGGREGATE.into(),
             shares: spec
                 .fs_shares
@@ -158,6 +207,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
             }
         }),
         virtio_console: true,
+        hotplug_mib: 0,
     })
 }
 
@@ -207,6 +257,9 @@ pub(crate) fn map_vmm_error(error: boxlite_vmm::Error) -> BoxliteError {
         error,
         Error::InvalidVcpuCount(_)
             | Error::InvalidMemorySize(_)
+            | Error::GuestMemoryAddressLimit { .. }
+            | Error::InvalidHotplugSize(_)
+            | Error::PlanHotplugMemory { .. }
             | Error::InvalidCommandLine(_)
             | Error::InvalidDiskCount(_)
     ) {
@@ -266,9 +319,19 @@ impl Vmm for Native {
             kernel = %vm_config.kernel.display(),
             "native VM configured"
         );
+        let box_dir = config
+            .exit_file
+            .parent()
+            .ok_or_else(|| BoxliteError::Engine("the exit file has no box directory".into()))?;
+        let vmm_socket_path = crate::net::socket_path::BoxSockets::new(
+            config.box_id.clone(),
+            box_dir.join(crate::runtime::layout::dirs::SOCKETS_DIR),
+        )
+        .vmm_sock();
         Ok(VmmInstance::new(Box::new(NativeVmmInstance {
             config: vm_config,
             console: config.console_output,
+            vmm_socket_path,
         })))
     }
 }

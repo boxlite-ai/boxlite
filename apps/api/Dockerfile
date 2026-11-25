@@ -32,6 +32,7 @@ ENV NX_SKIP_NX_CACHE=true
 
 COPY apps/api/ api/
 COPY apps/dashboard/ dashboard/
+COPY apps/shared/ shared/
 
 COPY apps/libs/ci-listener/ libs/ci-listener/
 COPY apps/libs/runner-api-client/ libs/runner-api-client/

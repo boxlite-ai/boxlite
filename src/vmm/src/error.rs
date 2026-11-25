@@ -8,21 +8,67 @@ use std::{error, fmt, io, path::PathBuf};
 /// Result of a VMM operation.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// A failure that ends the VM.
+/// Why a VM control operation was refused or failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlReason {
+    /// The operation is unavailable in the current lifecycle state.
+    InvalidState,
+    /// The operation requires a device-less configuration.
+    UnsupportedDevice,
+    /// The operation did not complete before its deadline.
+    DeadlineTimeout,
+    /// A terminal event interrupted the operation.
+    TerminalOutcome,
+}
+
+impl fmt::Display for ControlReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::InvalidState => "invalid state",
+            Self::UnsupportedDevice => "operation requires a device-less VM",
+            Self::DeadlineTimeout => "vCPU acknowledgements are still incomplete",
+            Self::TerminalOutcome => "the VM is stopping",
+        })
+    }
+}
+
+/// A VMM construction, execution, or control failure.
 ///
 /// The cause chain stays intact through [`error::Error::source`], so callers
 /// can tell a host that cannot run VMs from other failures.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
+    /// A control operation was refused or failed.
+    Control {
+        operation: &'static str,
+        reason: ControlReason,
+    },
     /// The vCPU count is outside `1..=config::MAX_VCPUS`.
     InvalidVcpuCount(u8),
     /// Opening or configuring filesystem exports failed.
     Filesystem(io::Error),
     /// Binding or configuring the host bridges failed.
     Vsock(io::Error),
-    /// The RAM size is outside `1..=memory::MAX_MEMORY_MIB`.
+    /// An invalid RAM size was requested.
     InvalidMemorySize(u32),
+    /// A guest RAM range extends beyond a host or boot address limit.
+    GuestMemoryAddressLimit {
+        memory_mib: u32,
+        end: u64,
+        limit_end: u64,
+        limit: &'static str,
+    },
+    /// The host's guest-memory capabilities are invalid or insufficient.
+    HostMemoryCapability(io::Error),
+    /// A hotplug capacity or target in MiB is not a multiple of 128 MiB, or
+    /// does not fit the configured capacity.
+    InvalidHotplugSize(u32),
+    /// The requested hotplug window does not fit the guest or KVM layout.
+    PlanHotplugMemory {
+        capacity_mib: u32,
+        source: io::Error,
+    },
     /// Allocating the guest RAM failed.
     AllocateMemory { bytes: u64, source: io::Error },
     /// A host hypervisor operation failed.
@@ -31,8 +77,14 @@ pub enum Error {
     InvalidCommandLine(&'static str),
     /// More disks than `config::MAX_DISKS`.
     InvalidDiskCount(usize),
+    /// A disk control ID is empty or duplicated.
+    InvalidDiskId(String),
     /// Opening a disk image failed.
     OpenDisk { path: PathBuf, source: io::Error },
+    /// Creating the channel that grows a disk failed.
+    DiskControl(io::Error),
+    /// The VM already has a memory control endpoint.
+    RegisterMemoryControl(io::Error),
     /// Every virtio-mmio window and interrupt line is taken.
     VirtioSlotsExhausted,
     /// Devices claimed resources the chipset cannot give them.
@@ -65,6 +117,8 @@ pub enum Error {
     CreateBalloon(io::Error),
     /// Starting the thread that writes the guest console failed.
     SpawnConsole(io::Error),
+    /// Starting the thread that raises the CMOS RTC alarm failed.
+    SpawnRtcAlarm(io::Error),
     /// Starting the thread of vCPU `vcpu` failed.
     SpawnVcpu { vcpu: u32, source: io::Error },
     /// vCPU `vcpu` exited in a way this host should never report, such as
@@ -79,10 +133,33 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Control { operation, reason } => write!(f, "{operation}: {reason}"),
             Self::Vsock(_) => f.write_str("failed to configure vsock bridges"),
             Self::Filesystem(_) => f.write_str("failed to configure virtio-fs exports"),
             Self::InvalidVcpuCount(count) => write!(f, "invalid vCPU count: {count}"),
             Self::InvalidMemorySize(mib) => write!(f, "invalid memory size: {mib} MiB"),
+            Self::GuestMemoryAddressLimit {
+                memory_mib,
+                end,
+                limit_end,
+                limit,
+            } => write!(
+                f,
+                "guest RAM request of {memory_mib} MiB ends at GPA {end:#x}, beyond {limit} exclusive limit {limit_end:#x}"
+            ),
+            Self::HostMemoryCapability(source) => {
+                write!(f, "guest memory capability check failed: {source}")
+            }
+            Self::InvalidHotplugSize(mib) => write!(f, "invalid hotplug memory size: {mib} MiB"),
+            Self::PlanHotplugMemory {
+                capacity_mib,
+                source,
+            } => {
+                write!(
+                    f,
+                    "cannot plan {capacity_mib} MiB of hotplug memory: {source}"
+                )
+            }
             Self::AllocateMemory { bytes, .. } => {
                 write!(f, "failed to allocate {bytes} bytes of guest RAM")
             }
@@ -91,6 +168,9 @@ impl fmt::Display for Error {
                 write!(f, "invalid kernel command line: {reason}")
             }
             Self::InvalidDiskCount(count) => write!(f, "too many disks: {count}"),
+            Self::InvalidDiskId(id) => write!(f, "empty or duplicate disk ID: {id:?}"),
+            Self::DiskControl(_) => f.write_str("failed to create a disk grow channel"),
+            Self::RegisterMemoryControl(_) => f.write_str("failed to register memory control"),
             Self::OpenDisk { path, .. } => {
                 write!(f, "failed to open the disk image {}", path.display())
             }
@@ -124,6 +204,7 @@ impl fmt::Display for Error {
             Self::EventLoop(_) => f.write_str("the VM event loop failed"),
             Self::CreateBalloon(_) => f.write_str("failed to create the reporting balloon"),
             Self::SpawnConsole(_) => f.write_str("failed to start the console thread"),
+            Self::SpawnRtcAlarm(_) => f.write_str("failed to start the RTC alarm thread"),
             Self::SpawnVcpu { vcpu, .. } => write!(f, "failed to start vCPU {vcpu}"),
             Self::UnexpectedExit { vcpu, exit } => {
                 write!(f, "vCPU {vcpu} exited unexpectedly: {exit}")
@@ -137,10 +218,14 @@ impl fmt::Display for Error {
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            Self::InvalidVcpuCount(_)
+            Self::Control { .. }
+            | Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
+            | Self::GuestMemoryAddressLimit { .. }
+            | Self::InvalidHotplugSize(_)
             | Self::InvalidCommandLine(_)
             | Self::InvalidDiskCount(_)
+            | Self::InvalidDiskId(_)
             | Self::VirtioSlotsExhausted
             | Self::ChipsetConflicts(_)
             | Self::LineNotArmed(_)
@@ -150,14 +235,19 @@ impl error::Error for Error {
             | Self::AlreadyRan => None,
             Self::Vsock(source)
             | Self::Filesystem(source)
+            | Self::HostMemoryCapability(source)
+            | Self::PlanHotplugMemory { source, .. }
             | Self::AllocateMemory { source, .. }
             | Self::OpenDisk { source, .. }
+            | Self::DiskControl(source)
+            | Self::RegisterMemoryControl(source)
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }
             | Self::WriteBootData { source, .. }
             | Self::SpawnVcpu { source, .. }
             | Self::EventLoop(source)
             | Self::CreateBalloon(source)
+            | Self::SpawnRtcAlarm(source)
             | Self::SpawnConsole(source)
             | Self::VirtioWorker(source) => Some(source),
             Self::Hypervisor(source) => Some(source),

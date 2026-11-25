@@ -77,22 +77,23 @@ codecov: coverage\:lcov
 coverage\:vmm\:kvm: _ensure-kvm
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-hypervisor -p boxlite-vmm --lib --run-ignored only --test-threads=1 \
-		-E 'test(vm::tests::) | test(tests::kvm::)'
+		-E '(package(boxlite-hypervisor) & test(/^kvm::/)) | (package(boxlite-vmm) & (test(/^vm::tests::/) | test(tests::kvm::)))'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 
 # Add the real-kernel boots of VMM_KERNEL to the same profiles, listed the same way.
 # CI runs it only when the vmm path filter matches.
 coverage\:vmm\:boot: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/target/vmm/guest-mount/x86_64-unknown-linux-musl/release/boxlite-guest
-coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) vmm\:guest-mount-init
+coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT) $(VMM_HOTPLUG_INIT) vmm\:guest-mount-init
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info
 
 # Go's reports include every package, including packages with no tests.
-coverage\:go: dev\:go
+coverage\:go:
+	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
 	@mkdir -p target/coverage
 	@rc=0; \
-	(cd sdks/go && go test -tags boxlite_dev -covermode=atomic -coverpkg=./... \
+	(cd sdks/go && go test -a -count=1 -tags boxlite_dev,boxlite_agent_test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-sdk.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	(cd src/deps/libgvproxy-sys/gvproxy-bridge && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/gvproxy.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
@@ -103,6 +104,11 @@ coverage\:go: dev\:go
 	(cd apps/secret-server && GOWORK=off go test -race -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/secret-server.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	exit $$rc
+
+PHONY_TARGETS += coverage\:apps\:secret-server\:integration
+coverage\:apps\:secret-server\:integration:
+	@mkdir -p "$(PROJECT_ROOT)/target/coverage"
+	@cd apps/secret-server && SECRET_TEST_DATABASE_URL="$${SECRET_TEST_DATABASE_URL:-postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite}" GOWORK=off go test -race -count=1 -covermode=atomic -coverpkg=./... -coverprofile="$(PROJECT_ROOT)/target/coverage/secret-server-integration.out" ./internal/database ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM)$$'
 
 # Native archive import/export does not boot a VM, but the production constructor still
 # requires a supported host. The Linux native-binding job enables KVM first.
@@ -170,3 +176,12 @@ coverage\:integration: $(if $(SETUP_DONE),,runtime\:debug)
 	$(MAKE) coverage:report || rc=$$?; \
 	exit $$rc
 	@echo "✅ Combined coverage report: target/coverage/html/index.html"
+
+# Exercise file-copy entry points with a real guest and retain the unit profiles.
+# The serve regression is explicitly ignored by the non-VM unit pass.
+coverage\:copy\:vm: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile vm --retries 0 --status-level pass \
+		-p boxlite --features krun,gvproxy,native --test copy --test copy_ownership
+	@cargo llvm-cov nextest --no-report --no-tests=fail --profile vm --retries 0 --status-level pass \
+		-p boxlite-cli --bin boxlite --run-ignored only -E 'test(upload_duplicate_entries_return_conflict)'
+	@$(MAKE) coverage:report

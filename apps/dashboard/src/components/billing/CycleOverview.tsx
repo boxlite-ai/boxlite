@@ -12,7 +12,9 @@ import { useUsagePricesQuery } from '@/hooks/queries/useUsagePricesQuery'
 import { formatPriceCents } from '@/lib/box-price'
 import { handleApiError } from '@/lib/error-handling'
 import { formatAmount, formatWholeDollars } from '@/lib/utils'
+import { differenceInCalendarDays } from 'date-fns'
 import { toast } from 'sonner'
+import { SubscriptionCancellationAction } from './SubscriptionCancellation'
 
 /**
  * How this organization is being billed right now, and the figures that follow
@@ -76,6 +78,9 @@ export function CycleOverview({
 }) {
   const mode = billingMode(wallet, organizationPlan)
   const scheduled = scheduledChange({ plan: organizationPlan, catalog })
+  const activeTrial =
+    mode.kind === 'plan' && mode.plan.trial?.conversionState === 'not_attempted' ? mode.plan.trial : null
+  const trialDaysLeft = activeTrial ? Math.max(0, differenceInCalendarDays(activeTrial.endsAt, new Date())) : null
 
   return (
     <section>
@@ -101,6 +106,11 @@ export function CycleOverview({
                   {formatWholeDollars(catalogPlan.priceMonthlyCents)}/mo
                 </span>
               )}
+              {activeTrial && (
+                <span className="font-mono text-em text-muted-foreground">
+                  (FREE TRIAL · {trialDaysLeft} {trialDaysLeft === 1 ? 'day' : 'days'} left)
+                </span>
+              )}
               {mode.kind === 'plan' && mode.plan.status.toLowerCase() !== 'active' && (
                 <span className="border border-border px-2 py-0.5 font-sans text-label uppercase tracking-[1px] text-muted-foreground">
                   {mode.plan.status}
@@ -123,6 +133,9 @@ export function CycleOverview({
         {mode.kind !== 'plan' && <UnsubscribedNote mode={mode} plansAnchorId={plansAnchorId} />}
         {scheduled && organizationPlan && (
           <ScheduledChangeNote scheduled={scheduled} organizationId={organizationId} planId={organizationPlan.planId} />
+        )}
+        {organizationPlan && organizationId && (
+          <SubscriptionCancellationAction plan={organizationPlan} organizationId={organizationId} />
         )}
       </Panel>
     </section>
@@ -170,7 +183,7 @@ function ScheduledChangeNote({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-[22px] py-4">
       <PanelNote>{scheduled.text}</PanelNote>
-      {organizationId && (
+      {organizationId && scheduled.keepLabel && (
         <AsciiButton
           disabled={keepPlan.isPending}
           onClick={handleKeep}

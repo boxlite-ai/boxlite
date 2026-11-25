@@ -5,17 +5,31 @@
 
 import { PaymentBrand } from './PaymentBrand'
 import type { PaymentMethod } from '@/billing-api'
-import { AsciiButton, BRAND, Panel, SectionTitle } from '@/components/ascii'
+import { AsciiButton, Panel, SectionTitle } from '@/components/ascii'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { MoreHorizontal, Plus } from '@/components/ui/icon'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { useState } from 'react'
 
 type PaymentMethodsPanelProps = {
   paymentMethods: PaymentMethod[]
   isLoading: boolean
   isError: boolean
-  hasConnectedCard: boolean
-  isActionLoading: boolean
-  onAction: () => void
+  isAddLoading: boolean
+  onAdd: () => void
+  onSetDefault: (paymentMethodId: string) => void
+  onRemove: (paymentMethodId: string) => void
 }
 
 type PaymentMethodDisplay = {
@@ -48,63 +62,54 @@ function paymentMethodDisplay(details: Record<string, unknown>): PaymentMethodDi
   }
 }
 
-function SetupButton({
-  connected,
-  isLoading,
-  onClick,
-}: {
-  connected: boolean
-  isLoading: boolean
-  onClick: () => void
-}) {
+function AddCardButton({ isLoading, onClick }: { isLoading: boolean; onClick: () => void }) {
   return (
-    <AsciiButton
-      variant={connected ? 'secondary' : 'primary'}
-      onClick={onClick}
-      disabled={isLoading}
-      className="inline-flex items-center gap-2 whitespace-nowrap"
-    >
-      {isLoading && <Spinner />} {connected ? 'Update card' : 'Connect'}
+    <AsciiButton variant="primary" className="h-11 shrink-0 sm:h-9" onClick={onClick} disabled={isLoading}>
+      {isLoading ? <Spinner /> : <Plus className="size-3.5" strokeWidth={2.4} />}
+      Add payment method
     </AsciiButton>
   )
 }
 
-/** Displays saved card identities and preserves setup access through loading, empty, and error states. */
+/** Lists saved cards with set-default and remove actions; adding a card stays available in every state. */
 export function PaymentMethodsPanel({
   paymentMethods,
   isLoading,
   isError,
-  hasConnectedCard,
-  isActionLoading,
-  onAction,
+  isAddLoading,
+  onAdd,
+  onSetDefault,
+  onRemove,
 }: PaymentMethodsPanelProps) {
-  const hasPaymentMethods = paymentMethods.length > 0
-  const actionConnected = isError ? hasConnectedCard : hasPaymentMethods
+  const [pendingRemovalId, setPendingRemovalId] = useState<string | null>(null)
+  // Resolved against the current list: a card that became the default or
+  // disappeared while the dialog was open closes it for good.
+  const pendingRemoval = paymentMethods.find((method) => method.id === pendingRemovalId && !method.isDefault) ?? null
+  if (pendingRemovalId && !pendingRemoval) setPendingRemovalId(null)
+  const removalDisplay = pendingRemoval ? paymentMethodDisplay(pendingRemoval.details) : null
+  // The default card leads; the rest keep the API's order (sort is stable).
+  const orderedMethods = [...paymentMethods].sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
 
   return (
     <section>
       <SectionTitle title="Payment Method" />
 
-      {isLoading ? (
-        <Panel className="flex items-center gap-5 px-[22px] py-5">
-          <Skeleton className="h-[52px] w-[82px] shrink-0" />
-          <Skeleton className="h-5 w-full max-w-xs" />
-        </Panel>
-      ) : isError ? (
-        <Panel className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
-          <span className="font-sans text-body text-muted-foreground">Payment methods unavailable</span>
-          <SetupButton connected={actionConnected} isLoading={isActionLoading} onClick={onAction} />
-        </Panel>
-      ) : hasPaymentMethods ? (
-        <Panel>
+      <Panel className="divide-y divide-border">
+        {isLoading ? (
+          <div className="flex items-center gap-5 px-[22px] py-5">
+            <Skeleton className="h-[52px] w-[82px] shrink-0" />
+            <Skeleton className="h-5 w-full max-w-xs" />
+          </div>
+        ) : isError ? (
+          <div className="px-[22px] py-5">
+            <span className="font-sans text-body text-muted-foreground">Payment methods unavailable</span>
+          </div>
+        ) : paymentMethods.length > 0 ? (
           <ul aria-label="Saved payment methods" className="w-full divide-y divide-border">
-            {paymentMethods.map((method, index) => {
+            {orderedMethods.map((method) => {
               const display = paymentMethodDisplay(method.details)
               return (
-                <li
-                  key={method.id}
-                  className="flex flex-col gap-4 px-[22px] py-5 sm:flex-row sm:items-center sm:justify-between"
-                >
+                <li key={method.id} className="flex items-center justify-between gap-4 px-[22px] py-5">
                   <div className="min-w-0">
                     <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-3">
                       <PaymentBrand brand={display.brand} />
@@ -114,33 +119,75 @@ export function PaymentMethodsPanel({
                       {display.expiry && (
                         <span className="font-mono text-meta tabular-nums text-muted-foreground">{display.expiry}</span>
                       )}
-                    </div>
-                    <p className="mt-3 font-sans text-meta text-muted-foreground">
-                      {method.isDefault ? (
-                        <>
-                          <span style={{ color: BRAND }}>▸</span> Used for subscription renewal and top-up charges
-                        </>
-                      ) : (
-                        'Saved payment method'
+                      {method.isDefault && (
+                        <span className="border border-border px-2 py-0.5 font-mono text-meta uppercase tracking-[1px] text-foreground">
+                          Default
+                        </span>
                       )}
-                    </p>
-                  </div>
-                  {index === 0 && (
-                    <div className="shrink-0">
-                      <SetupButton connected isLoading={isActionLoading} onClick={onAction} />
                     </div>
+                    {method.isDefault && (
+                      <p className="mt-3 font-sans text-meta text-muted-foreground">
+                        Your default card is used for subscription renewals and top-ups.
+                      </p>
+                    )}
+                  </div>
+                  {!method.isDefault && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <AsciiButton
+                          variant="quiet"
+                          size="icon"
+                          aria-label={`Actions for ${display.brand} ${display.cardNumber}`}
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </AsciiButton>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem className="cursor-pointer" onSelect={() => onSetDefault(method.id)}>
+                          Set as default
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="cursor-pointer text-red-600 dark:text-red-400"
+                          onSelect={() => setPendingRemovalId(method.id)}
+                        >
+                          Remove
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   )}
                 </li>
               )
             })}
           </ul>
-        </Panel>
-      ) : (
-        <Panel className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
-          <span className="font-sans text-body text-muted-foreground">Payment method not connected</span>
-          <SetupButton connected={false} isLoading={isActionLoading} onClick={onAction} />
-        </Panel>
-      )}
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
+          <div className="min-w-0">
+            {!isLoading && !isError && paymentMethods.length === 0 && (
+              <p className="mb-1 font-sans text-body text-muted-foreground">No cards on file yet.</p>
+            )}
+            <p className="font-sans text-meta text-muted-foreground">
+              Adding a card places a temporary $0.50 verification hold, refunded automatically.
+            </p>
+          </div>
+          <AddCardButton isLoading={isAddLoading} onClick={onAdd} />
+        </div>
+      </Panel>
+
+      <AlertDialog open={!!pendingRemoval} onOpenChange={(open) => !open && setPendingRemovalId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Remove {removalDisplay?.brand} {removalDisplay?.cardNumber}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>The card will no longer be available for charges.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => pendingRemoval && onRemove(pendingRemoval.id)}>Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   )
 }

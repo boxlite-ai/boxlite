@@ -1,64 +1,72 @@
 ---
 name: boxlite-setup
-description: Install a compatible BoxLite CLI and authenticate its developer cloud profile before deployment. Use for first-use BoxLite onboarding, missing CLI installation or expired BoxLite credentials, not an application's end-user login.
+description: Choose and verify BoxLite Cloud OAuth, Cloud API key, or Local mode before operating a Box. Use for onboarding or an explicit mode change, not application end-user login.
 ---
 
-Run this workflow when the user starts BoxLite setup or first asks the bundled **boxlite** skill to build/deploy an app. Continue from the original app request after setup; do not require the user to find a Setup button or invoke another skill manually. Reuse a verified CLI and valid selected profile; installation alone does not start authentication.
+## Choose a mode
 
-## 1. Select a compatible CLI
+Reuse the user's explicit choice, or present these three options before workload operations:
 
-~~~sh
-command -v boxlite
-boxlite --version
-boxlite auth login --help
-boxlite network tunnel --help
-~~~
+| Mode | Connection | Requirements |
+| --- | --- | --- |
+| Cloud OAuth | Host OAuth -> BoxLite MCP | BoxLite account and host authorization |
+| Cloud API key | User key -> the same BoxLite MCP | User-supplied key and private host MCP configuration |
+| Local | Local CLI -> embedded runtime | Shell, compatible CLI, and virtualization; no cloud account |
 
-Expect: a verified official **v0.10.6+** CLI, or the provenance-verified pinned native build in [source-build](references/source-build.md), with device login and tunnels. Published v0.10.5 lacks the hosted device-endpoint fix; the pinned build may report v0.10.5 and is identified by source provenance.
+Both cloud choices use `https://api.boxlite.ai/mcp`, the same tools, and the [cloud workflow](../boxlite/references/cloud.md).
+Local is an independent [runtime workflow](../boxlite/references/local.md); never send its work to the cloud.
+Never change modes, accounts, organizations, or credential sources to recover from a denial.
 
-If no CLI is installed, check the official release version. When a compatible release exists, set CLI_TAG to that published v0.10.6+ tag. Download its official installer into a temporary directory, verify checksum and provenance, then execute it:
+Record the choice privately in the project or session, outside Git and plugin files.
+A cloud record contains `mode` (`cloud-oauth` or `cloud-api`) and the selected host MCP connection name, never tokens.
+Without a writable project, retain the selection in the conversation; OAuth needs no local configuration file.
 
-~~~sh
-INSTALLER_DIR="$(mktemp -d)"
-(
-  set -eu
-  cd "$INSTALLER_DIR"
-  gh release download "$CLI_TAG" --repo boxlite-ai/boxlite --pattern install.sh --pattern install.sh.sha256
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -c install.sh.sha256
-  else
-    shasum -a 256 -c install.sh.sha256
-  fi
-  XDG_CACHE_HOME="$INSTALLER_DIR/cache" gh attestation verify install.sh --repo boxlite-ai/boxlite
-  BOXLITE_VERSION="$CLI_TAG" sh ./install.sh
-)
-"$HOME/.local/bin/boxlite" --version
-~~~
+## Cloud OAuth
 
-Checksum and attestation must both pass before execution. If gh, verification or a compatible release is unavailable, use the pinned source procedure; never bypass verification.
+For first use, have the user complete BoxLite registration in the Dashboard, including email verification and a default organization.
+An existing Dashboard account can sign in even when its MCP token contains no profile claims; direct first-time registration from MCP is not promised.
 
-Expect: a compatible binary under ~/.local/bin. Retain its absolute path when PATH does not persist across tool calls. If no compatible release exists or an installed CLI is incompatible, execute the supported pinned source procedure and continue login. Give the user any administrator/interactive dependency step that requires their participation.
+Use the bundled `boxlite` MCP connection and the host's OAuth UI.
+Let the host open the browser, obtain consent, and store tokens; never implement login or read the host's token store.
 
-Use local CLI help and bundled instructions first. Online docs are only for missing information or current release verification; fetch failure does not block a verified executable or the source procedure.
+If unavailable, report the exact setup step and wait for authorization rather than installing a CLI or requesting an API key.
+Client-registration errors happen before user login: report the issuer/client setup blocker without asking the user to reset a password.
 
-## 2. Authenticate the selected profile
+If the API returns `email_required` or `registration_required`, direct the user to complete Dashboard registration with the same identity, then retry explicitly.
+If no default organization exists, stop and have the user complete organization setup; never choose another account or organization automatically.
 
-Respect the selected home, API and profile. If no profile was specified, inspect `boxlite auth status` and reuse the active profile; choose a named cloud profile only when no existing context applies. Use the CLI global `--home CLI_HOME` selector for a custom BoxLite home; this is not the operating system HOME. Check the reported credential source without displaying its value. In the examples, substitute the selected API/home, or omit a selector only when intentionally using its verified default.
+Discover tools and read their schemas, then call `listBoxes` for the selected organization.
+Check `isError` and the response; an empty authorized list is valid, but discovery or HTTP 401 is not successful login.
+Confirm the intended organization before writes, then resume the original task.
 
-~~~sh
-boxlite --home CLI_HOME --profile PROFILE --url API auth status
-boxlite --home CLI_HOME --profile PROFILE --url API auth whoami
-~~~
+## Cloud API key
 
-Expect: online identity for the intended API. A successful check skips login. Missing credentials or an expired session that cannot refresh: read [login](references/login.md) and start the appropriate device command automatically, using its production mapping only for the matching API/issuer. Present the verification URL/user code and keep polling alive while the user authorizes in the browser.
+Follow [native host setup](references/cloud-auth.md); only authentication differs from OAuth.
+Require the user to supply a key to the host explicitly through their chosen private secret environment.
+Never put credentials in plugin files, argv, chat, screenshots, or application archives.
 
-DNS, TLS, transport, rate-limit or server failures are not proof that credentials expired: report the failing connection and preserve the profile instead of opening another login. Stop on denial/cancellation/expiry; do not retry authorization or change accounts to bypass the result. Browser PKCE and user-controlled API-key alternatives are in the login reference.
+Check that the selected key reference is nonempty without printing its value before discovering or calling tools.
+Refuse a missing or empty key even if OAuth is cached; if the host cannot enforce that separation, report API-key mode unavailable.
+Use only the selected API-key MCP connection, verify identity and organization, then follow the shared cloud workflow.
 
-## 3. Verify routing and continue
+## Local
 
-~~~sh
-boxlite --home CLI_HOME --profile PROFILE --url API auth whoami
-boxlite --home CLI_HOME --profile PROFILE --url API list --format json
-~~~
+Follow [local setup](../boxlite/references/local.md) and verify the runtime on the actual execution host.
+Never request cloud login or call cloud tools; disable the unused cloud connection if the host attempts automatic connection.
+A web-only host cannot provide Local mode: explain the missing capability and preserve the choice.
 
-Expect: online identity and cloud resources using the same connection settings. Keep credentials private; never print the store or request tokens in chat. Return the verified executable/home/profile/API to the original **boxlite** workflow and continue the requested app task. A login-only request ends after these checks. Installation/discovery does not prove login or deployment.
+## File transfer prerequisites
+
+Cloud file transfer needs Python 3.9+ and host shell/filesystem access.
+Claude Code must load the marketplace plugin's registered upload and download tools in the current session.
+
+Use the [file workflow](../boxlite/references/cloud.md#files) to select an existing Codex or Claude MCP connection.
+The selected host owns credentials and sends MCP requests; the helper handles local bytes and host-control messages only.
+
+If no programmatic transport is available for that connection, report file transfer unavailable without changing authentication or asking the model to copy base64.
+
+## Continue the task
+
+Report the selected mode, connection or runtime home, and observed setup check; keep sensitive account details private.
+Resume the original task with the main `boxlite` skill after setup succeeds.
+Installation, discovery, browser consent, and workload execution are separate outcomes.

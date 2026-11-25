@@ -1,16 +1,16 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { http, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 import { BoxState } from '@boxlite-ai/api-client'
 import type { CiSettings } from '@/api/ci-types'
 import { buildBox, MOCK_BOXES, MOCK_PAGINATED_BOXES, MOCK_ORGANIZATION } from './fixtures'
 
-export function ciHandlers() {
+export function ciHandlers(emptyAccount = false) {
   const runners = [
     buildBox({
       id: 'mock-ci-jit-running',
       name: 'ci-jit-a01d14f3b3c843e19cf01accc01e8412',
       state: BoxState.STARTED,
-      image: 'ghcr.io/actions/actions-runner:latest',
+      image: 'ghcr.io/boxlite-ai/boxlite-jitbox:latest',
       cpu: 2,
       memory: 2,
     }),
@@ -18,7 +18,7 @@ export function ciHandlers() {
       id: 'mock-ci-jit-stopped',
       name: 'ci-jit-ef319e6cc54f479098aaea43d8e09315',
       state: BoxState.STOPPED,
-      image: 'ghcr.io/actions/actions-runner:latest',
+      image: 'ghcr.io/boxlite-ai/boxlite-jitbox:latest',
       cpu: 2,
       memory: 2,
     }),
@@ -57,22 +57,36 @@ export function ciHandlers() {
     (import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true' &&
       ['demo-acme', 'demo-research'].includes(String(organizationId)))
   const missing = () => new HttpResponse(null, { status: 404 })
-  const preview = () => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview')
+  // Mock-only, per-tab scenario so following setup links does not restore demo connections.
+  const preview = () => {
+    if (typeof window === 'undefined') return null
+    const requested = new URLSearchParams(window.location.search).get('preview')
+    if (requested?.startsWith('ci-')) sessionStorage.setItem('ci-preview', requested)
+    return requested ?? sessionStorage.getItem('ci-preview')
+  }
   const emptyPreview = () =>
-    globalThis.localStorage?.getItem('desktop-review-empty') === '1' || preview() === 'ci-empty'
+    emptyAccount || globalThis.localStorage?.getItem('desktop-review-empty') === '1' || preview() === 'ci-empty'
   return [
-    http.get(`${base}/settings`, ({ params }) =>
-      own(params.organizationId)
-        ? HttpResponse.json({ ...settings, connections: emptyPreview() ? [] : settings.connections })
-        : missing(),
-    ),
+    http.get(`${base}/settings`, async ({ params }) => {
+      if (!own(params.organizationId)) return missing()
+      if (preview() === 'ci-unknown')
+        return HttpResponse.json({ message: 'Preview: connection service unavailable' }, { status: 503 })
+      if (preview() === 'ci-loading') await delay(8000)
+      return HttpResponse.json({
+        ...settings,
+        connections: emptyPreview() || preview() === 'ci-disconnected' ? [] : settings.connections,
+      })
+    }),
     http.get(`${base}/runners`, ({ params, request }) => {
       if (!own(params.organizationId)) return missing()
       const query = new URL(request.url).searchParams
       const page = Math.max(1, Number(query.get('page')) || 1),
         limit = Math.min(200, Math.max(1, Number(query.get('limit')) || 25))
       const name = (query.get('name') ?? '').trim().toLowerCase()
-      const visible = emptyPreview() ? [] : runners
+      const visible =
+        emptyPreview() || ['ci-disconnected', 'ci-connected', 'ci-unknown', 'ci-loading'].includes(String(preview()))
+          ? []
+          : runners
       const filtered = visible.filter((runner) => runner.name.toLowerCase().includes(name))
       return HttpResponse.json({
         items: filtered.slice((page - 1) * limit, page * limit),

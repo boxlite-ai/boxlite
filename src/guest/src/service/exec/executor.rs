@@ -4,10 +4,12 @@
 //! - GuestExecutor: runs commands directly on guest
 
 use crate::container::{CommandRejection, Container, SpawnFailure};
-use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
+use crate::service::exec::exec_handle::{ExecHandle, ExitStatus, PtyConfig};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use boxlite_shared::ExecRequest;
+use futures::TryStreamExt as _;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 /// Executes commands inside OCI container.
@@ -109,6 +111,12 @@ impl ContainerExecutor {
 /// Executes commands directly on guest (no container).
 pub struct GuestExecutor;
 
+pub(in crate::service) struct GuestCommandOutput {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
 impl GuestExecutor {
     /// Spawn directly in the guest.
     ///
@@ -124,6 +132,40 @@ impl GuestExecutor {
         } else {
             spawn_with_pipes(req)
         }
+    }
+
+    /// Run an internal tool while the guest reaper owns its exit status.
+    pub(in crate::service) async fn run_command(
+        &self,
+        program: String,
+        args: Vec<String>,
+    ) -> BoxliteResult<GuestCommandOutput> {
+        let reaper = crate::reaper::REAPER
+            .get()
+            .expect("reaper installed at startup");
+        let spawned_at = Instant::now();
+        let mut child = self
+            .spawn_attempt(&ExecRequest {
+                program,
+                args,
+                ..Default::default()
+            })
+            .await
+            .map_err(SpawnFailure::into_error)?;
+        let exit = reaper.register(child.pid(), spawned_at).await;
+        child.close_stdin();
+        let stdout = child.stdout().expect("guest tool has a stdout pipe");
+        let stderr = child.stderr().expect("guest tool has a stderr pipe");
+
+        // Join all three even on a read error so the caller keeps ownership until exit.
+        let (status, stdout, stderr) =
+            tokio::join!(exit.get(), stdout.try_concat(), stderr.try_concat());
+        reaper.release_slot(&exit);
+        Ok(GuestCommandOutput {
+            status,
+            stdout: stdout?,
+            stderr: stderr?,
+        })
     }
 }
 
@@ -193,7 +235,8 @@ fn working_directory_is_searchable(path: &str) -> bool {
 
 /// Spawn process with pipes (standard mode).
 fn spawn_with_pipes(req: &ExecRequest) -> Result<ExecHandle, SpawnFailure> {
-    use nix::unistd::Pid;
+    use nix::fcntl::OFlag;
+    use nix::unistd::{pipe2, Pid};
     use std::os::unix::io::{FromRawFd, IntoRawFd};
     use std::process::Command;
 
@@ -209,11 +252,11 @@ fn spawn_with_pipes(req: &ExecRequest) -> Result<ExecHandle, SpawnFailure> {
     }
 
     // Create pipes for stdin/stdout/stderr
-    let (stdin_read, stdin_write) = nix::unistd::pipe()
+    let (stdin_read, stdin_write) = pipe2(OFlag::O_CLOEXEC)
         .map_err(|e| BoxliteError::Internal(format!("Failed to create stdin pipe: {}", e)))?;
-    let (stdout_read, stdout_write) = nix::unistd::pipe()
+    let (stdout_read, stdout_write) = pipe2(OFlag::O_CLOEXEC)
         .map_err(|e| BoxliteError::Internal(format!("Failed to create stdout pipe: {}", e)))?;
-    let (stderr_read, stderr_write) = nix::unistd::pipe()
+    let (stderr_read, stderr_write) = pipe2(OFlag::O_CLOEXEC)
         .map_err(|e| BoxliteError::Internal(format!("Failed to create stderr pipe: {}", e)))?;
 
     // Configure command to use our pipes.

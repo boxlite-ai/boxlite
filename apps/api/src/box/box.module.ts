@@ -5,9 +5,12 @@
  */
 
 import { Module } from '@nestjs/common'
+import { SecretCredentialService } from './services/secret-credential.service'
+import { SecretCredentialController } from './controllers/secret-credential.controller'
 import { DataSource } from 'typeorm'
 import { BoxController } from './controllers/box.controller'
 import { BoxService } from './services/box.service'
+import { SecretServerClient } from './services/secret-server-client'
 import { BoxExitCodeService } from './services/box-exit-code.service'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { Box } from './entities/box.entity'
@@ -24,6 +27,7 @@ import { WarmPool } from './entities/warm-pool.entity'
 import { PreviewController } from './controllers/preview.controller'
 import { VolumeController } from './controllers/volume.controller'
 import { VolumeService } from './services/volume.service'
+import { FilestoreInstanceResolver } from './services/filestore-instance.resolver'
 import { VolumeManager } from './managers/volume.manager'
 import { Volume } from './entities/volume.entity'
 import { VolumeSubscriber } from './subscribers/volume.subscriber'
@@ -109,6 +113,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     ]),
   ],
   controllers: [
+    SecretCredentialController,
     BoxController,
     RunnerController,
     PreviewController,
@@ -118,6 +123,8 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     CustomDomainMaintenanceController,
   ],
   providers: [
+    SecretCredentialService,
+    SecretServerClient,
     CheckpointService,
     CheckpointArchiveStore,
     CheckpointRecoverService,
@@ -129,6 +136,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     BoxLookupCacheInvalidationService,
     RedisLockProvider,
     VolumeService,
+    FilestoreInstanceResolver,
     VolumeManager,
     VolumeSubscriber,
     RunnerSubscriber,

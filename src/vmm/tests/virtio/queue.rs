@@ -76,7 +76,7 @@ fn prepared(
         &[SIZE],
         event_idx,
         indirect,
-        Arc::clone(memory),
+        Arc::clone(memory).into(),
     )
     .unwrap()
 }
@@ -157,7 +157,7 @@ fn prepare_accepts_a_dense_ready_queue() {
         &[SIZE],
         true,
         false,
-        Arc::clone(&memory),
+        Arc::clone(&memory).into(),
     )
     .unwrap();
     let state = queues.state(0).expect("queue 0 exists");
@@ -177,7 +177,7 @@ fn prepare_requires_one_queue_per_slot() {
             &[SIZE, SIZE],
             false,
             false,
-            Arc::clone(&memory)
+            Arc::clone(&memory).into()
         )
         .err(),
         Some(QueueError::Count {
@@ -196,7 +196,7 @@ fn prepare_checks_each_slot_max_size() {
             &[SIZE],
             false,
             false,
-            Arc::clone(&memory)
+            Arc::clone(&memory).into()
         )
         .err(),
         Some(QueueError::MaxSize {
@@ -214,7 +214,7 @@ fn prepare_keeps_unready_queues_but_applies_event_idx() {
         &[SIZE],
         true,
         false,
-        Arc::clone(&memory),
+        Arc::clone(&memory).into(),
     )
     .unwrap();
     assert!(!queues.is_ready(0));
@@ -227,7 +227,14 @@ fn prepare_rejects_a_zero_avail_ring() {
     let mut queue = ready_queue();
     queue.try_set_avail_ring_address(GuestAddress(0)).unwrap();
     assert_eq!(
-        VirtQueues::prepare(vec![queue], &[SIZE], false, false, Arc::clone(&memory)).err(),
+        VirtQueues::prepare(
+            vec![queue],
+            &[SIZE],
+            false,
+            false,
+            Arc::clone(&memory).into()
+        )
+        .err(),
         Some(QueueError::Invalid)
     );
 }
@@ -240,7 +247,14 @@ fn prepare_rejects_rings_outside_memory() {
         .try_set_used_ring_address(GuestAddress(0x1_0000))
         .unwrap();
     assert_eq!(
-        VirtQueues::prepare(vec![queue], &[SIZE], false, false, Arc::clone(&memory)).err(),
+        VirtQueues::prepare(
+            vec![queue],
+            &[SIZE],
+            false,
+            false,
+            Arc::clone(&memory).into()
+        )
+        .err(),
         Some(QueueError::Memory)
     );
 }
@@ -252,8 +266,14 @@ fn prepare_reapplies_event_idx_after_reset() {
     queue.set_event_idx(true);
     queue.reset();
     assert!(!queue.event_idx_enabled());
-    let queues =
-        VirtQueues::prepare(vec![queue], &[SIZE], true, false, Arc::clone(&memory)).unwrap();
+    let queues = VirtQueues::prepare(
+        vec![queue],
+        &[SIZE],
+        true,
+        false,
+        Arc::clone(&memory).into(),
+    )
+    .unwrap();
     assert!(queues.state(0).unwrap().event_idx_enabled);
 }
 
@@ -646,7 +666,7 @@ fn complete_rejects_a_completion_on_the_wrong_queue() {
         &[SIZE, SIZE],
         false,
         false,
-        Arc::clone(&memory),
+        Arc::clone(&memory).into(),
     )
     .unwrap();
     write_desc(&memory, 0, DATA, 4, 0, 0);
@@ -707,7 +727,7 @@ fn dense_multi_queue_indices_are_preserved() {
         &[SIZE, SIZE],
         false,
         false,
-        Arc::clone(&memory),
+        Arc::clone(&memory).into(),
     )
     .unwrap();
     assert_eq!(queues.len(), 2);
@@ -745,7 +765,7 @@ fn drain_and_complete_reject_a_not_ready_queue() {
         &[SIZE],
         false,
         false,
-        Arc::clone(&memory),
+        Arc::clone(&memory).into(),
     )
     .unwrap();
     assert_eq!(
@@ -790,11 +810,11 @@ fn restore_reports_snapshots_unsupported() {
         .state(0)
         .unwrap();
     assert_eq!(
-        VirtQueues::restore(&[state], &[SIZE], false, false, Arc::clone(&memory)).err(),
+        VirtQueues::restore(&[state], &[SIZE], false, false, Arc::clone(&memory).into()).err(),
         Some(SnapshotError::Unsupported)
     );
     assert_eq!(
-        VirtQueues::restore(&[], &[SIZE], false, false, Arc::clone(&memory)).err(),
+        VirtQueues::restore(&[], &[SIZE], false, false, Arc::clone(&memory).into()).err(),
         Some(SnapshotError::Unsupported)
     );
 }
@@ -824,7 +844,7 @@ fn control_ranges_use_actual_sizes_include_events_and_skip_unready_slots() {
         &[SIZE; 3],
         false,
         false,
-        Arc::clone(&memory),
+        Arc::clone(&memory).into(),
     )
     .unwrap();
     assert_eq!(
@@ -838,4 +858,72 @@ fn control_ranges_use_actual_sizes_include_events_and_skip_unready_slots() {
             (GuestAddress(USED2), 6 + 8 * 4),
         ]
     );
+}
+
+/// Guest address of a region published only after the queues were prepared.
+const HOTPLUG: u64 = 0x10_0000;
+
+fn hotplug_region() -> Arc<vm_memory::GuestRegionMmap> {
+    Arc::new(vm_memory::GuestRegionMmap::from_range(GuestAddress(HOTPLUG), 0x1000, None).unwrap())
+}
+
+/// Drains one chain whose single descriptor reads four bytes at `HOTPLUG`,
+/// and returns the callback's read result.
+fn drain_hotplug_read(
+    queues: &mut VirtQueues,
+    memory: &GuestMemoryMmap,
+) -> Result<Result<[u8; 4], ()>, DeviceError> {
+    write_desc(memory, 0, HOTPLUG, 4, 0, 0);
+    add_chain(memory, 0);
+    let mut read = Err(());
+    queues
+        .drain(0, |chain| {
+            let mut bytes = [0; 4];
+            read = chain
+                .memory()
+                .read_slice(&mut bytes, GuestAddress(HOTPLUG))
+                .map(|()| bytes)
+                .map_err(|_| ());
+            match read {
+                Ok(_) => Ok(Completion::Used(0)),
+                Err(()) => Err(DeviceError::NeedsReset("unmapped descriptor")),
+            }
+        })
+        .map(|_| read)
+}
+
+#[test]
+fn drain_sees_a_region_published_after_prepare() {
+    let base = memory();
+    let view = crate::memory::GuestMemoryView::from(Arc::clone(&base));
+    let mut queues =
+        VirtQueues::prepare(vec![ready_queue()], &[SIZE], false, false, view.clone()).unwrap();
+
+    let grown = Arc::new(base.insert_region(hotplug_region()).unwrap());
+    grown.write_slice(b"plug", GuestAddress(HOTPLUG)).unwrap();
+    view.lock().unwrap().replace(GuestMemoryMmap::clone(&grown));
+
+    assert_eq!(
+        drain_hotplug_read(&mut queues, &base).unwrap(),
+        Ok(*b"plug")
+    );
+    assert_eq!(used_idx(&base), 1);
+}
+
+#[test]
+fn drain_rejects_a_region_removed_after_prepare() {
+    let base = memory();
+    let grown = Arc::new(base.insert_region(hotplug_region()).unwrap());
+    let view = crate::memory::GuestMemoryView::from(Arc::clone(&grown));
+    let mut queues =
+        VirtQueues::prepare(vec![ready_queue()], &[SIZE], false, false, view.clone()).unwrap();
+
+    let (shrunk, _removed) = grown.remove_region(GuestAddress(HOTPLUG), 0x1000).unwrap();
+    view.lock().unwrap().replace(shrunk);
+
+    assert_eq!(
+        drain_hotplug_read(&mut queues, &base),
+        Err(DeviceError::NeedsReset("unmapped descriptor"))
+    );
+    assert_eq!(used_idx(&base), 0);
 }

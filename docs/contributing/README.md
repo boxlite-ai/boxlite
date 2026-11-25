@@ -29,13 +29,24 @@ How to build, test, and change the code.
 - [CLI development](development/cli.md): building, testing, and extending the `boxlite` CLI.
 - [E2E local CI runbook](development/e2e-local.md): the self-hosted runner behind `e2e-local.yml`.
 - [REST API testing](development/rest-api-testing.md): API-key and OIDC coverage across the SDK, CLI, API, runner, and VM.
+- [Local volume testing](development/local-volume-testing.md): unit, guest, real-VM, and Python compatibility checks for local managed volumes.
 - [macOS sandbox debugging](development/macos-sandbox-debugging.md): find and fix Seatbelt denials.
 
 ## Investigations
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-23 · [Memory and VMState checkpoint API](investigations/2026-11-23-checkpoint-memory-vmstate-api.md): Defines full checkpoint options, capability checks, and the implementation order across the runtime, REST API, CLI, and SDKs.
+- 2026-11-23 · [Create Box subscription value](investigations/2026-11-23-create-box-subscription-value.md): catalog-derived subscription savings beside the PAYG estimate, billing-state rules, and draft-preserving plan access.
+
+- 2026-11-19 · [Trial discovery in Welcome](investigations/2026-11-19-trial-discovery-preview.md): frontend onboarding study, mock boundaries, direct completion and full walkthrough screenshots.
+
+- 2026-11-13 · [Runner data-disk performance scaling](investigations/2026-11-13-runner-data-disk-performance-scaling.md): expansion raises provisioned IOPS/throughput proportionally, clipped to the per-disk ceiling; capacity never waits for performance.
+- 2026-11-13 · [Filestore lookup prerequisites](investigations/2026-11-13-filestore-lookup-prerequisites.md): automatic Filestore IAM and API prerequisites, cross-project configuration, and diagnostic error preservation.
+- 2026-11-13 · [Filestore instance discovery](investigations/2026-11-13-filestore-instance-discovery.md): API-resolved NFS targets, explicit backend selection, and deterministic instance assignment.
 - 2026-11-11 · [CI resource labels](investigations/2026-11-11-ci-resource-labels.md): job-selected Box resources, quota enforcement and original-operation recovery.
+
+- 2026-11-10 · [One-shot Python stdin](investigations/2026-11-10-python-one-shot-stdin-eof.md): input ownership, EOF delivery, and streaming controls.
 - 2026-11-10 · [Desktop left navigation](investigations/2026-11-10-desktop-left-navigation.md): sidebar layout, hover preview and navigation behavior.
 - 2026-11-10 · [Desktop visual refinement](investigations/2026-11-10-desktop-visual-refinement.md): resource view consistency and desktop review findings.
 - 2026-11-09 · [Desktop dashboard consistency](investigations/2026-11-09-desktop-review-corrections.md): shared resource presentation, compact usage summaries and desktop screenshot evidence.

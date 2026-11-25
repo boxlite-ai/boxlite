@@ -3,7 +3,7 @@
 
 //! BoxLite's native VMM. [`Vm::new`] validates a [`VmConfig`], creates the
 //! host VM, registers guest RAM and loads the kernel; [`Vm::run`] runs every
-//! vCPU until the guest powers off or resets, or a [`StopHandle`] stops it.
+//! vCPU until the guest powers off or resets, or a [`VmControl`] stops it.
 //!
 //! The VMM owns the guest machine and delegates host operations to
 //! `boxlite-hypervisor`. BoxLite runtime integration belongs in its engine adapter.
@@ -27,6 +27,7 @@ mod bus;
 )]
 mod chipset;
 mod config;
+mod control;
 #[cfg(target_arch = "x86_64")]
 mod cpu_features;
 #[cfg_attr(
@@ -44,13 +45,16 @@ mod error;
 )]
 mod events;
 #[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Only tests use part of this API, and only Linux x86_64 adds devices yet."
-    )
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only the Linux x86_64 Vm::new adds devices yet.")
+)]
+mod hotplug;
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only Linux x86_64 adds devices yet.")
 )]
 mod irq;
+pub(crate) mod lifecycle;
 mod memory;
 #[cfg(target_arch = "x86_64")]
 mod vcpu;
@@ -70,13 +74,23 @@ mod virtio;
     )
 )]
 mod vm;
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only Linux x86_64 boots guests yet.")
+)]
+mod x86_boot_layout;
 
 pub use chipset::{BusKind, Conflict};
 pub use config::{
     DiskConfig, DiskFormat, FsConfig, FsShareConfig, NetConfig, VmConfig, VsockConfig,
 };
-pub use error::{Error, Result};
+pub use control::VmControl;
+pub use devices::mem::MemoryStatus;
+pub use error::{ControlReason, Error, Result};
+pub use lifecycle::VmStatus;
 pub use memory::ReclaimPolicy;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use virtio::fs::{AggregateFs, Share, insert_aggregate, lookup_aggregate};
 pub use vm::{StopHandle, Vm, VmExit};
 
 /// A recording hypervisor backend shared by the crate's unit tests. Test

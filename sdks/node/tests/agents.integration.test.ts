@@ -7,20 +7,18 @@ import { getNativeModule } from "../lib/native.js";
 import { SimpleBox } from "../lib/simplebox.js";
 
 describe("agent namespace", () => {
-  test("namespace calls reject without creating a Box", async () => {
-    const create = vi.fn();
+  test("SimpleBox lazily creates a Box when an agent is requested", async () => {
+    const get = vi.fn().mockRejectedValue(new Error("core lookup failed"));
+    const create = vi.fn().mockResolvedValue({ agents: { get } });
     const box = new SimpleBox({
       image: "alpine:latest",
       runtime: { create } as never,
     });
     const agents: Agents = box.agents;
-    await expect(
-      agents.create("agent", { config: { model: "model" } }),
-    ).rejects.toThrow("agents.create is not implemented");
-    await expect(agents.get("agent")).rejects.toThrow(
-      "agents.get is not implemented",
-    );
     expect(create).not.toHaveBeenCalled();
+    await expect(agents.get("agent")).rejects.toThrow("core lookup failed");
+    expect(create).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledWith("agent");
   });
 
   test("native Box exposes a namespace without sending agent requests", async () => {
@@ -59,12 +57,6 @@ describe("agent namespace", () => {
       expect(box).not.toBeNull();
       const agents = box!.agents;
       expect(agents).toBeInstanceOf(getNativeModule().Agents);
-      await expect(agents.create("agent")).rejects.toThrow(
-        "agents.create is not implemented",
-      );
-      await expect(agents.get("agent")).rejects.toThrow(
-        "agents.get is not implemented",
-      );
       expect(requests).toEqual(["GET /v1/boxes/agent-box"]);
     } finally {
       runtime.close();

@@ -22,7 +22,8 @@ machine layout and device emulation belong to `boxlite-vmm`.
 | `error` | `Error`: the failed operation, its resource, and the host cause |
 | `arm64` | `Arm64Vcpu`, `Arm64BootRegisters` and `CpuOnResult`: the arm64 boot registers and the VMM's answer to `CPU_ON` |
 | `hvf` | macOS arm64: the VM and its in-kernel GICv3, memory, vCPU execution and kicks, with `syndrome` decoding exceptions and emulating trapped system registers, and `psci` serving PSCI 0.2 |
-| `kvm` | x86_64 VM creation, memory slots, registers, CPUID/MSRs, execution, kicks and pending-I/O completion; arm64 follows |
+| `x86` | Boot configuration and Linux x86_64 VM/vCPU state images with Serde encoding |
+| `kvm` | x86_64 VM creation, memory slots, registers, CPUID/MSRs, execution, kicks, pending-I/O completion and paused-state transfer; arm64 follows |
 | `whp` / `whp::emulator` | WHP operations and x86 instruction decoding for memory-access exits (reserved for M10) |
 
 Three boundaries decide placement when a case is ambiguous: KVM memory-slot
@@ -67,11 +68,69 @@ MSRs are explicit index/value writes. A short KVM write is an error identifying
 the first rejected MSR, never a successful partially configured CPU. Host feature
 discovery is a ceiling, not permission to add unsupported instructions.
 
-These three methods form the x86_64 extension traits `X86Vm`
+These boot methods form the x86_64 extension traits `X86Vm`
 (`supported_cpuid`) and `X86Vcpu` (`set_cpu_features`, `set_boot_registers`),
 which `KvmVm` and `KvmVcpu` implement, so the VMM's vCPU workers and its mock
 backend use one interface. On arm64, `Arm64Vcpu` sets MPIDR_EL1 (`set_mpidr`) and
 the entry PC, X0 and PSTATE (`set_boot_registers`).
+
+## Linux x86_64 paused state
+
+`X86Vm::save_state` and `X86Vcpu::save_state` capture owned images on Linux
+x86_64 KVM. Restore requires the same host and KVM environment, with compatible
+guest CPU policy and VM configuration. The images have a non-stable ABI and
+implement Serde for Postcard encoding. The VMM owns RAM, devices, machine-state
+assembly, and persistence.
+
+| Image | Captured state |
+| --- | --- |
+| `X86VmState` | PIC master and slave, IOAPIC, PIT, and KVM clock |
+| `X86VcpuState` | General and special registers, FPU, CPUID, filtered MSRs, host-sized XSAVE, XCRs, debug registers, events, MP state, LAPIC, and TSC frequency |
+
+### Save
+
+Stop all vCPUs and IRQ producers, then call `Vcpu::complete_pending_io` on each
+vCPU's owning thread. Begin the round with `X86Vm::save_state`, then call
+`X86Vcpu::save_state` once per vCPU on its owning thread. A failed vCPU save can
+be retried in the same round. Finish all vCPU saves before starting another
+round. KVM timers can advance during capture, and PIT restore can lose
+sub-tick timing.
+
+### Restore
+
+Restore into an identically configured VM with fresh, never-entered vCPUs.
+
+1. Register restored guest RAM with `Vm::map_memory`.
+2. Call `X86Vm::restore_before_vcpus` to set the guest clock in nanoseconds.
+   KVM receives `flags: 0` for kernel compatibility and to exclude snapshot downtime.
+3. Create the vCPUs and call `X86Vcpu::restore_state` on each owning thread.
+   The restored clock anchors the pvclock epoch that KVM writes into guest RAM.
+4. Call `X86Vm::restore_after_vcpus` after all vCPUs are restored. It validates
+   IRQ chip IDs, restores the chips, then restores the PIT if present.
+5. Call `Vcpu::notify_guest_stopped` on each owning thread before `Vcpu::run`.
+   It succeeds even if KVM pvclock is inactive.
+
+A vCPU restore preflight error permits a retry on the same vCPU. Any failure
+from the `KVM_SET_CPUID2` attempt onward requires discarding the destination VM.
+VM snapshot operations return `Error::VmState` on failure, and vCPU snapshot
+operations return `Error::ConfigureVcpu`. Both preserve the underlying `io::Error`,
+including its kind and any ioctl errno.
+
+### Scope
+
+Nested virtualization, Hyper-V SynIC, MCE bank setup, guest-debug configuration,
+IRQ routing, and device or irqfd configuration are outside the snapshot images.
+Capture and restore reject paged 32-bit PAE and CET shadow stack (SHSTK).
+Keep host XSTATE permissions fixed after vCPU creation.
+
+Capture gates and restore validates CPUID-gated MSRs against guest CPUID.
+SGX launch key hashes require SGX_LC. IA32_PERF_CAPABILITIES requires PDCM and a
+nonzero architectural PMU version.
+
+- `make test:unit:vmm` runs unit tests without hardware.
+- `make test:integration:vmm:kvm` runs restoration tests on Linux x86_64 with `/dev/kvm`.
+
+## Host execution
 
 macOS arm64 exports `HvfVm` and thread-bound `HvfVcpu`, which implement `Vm`,
 `Vcpu` and `Arm64Vcpu` on Hypervisor.framework with the in-kernel GICv3 of

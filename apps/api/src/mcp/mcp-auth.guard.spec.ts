@@ -26,8 +26,8 @@ interface OAuthUser {
 }
 
 function guardWith(apiKeyCaller: unknown, oauth: OAuthUser = {}, resourceAudience: string | null = MCP_AUDIENCE) {
-  // Like `JwtStrategy.verifyToken`: no audience means the dashboard audience, which this token also carries.
-  const verifyToken = jest.fn(async (_token: string, audience?: string) => {
+  // Like `JwtStrategy.verifyMcpToken`: only the MCP audience verifies.
+  const verifyMcpToken = jest.fn(async (_token: string, audience?: string) => {
     if (audience !== undefined && audience !== MCP_AUDIENCE) {
       throw new errors.JWTClaimValidationFailed('aud', {} as never)
     }
@@ -45,12 +45,12 @@ function guardWith(apiKeyCaller: unknown, oauth: OAuthUser = {}, resourceAudienc
   const organizationUsers = { findDefault: jest.fn(async () => membership) }
   const apiKeyStrategy = { validate: jest.fn(async () => apiKeyCaller) }
   const guard = new McpAuthGuard(
-    { verifyToken, validate } as never,
+    { verifyMcpToken, validate } as never,
     apiKeyStrategy as never,
     { audience: resourceAudience ?? undefined } as never,
     organizationUsers as never,
   )
-  return { guard, verifyToken }
+  return { guard, verifyMcpToken }
 }
 
 describe('McpAuthGuard', () => {
@@ -63,11 +63,11 @@ describe('McpAuthGuard', () => {
   })
 
   it('verifies an OAuth token against the MCP resource audience', async () => {
-    const { guard, verifyToken } = guardWith(null)
+    const { guard, verifyMcpToken } = guardWith(null)
     const { request, context } = contextFor(`Bearer ${JWT}`)
 
     await expect(guard.canActivate(context)).resolves.toBe(true)
-    expect(verifyToken).toHaveBeenCalledWith(JWT, MCP_AUDIENCE)
+    expect(verifyMcpToken).toHaveBeenCalledWith(JWT, MCP_AUDIENCE)
     expect(request.user).toMatchObject({ userId: 'user-1', organizationId: 'org-default' })
   })
 

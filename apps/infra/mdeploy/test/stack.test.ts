@@ -81,7 +81,22 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   runnerEnvironment: {},
   runnerSecrets: {},
   clickHouseRetentionHours: null,
+  filestoreProjects: [],
   ...overrides,
+})
+
+test('filestore projects become the final API capability', () => {
+  const { providers, seen } = bundle()
+  deployStack({
+    providers,
+    config,
+    inputs: inputs({ filestoreProjects: ['zeta-project', 'alpha-project'] }),
+  })
+
+  assert.deepEqual(seen.api.request.capabilities.at(-1), {
+    kind: 'read-filestore-instances',
+    projects: ['zeta-project', 'alpha-project'],
+  })
 })
 
 test('retention is resolved once, and only a self-hosted ClickHouse accepts one', () => {
@@ -106,7 +121,7 @@ test('retention is resolved once, and only a self-hosted ClickHouse accepts one'
 })
 
 /**
- * A fleet of the given control-plane names, shaped as `fleetFrom` shapes one.
+ * A fleet of the given control-plane names, shaped as `runnerFleetFrom` shapes one.
  *
  * The first slot keeps the resource name `Runner`; every later one is numbered.
  * Copied in that detail on purpose — a test that invented its own naming would
@@ -314,17 +329,20 @@ test('the runner is placed directly, because it is a machine rather than a task'
   assert.ok(seen.runners.input.network, 'it takes its placement from the network instead')
 })
 
-test('the parsed runner data disk size reaches the provider', () => {
+test('parsed stage sizes reach the API and runner providers', () => {
   const { providers, seen } = bundle()
   const settings = Object.fromEntries(Object.entries(config).filter(([key]) => key !== 'path' && key !== 'root'))
   const sizedConfig = parseDeployConfig(
     config.path,
     JSON.stringify({
       ...settings,
+      api: { minInstances: 0, instance: { cpu: 2, memoryMiB: 2048 } },
       runners: { ...config.runners, dataDiskGb: 2048 },
     }),
   )
   deployStack({ providers, config: sizedConfig, inputs: inputs() })
+  assert.deepEqual(seen.api.request.instance, { cpu: 2, memoryMiB: 2048 })
+  assert.equal(seen.api.request.minInstances, 0)
   assert.equal(seen.runners.request.dataDiskGb, 2048)
 })
 

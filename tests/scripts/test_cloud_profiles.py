@@ -30,7 +30,7 @@ class CloudProfilesTest(unittest.TestCase):
         }
         self.metadata = {
             "key-one": ("org-one", ["write:boxes", "delete:boxes"]),
-            'key-two"quoted': ("org-two", ["write:boxes", "delete:boxes"]),
+            'key-two"quoted': ("org-two", ["write:boxes", "delete:boxes", "read:images", "delete:images"]),
             "key-readonly": ("org-two", ["read:images"]),
             "key-prod": ("org-prod", ["write:boxes", "delete:boxes"]),
         }
@@ -77,7 +77,7 @@ class CloudProfilesTest(unittest.TestCase):
         })
         self.metadata.update({
             "stage-one": ("stage-one", ["write:boxes", "delete:boxes"]),
-            "stage-two": ("stage-two", ["write:boxes", "delete:boxes"]),
+            "stage-two": ("stage-two", ["write:boxes", "delete:boxes", "read:images", "delete:images"]),
             "stage-readonly": ("stage-two", ["read:images"]),
         })
 
@@ -130,6 +130,19 @@ class CloudProfilesTest(unittest.TestCase):
                     self.assertFalse(self.destination.exists())
                 finally:
                     self.environment[name] = key
+
+    def test_catalog_owner_requires_each_image_scope_before_replacing_credentials(self):
+        self.destination.parent.mkdir()
+        self.destination.write_text("existing profiles")
+        for missing in ("read:images", "delete:images"):
+            with self.subTest(missing=missing):
+                permissions = {"write:boxes", "delete:boxes", "read:images", "delete:images"} - {missing}
+                with (
+                    patch.dict(self.metadata, {'key-two"quoted': ("org-two", sorted(permissions))}),
+                    self.assertRaisesRegex(RuntimeError, missing),
+                ):
+                    self.configure()
+                self.assertEqual(self.destination.read_text(), "existing profiles")
 
     def test_invalid_targets_are_rejected_before_credentials_are_sent(self):
         for stage, url in [("typo", "https://api.example"), ("dev", "http://api.example"),

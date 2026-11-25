@@ -2,8 +2,8 @@
 
 use boxlite_shared::{
     BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestClient, GuestInitRequest,
-    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, ThawRequest, VirtiofsSource, Volume,
-    guest_init_response,
+    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, SyncClockRequest, ThawRequest,
+    VirtiofsSource, Volume, guest_init_response,
 };
 use tonic::transport::Channel;
 
@@ -79,6 +79,18 @@ impl GuestInterface {
         ensure_guest_version(&response.version, minimum)
     }
 
+    /// Fail before initialization if the guest cannot pin managed-volume subdirectories.
+    pub async fn require_safe_volume_sub_path(&mut self) -> BoxliteResult<()> {
+        let response = self.client.ping(PingRequest {}).await?.into_inner();
+        if response.safe_managed_volume_sub_path {
+            return Ok(());
+        }
+        Err(BoxliteError::Unsupported(
+            "guest does not support safe managed-volume sub_path mounts; recreate the box with the current runtime"
+                .into(),
+        ))
+    }
+
     /// Shutdown the guest agent.
     pub async fn shutdown(&mut self) -> BoxliteResult<()> {
         let _response = self.client.shutdown(ShutdownRequest {}).await?;
@@ -102,6 +114,46 @@ impl GuestInterface {
         let response = self.client.thaw(ThawRequest {}).await?.into_inner();
         Ok(response.thawed_count)
     }
+
+    /// Correct CLOCK_REALTIME from UTC sampled by the host just before sending.
+    ///
+    /// The Linux/native shim pushes initially and checks every 2s, pushing on
+    /// a >=6s check gap, >=60s since success, no success, or host clock rollback.
+    /// It survives detached creator exit and needs no D-Bus. This host-only
+    /// operation leaves the RTC and monotonic clock unchanged.
+    /// Success means absolute drift <=100ms (no adjustment) or an accepted
+    /// clock setting in either direction; 100ms is not a precision guarantee.
+    /// Invalid timestamps, clock-read/set failures, and an agent without this
+    /// method surface as errors.
+    pub async fn sync_clock(&mut self, unix_sec: i64, nanos: i32) -> BoxliteResult<()> {
+        let _response = self
+            .client
+            .sync_clock(SyncClockRequest { unix_sec, nanos })
+            .await?;
+        Ok(())
+    }
+
+    /// Fill the container root disk after the kernel observes its new capacity.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) async fn resize_filesystem(&mut self, minimum_bytes: u64) -> BoxliteResult<()> {
+        self.client
+            .resize_filesystem(boxlite_shared::ResizeFilesystemRequest {
+                device: "/dev/vda".into(),
+                minimum_bytes,
+            })
+            .await
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unimplemented {
+                    BoxliteError::Unsupported(
+                        "guest has no filesystem resize RPC; restart with the current runtime"
+                            .into(),
+                    )
+                } else {
+                    BoxliteError::Engine(format!("guest filesystem resize failed: {error}"))
+                }
+            })?;
+        Ok(())
+    }
 }
 
 /// A guest agent version as `(major, minor, patch)`.
@@ -119,7 +171,7 @@ fn parse_guest_version(version: &str) -> Option<GuestVersion> {
     parts.next().is_none().then_some(parsed)
 }
 
-fn ensure_guest_version(version: &str, minimum: GuestVersion) -> BoxliteResult<()> {
+pub(crate) fn ensure_guest_version(version: &str, minimum: GuestVersion) -> BoxliteResult<()> {
     let (major, minor, patch) = minimum;
     let Some(reported) = parse_guest_version(version) else {
         return Err(BoxliteError::Unsupported(format!(

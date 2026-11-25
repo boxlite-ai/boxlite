@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { parallelReads } from './parallel-reads'
 import { GitHubCredential } from './github-app'
 import { selectRunnerLabels } from './resource-labels'
 
@@ -122,13 +123,77 @@ export class GitHubJobs {
     await this.authority(signal)
     return job
   }
+  /** Positive evidence for notified jobs, never a complete repository snapshot. */
+  async pending(notices: readonly JobNotice[], signal?: AbortSignal): Promise<WorkflowJob[]> {
+    const captured = notices.map((notice) => ({ ...notice }))
+    if (
+      !captured.length ||
+      captured.length > 32 ||
+      captured.some((notice) => notice.repository !== this.repository.id || !id(notice.run) || !id(notice.job))
+    )
+      throw new Error('Job notices are outside their original repository or budget')
+    const groups = new Map<number, Map<number, JobNotice>>()
+    for (const notice of captured) {
+      const group = groups.get(notice.run) ?? new Map()
+      group.set(notice.job, notice)
+      groups.set(notice.run, group)
+    }
+    await this.authority(signal)
+    const batches = await parallelReads(
+      [...groups],
+      async ([run, notices], signal) => {
+        const jobs = new Map<number, WorkflowJob>()
+        if (notices.size > 1) {
+          const value = await this.credential.request(
+            `${this.route}/actions/runs/${run}/jobs?filter=latest&per_page=100&page=1`,
+            { signal },
+          )
+          if (
+            !object(value) ||
+            !Number.isSafeInteger(value.total_count) ||
+            (value.total_count as number) < 0 ||
+            !Array.isArray(value.jobs) ||
+            value.jobs.length > 100 ||
+            value.jobs.length > (value.total_count as number)
+          )
+            throw new Error('Invalid GitHub notified-run inventory')
+          for (const raw of value.jobs) {
+            const job = this.decode(raw, run)
+            if (jobs.has(job.job)) throw new Error('Duplicate GitHub workflow job')
+            jobs.set(job.job, job)
+          }
+        }
+        const result: WorkflowJob[] = []
+        for (const notice of notices.values()) {
+          const job =
+            jobs.get(notice.job) ??
+            this.decode(await this.credential.request(`${this.route}/actions/jobs/${notice.job}`, { signal }), run)
+          if (job.job !== notice.job) throw new Error('GitHub workflow job identity changed')
+          result.push(job)
+        }
+        return result
+      },
+      signal,
+    )
+    await this.authority(signal)
+    return batches.flat()
+  }
   /** A bounded, complete pass. Any changing count, API cap or permission failure leaves the caller's wake pending. */
   async queued(signal?: AbortSignal): Promise<WorkflowJob[]> {
     await this.authority(signal)
     const runs = new Set<number>(),
       jobs = new Map<number, WorkflowJob>()
-    for (const status of ['queued', 'in_progress', 'waiting', 'pending', 'requested']) {
-      const batch = await this.list(`${this.route}/actions/runs?status=${status}`, 'workflow_runs', signal, 1000)
+    // Sample queued before in_progress so a starting run cannot fall between both inventories.
+    const queued = await this.list(`${this.route}/actions/runs?status=queued`, 'workflow_runs', signal, 1000)
+    const batches = [
+      queued,
+      ...(await parallelReads(
+        ['in_progress', 'waiting', 'pending', 'requested'],
+        (status, signal) => this.list(`${this.route}/actions/runs?status=${status}`, 'workflow_runs', signal, 1000),
+        signal,
+      )),
+    ]
+    for (const batch of batches) {
       for (const run of batch) {
         if (!object(run) || !id(run.id) || !object(run.repository) || run.repository.id !== this.repository.id)
           throw new Error('Invalid GitHub workflow run')

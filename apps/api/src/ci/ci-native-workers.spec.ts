@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Header } from 'tar'
+import { ConflictException, ForbiddenException } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import {
   WorkerPool,
@@ -22,14 +23,28 @@ import { CiNativeState } from './ci-native-state'
 import { CiNativeWorkers } from './ci-native-workers'
 import { CiSettingsService } from './ci-settings.service'
 import { Box } from '../box/entities/box.entity'
+import { CheckpointOperation } from '../box/entities/checkpoint-operation.entity'
+import { Job } from '../box/entities/job.entity'
+import { JobStatus } from '../box/enums/job-status.enum'
+import { JobType } from '../box/enums/job-type.enum'
+import { ResourceType } from '../box/enums/resource-type.enum'
+import { RunnerState } from '../box/enums/runner-state.enum'
+import { JobService } from '../box/services/job.service'
+import { JobStateHandlerService } from '../box/services/job-state-handler.service'
+import { RunnerAdapterV2 } from '../box/runner-adapter/runnerAdapter.v2'
+import { BoxDestroyAction } from '../box/managers/box-actions/box-destroy.action'
+import { LockCode } from '../box/common/redis-lock.provider'
+import { BoxManager } from '../box/managers/box.manager'
 import { BoxCheckpointState } from '../box/entities/box-checkpoint-state.entity'
 import { BoxLastActivity } from '../box/entities/box-last-activity.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxService } from '../box/services/box.service'
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
+import { ImageAdmissionService } from '../image/services/image-admission.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
+import { AddSecretCredential1794873600000 } from '../migrations/pre-deploy/1794873600000-add-secret-credential-migration'
 import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/1793700000000-add-ci-listener-state-migration'
 
 const integration = process.env.DB_HOST ? describe : describe.skip
@@ -80,7 +95,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema,
-      entities: [Box, BoxLastActivity, BoxCheckpointState],
+      entities: [Box, BoxLastActivity, BoxCheckpointState, CheckpointOperation, Job],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       extra: { options: `-c search_path=${schema},public` },
@@ -96,6 +111,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     const query = db.createQueryRunner()
     try {
       await new AddCiListenerState1793700000000().up(query)
+      await new AddSecretCredential1794873600000().up(query)
     } finally {
       await query.release()
     }
@@ -105,6 +121,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as any,
     )
     const args = Array.from({ length: 21 }, () => ({}))
+    args[5] = { get: () => app }
     args[0] = repository
     args[7] = { emit: jest.fn() }
     args[8] = organizations
@@ -119,6 +136,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
         cpu: dto.cpu,
         mem: dto.memory,
         disk: dto.disk,
+        privileged: dto.privileged ?? false,
+        runAsUser: dto.runAsUser,
         runnerId,
         osUser: 'runner',
         labels: {},
@@ -168,7 +187,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
   })
   beforeEach(async () => {
     await db.query(
-      'TRUNCATE ci_listener_state,ci_installation_binding,"user",organization_user,box,box_last_activity,box_checkpoint_state',
+      'TRUNCATE ci_listener_state,ci_installation_binding,"user",organization_user,box,box_last_activity,box_checkpoint_state,secret_credential',
     )
     await db.query(
       `INSERT INTO ci_installation_binding VALUES($1,1,'github.com',$2,10,20,'owner','User',$3,$4,true,true,'ready')`,
@@ -188,14 +207,12 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     journal = new ExecutionJournal(store.state)
     lease = (await store.state.acquire(randomUUID(), 30000))!
   })
-  async function prepared(job?: number) {
+  async function prepared() {
     await store.applications().define(lease, scope(), app)
-    const allocation = await journal.reserve(
-      lease,
-      scopeKey(scope()),
-      { repository: 30, run: 40, job: job ?? 50 + (await db.getRepository(Box).count()) },
-      testCapacity({ account: 4, tenant: 4 }),
-    )
+    const allocation = await journal.reserve(lease, scopeKey(scope()), null, testCapacity({ account: 4, tenant: 4 }), {
+      labels: ['boxlite'],
+      scaleSet: 9,
+    })
     if (!allocation) throw Error('Expected reserved allocation')
     const row = await journal.advance(lease, allocation.record.key, allocation.record.version, {
       box: { phase: 'requested', id: null },
@@ -211,6 +228,24 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       box: { phase: 'known', id: box.box_id },
     })
     return { ...value, box }
+  }
+  async function ageCreation(key: string, age = 300000) {
+    await db.query(
+      "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{createdAt}',to_jsonb($3::bigint)) WHERE namespace=$1 AND record_key=$2",
+      [store.namespace, key, Date.now() - age],
+    )
+  }
+  function recoveringPool(host: ReturnType<CiNativeWorkers['open']>) {
+    return new WorkerPool(
+      journal,
+      scopeKey(scope()),
+      async () => ({
+        workers: host,
+        admit: jest.fn(),
+        runners: jest.fn(),
+      }),
+      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
+    )
   }
   async function forDelivery() {
     const value = await created()
@@ -241,6 +276,11 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await value.host.remove(value.config.name)
     return value
   }
+  it('Docker bootstrap persists a privileged native CI guest', async () => {
+    const { box } = await created()
+    expect((await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).privileged).toBe(true)
+    expect((await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).runAsUser).toBe('root')
+  })
   it('preserves a delivered running worker after a real policy update and retains original cleanup', async () => {
     const { host, config, row, box } = await forDelivery()
     await host.deliverJit(config.name, jit)
@@ -265,7 +305,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }),
       { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
     )
-    await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+    await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
     expect(admit).not.toHaveBeenCalled()
     expect(platform.stop).not.toHaveBeenCalled()
     expect(platform.destroy).not.toHaveBeenCalled()
@@ -308,9 +348,9 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(host.get(config.name)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
   })
   it('commits the real original Box ID with the Box row in the single shared table', async () => {
-    const { host, config, box } = await created()
+    const { host, config, box, row } = await created()
     const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
-    expect(ledger.payload).toEqual({ scope: scopeKey(scope()), box: box.box_id })
+    expect(ledger.payload).toEqual({ scope: scopeKey(scope()), box: box.box_id, creationEffect: row.value.effect!.id })
     expect(await host.get(config.name)).toMatchObject({ box_id: box.box_id, status: 'running' })
     expect(await db.getRepository(Box).count()).toBe(1)
     expect(limits.resolveMaxCreatedBoxes).toHaveBeenCalledWith(org)
@@ -348,6 +388,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       const resources = parseResourceLabels(['boxlite-2vcpu-4gbmem-10gbdisk'])!.resources
       await expect(host.create({ ...config, ...resources })).rejects.toMatchObject({
         rejectedCreationEffect: row.value.effect!.id,
+        reason: 'before-persistence',
+        platformStatus: expect.any(Number),
       })
       expect(await db.getRepository(Box).count()).toBe(0)
       await expect(host.get(config.name)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
@@ -432,6 +474,250 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(restarted.create(config)).rejects.toThrow('already attempted')
     expect(await db.getRepository(Box).count()).toBe(1)
   })
+  it('creation fallback regression: a real cold-pull refusal releases its slot and later demand can create', async () => {
+    const { host, config, row } = await prepared()
+    let started = 0
+    const admission = new ImageAdmissionService(
+      { incr: async () => ++started, expire: async () => 1, ttl: async () => 60 } as any,
+      {} as any,
+      {} as any,
+    )
+    const image = { ref: 'quay.io/example/runner:latest', isOrgOwned: true }
+    for (let pull = 0; pull < 6; pull++) await admission.spendColdPullBudget({ id: org } as any, image)
+    beforePersist.mockImplementation(() => admission.spendColdPullBudget({ id: org } as any, image))
+    await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    expect(await db.getRepository(Box).count()).toBe(0)
+    const pool = recoveringPool(host)
+    const now = Date.now(),
+      clock = jest.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
+      expect(await journal.used(org)).toBe(0)
+      expect((await inspectJournal(store.state, lease)).allocations.has(row.record.key)).toBe(false)
+      started = 0
+      // Keep the real Box repository/ledger while modeling asynchronous VM startup.
+      const create = jest.mocked(platform.create).getMockImplementation()!
+      jest.mocked(platform.create).mockImplementationOnce(async (...args) => {
+        const box = await create(...args)
+        await db.getRepository(Box).update(box.id, { state: BoxState.STARTING })
+        return box
+      })
+      await pool.balanceScaleSets(
+        lease,
+        [
+          {
+            id: 9,
+            labels: ['boxlite'],
+            assigned: 1,
+            held: 0,
+            check: (await store.state.read(['journal/format'], lease))[0],
+            delivery: { covered: 0, waitingForDispatch: true, offline: false },
+          },
+        ],
+        testCapacity({ account: 1, tenant: 1 }),
+        new AbortController().signal,
+      )
+      expect(await db.getRepository(Box).count()).toBe(0)
+      clock.mockReturnValue(now + 1000)
+      await pool.balanceScaleSets(
+        lease,
+        [
+          {
+            id: 9,
+            labels: ['boxlite'],
+            assigned: 1,
+            held: 0,
+            check: (await store.state.read(['journal/format'], lease))[0],
+            delivery: { covered: 0, waitingForDispatch: true, offline: false },
+          },
+        ],
+        testCapacity({ account: 1, tenant: 1 }),
+        new AbortController().signal,
+      )
+      expect(await db.getRepository(Box).count()).toBe(1)
+      expect(await journal.used(org)).toBe(1)
+    } finally {
+      clock.mockRestore()
+      await pool.close()
+    }
+  })
+  it.each(['platform', 'non-Error provider', 'organization', 'commerce'])(
+    'creation fallback regression: unclassified %s failures record a durable refusal',
+    async (boundary) => {
+      const { host, config, row } = await prepared()
+      if (boundary === 'platform') beforePersist.mockRejectedValueOnce(Error('Unclassified placement failure'))
+      if (boundary === 'non-Error provider') beforePersist.mockRejectedValueOnce('Provider refused creation')
+      if (boundary === 'organization') organizations.findOne.mockRejectedValueOnce(Error('Organization unavailable'))
+      if (boundary === 'commerce') limits.resolveMaxCreatedBoxes.mockRejectedValueOnce(Error('Commerce unavailable'))
+      await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+      await expect(host.get(config.name)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
+      expect(await db.getRepository(Box).count()).toBe(0)
+      const pool = recoveringPool(host)
+      try {
+        await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+        expect(await journal.used(org)).toBe(0)
+      } finally {
+        await pool.close()
+      }
+    },
+  )
+  it('creation correction regression: repairs historical missing-ledger attempts at five minutes after restart', async () => {
+    const { config, row } = await prepared()
+    const restarted = new CiNativeWorkers(store, platform, organizations as any, limits as any, runners as any).open(
+      scope(),
+      lease,
+    )
+    await ageCreation(row.record.key, 299000)
+    await expect(restarted.get(config.name)).rejects.toThrow('ID is not durably known')
+    expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(0)
+    expect(await journal.used(org)).toBe(1)
+    await ageCreation(row.record.key)
+    await db.query('DELETE FROM ci_installation_binding; DELETE FROM organization_user')
+    const pool = recoveringPool(restarted)
+    try {
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      expect(await journal.used(org)).toBe(0)
+      expect((await inspectJournal(store.state, lease)).allocations.size).toBe(0)
+      expect(await db.getRepository(Box).count()).toBe(0)
+    } finally {
+      await pool.close()
+    }
+  })
+  it('creation fallback regression: an actual image catalog refusal returns capacity', async () => {
+    const { host, config } = await prepared()
+    const previous = process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+    process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = 'quay.io'
+    const pool = recoveringPool(host)
+    try {
+      const admission = new ImageAdmissionService(
+        {} as any,
+        { exists: async () => false, count: async () => 1 } as any,
+        {} as any,
+      )
+      beforePersist.mockImplementationOnce(() =>
+        admission.assert({ id: org, imageCountLimit: 1 } as any, 'quay.io/example/runner:latest'),
+      )
+      await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      expect(await journal.used(org)).toBe(0)
+      expect(await db.getRepository(Box).count()).toBe(0)
+    } finally {
+      await pool.close()
+      if (previous === undefined) delete process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST
+      else process.env.BOXLITE_IMAGE_REGISTRY_ALLOWLIST = previous
+    }
+  })
+  it('creation correction regression: concurrent recovery releases once without adopting a foreign Box', async () => {
+    const { host, config, row } = await prepared()
+    const foreign = new Box('test-region', config.name)
+    Object.assign(foreign, {
+      organizationId: randomUUID(),
+      osUser: 'runner',
+      labels: {},
+      state: BoxState.STARTED,
+    })
+    await db.getRepository(Box).save(foreign)
+    await ageCreation(row.record.key)
+    const results = await Promise.all([host.get(config.name).catch((e) => e), host.get(config.name).catch((e) => e)])
+    expect(results.some((error) => error instanceof ConfirmedWorkerCreationRejected)).toBe(true)
+    const pool = recoveringPool(host)
+    try {
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      expect(await journal.used(org)).toBe(0)
+      expect(await db.getRepository(Box).findOneByOrFail({ id: foreign.id })).toMatchObject({ state: BoxState.STARTED })
+      expect(platform.stop).not.toHaveBeenCalled()
+      expect(platform.destroy).not.toHaveBeenCalled()
+    } finally {
+      await pool.close()
+    }
+  })
+  it('creation correction boundary: a committed Box wins even when its creation acknowledgment was lost', async () => {
+    const { host, config, row } = await prepared()
+    const create = jest.mocked(platform.create).getMockImplementation()!
+    jest.mocked(platform.create).mockImplementationOnce(async (...args) => {
+      await create(...args)
+      throw Error('Lost creation acknowledgment')
+    })
+    await expect(host.create(config)).rejects.toThrow('Lost creation acknowledgment')
+    await ageCreation(row.record.key)
+    expect(await host.get(config.name)).toMatchObject({ status: 'running' })
+    expect(await db.getRepository(Box).count()).toBe(1)
+    expect(await journal.used(org)).toBe(1)
+  })
+  it('creation correction boundary: missing ownership of an existing Box never grants cleanup', async () => {
+    const { host, config, row } = await prepared()
+    const box = new Box('test-region', config.name)
+    Object.assign(box, { organizationId: org, osUser: 'runner', labels: {}, state: BoxState.STARTED })
+    await db.getRepository(Box).save(box)
+    await ageCreation(row.record.key)
+    await expect(host.get(config.name)).rejects.toThrow('exists without its original ledger')
+    expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(0)
+    expect(await journal.used(org)).toBe(1)
+    expect(await db.getRepository(Box).count()).toBe(1)
+  })
+  it('creation correction boundary: lease loss and proof-write failure retain the reservation', async () => {
+    const { host, config, row } = await prepared()
+    await ageCreation(row.record.key)
+    const stale = workers.open(scope(), { ...lease, owner: 'not-the-owner' })
+    await expect(stale.get(config.name)).rejects.toThrow('lease')
+    const transaction = store.transaction.bind(store)
+    let calls = 0
+    const fail = jest.spyOn(store, 'transaction').mockImplementation((work) => {
+      if (++calls === 2) throw Error('Correction proof unavailable')
+      return transaction(work)
+    })
+    try {
+      await expect(host.get(config.name)).rejects.toThrow('Correction proof unavailable')
+    } finally {
+      fail.mockRestore()
+    }
+    expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(0)
+    expect(await journal.used(org)).toBe(1)
+  })
+  it('creation correction regression: fences a Box insert paused before its original ledger callback', async () => {
+    const { host, config, row } = await prepared()
+    let resume!: () => void, entered!: () => void
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    const inserted = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const create = jest.mocked(platform.create).getMockImplementation()!
+    jest.mocked(platform.create).mockImplementationOnce((dto, organization, ctx, options) =>
+      create(dto, organization, ctx, {
+        ...options,
+        onPersist: async (tx, box) => {
+          entered()
+          await paused
+          await options!.onPersist!(tx, box)
+        },
+      }),
+    )
+    const creation = host.create(config).catch((error) => error)
+    await inserted
+    let correction: unknown
+    try {
+      await ageCreation(row.record.key)
+      correction = await host.get(config.name).catch((error) => error)
+    } finally {
+      resume()
+      await creation
+    }
+    expect(correction).toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    expect(await db.getRepository(Box).count()).toBe(0)
+    const pool = recoveringPool(host)
+    try {
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+      expect(await journal.used(org)).toBe(0)
+    } finally {
+      await pool.close()
+    }
+  })
   it('creation refusal boundary: quota-like errors after entering persistence never become no-creation proofs', async () => {
     const { host, config, row } = await prepared()
     const create = jest.mocked(platform.create).getMockImplementation()!
@@ -489,8 +775,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       }),
       { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
     )
-    await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
-    await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+    await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
+    await pool.balanceScaleSets(lease, [], testCapacity({ account: 4, tenant: 4 }), new AbortController().signal)
     expect((await inspectJournal(store.state, lease)).workers).toHaveLength(0)
     expect(jest.mocked(platform.create).mock.calls.length).toBe(createCalls)
   })
@@ -661,22 +947,16 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(host.create(config)).rejects.toThrow('persistence intent')
     expect(await db.getRepository(Box).count()).toBe(0)
   })
-  it('preserves Commerce failure instead of admitting an unmetered Box', async () => {
-    const { host, config } = await prepared()
-    limits.resolveMaxCreatedBoxes.mockRejectedValueOnce(Error('Commerce unavailable'))
-    await expect(host.create(config)).rejects.toThrow('Commerce unavailable')
-    expect(await db.getRepository(Box).count()).toBe(0)
-  })
   it('allows current admin authority without membership but denies a missing actor', async () => {
     const { host, config } = await prepared()
     await db.query('DELETE FROM organization_user')
     await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
     await db.query('UPDATE "user" SET role=\'admin\'')
-    const promoted = await prepared(51)
+    const promoted = await prepared()
     const box = await promoted.host.create(promoted.config)
     expect(box.box_id).toBeTruthy()
     await db.query('DELETE FROM "user"')
-    const next = await prepared(52)
+    const next = await prepared()
     await expect(next.host.create(next.config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
   })
   it('keeps original-resource cleanup after binding removal without admitting a new Box', async () => {
@@ -706,16 +986,311 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(host.stop(config.name)).rejects.toThrow('ledger changed')
     expect(platform.stop).not.toHaveBeenCalled()
   })
-  it('distinguishes an unknown original ID from a confirmed absent known Box', async () => {
+  it('distinguishes an unknown original ID from a confirmed destroyed known Box', async () => {
     const unknown = await prepared()
     await expect(unknown.host.get(unknown.config.name)).rejects.not.toBeInstanceOf(ConfirmedWorkerAbsent)
     const box = await unknown.host.create(unknown.config)
     await journal.advance(lease, unknown.row.record.key, unknown.row.record.version, {
       box: { phase: 'known', id: box.box_id },
     })
-    await db.getRepository(Box).delete(box.box_id)
+    await db.getRepository(Box).update(box.box_id, { state: BoxState.DESTROYED })
     await expect(unknown.host.get(unknown.config.name)).rejects.toBeInstanceOf(ConfirmedWorkerAbsent)
   })
+  it.each(['original', 'wrong tenant', 'wrong ID', 'wrong name', 'wrong worker key'] as const)(
+    'retries a failed soft deletion only for the original Hosted CI Box: %s',
+    async (scenario) => {
+      const { box, config } = await deleting()
+      const boxes = db.getRepository(Box)
+      const old = new Date(Date.now() - 8 * 86400000)
+      await boxes.update(box.box_id, {
+        state: BoxState.ERROR,
+        updatedAt: old,
+        ...(scenario === 'wrong tenant' && { organizationId: randomUUID() }),
+        ...(scenario === 'wrong name' && { name: 'DESTROYED_' + config.name + '_other' }),
+        ...(scenario === 'wrong worker key' && {
+          name: 'DESTROYED_' + config.name.slice(0, -1) + (config.name.endsWith('0') ? '1' : '0') + '_123',
+        }),
+      })
+      if (scenario === 'wrong ID')
+        await db.query(
+          "UPDATE ci_listener_state SET payload = jsonb_set(payload, '{box}', to_jsonb('different'::text)) WHERE namespace=$1 AND record_key=$2",
+          [store.namespace, 'box-native/' + config.name.slice(7)],
+        )
+      const locks = { lock: async () => true, isLocked: async () => false, unlock: async () => {} }
+      const manager = new BoxManager(
+        new BoxRepository(db, {} as never, {} as never),
+        {} as never,
+        {} as never,
+        locks as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        { get: () => app } as never,
+      )
+      const dispatch = jest.spyOn(manager, 'syncInstanceState').mockResolvedValue()
+      await manager.syncStates()
+      await platform.cleanupStaleErrorBoxes()
+      if (scenario === 'original') {
+        expect(dispatch).toHaveBeenCalledWith(box.box_id)
+        expect(await boxes.existsBy({ id: box.box_id })).toBe(true)
+      } else {
+        expect(dispatch).not.toHaveBeenCalled()
+        expect(await boxes.existsBy({ id: box.box_id })).toBe(false)
+      }
+    },
+  )
+  it.each(['current', 'historical'])(
+    'releases a requested slot after confirmation for its original persisted Box: %s',
+    async (format) => {
+      const { host, config, row } = await prepared()
+      const box = await host.create(config)
+      if (format === 'historical') {
+        const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
+        await store.state.commit(lease, [
+          { key: ledger.key, expected: ledger.version, payload: { scope: scopeKey(scope()), box: box.box_id } },
+        ])
+      }
+      expect((await journal.allocation(lease, row.record.key))!.value.box).toEqual({ phase: 'requested', id: null })
+      await db
+        .getRepository(Box)
+        .update(box.box_id, { state: BoxState.DESTROYED, desiredState: BoxDesiredState.DESTROYED })
+      const capacity = testCapacity({ account: 1, tenant: 1 })
+      const replacement = { repository: 30, run: 40, job: 99 }
+      expect(await journal.reserve(lease, scopeKey(scope()), replacement, capacity)).toBeUndefined()
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const pool = recoveringPool(workers.open(scope(), lease))
+        try {
+          await pool.balanceScaleSets(lease, [], capacity, new AbortController().signal)
+        } finally {
+          await pool.close()
+        }
+      }
+      expect(await journal.used(org)).toBe(0)
+      expect(await db.getRepository(Box).count()).toBe(1)
+      expect(await journal.reserve(lease, scopeKey(scope()), replacement, capacity)).toBeDefined()
+    },
+  )
+  it('keeps a charged tombstone across cleanup and prunes it after quota recovery', async () => {
+    const { box, host } = await deleting()
+    const boxes = db.getRepository(Box)
+    await boxes.update(box.box_id, { state: BoxState.DESTROYED, updatedAt: new Date(Date.now() - 2 * 86400000) })
+    await platform.cleanupDestroyedBoxes()
+    expect(await boxes.existsBy({ id: box.box_id })).toBe(true)
+    const pool = recoveringPool(host)
+    try {
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
+      expect(await journal.used(org)).toBe(0)
+      await platform.cleanupDestroyedBoxes()
+      expect(await boxes.existsBy({ id: box.box_id })).toBe(false)
+    } finally {
+      await pool.close()
+    }
+  })
+  it('preserves confirmed destruction when a concurrent sync returns an error', async () => {
+    const { box, host } = await deleting()
+    const repository = new BoxRepository(
+      db,
+      { emit: jest.fn() } as never,
+      { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as never,
+    )
+    const locks = { lock: async () => true, unlock: async () => true, getCode: async () => null }
+    const handler = new JobStateHandlerService(repository, locks as never, {} as never, {} as never, {} as never)
+    const jobRows = db.getRepository(Job)
+    const jobs = new JobService(jobRows, { lpush: jest.fn() } as never, handler)
+    const job = await jobs.createJob(null, JobType.DESTROY_BOX, runnerId, ResourceType.BOX, box.box_id)
+    const runners = {
+      findOneOrFail: async () => {
+        await jobRows.save(Object.assign(job, { status: JobStatus.COMPLETED, completedAt: new Date() }))
+        await handler.handleJobCompletion(job)
+        expect(await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).toMatchObject({
+          state: BoxState.DESTROYED,
+        })
+        throw new Error('runner lookup failed')
+      },
+    }
+    const destroy = new BoxDestroyAction(runners as never, {} as never, repository, locks as never)
+    const manager = new BoxManager(
+      repository,
+      runners as never,
+      {} as never,
+      locks as never,
+      {} as never,
+      {} as never,
+      destroy,
+      { reasonFor: async (_box: Box, reason: string) => reason } as never,
+      { get: () => app } as never,
+    )
+    await manager.syncInstanceState(box.box_id)
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).toMatchObject({ state: BoxState.DESTROYED })
+    const pool = recoveringPool(host)
+    try {
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
+      expect(await journal.used(org)).toBe(0)
+    } finally {
+      await pool.close()
+    }
+  })
+  it.each(['requested', 'known'])(
+    'keeps %s quota after historical failed-destroy cleanup even with a prior runner receipt',
+    async (phase) => {
+      const { host, config, row } = await prepared()
+      const { box_id } = await host.create(config)
+      const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
+      await store.state.commit(lease, [
+        { key: ledger.key, expected: ledger.version, payload: { scope: scopeKey(scope()), box: box_id } },
+      ])
+      if (phase === 'known')
+        await journal.advance(lease, row.record.key, row.record.version, { box: { phase: 'known', id: box_id } })
+      const boxes = db.getRepository(Box),
+        jobs = db.getRepository(Job)
+      const destroy = await jobs.save({
+        runnerId,
+        resourceType: ResourceType.BOX,
+        resourceId: box_id,
+        type: JobType.DESTROY_BOX,
+        status: JobStatus.FAILED,
+        completedAt: new Date(),
+      })
+      await jobs.save({ ...destroy, id: randomUUID(), runnerId: randomUUID(), status: JobStatus.COMPLETED })
+      await boxes.update(box_id, {
+        state: BoxState.ERROR,
+        desiredState: BoxDesiredState.DESTROYED,
+        updatedAt: new Date(Date.now() - 8 * 86400000),
+      })
+      // Historical cleanup removed failed deletion rows after seven days.
+      await boxes.delete({ id: box_id, state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED })
+      const capacity = testCapacity({ account: 1, tenant: 1 })
+      const pool = recoveringPool(host)
+      try {
+        const result = await pool
+          .balanceScaleSets(lease, [], capacity, new AbortController().signal)
+          .catch((error: unknown) => error)
+        expect(await journal.used(org)).toBe(1)
+        expect(result).toBeInstanceOf(ConflictException)
+      } finally {
+        await pool.close()
+      }
+    },
+  )
+  it('keeps requested quota when the saved Box belongs to a different creation effect', async () => {
+    const { host, config } = await prepared()
+    const original = await host.create(config)
+    const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
+    await store.state.commit(lease, [
+      {
+        key: ledger.key,
+        expected: ledger.version,
+        payload: { scope: scopeKey(scope()), box: original.box_id, creationEffect: randomUUID() },
+      },
+    ])
+    await db.getRepository(Box).update(original.box_id, { state: BoxState.DESTROYED })
+    await expect(host.get(config.name)).rejects.toBeInstanceOf(ForbiddenException)
+    expect(await journal.used(org)).toBe(1)
+  })
+  it.each(['late failure', 'failure before destroying'])(
+    'returns the slot only after a replacement destroy job completes for the Box: %s',
+    async (scenario) => {
+      const { box, host, row } = await deleting()
+      const repository = new BoxRepository(
+        db,
+        { emit: jest.fn() } as never,
+        { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as never,
+      )
+      const jobRows = db.getRepository(Job)
+      const held = new Map<string, LockCode>()
+      const locks = {
+        lock: async (key: string, _ttl: number, code: LockCode) => {
+          held.set(key, code)
+          return true
+        },
+        isLocked: async (key: string) => held.has(key),
+        getCode: async (key: string) => held.get(key) ?? null,
+        unlock: async (key: string) => held.delete(key),
+      }
+      const handler = new JobStateHandlerService(repository, locks as never, {} as never, {} as never, {} as never)
+      const jobs = new JobService(jobRows, { lpush: jest.fn() } as never, handler)
+      const failed = await jobs.createJob(null, JobType.DESTROY_BOX, runnerId, ResourceType.BOX, box.box_id)
+      await jobRows.save(
+        Object.assign(failed, { status: JobStatus.FAILED, completedAt: new Date(), errorMessage: 'timed out' }),
+      )
+      await handler.handleJobCompletion(failed)
+      const boxes = db.getRepository(Box)
+      expect(await boxes.findOneByOrFail({ id: box.box_id })).toMatchObject({
+        state: BoxState.ERROR,
+        desiredState: BoxDesiredState.DESTROYED,
+      })
+      const runner = { id: runnerId, state: RunnerState.READY }
+      const adapter = new RunnerAdapterV2(repository, jobRows, jobs)
+      await adapter.init(runner as never)
+      const runners = { findOneOrFail: async () => runner, getRunnerApiVersion: async () => '2' }
+      const destroy = new BoxDestroyAction(
+        runners as never,
+        { create: async () => adapter } as never,
+        repository,
+        locks as never,
+      )
+      const manager = new BoxManager(
+        repository,
+        runners as never,
+        {} as never,
+        locks as never,
+        {} as never,
+        {} as never,
+        destroy,
+        {} as never,
+        { get: () => app } as never,
+      )
+      const pending = { resourceId: box.box_id, runnerId, type: JobType.DESTROY_BOX, status: JobStatus.PENDING }
+      const otherRunner = new RunnerAdapterV2(repository, jobRows, jobs)
+      await otherRunner.init({ id: randomUUID() } as never)
+      await expect(otherRunner.boxInfo(box.box_id)).resolves.toMatchObject({ failedDestroyJob: true })
+      const submit = adapter.destroyBox.bind(adapter)
+      const submissions = jest.spyOn(adapter, 'destroyBox')
+      if (scenario === 'failure before destroying') {
+        submissions.mockImplementationOnce(async (id) => {
+          await submit(id)
+          // A failure can be durable before the manager publishes DESTROYING; its callback can be lost.
+          const fast = await jobRows.findOneByOrFail(pending)
+          await jobRows.save(Object.assign(fast, { status: JobStatus.FAILED, completedAt: new Date() }))
+        })
+      }
+      const attempts = jest.spyOn(manager, 'syncInstanceState')
+      const sync = async () => {
+        await manager.syncStates()
+        await Promise.all(attempts.mock.results.map((attempt) => attempt.value))
+      }
+      await sync()
+      if (scenario === 'failure before destroying') {
+        expect(await boxes.findOneByOrFail({ id: box.box_id })).toMatchObject({ state: BoxState.DESTROYING })
+        expect(await jobRows.countBy(pending)).toBe(0)
+        await sync()
+      }
+      const retry = await jobRows.findOneBy(pending)
+      expect(retry).not.toBeNull()
+      await sync()
+      expect(await jobRows.countBy(pending)).toBe(1)
+      expect(submissions).toHaveBeenCalledTimes(scenario === 'failure before destroying' ? 2 : 1)
+      expect(await journal.used(org)).toBe(1)
+      await jobRows.save(Object.assign(retry!, { status: JobStatus.COMPLETED, completedAt: new Date() }))
+      await handler.handleJobCompletion(retry!)
+      await handler.handleJobCompletion(failed)
+      expect(await boxes.findOneByOrFail({ id: box.box_id })).toMatchObject({ state: BoxState.DESTROYED })
+      const pool = new WorkerPool(
+        journal,
+        scopeKey(scope()),
+        async () => ({ workers: host, admit: jest.fn(), job: jest.fn(), runners: jest.fn() }),
+        { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
+      )
+      try {
+        await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
+        expect(await journal.used(org)).toBe(0)
+        expect(await journal.allocation(lease, row.record.key)).toBeUndefined()
+      } finally {
+        await pool.close()
+      }
+    },
+  )
   it('recognizes the original destroyed Box after production soft deletion renames it', async () => {
     const { host, config, box } = await deleting()
     const deleted = await platform.findOne(box.box_id, true)
@@ -739,7 +1314,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite'] },
     )
     try {
-      await pool.tick(lease, capacity)
+      await pool.balanceScaleSets(lease, [], capacity, new AbortController().signal)
       expect((await inspectJournal(store.state, lease)).allocations.has(row.record.key)).toBe(false)
       const next = await journal.reserve(lease, scopeKey(scope()), nextJob, capacity)
       expect(next?.value.job).toEqual(nextJob)
@@ -788,6 +1363,93 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(rows).not.toContain(key)
     expect(received).toHaveLength(2)
   })
+  describe('native JIT recovery', () => {
+    async function lostReadyAcknowledgment() {
+      const delivery = await forDelivery()
+      respond = async () => {
+        if (received.length === 2) throw new Error('Connection closed after receiving ready')
+        return 204
+      }
+      await expect(delivery.host.deliverJit(delivery.config.name, jit)).rejects.toThrow('delivery failed')
+      expect(received.map((request) => request.content)).toEqual([jit, 'ready'])
+      return delivery
+    }
+
+    it('seals an unclaimed delivery before a delayed publisher can send config', async () => {
+      const { host, config, row } = await forDelivery()
+      const repair = workers.open(scope(), lease)
+      const findOne = platform.findOne.bind(platform)
+      let recovery: string | undefined
+      const lookup = jest.spyOn(platform, 'findOne').mockImplementationOnce(async (...args) => {
+        const box = await findOne(...args)
+        recovery = await repair.recoverJit!(config.name, row.value.effect!.id)
+        return box
+      })
+      try {
+        const failure = await host.deliverJit(config.name, jit).catch((error: unknown) => error)
+        expect(received).toHaveLength(0)
+        expect(recovery).toBe('replace')
+        expect(failure).toBeInstanceOf(Error)
+        await expect(repair.recoverJit!(config.name, row.value.effect!.id)).resolves.toBe('replace')
+      } finally {
+        lookup.mockRestore()
+      }
+    })
+
+    it('fences a delayed ready authorization after config was acknowledged', async () => {
+      const { host, config, row } = await forDelivery()
+      const repair = workers.open(scope(), lease)
+      const runner = { id: runnerId, apiUrl: endpoint, apiKey: key }
+      let recovery: string | undefined
+      runners.findOneUncachedOrFail.mockResolvedValueOnce(runner).mockImplementationOnce(async () => {
+        recovery = await repair.recoverJit!(config.name, row.value.effect!.id)
+        return runner
+      })
+      const failure = await host.deliverJit(config.name, jit).catch((error: unknown) => error)
+      expect(received.map((request) => request.file)).toEqual(['.boxlite-jitconfig'])
+      expect(recovery).toBe('replace')
+      expect(failure).toBeInstanceOf(Error)
+    })
+
+    it('replays only ready after the original ready acknowledgment is lost', async () => {
+      const { config, row, box } = await lostReadyAcknowledgment()
+      const repair = workers.open(scope(), lease)
+      const result = await repair.recoverJit!(config.name, row.value.effect!.id)
+      expect(received.map((request) => request.content)).toEqual([jit, 'ready', 'ready'])
+      expect(received[2]).toMatchObject({
+        file: '.boxlite-jitconfig.ready',
+        url: `/v1/boxes/${box.box_id}/files?path=%2Fhome%2Frunner`,
+      })
+      expect(result).toBe('delivered')
+    })
+
+    it('leaves an opaque single-claim marker for normal startup recovery', async () => {
+      const { host, config, row } = await forDelivery()
+      await db.query(
+        "UPDATE ci_listener_state SET payload=payload||jsonb_build_object('delivery',gen_random_uuid()::text) WHERE namespace=$1 AND record_key=$2",
+        [store.namespace, 'box-native/' + config.name.slice(7)],
+      )
+      expect(await host.get(config.name)).not.toHaveProperty('recoverableJit')
+      await expect(host.recoverJit!(config.name, row.value.effect!.id)).resolves.toBe('unknown')
+      await expect(host.deliverJit(config.name, jit)).rejects.toThrow('already attempted')
+      expect(received).toHaveLength(0)
+    })
+
+    it.each(['effect', 'binding', 'platform runner', 'Box organization'])(
+      'refuses a ready retry when the original %s changes',
+      async (changed) => {
+        const { host, config, row, box } = await lostReadyAcknowledgment()
+        if (changed === 'binding') await db.query("UPDATE ci_installation_binding SET state='disabled'")
+        if (changed === 'platform runner') await db.getRepository(Box).update(box.box_id, { runnerId: randomUUID() })
+        if (changed === 'Box organization')
+          await db.getRepository(Box).update(box.box_id, { organizationId: randomUUID() })
+        const effect = changed === 'effect' ? randomUUID() : row.value.effect!.id
+        await expect(host.recoverJit!(config.name, effect)).rejects.toThrow()
+        expect(received.map((request) => request.content)).toEqual([jit, 'ready'])
+      },
+    )
+  })
+
   it('keeps an uncertain JIT attempt and never sends ready after an HTTP failure', async () => {
     const { host, config } = await forDelivery()
     respond = async () => 503
@@ -806,8 +1468,8 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
   })
   it('enforces the actual Box repository quota across concurrent shared allocations', async () => {
     limits.resolveMaxCreatedBoxes.mockResolvedValue(1)
-    const first = await prepared(51),
-      second = await prepared(52)
+    const first = await prepared(),
+      second = await prepared()
     const outcomes = await Promise.allSettled([first.host.create(first.config), second.host.create(second.config)])
     expect(outcomes.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
     expect(outcomes.filter((r) => r.status === 'rejected')).toHaveLength(1)

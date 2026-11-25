@@ -29,7 +29,7 @@ mod volumes;
 // Re-export all public types
 pub use advanced_options::{JsAdvancedBoxOptions, JsContainerCapabilities, JsSecurityOptions};
 pub use box_handle::JsBox;
-pub use checkpoints::{JsCheckpointHandle, JsCheckpointInfo};
+pub use checkpoints::{JsCheckpointHandle, JsCheckpointInfo, JsCheckpointOptions};
 pub use copy::JsCopyOptions;
 pub use domains::{JsDomain, JsDomainHandle, JsDomainList, JsDomainTarget};
 pub use exec::{

@@ -149,6 +149,15 @@ fn respond(status: &str, body: Value) -> String {
     )
 }
 
+#[cfg(feature = "rest")]
+pub(in crate::agents) async fn scripted_events(events: &[Value]) -> AgentEventStream {
+    let (session, _) = scripted_session(vec![event_response(events)]);
+    session
+        .events(&AgentEventsOptions::default())
+        .await
+        .unwrap()
+}
+
 /// An SSE response whose body ends when the scripted server closes the connection.
 fn event_response(events: &[Value]) -> String {
     let mut body = String::from(": heartbeat\n\n");

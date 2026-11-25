@@ -18,14 +18,12 @@ use vm_memory::{GuestAddress, GuestMemoryBackend};
 
 use crate::config::MAX_CMDLINE_BYTES;
 
+pub(super) use crate::x86_boot_layout::LOW_RAM_END;
+
 /// `boot_params` (the zero page), as the design's x86_64 layout places it.
 const ZERO_PAGE_START: u64 = 0x7000;
 /// The NUL-terminated kernel command line, from the same layout.
 const CMDLINE_START: u64 = 0x2_0000;
-/// Usable low RAM ends where the MP table and the legacy BIOS areas begin,
-/// and resumes at 1 MiB.
-pub(super) const LOW_RAM_END: u64 = 0x9_fc00;
-const HIGH_RAM_START: u64 = 0x10_0000;
 
 /// Setup header values, as Firecracker and libkrun write them: no assigned
 /// loader ID, the boot flag and "HdrS" magic, and a 16 MiB alignment.
@@ -35,20 +33,22 @@ const HEADER_MAGIC: u32 = u32::from_le_bytes(*b"HdrS");
 const KERNEL_ALIGNMENT: u32 = 16 << 20;
 /// `E820_TYPE_RAM`: usable RAM.
 const E820_RAM: u32 = 1;
+const E820_RESERVED: u32 = 2;
 
 /// Writes the command line at 0x2_0000 and `boot_params` at 0x7000, then
 /// returns the zero-page address the boot vCPU gets in RSI. Each of `ranges`
-/// becomes usable E820 RAM outside [0x9_FC00, 1 MiB), and `initramfs`, the
-/// start and size of a loaded archive, goes into the setup header.
+/// becomes usable E820 RAM outside [0x9_FC00, 1 MiB) and the half-open
+/// `reserved` intervals. The start and size of `initramfs` go into the header.
 ///
 /// Fails with `InvalidInput`, writing nothing, if `cmdline`, once trimmed, is
-/// not printable ASCII under `MAX_CMDLINE_BYTES`, if `ranges` need more
-/// than the 128 E820 slots, or if `initramfs` does not fit the 32-bit fields.
+/// not printable ASCII under `MAX_CMDLINE_BYTES`, if the E820 map needs more
+/// than 128 slots, or if `initramfs` does not fit the 32-bit fields.
 pub(crate) fn write_boot_params<M: GuestMemoryBackend>(
     ram: &M,
     cmdline: &str,
     ranges: &[(GuestAddress, usize)],
     initramfs: Option<(GuestAddress, usize)>,
+    reserved: &[(u64, u64)],
 ) -> io::Result<u64> {
     let mut line = Cmdline::new(MAX_CMDLINE_BYTES).map_err(io::Error::other)?;
     line.insert_str(cmdline)
@@ -78,7 +78,7 @@ pub(crate) fn write_boot_params<M: GuestMemoryBackend>(
         params.hdr.ramdisk_image = field(start.0)?;
         params.hdr.ramdisk_size = field(size as u64)?;
     }
-    let entries = e820_entries(ranges);
+    let entries = e820_entries(ranges, reserved);
     let slots = params.e820_table.len();
     if entries.len() > slots {
         return Err(io::Error::new(
@@ -100,24 +100,38 @@ pub(crate) fn write_boot_params<M: GuestMemoryBackend>(
     Ok(ZERO_PAGE_START)
 }
 
-/// Usable RAM entries for `ranges`, without [0x9_FC00, 1 MiB).
-fn e820_entries(ranges: &[(GuestAddress, usize)]) -> Vec<boot_e820_entry> {
-    let mut entries = Vec::new();
-    for &(start, size) in ranges {
-        let (start, end) = (start.0, start.0 + size as u64);
-        for (from, to) in [
-            (start, end.min(LOW_RAM_END)),
-            (start.max(HIGH_RAM_START), end),
-        ] {
-            if from < to {
-                entries.push(boot_e820_entry {
-                    addr: from,
-                    size: to - from,
-                    r#type: E820_RAM,
-                });
+fn e820_entries(ranges: &[(GuestAddress, usize)], reserved: &[(u64, u64)]) -> Vec<boot_e820_entry> {
+    let mut reserved = reserved.to_vec();
+    reserved.sort_unstable();
+    let mut entries: Vec<_> = reserved
+        .iter()
+        .map(|&(start, end)| boot_e820_entry {
+            addr: start,
+            size: end - start,
+            r#type: E820_RESERVED,
+        })
+        .collect();
+    let mut usable = |addr, end| {
+        if addr < end {
+            entries.push(boot_e820_entry {
+                addr,
+                size: end - addr,
+                r#type: E820_RAM,
+            });
+        }
+    };
+    for (start, size) in crate::x86_boot_layout::e820_ram_ranges(ranges) {
+        let end = start + size;
+        let mut cursor = start;
+        for &(from, to) in reserved.iter().take_while(|&&(from, _)| from < end) {
+            if cursor < to {
+                usable(cursor, from);
+                cursor = to;
             }
         }
+        usable(cursor, end);
     }
+    entries.sort_unstable_by_key(|entry| entry.addr);
     entries
 }
 

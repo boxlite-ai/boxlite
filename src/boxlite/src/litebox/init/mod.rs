@@ -194,7 +194,7 @@ impl BoxBuilder {
     /// # Arguments
     ///
     /// * `runtime` - Runtime providing resources (layout, guest_rootfs, etc.)
-    /// * `config` - Box configuration (immutable after creation)
+    /// * `config` - Box configuration with any saved disk target applied
     /// * `state` - Current box state (determines init mode)
     pub(crate) fn new(
         runtime: SharedRuntimeImpl,

@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { createElement, useCallback } from 'react'
 import { toast } from 'sonner'
+import { clearPendingPlanUpgrade } from '@/lib/pending-plan-upgrade'
 import { useFetchOwnerCheckoutUrlQuery, useIsOwnerCheckoutUrlFetching } from './queries/billingQueries'
 
 export function useConnectCard() {
@@ -8,6 +9,7 @@ export function useConnectCard() {
   const isPending = useIsOwnerCheckoutUrlFetching()
 
   const connectCard = useCallback(async () => {
+    clearPendingPlanUpgrade()
     const newWindow = window.open('', '_blank')
     try {
       const url = await fetchCheckoutUrl()

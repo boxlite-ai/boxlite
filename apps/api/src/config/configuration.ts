@@ -5,8 +5,10 @@
  */
 
 import { turnstileConfig } from './turnstile-config'
+import { parseFilestoreInstances } from './filestore-instances'
 import { checkpointConfig } from './checkpoint-config'
 import { customDomainConfig } from './custom-domain-config'
+import { secretServerConfig } from './secret-server-config'
 
 /**
  * A whole number at least 1, or a hard failure.
@@ -30,6 +32,13 @@ function requiredCount(value: string | undefined, fallback: number, name: string
     throw new Error(`${name} must be a whole number of at least 1, got "${value}"`)
   }
   return parsed
+}
+
+function databaseAcquisitionTimeout(): number {
+  const name = 'DB_POOL_CONNECTION_TIMEOUT_MS'
+  const timeout = requiredCount(process.env[name], 5000, name)
+  if (timeout > 2_147_483_647) throw new Error(`${name} exceeds the Node.js timer limit`)
+  return timeout
 }
 
 function organizationInvitationTtlSeconds(): number {
@@ -423,8 +432,8 @@ function boundedNumber(
  * The `expansion` block drives the runner-disk-expansion cron: it grows a
  * GCP runner's data disk through `disks.update` when free space falls below a
  * water level, rate-limited to GCP's own budget (2 expansions per 4 hours)
- * and a configured cap. `enabled` defaults to false and no other key changes
- * any default, so an unset block is exactly today's behavior. The cap is its
+ * and a configured cap. `enabled` defaults to true; only an explicit
+ * `RUNNER_DISK_EXPANSION_ENABLED=false` keeps the cron dormant. The cap is its
  * own key rather than reusing `expandLimitGiB` because that key feeds the
  * placement admission formula: sharing it would widen the admission ceiling
  * the moment expansion is enabled. Resolution order:
@@ -457,9 +466,9 @@ export function runnerDiskConfig(env: NodeJS.ProcessEnv = process.env) {
       'a percentage from 0 up to (not including) 100',
     ),
     expansion: {
-      // Master switch; the gray-release lever. Off means the controller,
-      // sampling and unschedulable marks all stay dormant.
-      enabled: env.RUNNER_DISK_EXPANSION_ENABLED === 'true',
+      // Master switch. Off stops the controller and sampling.
+      // Existing disk_expand_exhausted marks are not lifted while off.
+      enabled: env.RUNNER_DISK_EXPANSION_ENABLED?.trim().toLowerCase() !== 'false',
       // Expansion ceiling. Unset resolves at evaluation time to the admission
       // expand limit, then to a per-runner default of twice the disk's
       // baseline size — the size at its first expansion attempt, fixed across
@@ -633,8 +642,7 @@ const configuration = {
       max: process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10),
       min: process.env.DB_POOL_MIN && parseInt(process.env.DB_POOL_MIN, 10),
       idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS && parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10),
-      connectionTimeoutMillis:
-        process.env.DB_POOL_CONNECTION_TIMEOUT_MS && parseInt(process.env.DB_POOL_CONNECTION_TIMEOUT_MS, 10),
+      connectionTimeoutMillis: databaseAcquisitionTimeout(),
     },
   },
   redis: {
@@ -704,6 +712,13 @@ const configuration = {
     // Which object store backs volume buckets. Must match the runner's
     // VOLUME_STORAGE_BACKEND: the API creates the bucket the runner mounts.
     storageBackend: process.env.VOLUME_STORAGE_BACKEND || 's3',
+    // Filestore is a GCP deployment feature. The deployment turns it off on
+    // other clouds; local APIs default to enabled so an explicit instance list
+    // keeps working without hosted deployment metadata.
+    filestoreSupported: process.env.FILESTORE_SUPPORTED !== 'false',
+    // The Filestore instances a create may select or dispatch may resolve;
+    // invalid configuration refuses to start the API.
+    filestoreInstances: parseFilestoreInstances(),
   },
   gcs: {
     // Credentials come from Application Default Credentials, never a key file,
@@ -786,6 +801,7 @@ const configuration = {
   billingApiUrl: billingApiUrlConfig(),
   analyticsApiUrl: process.env.ANALYTICS_API_URL,
   usageExport: usageExportConfig(),
+  secretServer: secretServerConfig(),
   incidentIo: incidentIoConfig(),
   defaultRunner: {
     domain: process.env.DEFAULT_RUNNER_DOMAIN,
@@ -947,7 +963,7 @@ const configuration = {
   ci: {
     schedulerGeneration: process.env.CI_SCHEDULER_GENERATION,
     workerGroup: process.env.CI_WORKER_GROUP_NAME || 'boxlite-ci-runner',
-    workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/actions/actions-runner:latest',
+    workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/boxlite-ai/boxlite-jitbox:latest',
     ...ciWorkerResources(),
     githubOAuthClientId: process.env.CI_GITHUB_OAUTH_CLIENT_ID,
     githubOAuthClientSecret: process.env.CI_GITHUB_OAUTH_CLIENT_SECRET,

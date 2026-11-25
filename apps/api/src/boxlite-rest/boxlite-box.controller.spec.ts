@@ -361,6 +361,7 @@ describe('BoxliteBoxController inbound audit', () => {
         targetId: 'box-1',
         metadata: { body: { mode: 'enabled' } },
       }),
+      expect.any(Number),
     )
   })
 })

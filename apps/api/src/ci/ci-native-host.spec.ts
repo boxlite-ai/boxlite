@@ -2,7 +2,7 @@
 import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
-import { DataSource } from 'typeorm'
+import { DataSource, QueryFailedError } from 'typeorm'
 import { Logger } from '@nestjs/common'
 import {
   WorkerPool,
@@ -34,6 +34,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     delivery: randomUUID(),
     event: 'workflow_job',
     digest: createHash('sha256').update('test-event').digest('hex'),
+    observation: { status: 'queued', labels: ['boxlite'], runner: null },
     hint: { installationId: 10, accountId: 20, repositoryId: 30, job: { id: 50, runId: 40 } },
   })
   beforeAll(async () => {
@@ -679,18 +680,46 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     expect(result.scopes).toEqual([])
     expect(requests).toHaveLength(0)
   })
+  it('reports the SQLSTATE of a failed Listener renewal without SQL or parameters', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    try {
+      await expect(
+        db.query('SELECT 1 / $1::integer', [0]).catch((error) => {
+          host.report(error, 'listener-renewal')
+          throw error
+        }),
+      ).rejects.toThrow('division by zero')
+      expect(warn).toHaveBeenCalledWith({ operation: 'listener-renewal', error: 'QueryFailedError', sqlState: '22012' })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+  it('omits private error details when renewal has no valid SQLSTATE', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => {})
+    try {
+      const error = new Error('private error details')
+      for (const cause of [error, Object.assign(new Error(), { code: 'private-driver-message' })]) {
+        host.report(new QueryFailedError('private query', [], cause), 'listener-renewal')
+        expect(warn).toHaveBeenLastCalledWith({ operation: 'listener-renewal', error: 'QueryFailedError' })
+      }
+      host.report(error, 'listener-renewal')
+      expect(warn).toHaveBeenLastCalledWith({ operation: 'listener-renewal', error: 'Error' })
+      host.report('private rejection', 'listener-renewal')
+      expect(warn).toHaveBeenLastCalledWith({ operation: 'listener-renewal', error: 'Unknown' })
+    } finally {
+      warn.mockRestore()
+    }
+  })
   it.each([0, 137])('writes a real pool exit %s to the API logger with original CI identity', async (exit_code) => {
     const scope = (await discover()).scopes.find(
       (scope) => scope.runners.kind === 'repository' && scope.runners.repository.id === 30,
     )!
     const journal = new ExecutionJournal(store.state),
       key = await journal.define(lease, scope)
-    let row = (await journal.reserve(
-      lease,
-      key,
-      { repository: 30, run: 40, job: 50 },
-      testCapacity({ account: 1, tenant: 1 }),
-    ))!
+    let row = (await journal.reserve(lease, key, null, testCapacity({ account: 1, tenant: 1 }), {
+      labels: ['boxlite'],
+      scaleSet: 9,
+    }))!
     row = await journal.advance(lease, row.record.key, row.record.version, {
       box: { phase: 'requested', id: null },
       effect: { id: randomUUID(), kind: 'box-create' },
@@ -723,7 +752,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
         { image: 'runner', cpus: 1, memoryMiB: 512, labels: ['boxlite'] },
         (event) => (host as any).observe(event),
       )
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
       expect((exit_code === 0 ? info : warn).mock.calls).toContainEqual([
         expect.objectContaining({
           event: 'ci-worker-exited',
@@ -732,7 +761,8 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
           organization: org,
           binding,
           boxId: 'original-log-box',
-          trigger: { repository: 30, run: 40, job: 50 },
+          trigger: null,
+          scaleSet: 9,
         }),
       ])
       expect(JSON.stringify([...info.mock.calls, ...warn.mock.calls])).not.toMatch(/catalog-|private-test|c2VjcmV0/)

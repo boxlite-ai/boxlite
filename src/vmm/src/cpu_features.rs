@@ -1,17 +1,31 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The CPU features each x86_64 vCPU sees. KVM reports the host's CPUID and
-//! leaves the APIC ID and topology to the VMM (`Documentation/virt/kvm/api.rst`,
+//! The CPU features each x86_64 vCPU sees. KVM reports supported guest CPUID
+//! and leaves the APIC ID and topology to the VMM (`Documentation/virt/kvm/api.rst`,
 //! `KVM_GET_SUPPORTED_CPUID`); Linux reads its APIC ID from leaf 1, then from
 //! leaf 0x1F or 0xB, then from 0x8000_001E on AMD.
 
+#[cfg(any(test, target_os = "linux"))]
+use std::io;
+
 use boxlite_hypervisor::{X86CpuidEntry, X86Msr};
+#[cfg(any(test, target_os = "linux"))]
+use vm_memory::GuestAddress;
 
 use crate::config::MAX_VCPUS;
+#[cfg(test)]
+use crate::memory::ram_ranges;
+#[cfg(any(test, target_os = "linux"))]
+use crate::{
+    error::{Error, Result},
+    memory::check_ram_end,
+    x86_boot_layout::{CheckedBootLeaf, IDENTITY_END, PageSize},
+};
 
 const LEAF_VENDOR: u32 = 0;
 const LEAF_FEATURES: u32 = 1;
+const LEAF_STRUCTURED_FEATURES: u32 = 7;
 const LEAF_TOPOLOGY: u32 = 0xb;
 const LEAF_TOPOLOGY_V2: u32 = 0x1f;
 const LEAF_AMD_ADDRESS_SIZES: u32 = 0x8000_0008;
@@ -23,6 +37,8 @@ const HYPERVISOR: u32 = 1 << 31;
 /// Leaf 1 ECX: the TSC-deadline timer, which the in-kernel local APIC
 /// emulates and which spares Linux its APIC timer calibration.
 const TSC_DEADLINE: u32 = 1 << 24;
+/// Leaf 7 subleaf 0 ECX: CET shadow stack (CET_SS or SHSTK).
+const SHSTK: u32 = 1 << 7;
 /// Leaf 1 EDX: more than one logical processor per package.
 const HTT: u32 = 1 << 28;
 /// Leaf 1 EBX[15:8]: the CLFLUSH line in 8-byte units, 64 bytes, the same on
@@ -57,10 +73,91 @@ pub(crate) const BOOT_MSRS: [X86Msr; 2] = [
     },
 ];
 
+/// Memory capabilities from the CPUID KVM supports for guests.
+#[cfg(any(test, target_os = "linux"))]
+#[derive(Debug)]
+pub(crate) struct X86MemoryCaps {
+    pub(crate) physical_end: u64,
+    pub(crate) pdpe1gb: bool,
+}
+
+#[cfg(any(test, target_os = "linux"))]
+impl X86MemoryCaps {
+    pub(crate) fn from_cpuid(entries: &[X86CpuidEntry]) -> io::Result<Self> {
+        let leaf = |leaf| {
+            entries
+                .iter()
+                .find(|entry| entry.leaf == leaf && entry.subleaf == 0)
+        };
+        let unsupported = |message| io::Error::new(io::ErrorKind::Unsupported, message);
+        let sizes = leaf(LEAF_AMD_ADDRESS_SIZES)
+            .ok_or_else(|| unsupported("missing CPUID address sizes leaf 0x80000008"))?;
+        let physical_bits = sizes.eax & 0xff;
+        // EAX[15:8] is the virtual width; EAX[23:16] is an optional GPA limit.
+        let guest_bits = (sizes.eax >> 16) & 0xff;
+        if !(32..=52).contains(&physical_bits) {
+            return Err(unsupported(
+                "CPUID physical address width must be in 32..=52",
+            ));
+        }
+        if guest_bits != 0 && !(32..=52).contains(&guest_bits) {
+            return Err(unsupported(
+                "CPUID guest physical address width must be in 32..=52",
+            ));
+        }
+        let bits = if guest_bits == 0 {
+            physical_bits
+        } else {
+            physical_bits.min(guest_bits)
+        };
+        // Extended features leaf EDX[26]: 1 GiB pages in long mode.
+        let pdpe1gb = leaf(0x8000_0001).is_some_and(|entry| entry.edx & (1 << 26) != 0);
+        Ok(Self {
+            physical_end: 1u64 << bits,
+            pdpe1gb,
+        })
+    }
+
+    /// Checks backed GPAs and the requested boot leaf before allocating RAM.
+    pub(crate) fn check_boot_leaf(
+        &self,
+        memory_mib: u32,
+        ranges: &[(GuestAddress, usize)],
+        requested_leaf: PageSize,
+    ) -> Result<CheckedBootLeaf> {
+        let mut limits = [
+            (self.physical_end, "KVM GPA"),
+            (IDENTITY_END, "four-level identity map"),
+        ];
+        // Report the tighter limit, keeping KVM first if the limits are equal.
+        limits.sort_by_key(|&(end, _)| end);
+        for (end, name) in limits {
+            check_ram_end(memory_mib, ranges, end, name)?;
+        }
+        requested_leaf
+            .checked(self.pdpe1gb)
+            .map_err(Error::HostMemoryCapability)
+    }
+}
+
+/// Checks the boot layout for tests that supply their own CPUID or page size.
+#[cfg(test)]
+pub(crate) fn preflight_x86(
+    memory_mib: u32,
+    entries: &[X86CpuidEntry],
+    requested_leaf: PageSize,
+) -> Result<CheckedBootLeaf> {
+    let caps = X86MemoryCaps::from_cpuid(entries).map_err(Error::HostMemoryCapability)?;
+    caps.check_boot_leaf(memory_mib, &ram_ranges(memory_mib), requested_leaf)
+}
+
 /// The CPUID of vCPU `index` of `count`: `supported` with APIC ID `index`, one
 /// package of `count` single-thread cores, a 64-byte CLFLUSH line, and the
-/// hypervisor and TSC-deadline bits. Every other entry is kept, so all vCPUs
-/// differ only in the APIC ID.
+/// hypervisor and TSC-deadline bits.
+///
+/// The VMM masks SHSTK because KVM snapshots do not capture the shadow stack
+/// pointer (SSP) via `KVM_GET_ONE_REG`. `boxlite-hypervisor` rejects CPUID that
+/// advertises SHSTK with `Unsupported` during capture and restore.
 pub(crate) fn vcpu_cpuid(supported: &[X86CpuidEntry], index: u8, count: u8) -> Vec<X86CpuidEntry> {
     debug_assert!(index < count && count <= MAX_VCPUS);
     let apic_id = u32::from(index);
@@ -84,6 +181,9 @@ pub(crate) fn vcpu_cpuid(supported: &[X86CpuidEntry], index: u8, count: u8) -> V
                 } else {
                     entry.edx & !HTT
                 };
+            }
+            LEAF_STRUCTURED_FEATURES if !entry.subleaf_required || entry.subleaf == 0 => {
+                entry.ecx &= !SHSTK;
             }
             // ApicIdSize in ECX[15:12] and the core count minus one in ECX[7:0].
             LEAF_AMD_ADDRESS_SIZES if amd => {

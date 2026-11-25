@@ -8,6 +8,12 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import Billing from './Billing'
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom'
+
+vi.mock('@/components/billing/SubscriptionCancellation', () => ({
+  SubscriptionCancellationProvider: ({ children }: { children: import('react').ReactNode }) => children,
+  SubscriptionCancellationAction: () => null,
+}))
 
 vi.mock('@/hooks/useConfig', () => ({
   useConfig: () => ({ billingApiUrl: 'https://billing.example.test' }),
@@ -24,11 +30,29 @@ vi.mock('@/components/billing/BalanceLowBanner', () => ({
   ),
 }))
 vi.mock('@/components/billing/PlanSection', () => ({
-  PlanSection: () => <div data-testid="plan-section">Plan section</div>,
+  PlanSection: ({ onViewPlans }: { onViewPlans: () => void }) => (
+    <div data-testid="plan-section">
+      <button onClick={onViewPlans}>View plans</button>
+    </div>
+  ),
+}))
+vi.mock('@/components/billing/PlansSection', () => ({
+  PlansSection: () => <div data-testid="plans-comparison">Plans comparison</div>,
 }))
 vi.mock('@/components/billing/UsageSection', () => ({ UsageSection: () => <div>Usage section</div> }))
 vi.mock('@/components/billing/WalletSection', () => ({
-  WalletSection: () => <div data-testid="wallet-section">Wallet section</div>,
+  WalletSection: ({
+    linkCouponCode,
+    onCouponClaimAccepted,
+  }: {
+    linkCouponCode?: string
+    onCouponClaimAccepted?: () => void
+  }) => (
+    <div data-testid="wallet-section">
+      <span data-testid="wallet-link-coupon-code">{linkCouponCode ?? ''}</span>
+      <button onClick={onCouponClaimAccepted}>Claim accepted</button>
+    </div>
+  ),
 }))
 
 function closestPageContainer(element: Element | null): Element | null {
@@ -42,6 +66,17 @@ function closestPageContainer(element: Element | null): Element | null {
   }
 
   return null
+}
+
+function LocationProbe() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  return (
+    <>
+      <output>{location.search}</output>
+      <button onClick={() => navigate(-1)}>Back in history</button>
+    </>
+  )
 }
 
 describe('Billing layout', () => {
@@ -63,7 +98,11 @@ describe('Billing layout', () => {
 
     act(() => {
       root = createRoot(host)
-      root.render(<Billing />)
+      root.render(
+        <MemoryRouter>
+          <Billing />
+        </MemoryRouter>,
+      )
     })
 
     const heading = Array.from(document.querySelectorAll('h1')).find((element) => element.textContent === 'Billing')
@@ -82,7 +121,11 @@ describe('Billing layout', () => {
 
     act(() => {
       root = createRoot(host)
-      root.render(<Billing />)
+      root.render(
+        <MemoryRouter>
+          <Billing />
+        </MemoryRouter>,
+      )
     })
 
     const heading = Array.from(document.querySelectorAll('h1')).find((element) => element.textContent === 'Billing')
@@ -96,11 +139,63 @@ describe('Billing layout', () => {
     expect(banner?.compareDocumentPosition(tabs as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(banner?.parentElement?.classList.contains('mt-4')).toBe(true)
     expect(banner?.parentElement?.classList.contains('w-full')).toBe(true)
-    expect(tabs?.classList.contains('mt-5')).toBe(true)
+    expect(tabs?.parentElement?.classList.contains('mt-5')).toBe(true)
 
     act(() => {
       ;(banner as HTMLElement).click()
     })
     expect(document.querySelector('[data-testid="wallet-section"]')).not.toBeNull()
+  })
+  it('opens Plans from Overview, preserves preview parameters and supports history', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/billing?preview=subscription-cards']}>
+          <Billing />
+          <LocationProbe />
+        </MemoryRouter>,
+      )
+    })
+    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'View plans')!.click())
+    expect(host.querySelector('[data-testid="plans-comparison"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="plan-section"]')).toBeNull()
+    expect(host.querySelector('output')?.textContent).toBe('?preview=subscription-cards&tab=plans')
+    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Back in history')!.click())
+    expect(host.querySelector('[data-testid="plan-section"]')).not.toBeNull()
+  })
+
+  it('loads a direct Plans URL without showing the Overview panel', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/billing?tab=plans']}>
+          <Billing />
+        </MemoryRouter>,
+      )
+    })
+    expect(host.querySelector('[data-testid="plans-comparison"]')).not.toBeNull()
+    expect(host.querySelector('[data-testid="plan-section"]')).toBeNull()
+  })
+
+  it('passes a coupon link code to Wallet and drops it from the URL once accepted', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter initialEntries={['/dashboard/billing?tab=wallet&code=ACME50']}>
+          <Billing />
+          <LocationProbe />
+        </MemoryRouter>,
+      )
+    })
+    expect(host.querySelector('[data-testid="wallet-link-coupon-code"]')?.textContent).toBe('ACME50')
+    act(() => [...host.querySelectorAll('button')].find((button) => button.textContent === 'Claim accepted')!.click())
+    expect(host.querySelector('output')?.textContent).toBe('?tab=wallet')
+    expect(host.querySelector('[data-testid="wallet-link-coupon-code"]')?.textContent).toBe('')
   })
 })

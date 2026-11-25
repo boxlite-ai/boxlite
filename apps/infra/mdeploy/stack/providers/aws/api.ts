@@ -22,6 +22,7 @@
 
 import type { Api, ApiCapability, ApiDependencies, ApiProvider, ApiRequest } from '../../api.ts'
 import { publicHostsFor } from '../../api.ts'
+import { denyPublicInternalRoutes } from './internal-route-policy.ts'
 import { CACHE_PASSWORD_VARIABLE } from '../../cache.ts'
 import { CLICKHOUSE_PASSWORD_VARIABLE } from '../../clickhouse.ts'
 import type { WorkloadHost } from '../../cluster.ts'
@@ -97,6 +98,8 @@ const grantsFor = (capability: ApiCapability): $util.Input<string>[] => {
       // Checkpoint storage is reserved on this cloud, and the stack asks for
       // this only where a checkpoint bucket is active.
       throw new Error('AWS keeps no checkpoint bucket yet, but was asked to grant one')
+    case 'read-filestore-instances':
+      throw new Error('AWS has no GCP Filestore instances to read')
     case 'resize-runner-disks':
       // This cloud's runners keep box state on the root disk; there is no
       // per-host data disk to grow. Reaching here means the stack was composed
@@ -190,6 +193,7 @@ export const awsApiProvider =
      * cycle: the API's environment could carry the name before the role was
      * real.
      */
+    denyPublicInternalRoutes(service.nodes.loadBalancer.arn)
     const vending = new aws.iam.Role('S3AccessRole', {
       name: storage.credentialVending.roleName,
       assumeRolePolicy: service.nodes.taskRole.arn.apply((taskRoleArn: string) =>

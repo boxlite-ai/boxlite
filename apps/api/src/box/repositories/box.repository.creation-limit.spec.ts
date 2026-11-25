@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import crypto from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 import { FindOperator } from 'typeorm'
-import { BoxRepository } from './box.repository'
+import { BoxRepository, CREATION_ADMISSION_LOCK_NAMESPACE } from './box.repository'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import {
@@ -55,6 +57,15 @@ function box(organizationId = '11111111-1111-4111-8111-111111111111'): Box {
   return entity
 }
 
+function mockAdmissionLanes(...lanes: number[]) {
+  const { randomInt } = crypto
+  return jest.spyOn(crypto, 'randomInt').mockImplementation((...args: unknown[]) => {
+    // Preserve other uses of crypto, including Box ID generation.
+    const lane = args.length === 1 && args[0] === 8 ? lanes.shift() : undefined
+    return lane ?? Reflect.apply(randomInt, crypto, args)
+  })
+}
+
 function responseCode(error: BoxCreationLimitExceededError | BoxCreationAdmissionUnavailableError): string {
   return (error.getResponse() as { code: string }).code
 }
@@ -67,7 +78,7 @@ function expectAdmissionLock(entityManager: ReturnType<typeof makeEntityManager>
   const [sql, params] = lockCalls[0] as [string, unknown[]]
   expect(sql.indexOf("set_config('lock_timeout', $1, true)")).toBeLessThan(sql.indexOf('pg_advisory_xact_lock($2'))
   expect(sql.lastIndexOf('reset_val')).toBeGreaterThan(sql.indexOf('pg_advisory_xact_lock($2'))
-  expect(params).toEqual(['5000ms', expect.any(Number), organizationId])
+  expect(params).toEqual(['5000ms', CREATION_ADMISSION_LOCK_NAMESPACE, organizationId])
 }
 
 describe('BoxRepository creation admission', () => {
@@ -78,8 +89,9 @@ describe('BoxRepository creation admission', () => {
     const onPersist = jest.fn().mockResolvedValue(undefined)
     const afterInsert = jest.fn().mockResolvedValue(undefined)
 
-    await boxRepository.insert(entity, 2, onPersist, initialize, afterInsert)
+    await boxRepository.insert(entity, 100, onPersist, initialize, afterInsert)
 
+    expectAdmissionLock(entityManager, entity.organizationId)
     expect(initialize).toHaveBeenCalledWith(entityManager)
     expect(onPersist).toHaveBeenCalledWith(entityManager, entity)
     expect(afterInsert).toHaveBeenCalledWith(entityManager)
@@ -120,6 +132,131 @@ describe('BoxRepository creation admission', () => {
       BoxState.ARCHIVING,
       BoxState.ARCHIVED,
     ])
+  })
+
+  it.each(['onPersist', 'initialize', 'afterInsert'])('keeps a create with just %s exclusive', async (callback) => {
+    const { boxRepository, entityManager } = makeRepository()
+    const entity = box()
+    const persist = jest.fn().mockResolvedValue(undefined)
+    await boxRepository.insert(
+      entity,
+      100,
+      callback === 'onPersist' ? persist : undefined,
+      callback === 'initialize' ? persist : undefined,
+      callback === 'afterInsert' ? persist : undefined,
+    )
+    expect(persist).toHaveBeenCalledTimes(1)
+    expectAdmissionLock(entityManager, entity.organizationId)
+  })
+
+  it.each([7, 100.5, Infinity, Number.MAX_SAFE_INTEGER + 1])('uses the exclusive path for limit %s', async (limit) => {
+    const { boxRepository, entityManager } = makeRepository()
+    const entity = box()
+    await boxRepository.insert(entity, limit)
+    expectAdmissionLock(entityManager, entity.organizationId)
+  })
+
+  it.each([
+    { count: 0, limit: 8, attempts: 1 },
+    { count: 1, limit: 8, attempts: 2 },
+    { count: 91, limit: 99, attempts: 1 },
+    { count: 92, limit: 100, attempts: 1 },
+    { count: 93, limit: 100, attempts: 2 },
+    { count: 93, limit: 200, attempts: 1 },
+    { count: 100, limit: 150, attempts: 1 },
+    { count: 992, limit: 1000, attempts: 1 },
+    { count: 993, limit: 1000, attempts: 2 },
+    { count: Number.MAX_SAFE_INTEGER - 8, limit: Number.MAX_SAFE_INTEGER, attempts: 1 },
+    { count: Number.MAX_SAFE_INTEGER - 7, limit: Number.MAX_SAFE_INTEGER, attempts: 2 },
+  ])('uses $attempts admission transactions for $count counted of $limit', async ({ count, limit, attempts }) => {
+    const { boxRepository, entityManager, transaction } = makeRepository(count)
+    await boxRepository.insert(box(), limit)
+    expect(transaction).toHaveBeenCalledTimes(attempts)
+    expect(entityManager.query).toHaveBeenCalledTimes(attempts + 1)
+    expect(entityManager.count).toHaveBeenCalledTimes(attempts)
+    expect(entityManager.insert).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([Number.NaN, -1, 12.5, Number.MAX_SAFE_INTEGER + 1])(
+    'recounts under the exclusive lock rather than trusting an invalid parallel count of %s',
+    async (count) => {
+      const { boxRepository, entityManager, transaction } = makeRepository(1000)
+      entityManager.count.mockResolvedValueOnce(count)
+
+      await expect(boxRepository.insert(box(), 1000)).rejects.toBeInstanceOf(BoxCreationLimitExceededError)
+      expect(transaction).toHaveBeenCalledTimes(2)
+      expect(entityManager.count).toHaveBeenCalledTimes(2)
+      expect(entityManager.query.mock.calls[2][0]).toContain('pg_advisory_xact_lock($2')
+      expect(entityManager.query.mock.calls[2][1][1]).toBe(CREATION_ADMISSION_LOCK_NAMESPACE)
+      expect(entityManager.insert).not.toHaveBeenCalled()
+    },
+  )
+
+  it('propagates a parallel count error without retrying or writing', async () => {
+    const { boxRepository, entityManager, transaction } = makeRepository(850)
+    const countError = Object.assign(new Error('canceling count due to lock timeout'), { code: '55P03' })
+    entityManager.count.mockRejectedValueOnce(countError)
+
+    await expect(boxRepository.insert(box(), 1000)).rejects.toBe(countError)
+    expect(transaction).toHaveBeenCalledTimes(1)
+    expect(entityManager.query).toHaveBeenCalledTimes(2)
+    expect(entityManager.insert).not.toHaveBeenCalled()
+  })
+
+  it('uses the selected random lane for each create, including repeated lanes', async () => {
+    const { boxRepository, entityManager } = makeRepository()
+    const random = mockAdmissionLanes(7, 0, 7)
+
+    try {
+      const entities = [box(), box(), box()]
+      for (const entity of entities) await boxRepository.insert(entity, 100)
+
+      const laneCalls = entityManager.query.mock.calls.filter(([sql]) => sql.includes('pg_advisory_xact_lock($2'))
+      expect(laneCalls.map(([, params]) => params.slice(1))).toEqual([
+        [0x43525007, entities[0].organizationId],
+        [0x43525000, entities[1].organizationId],
+        [0x43525007, entities[2].organizationId],
+      ])
+      expect(random.mock.calls.filter(([max]) => max === 8)).toHaveLength(3)
+    } finally {
+      random.mockRestore()
+    }
+  })
+
+  it('shares one lock budget across the lane, shared key, and fallback without charging the count', async () => {
+    const { boxRepository, entityManager } = makeRepository(993)
+    const random = mockAdmissionLanes(0)
+    const clock = jest.spyOn(performance, 'now')
+    for (const ms of [0, 1200, 1200, 3100, 9000, 9001]) clock.mockReturnValueOnce(ms)
+
+    try {
+      await boxRepository.insert(box(), 1000)
+      const calls = entityManager.query.mock.calls as Array<[string, [string, number, string]]>
+      expect(calls.map(([, params]) => params[0])).toEqual(['5000ms', '3800ms', '1900ms'])
+      expect(calls[0][0]).toContain('pg_advisory_xact_lock($2')
+      expect(calls[0][1][1]).toBe(0x43525000)
+      expect(calls[1][0]).toContain('pg_advisory_xact_lock_shared($2')
+      expect(calls[1][1][1]).toBe(CREATION_ADMISSION_LOCK_NAMESPACE)
+      expect(calls[2][0]).toContain('pg_advisory_xact_lock($2')
+      expect(calls[2][1][1]).toBe(CREATION_ADMISSION_LOCK_NAMESPACE)
+    } finally {
+      clock.mockRestore()
+      random.mockRestore()
+    }
+  })
+
+  it('does not start another lock wait once the admission budget is exhausted', async () => {
+    const { boxRepository, entityManager, transaction } = makeRepository()
+    const clock = jest.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(5000)
+
+    try {
+      await expect(boxRepository.insert(box(), 100)).rejects.toBeInstanceOf(BoxCreationAdmissionUnavailableError)
+      expect(entityManager.query).toHaveBeenCalledTimes(1)
+      expect(entityManager.count).not.toHaveBeenCalled()
+      expect(transaction).toHaveBeenCalledTimes(1)
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   it('rejects at the limit before persistence or post-commit side effects', async () => {
@@ -179,12 +316,12 @@ describe('BoxRepository creation admission', () => {
     expect(entityManager.insert).not.toHaveBeenCalled()
   })
 
-  it('propagates a lock timeout raised while persisting instead of reporting admission contention', async () => {
+  it.each([3, 100])('propagates a persistence lock timeout at limit %d as the original error', async (limit) => {
     const { boxRepository, entityManager } = makeRepository(0)
     const rowLockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
     entityManager.insert.mockRejectedValue(rowLockTimeout)
 
-    const error = await boxRepository.insert(box(), 3).catch((caught) => caught)
+    const error = await boxRepository.insert(box(), limit).catch((caught) => caught)
 
     expect(error).not.toBeInstanceOf(BoxCreationAdmissionUnavailableError)
     expect(error).toBe(rowLockTimeout)

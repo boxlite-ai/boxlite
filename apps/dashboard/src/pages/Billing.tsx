@@ -4,19 +4,23 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { SubscriptionCancellationProvider } from '@/components/billing/SubscriptionCancellation'
 import { TabIcon } from '@/components/ui/TabIcon'
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts } from '@/components/billing/BillingAlerts'
+import { PlansSection } from '@/components/billing/PlansSection'
 import { PlanSection } from '@/components/billing/PlanSection'
+import { PlanUpgradeReturn } from '@/components/billing/PlanUpgradeReturn'
 import { UsageSection } from '@/components/billing/UsageSection'
 import { WalletSection } from '@/components/billing/WalletSection'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RoutePath } from '@/enums/RoutePath'
 import { useConfig } from '@/hooks/useConfig'
 import { Clock, Cpu, Database, MemoryStick, type LucideIcon } from '@/components/ui/icon'
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { readPendingPlanUpgrade } from '@/lib/pending-plan-upgrade'
+import { useCallback, useState } from 'react'
 
 const TAB_PANE = 'py-6'
 
@@ -78,66 +82,106 @@ function BillingComingSoon() {
 }
 
 /**
- * One page, three tabs — the arrangement in the design. Each tab is a section
+ * One page, four tabs — the arrangement in the design. Each tab is a section
  * that keeps its own hooks; this only composes and switches them. Critical wallet
  * warnings stay above the tabs; identity and payment guidance stays in Overview.
  */
 function Billing() {
   usePageTitle('Billing')
   const config = useConfig()
+  const [pendingUpgrade, setPendingUpgrade] = useState(readPendingPlanUpgrade)
+  const finishUpgradeReturn = useCallback(() => setPendingUpgrade(null), [])
   // Controlled, so the page-level balance warning can send the user to Wallet.
-  const [tab, setTab] = useState('overview')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const tab =
+    requestedTab && ['overview', 'plans', 'usage', 'wallet'].includes(requestedTab) ? requestedTab : 'overview'
+  const setTab = (value: string) =>
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous)
+      next.set('tab', value)
+      return next
+    })
 
   if (!config.billingApiUrl) {
     return <BillingComingSoon />
   }
+  if (pendingUpgrade) {
+    return <PlanUpgradeReturn selection={pendingUpgrade} onFinish={finishUpgradeReturn} />
+  }
 
   return (
-    <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
-      <div className="page-container">
-        <div className="pt-6">
-          <h1 className="resource-title">Billing</h1>
-          <p className="mt-2 text-body leading-relaxed text-muted-foreground">
-            Track resource usage, manage your plan, and top up your balance.
-          </p>
-          <div className="mt-4 w-full empty:hidden">
-            <BalanceLowBanner onGoToWallet={() => setTab('wallet')} />
-          </div>
-          <TabsList variant="underline" aria-label="Billing views" className="mt-5">
-            <TabsTrigger value="overview">
-              <TabIcon name="overview" />
-              Overview
-            </TabsTrigger>
-            <TabsTrigger value="usage">
-              <TabIcon name="chart" />
-              Usage
-            </TabsTrigger>
-            <TabsTrigger value="wallet">
-              <TabIcon name="wallet" />
-              Wallet
-            </TabsTrigger>
-          </TabsList>
-        </div>
-        <TabsContent value="overview">
-          <div className={TAB_PANE}>
-            <div className="mb-8 flex flex-col gap-4 empty:hidden">
-              <BillingAlerts />
+    <SubscriptionCancellationProvider>
+      <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
+        <div className="page-container">
+          <div className="pt-6">
+            <h1 className="resource-title">Billing</h1>
+            <p className="mt-2 text-body leading-relaxed text-muted-foreground">
+              Track resource usage, manage your plan, and top up your balance.
+            </p>
+            <div className="mt-4 w-full empty:hidden">
+              <BalanceLowBanner onGoToWallet={() => setTab('wallet')} />
             </div>
-            <PlanSection />
+            <div className="mt-5 flex items-center gap-3">
+              <TabsList variant="underline" aria-label="Billing views" className="min-w-0 flex-1 gap-3 sm:gap-6">
+                <TabsTrigger value="overview">
+                  <TabIcon name="overview" />
+                  Overview
+                </TabsTrigger>
+                <TabsTrigger value="plans">
+                  <TabIcon name="list" />
+                  Plans
+                </TabsTrigger>
+                <TabsTrigger value="usage">
+                  <TabIcon name="chart" />
+                  Usage
+                </TabsTrigger>
+                <TabsTrigger value="wallet">
+                  <TabIcon name="wallet" />
+                  Wallet
+                </TabsTrigger>
+              </TabsList>
+            </div>
           </div>
-        </TabsContent>
-        <TabsContent value="usage">
-          <div className={TAB_PANE}>
-            <UsageSection />
-          </div>
-        </TabsContent>
-        <TabsContent value="wallet">
-          <div className={TAB_PANE}>
-            <WalletSection />
-          </div>
-        </TabsContent>
-      </div>
-    </Tabs>
+          <TabsContent value="overview">
+            <div className={TAB_PANE}>
+              <div className="mb-8 flex flex-col gap-4 empty:hidden">
+                <BillingAlerts />
+              </div>
+              <PlanSection onViewPlans={() => setTab('plans')} />
+            </div>
+          </TabsContent>
+          <TabsContent value="plans">
+            <div className={TAB_PANE}>
+              <PlansSection />
+            </div>
+          </TabsContent>
+          <TabsContent value="usage">
+            <div className={TAB_PANE}>
+              <UsageSection />
+            </div>
+          </TabsContent>
+          <TabsContent value="wallet">
+            <div className={TAB_PANE}>
+              <WalletSection
+                linkCouponCode={searchParams.get('code') ?? undefined}
+                onCouponClaimAccepted={() =>
+                  // An accepted claim no longer needs its code in the URL.
+                  setSearchParams(
+                    (previous) => {
+                      const next = new URLSearchParams(previous)
+                      next.delete('code')
+                      return next
+                    },
+                    { replace: true },
+                  )
+                }
+              />
+            </div>
+          </TabsContent>
+        </div>
+      </Tabs>
+    </SubscriptionCancellationProvider>
   )
 }
 

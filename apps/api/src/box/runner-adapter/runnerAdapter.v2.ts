@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { Inject, Injectable, Logger } from '@nestjs/common'
+import { TypedConfigService } from '../../config/typed-config.service'
+import { SecretCredentialService } from '../services/secret-credential.service'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, IsNull } from 'typeorm'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
@@ -27,6 +29,11 @@ import { RunnerState } from '../enums/runner-state.enum'
  */
 @Injectable()
 export class RunnerAdapterV2 implements RunnerAdapter {
+  @Inject(TypedConfigService)
+  private readonly config: TypedConfigService
+
+  @Inject(SecretCredentialService)
+  private readonly credentials: SecretCredentialService
   private readonly logger = new Logger(RunnerAdapterV2.name)
   private runner: Runner
 
@@ -69,42 +76,19 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       throw new Error(`Box ${boxId} not found`)
     }
 
-    // Query for any incomplete jobs for this box to determine transitional state
+    // An incomplete job takes precedence over a previous terminal result.
+    const where = { resourceType: ResourceType.BOX, resourceId: boxId }
+    const order = { createdAt: 'DESC' } as const
     const incompleteJob = await this.jobRepository.findOne({
-      where: {
-        resourceType: ResourceType.BOX,
-        resourceId: boxId,
-        completedAt: IsNull(),
-      },
-      order: { createdAt: 'DESC' },
+      where: { ...where, completedAt: IsNull() },
+      order,
     })
-
-    let state = box.state
-
-    let daemonVersion: string | undefined = undefined
-
-    // If there's an incomplete job, infer the transitional state from job type
-    if (incompleteJob) {
-      state = this.inferStateFromJob(incompleteJob, box)
-      daemonVersion = incompleteJob.getResultMetadata()?.daemonVersion
-    } else {
-      // Look for latest job for this box
-      const latestJob = await this.jobRepository.findOne({
-        where: {
-          resourceType: ResourceType.BOX,
-          resourceId: boxId,
-        },
-        order: { createdAt: 'DESC' },
-      })
-      if (latestJob) {
-        state = this.inferStateFromJob(latestJob, box)
-        daemonVersion = latestJob.getResultMetadata()?.daemonVersion
-      }
-    }
-
+    const job = incompleteJob ?? (await this.jobRepository.findOne({ where, order }))
+    const failedDestroy = !incompleteJob && job?.type === JobType.DESTROY_BOX && job.status === JobStatus.FAILED
     return {
-      state,
-      daemonVersion,
+      state: job ? this.inferStateFromJob(job, box) : box.state,
+      daemonVersion: job?.getResultMetadata()?.daemonVersion,
+      ...(failedDestroy && { failedDestroyJob: true }),
     }
   }
 
@@ -138,6 +122,14 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
+    const enabled = this.config.get('secretServer.enabled')
+    const secrets = box.secrets ?? []
+    if (!enabled && secrets.some((secret) => secret.secretId !== undefined)) {
+      throw new Error('Secret references require Secret Server to be enabled')
+    }
+    if (enabled && secrets.some((secret) => !secret.secretId)) {
+      throw new Error('Secret Server requires secret references; migrate inline secrets before enabling')
+    }
     const payload = {
       id: box.id,
       ...(nestedVirtualization ? { nestedVirtualization: true } : {}),
@@ -160,7 +152,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       })),
       secrets: box.secrets?.map((secret) => ({
         name: secret.name,
-        value: secret.value,
+        ...(!enabled ? { value: secret.value } : {}),
         hosts: secret.hosts,
         placeholder: secret.placeholder,
         headers: secret.headers,
@@ -173,7 +165,26 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       regionId: box.region,
     }
 
-    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+    if (enabled && secrets.length) {
+      const job = await this.jobRepository.manager.transaction(async (manager) => {
+        const secretCredential = await this.credentials.issue(
+          {
+            runnerId: this.runner.id,
+            boxId: box.id,
+            organizationId: box.organizationId,
+            secretIds: secrets.map((secret) => secret.secretId),
+          },
+          manager,
+        )
+        return this.jobService.createJob(manager, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, {
+          ...payload,
+          secretCredential,
+        })
+      })
+      await this.jobService.notifyRunner(job.runnerId, job.id)
+    } else {
+      await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+    }
 
     this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)
 

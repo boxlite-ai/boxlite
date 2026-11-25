@@ -11,9 +11,10 @@ import { ListenerState, ExecutionLease } from '../state/store'
 import { SqliteStateDatabase } from '../state/sqlite'
 import { PostgresStateDatabase, postgresStateTable } from '../state/postgres'
 import { ExecutionJournal } from './journal'
+import { WorkerPool } from './pool'
+import { WorkQueue } from './work-queue'
 import { ScopeApplications } from '../app-scopes'
 import { ExecutionScope } from './model'
-import { observeDemand } from '../demand'
 
 const definition: ExecutionScope = {
   binding: 'binding-a',
@@ -88,6 +89,209 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         }
       }
     })
+    it('starts every assigned worker in one pass and leaves no deficit for the next pass', async () => {
+      const size = 16
+      const capacity = testCapacity({ account: size, tenant: size })
+      const labels = ['boxlite']
+      const [check] = await state.read(['journal/format'], lease)
+      const target = {
+        id: 9,
+        labels,
+        held: 0,
+        assigned: size,
+        check,
+        delivery: { covered: 0, waitingForDispatch: true, offline: false },
+      }
+      const create = jest.fn(async ({ name }: { name: string }) => ({ box_id: name, status: 'created' }))
+      const backend = {
+        admit: async () => {},
+        runners: jest.fn(),
+        workers: {
+          create,
+          get: async (name: string) => ({ box_id: name, status: 'created' }),
+          stop: jest.fn(),
+          remove: jest.fn(),
+          deliverJit: jest.fn(),
+        },
+      }
+      for (let i = 0; i < size; i++) await journal.reserve(lease, key, null, capacity, { labels, scaleSet: target.id })
+      for (let pass = 0; pass < 2; pass++) {
+        const report = jest.fn()
+        const queue = new WorkQueue(32, report)
+        const pool = new WorkerPool(
+          journal,
+          key,
+          async () => backend,
+          { image: 'worker', cpus: 2, memoryMiB: 2048, labels },
+          undefined,
+          { queue, wake: () => {} },
+        )
+        try {
+          await pool.balanceScaleSets(lease, [target], capacity, new AbortController().signal)
+        } finally {
+          await queue.close()
+          await pool.close()
+        }
+        expect(create).toHaveBeenCalledTimes(size)
+        expect(new Set(create.mock.calls.map(([worker]) => worker.name)).size).toBe(size)
+        expect(report).not.toHaveBeenCalled()
+        expect(await journal.used(definition.organization)).toBe(size)
+      }
+    })
+    it('preserves a new reservation committed between a sibling dispatch read and write', async () => {
+      const capacity = testCapacity({ account: 2, tenant: 2 })
+      const supply = { labels: ['boxlite'], scaleSet: 9 }
+      const first = (await journal.reserve(lease, key, null, capacity, supply))!
+      const commit = state.commit.bind(state)
+      jest.spyOn(state, 'commit').mockImplementationOnce(async (...args) => {
+        expect(await journal.reserve(lease, key, null, capacity, supply)).toBeDefined()
+        return commit(...args)
+      })
+      await journal.advance(lease, first.record.key, first.record.version, {
+        effect: { id: randomUUID(), kind: 'box-create' },
+        box: { phase: 'requested', id: null },
+      })
+      const scope = await journal.scope(lease, key)
+      expect(scope.active).toBe(2)
+      expect(await journal.used(definition.organization)).toBe(2)
+      expect((await journal.workers(lease, key)).rows.map((row) => row.value.box.phase).sort()).toEqual([
+        'none',
+        'requested',
+      ])
+    })
+    it('rolls back a competing create intent for the same reservation', async () => {
+      const slot = (await journal.reserve(lease, key, null, limits, { labels: ['boxlite'], scaleSet: 9 }))!
+      const start = (id: string) =>
+        journal.advance(lease, slot.record.key, slot.record.version, {
+          effect: { id, kind: 'box-create' },
+          box: { phase: 'requested', id: null },
+        })
+      const commit = state.commit.bind(state)
+      const winner = randomUUID()
+      let acceptedVersion: string | undefined
+      jest.spyOn(state, 'commit').mockImplementationOnce(async (...args) => {
+        await start(winner)
+        acceptedVersion = (await journal.scope(lease, key)).activity.version
+        return commit(...args)
+      })
+      await expect(start(randomUUID())).rejects.toBeInstanceOf(StateConflict)
+      expect((await journal.allocation(lease, slot.record.key))!.value.effect?.id).toBe(winner)
+      expect((await journal.scope(lease, key)).activity.version).toBe(acceptedVersion)
+      expect(await journal.used(definition.organization)).toBe(1)
+    })
+    it('rejects a queued allocation mutation after an authoritative queue revision changes', async () => {
+      const [revision] = await state.commit(lease, [{ key: 'set/9', expected: null, payload: { assigned: 1 } }])
+      const row = (await journal.reserve(
+        lease,
+        key,
+        { repository: 21, run: 33, job: 55 },
+        testCapacity({ account: 2, tenant: 2 }),
+        { labels: ['boxlite'] },
+      ))!
+      await state.commit(lease, [{ key: revision.key, expected: revision.version, payload: { assigned: 0 } }])
+      await expect(
+        journal.advance(lease, row.record.key, row.record.version, { closing: true }, [
+          { key: revision.key, version: revision.version },
+        ]),
+      ).rejects.toBeInstanceOf(StateConflict)
+      expect((await journal.allocation(lease, row.record.key))!.value.closing).toBe(false)
+      expect((await journal.allocation(lease, row.record.key))!.record.version).toBe(row.record.version)
+    })
+    it.each([0, 1, 16, 32, 33])('reads %s workers with a bounded transaction budget per page', async (size) => {
+      const capacity = testCapacity({ account: Math.max(1, size), tenant: Math.max(1, size) })
+      const expected = new Set<string>()
+      for (let index = 0; index < size; index++) {
+        const row = await journal.reserve(lease, key, demand, capacity, { labels: ['boxlite'] })
+        expected.add(row!.record.key)
+      }
+      const transactions = jest.spyOn(db, 'transaction')
+      const seen = new Set<string>()
+      let after = ''
+      do {
+        transactions.mockClear()
+        const page = await journal.workers(lease, key, after)
+        expect(transactions.mock.calls.length).toBeLessThanOrEqual(10)
+        for (const row of page.rows) {
+          expect(row.value.scope).toBe(key)
+          expect(row.value.name).toBe('ci-jit-' + row.record.key.slice(7))
+          seen.add(row.record.key)
+        }
+        after = page.after
+      } while (after)
+      expect(seen).toEqual(expected)
+      transactions.mockRestore()
+    })
+    it.each(['complete', 'worker-only'])('handles %s removal between worker page reads', async (removal) => {
+      let row = (await journal.reserve(lease, key, demand, limits))!
+      row = await journal.advance(lease, row.record.key, row.record.version, {
+        box: { phase: 'absent', id: null },
+        runner: { phase: 'absent', id: null },
+      })
+      const read = state.read.bind(state)
+      let removed = false
+      const observed = jest.spyOn(state, 'read').mockImplementation(async (keys, currentLease) => {
+        const records = await read(keys, currentLease)
+        if (!removed && keys.length === 1 && keys[0] === row.record.key) {
+          removed = true
+          if (removal === 'complete') await journal.release(lease, row.record.key, row.record.version)
+          else await state.commit(lease, [{ key: row.record.key, expected: row.record.version }])
+        }
+        return records
+      })
+      if (removal === 'complete') expect((await journal.workers(lease, key)).rows).toEqual([])
+      else await expect(journal.workers(lease, key)).rejects.toBeInstanceOf(StateCorrupt)
+      expect(removed).toBe(true)
+      observed.mockRestore()
+    })
+    it('keeps unlimited domains out of the minimum when a finite domain is full', async () => {
+      const policy = {
+        limits: [
+          { domain: 'account' as const, maximum: null },
+          { domain: 'organization' as const, maximum: 1 },
+        ],
+      }
+      expect(await journal.remainingCapacity(lease, key, policy)).toBe(1)
+      await journal.reserve(lease, key, null, policy, { labels: ['boxlite'], scaleSet: 9 })
+      expect(await journal.remainingCapacity(lease, key, policy)).toBe(0)
+      expect(await journal.permitsChargedRetry(lease, key, policy)).toBe(true)
+    })
+    it.each([
+      [null, undefined],
+      [null, { labels: ['boxlite'] }],
+      [demand, { labels: ['boxlite'], scaleSet: 9 }],
+      [{ ...demand, repository: 0 }, undefined],
+      [{ ...demand, run: 0 }, undefined],
+      [{ ...demand, job: 0 }, undefined],
+    ] as const)('refuses ambiguous or unidentified job and scale-set admissions %j', async (notice, supply) => {
+      await expect(
+        journal.reserve(lease, key, notice, limits, supply && { ...supply, labels: [...supply.labels] }),
+      ).rejects.toThrow('Invalid CI admission request')
+      expect(await journal.used(definition.organization)).toBe(0)
+    })
+    it('charges only a member repository against an organization runner group', async () => {
+      const organizationScope: ExecutionScope = {
+        ...definition,
+        installation: {
+          ...definition.installation,
+          account: { ...definition.installation.account, type: 'Organization' },
+        },
+        runners: {
+          kind: 'organization',
+          account: { id: 7, login: 'owner' },
+          group: 4,
+          repositories: [21],
+          allowPrivate: true,
+          allowPublic: false,
+        },
+      }
+      const org = await journal.define(lease, organizationScope)
+      await expect(journal.reserve(lease, org, { ...demand, repository: 22 }, limits)).rejects.toThrow(
+        'outside its execution scope',
+      )
+      expect(await journal.used(definition.organization)).toBe(0)
+      expect(await journal.reserve(lease, org, demand, limits)).toBeDefined()
+      expect(await journal.used(definition.organization)).toBe(1)
+    })
     it('does not bind counted supply reservations to the triggering job', async () => {
       const capacity = testCapacity({ account: 2, tenant: 2 })
       const reserve = () => journal.reserve(lease, key, demand, capacity, { labels: ['boxlite'] })
@@ -99,74 +303,6 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await journal.used(definition.organization)).toBe(2)
       expect(await reserve()).toBeUndefined()
     })
-    const recordClaim = (installationId: number, repositoryId: number, runner: number) =>
-      state.ingress(`${installationId}/${repositoryId}`, async (tx) => {
-        await tx.write(
-          await observeDemand(
-            tx,
-            { installationId, accountId: 7, repositoryId, job: { id: demand.job, runId: demand.run } },
-            { status: 'in_progress', labels: ['boxlite'], runner },
-          ),
-        )
-      })
-    it('reads claims only from the original installation and requested runners', async () => {
-      await recordClaim(1, 21, 91)
-      await recordClaim(2, 21, 92)
-      expect(await journal.claimedRunners(lease, definition, [91, 92, 93])).toEqual(new Set([91]))
-      expect(await journal.claimedRunners(lease, definition, [])).toEqual(new Set())
-      expect(await journal.claimedRunners(lease, definition, [93])).toEqual(new Set())
-    })
-    it('withholds runner claim certainty when running observations overlap', async () => {
-      await recordClaim(1, 21, 91)
-      await state.ingress('1/21', async (tx) =>
-        tx.write(
-          await observeDemand(
-            tx,
-            { installationId: 1, accountId: 7, repositoryId: 21, job: { id: 56, runId: 33 } },
-            { status: 'in_progress', labels: ['boxlite'], runner: 91 },
-          ),
-        ),
-      )
-      expect(await journal.claimedRunners(lease, definition, [91])).toEqual(new Set())
-    })
-    it.each(['repository', 'organization'] as const)('rejects a claim outside the %s scope', async (kind) => {
-      await recordClaim(1, 22, 91)
-      const scope: ExecutionScope =
-        kind === 'repository'
-          ? definition
-          : {
-              ...definition,
-              installation: { id: 1, account: { id: 7, login: 'owner', type: 'Organization' } },
-              runners: {
-                kind: 'organization',
-                account: { id: 7, login: 'owner' },
-                group: 5,
-                repositories: [21],
-                allowPrivate: true,
-                allowPublic: false,
-              },
-            }
-      await expect(journal.claimedRunners(lease, scope, [91])).rejects.toBeInstanceOf(StateCorrupt)
-      if (scope.runners.kind === 'organization') {
-        scope.runners.repositories.push(22)
-        expect(await journal.claimedRunners(lease, scope, [91])).toEqual(new Set([91]))
-      }
-    })
-    it.each([{ repository: 0 }, { run: null }, { job: '55' }, { status: 'queued' }, { ambiguous: 'true' }])(
-      'rejects malformed persisted runner claims: %j',
-      async (change) => {
-        await recordClaim(1, 21, 91)
-        const [row] = await state.read(['runner-claim/1/91'])
-        await state.commit(lease, [
-          {
-            key: row.key,
-            expected: row.version,
-            payload: JSON.parse(JSON.stringify({ ...(row.payload as object), ...change })),
-          },
-        ])
-        await expect(journal.claimedRunners(lease, definition, [91])).rejects.toBeInstanceOf(StateCorrupt)
-      },
-    )
     it.each([
       null,
       { labels: null },
@@ -309,7 +445,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       const active = await journal.activeScopes(lease)
       expect(active.rows).toHaveLength(1)
       expect(active.rows[0].active).toBe(1)
-      expect((await journal.workers(lease, key)).rows.map((row) => row.value.job.job)).toEqual([56])
+      expect((await journal.workers(lease, key)).rows.map((row) => row.value.job!.job)).toEqual([56])
       expect(await journal.used(definition.organization)).toBe(1)
     })
     it('continues keyset recovery after a deleted cursor at an exact page boundary', async () => {
@@ -619,6 +755,34 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       const snapshot = await inspectJournal(state, lease)
       expect(snapshot.allocations.size).toBe(1)
       expect([...snapshot.scopes.values()].reduce((sum, row) => sum + row.active.length, 0)).toBe(1)
+    })
+    it('shares thirty BoxLite account slots between two competing GitHub repositories', async () => {
+      const other = structuredClone(definition)
+      if (other.runners.kind !== 'repository') throw new Error('fixture')
+      const owner = { id: 8, login: 'other' }
+      other.installation = { id: 2, account: { ...owner, type: 'User' } }
+      other.runners.repository = { ...other.runners.repository, id: 22, owner }
+      const second = await journal.define(lease, other)
+      const policy = { limits: [{ domain: 'organization' as const, maximum: 30 }] }
+      const reserve = (scope: string) =>
+        journal.reserve(lease, scope, null, policy, { labels: ['boxlite'], scaleSet: 9 })
+      const existing = await Promise.all([reserve(key), reserve(second)])
+      const competing = await Promise.all(Array.from({ length: 62 }, (_, i) => reserve(i % 2 ? key : second)))
+      const slots = [...existing, ...competing].filter((row) => row !== undefined)
+      expect(slots).toHaveLength(30)
+      expect(new Set(slots.map((row) => row.record.key)).size).toBe(30)
+      expect(new Set(slots.map((row) => row.value.scope))).toEqual(new Set([key, second]))
+      expect(await journal.used(definition.organization)).toBe(30)
+      const first = slots[0]
+      const closed = await journal.advance(lease, first.record.key, first.record.version, {
+        box: { phase: 'absent', id: null },
+        runner: { phase: 'absent', id: null },
+        closing: true,
+      })
+      await journal.release(lease, closed.record.key, closed.record.version)
+      const replacements = await Promise.all([reserve(key), reserve(second)])
+      expect(replacements.filter(Boolean)).toHaveLength(1)
+      expect(await journal.used(definition.organization)).toBe(30)
     })
     it('enforces tenant quota across different GitHub accounts', async () => {
       await journal.reserve(lease, key, demand, testCapacity({ account: 2, tenant: 1 }))

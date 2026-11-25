@@ -15,9 +15,14 @@ export interface StateChange {
   /** Undefined deletes an existing version; null is a persistable JSON value. */
   payload?: Json
 }
+// A key-only mutation advances the locked record's version and preserves its payload.
+type PreparedChange = StateChange | { key: string; expected?: never; payload?: never }
+export const MAX_STATE_CHECKS = 100
 export interface StateCheck {
   key: string
   version: string
+  /** Absolute database-clock deadline for time-bounded admission or retirement proof. */
+  expiresAt?: number
 }
 export interface IngressTransaction {
   read(keys: readonly string[]): Promise<StateRecord[]>
@@ -67,8 +72,45 @@ export class ListenerState {
     })
   }
 
+  /** Permanent deployment retirement, distinct from an expired execution lease. */
+  async superseded(): Promise<boolean> {
+    return this.database.transaction(
+      this.namespace,
+      async (tx) => {
+        this.anchor(await tx.get('@anchor'))
+        const current = this.owner(await tx.get('@owner'))
+        return (current.deployment ?? 0) > (this.deployment ?? 0)
+      },
+      'snapshot',
+    )
+  }
+
+  async now(lease: ExecutionLease): Promise<number> {
+    return this.database.transaction(this.namespace, async (tx) => {
+      await this.assertLease(tx, { ...lease })
+      return tx.now()
+    })
+  }
+
   async initialize(initial: { key: string; payload: Json }[] = []): Promise<void> {
     const seeds = initial.length ? this.prepare(initial.map((row) => ({ ...row, expected: null }))) : []
+    // Every standby tick checks the journal. Only creation or migration needs the bootstrap lock.
+    const initialized = await this.database.transaction(
+      this.namespace,
+      async (tx) => {
+        const owner = await tx.get('@owner')
+        if (!owner || owner.schema === 1) return false
+        this.owner(owner)
+        const keys = ['@anchor', '@lease', ...seeds.map((seed) => seed.key)]
+        const rows = await this.lookup(tx, keys)
+        if (rows.length !== keys.length) throw new StateCorrupt()
+        this.anchor(rows[0])
+        this.until(rows[1])
+        return true
+      },
+      'snapshot',
+    )
+    if (initialized) return
     await this.database.transaction(
       this.namespace,
       async (tx) => {
@@ -105,7 +147,13 @@ export class ListenerState {
     this.ttl(ttlMs)
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(ownerId)) throw new Error('Invalid Listener owner')
     return this.database.transaction(this.namespace, async (tx) => {
-      this.anchor(await tx.get('@anchor'))
+      const [anchor, observedOwner, observedLease] = await this.lookup(tx, ['@anchor', '@owner', '@lease'])
+      this.anchor(anchor)
+      const deployment = this.owner(observedOwner).deployment
+      const deadline = this.until(observedLease)
+      if (deployment !== this.deployment || deadline > (await tx.now())) return undefined
+
+      // A renewal or another contender may have committed since the unlocked observation.
       const row = await tx.get('@owner', true),
         previous = this.owner(row),
         expiry = await tx.get('@lease'),
@@ -126,7 +174,7 @@ export class ListenerState {
     lease = { ...lease }
     this.ttl(ttlMs)
     await this.database.transaction(this.namespace, async (tx) => {
-      const row = await this.assertLease(tx, lease),
+      const row = await this.assertLease(tx, lease, 'renew'),
         until = Math.max(this.until(row), (await tx.now()) + ttlMs)
       // Keep the locked identity tuple stable; snapshots may conservatively see an older deadline.
       if (!(await tx.put(record('@lease', { until }), row.version))) throw new StateConflict()
@@ -200,14 +248,29 @@ export class ListenerState {
     lease: ExecutionLease,
     changes: StateChange[],
     checks: readonly StateCheck[] = [],
+    refreshScopeActivity?: string,
   ): Promise<StateRecord[]> {
     lease = { ...lease }
-    const prepared = this.prepare(changes)
-    if (!Array.isArray(checks) || checks.length > 100) throw new Error('Invalid Listener state checks')
-    const fences = checks.map(({ key, version }) => ({ key, version }))
+    const prepared: PreparedChange[] = this.prepare(changes)
+    if (refreshScopeActivity !== undefined) {
+      if (
+        !/^scope-state\/[0-9a-f]{64}$/.test(refreshScopeActivity) ||
+        prepared.length >= 100 ||
+        prepared.some((change) => change.key === refreshScopeActivity)
+      )
+        throw new Error('Invalid scope activity refresh')
+      prepared.push({ key: refreshScopeActivity })
+    }
+    if (!Array.isArray(checks) || checks.length > MAX_STATE_CHECKS) throw new Error('Invalid Listener state checks')
+    const fences = checks.map(({ key, version, expiresAt }) => ({ key, version, expiresAt }))
     if (
       new Set(fences.map((check) => check.key)).size !== fences.length ||
-      fences.some((check) => !/^[A-Za-z0-9][A-Za-z0-9:._/-]{0,383}$/.test(check.key) || !uuid.test(check.version))
+      fences.some(
+        (check) =>
+          !/^[A-Za-z0-9][A-Za-z0-9:._/-]{0,383}$/.test(check.key) ||
+          !uuid.test(check.version) ||
+          (check.expiresAt !== undefined && (!Number.isSafeInteger(check.expiresAt) || check.expiresAt < 1)),
+      )
     )
       throw new Error('Invalid Listener state checks')
     return this.database.transaction(this.namespace, async (tx) => {
@@ -221,6 +284,8 @@ export class ListenerState {
       const result = await this.apply(tx, prepared)
       // Waiting for another record can consume a lease after its first check.
       await this.assertLease(tx, lease)
+      const deadlines = fences.flatMap((check) => (check.expiresAt === undefined ? [] : [check.expiresAt]))
+      if (deadlines.length && Math.min(...deadlines) <= (await tx.now())) throw new StateConflict()
       return result
     })
   }
@@ -240,17 +305,12 @@ export class ListenerState {
       this.namespace,
       async (tx) => {
         if (lease) await this.assertLease(tx, lease)
-        this.anchor(await tx.get('@anchor'))
-        this.owner(await tx.get('@owner'))
-        this.until(await tx.get('@lease'))
-        const rows: StateRecord[] = []
-        for (const key of keys) {
-          const row = await tx.get(key)
-          if (row) {
-            this.valid(row)
-            rows.push(row)
-          }
+        else {
+          this.anchor(await tx.get('@anchor'))
+          this.owner(await tx.get('@owner'))
+          this.until(await tx.get('@lease'))
         }
+        const rows = await this.lookup(tx, keys)
         if (lease) await this.assertLease(tx, lease)
         return rows
       },
@@ -259,7 +319,12 @@ export class ListenerState {
   }
 
   /** Host adapters must check the live binding in this same database transaction. */
-  async ingress<T>(target: string, work: (tx: IngressTransaction) => Promise<T>, lease?: ExecutionLease): Promise<T> {
+  async ingress<T>(
+    target: string,
+    work: (tx: IngressTransaction) => Promise<T>,
+    lease?: ExecutionLease,
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (!/^[A-Za-z0-9][A-Za-z0-9:._/-]{0,200}$/.test(target)) throw new Error('Invalid ingress target')
     return this.database.transaction(this.namespace, async (tx) => {
       if (lease) await this.assertLease(tx, lease)
@@ -270,26 +335,25 @@ export class ListenerState {
       this.until(await tx.get('@lease'))
       const result = await work({
         read: async (keys) => {
-          const rows: StateRecord[] = []
-          for (const key of keys) {
-            if (!/^(receipt|notice|wake|demand|job-fact|runner-claim)\/[A-Za-z0-9:._/-]+$/.test(key))
+          for (const key of keys)
+            if (!/^(receipt|notice|wake|demand|job-fact|runner-claim|queue-revision)\/[A-Za-z0-9:._/-]+$/.test(key))
               throw new Error('Invalid ingress record kind')
-            const row = await tx.get(key)
-            if (row) {
-              this.valid(row)
-              rows.push(row)
-            }
-          }
-          return rows
+          return this.lookup(tx, keys)
         },
         write: async (changes) => {
           const prepared = this.prepare(changes)
-          if (prepared.some(({ key }) => !/^(receipt|notice|wake|demand|job-fact|runner-claim)\//.test(key)))
+          if (
+            prepared.some(
+              ({ key }) => !/^(receipt|notice|wake|demand|job-fact|runner-claim|queue-revision)\//.test(key),
+            )
+          )
             throw new Error('Invalid ingress record kind')
           return this.apply(tx, prepared)
         },
       })
       if (lease) await this.assertLease(tx, lease)
+      // A superseded scan rolls back staged counters even if inventory changed during the final lease check.
+      signal?.throwIfAborted()
       return result
     })
   }
@@ -307,9 +371,52 @@ export class ListenerState {
     })
   }
 
-  private async apply(tx: StateTransaction, changes: StateChange[]): Promise<StateRecord[]> {
+  private async lookup(tx: StateTransaction, keys: readonly string[]): Promise<StateRecord[]> {
     const result: StateRecord[] = []
-    for (const change of changes.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
+    for (let offset = 0; offset < keys.length; offset += 100) {
+      const batch = keys.slice(offset, offset + 100)
+      const found = tx.getMany ? await tx.getMany([...new Set(batch)]) : []
+      if (!tx.getMany)
+        for (const key of batch) {
+          const row = await tx.get(key)
+          if (row) found.push(row)
+        }
+      const indexed = new Map(
+        found.map((row) => {
+          this.valid(row)
+          if (!batch.includes(row.key)) throw new StateCorrupt()
+          return [row.key, row] as const
+        }),
+      )
+      for (const key of batch) {
+        const row = indexed.get(key)
+        if (row) result.push(row)
+      }
+    }
+    return result
+  }
+  private async apply(tx: StateTransaction, changes: PreparedChange[]): Promise<StateRecord[]> {
+    const result: StateRecord[] = []
+    const ordered = changes.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    for (let index = 0; index < ordered.length; index++) {
+      let change = ordered[index]
+      if (change.expected === undefined) {
+        // Lock in the same order as membership writes; a dispatch preserves their latest active count.
+        const current = await tx.get(change.key, true)
+        this.valid(current)
+        change = { key: change.key, expected: current!.version, payload: current!.payload }
+      }
+      if (tx.insertMany && change.expected === null) {
+        let end = index + 1
+        while (end < ordered.length && ordered[end].expected === null) end++
+        if (end - index > 1) {
+          const inserted = ordered.slice(index, end).map((row) => record(row.key, row.payload as Json))
+          if (!(await tx.insertMany(inserted))) throw new StateConflict()
+          result.push(...inserted)
+          index = end - 1
+          continue
+        }
+      }
       if (change.payload === undefined) {
         if (!change.expected || !(await tx.remove(change.key, change.expected))) throw new StateConflict()
       } else {
@@ -321,11 +428,16 @@ export class ListenerState {
     return result
   }
 
-  private async assertLease(tx: StateTransaction, lease: ExecutionLease): Promise<StateRecord> {
+  private async assertLease(
+    tx: StateTransaction,
+    lease: ExecutionLease,
+    operation: 'check' | 'renew' = 'check',
+  ): Promise<StateRecord> {
     if (lease.namespace !== this.namespace) throw new LeaseLost()
     this.anchor(await tx.get('@anchor'))
-    const current = this.owner(await tx.get('@owner', true)),
-      expiry = await tx.get('@lease'),
+    // Identity changes wait for both workers and renewals. Only renewals serialize on the deadline.
+    const current = this.owner(await (tx.getShared ? tx.getShared('@owner') : tx.get('@owner', true))),
+      expiry = await tx.get('@lease', operation === 'renew'),
       until = this.until(expiry)
     if (
       current.deployment !== this.deployment ||

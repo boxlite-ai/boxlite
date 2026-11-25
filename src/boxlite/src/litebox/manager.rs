@@ -52,6 +52,24 @@ impl BoxManager {
 
     /// Add a new box to the database.
     pub fn add_box(&self, config: &BoxConfig, state: &BoxState) -> BoxliteResult<()> {
+        self.add_box_impl(config, state, None)
+    }
+
+    pub(crate) fn add_clone_box(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: &crate::BaseDiskID,
+    ) -> BoxliteResult<()> {
+        self.add_box_impl(config, state, Some(base_disk_id))
+    }
+
+    fn add_box_impl(
+        &self,
+        config: &BoxConfig,
+        state: &BoxState,
+        base_disk_id: Option<&crate::BaseDiskID>,
+    ) -> BoxliteResult<()> {
         // Check name uniqueness if name is set
         if let Some(ref name) = config.name
             && self.lookup_box_id(name)?.is_some()
@@ -70,7 +88,11 @@ impl BoxManager {
             )));
         }
 
-        self.store.save(config, state)?;
+        if let Some(base_disk_id) = base_disk_id {
+            self.store.save_clone(config, state, base_disk_id)?;
+        } else {
+            self.store.save(config, state)?;
+        }
 
         tracing::debug!(
             box_id = %config.id,
@@ -156,6 +178,11 @@ impl BoxManager {
         self.store.list_all()
     }
 
+    /// Get every persisted configuration, including records with no state row.
+    pub fn all_box_configs(&self) -> BoxliteResult<Vec<BoxConfig>> {
+        self.store.list_configs()
+    }
+
     /// Save box state to the database.
     ///
     /// Reads state from the provided BoxState and persists to DB.
@@ -169,6 +196,11 @@ impl BoxManager {
         );
 
         Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub fn save_disk_size(&self, id: &BoxID, disk_size_gb: u64) -> BoxliteResult<()> {
+        self.store.update_disk_size(id.as_str(), disk_size_gb)
     }
 
     pub fn save_outbound(
