@@ -528,7 +528,9 @@ jobs:
         run: node apps/infra/scripts/release-candidate.mjs attach
 
   npm:
-    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","repair-node"]'), inputs.command) }}
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","repair-node"]'), inputs.command) &&
+      !cancelled() && needs.attach.result == 'success' }}
     name: Publish accepted npm packages
     needs: [resolve, attach]
     runs-on: ubuntu-latest
@@ -572,7 +574,9 @@ jobs:
           done
 
   pypi:
-    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) }}
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) &&
+      !cancelled() && needs.attach.result == 'success' }}
     name: Publish to PyPI
     needs: [resolve, attach]
     runs-on: ubuntu-latest
@@ -611,7 +615,9 @@ jobs:
         run: bash scripts/release/verify-pypi-wheels.sh after
 
   tag-go-module:
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' &&
+      !cancelled() && needs.attach.result == 'success' }}
     name: Tag Go Module
     needs: [resolve, attach]
     runs-on: ubuntu-latest
@@ -658,7 +664,9 @@ jobs:
           git push origin "$C_SHA:$go_ref"
 
   publish_crates:
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' &&
+      !cancelled() && needs.finalize.result == 'success' }}
     name: Publish to crates.io
     needs: [resolve, finalize]
     runs-on: ubuntu-latest
@@ -764,7 +772,10 @@ jobs:
           echo "::endgroup::"
 
   finalize:
-    if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' &&
+      !cancelled() && needs.npm.result == 'success' &&
+      needs.pypi.result == 'success' && needs.tag-go-module.result == 'success' }}
     name: Publish the verified GitHub Release
     needs: [resolve, distribution, attach, pypi, npm, tag-go-module]
     runs-on: ubuntu-latest

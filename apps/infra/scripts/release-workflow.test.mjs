@@ -373,3 +373,35 @@ test('GHCR pins unlock dev and dev acceptance independently unlocks prod and pub
   assert.ok(!jobs.attach.needs.includes('prod'))
   assert.ok(jobs.publish_crates.needs.includes('finalize'))
 })
+
+test('publication gates accept a skipped optional ancestor and require successful direct prerequisites', () => {
+  for (const [id, prerequisites, commands] of [
+    ['npm', ['attach'], ['publish', 'repair-node']],
+    ['pypi', ['attach'], ['publish', 'repair-wheels']],
+    ['tag-go-module', ['attach'], ['publish']],
+    ['finalize', ['npm', 'pypi', 'tag-go-module'], ['publish']],
+    ['publish_crates', ['finalize'], ['publish']],
+  ]) {
+    const condition = expression(release.jobs[id].if)
+    const evaluate = new Function('github', 'inputs', 'needs', 'cancelled', 'contains', 'fromJSON',
+      'return ' + condition.replaceAll('needs.tag-go-module', "needs['tag-go-module']"))
+    const needs = Object.fromEntries(release.jobs[id].needs.map((name) => [name, { result: 'success' }]))
+    const selected = (command, cancelled = false, ref = 'refs/heads/main') => {
+      // GitHub implicitly adds success() when the condition omits a status function.
+      if (!/\b(success|failure|always|cancelled)\(/.test(condition)) return false
+      return evaluate({ ref }, { command }, needs, () => cancelled, (a, b) => a.includes(b), JSON.parse)
+    }
+    for (const command of release.on.workflow_dispatch.inputs.command.options) {
+      assert.equal(selected(command), commands.includes(command), id + ' on ' + command)
+    }
+    for (const name of prerequisites) {
+      for (const result of ['skipped', 'failure', 'cancelled']) {
+        needs[name].result = result
+        assert.equal(selected('publish'), false, id + ' after ' + name + ' ' + result)
+      }
+      needs[name].result = 'success'
+    }
+    assert.equal(selected('publish', true), false)
+    assert.equal(selected('publish', false, 'refs/heads/topic'), false)
+  }
+})

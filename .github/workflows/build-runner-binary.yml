@@ -29,18 +29,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  config:
-    uses: ./.github/workflows/config.yml
-
   resolve-ref:
-    name: Resolve build commit
+    name: Prepare build configuration and commit
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
+      go-version: ${{ steps.config.outputs.go-version }}
+      artifact-retention-days: ${{ steps.config.outputs.artifact-retention-days }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/ci-config
+        id: config
       - name: Validate build commit
         id: ref
         shell: bash
@@ -72,10 +73,9 @@ jobs:
 
   build:
     name: Build Runner (linux-amd64)
-    needs: [config, resolve-ref, build-c]
+    needs: [resolve-ref, build-c]
     if: >-
       !cancelled() &&
-      needs.config.result == 'success' &&
       needs['resolve-ref'].result == 'success' &&
       (needs['build-c'].result == 'success' || needs['build-c'].result == 'skipped')
     runs-on: ubuntu-latest
@@ -92,7 +92,7 @@ jobs:
 
       - uses: ./.github/actions/setup-go
         with:
-          go-version: ${{ needs.config.outputs.go-version }}
+          go-version: ${{ needs.resolve-ref.outputs.go-version }}
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
@@ -212,4 +212,4 @@ jobs:
             boxlite-runner-*-linux-amd64.tar.gz
             boxlite-runner-*-linux-amd64.tar.gz.sha256
             producer.json
-          retention-days: ${{ needs.config.outputs.artifact-retention-days }}
+          retention-days: ${{ needs.resolve-ref.outputs.artifact-retention-days }}

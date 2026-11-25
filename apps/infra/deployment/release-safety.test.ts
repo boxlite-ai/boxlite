@@ -1751,11 +1751,11 @@ test('a job calling a reusable workflow grants at least what that workflow asks 
       checked += 1
     }
   }
-  // The input sweep also covers the three release deployment and acceptance calls, five config loads,
-  // deploy-infra's four and two manual SDK builds. The exact count, not a
+  // The sweep covers release deployment, shared configuration and manual SDK builds.
+  // The exact count, not a
   // floor, so a call that stops being swept fails here rather than being
   // absorbed — and adding one means changing this number in the same commit.
-  assert.equal(checked, 21, `expected every local reusable call to be swept, saw ${checked}`)
+  assert.equal(checked, 19, `expected every local reusable call to be swept, saw ${checked}`)
 })
 
 test('every reusable workflow is called with the inputs it declares', () => {
@@ -1795,14 +1795,14 @@ test('every reusable workflow is called with the inputs it declares', () => {
       checked += 1
     }
   }
-  // Every local `uses:` in the directory, not just the deploy path's: five
+  // Every local `uses:` in the directory, not just the deploy path's: four
   // build workflows load `config.yml`, `deploy-infra.yml` calls four, and
   // the manual Runner and Go builds each call
   // build-c to pair their SDK sources with the native library from that commit.
   // The exact count, not a floor: a call that stops being swept is the drop
   // this exists to catch, and one that appears is a caller nobody reviewed.
   // Adding a legitimate one means changing this number in the same commit.
-  assert.equal(checked, 21, `expected every reusable-workflow call swept, saw ${checked}`)
+  assert.equal(checked, 19, `expected every reusable-workflow call swept, saw ${checked}`)
 })
 
 /**

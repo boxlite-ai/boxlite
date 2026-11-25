@@ -23,6 +23,8 @@ The run creates the draft or selects the existing draft for that tag. Configure 
 | Publish | Dev E2E success opens prod approval immediately. In parallel, publication waits for the complete distribution and Go tests, compares the tested client bytes, and attaches the verified files to the draft. The top-level PyPI and npm jobs publish the accepted packages and the Go job tags the tested commit. |
 | Release and prod | When those publishers succeed, the workflow marks the draft public. Rust crates publish after the runtime becomes public. Approved prod deployment uses the same GHCR digests and can finish while the release is still a draft. |
 
+The C SDK and Runner workflows each load CI configuration and validate the build commit in one preparation job. A regular release skips the lookup for a previous acceptance receipt. Once its own attachments succeed, npm, PyPI and Go tagging can start. Finalization requires all three to succeed, and crates.io requires successful finalization.
+
 The Runner package at `ghcr.io/boxlite-ai/boxlite/runner` must allow anonymous pulls from hosts. First boot and in-place upgrade verify the OCI manifest against the release tag, source commit and archive digest before extracting the binary. Dev and prod receive those pins from the candidate. A version-only manual rollout reads the same pins from the published `release-candidate.json`.
 
 ### Retries
