@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/boxlite/gvproxy-bridge/internal/guardinventory"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -34,7 +35,6 @@ type outboundPolicy struct {
 
 type trustedTCPRules struct {
 	allow, deny []string
-	cloud       bool
 }
 
 type nicOperations interface {
@@ -48,6 +48,9 @@ type outboundPolicyController struct {
 	mu           sync.Mutex
 	active       atomic.Pointer[outboundSnapshot]
 	config       *types.Configuration
+	guard        platformGuard
+	inventory    guardinventory.Observation
+	resolve      resolveFunc
 	guestIP      string
 	stack        *stack.Stack
 	nic          tcpip.NICID
@@ -58,7 +61,7 @@ type outboundPolicyController struct {
 	udpFlows           *udpFlowPool
 }
 
-func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.VirtualNetwork, config *types.Configuration, guestIP string, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, initialRevision string) (*outboundPolicyController, error) {
+func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.VirtualNetwork, config *types.Configuration, startup GvproxyConfig, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy, resolve resolveFunc) (*outboundPolicyController, error) {
 	s, err := stackOf(vn)
 	if err != nil {
 		return nil, err
@@ -68,7 +71,7 @@ func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.Virtual
 		return nil, fmt.Errorf("policy updates require one guest NIC, got %d", len(nics))
 	}
 	p := &outboundPolicyController{
-		config: config, guestIP: guestIP, stack: s, nicOps: s,
+		config: config, guard: startup.guard, resolve: resolve, guestIP: startup.GuestIP, stack: s, nicOps: s,
 		capabilities:       supportedOutboundCapabilities(),
 		tcpInspectionSlots: make(chan struct{}, 10),
 		udpFlows:           newUDPFlowPool(ctx),
@@ -76,6 +79,7 @@ func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.Virtual
 	for id := range nics {
 		p.nic = id
 	}
+	initialRevision := startup.OutboundRevision
 	if initialRevision == "" {
 		initialRevision, err = newOutboundRevision()
 		if err != nil {
@@ -90,9 +94,10 @@ func newOutboundPolicyController(ctx context.Context, vn *virtualnetwork.Virtual
 		return nil, err
 	}
 	p.publish(snapshot, "pending")
-	if err := installOutboundHandlers(p.stack, config, config.Ec2MetadataAccess, p.active.Load, p.tcpInspectionSlots, p.udpFlows, ca, secrets); err != nil {
+	if err := p.installOutboundModeGate(); err != nil {
 		return nil, err
 	}
+	installOutboundHandlers(p.stack, config, p.active.Load, p.tcpInspectionSlots, p.udpFlows, ca, secrets)
 	if initial.Mode == "disabled" {
 		if err := p.nicOps.DisableNIC(p.nic); err != nil {
 			return nil, fmt.Errorf("suspend initial guest NIC: %s", err)

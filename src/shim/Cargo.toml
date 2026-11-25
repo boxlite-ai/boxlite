@@ -23,3 +23,6 @@ tokio = { version = "1.37", features = ["rt", "time"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "ansi"] }
+
+[dev-dependencies]
+tempfile = "3"

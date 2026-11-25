@@ -1,0 +1,2 @@
+# Unified-diff context lines carry a leading space before upstream tabs or blank lines.
+src/deps/libgvproxy-sys/gvproxy-bridge/gvisor-tap-vsock-dns.patch whitespace=-blank-at-eol,-space-before-tab

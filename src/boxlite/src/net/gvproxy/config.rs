@@ -6,7 +6,8 @@ use std::path::PathBuf;
 /// Local DNS zone configuration
 ///
 /// Defines local DNS records served by the gateway's embedded DNS server.
-/// Queries not matching any zone are forwarded to the host's system DNS.
+/// Other queries use the host resolver in Local mode and the approved
+/// inventory resolver endpoints in guarded Cloud mode.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DnsZone {
     /// Zone name (e.g., "myapp.local.", "." for root)
@@ -60,7 +61,8 @@ pub struct GvproxyConfig {
     /// Guest IP address
     pub guest_ip: String,
 
-    /// Virtual host IP address that routes to host loopback services
+    /// Virtual host alias address. Local gvproxy forwards permitted traffic
+    /// to host loopback. The Cloud platform guard denies this destination.
     pub host_ip: String,
 
     /// Guest MAC address

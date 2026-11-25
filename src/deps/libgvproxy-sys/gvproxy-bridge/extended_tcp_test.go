@@ -26,6 +26,7 @@ func TestExtendedTCPGuestRoutes(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		rules      trustedTCPRules
+		cloud      bool
 		answers    []string
 		headers    string
 		port       uint16
@@ -33,7 +34,7 @@ func TestExtendedTCPGuestRoutes(t *testing.T) {
 		connection string
 	}{
 		{name: "direct-local-NAT", rules: trustedTCPRules{allow: []string{unlistedIP}}, headers: hostHeader, connection: "127.0.0.1"},
-		{name: "direct-Cloud-NAT-denied", rules: trustedTCPRules{allow: []string{unlistedIP}, cloud: true}, headers: hostHeader},
+		{name: "direct-Cloud-NAT-denied", cloud: true, rules: trustedTCPRules{allow: []string{unlistedIP}}, headers: hostHeader},
 		{name: "pre-NAT-deny", rules: trustedTCPRules{deny: []string{unlistedIP}}, headers: hostHeader},
 		{name: "deny-only-inspects-unusual-port", rules: trustedTCPRules{deny: []string{"api.example.com:8443"}}, headers: hostHeader, port: 8443},
 		{name: "name-allow-mixed-DNS", rules: trustedTCPRules{allow: []string{"api.example.com:8443"}, deny: []string{"192.0.2.0/24:8443"}},
@@ -41,7 +42,7 @@ func TestExtendedTCPGuestRoutes(t *testing.T) {
 		{name: "IPv6-only-DNS", rules: trustedTCPRules{allow: []string{"api.example.com"}}, headers: hostHeader, answers: []string{"2001:db8::8"}},
 		{name: "hard-candidate-deny", rules: trustedTCPRules{allow: []string{"api.example.com", "0.0.0.0/8", "224.0.0.0/4", "169.254.0.0/16"}},
 			headers: hostHeader, answers: []string{"169.254.169.254", "224.0.0.1", "0.8.2.1"}},
-		{name: "Cloud-private-candidate-deny", rules: trustedTCPRules{allow: []string{"api.example.com", "127.0.0.1"}, cloud: true},
+		{name: "Cloud-private-candidate-deny", cloud: true, rules: trustedTCPRules{allow: []string{"api.example.com", "127.0.0.1"}},
 			headers: hostHeader, answers: []string{"127.0.0.1"}},
 		{name: "extended-allow-independent-of-UDP", rules: trustedTCPRules{allow: []string{"api.example.com", "127.0.0.1"}},
 			headers: hostHeader, answers: []string{"127.0.0.1"}, connection: "127.0.0.1"},
@@ -71,7 +72,7 @@ func TestExtendedTCPGuestRoutes(t *testing.T) {
 			cfg := testGvproxyConfig()
 			cfg.AllowNet = []string{"192.0.2.77"}
 			seams := networkSeams{
-				tcp: &tc.rules, resolve: staticResolve(tc.answers...), dial: refuseDial,
+				cloud: tc.cloud, tcp: &tc.rules, resolve: staticResolve(tc.answers...), dial: refuseDial,
 				connect: func(ctx context.Context, target egressTarget) (net.Conn, error) {
 					if connectorCalls.Add(1) <= 2 {
 						targets <- target

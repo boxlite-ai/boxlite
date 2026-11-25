@@ -24,6 +24,13 @@ pub(crate) async fn probe_outbound_capabilities() -> BoxliteResult<OutboundCapab
 pub(super) async fn probe_outbound_capabilities_at(
     shim: PathBuf,
 ) -> BoxliteResult<OutboundCapabilities> {
+    probe_shim_at(shim, br#"{"outbound_policy_probe":1}"#).await
+}
+
+async fn probe_shim_at<T: serde::de::DeserializeOwned + Send + 'static>(
+    shim: PathBuf,
+    probe: &'static [u8],
+) -> BoxliteResult<T> {
     use std::{process::Stdio, time::Duration};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_util::sync::CancellationToken;
@@ -39,7 +46,7 @@ pub(super) async fn probe_outbound_capabilities_at(
             .kill_on_drop(true).spawn().map_err(error)?;
         let exchange = async {
             let mut input = child.stdin.take().ok_or_else(|| BoxliteError::Engine("missing probe stdin".into()))?;
-            input.write_all(br#"{"outbound_policy_probe":1}"#).await.map_err(error)?;
+            input.write_all(probe).await.map_err(error)?;
             drop(input);
             let output = child.stdout.take().ok_or_else(|| BoxliteError::Engine("missing probe stdout".into()))?;
             let mut reply = Vec::new();
@@ -365,6 +372,9 @@ impl ShimController {
 fn serialize_shim_config(
     config: &InstanceSpec,
     revision: Option<&crate::net::OutboundRevision>,
+    outbound: Option<&OutboundBootstrap>,
+    protected_cidrs: &[String],
+    cloud_guard: Option<&crate::net::gvproxy::CloudGuardBootstrap>,
 ) -> BoxliteResult<String> {
     #[derive(serde::Serialize)]
     struct Launch<'a> {
@@ -372,12 +382,45 @@ fn serialize_shim_config(
         config: &'a InstanceSpec,
         #[serde(skip_serializing_if = "Option::is_none")]
         outbound_revision: Option<&'a crate::net::OutboundRevision>,
+        #[serde(skip_serializing_if = "<[String]>::is_empty")]
+        platform_protected_cidrs: &'a [String],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cloud_guard: Option<&'a crate::net::gvproxy::CloudGuardBootstrap>,
     }
-    serde_json::to_string(&Launch {
-        config,
-        outbound_revision: revision,
-    })
+    #[derive(serde::Serialize)]
+    struct CompleteLaunch<'a> {
+        config: &'a InstanceSpec,
+        outbound_v1: &'a OutboundBootstrap,
+        #[serde(skip_serializing_if = "<[String]>::is_empty")]
+        platform_protected_cidrs: &'a [String],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cloud_guard: Option<&'a crate::net::gvproxy::CloudGuardBootstrap>,
+    }
+    match outbound {
+        Some(outbound) => serde_json::to_string(&CompleteLaunch {
+            config,
+            outbound_v1: outbound,
+            platform_protected_cidrs: protected_cidrs,
+            cloud_guard,
+        }),
+        None => serde_json::to_string(&Launch {
+            config,
+            outbound_revision: revision,
+            platform_protected_cidrs: protected_cidrs,
+            cloud_guard,
+        }),
+    }
     .map_err(|e| BoxliteError::Engine(format!("Failed to serialize shim config: {e}")))
+}
+
+fn protected_cidrs_from_host_env() -> BoxliteResult<Vec<String>> {
+    match std::env::var("BOXLITE_PLATFORM_PROTECTED_CIDRS") {
+        Ok(value) if !value.is_empty() => Ok(value.split(',').map(str::to_owned).collect()),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(Vec::new()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(BoxliteError::InvalidArgument(
+            "BOXLITE_PLATFORM_PROTECTED_CIDRS must be UTF-8".into(),
+        )),
+    }
 }
 
 #[async_trait::async_trait]
@@ -427,15 +470,65 @@ impl VmmController for ShimController {
         };
 
         // Serialize the config for passing to subprocess
-        let config_json = match &self.complete_outbound {
-            Some(outbound) => serde_json::to_string(
-                &serde_json::json!({"config": serializable_config, "outbound_v1": outbound}),
-            )
-            .map_err(|e| {
-                BoxliteError::Engine(format!("Failed to serialize complete shim launch: {e}"))
-            })?,
-            None => serialize_shim_config(&serializable_config, self.outbound_revision.as_ref())?,
-        };
+        let mut protected_cidrs = Vec::new();
+        let mut cloud_profile = None;
+        let mut cloud_launch = None;
+        if !serializable_config.disable_network {
+            cloud_profile = crate::net::gvproxy::CloudGuardRuntime::from_host()?;
+        }
+        if cloud_profile.is_some() && serializable_config.network_backend_spec.is_none() {
+            return Err(BoxliteError::Unsupported(
+                "Cloud platform guard requires the gvproxy network backend".into(),
+            ));
+        }
+        if !serializable_config.disable_network
+            && let Some(network) = &serializable_config.network_backend_spec
+        {
+            protected_cidrs = protected_cidrs_from_host_env()?;
+            if !protected_cidrs.is_empty()
+                && !probe_shim_at::<bool>(
+                    self.binary_path.clone(),
+                    br#"{"platform_cidrs_probe":1}"#,
+                )
+                .await?
+            {
+                return Err(BoxliteError::Unsupported(
+                    "shim does not support host-protected CIDRs".into(),
+                ));
+            }
+            if let Some(profile) = &cloud_profile {
+                profile.validate_jail_mounts(
+                    &self.options,
+                    &serializable_config,
+                    &self.binary_path,
+                )?;
+                if !probe_shim_at::<bool>(self.binary_path.clone(), br#"{"cloud_guard_probe":1}"#)
+                    .await?
+                {
+                    return Err(BoxliteError::Unsupported(
+                        "shim does not support the Cloud platform guard".into(),
+                    ));
+                }
+                #[cfg(target_os = "linux")]
+                crate::jailer::cgroup::setup_cgroup(
+                    self.box_id.as_str(),
+                    &crate::jailer::cgroup::CgroupConfig::default(),
+                )
+                .map_err(|error| BoxliteError::Engine(error.to_string()))?;
+                cloud_launch = Some(
+                    profile
+                        .prepare(self.box_id.as_str(), &network.socket_path)
+                        .await?,
+                );
+            }
+        }
+        let config_json = serialize_shim_config(
+            &serializable_config,
+            self.outbound_revision.as_ref(),
+            self.complete_outbound.as_ref(),
+            &protected_cidrs,
+            cloud_launch.as_ref(),
+        )?;
 
         // Clean up stale socket file if it exists (defense in depth)
         // Only relevant for Unix sockets
@@ -457,14 +550,49 @@ impl VmmController for ShimController {
 
         // Measure subprocess spawn time
         let shim_spawn_start = Instant::now();
-        let spawner = ShimSpawner::new(
+        let mut spawner = ShimSpawner::new(
             &self.binary_path,
             &self.layout,
             self.box_id.as_str(),
             &self.options,
         )
         .with_nested_virtualization(config.nested_virtualization);
-        let spawned = spawner.spawn(&config_json, config.detach)?;
+        if let Some(launch) = &cloud_launch {
+            spawner = spawner.with_cloud_paths(launch);
+        }
+        let mut spawned = match spawner.spawn(&config_json, config.detach) {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                if let (Some(profile), Some(launch)) = (&cloud_profile, &cloud_launch) {
+                    profile.release(launch).await;
+                }
+                return Err(error);
+            }
+        };
+        if let (Some(profile), Some(launch), Some(network)) =
+            (&cloud_profile, &cloud_launch, &config.network_backend_spec)
+        {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                match profile
+                    .verify_live(self.box_id.as_str(), &network.socket_path, Some(launch))
+                    .await
+                {
+                    Ok(()) => break,
+                    Err(error)
+                        if tokio::time::Instant::now() >= deadline
+                            || spawned.child.try_wait().ok().flatten().is_some() =>
+                    {
+                        crate::jailer::reap_box(&self.box_id);
+                        let _ = spawned.child.kill();
+                        let _ = spawned.child.wait();
+                        profile.release(launch).await;
+                        return Err(error);
+                    }
+                    Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+                }
+            }
+        }
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();
 

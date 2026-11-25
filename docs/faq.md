@@ -250,7 +250,8 @@ See [Debugging Guide](./guides/debugging.md) for comprehensive troubleshooting.
 
 ### Does BoxLite support internet access?
 
-**Yes.** All boxes have full internet access by default.
+Networking is enabled by default with an empty Box allowlist.
+Host protection, including the [Cloud platform guard](./concepts/networking.md#cloud-platform-guard), still applies.
 
 **Outbound connections:**
 - HTTP/HTTPS requests
@@ -302,12 +303,13 @@ See [Configuring Networking](./guides/networking.md) for details.
    volumes=[("/host/shared", "/mnt/shared", False)]
    ```
 
-2. **Use host network:**
+2. **Use host loopback on Local:**
    - Box A exposes port
    - Box B connects to `host.boxlite.internal:port`
-   - With an empty `allow_net`, host loopback services are reachable from
-     inside the box; a non-empty `allow_net` must list `"192.168.127.254"`
-     or a CIDR covering it
+   - The host rules must permit the alias. A non-empty `allow_net` must
+     list `"192.168.127.254"` or a CIDR covering it.
+
+   Guarded Cloud Runners deny connections to the alias.
 
 3. **External service:**
    - Both boxes connect to Redis/database on host or network

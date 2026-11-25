@@ -38,6 +38,18 @@ guest:
 shim:
 	@bash $(SCRIPT_DIR)/build/build-shim.sh
 
+PHONY_TARGETS += build\:platform-guard-bpf build\:platform-guard
+BPF_CLANG ?= clang
+build\:platform-guard-bpf:
+	@mkdir -p target/platform-guard
+	@$(BPF_CLANG) -target bpfel -mcpu=v3 -O2 -g -Wall -Wextra -Werror \
+		-c apps/runner/platform-guard/bpf/deadline.bpf.c -o target/platform-guard/deadline.bpf.o
+
+build\:platform-guard:
+	@$(MAKE) build:platform-guard-bpf
+	@GOWORK=off go -C src/deps/libgvproxy-sys/gvproxy-bridge build \
+		-o "$(PROJECT_ROOT)/target/platform-guard/boxlite-platform-guard" ./cmd/boxlite-platform-guard
+
 runtime:
 	@bash $(SCRIPT_DIR)/build/build-runtime.sh --profile release
 

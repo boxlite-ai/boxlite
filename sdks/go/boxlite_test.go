@@ -838,9 +838,8 @@ func TestWithNetwork_InboundDisabled(t *testing.T) {
 	if cfg.network.Inbound.Mode != NetworkModeDisabled {
 		t.Errorf("network.Inbound.Mode: got %q", cfg.network.Inbound.Mode)
 	}
-	// Outbound is independent of Inbound: unset Outbound.Mode still means
-	// "enabled, full access" once buildCOptions runs, same as before this
-	// field existed.
+	// An unset Outbound.Mode preserves the enabled mode and empty Box
+	// allowlist regardless of the inbound setting.
 	if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

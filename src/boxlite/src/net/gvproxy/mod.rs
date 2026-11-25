@@ -34,6 +34,7 @@ mod ffi;
 mod instance;
 #[cfg(feature = "gvproxy")]
 mod logging;
+mod platform;
 mod services;
 mod stats;
 
@@ -43,6 +44,8 @@ pub use config::{DnsRecord, DnsZone, GvproxyConfig, GvproxySecretConfig};
 pub use instance::GvproxyInstance;
 #[cfg(feature = "gvproxy")]
 pub use logging::init_logging;
+pub use platform::CloudGuardBootstrap;
+pub(crate) use platform::CloudGuardRuntime;
 pub use services::GvproxyBackend;
 pub use stats::{NetworkStats, TcpStats};
 

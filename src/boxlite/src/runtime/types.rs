@@ -333,7 +333,7 @@ pub struct PublishedPort {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutboundNetworkInfo {
     pub mode: NetworkMode,
-    /// Empty means unrestricted outbound access.
+    /// Empty means there is no Box-level allowlist. Host protection still applies.
     #[serde(default)]
     pub allow_net: Vec<String>,
 }

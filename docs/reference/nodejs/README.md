@@ -219,7 +219,15 @@ interface NetworkSpec {
 }
 ```
 
-Use `allowNet` only when `mode: "enabled"`. Empty or omitted `allowNet` means full outbound access. A host matched by a configured secret is additionally reachable on port 443 without a rule of its own, so `allowNet` is not the only egress gate. The connection is dialed by name, and under a non-empty allowlist an answer in a private, loopback or CGNAT range is refused unless an IP or CIDR rule covers it. `mode: "disabled"` removes the guest network interface entirely.
+Use `allowNet` when `mode: "enabled"`. Empty or omitted `allowNet` adds no Box
+allowlist, and host egress protection still applies. `mode: "disabled"`
+removes the guest network interface.
+
+A configured secret can permit TCP port 443 without a Box allow rule. Local
+hostname routing requires an IP or CIDR rule for private, loopback, and CGNAT
+answers when the allowlist is non-empty. The
+[Cloud platform guard](../../concepts/networking.md#cloud-platform-guard)
+applies its protected destination checks to these connections.
 
 #### `JsEnvVar`
 

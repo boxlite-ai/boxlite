@@ -8,6 +8,7 @@ use std::ffi::{CStr, CString};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::config::GvproxyConfig;
+use super::platform::CloudGuardBootstrap;
 use crate::net::{OutboundBootstrap, OutboundCapabilities, OutboundRevision};
 use libgvproxy_sys::{
     gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_stats, gvproxy_get_version,
@@ -25,15 +26,24 @@ pub fn create_instance(
     config: &GvproxyConfig,
     revision: Option<&OutboundRevision>,
     outbound: Option<&OutboundBootstrap>,
+    protected_cidrs: &[String],
+    cloud_guard: Option<&CloudGuardBootstrap>,
 ) -> BoxliteResult<i64> {
     let json = match outbound {
         Some(outbound) => {
-            serde_json::to_string(&serde_json::json!({"config": config, "outbound_v1": outbound}))
-                .map_err(|e| {
+            let host_config = PlatformStartup {
+                config,
+                platform_protected_cidrs: protected_cidrs,
+                cloud_guard,
+            };
+            serde_json::to_string(
+                &serde_json::json!({"config": host_config, "outbound_v1": outbound}),
+            )
+            .map_err(|e| {
                 BoxliteError::Network(format!("Failed to serialize complete gvproxy config: {e}"))
             })?
         }
-        None => serialize_config(config, revision)?,
+        None => serialize_config(config, revision, protected_cidrs, cloud_guard)?,
     };
 
     let c_json = CString::new(json)
@@ -74,19 +84,44 @@ pub fn outbound_capabilities() -> OutboundCapabilities {
     OutboundCapabilities::from_bits(unsafe { gvproxy_outbound_capabilities() })
 }
 
+pub fn supports_platform_cidrs() -> bool {
+    // Matches the bridge's platform-CIDR bit in gvproxy_outbound_capabilities.
+    unsafe { gvproxy_outbound_capabilities() & (1 << 4) != 0 }
+}
+
+pub fn supports_cloud_guard() -> bool {
+    unsafe { gvproxy_outbound_capabilities() & (1 << 5) != 0 }
+}
+
+#[derive(serde::Serialize)]
+struct PlatformStartup<'a> {
+    #[serde(flatten)]
+    config: &'a GvproxyConfig,
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    platform_protected_cidrs: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cloud_guard: Option<&'a CloudGuardBootstrap>,
+}
+
 fn serialize_config(
     config: &GvproxyConfig,
     revision: Option<&crate::net::OutboundRevision>,
+    protected_cidrs: &[String],
+    cloud_guard: Option<&CloudGuardBootstrap>,
 ) -> BoxliteResult<String> {
     #[derive(serde::Serialize)]
     struct Startup<'a> {
         #[serde(flatten)]
-        config: &'a GvproxyConfig,
+        config: PlatformStartup<'a>,
         #[serde(skip_serializing_if = "Option::is_none")]
         outbound_revision: Option<&'a crate::net::OutboundRevision>,
     }
     serde_json::to_string(&Startup {
-        config,
+        config: PlatformStartup {
+            config,
+            platform_protected_cidrs: protected_cidrs,
+            cloud_guard,
+        },
         outbound_revision: revision,
     })
     .map_err(|e| BoxliteError::Network(format!("Failed to serialize config: {e}")))
@@ -188,7 +223,7 @@ mod tests {
         use std::path::PathBuf;
         let socket_path = PathBuf::from("/tmp/test-gvproxy-ffi.sock");
         let config = GvproxyConfig::new(socket_path);
-        let id = create_instance(&config, None, None).unwrap();
+        let id = create_instance(&config, None, None, &[], None).unwrap();
 
         // Destroy instance
         destroy_instance(id).unwrap();

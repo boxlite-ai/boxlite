@@ -6,7 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **mode** | [**NetworkMode**](NetworkMode.md) | Whether the guest may reach out | [default to undefined]
-**allow_net** | **Array&lt;string&gt;** | Outbound allowlist in force; empty means unrestricted egress | [default to undefined]
+**allow_net** | **Array&lt;string&gt;** | Box-level outbound allowlist. Host protection applies even when it is empty. | [default to undefined]
 
 ## Example
 

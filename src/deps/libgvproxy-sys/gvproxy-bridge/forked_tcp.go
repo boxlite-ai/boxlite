@@ -131,7 +131,8 @@ func decideTCPInspectRoute(hostname string, destIP net.IP, destPort uint16,
 	if destPort == 443 && secretMatcher != nil && hostname != "" && secretMatcher.Matches(hostname) {
 		return tcpInspectMitm, egressByName
 	}
-	// No allowlist (secrets-only mode): everything else flows as addressed.
+	// With an empty Box allowlist, select direct routing. The dialer still
+	// checks the destination against the platform guard.
 	if filter == nil {
 		return tcpInspectForward, egressByAddress
 	}
@@ -150,7 +151,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
 		current := snapshot()
-		if current.policy.Mode == "disabled" {
+		if current.policy.Mode == "disabled" || !current.dialer.guard.active() {
 			r.Complete(true)
 			return
 		}
@@ -181,10 +182,15 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			forwardExtendedTCP(r, target, current, inspectionSlots, ca, secretMatcher)
 			return
 		}
+		if dialer.guard.denies(target.PolicyIP) {
+			logrus.WithField("reason", outboundPlatformDeny).Debug("TCP original destination denied")
+			r.Complete(true)
+			return
+		}
 
 		switch decideTCPRoute(destIP, destPort, filter, secretMatcher) {
 		case tcpRouteStandardForward:
-			standardForward(r, dialer.byAddress(target))
+			standardForward(r, dialer.byAddress(target), dialer.guard)
 			return
 		case tcpRouteInspect:
 			inspectAndForward(r, target, filter, dialer, ca, secretMatcher)
@@ -201,7 +207,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 }
 
 // standardForward is the upstream flow: Dial → CreateEndpoint → relay.
-func standardForward(r *tcp.ForwarderRequest, dial upstreamDial) {
+func standardForward(r *tcp.ForwarderRequest, dial upstreamDial, guard platformGuard) {
 	outbound, err := dial(context.Background())
 	if err != nil {
 		logrus.Tracef("outbound dial = %v", err)
@@ -211,6 +217,11 @@ func standardForward(r *tcp.ForwarderRequest, dial upstreamDial) {
 
 	guest := openGuestTCP(r)
 	if guest == nil {
+		outbound.Close()
+		return
+	}
+	guest, err = guard.track(guest)
+	if err != nil {
 		outbound.Close()
 		return
 	}
@@ -248,6 +259,10 @@ func inspectAndForward(r *tcp.ForwarderRequest, target egressTarget,
 	destPort := target.Port
 	guestConn := openGuestTCP(r)
 	if guestConn == nil {
+		return
+	}
+	guestConn, err := dialer.guard.track(guestConn)
+	if err != nil {
 		return
 	}
 

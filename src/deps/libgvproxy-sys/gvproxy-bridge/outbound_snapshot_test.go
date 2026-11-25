@@ -222,7 +222,7 @@ func TestOutboundSnapshot_ModeGatePreservesInputUnderflow(t *testing.T) {
 	// chain's DROP. Verify that behavior before installing the project gate.
 	tap.send(t, udpFrame(t, unlistedIP, port, []byte(probePayload)))
 	receivePolicyProbe(t, upstream, []byte(probePayload))
-	if err := installOutboundModeGate(tap.policy.stack, tap.policy.active.Load); err != nil {
+	if err := tap.policy.installOutboundModeGate(); err != nil {
 		t.Fatal(err)
 	}
 	tap.send(t, udpFrame(t, unlistedIP, port, []byte(probePayload)))
