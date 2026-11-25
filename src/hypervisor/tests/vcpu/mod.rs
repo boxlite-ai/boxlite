@@ -3,14 +3,14 @@
 
 use std::io;
 
-use super::{IoCompletion, PendingIo};
+use super::{PendingIo, PendingIoStep};
 
 #[test]
 fn completion_without_pending_io_skips_entry() {
     let mut pending = PendingIo::default();
     assert_eq!(
         pending.complete(|| panic!("no pending I/O")).unwrap(),
-        IoCompletion::Done
+        PendingIoStep::Done
     );
 }
 
@@ -23,13 +23,16 @@ fn interrupted_entry_consumes_pending_io() {
     ];
     for error in errors {
         let mut pending = PendingIo(true);
-        assert_eq!(pending.complete(|| Err(error)).unwrap(), IoCompletion::Done);
+        assert_eq!(
+            pending.complete(|| Err(error)).unwrap(),
+            PendingIoStep::Done
+        );
         assert!(!pending.0);
         assert_eq!(
             pending
                 .complete(|| panic!("I/O already completed"))
                 .unwrap(),
-            IoCompletion::Done
+            PendingIoStep::Done
         );
     }
 }
@@ -47,6 +50,6 @@ fn failed_entry_preserves_pending_io() {
 #[test]
 fn successful_kvm_reentry_can_return_a_follow_up_exit() {
     let mut pending = PendingIo(true);
-    assert_eq!(pending.complete(|| Ok(())).unwrap(), IoCompletion::Exit);
+    assert_eq!(pending.complete(|| Ok(())).unwrap(), PendingIoStep::Exit);
     assert!(pending.0);
 }

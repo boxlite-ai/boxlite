@@ -272,7 +272,7 @@ fn fpu_postcard_rejects_non_abi_lengths() {
 
 #[test]
 fn snapshot_defaults_fail_closed_for_an_unsnapshotable_backend() {
-    use crate::{MemoryRegion, Vcpu, VcpuExit, VcpuHandle, Vm, X86Vcpu, X86Vm};
+    use crate::{IoCompletion, MemoryRegion, Vcpu, VcpuExit, VcpuHandle, Vm, X86Vcpu, X86Vm};
     struct Backend;
     struct Cpu;
     #[derive(Clone)]
@@ -287,7 +287,7 @@ fn snapshot_defaults_fail_closed_for_an_unsnapshotable_backend() {
         fn run(&mut self) -> crate::Result<VcpuExit<'_>> {
             panic!("unexpected guest entry")
         }
-        fn complete_pending_io(&mut self) -> crate::Result<Option<VcpuExit<'_>>> {
+        fn complete_pending_io(&mut self) -> crate::Result<IoCompletion<'_>> {
             panic!("unexpected I/O completion")
         }
         fn handle(&self) -> Handle {

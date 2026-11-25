@@ -32,8 +32,8 @@ use super::{
     kick::WorkerSignal,
 };
 use crate::{
-    Error, Result, VcpuExit,
-    vcpu::{IoCompletion, PendingIo},
+    Error, IoCompletion, Result, VcpuExit,
+    vcpu::{PendingIo, PendingIoStep},
     x86::MAX_SNAPSHOT_MSR_ENTRIES,
 };
 
@@ -427,8 +427,8 @@ impl KvmVcpu {
     }
 
     /// Finishes handled I/O without executing another guest instruction.
-    /// Handle each returned exit and call again until completion returns `None`.
-    pub fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
+    /// Handle each returned exit and call again until [`IoCompletion::Done`].
+    pub fn complete_pending_io(&mut self) -> Result<IoCompletion<'_>> {
         let completion = self
             .pending_io
             .complete(|| {
@@ -443,8 +443,8 @@ impl KvmVcpu {
                 source,
             })?;
         match completion {
-            IoCompletion::Done => Ok(None),
-            IoCompletion::Exit => self.decode_last_exit().map(Some),
+            PendingIoStep::Done => Ok(IoCompletion::Done),
+            PendingIoStep::Exit => self.decode_last_exit().map(IoCompletion::Exit),
         }
     }
 
@@ -467,7 +467,7 @@ impl crate::Vcpu for KvmVcpu {
         Self::run(self)
     }
 
-    fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
+    fn complete_pending_io(&mut self) -> Result<IoCompletion<'_>> {
         Self::complete_pending_io(self)
     }
 

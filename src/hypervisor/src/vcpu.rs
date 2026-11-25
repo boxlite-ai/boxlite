@@ -6,7 +6,7 @@
 #[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
 use std::io;
 
-use crate::{Result, VcpuExit};
+use crate::{IoCompletion, Result, VcpuExit};
 
 /// A vCPU, bound to the thread that created it.
 ///
@@ -23,11 +23,12 @@ pub trait Vcpu {
     /// guest instruction, before stopping the vCPU or saving its state.
     ///
     /// Supply any read response and release the exit's borrowed buffer before
-    /// calling. `Ok(Some(exit))` reports another exit from the same instruction,
-    /// such as a split MMIO fragment, a read-modify-write phase, or a terminal
-    /// exit. Handle it, release its borrow, and call again until `Ok(None)`.
-    /// `Ok(None)` means no I/O remains and repeat calls are no-ops.
-    fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>>;
+    /// calling. `Ok(IoCompletion::Exit(exit))` reports another exit from the
+    /// same instruction, such as a split MMIO fragment, a read-modify-write
+    /// phase, or a terminal exit. Handle it and release its borrow before
+    /// calling again. `Ok(IoCompletion::Done)` means no I/O remains and
+    /// repeat calls are no-ops.
+    fn complete_pending_io(&mut self) -> Result<IoCompletion<'_>>;
 
     /// Notifies the guest that its clock was interrupted, while stopped on
     /// the owning thread. An unused guest clock is a successful no-op; backends
@@ -54,7 +55,7 @@ pub(crate) struct PendingIo(pub(crate) bool);
 
 #[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum IoCompletion {
+pub(crate) enum PendingIoStep {
     Done,
     Exit,
 }
@@ -64,17 +65,17 @@ impl PendingIo {
     pub(crate) fn complete(
         &mut self,
         enter: impl FnOnce() -> io::Result<()>,
-    ) -> io::Result<IoCompletion> {
+    ) -> io::Result<PendingIoStep> {
         if !self.0 {
-            return Ok(IoCompletion::Done);
+            return Ok(PendingIoStep::Done);
         }
         match enter() {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                 self.0 = false;
-                Ok(IoCompletion::Done)
+                Ok(PendingIoStep::Done)
             }
             Err(error) => Err(error),
-            Ok(()) => Ok(IoCompletion::Exit),
+            Ok(()) => Ok(PendingIoStep::Exit),
         }
     }
 }
@@ -131,7 +132,7 @@ mod tests {
                 unreachable!()
             }
 
-            fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
+            fn complete_pending_io(&mut self) -> Result<IoCompletion<'_>> {
                 unreachable!()
             }
 

@@ -698,9 +698,9 @@ fn completing_a_read_without_entry_writes_it_once_and_moves_past_it() {
     code.extend(a64::psci(PSCI_SYSTEM_OFF));
     let mut vcpu = guest.vcpu(&code);
     answer_read(&mut vcpu, 0, 8, 0x55);
-    assert!(vcpu.complete_pending_io().unwrap().is_none());
+    assert!(vcpu.complete_pending_io().unwrap().is_done());
     // A second completion has nothing left to do.
-    assert!(vcpu.complete_pending_io().unwrap().is_none());
+    assert!(vcpu.complete_pending_io().unwrap().is_done());
     assert_eq!(next_write(&mut vcpu), (8, 0x55));
 }
 
@@ -773,7 +773,7 @@ fn completing_mmio_at_the_last_virtual_instruction_wraps_pc() {
     check(unsafe { ffi::hv_vcpu_get_reg(vcpu.vcpu, ffi::HV_REG_PC, &mut pc) }).unwrap();
     assert_eq!(pc, u64::MAX - 3, "the guest reached the boundary itself");
     eprintln!("MMIO exit at PC {pc:#018x}");
-    assert!(vcpu.complete_pending_io().unwrap().is_none());
+    assert!(vcpu.complete_pending_io().unwrap().is_done());
     // SAFETY: completion keeps the vCPU alive on this thread without guest entry.
     check(unsafe { ffi::hv_vcpu_get_reg(vcpu.vcpu, ffi::HV_REG_PC, &mut pc) }).unwrap();
     assert_eq!(pc, 0, "completion wraps the 64-bit PC");

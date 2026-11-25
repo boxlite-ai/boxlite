@@ -11,8 +11,8 @@ use std::{
 };
 
 use boxlite_hypervisor::{
-    KvmVcpu, KvmVcpuHandle, KvmVm, MemoryRegion, Result, Vcpu, VcpuExit, X86BootRegisters,
-    X86CpuidEntry, X86Msr, X86Vcpu, X86Vm,
+    IoCompletion, KvmVcpu, KvmVcpuHandle, KvmVm, MemoryRegion, Result, Vcpu, VcpuExit,
+    X86BootRegisters, X86CpuidEntry, X86Msr, X86Vcpu, X86Vm,
 };
 use vm_memory::{Bytes, GuestAddress, GuestAddressSpace};
 
@@ -150,18 +150,18 @@ impl Vcpu for GatedKvmVcpu {
         Ok(exit)
     }
 
-    fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
-        let exit = self.vcpu.complete_pending_io()?;
+    fn complete_pending_io(&mut self) -> Result<IoCompletion<'_>> {
+        let completion = self.vcpu.complete_pending_io()?;
         if std::mem::take(&mut self.check_completion) {
             assert!(
-                exit.as_ref()
-                    .is_some_and(|exit| self.access.is_fragment(exit, MMIO_SPLIT_ADDR + 2)),
-                "expected the second {:?} fragment from completion, got {exit:?}",
+                matches!(&completion, IoCompletion::Exit(exit)
+                    if self.access.is_fragment(exit, MMIO_SPLIT_ADDR + 2)),
+                "expected the second {:?} fragment from completion, got {completion:?}",
                 self.access
             );
             self.completed_fragments.fetch_add(1, Ordering::Relaxed);
         }
-        Ok(exit)
+        Ok(completion)
     }
 
     fn notify_guest_stopped(&mut self) -> Result<()> {

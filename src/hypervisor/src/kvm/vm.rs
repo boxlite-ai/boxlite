@@ -629,7 +629,7 @@ mod tests {
             cpu.run().unwrap(),
             VcpuExit::IoOut { port: 0x80, .. }
         ));
-        cpu.complete_pending_io().unwrap();
+        assert!(cpu.complete_pending_io().unwrap().is_done());
         vm.save_state().unwrap();
         let error = cpu.save_state().unwrap_err();
         assert!(
@@ -735,7 +735,7 @@ mod tests {
                     ready.send(()).unwrap();
                     if wait_for_capture.recv().is_ok() {
                         if matches!(order, CaptureOrder::NoopIoCompletion) {
-                            second.complete_pending_io().unwrap();
+                            assert!(second.complete_pending_io().unwrap().is_done());
                         }
                         saved.send(second.save_state().unwrap()).unwrap();
                     }
@@ -1368,7 +1368,7 @@ mod tests {
             VcpuExit::IoOut { port: 0x81, bytes } => assert_eq!(bytes, &[VECTOR]),
             exit => panic!("expected output after LAPIC EOI, got {exit:?}"),
         }
-        cpu.complete_pending_io().unwrap();
+        assert!(cpu.complete_pending_io().unwrap().is_done());
         // SAFETY: GET_IRQCHIP initialized the redirection entries as raw bits.
         assert_eq!(
             unsafe { read_ioapic(&vm).redirtbl[PIN].bits } & REMOTE_IRR,
@@ -1574,7 +1574,7 @@ mod tests {
             source.save_state().unwrap_err(),
             "complete pending I/O before saving",
         );
-        source.complete_pending_io().unwrap();
+        assert!(source.complete_pending_io().unwrap().is_done());
         let platform = vm.save_state().unwrap();
         let mut state = crate::X86Vcpu::save_state(&mut source).unwrap();
         assert_eq!(state.regs.rip, 0x104c);
@@ -1712,7 +1712,7 @@ mod tests {
                     bsp.run().unwrap(),
                     VcpuExit::IoOut { port: 0x81, .. }
                 ));
-                bsp.complete_pending_io().unwrap();
+                assert!(bsp.complete_pending_io().unwrap().is_done());
             });
 
             let mut ap = vm.create_vcpu(1).unwrap();
@@ -1773,7 +1773,7 @@ mod tests {
             VcpuExit::IoOut { port: 0x80, bytes } => assert_eq!(bytes, b"S"),
             exit => panic!("expected AP output at the SIPI vector, got {exit:?}"),
         }
-        ap_dst.complete_pending_io().unwrap();
+        assert!(ap_dst.complete_pending_io().unwrap().is_done());
     }
 
     #[test]
@@ -1834,7 +1834,7 @@ mod tests {
             source.run().unwrap(),
             VcpuExit::IoOut { port: 0x80, .. }
         ));
-        source.complete_pending_io().unwrap();
+        assert!(source.complete_pending_io().unwrap().is_done());
         let platform = vm.save_state().unwrap();
         let state = source.save_state().unwrap();
         // The standard XSAVE layout starts YMM_Hi128 at byte 576.
@@ -1931,7 +1931,11 @@ mod tests {
             VcpuExit::Interrupted
         ));
         assert_eq!(vcpu.fd.get_regs().unwrap().rip, before.rip);
-        crate::Vcpu::complete_pending_io(&mut vcpu).unwrap();
+        assert!(
+            crate::Vcpu::complete_pending_io(&mut vcpu)
+                .unwrap()
+                .is_done()
+        );
         drop(vcpu);
         handle.kick().unwrap();
     }
@@ -2125,7 +2129,7 @@ mod tests {
             vm.create_vcpu(0),
             Err(Error::CreateVcpu { id: 0, .. })
         ));
-        vcpu.complete_pending_io().unwrap();
+        assert!(vcpu.complete_pending_io().unwrap().is_done());
         let mut segments = vcpu.fd.get_sregs().unwrap();
         segments.cs.base = 0;
         segments.cs.selector = 0;
@@ -2146,9 +2150,9 @@ mod tests {
         }
         // The I/O exit leaves instruction completion pending until KVM_RUN.
         // Complete it without reaching HLT, which can wait in the kernel.
-        vcpu.complete_pending_io().unwrap();
+        assert!(vcpu.complete_pending_io().unwrap().is_done());
         assert_eq!(vcpu.fd.get_regs().unwrap().rip, 0x1006);
-        vcpu.complete_pending_io().unwrap();
+        assert!(vcpu.complete_pending_io().unwrap().is_done());
         assert_eq!(vcpu.fd.get_regs().unwrap().rip, 0x1006);
         assert_eq!(vcpu.fd.get_kvm_run().immediate_exit, 0);
         crate::VcpuHandle::kick(&vcpu.handle()).unwrap();

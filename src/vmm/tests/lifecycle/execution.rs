@@ -14,7 +14,7 @@ use std::{
 };
 
 use boxlite_hypervisor::{
-    MemoryRegion, Vcpu, VcpuExit, VcpuHandle, X86BootRegisters, X86Vcpu, X86Vm,
+    IoCompletion, MemoryRegion, Vcpu, VcpuExit, VcpuHandle, X86BootRegisters, X86Vcpu, X86Vm,
 };
 
 use super::{CompletionEnd, FragmentCpu, StopOnDrop, WAIT, assert_error};
@@ -422,7 +422,7 @@ impl Vcpu for FailingCpu {
         self.vcpu.run()
     }
 
-    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<Option<VcpuExit<'_>>> {
+    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<IoCompletion<'_>> {
         if matches!(self.fault, PauseFault::CompleteIo(_)) {
             return Err(boxlite_hypervisor::Error::CompletePendingIo {
                 id: self.id,
@@ -433,9 +433,9 @@ impl Vcpu for FailingCpu {
             && let Some(fragments) = &mut self.fragments
             && fragments.completions < 2
         {
-            let exit = fragments.complete_pending_io()?;
+            let completion = fragments.complete_pending_io()?;
             completions.fetch_add(1, Ordering::Relaxed);
-            return Ok(exit);
+            return Ok(completion);
         }
         self.vcpu.complete_pending_io()
     }

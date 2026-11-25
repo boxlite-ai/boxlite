@@ -12,7 +12,7 @@ use std::{
     sync::{Condvar, Mutex, PoisonError},
 };
 
-use boxlite_hypervisor::{Vcpu, VcpuExit};
+use boxlite_hypervisor::{IoCompletion, Vcpu, VcpuExit};
 #[cfg(target_arch = "x86_64")]
 use boxlite_hypervisor::{X86BootRegisters, X86Vcpu, X86Vm};
 
@@ -161,7 +161,7 @@ pub(crate) fn complete_pending_io(
     vcpu: &mut impl Vcpu,
     id: u8,
 ) -> Result<Option<Event>> {
-    while let Some(exit) = vcpu.complete_pending_io()? {
+    while let IoCompletion::Exit(exit) = vcpu.complete_pending_io()? {
         if let Some(event) = handle_exit(chipset, id, exit)? {
             return Ok(Some(event));
         }

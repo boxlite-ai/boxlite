@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use boxlite_hypervisor::{Vcpu, VcpuExit};
+use boxlite_hypervisor::{IoCompletion, Vcpu, VcpuExit};
 
 use super::{Command, Lifecycle, VmStatus};
 use crate::{
@@ -91,7 +91,7 @@ impl Vcpu for FragmentCpu {
         })
     }
 
-    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<Option<VcpuExit<'_>>> {
+    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<IoCompletion<'_>> {
         self.completions += 1;
         match self.completions {
             1 => {
@@ -99,7 +99,7 @@ impl Vcpu for FragmentCpu {
                 if let Some(before_fragment) = self.before_fragment.take() {
                     before_fragment();
                 }
-                Ok(Some(VcpuExit::MmioRead {
+                Ok(IoCompletion::Exit(VcpuExit::MmioRead {
                     guest_addr: 0xd000_1000,
                     bytes: &mut self.responses[1],
                 }))
@@ -107,17 +107,17 @@ impl Vcpu for FragmentCpu {
             2 => {
                 assert_eq!(self.responses[1], [0xff; 2]);
                 match self.end {
-                    CompletionEnd::Done => Ok(None),
-                    CompletionEnd::Shutdown => Ok(Some(VcpuExit::Shutdown)),
-                    CompletionEnd::Reset => Ok(Some(VcpuExit::Reset)),
-                    CompletionEnd::Halted => Ok(Some(VcpuExit::Halted)),
+                    CompletionEnd::Done => Ok(IoCompletion::Done),
+                    CompletionEnd::Shutdown => Ok(IoCompletion::Exit(VcpuExit::Shutdown)),
+                    CompletionEnd::Reset => Ok(IoCompletion::Exit(VcpuExit::Reset)),
+                    CompletionEnd::Halted => Ok(IoCompletion::Exit(VcpuExit::Halted)),
                     CompletionEnd::Error => Err(boxlite_hypervisor::Error::CompletePendingIo {
                         id: 0,
                         source: io::ErrorKind::PermissionDenied.into(),
                     }),
                 }
             }
-            _ => Ok(None),
+            _ => Ok(IoCompletion::Done),
         }
     }
 

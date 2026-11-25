@@ -3,6 +3,23 @@
 
 //! Decoded vCPU exits shared by host backends and the VMM.
 
+/// Completion status of a pending guest I/O operation.
+#[must_use = "handle any returned exit and repeat complete_pending_io until Done"]
+#[derive(Debug)]
+pub enum IoCompletion<'a> {
+    /// No pending I/O remains.
+    Done,
+    /// Another exit from the same guest instruction must be handled before repeating.
+    Exit(VcpuExit<'a>),
+}
+
+impl IoCompletion<'_> {
+    /// Returns `true` if the completion has finished with no remaining I/O.
+    pub fn is_done(&self) -> bool {
+        matches!(self, Self::Done)
+    }
+}
+
 /// A guest exit requiring VMM handling, without backend-specific state.
 ///
 /// [`Vcpu::run`](crate::Vcpu::run) ties `'a` to its mutable vCPU borrow: MMIO
@@ -16,8 +33,9 @@
 /// guest instruction. The backend must finish pending I/O on re-entry. Before
 /// stopping the vCPU or saving its state, the caller releases the exit borrow
 /// and calls [`Vcpu::complete_pending_io`](crate::Vcpu::complete_pending_io).
-/// Handle each returned exit and release its borrow before calling again,
-/// until `Ok(None)` confirms the instruction has no pending I/O.
+/// Handle each `Ok(IoCompletion::Exit(exit))` and release its borrow before
+/// calling again, until `Ok(IoCompletion::Done)` confirms no I/O remains.
+#[must_use = "vCPU exits must be handled; discarding an exit drops guest I/O completions"]
 #[derive(Debug)]
 pub enum VcpuExit<'a> {
     /// Read from an emulated device; fill the entire buffer before re-entry.

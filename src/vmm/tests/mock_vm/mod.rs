@@ -11,7 +11,9 @@ use std::{
     sync::{Arc, Condvar, Mutex},
 };
 
-use boxlite_hypervisor::{Error, MemoryRegion, Result, Vcpu, VcpuExit, VcpuHandle, Vm};
+use boxlite_hypervisor::{
+    Error, IoCompletion, MemoryRegion, Result, Vcpu, VcpuExit, VcpuHandle, Vm,
+};
 
 /// One recorded call attempt, with the host address as an integer because
 /// `MemoryRegion` is not `Send`.
@@ -375,8 +377,8 @@ impl Vcpu for MockVcpu {
         })
     }
 
-    fn complete_pending_io(&mut self) -> Result<Option<VcpuExit<'_>>> {
-        Ok(None)
+    fn complete_pending_io(&mut self) -> Result<IoCompletion<'_>> {
+        Ok(IoCompletion::Done)
     }
 
     fn handle(&self) -> MockHandle {

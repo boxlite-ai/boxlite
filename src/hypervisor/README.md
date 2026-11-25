@@ -90,10 +90,12 @@ assembly, and persistence.
 ### Save
 
 Keep all vCPUs out of the guest and stop IRQ producers. On each vCPU's owning
-thread, call `Vcpu::complete_pending_io` until it returns `Ok(None)`. Dispatch
-each `Ok(Some(exit))` and release its borrow before the next call. Split MMIO
-can produce multiple exits for one instruction. A terminal exit or completion
-error aborts capture.
+thread, call `Vcpu::complete_pending_io` until it returns `Ok(IoCompletion::Done)`.
+Dispatch each `Ok(IoCompletion::Exit(exit))` and release its borrow before the
+next call. Split MMIO can produce multiple exits for one instruction. A
+terminal exit or completion error aborts capture. Both `VcpuExit` and
+`IoCompletion` are `#[must_use]`: discarding either after unwrapping its
+`Result` triggers a lint.
 
 Begin the round with `X86Vm::save_state`, then call `X86Vcpu::save_state` once
 per vCPU on its owning thread. A failed vCPU save can be retried in the same
