@@ -24,7 +24,8 @@ type transport func(*http.Request) (*http.Response, error)
 
 func (f transport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestWriteAuthentication(t *testing.T) {
+func googleTokenFixture(t *testing.T) (*idtoken.Validator, func(map[string]any) string) {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +41,30 @@ func TestWriteAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if calls == 0 {
+			t.Error("custom JWKS transport was not used")
+		}
+	})
+	return v, func(claims map[string]any) string {
+		t.Helper()
+		payload, err := json.Marshal(claims)
+		if err != nil {
+			t.Fatal(err)
+		}
+		head := encode([]byte(`{"alg":"RS256","kid":"local"}`))
+		body := encode(payload)
+		sum := sha256.Sum256([]byte(head + "." + body))
+		signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return head + "." + body + "." + encode(signature)
+	}
+}
+
+func TestWriteAuthentication(t *testing.T) {
+	v, sign := googleTokenFixture(t)
 	c := Config{AuthMode: "google", Audience: "test-audience", AllowedCallers: []string{"allowed@example.invalid"}}
 	tests := []struct {
 		name   string
@@ -60,18 +85,10 @@ func TestWriteAuthentication(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			claims := map[string]any{"iss": "https://accounts.google.com", "aud": "test-audience", "exp": time.Now().Add(time.Hour).Unix(), "email": "allowed@example.invalid", "email_verified": true}
 			tc.change(claims)
-			payload, _ := json.Marshal(claims)
-			head := encode([]byte(`{"alg":"RS256","kid":"local"}`))
-			body := encode(payload)
-			sum := sha256.Sum256([]byte(head + "." + body))
-			signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
-			if err != nil {
-				t.Fatal(err)
-			}
 			called := false
 			handler := writeAuth(c, v.Validate, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { called = true; w.WriteHeader(200) }))
 			r := httptest.NewRequest("POST", "/", nil)
-			r.Header.Set("Authorization", "Bearer "+head+"."+body+"."+encode(signature))
+			r.Header.Set("Authorization", "Bearer "+sign(claims))
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, r)
 			if w.Code != tc.want || called != (tc.want == 200) {
@@ -79,8 +96,39 @@ func TestWriteAuthentication(t *testing.T) {
 			}
 		})
 	}
-	if calls == 0 {
-		t.Fatal("custom JWKS transport was not used")
+}
+
+func TestGoogleWriteRouteAuthentication(t *testing.T) {
+	v, sign := googleTokenFixture(t)
+	const audience = "https://secret-server.example.invalid"
+	const allowed = "allowed@example.invalid"
+	now := time.Now()
+	for _, tc := range []struct {
+		name, email string
+		expiry      time.Time
+		want        int
+	}{
+		{"allowed", allowed, now.Add(time.Hour), http.StatusNotFound},
+		{"expired", allowed, now.Add(-time.Hour), http.StatusUnauthorized},
+		{"outside allowlist", "other@example.invalid", now.Add(time.Hour), http.StatusUnauthorized},
+	} {
+		token := sign(map[string]any{
+			"iss": "https://accounts.google.com", "aud": audience,
+			"exp": tc.expiry.Unix(), "email": tc.email, "email_verified": true,
+		})
+		for _, role := range []string{"write", "all"} {
+			t.Run(role+"/"+tc.name, func(t *testing.T) {
+				config := Config{Role: role, AuthMode: "google", Audience: audience, AllowedCallers: []string{allowed}}
+				handler := routes(config, nil, v.Validate, nil)
+				request := httptest.NewRequest(http.MethodPost, "/internal/v1/write", nil)
+				request.Header.Set("Authorization", "Bearer "+token)
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				if response.Code != tc.want {
+					t.Fatalf("write route returned %d, want %d", response.Code, tc.want)
+				}
+			})
+		}
 	}
 }
 

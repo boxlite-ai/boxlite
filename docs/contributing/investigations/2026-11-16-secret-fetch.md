@@ -9,25 +9,35 @@ on the single-value database from [#2571](https://github.com/boxlite-ai/boxlite/
 
 The database foundation from [#2612](https://github.com/boxlite-ai/boxlite/pull/2612)
 is merged into `main`. This change builds on that foundation, including runner
-attestation and envelope encryption, and targets `main`. It extends the existing
+attestation and envelope encryption, and integrates with the #2617 runtime. It extends the existing
 migrations without introducing a versioned secret model.
 
 The API implements atomic consumption in BUI-1385. This handler calls that API
 once and cannot independently guarantee consumption if the API violates its
-contract. Tests provide a consuming fake over HTTP. The service skeleton owns
-process startup, role selection and mounting the fetch handler.
+contract. Tests provide a consuming fake over HTTP. The service skeleton owns process startup and role selection. This change
+mounts the fetch handler in that runtime.
 
 | Dependency | Integration boundary | Required before |
 | --- | --- | --- |
 | [Database #2612](https://github.com/boxlite-ai/boxlite/pull/2612) | Schema, key verification, pool and encryption foundations | Available in `main` |
-| [Runtime #2617](https://github.com/boxlite-ai/boxlite/pull/2617) | Initialize storage before readiness and mount fetch for `fetch`/`all` roles | Deploying the fetch service |
+| [Runtime #2617](https://github.com/boxlite-ai/boxlite/pull/2617) | Initialize storage before readiness and mount fetch for `fetch`/`all` roles | Building and starting the fetch service |
 | [Credential API #2769](https://github.com/boxlite-ai/boxlite/pull/2769) | Internal-only introspection with atomic consumption and runner binding | End-to-end deployment |
 
 The credential API contract is checked using the merged
 production controller and service in the
 [contract integration harness](../../../apps/secret-server/README.md#credential-api-contract-integration).
-This isolated check does not validate service startup or deployed ingress.
-Runtime and API integration can proceed independently of reviewing this handler.
+The contract test starts the Secret Server command on a loopback listener with
+PostgreSQL and the dev attestor. Deployed ingress and real GCP attestation
+require separate validation.
+
+## Runtime integration
+
+The runtime starts with its existing PostgreSQL pool, initialized schema, and
+validated cipher. For `fetch` and `all`, build the handler with the runtime's
+Runner verifier and the full URL in `SECRET_SERVER_INTROSPECTION_URL`. Validate
+the endpoint before listening. The handler owns Runner verification so the same
+verified identity drives consumption and audit, with one verification per request.
+The `write` role leaves the fetch route disabled and requires no API URL.
 
 ## Contract
 

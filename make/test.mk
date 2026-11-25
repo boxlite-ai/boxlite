@@ -787,13 +787,22 @@ PHONY_TARGETS += test\:apps\:secret-server
 test\:apps\:secret-server:
 	@cd apps/secret-server && GOWORK=off go test -race ./... $(GOTEST_FILTER)
 
-PHONY_TARGETS += test\:apps\:secret-server\:integration
+PHONY_TARGETS += run\:apps\:secret-server
+run\:apps\:secret-server:
+	@cd apps/secret-server && ENVIRONMENT=local SECRET_SERVER_ROLE=$${SECRET_SERVER_ROLE:-write} SECRET_SERVER_AUTH_MODE=dev SECRET_SERVER_ATTESTORS=$${SECRET_SERVER_ATTESTORS:-dev} GOWORK=off go run ./cmd/secret-server
+
+SECRET_SERVER_INTEGRATION_PACKAGES := ./internal/database ./internal/fetch ./internal/server ./internal/testdb ./cmd/secret-server
+SECRET_SERVER_INTEGRATION_TESTS := ^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer|RunRejectsOccupiedPort|StartupClosesPoolWhenValidatorConstructionFails|RunBoundsDatabaseCleanup|FetchRuntimeRequiresAttestation|StartupWaitsForMigrationLock|CreateOverridesDatabaseQuery)$$
+PHONY_TARGETS += _require-secret-test-database test\:apps\:secret-server\:integration
+_require-secret-test-database:
+	@test -n "$$SECRET_TEST_DATABASE_URL" || { echo "Set SECRET_TEST_DATABASE_URL to a disposable PostgreSQL server before running Secret Server integration tests." >&2; exit 1; }
+
+test\:apps\:secret-server\:integration: _require-secret-test-database
+	@cd apps/secret-server && GOWORK=off go test -race -count=1 $(SECRET_SERVER_INTEGRATION_PACKAGES) -run '$(SECRET_SERVER_INTEGRATION_TESTS)'
+
 PHONY_TARGETS += test\:apps\:secret-server\:credential-api
 test\:apps\:secret-server\:credential-api:
 	@NODE_PATH="$${NODE_PATH:-$(PROJECT_ROOT)/apps/node_modules}" node apps/secret-server/tests/credential-api.cjs
-
-test\:apps\:secret-server\:integration:
-	@cd apps/secret-server && SECRET_TEST_DATABASE_URL="$${SECRET_TEST_DATABASE_URL:-postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite}" GOWORK=off go test -race -count=1 ./internal/database ./internal/fetch ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM)$$'
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."

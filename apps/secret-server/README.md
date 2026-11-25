@@ -4,10 +4,69 @@ The internal encryption package protects secret values and routing policy with p
 
 ## Scope
 
-This Go module contains encryption, runner attestation, server configuration,
-write authentication, a fetch handler, database initialization, and a migration
-command. The HTTP server entry point and deployment resources are not yet included.
+This Go module runs Secret Server with database initialization, a migration
+command, and the authenticated fetch endpoint.
 The existing API encryption service and stored values remain unchanged.
+
+## Server skeleton
+
+Set `SECRET_SERVER_ROLE` to `write`, `fetch`, or `all`; set `ENVIRONMENT`,
+`DATABASE_URL`, `SECRET_MASTER_KEY_ID`, `SECRET_MASTER_KEY_BASE64`, and
+`SECRET_SERVER_AUTH_MODE`. Google mode requires `SECRET_SERVER_AUDIENCE` and,
+for write or all roles, `SECRET_SERVER_ALLOWED_CALLERS`. Dev mode requires
+`SECRET_SERVER_DEV_TOKEN` and is limited to local and dev environments. The
+environment key provider is rejected in production.
+
+The write route group validates Google ID tokens and permits only verified emails
+on the allowlist. The fetch route checks Runner proof in `fetch` and `all` roles.
+The fetch endpoint redeems credentials. The reserved write routes return 404
+after successful write authentication until their handlers are wired.
+
+`/health` is liveness and `/ready` checks database connectivity. Startup also
+performs an encryption round trip.
+
+Startup applies migrations and verifies the durable encrypted canary before the
+server listens. A failed migration or key check prevents startup and readiness.
+Startup and the standalone `migrate` command each allow up to two minutes,
+including any wait for the migration lock.
+
+If token validator initialization fails, startup closes the database pool and
+returns an error before opening the listener.
+
+The server caps the PostgreSQL pool at 10 connections and honors a lower
+`pool_max_conns` in `DATABASE_URL`. Without that option, the pgx default
+applies up to the cap.
+
+`SHUTDOWN_TIMEOUT_SEC` bounds HTTP draining and database cleanup together.
+On a shutdown signal or a permanent listener error, the server stops accepting
+connections and drains active requests.
+
+If the deadline expires, the server closes any remaining HTTP connections and
+stops waiting for the database pool. Pool cleanup can continue until the process
+exits. A permanent listener error remains part of the returned error even if
+cleanup times out.
+
+Request logging and OpenTelemetry integration remain open under [#2570](https://github.com/boxlite-ai/boxlite/issues/2570);
+the current service emits only startup and recovery logs. Configuration uses explicit
+environment parsing and validation to keep errors limited to variable names and avoid
+exposing secret values; it does not use envconfig or validator.
+
+For a local run, supply a persistent development key, database URL, and dev token
+through the environment, then run `make run:apps:secret-server`. The role defaults
+to `write`; set `SECRET_SERVER_ROLE=fetch` to select fetch. The local target defaults
+to the `dev` attestor. For `fetch` and `all`, set
+`SECRET_SERVER_INTROSPECTION_URL` to the full credential introspection URL.
+Do not commit or print the key or token.
+
+The local database must use the same key across restarts.
+
+To exercise startup and readiness against a disposable PostgreSQL database, set
+`SECRET_TEST_DATABASE_URL` and run `make test:apps:secret-server`. Integration
+tests are skipped by the general test target when this variable is absent.
+
+The dedicated `test:apps:secret-server:integration` and
+`coverage:apps:secret-server:integration` targets fail without it. The
+configured user must be able to create and drop temporary databases.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
 Routing metadata follows the [headers map contract](https://github.com/boxlite-ai/boxlite/issues/2467).
@@ -15,10 +74,9 @@ Routing metadata follows the [headers map contract](https://github.com/boxlite-a
 ## Server configuration and write authentication
 
 The service configuration and write authentication middleware are available for
-the server skeleton. Google mode validates token signature, audience, expiry,
+the server runtime. Google mode validates token signature, audience, expiry,
 issuer, verified email, and the caller allowlist. Dev mode uses an exact bearer
-token and is permitted only in local and dev environments. The server entry
-point and routes are delivered separately.
+token and is permitted only in local and dev environments.
 
 Google-mode bearer tokens with signatures shorter than 32 bytes are rejected
 before validation; signatures and claims still require verification. `PORT` must
@@ -141,17 +199,16 @@ can create schema objects. Migrations are forward-only; deployed application
 versions must tolerate compatible schema changes. The database must use UTF-8
 server encoding. SIGINT and SIGTERM cancel a running migration.
 
-Before serving requests, the future service must call `database.Initialize`.
+Before serving requests, the service calls `database.Initialize`.
 It applies migrations and verifies a durable encrypted canary under a separate
 transaction advisory lock. If the canary is absent but secrets exist, it first
 decrypts an existing secret using AAD version 1.
 
-A wrong key or corrupt ciphertext fails readiness.
-Each secret stores one immutable encrypted value; replace a value by deleting and
-creating a secret with a new ID. Online rotation and version history are not supported.
+A wrong key or corrupt ciphertext prevents startup.
 
 Canary enrollment uses a read-committed transaction even when the database has a
 different default isolation level.
+
 ## Runner attestation
 
 Design: [runner attestation with gcp_iit](https://github.com/boxlite-ai/boxlite/issues/2623).
@@ -176,15 +233,16 @@ runnerID, err := selector.Verify(ctx, r.Header)
 ```
 
 `googleVerifier` comes from `attest.NewGoogleTokenVerifier(ctx, nil)`.
-Every error from `New` must fail startup. The service skeleton reads these
-values from `SECRET_SERVER_ATTESTORS`, `SECRET_SERVER_AUDIENCE`,
-`SECRET_SERVER_GCP_PROJECT`, `SECRET_SERVER_RUNNER_SERVICE_ACCOUNT`, and
-`SECRET_SERVER_RUNNER_REGISTRY` once it lands; this package does not read the
-environment.
+
+In `fetch` and `all` roles, startup requires `SECRET_SERVER_ATTESTORS`, a
+comma-separated list of enabled attestors. The `gcp_iit` attestor uses
+`SECRET_SERVER_AUDIENCE`, `SECRET_SERVER_GCP_PROJECT`,
+`SECRET_SERVER_RUNNER_SERVICE_ACCOUNT`, and `SECRET_SERVER_RUNNER_REGISTRY`.
+Invalid attestation configuration prevents startup before the listener opens.
 
 | `Verify` result | Meaning | Fetch route answer |
 | --- | --- | --- |
-| `runnerID, nil` | Proof valid; instance registered | Continue to introspection |
+| `runnerID, nil` | Proof valid | Continue to credential introspection |
 | `errors.Is(err, attest.ErrInvalidProof)` | Missing, ambiguous, or rejected proof | 401 `attestation_failed` |
 | any other error | Google signing keys unreachable | 503; the runner retries |
 
@@ -200,8 +258,8 @@ environment.
 - **dev attestor.** Reads `X-Boxlite-Dev-Runner` and is refused unless
   `ENVIRONMENT` is `local` or `dev`. It rejects runner IDs registered under
   another mode.
-- **Logging.** Rejection reasons name the failed check, never token content.
-  Callers log the error and return only the problem code.
+- **Errors.** The fetch route returns a fixed problem code without token or
+  verifier error details.
 
 Known limitations: a captured token can be replayed until it expires, about
 an hour; the zone is not checked; the registry is written by hand.
@@ -220,9 +278,9 @@ make test:apps:secret-server GOTEST_FILTER='-fuzz=FuzzDecryptEnvelope -fuzztime=
 ```
 
 The unit test target runs with the race detector and `GOWORK=off`. The integration
-target requires infra-local PostgreSQL and permission to create a temporary database.
-It defaults to port 25432; override `SECRET_TEST_DATABASE_URL` when needed. It
-creates a uniquely named database and drops it after the test.
+target requires PostgreSQL and permission to create a temporary database. Set
+`SECRET_TEST_DATABASE_URL` before running either dedicated integration target.
+Tests create uniquely named databases and drop them afterward.
 The coverage target runs the same tests and writes `target/coverage/secret-server-integration.out`.
 Database and command tests share the temporary database setup and cleanup helper.
 It also checks that SIGTERM cancels the migration command while it waits for a lock.
@@ -272,22 +330,17 @@ existing attestation and encryption packages. Migration 2 extends access-log
 results while preserving version-1 data. There is no secret version in grants,
 responses or audit rows; decryption always uses AAD version 1.
 
-After `database.Initialize`, construct the handler with the configured cipher,
-attestation selector and the **full internal introspection URL**:
+For `fetch` and `all`, startup constructs the handler after database
+initialization, using the configured cipher and Runner verifier. Set the full
+internal endpoint, for example:
 
-```go
-handler, err := fetch.New(pool, cipher, selector,
-    "https://api-internal/internal/v1/credentials/introspect", logger)
-if err != nil {
-    return err
-}
-mux.Handle("/internal/v1/fetch", handler)
+```sh
+export SECRET_SERVER_INTROSPECTION_URL=https://api-internal/internal/v1/credentials/introspect
 ```
 
-The service skeleton (#2570) must mount this route only for roles `fetch` and
-`all`, outside write-caller authentication middleware. This module still has
-only the migration command; the handler does not introduce a second service
-startup implementation. The caller owns pool shutdown and the verifier settings.
+An invalid or missing URL prevents the service from listening. The runtime
+mounts `POST /internal/v1/fetch` separately from write-caller authentication.
+The `write` role leaves fetch disabled and does not require this URL.
 
 A runner posts `{"credential":"bxsc_..."}` with its attestation proof header.
 The handler verifies identity before contacting the API, then sends
@@ -360,7 +413,7 @@ tokens or replace staging identity verification.
 
 `make test:apps:secret-server:credential-api` runs the actual service, controller
 and migration as merged by API PR #2769 at commit
-`bc78b36e5dc241bb3d2d7f8522f4f6f546833b40`, with the Go fetch handler and real
+`bc78b36e5dc241bb3d2d7f8522f4f6f546833b40`, with the Secret Server command on a loopback listener and real
 PostgreSQL. The harness reads these files from Git into a temporary directory;
 it does not change the API checkout or implement a second credential service.
 
@@ -378,8 +431,9 @@ target uses this worktree's `apps/node_modules`. The harness creates a temporary
 API schema and a separate secret database, then removes both. Its loopback-only
 issuance fixture invokes the real service; it is not a production API endpoint.
 
-The test verifies wrong-runner rejection without consumption, successful
-redemption of a 64 KiB value with a 920 KiB placeholder, replay rejection, and
-persisted audit outcomes. A missing or skipped Go test fails the harness. This
-validates the pinned API contract in an isolated Nest application, not full API startup, ingress controls,
-service deployment, or GCP attestation. Those checks remain pending.
+The test verifies that missing proof and wrong Runner identity leave the
+credential usable. It also checks redemption of a 64 KiB value with a 920 KiB
+placeholder, replay rejection, and persisted audit outcomes. A missing or skipped
+Go test fails the harness. It covers Secret Server startup and the API contract
+in an isolated Nest application. Full API startup, ingress, deployment, and GCP
+attestation require separate validation.
