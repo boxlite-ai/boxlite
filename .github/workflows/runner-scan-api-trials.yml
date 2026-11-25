@@ -1,0 +1,102 @@
+name: BoxLite scan and API qualification
+on:
+  push:
+    branches: [ci/boxlite-runner-trials-2833]
+    paths: [.github/workflows/runner-scan-api-trials.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  api:
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    timeout-minutes: 30
+    services: # Integration dependencies used by API specs.
+      redis: # Distributed-lock integration tests.
+        image: "redis:7"
+        ports: # Bind only on the ephemeral CI runner.
+          - "6379:6379"
+        options: >- # Wait for Redis before Jest starts.
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: boxlite
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env: # Service connection values are non-secret CI-local defaults.
+      REDIS_HOST: "localhost"
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: boxlite
+    defaults: # Keep package-manager commands inside the apps workspace.
+      run: # Applies only to shell steps, not actions.
+        working-directory: "apps"
+    steps: # Install exactly the lockfile-defined workspace before testing.
+      - uses: actions/checkout@v5
+        with: # Native workspace dependencies are submodules.
+          submodules: "recursive"
+          persist-credentials: ${{ false }}
+      - uses: ./.github/actions/setup-boxlite-runner
+      - name: Install native Node build dependencies
+        run: sudo apt-get install -y --no-install-recommends build-essential python3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Enable Corepack
+        run: "corepack enable"
+      - uses: actions/setup-node@v4
+        with: # Match the apps workspace toolchain and cache key.
+          node-version: "22"
+          cache: "yarn"
+          cache-dependency-path: "apps/yarn.lock"
+      - name: Install app dependencies
+        run: "yarn install --immutable"
+      - name: Run API unit tests
+        run: "yarn nx run api:test --coverage --skip-nx-cache"
+      - name: Run shared and standalone CI Listener tests
+        working-directory: .
+        run: make coverage:ci-listener coverage:github-ci-runner
+
+  scan:
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, c-cpp, javascript-typescript, rust]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: matrix.language == 'javascript-typescript'
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/setup-rust
+        if: matrix.language == 'rust'
+        with:
+          cache: 'false'
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          upload: never
+          category: "/language:${{ matrix.language }}"
