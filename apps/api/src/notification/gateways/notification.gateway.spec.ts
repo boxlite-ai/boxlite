@@ -23,6 +23,7 @@ function connect(options: {
   queryOrganizationId?: string
   memberships: Array<[string, string]>
   membershipLookupError?: Error
+  pendingConsent?: boolean
 }) {
   const organizationUserService = {
     exists: jest.fn(async (organizationId: string, userId: string) => {
@@ -42,7 +43,8 @@ function connect(options: {
     apiKeyStrategy as never,
     organizationUserService as never,
     {} as never,
-    { findOne: jest.fn(async (id: string) => ({ id })) } as never,
+    { findOne: jest.fn(async (id: string) => ({ id, registrationConsentPending: options.pendingConsent })) } as never,
+    { get: () => ({}) } as never,
   )
 
   let middleware: Middleware | undefined
@@ -64,6 +66,14 @@ function connect(options: {
 }
 
 describe('NotificationGateway connection rooms', () => {
+  it('denies a pending-consent user before joining any room', async () => {
+    const socket = connect({ jwtPayload: { sub: 'user-1' }, memberships: [], pendingConsent: true })
+
+    await socket.run()
+
+    expect(socket.joined).toEqual([])
+    expect(socket.next).toHaveBeenCalledWith(expect.objectContaining({ status: 401 }))
+  })
   it('does not put a JWT user into an organization room they are not a member of', async () => {
     const socket = connect({ jwtPayload: { sub: 'user-2' }, queryOrganizationId: 'org-1', memberships: [] })
 

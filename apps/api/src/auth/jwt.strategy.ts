@@ -73,6 +73,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (typeof userId !== 'string' || !userId.trim()) throw new UnauthorizedException('Invalid credentials')
     let user = await this.userService.findOne(userId)
 
+    if (user?.registrationConsentPending && this.configService.get('legal')) {
+      throw new ForbiddenException({ message: 'Complete registration to continue', code: 'registration_required' })
+    }
+
     if (user && !user.emailVerified && payload.email_verified) {
       await this.userService.update(user.id, {
         emailVerified: payload.email_verified,

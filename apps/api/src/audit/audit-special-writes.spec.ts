@@ -150,7 +150,7 @@ describe('account adoption audit failures', () => {
       updateLog: jest.fn().mockResolvedValue({}),
     }
     const service = new (AccountLinkService as any)(
-      { getOrThrow: () => secret },
+      { get: () => false, getOrThrow: () => secret },
       linked,
       {},
       audit,

@@ -39,6 +39,19 @@ function buildStrategy(protectedRegistration = true, legalEnabled = false) {
 }
 
 describe('JwtStrategy.validate — local account access', () => {
+  it('requires registration for an adopted target even though the user row exists', async () => {
+    const { strategy, userService } = buildStrategy(false, true)
+    const user = { id: 'auth0|target', registrationConsentPending: true }
+    jest.mocked(userService.findOne).mockResolvedValue(user as never)
+    const request = { get: jest.fn() } as unknown as Request
+
+    await expect(strategy.validate(request, { sub: user.id })).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'registration_required' },
+    })
+    expect(userService.update).not.toHaveBeenCalled()
+  })
+
   it.each([undefined, '', '   ', 42])(
     'rejects an unusable identity before accessing local accounts (%s)',
     async (sub) => {

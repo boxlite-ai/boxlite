@@ -38,6 +38,7 @@ const storedUser = {
   createdAt,
   role: 'user',
   emailVerified: true,
+  registrationConsentPending: false,
   keyPair: { privateKey: 'private-key', publicKey: 'public-key' },
 } as User
 
@@ -50,7 +51,7 @@ describe('POST /api/auth/register', () => {
   let validate: jest.SpyInstance
   let jwks: Server
   let signingKey: jose.KeyLike
-  const users = { findOne: jest.fn(), create: jest.fn() }
+  const users = { findOne: jest.fn(), create: jest.fn(), acceptPendingRegistration: jest.fn() }
   const loginEvents = { recordFirstUse: jest.fn() }
   const settings = { secretKey: SECRET, expectedHostnames: ['console.example.com'], action: 'signup', timeoutMs: 5000 }
   const legal = {
@@ -117,6 +118,7 @@ describe('POST /api/auth/register', () => {
     identity = { sub: storedUser.id, name: 'Token User', email: '  Token@GMAIL.COM  ', email_verified: true }
     users.findOne.mockReset().mockResolvedValue(null)
     users.create.mockReset().mockImplementation(async (dto) => ({ ...storedUser, ...dto }))
+    users.acceptPendingRegistration.mockReset()
     loginEvents.recordFirstUse.mockReset().mockResolvedValue(undefined)
     config.getOrThrow.mockClear()
     verifyJwt = jest.spyOn(jose, 'jwtVerify')
@@ -172,6 +174,21 @@ describe('POST /api/auth/register', () => {
     users.findOne.mockResolvedValue(storedUser)
     expect((await post({ ...challenge, ...versions, accepted: true })).status).toBe(200)
     expect(users.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires valid consent for an adopted target and submits it without creating a second user', async () => {
+    currentLegal = legal
+    turnstileEnabled = false
+    users.findOne.mockResolvedValue({ ...storedUser, registrationConsentPending: true })
+    users.acceptPendingRegistration.mockResolvedValue({ user: storedUser, accepted: true })
+
+    expect(await post({})).toMatchObject({ status: 400, data: { code: 'consent_required' } })
+    expect(users.acceptPendingRegistration).not.toHaveBeenCalled()
+
+    const versions = { tosVersion: legal.tosVersion, privacyVersion: legal.privacyVersion }
+    expect(await post({ accepted: true, ...versions })).toMatchObject({ status: 200 })
+    expect(users.acceptPendingRegistration).toHaveBeenCalledWith(storedUser.id, versions, 'platform-default-region')
+    expect(users.create).not.toHaveBeenCalled()
   })
 
   it('creates a user from verified JWT claims and returns only UserDto with 201', async () => {

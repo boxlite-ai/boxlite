@@ -32,6 +32,8 @@ export interface ApiInputs {
   oidcMgmtClientId: sst.Secret
   oidcMgmtClientSecret: sst.Secret
   accountLinkSecret: sst.Secret
+  accountLinkReadClientId: sst.Secret
+  accountLinkReadClientSecret: sst.Secret
   posthogApiKey: sst.Secret
   svixAuthToken: sst.Secret
   usageExportToken: sst.Secret
@@ -69,6 +71,8 @@ export function buildApi(input: ApiInputs) {
     oidcMgmtClientId,
     oidcMgmtClientSecret,
     accountLinkSecret,
+    accountLinkReadClientId,
+    accountLinkReadClientSecret,
     posthogApiKey,
     svixAuthToken,
     usageExportToken,
@@ -264,6 +268,8 @@ export function buildApi(input: ApiInputs) {
         // status requests with; the link merges a person's logins into one
         // account. Empty leaves both endpoints off.
         OIDC_ACCOUNT_LINK_SECRET: accountLinkSecret.value,
+        OIDC_ACCOUNT_LINK_READ_CLIENT_ID: accountLinkReadClientId.value,
+        OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET: accountLinkReadClientSecret.value,
         // RP-initiated logout fallback. Safe to set unconditionally: the API
         // probes the IdP's discovery doc at startup and only exposes this URL
         // to the dashboard when the IdP itself lacks end_session_endpoint

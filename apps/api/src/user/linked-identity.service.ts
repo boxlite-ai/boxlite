@@ -53,33 +53,41 @@ export class LinkedIdentityService {
       throw new Error(`cannot link ${primaryUserId} to itself`)
     }
 
-    const movedKeyHashes = await this.dataSource.transaction(async (em) => {
-      // Serialise concurrent adoptions of one secondary, so two links
-      // racing over the same identity cannot both copy its memberships.
-      const secondary = await em
-        .createQueryBuilder(User, 'user')
-        .setLock('pessimistic_write')
-        .where('user.id = :id', { id: secondaryUserId })
-        .getOne()
-      if (!secondary) {
-        return []
-      }
-
-      await this.ensurePrimaryUser(em, primaryUserId, secondary)
-      await this.moveRegistrationConsent(em, primaryUserId, secondaryUserId)
-      const moved = await this.moveMemberships(em, primaryUserId, secondaryUserId)
-      const keyHashes = await this.moveApiKeys(em, primaryUserId, secondaryUserId)
-      await em.query(`UPDATE "organization" SET "createdBy" = $1 WHERE "createdBy" = $2`, [
-        primaryUserId,
-        secondaryUserId,
-      ])
-
-      this.logger.log(
-        `Moved ${moved} membership(s) and ${keyHashes.length} API key(s) from ${secondaryUserId} to ${primaryUserId}`,
-      )
-      return keyHashes
-    })
+    const movedKeyHashes = await this.dataSource.transaction((em) =>
+      this.adoptInTransaction(em, primaryUserId, secondaryUserId, false),
+    )
     await this.forgetCachedOwners(movedKeyHashes)
+  }
+
+  async adoptInTransaction(
+    em: EntityManager,
+    primaryUserId: string,
+    secondaryUserId: string,
+    registrationConsentPending: boolean,
+  ): Promise<string[]> {
+    // Serialise concurrent adoptions of one secondary, so two links
+    // racing over the same identity cannot both copy its memberships.
+    const secondary = await em
+      .createQueryBuilder(User, 'user')
+      .setLock('pessimistic_write')
+      .where('user.id = :id', { id: secondaryUserId })
+      .getOne()
+    if (!secondary) {
+      return []
+    }
+
+    await this.ensurePrimaryUser(em, primaryUserId, secondary, registrationConsentPending)
+    const moved = await this.moveMemberships(em, primaryUserId, secondaryUserId)
+    const keyHashes = await this.moveApiKeys(em, primaryUserId, secondaryUserId)
+    await em.query(`UPDATE "organization" SET "createdBy" = $1 WHERE "createdBy" = $2`, [
+      primaryUserId,
+      secondaryUserId,
+    ])
+
+    this.logger.log(
+      `Moved ${moved} membership(s) and ${keyHashes.length} API key(s) from ${secondaryUserId} to ${primaryUserId}`,
+    )
+    return keyHashes
   }
 
   /**
@@ -89,7 +97,7 @@ export class LinkedIdentityService {
    * commits: any earlier, a request could read the old owner from the
    * database and cache it again.
    */
-  private async forgetCachedOwners(keyHashes: string[]): Promise<void> {
+  async forgetCachedOwners(keyHashes: string[]): Promise<void> {
     if (keyHashes.length === 0) {
       return
     }
@@ -109,7 +117,12 @@ export class LinkedIdentityService {
    * one of them empty, when the organization they have been using is the one
    * that should stay their default.
    */
-  private async ensurePrimaryUser(em: EntityManager, primaryUserId: string, secondary: User): Promise<void> {
+  private async ensurePrimaryUser(
+    em: EntityManager,
+    primaryUserId: string,
+    secondary: User,
+    registrationConsentPending: boolean,
+  ): Promise<void> {
     const existing = await em.findOne(User, { where: { id: primaryUserId } })
     if (existing) {
       return
@@ -119,23 +132,10 @@ export class LinkedIdentityService {
       name: secondary.name,
       email: secondary.email,
       emailVerified: secondary.emailVerified,
+      registrationConsentPending,
       publicKeys: secondary.publicKeys,
       role: secondary.role,
     })
-  }
-
-  private async moveRegistrationConsent(
-    em: EntityManager,
-    primaryUserId: string,
-    secondaryUserId: string,
-  ): Promise<void> {
-    // The secondary lock cannot serialize two different accounts merging into the same primary.
-    await em.findOneOrFail(User, { where: { id: primaryUserId }, lock: { mode: 'pessimistic_write' } })
-    await em.query(
-      `UPDATE "registration_consent" SET "user_id" = $1
-       WHERE "user_id" = $2 AND NOT EXISTS (SELECT 1 FROM "registration_consent" WHERE "user_id" = $1)`,
-      [primaryUserId, secondaryUserId],
-    )
   }
 
   private async moveMemberships(em: EntityManager, primaryUserId: string, secondaryUserId: string): Promise<number> {

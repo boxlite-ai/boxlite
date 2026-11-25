@@ -38,6 +38,19 @@ export class AccountLinkController {
     await this.accountLink.adopt(this.requestToken(authorization))
   }
 
+  @Post('prepare')
+  @UseGuards(AnonymousRateLimitGuard)
+  async prepare(@Headers('authorization') authorization?: string): Promise<{ operationId: string; ready: boolean }> {
+    return this.accountLink.prepare(this.requestToken(authorization))
+  }
+
+  @Post('result')
+  @HttpCode(204)
+  @UseGuards(AnonymousRateLimitGuard)
+  async result(@Headers('authorization') authorization?: string): Promise<void> {
+    await this.accountLink.result(this.requestToken(authorization))
+  }
+
   /** Whether BoxLite already has the user the Action names. */
   @Get('status')
   @UseGuards(AnonymousRateLimitGuard)

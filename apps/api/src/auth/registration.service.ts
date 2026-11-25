@@ -32,7 +32,9 @@ export class RegistrationService {
     const token = this.config.get('turnstile') || !legal ? registrationToken(body) : undefined
     const id = jwtUserId(identity)!
     const existing = await this.users.findOne(id)
-    if (existing) return { user: UserDto.fromUser(existing), created: false }
+    if (existing && (!legal || !existing.registrationConsentPending)) {
+      return { user: UserDto.fromUser(existing), created: false }
+    }
 
     const consent = legal ? registrationConsent(body, legal) : undefined
     const rawEmail = identity.cid && identity.uid ? identity.sub : identity.email
@@ -41,6 +43,12 @@ export class RegistrationService {
     }
     const email = normalizeRegistrationEmail(rawEmail)
     if (token !== undefined) await this.turnstile.verify(token)
+
+    if (existing && consent) {
+      const result = await this.users.acceptPendingRegistration(id, consent, this.config.getOrThrow('defaultRegion.id'))
+      if (result.accepted) await this.loginEvents.recordFirstUse(id, identity)
+      return { user: UserDto.fromUser(result.user), created: false }
+    }
 
     let user
     try {
@@ -59,7 +67,18 @@ export class RegistrationService {
     } catch (error) {
       if (error instanceof UserAlreadyExistsException) {
         const existing = await this.users.findOne(id)
-        if (existing) return { user: UserDto.fromUser(existing), created: false }
+        if (existing && (!legal || !existing.registrationConsentPending)) {
+          return { user: UserDto.fromUser(existing), created: false }
+        }
+        if (existing && consent) {
+          const result = await this.users.acceptPendingRegistration(
+            id,
+            consent,
+            this.config.getOrThrow('defaultRegion.id'),
+          )
+          if (result.accepted) await this.loginEvents.recordFirstUse(id, identity)
+          return { user: UserDto.fromUser(result.user), created: false }
+        }
       }
       throw error
     }

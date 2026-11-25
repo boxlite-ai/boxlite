@@ -228,6 +228,22 @@ Deploy the API after upgrading the package to apply the new list.
 Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
 and `make build:apps:api` to validate the production bundle and dependency imports.
 
+### Account linking and consent
+
+Deploy the account-link migration and API before updating the Auth0 login Action.
+Configure `OIDC_ACCOUNT_LINK_READ_CLIENT_ID` and `OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET` for a
+dedicated Auth0 Management API client with `read:users` and verify the API scheduler
+can run without incoming traffic before enabling legal enforcement.
+
+The Action prepares each link in BoxLite before calling Auth0. Confirmed links
+transfer an existing acceptance only when the retained account has none.
+Consent keeps its original accepter, document versions, and timestamp.
+
+A confirmed rejection allows a fresh attempt from sign-in. An unknown result
+keeps the original job active and the scheduler checks Auth0 for the exact linked
+identity. After six inconclusive checks, the API logs the operation ID at warning
+level and continues hourly checks. Alert on that warning.
+
 ## Coupon link claims
 
 `POST /api/organizations/:organizationId/coupon-claims` accepts

@@ -292,18 +292,20 @@ Action folds a login into the account that already holds its address once the
 person proves that account is theirs, and nobody is asked to set a password.
 BoxLite never receives a password.
 
-Moving BoxLite's own rows is the one step Auth0 cannot take. Before it links,
-the Action asks the API with `POST /api/auth/link/adopt`, a server-to-server
-call carrying an HS256 bearer token signed with `OIDC_ACCOUNT_LINK_SECRET`. The
-token names the user being folded as `sub` and the account that stays as
-`primary_user_id`, with the audience `boxlite-account-link-adopt`, and is
-refused once it is older than a minute. `GET /api/auth/link/status`, signed the
-same way for the audience `boxlite-account-link-status`, answers
-`{"known": true}` when BoxLite already has the user named in `sub`. Without the
-secret both endpoints answer 404; a key shorter than 32 characters stops the
-API at boot. The key reaches the API on both deploy paths: SST declares
-`OIDC_ACCOUNT_LINK_SECRET` as a secret that defaults to empty, and mdeploy
-fetches it from the stage's optional API group.
+Before linking, the Action calls `POST /api/auth/link/prepare` with both
+identities and an operation ID. It calls `POST /api/auth/link/result` after a
+confirmed result. BoxLite transfers consent only after confirmation, either
+from the Action or from its own Auth0 lookup.
+
+The Action signs each call with an endpoint-specific HS256 audience and a
+one-minute lifetime. `GET /api/auth/link/status` reports whether BoxLite knows
+the named user. The legacy `POST /api/auth/link/adopt` supports rolling out the
+API before the new Action while legal enforcement is disabled.
+
+Set `OIDC_ACCOUNT_LINK_SECRET` to a value of at least 32 characters on both
+sides. The stage also needs `OIDC_ACCOUNT_LINK_READ_CLIENT_ID` and
+`OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET` for a dedicated Auth0 client granted
+`read:users`. Both deployment paths deliver these through the API secret group.
 
 ### The Action's part
 

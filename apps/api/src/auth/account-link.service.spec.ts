@@ -34,12 +34,13 @@ describe('AccountLinkService', () => {
   beforeEach(() => {
     adopt = jest.fn().mockResolvedValue(undefined)
     findOne = jest.fn().mockResolvedValue(null)
-    const config = { getOrThrow: jest.fn(() => SECRET) } as unknown as TypedConfigService
+    const config = { get: jest.fn(), getOrThrow: jest.fn(() => SECRET) } as unknown as TypedConfigService
     service = new AccountLinkService(
       config,
       { adopt } as unknown as LinkedIdentityService,
       { findOne } as unknown as UserService,
       { createLog: jest.fn().mockResolvedValue({ id: 'audit' }), updateLog: jest.fn().mockResolvedValue({}) } as any,
+      {} as import('./account-link-consent-jobs.service').AccountLinkConsentJobs,
     )
   })
 

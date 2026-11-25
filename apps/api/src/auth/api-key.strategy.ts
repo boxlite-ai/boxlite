@@ -83,8 +83,14 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       }
     }
 
+    const live = this.configService.get('legal') ? await this.apiKeyService.findWithCurrentOwner(token) : undefined
+    if (live && (!live.owner || live.owner.registrationConsentPending)) {
+      throw new UnauthorizedException('This API key cannot be used until registration is complete')
+    }
+
     try {
-      let apiKey = await this.getApiKeyCache(token)
+      if (live === null) throw new UnauthorizedException('API key not found')
+      let apiKey = live ? live.apiKey : await this.getApiKeyCache(token)
       if (!apiKey) {
         // Cache miss - validate from database
         apiKey = await this.apiKeyService.getApiKeyByValue(token)
@@ -106,7 +112,10 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       this.logger.debug(`Updating last used timestamp for API key: ${token.substring(0, 8)}...`)
       await this.apiKeyService.updateLastUsedAt(apiKey.organizationId, apiKey.userId, apiKey.name, new Date())
 
-      let userCache = await this.getUserCache(apiKey.userId)
+      const owner = live?.owner
+      let userCache = owner
+        ? { userId: owner.id, role: owner.role, email: owner.email }
+        : await this.getUserCache(apiKey.userId)
       if (!userCache) {
         const user = await this.userService.findOne(apiKey.userId)
         if (!user) {

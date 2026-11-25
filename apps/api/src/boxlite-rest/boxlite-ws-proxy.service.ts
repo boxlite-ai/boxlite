@@ -13,6 +13,7 @@ import { OrganizationUserService } from '../organization/services/organization-u
 import { OrganizationService } from '../organization/services/organization.service'
 import { Organization } from '../organization/entities/organization.entity'
 import { UserService } from '../user/user.service'
+import { TypedConfigService } from '../config/typed-config.service'
 import type { User } from '../user/user.entity'
 import { SystemRole } from '../user/enums/system-role.enum'
 import type { ApiKey } from '../api-key/api-key.entity'
@@ -74,6 +75,7 @@ export class BoxliteWsProxyService {
     @Inject(JwtStrategy) private readonly jwtStrategy: JwtStrategy | undefined,
     private readonly attachTickets: AttachTicketService,
     private readonly auditService: AuditService,
+    private readonly config?: TypedConfigService,
   ) {
     this.proxy = createProxyMiddleware({
       ws: true,
@@ -241,12 +243,14 @@ export class BoxliteWsProxyService {
       // 1. API key — org comes from the key itself; the URL tenant is ignored, as
       //    before. A *throw* means "not an API key", so it is caught here to fall
       //    through to JWT rather than being rejected by the outer guard.
-      const apiKey = await this.apiKeyService.getApiKeyByValue(token).catch(() => null)
+      const live = this.config?.get('legal') ? await this.apiKeyService.findWithCurrentOwner(token) : undefined
+      const apiKey =
+        live === undefined ? await this.apiKeyService.getApiKeyByValue(token).catch(() => null) : live?.apiKey
       if (apiKey) {
         if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
         // The system role comes from the key's user, as ApiKeyStrategy resolves it
         // on the HTTP path.
-        const user = await this.userService.findOne(apiKey.userId)
+        const user = live ? live.owner : await this.userService.findOne(apiKey.userId)
         if (!user) return null
         if (!(await this.authorizeAttach(user, apiKey.organizationId, apiKey))) return null
         const organization = await this.organizationService.findOne(apiKey.organizationId)
@@ -282,6 +286,7 @@ export class BoxliteWsProxyService {
    * execution's stdin, i.e. interactive exec.
    */
   private async authorizeAttach(user: User, organizationId: string, apiKey?: ApiKey): Promise<boolean> {
+    if (user.registrationConsentPending && this.config?.get('legal')) return false
     if (user.role === SystemRole.ADMIN) return true
     const membership = await this.organizationUserService.findOne(organizationId, user.id)
     if (!membership) return false

@@ -26,6 +26,7 @@ import { RunnerState } from '../../box/enums/runner-state.enum'
 import { RunnerEvents } from '../../box/constants/runner-events'
 import { NotificationEmitter } from './notification-emitter.abstract'
 import { UserService } from '../../user/user.service'
+import { TypedConfigService } from '../../config/typed-config.service'
 
 @WebSocketGateway({
   path: '/api/socket.io/',
@@ -43,6 +44,7 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
     private readonly organizationUserService: OrganizationUserService,
     @InjectRedis() private readonly redis: Redis,
     private readonly userService: UserService,
+    private readonly config?: TypedConfigService,
   ) {
     super()
   }
@@ -70,7 +72,10 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
           return next(new UnauthorizedException())
         }
         try {
-          if (!(await this.userService.findOne(userId))) return next(new UnauthorizedException())
+          const user = await this.userService.findOne(userId)
+          if (!user || (user.registrationConsentPending && this.config?.get('legal'))) {
+            return next(new UnauthorizedException())
+          }
         } catch (error) {
           this.logger.error('Notification user lookup failed', error)
           // A transport close triggers Socket.IO's retry; finish middleware to clean up the pending socket.

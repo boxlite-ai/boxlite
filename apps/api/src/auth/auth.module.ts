@@ -23,6 +23,8 @@ import { RegionModule } from '../region/region.module'
 import { LogoutController } from './logout.controller'
 import { AccountLinkController } from './account-link.controller'
 import { AccountLinkService } from './account-link.service'
+import { AccountLinkConsentJobs } from './account-link-consent-jobs.service'
+import { AccountLinkReconciliation } from './account-link-reconciliation.service'
 import { McpDelegation } from './mcp-delegation'
 import { AuditModule } from '../audit/audit.module'
 import { RegistrationController } from './registration.controller'
@@ -49,6 +51,8 @@ import { TurnstileService } from './turnstile.service'
     RegistrationJwtGuard,
     TurnstileService,
     AccountLinkService,
+    AccountLinkConsentJobs,
+    AccountLinkReconciliation,
     ApiKeyStrategy,
     {
       provide: JwtStrategy,

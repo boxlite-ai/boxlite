@@ -41,7 +41,8 @@ const MCP_RESOURCE_URL = __MCP_RESOURCE_URL_JSON__
 const API_AUDIENCE = __API_AUDIENCE_JSON__
 
 // The API refuses a request signed for any audience but the one it serves.
-const ADOPT_AUDIENCE = 'boxlite-account-link-adopt'
+const PREPARE_AUDIENCE = 'boxlite-account-link-prepare'
+const RESULT_AUDIENCE = 'boxlite-account-link-result'
 const STATUS_AUDIENCE = 'boxlite-account-link-status'
 const PASSWORD_REALM_GRANT = 'http://auth0.com/oauth/grant-type/password-realm'
 // Gmail addresses, whose mail Google itself serves.
@@ -131,10 +132,13 @@ async function managementToken(event, api) {
   return token
 }
 
-async function management(event, api, method, path, body) {
+async function management(event, api, method, path, body, token) {
   const response = await fetch(`https://${AUTH0_DOMAIN}/api/v2${path}`, {
     method,
-    headers: { authorization: `Bearer ${await managementToken(event, api)}`, 'content-type': 'application/json' },
+    headers: {
+      authorization: `Bearer ${token ?? (await managementToken(event, api))}`,
+      'content-type': 'application/json',
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const text = await response.text()
@@ -310,23 +314,58 @@ async function boxliteKnows(event, userId) {
   return (await response.json()).known === true
 }
 
-async function adopt(event, primaryUserId, userId) {
-  const token = signLinkRequest(event, ADOPT_AUDIENCE, { sub: userId, primary_user_id: primaryUserId })
-  const response = await fetch(`${ACCOUNT_LINK_API_ORIGIN}/api/auth/link/adopt`, {
+async function linkRequest(event, endpoint, audience, claims) {
+  return fetch(`${ACCOUNT_LINK_API_ORIGIN}/api/auth/link/${endpoint}`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}` },
+    headers: { authorization: `Bearer ${signLinkRequest(event, audience, claims)}` },
   })
-  if (response.status !== 204) throw new Error(`the BoxLite API answered ${response.status} to adopt`)
 }
 
 async function link(event, api, primaryUserId, userId) {
+  const token = await managementToken(event, api)
+  const operationId = require('crypto').randomUUID()
+  const claims = { sub: userId, primary_user_id: primaryUserId, operation_id: operationId }
+  // Retrying preparation is safe before this invocation has sent a link request.
+  const prepared = await linkRequest(event, 'prepare', PREPARE_AUDIENCE, claims).catch(() =>
+    linkRequest(event, 'prepare', PREPARE_AUDIENCE, claims),
+  )
+  if (prepared.status === 409) throw new AccountLinkPendingError()
+  if (prepared.status !== 201) throw new Error(`preparing account link answered ${prepared.status}`)
+  const preparation = await prepared.json()
+  if (preparation.operationId !== operationId || preparation.ready !== true) throw new AccountLinkPendingError()
+
   const separator = userId.indexOf('|')
-  const { status } = await management(event, api, 'POST', `/users/${encodeURIComponent(primaryUserId)}/identities`, {
-    provider: userId.slice(0, separator),
-    user_id: userId.slice(separator + 1),
+  const { status } = await management(
+    event,
+    api,
+    'POST',
+    `/users/${encodeURIComponent(primaryUserId)}/identities`,
+    { provider: userId.slice(0, separator), user_id: userId.slice(separator + 1) },
+    token,
+  ).catch(() => {
+    throw new AccountLinkPendingError()
   })
-  if (status !== 201) throw new Error(`linking answered ${status}`)
+  if (status !== 201 && ![400, 401, 403, 404, 422].includes(status)) {
+    throw new AccountLinkPendingError()
+  }
+
+  const outcome = status === 201 ? 'done' : 'failed'
+  let acknowledged = false
+  try {
+    const response = await linkRequest(event, 'result', RESULT_AUDIENCE, { ...claims, outcome })
+    acknowledged = response.status === 204
+  } catch {
+    // BoxLite can reconcile a confirmed link even when the result cannot reach it.
+  }
+  if (!acknowledged) console.log(`BoxLite did not acknowledge account-link result ${operationId}`)
+  if (outcome === 'failed') {
+    if (!acknowledged) throw new AccountLinkPendingError()
+    throw new AccountLinkRejectedError()
+  }
 }
+
+class AccountLinkPendingError extends Error {}
+class AccountLinkRejectedError extends Error {}
 
 /**
  * The account that stays. One that already joins several sign-ins stays, so
@@ -342,16 +381,10 @@ async function accountThatStays(event, accounts) {
   return best
 }
 
-/**
- * Folds this login and `accounts` into one. Local data moves before the
- * tenant link: once linked, later logins reach the account directly and never
- * pass here again, so anything not yet moved would stay stranded, while a
- * failed link is simply retried at the next login.
- */
+/** Each identity gets its own BoxLite operation before linking in Auth0. */
 async function fold(event, api, accounts) {
   const stays = await accountThatStays(event, accounts)
   const folded = [event.user, ...accounts].filter((user) => user.user_id !== stays.user_id)
-  for (const user of folded) await adopt(event, stays.user_id, user.user_id)
   for (const user of folded) await link(event, api, stays.user_id, user.user_id)
   if (stays.user_id !== event.user.user_id) api.authentication.setPrimaryUser(stays.user_id)
   setIdentityClaims(event, api, true)
@@ -491,6 +524,14 @@ async function withAccountLink(api, step) {
   try {
     await step()
   } catch (error) {
+    if (error instanceof AccountLinkPendingError) {
+      api.access.deny('BoxLite is still checking the account link. Try signing in again later.')
+      return
+    }
+    if (error instanceof AccountLinkRejectedError) {
+      api.access.deny('The account link was declined. Sign in again to retry.')
+      return
+    }
     console.log(`Account link failed: ${error?.message ?? error}`)
     api.access.deny('Account linking is unavailable right now. Try again in a moment.')
   }

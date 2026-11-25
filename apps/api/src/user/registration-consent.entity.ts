@@ -19,6 +19,9 @@ export class RegistrationConsent implements AcceptedLegalVersions {
   @Column({ name: 'user_id' })
   userId: string
 
+  @Column({ name: 'accepted_by_user_id', type: 'varchar', nullable: true })
+  acceptedByUserId: string | null
+
   @Column({ name: 'tos_version', type: 'text' })
   tosVersion: string
 
