@@ -10,6 +10,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Why a VM control operation was refused or failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ControlReason {
     /// The operation is unavailable on this host platform.
     Unsupported,

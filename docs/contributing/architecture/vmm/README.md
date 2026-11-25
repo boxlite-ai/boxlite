@@ -588,12 +588,15 @@ setup. Its empty disk registry makes `resize_disk()` return `InvalidInput`.
 ### Snapshot export
 
 `VmControl::export(state_path, memory_path)` reserves the control slot for a
-paused device-less VM on Linux x86_64. Once all vCPUs have completed pending
-I/O and parked, the driver saves the VM platform state. If this fails, the
-driver releases the slot and returns the error without dispatching vCPU capture.
-On success, each vCPU saves its state on its owning thread. The driver collects
-all replies, including failures, and writes the platform state and ID-ordered
-vCPU records only if every capture succeeds.
+paused device-less VM on Linux x86_64. `Vm` currently has no public device-less
+constructor (`Vm::new_device_less` is crate-internal for tests). Once all vCPUs
+have completed pending I/O and parked, the driver saves the VM platform state.
+If this fails, the driver releases the slot and returns the error without
+dispatching vCPU capture. On success, each vCPU saves its state on its owning
+thread. The driver collects all replies, including failures, and writes the
+platform state and ID-ordered vCPU records only if every capture succeeds.
+Following `boxlite-hypervisor`'s capture exclusions, x86 machine state excludes
+nested virtualization, Hyper-V SynIC, and guest-debug state.
 
 The state file has a 32-byte little-endian header containing the eight-byte
 magic `BXLVMST1`, `u32` version `1`, `u32` vCPU count, `u64` RAM length, and
@@ -601,11 +604,15 @@ magic `BXLVMST1`, `u32` version `1`, `u32` vCPU count, `u64` RAM length, and
 state. The memory file contains raw RAM from offset zero in `ram.ranges()`
 order, skipping `[3 GiB, 4 GiB)`. Its length equals the header's RAM length.
 
-The driver creates both files exclusively with mode `0600`, checks for stop
-between chunks of up to 1 MiB, and releases the control slot at the final
-lifecycle check. A terminal state at that check yields `TerminalOutcome`.
-The driver skips `fsync`, and dropping the files ignores delayed `close(2)`
-errors. `Ok(())` provides no guarantee of power-loss durability.
+The driver creates both files exclusively with mode `0600` (subject to the
+process `umask`), checks for stop between chunks of up to 1 MiB, and releases
+the control slot at the final lifecycle check. Relative paths are resolved
+against the current working directory when the export is admitted. `stop()`
+takes effect at export checkpoints; an in-flight `save_state` ioctl or file I/O
+call delays `export()` and `run()` until it returns. A terminal state at that
+check yields `TerminalOutcome`. The driver skips `fsync`, and dropping the files
+ignores delayed `close(2)` errors. `Ok(())` provides no guarantee of power-loss
+durability.
 
 Callers must have exclusive use of both target paths during export. Failure
 cleanup is best-effort and attempts to unlink a path only if its device and

@@ -31,6 +31,10 @@ impl VmControl {
     }
 
     /// Requests a stop, including before execution starts, without waiting for exit.
+    ///
+    /// During [`Self::export`], stop requests take effect at export checkpoints;
+    /// an in-flight `save_state` ioctl or file I/O call delays `export()` and
+    /// `Vm::run()` until it returns.
     pub fn stop(&self) {
         self.lifecycle.stop();
     }
@@ -48,13 +52,16 @@ impl VmControl {
     }
 
     /// Exports a paused device-less VM on Linux x86_64 to new state and raw RAM files.
-    /// Both files are created with mode `0600`.
+    /// Both files are created with mode `0600` (subject to the process `umask`).
     /// Export skips `fsync`, and dropping the files ignores delayed `close(2)` errors.
     /// `Ok(())` provides no guarantee of power-loss durability.
     ///
-    /// Callers must have exclusive use of both target paths during export. Failure
-    /// cleanup is best-effort and attempts to unlink a path only if its device and
-    /// inode still match the open file.
+    /// `Vm` currently has no public device-less constructor, so `export()` only
+    /// applies to device-less VMs. Callers must have exclusive use of both
+    /// target paths during export. Failure cleanup is best-effort and attempts
+    /// to unlink a path only if its device and inode still match the open file.
+    /// Relative paths are resolved against the current working directory when
+    /// the export is admitted.
     pub fn export(
         &self,
         state_path: impl AsRef<Path>,

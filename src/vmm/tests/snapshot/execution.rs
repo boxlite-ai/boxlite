@@ -20,8 +20,8 @@ use crate::{
     mock_vm::{MockHandle, MockVcpu, MockVm},
 };
 use boxlite_hypervisor::{
-    MemoryRegion, Vcpu, VcpuExit, X86BootRegisters, X86IrqchipState, X86Vcpu, X86VcpuState, X86Vm,
-    X86VmState,
+    IoCompletion, MemoryRegion, Vcpu, VcpuExit, X86BootRegisters, X86IrqchipState, X86Vcpu,
+    X86VcpuState, X86Vm, X86VmState,
 };
 use vm_memory::{Bytes, GuestAddress};
 
@@ -70,6 +70,7 @@ struct Backend {
     observed: mpsc::Sender<Capture>,
     gates: Vec<Mutex<mpsc::Receiver<()>>>,
     fail_cpu: bool,
+    fail_cpu_once: bool,
     fail_platform: bool,
     platform_gate: Option<Mutex<mpsc::Receiver<()>>>,
 }
@@ -80,6 +81,7 @@ struct Cpu {
     observed: mpsc::Sender<Capture>,
     gate: mpsc::Receiver<()>,
     fail: bool,
+    fail_once: bool,
     // Enforce the backend contract: only its owning thread may access the CPU.
     local: PhantomData<Rc<()>>,
 }
@@ -105,6 +107,7 @@ impl boxlite_hypervisor::Vm for Backend {
             observed: self.observed.clone(),
             gate,
             fail: self.fail_cpu && id == 0,
+            fail_once: self.fail_cpu_once && id == 0,
             local: PhantomData,
         })
     }
@@ -133,7 +136,7 @@ impl Vcpu for Cpu {
     fn run(&mut self) -> boxlite_hypervisor::Result<VcpuExit<'_>> {
         self.inner.run()
     }
-    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<Option<VcpuExit<'_>>> {
+    fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<IoCompletion<'_>> {
         self.inner.complete_pending_io()
     }
     fn handle(&self) -> MockHandle {
@@ -157,7 +160,7 @@ impl X86Vcpu for Cpu {
             .send(Capture::Cpu(self.id, self.owner))
             .unwrap();
         self.gate.recv_timeout(WAIT).unwrap();
-        if self.fail {
+        if self.fail || std::mem::take(&mut self.fail_once) {
             self.observed.send(Capture::Failed(self.id)).unwrap();
             return Err(boxlite_hypervisor::Error::ConfigureVcpu {
                 id: self.id,
@@ -203,6 +206,7 @@ fn backend(
             observed,
             gates,
             fail_cpu,
+            fail_cpu_once: false,
             fail_platform,
             platform_gate: None,
         },
@@ -469,7 +473,17 @@ fn vcpu_panic_interrupts_capture_before_a_blocked_vcpu_replies() {
 
 #[test]
 fn stop_interrupts_capture_before_a_blocked_vcpu_replies() {
+    struct ReleaseOnDrop(Vec<mpsc::Sender<()>>);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            for release in self.0.drain(..) {
+                let _ = release.send(());
+            }
+        }
+    }
+
     let (backend, releases, observed) = backend(false, false);
+    let mut releases = ReleaseOnDrop(releases);
     let dir = tempfile::tempdir().unwrap();
     let state_path = dir.path().join("state");
     let memory_path = dir.path().join("memory");
@@ -482,21 +496,88 @@ fn stop_interrupts_capture_before_a_blocked_vcpu_replies() {
                 observed.recv_timeout(WAIT).unwrap(),
                 Capture::Platform(_)
             ));
-            assert!(matches!(
-                observed.recv_timeout(WAIT).unwrap(),
-                Capture::Cpu(..)
-            ));
+            for _ in 0..3 {
+                assert!(matches!(
+                    observed.recv_timeout(WAIT).unwrap(),
+                    Capture::Cpu(..)
+                ));
+            }
             control.stop();
             expect_export_error(
-                result.recv_timeout(WAIT).unwrap(),
+                result.recv_timeout(Duration::from_millis(500)).unwrap(),
                 ControlReason::TerminalOutcome,
             );
             assert!(!state_path.exists() && !memory_path.exists());
-            for release in releases {
-                let _ = release.send(());
+            for release in releases.0.drain(..) {
+                release.send(()).unwrap();
             }
         });
     });
+}
+
+#[test]
+fn retry_export_succeeds_in_same_pause_epoch_after_capture_failure() {
+    let (mut backend, releases, _observed) = backend(false, false);
+    backend.fail_cpu_once = true;
+    let dir = tempfile::tempdir().unwrap();
+    let state_path = dir.path().join("state");
+    let memory_path = dir.path().join("memory");
+    with_paused(machine(backend), |control, _, _| {
+        for release in &releases {
+            release.send(()).unwrap();
+        }
+        assert!(matches!(
+            control.export(&state_path, &memory_path),
+            Err(Error::Hypervisor(_))
+        ));
+        assert!(!state_path.exists() && !memory_path.exists());
+        assert_eq!(control.status(), VmStatus::Paused);
+
+        for release in &releases {
+            release.send(()).unwrap();
+        }
+        control.export(&state_path, &memory_path).unwrap();
+        assert_eq!(control.status(), VmStatus::Paused);
+    });
+    let memory = fs::read(&memory_path).unwrap();
+    let (header, state) = decode(&fs::read(&state_path).unwrap(), &memory);
+    assert_eq!(header.vcpus, 3);
+    assert_eq!(header.ram_len, 1 << 20);
+    assert_eq!(&memory[..9], b"guest RAM");
+    assert_eq!(
+        state
+            .vcpus
+            .iter()
+            .map(|record| (record.id, record.state.regs.rax))
+            .collect::<Vec<_>>(),
+        [(0, 0), (1, 1), (2, 2)]
+    );
+    assert_eq!(state.platform, platform());
+}
+
+#[test]
+fn export_rejects_vms_with_devices() {
+    struct Idle;
+    impl crate::bus::BusDevice for Idle {
+        fn read(&mut self, _: u64, _: &mut [u8]) {}
+        fn write(&mut self, _: u64, _: &[u8]) {}
+    }
+
+    let vm = Vm::with_backend(
+        config(),
+        || Ok(MockVm::new()),
+        |_, _| Ok(X86BootRegisters::default()),
+        |chipset, _| chipset.add("idle", |_| Ok(Idle)),
+    )
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let state_path = dir.path().join("state");
+    let memory_path = dir.path().join("memory");
+    expect_export_error(
+        vm.control().export(&state_path, &memory_path),
+        ControlReason::UnsupportedDevice,
+    );
+    assert!(!state_path.exists() && !memory_path.exists());
 }
 
 #[test]
@@ -695,17 +776,23 @@ fn kvm_export_captures_executed_guest_state_and_ram() {
     use crate::flat_guest;
 
     const MARKER_ADDR: GuestAddress = GuestAddress(0x2000);
+    const COUNTER_ADDR: GuestAddress = GuestAddress(0x2004);
     const MARKER: u32 = 0x1234_5678;
     #[rustfmt::skip]
-    const PROGRAM: [u8; 12] = [
-        0xb8, 0x78, 0x56, 0x34, 0x12, // mov eax, 0x12345678
-        0xa3, 0x00, 0x20, 0x00, 0x00, // mov dword ptr ds:[0x2000], eax
-        0xeb, 0xfe,                   // jmp $ (0x100a)
+    const PROGRAM: [u8; 19] = [
+        0xb8, 0x78, 0x56, 0x34, 0x12,             // mov eax, 0x12345678
+        0xa3, 0x00, 0x20, 0x00, 0x00,             // mov dword ptr ds:[0x2000], eax
+        0xf0, 0xff, 0x05, 0x04, 0x20, 0x00, 0x00, // lock inc dword ptr ds:[0x2004]
+        0xeb, 0xf7,                               // jmp $-7 (0x100a)
     ];
 
     let dir = tempfile::tempdir().unwrap();
     let state_path = dir.path().join("state");
     let memory_path = dir.path().join("memory");
+    let state_path_2 = dir.path().join("state2");
+    let memory_path_2 = dir.path().join("memory2");
+    let state_path_3 = dir.path().join("state3");
+    let memory_path_3 = dir.path().join("memory3");
     let mut guest_memory = None;
     let vm = Vm::with_backend(
         config(),
@@ -718,28 +805,30 @@ fn kvm_export_captures_executed_guest_state_and_ram() {
     )
     .unwrap();
     let guest_memory = guest_memory.unwrap();
-    let read_marker = || {
+    let read_u32 = |addr| {
         guest_memory
             .memory()
-            .load::<u32>(MARKER_ADDR, Ordering::Relaxed)
+            .load::<u32>(addr, Ordering::Relaxed)
             .unwrap()
     };
 
     with_paused(vm, |control, _, _| {
-        assert_eq!(read_marker(), 0);
+        assert_eq!(read_u32(MARKER_ADDR), 0);
+        assert_eq!(read_u32(COUNTER_ADDR), 0);
         control.resume().unwrap();
-        // The store is immediately followed by the self-loop, so the next RIP
-        // and the marker stay fixed once the store is visible to the host.
         let deadline = Instant::now() + WAIT;
-        while read_marker() != MARKER {
+        while read_u32(MARKER_ADDR) != MARKER || read_u32(COUNTER_ADDR) == 0 {
             assert!(
                 Instant::now() < deadline,
-                "guest did not write the RAM marker"
+                "guest did not write the RAM marker and counter"
             );
             thread::sleep(Duration::from_millis(10));
         }
         control.pause().unwrap();
+        control.wait_paused(WAIT).unwrap();
         assert_eq!(control.status(), VmStatus::Paused);
+        let paused_counter = read_u32(COUNTER_ADDR);
+        assert!(paused_counter > 0);
         control.export(&state_path, &memory_path).unwrap();
 
         let memory = fs::read(&memory_path).unwrap();
@@ -749,18 +838,331 @@ fn kvm_export_captures_executed_guest_state_and_ram() {
         assert_eq!(state.vcpus.len(), 3);
         let ids: Vec<_> = state.vcpus.iter().map(|record| record.id).collect();
         assert_eq!(ids, [0, 1, 2]);
+        assert!(state.platform.pit.is_some());
+        let chip_ids: Vec<_> = state
+            .platform
+            .irqchips
+            .iter()
+            .map(|chip| chip.as_kvm().chip_id)
+            .collect();
+        assert_eq!(chip_ids, [0, 1, 2]);
         let regs = &state.vcpus[0].state.regs;
         assert_eq!(regs.rax, u64::from(MARKER));
-        assert_eq!(regs.rip, 0x100a);
+        assert!((0x100a..=0x1011).contains(&regs.rip));
+        for vcpu in &state.vcpus[1..] {
+            assert!(!vcpu.state.cpuid.is_empty());
+            assert!(!vcpu.state.xsave.is_empty());
+        }
         let marker = MARKER_ADDR.0 as usize;
         assert_eq!(
             u32::from_le_bytes(memory[marker..marker + 4].try_into().unwrap()),
             MARKER
         );
+        let counter = COUNTER_ADDR.0 as usize;
+        assert_eq!(
+            u32::from_le_bytes(memory[counter..counter + 4].try_into().unwrap()),
+            paused_counter
+        );
         let code = flat_guest::CODE as usize;
         assert_eq!(&memory[code..code + PROGRAM.len()], &PROGRAM);
+
+        // Re-exporting within the same pause epoch succeeds without changing state.
+        control.export(&state_path_2, &memory_path_2).unwrap();
+        let memory_2 = fs::read(&memory_path_2).unwrap();
+        let (header_2, _) = decode(&fs::read(&state_path_2).unwrap(), &memory_2);
+        assert_eq!(header_2.vcpus, 3);
+        assert_eq!(
+            u32::from_le_bytes(memory_2[counter..counter + 4].try_into().unwrap()),
+            paused_counter
+        );
+
         assert_eq!(control.status(), VmStatus::Paused);
         control.resume().unwrap();
         assert_eq!(control.status(), VmStatus::Running);
+        let deadline = Instant::now() + WAIT;
+        while read_u32(COUNTER_ADDR) <= paused_counter {
+            assert!(
+                Instant::now() < deadline,
+                "guest counter did not advance after resume"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        control.pause().unwrap();
+        control.wait_paused(WAIT).unwrap();
+        assert_eq!(control.status(), VmStatus::Paused);
+        let resumed_counter = read_u32(COUNTER_ADDR);
+        assert!(resumed_counter > paused_counter);
+        control.export(&state_path_3, &memory_path_3).unwrap();
+        let memory_3 = fs::read(&memory_path_3).unwrap();
+        let (_, _) = decode(&fs::read(&state_path_3).unwrap(), &memory_3);
+        assert_eq!(
+            u32::from_le_bytes(memory_3[counter..counter + 4].try_into().unwrap()),
+            resumed_counter
+        );
     });
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+fn kvm_export_after_split_mmio_pause() {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Instant,
+    };
+
+    use boxlite_hypervisor::{KvmVcpu, KvmVcpuHandle, KvmVm};
+    use vm_memory::GuestAddressSpace;
+
+    use crate::flat_guest;
+
+    const COUNTER: GuestAddress = GuestAddress(0x2000);
+    const READBACK: GuestAddress = GuestAddress(0x2004);
+    const MMIO_SPLIT_ADDR: u64 = 0xd000_0ffe;
+    #[rustfmt::skip]
+    const PROGRAM: [u8; 29] = [
+        0xa1, 0xfe, 0x0f, 0x00, 0xd0,                               // mov eax, [0xd0000ffe]
+        0xa3, 0x04, 0x20, 0x00, 0x00,                               // mov [0x2004], eax
+        0xc7, 0x05, 0xfe, 0x0f, 0x00, 0xd0, 0x78, 0x56, 0x34, 0x12, // mov dword [0xd0000ffe], 0x12345678
+        0xf0, 0xff, 0x05, 0x00, 0x20, 0x00, 0x00,                   // lock inc dword [0x2000]
+        0xeb, 0xe3,                                                 // jmp to the start
+    ];
+
+    #[derive(Clone, Copy, Debug)]
+    enum SplitAccess {
+        Read,
+        Write,
+    }
+
+    impl SplitAccess {
+        fn is_fragment(self, exit: &VcpuExit<'_>, addr: u64) -> bool {
+            match (self, exit) {
+                (Self::Read, VcpuExit::MmioRead { guest_addr, bytes }) => {
+                    *guest_addr == addr && bytes.len() == 2
+                }
+                (Self::Write, VcpuExit::MmioWrite { guest_addr, bytes }) => {
+                    *guest_addr == addr && bytes.len() == 2
+                }
+                _ => false,
+            }
+        }
+    }
+
+    struct ExitGate {
+        arrived: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl ExitGate {
+        fn new() -> (Arc<Self>, mpsc::Receiver<()>, mpsc::Sender<()>) {
+            let (arrived, ready) = mpsc::channel();
+            let (release, resume) = mpsc::channel();
+            (
+                Arc::new(Self {
+                    arrived,
+                    release: Mutex::new(resume),
+                }),
+                ready,
+                release,
+            )
+        }
+
+        fn wait(&self) {
+            self.arrived.send(()).unwrap();
+            self.release.lock().unwrap().recv_timeout(WAIT).unwrap();
+        }
+    }
+
+    struct SplitMmioVm {
+        vm: KvmVm,
+        gate: Arc<ExitGate>,
+        access: SplitAccess,
+        completed_fragments: Arc<AtomicUsize>,
+    }
+
+    impl boxlite_hypervisor::Vm for SplitMmioVm {
+        type Vcpu = SplitMmioVcpu;
+
+        unsafe fn map_memory(&self, region: &MemoryRegion) -> boxlite_hypervisor::Result<()> {
+            // SAFETY: forwards the caller's unchanged registration contract.
+            unsafe { self.vm.map_memory(region) }
+        }
+
+        fn unmap_memory(&self, region: &MemoryRegion) -> boxlite_hypervisor::Result<()> {
+            self.vm.unmap_memory(region)
+        }
+
+        fn create_vcpu(&self, id: u32) -> boxlite_hypervisor::Result<Self::Vcpu> {
+            Ok(SplitMmioVcpu {
+                vcpu: self.vm.create_vcpu(id)?,
+                gate: Some(Arc::clone(&self.gate)),
+                access: self.access,
+                check_completion: false,
+                completed_fragments: Arc::clone(&self.completed_fragments),
+            })
+        }
+
+        fn set_irq_line(&self, line: u32, level: bool) -> boxlite_hypervisor::Result<()> {
+            self.vm.set_irq_line(line, level)
+        }
+    }
+
+    impl X86Vm for SplitMmioVm {
+        fn supported_cpuid(&self) -> &[boxlite_hypervisor::X86CpuidEntry] {
+            self.vm.supported_cpuid()
+        }
+
+        fn save_state(&self) -> boxlite_hypervisor::Result<X86VmState> {
+            self.vm.save_state()
+        }
+    }
+
+    struct SplitMmioVcpu {
+        vcpu: KvmVcpu,
+        gate: Option<Arc<ExitGate>>,
+        access: SplitAccess,
+        check_completion: bool,
+        completed_fragments: Arc<AtomicUsize>,
+    }
+
+    impl Vcpu for SplitMmioVcpu {
+        type Handle = KvmVcpuHandle;
+
+        fn run(&mut self) -> boxlite_hypervisor::Result<VcpuExit<'_>> {
+            let exit = self.vcpu.run()?;
+            if self.access.is_fragment(&exit, MMIO_SPLIT_ADDR)
+                && let Some(gate) = self.gate.take()
+            {
+                self.check_completion = true;
+                gate.wait();
+            }
+            Ok(exit)
+        }
+
+        fn complete_pending_io(&mut self) -> boxlite_hypervisor::Result<IoCompletion<'_>> {
+            let completion = self.vcpu.complete_pending_io()?;
+            if std::mem::take(&mut self.check_completion) {
+                assert!(
+                    matches!(&completion, IoCompletion::Exit(exit)
+                        if self.access.is_fragment(exit, MMIO_SPLIT_ADDR + 2)),
+                    "expected the second {:?} fragment from completion, got {completion:?}",
+                    self.access
+                );
+                self.completed_fragments.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(completion)
+        }
+
+        fn notify_guest_stopped(&mut self) -> boxlite_hypervisor::Result<()> {
+            self.vcpu.notify_guest_stopped()
+        }
+
+        fn handle(&self) -> Self::Handle {
+            self.vcpu.handle()
+        }
+    }
+
+    impl X86Vcpu for SplitMmioVcpu {
+        fn set_cpu_features(
+            &mut self,
+            cpuid: &[boxlite_hypervisor::X86CpuidEntry],
+            msrs: &[boxlite_hypervisor::X86Msr],
+        ) -> boxlite_hypervisor::Result<()> {
+            self.vcpu.set_cpu_features(cpuid, msrs)
+        }
+
+        fn set_boot_registers(
+            &mut self,
+            regs: &X86BootRegisters,
+        ) -> boxlite_hypervisor::Result<()> {
+            self.vcpu.set_boot_registers(regs)
+        }
+
+        fn save_state(&mut self) -> boxlite_hypervisor::Result<X86VcpuState> {
+            self.vcpu.save_state()
+        }
+    }
+
+    struct StopOnDrop<'a>(&'a VmControl);
+    impl Drop for StopOnDrop<'_> {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+
+    for access in [SplitAccess::Read, SplitAccess::Write] {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state");
+        let memory_path = dir.path().join("memory");
+        let (gate, ready, release) = ExitGate::new();
+        let completed_fragments = Arc::new(AtomicUsize::new(0));
+        let mut guest_memory = None;
+        let mut cfg = config();
+        cfg.vcpu_count = 1;
+        let mut vm = Vm::with_backend(
+            cfg,
+            || {
+                Ok(SplitMmioVm {
+                    vm: KvmVm::new()?,
+                    gate,
+                    access,
+                    completed_fragments: Arc::clone(&completed_fragments),
+                })
+            },
+            |ram, _| {
+                guest_memory = Some(ram.memory().clone());
+                let guest = ram.memory().memory();
+                guest.store(0u32, COUNTER, Ordering::Relaxed).unwrap();
+                guest
+                    .store(0xdead_beefu32, READBACK, Ordering::Relaxed)
+                    .unwrap();
+                Ok(flat_guest::load(&guest, &PROGRAM))
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        let guest_memory = guest_memory.unwrap();
+        let load = |addr| {
+            guest_memory
+                .memory()
+                .load::<u32>(addr, Ordering::Relaxed)
+                .unwrap()
+        };
+        let control = vm.control();
+        thread::scope(|scope| {
+            let driver = scope.spawn(|| vm.run());
+            let stop = StopOnDrop(&control);
+            ready.recv_timeout(WAIT).unwrap();
+            control.pause().unwrap();
+            let deadline = Instant::now() + WAIT;
+            while control.status() != VmStatus::Pausing {
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(1));
+            }
+            release.send(()).unwrap();
+            control.wait_paused(WAIT).unwrap();
+            assert_eq!(control.status(), VmStatus::Paused);
+            assert_eq!(completed_fragments.load(Ordering::Relaxed), 1);
+
+            control.export(&state_path, &memory_path).unwrap();
+            let memory = fs::read(&memory_path).unwrap();
+            let (header, state) = decode(&fs::read(&state_path).unwrap(), &memory);
+            assert_eq!(header.vcpus, 1);
+            assert_eq!(header.ram_len, 1 << 20);
+            assert_eq!(state.vcpus.len(), 1);
+
+            control.resume().unwrap();
+            let deadline = Instant::now() + WAIT;
+            while load(COUNTER) == 0 {
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(load(READBACK), u32::MAX);
+            drop(stop);
+            assert_eq!(driver.join().unwrap().unwrap(), VmExit::StopRequested);
+        });
+    }
 }

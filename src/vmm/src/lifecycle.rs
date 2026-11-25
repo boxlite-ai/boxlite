@@ -205,10 +205,16 @@ impl Lifecycle {
         if state.status != VmStatus::Paused || state.command.is_some() {
             return Err(control_error("export", ControlReason::InvalidState));
         }
+        let (state_path, memory_path) = if state_path.is_relative() || memory_path.is_relative() {
+            let cwd = std::env::current_dir().map_err(Error::Snapshot)?;
+            (cwd.join(state_path), cwd.join(memory_path))
+        } else {
+            (state_path.into(), memory_path.into())
+        };
         let (reply, result) = mpsc::channel();
         state.command = Some(Command::Export(Request {
-            state_path: state_path.into(),
-            memory_path: memory_path.into(),
+            state_path,
+            memory_path,
             reply,
         }));
         state.sender().wake();

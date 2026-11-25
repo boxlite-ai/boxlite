@@ -743,23 +743,31 @@ controls, including when the VM never ran.
 ### Exporting a paused VM
 
 On Linux x86_64, call `control.export(state_path, memory_path)` from a
-control thread while a device-less VM is paused. Other hosts return
-`ControlReason::Unsupported`. Other handles can observe the pause during
-capture and I/O. A competing resume or export returns `InvalidState`.
+control thread while a device-less VM is paused. `Vm` currently has no public
+device-less constructor (`Vm::new_device_less` is crate-internal for tests).
+Other hosts return `ControlReason::Unsupported`. Other handles can observe the
+pause during capture and I/O. A competing resume or export returns
+`InvalidState`. Relative paths are resolved against the current working
+directory when the export is admitted.
 
 The driver saves platform state first. If it succeeds, each parked vCPU
 saves its state on its owning thread. The driver collects all replies
-and sorts the vCPU records by ID before writing either file.
+and sorts the vCPU records by ID before writing either file. Following
+`boxlite-hypervisor`'s capture exclusions, x86 machine state excludes nested
+virtualization, Hyper-V SynIC, and guest-debug state.
 
-Export creates two files with mode `0600`. It skips `fsync`, and dropping the
-files ignores delayed `close(2)` errors. `Ok(())` provides no guarantee of
-power-loss durability. An existing target, including reuse of the state path
-for memory, returns `Error::Snapshot` with `AlreadyExists`.
+Export creates two files with mode `0600` (subject to the process `umask`). It
+skips `fsync`, and dropping the files ignores delayed `close(2)` errors.
+`Ok(())` provides no guarantee of power-loss durability. An existing target,
+including reuse of the state path for memory, returns `Error::Snapshot` with
+`AlreadyExists`.
 
 Callers must have exclusive use of both target paths during export. Failure
 cleanup is best-effort and attempts to unlink a path only if its device and
 inode still match the open file. Capture and I/O failures leave a live VM
-paused. A terminal state at the final lifecycle check yields `TerminalOutcome`.
+paused. `stop()` takes effect at export checkpoints; an in-flight `save_state`
+ioctl or file I/O call delays `export()` and `run()` until it returns. A
+terminal state at the final lifecycle check yields `TerminalOutcome`.
 
 The state file starts with a 32-byte little-endian header with the magic
 `BXLVMST1`, followed by Postcard machine state with vCPU records in ID order.

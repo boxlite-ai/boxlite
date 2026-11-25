@@ -15,7 +15,9 @@ mod linux {
         events::EventLoop,
         lifecycle::Lifecycle,
         memory::{GuestRam, MMIO_HOLE_START, X86_LAYOUT},
-        snapshot::image::{HEADER_LEN, Header, MAGIC, NewFileWriter, VERSION, write_to_checked},
+        snapshot::image::{
+            CHUNK, HEADER_LEN, Header, MAGIC, NewFileWriter, VERSION, write_to_checked,
+        },
     };
 
     const MIB: usize = 1 << 20;
@@ -245,6 +247,55 @@ mod linux {
             ));
             assert!(!state_path.exists() && !memory_path.exists());
         }
+    }
+
+    #[test]
+    fn multi_chunk_state_writes_respect_chunk_boundaries_and_stop_cleanup() {
+        let machine = vec![0x5a; CHUNK + PAGE];
+        let ram = GuestRam::new(&[(GuestAddress(0), PAGE)]).unwrap();
+        let mut state_writer = RecordingWriter::default();
+        let mut memory_writer = RecordingWriter::default();
+
+        write_to_checked(
+            &mut state_writer,
+            &mut memory_writer,
+            1,
+            &machine,
+            &ram,
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(state_writer.writes, [HEADER_LEN, CHUNK, PAGE]);
+        assert_eq!(&state_writer.output[HEADER_LEN..], machine.as_slice());
+
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join("state");
+        let memory_path = dir.path().join("memory");
+        let events = EventLoop::new().unwrap();
+        let lifecycle = Lifecycle::new(events.sender(), true);
+        let mut state = NewFileWriter::new(&state_path).unwrap();
+        let mut memory = NewFileWriter::new(&memory_path).unwrap();
+        let result = write_to_checked(&mut state, &mut memory, 1, &machine, &ram, || {
+            if fs::metadata(&state_path).unwrap().len() == (HEADER_LEN + CHUNK) as u64 {
+                lifecycle.stop();
+            }
+            lifecycle.check_export()
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            fs::metadata(&state_path).unwrap().len(),
+            (HEADER_LEN + CHUNK) as u64
+        );
+        assert_eq!(fs::metadata(&memory_path).unwrap().len(), 0);
+        assert!(matches!(
+            lifecycle.finish_export(result.map(|()| [state, memory])),
+            Err(Error::Control {
+                reason: ControlReason::TerminalOutcome,
+                ..
+            })
+        ));
+        assert!(!state_path.exists() && !memory_path.exists());
     }
 }
 

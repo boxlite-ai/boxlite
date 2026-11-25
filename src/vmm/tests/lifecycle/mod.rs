@@ -503,7 +503,7 @@ fn running_pause_posts_without_blocking_and_survives_wait_timeouts() {
     let wake_wait = Instant::now();
     assert!(events.wait(Some(WAIT)).unwrap().is_none());
     assert!(wake_wait.elapsed() < WAIT / 2);
-    assert_eq!(lifecycle.state().command, Some(Command::Park(1)));
+    assert!(matches!(lifecycle.state().command, Some(Command::Park(1))));
 
     assert!(lifecycle.drive(1));
     assert_eq!(control.status(), VmStatus::Pausing);
