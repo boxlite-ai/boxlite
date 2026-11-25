@@ -384,7 +384,7 @@ fn created_pause_has_one_winner_and_stop_or_exit_releases_waiters() {
                     // Signal while holding the lock so teardown cannot run
                     // before this waiter releases it in the condition wait.
                     ready.send(()).unwrap();
-                    lifecycle.await_pause(state, epoch, WAIT).1
+                    lifecycle.await_pause(state, epoch, WAIT)
                 })
             });
             for _ in 0..waiters.len() {
@@ -463,31 +463,34 @@ fn epoch_overflow_rejects_pause_without_claiming_the_slot() {
 }
 
 #[test]
-fn pause_timeout_withdraws_only_an_unaccepted_command() {
+fn running_pause_posts_without_blocking_and_survives_wait_timeouts() {
     let (mut events, lifecycle, control) = fixture(true);
     lifecycle.begin_run().unwrap();
-    assert_error(
-        lifecycle.pause(Duration::from_millis(10)),
-        "pause",
-        ControlReason::DeadlineTimeout,
-    );
-    assert!(!lifecycle.drive(1));
+    control.pause().unwrap();
     assert_eq!(control.status(), VmStatus::Running);
-    assert!(events.wait(Some(WAIT)).unwrap().is_none()); // Withdrawn request's wake.
+    assert_error(control.pause(), "pause", ControlReason::InvalidState);
+    for timeout in [Duration::ZERO, Duration::from_millis(10)] {
+        assert_error(
+            control.wait_paused(timeout),
+            "wait_paused",
+            ControlReason::DeadlineTimeout,
+        );
+    }
+    let wake_wait = Instant::now();
+    assert!(events.wait(Some(WAIT)).unwrap().is_none());
+    assert!(wake_wait.elapsed() < WAIT / 2);
+    assert_eq!(lifecycle.state().command, Some(Command::Park(1)));
 
-    // Accept the command before taking the caller's timeout path.
-    let epoch = 1;
-    lifecycle.state().command = Some(Command::Park(epoch));
     assert!(lifecycle.drive(1));
-    assert_error(
-        lifecycle.finish_pause(lifecycle.state(), epoch, Duration::ZERO),
-        "pause",
-        ControlReason::DeadlineTimeout,
-    );
     assert_eq!(control.status(), VmStatus::Pausing);
     assert_error(control.pause(), "pause", ControlReason::InvalidState);
-    lifecycle.state().acknowledge(epoch, 0);
-    lifecycle.drive(1);
+    assert_error(
+        control.wait_paused(Duration::ZERO),
+        "wait_paused",
+        ControlReason::DeadlineTimeout,
+    );
+    lifecycle.state().acknowledge(1, 0);
+    assert!(!lifecycle.drive(1));
     control.wait_paused(Duration::ZERO).unwrap();
 }
 
@@ -513,9 +516,19 @@ fn competing_clones_claim_only_one_command_slot() {
                 done.send(request(&control)).unwrap();
             })
         });
-        let rejected = result.recv_timeout(WAIT).unwrap();
-        assert!(events.wait(Some(WAIT)).unwrap().is_none());
-        if lifecycle.drive(1) {
+        if operation == "pause" {
+            let outcomes = [
+                result.recv_timeout(WAIT).unwrap(),
+                result.recv_timeout(WAIT).unwrap(),
+            ];
+            match outcomes {
+                [Ok(()), rejected] | [rejected, Ok(())] => {
+                    assert_error(rejected, operation, ControlReason::InvalidState);
+                }
+                results => panic!("expected one pause winner: {results:?}"),
+            }
+            assert!(events.wait(Some(WAIT)).unwrap().is_none());
+            assert!(lifecycle.drive(1));
             let epoch = lifecycle.state().epoch;
             if epoch > 1 {
                 lifecycle.state().acknowledge(epoch - 1, 0);
@@ -528,9 +541,14 @@ fn competing_clones_claim_only_one_command_slot() {
             }
             lifecycle.state().acknowledge(epoch, 0);
             lifecycle.drive(1);
+            control.wait_paused(Duration::ZERO).unwrap();
+        } else {
+            let rejected = result.recv_timeout(WAIT).unwrap();
+            assert!(events.wait(Some(WAIT)).unwrap().is_none());
+            assert!(!lifecycle.drive(1));
+            assert_error(rejected, operation, ControlReason::InvalidState);
+            result.recv_timeout(WAIT).unwrap().unwrap();
         }
-        assert_error(rejected, operation, ControlReason::InvalidState);
-        result.recv_timeout(WAIT).unwrap().unwrap();
         for caller in callers {
             caller.join().unwrap();
         }
@@ -551,10 +569,31 @@ fn terminal_stop_rejects_queued_and_accepted_operations() {
         }
 
         let other = control.clone();
-        let request = thread::spawn(move || match operation {
-            "pause" => other.pause(),
-            _ => other.resume(),
-        });
+        let (ready, waiting) = mpsc::channel();
+        let (wait_op, request) = if operation == "pause" {
+            control.pause().unwrap();
+            let lifecycle = Arc::clone(&lifecycle);
+            (
+                "wait_paused",
+                thread::spawn(move || {
+                    let state = lifecycle.state();
+                    let Some(Command::Park(epoch)) = state.command else {
+                        panic!("pause was never queued");
+                    };
+                    // Signal while holding the lock so teardown cannot run
+                    // before this waiter releases it in the condition wait.
+                    ready.send(()).unwrap();
+                    lifecycle
+                        .await_pause(state, epoch, WAIT)
+                        .map_err(|reason| super::control_error("wait_paused", reason))
+                }),
+            )
+        } else {
+            ("resume", thread::spawn(move || other.resume()))
+        };
+        if operation == "pause" {
+            waiting.recv_timeout(WAIT).unwrap();
+        }
         assert!(events.wait(Some(WAIT)).unwrap().is_none());
         if accepted {
             assert!(lifecycle.drive(1));
@@ -568,7 +607,7 @@ fn terminal_stop_rejects_queued_and_accepted_operations() {
         }
         assert_error(
             request.join().unwrap(),
-            operation,
+            wait_op,
             ControlReason::TerminalOutcome,
         );
         assert_error(

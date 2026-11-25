@@ -59,6 +59,7 @@ fn kvm_device_less_guest_pauses_resumes_and_stops() {
             assert_eq!(control.status(), VmStatus::Running);
             wait_until(|| counter() != previous);
             control.pause().unwrap();
+            control.wait_paused(WAIT).unwrap();
             assert_eq!(control.status(), VmStatus::Paused);
             let paused = counter();
             thread::sleep(Duration::from_millis(20));

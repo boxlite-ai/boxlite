@@ -104,12 +104,10 @@ impl ExitGate {
 }
 
 pub(super) fn pause_at_exit(control: &VmControl, release: mpsc::Sender<()>) -> crate::Result<()> {
-    thread::scope(|scope| {
-        let pause = scope.spawn(|| control.pause());
-        wait_until(|| control.status() == VmStatus::Pausing);
-        release.send(()).unwrap();
-        pause.join().unwrap()
-    })
+    control.pause()?;
+    wait_until(|| control.status() == VmStatus::Pausing);
+    release.send(()).unwrap();
+    control.wait_paused(WAIT)
 }
 
 #[test]
@@ -134,6 +132,7 @@ fn initial_pause_prevents_guest_entry_and_running_pauses_are_reversible() {
                 assert_eq!(control.status(), VmStatus::Running);
                 wait_until(|| entries.lock().unwrap().len() > previous);
                 control.pause().unwrap();
+                control.wait_paused(WAIT).unwrap();
                 assert_eq!(control.status(), VmStatus::Paused);
                 control.wait_paused(Duration::ZERO).unwrap();
             }
@@ -495,7 +494,7 @@ fn failed_io_completion_ends_the_vm_and_rejects_the_in_flight_pause() {
 
     let exit = run_with_control(&mut vm, move |control| {
         ready.recv_timeout(WAIT).unwrap();
-        assert_error(control.pause(), "pause", ControlReason::TerminalOutcome);
+        control.pause().unwrap();
         assert_error(
             control.wait_paused(WAIT),
             "wait_paused",
@@ -558,14 +557,15 @@ fn pause_kick_panic_releases_vcpus_before_unwinding() {
     });
 
     wait_until(|| entries.lock().unwrap().len() == 2);
-    let pause = control.pause();
+    control.pause().unwrap();
+    let wait = control.wait_paused(WAIT);
     assert!(
         result
             .recv_timeout(WAIT)
             .expect("VM run did not unwind")
             .is_err()
     );
-    assert_error(pause, "pause", ControlReason::TerminalOutcome);
+    assert_error(wait, "wait_paused", ControlReason::TerminalOutcome);
     runner.join().unwrap();
     assert_eq!(kicks.load(Ordering::Relaxed), 3);
 }
@@ -586,8 +586,9 @@ fn transient_pause_kick_retries_and_allows_resume() {
 
     let exit = run_with_control(&mut vm, |control| {
         wait_until(|| entries.lock().unwrap().len() == 2);
+        control.pause().unwrap();
         control
-            .pause()
+            .wait_paused(WAIT)
             .expect("transient kick should still allow the VM to pause");
         assert_eq!(control.status(), VmStatus::Paused);
         {
@@ -641,8 +642,9 @@ fn assert_terminal_during_pause_retries_shutdown_kick(expected: VmExit) {
         guest_entered.recv_timeout(WAIT).unwrap();
     }
 
-    let pause = thread::scope(|scope| {
-        let pauser = scope.spawn(|| control.pause());
+    let wait = thread::scope(|scope| {
+        control.pause().unwrap();
+        let waiter = scope.spawn(|| control.wait_paused(WAIT));
         pause_kick_started.recv_timeout(WAIT).unwrap();
         assert_eq!(control.status(), VmStatus::Pausing);
         if guest_shutdown {
@@ -654,7 +656,7 @@ fn assert_terminal_during_pause_retries_shutdown_kick(expected: VmExit) {
         // Latch the terminal event before the first kick fails, so the next
         // attempt is from shutdown, not the pause retry loop.
         finish_pause_kick.send(()).unwrap();
-        pauser.join().unwrap()
+        waiter.join().unwrap()
     });
 
     let outcome = result.recv_timeout(WAIT);
@@ -667,7 +669,7 @@ fn assert_terminal_during_pause_retries_shutdown_kick(expected: VmExit) {
             .expect("rescue kick did not unblock Vm::run()");
     }
     runner.join().unwrap();
-    assert_error(pause, "pause", ControlReason::TerminalOutcome);
+    assert_error(wait, "wait_paused", ControlReason::TerminalOutcome);
     assert_eq!(
         outcome
             .expect("Vm::run() did not return before WAIT")
@@ -696,7 +698,8 @@ fn single_vcpu_pause_distinguishes_interrupted_and_fatal_kicks() {
 
         let exit = run_with_control(&mut vm, |control| {
             wait_until(|| entries.lock().unwrap().len() == 1);
-            let pause = control.pause();
+            control.pause().unwrap();
+            let paused = control.wait_paused(Duration::from_secs(5));
             if kind == io::ErrorKind::Interrupted {
                 let kicks = {
                     let mut attempts = attempts.lock().unwrap();
@@ -705,14 +708,14 @@ fn single_vcpu_pause_distinguishes_interrupted_and_fatal_kicks() {
                     attempts.ids.clone()
                 };
                 // No peer wakes the driver, so six 1-second waits would exceed
-                // the 5-second pause timeout.
-                pause.expect("interrupted kicks should be retried before the pause deadline");
+                // the wait_paused deadline.
+                paused.expect("interrupted kicks should be retried before the pause deadline");
                 assert_eq!(control.status(), VmStatus::Paused);
                 assert_eq!(kicks, [0; 7]);
                 control.resume().unwrap();
                 assert_eq!(control.status(), VmStatus::Running);
             } else {
-                assert_error(pause, "pause", ControlReason::TerminalOutcome);
+                assert_error(paused, "wait_paused", ControlReason::TerminalOutcome);
             }
         });
         if kind == io::ErrorKind::Interrupted {
@@ -752,6 +755,7 @@ fn pause_during_vcpu_startup_parks_every_worker_before_guest_entry() {
         // The kick batch starts with only vCPU 0's handle. Its kick lets
         // vCPU 1 finish configuring and both workers leave the start gate.
         control.pause().unwrap();
+        control.wait_paused(WAIT).unwrap();
         assert_eq!(control.status(), VmStatus::Paused);
         assert_eq!(lifecycle.state().acknowledgements, 0b11);
         assert!(entries.lock().unwrap().is_empty());
@@ -809,7 +813,7 @@ fn terminal_exit_during_split_mmio_completion_ends_the_vm() {
         ready.recv_timeout(WAIT).unwrap();
         assert_error(
             pause_at_exit(control, release),
-            "pause",
+            "wait_paused",
             ControlReason::TerminalOutcome,
         );
     });

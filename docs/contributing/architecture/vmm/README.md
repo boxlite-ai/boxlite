@@ -522,14 +522,13 @@ terminal exit or error returns immediately without acknowledging the pause. The
 checkpoint also skips acknowledgement if a stop arrived during completion.
 The driver publishes `Paused` after one acknowledgement from each vCPU.
 `resume()` uses the same slot and epoch to reopen guest entry and return to
-`Running`. The mailbox lock serializes admission against concurrent clones
-and timeout withdrawal. A pure poller wake prompts the driver to check the
-mailbox. Terminal events use the same poller and keep their queue priority.
+`Running`. The mailbox lock serializes admission against concurrent clones. A
+pure poller wake prompts the driver to check the mailbox. Terminal events use
+the same poller and keep their queue priority.
 
-`pause()` waits up to five seconds when called in `Running`. A timeout
-withdraws a queued command. An accepted pause keeps collecting
-acknowledgements. `wait_paused(timeout)` observes the reserved or accepted
-epoch and its own timeout leaves the pause in place.
+`pause()` posts the request and wakes the driver without waiting.
+`wait_paused(timeout)` observes the reserved, queued, or active epoch and its
+timeout leaves the pause in place.
 
 A stop or terminal event moves the VM to `Stopping`, releases parked vCPUs,
 and wakes pending control calls with `TerminalOutcome`. A stop in `Created`

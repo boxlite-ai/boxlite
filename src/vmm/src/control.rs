@@ -35,11 +35,11 @@ impl VmControl {
         self.lifecycle.stop();
     }
 
-    /// Reserves an initial pause in `Created`, or waits up to five seconds
-    /// for a running device-less VM to park all vCPUs. An accepted pause
-    /// continues after a timeout and can be observed with [`Self::wait_paused`].
+    /// Reserves an initial pause in `Created`, or posts a pause request for a
+    /// running device-less VM and wakes the run driver without waiting. Callers
+    /// can observe completion with [`Self::wait_paused`].
     pub fn pause(&self) -> Result<()> {
-        self.lifecycle.pause(Duration::from_secs(5))
+        self.lifecycle.pause()
     }
 
     /// Reopens guest entry for a paused VM after the run driver accepts it.
@@ -47,12 +47,12 @@ impl VmControl {
         self.lifecycle.resume()
     }
 
-    /// Waits for the current pause epoch, including a reserved initial pause.
+    /// Waits for the current pause epoch, including a reserved or queued pause.
     /// A zero timeout checks the current condition while holding the lock.
     ///
-    /// `Ok(())` here or from [`Self::pause`] on a running VM confirms that the
-    /// target pause epoch completed; callers that need the VM to stay quiescent
-    /// must serialize against concurrent [`Self::resume`] calls on cloned handles.
+    /// `Ok(())` confirms that the target pause epoch completed; callers that
+    /// need the VM to stay quiescent must serialize against concurrent
+    /// [`Self::resume`] calls on cloned handles.
     pub fn wait_paused(&self, timeout: Duration) -> Result<()> {
         self.lifecycle.wait_paused(timeout)
     }

@@ -666,19 +666,17 @@ The driver enters `Pausing` before releasing the vCPU start gate, so every
 vCPU parks before its first guest entry. The VM reports `Created` until `run`
 starts. A second reservation or a `resume()` in `Created` returns `InvalidState`.
 
-In `Running`, `pause()` requests `Running → Pausing → Paused` and waits up to
-five seconds. If the driver has yet to accept the request, a timeout withdraws
-it and allows a retry. Once the driver accepts it, vCPUs keep parking after a
-timeout. `wait_paused(timeout)` waits for the reserved or active pause epoch
-and leaves the pause in place on `DeadlineTimeout`. A zero timeout checks the
-current state immediately. With no active or reserved pause, the operation
-returns `InvalidState`.
+In `Running`, `pause()` enqueues `Running → Pausing → Paused`, wakes the
+driver, and returns immediately without waiting. `wait_paused(timeout)` waits
+for the reserved, queued, or active pause epoch and leaves the pause in place on
+`DeadlineTimeout`. A zero timeout checks the current state immediately. With no
+reserved, queued, or active pause, the operation returns `InvalidState`.
 
 `resume()` returns once the driver reopens the guest entry gate and the VM
 returns to `Running`. It requires `Paused`. Pause and resume share a
 single-slot mailbox, so a pending request blocks other clones from submitting
-another request. Stop and terminal events release parked vCPUs. Pending pause
-or resume calls and `wait_paused` return `TerminalOutcome` when the VM is
+another request. Stop and terminal events release parked vCPUs. Pending
+resume calls and `wait_paused` return `TerminalOutcome` when the VM is
 stopping or has exited. New pause and resume calls in those states return
 `InvalidState`.
 

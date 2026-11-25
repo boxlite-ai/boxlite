@@ -123,7 +123,7 @@ impl Lifecycle {
         self.changed.notify_all();
     }
 
-    pub(crate) fn pause(&self, timeout: Duration) -> Result<()> {
+    pub(crate) fn pause(&self) -> Result<()> {
         let mut state = self.state();
         let invalid = || control_error("pause", ControlReason::InvalidState);
         if state.is_terminal() {
@@ -138,27 +138,10 @@ impl Lifecycle {
         }
         let epoch = state.epoch.checked_add(1).ok_or_else(invalid)?;
         state.command = Some(Command::Park(epoch));
-        if state.status == VmStatus::Created {
-            return Ok(());
+        if state.status == VmStatus::Running {
+            state.sender().wake();
         }
-
-        state.sender().wake();
-        self.finish_pause(state, epoch, timeout)
-    }
-
-    fn finish_pause(
-        &self,
-        state: MutexGuard<'_, LifecycleState>,
-        epoch: u64,
-        timeout: Duration,
-    ) -> Result<()> {
-        let (mut state, result) = self.await_pause(state, epoch, timeout);
-        // The driver takes the command under this same lock. Once it does,
-        // the vCPUs keep parking even if this caller times out.
-        if state.command == Some(Command::Park(epoch)) {
-            state.command = None;
-        }
-        result.map_err(|reason| control_error("pause", reason))
+        Ok(())
     }
 
     pub(crate) fn resume(&self) -> Result<()> {
@@ -187,24 +170,20 @@ impl Lifecycle {
             return Err(control_error("wait_paused", ControlReason::TerminalOutcome));
         }
         let epoch = match (state.status, state.command) {
-            (VmStatus::Created, Some(Command::Park(epoch))) => epoch,
+            (VmStatus::Created | VmStatus::Running, Some(Command::Park(epoch))) => epoch,
             (VmStatus::Pausing | VmStatus::Paused, _) => state.epoch,
             _ => return Err(control_error("wait_paused", ControlReason::InvalidState)),
         };
         self.await_pause(state, epoch, timeout)
-            .1
             .map_err(|reason| control_error("wait_paused", reason))
     }
 
-    fn await_pause<'a>(
+    fn await_pause(
         &self,
-        mut state: MutexGuard<'a, LifecycleState>,
+        mut state: MutexGuard<'_, LifecycleState>,
         epoch: u64,
         timeout: Duration,
-    ) -> (
-        MutexGuard<'a, LifecycleState>,
-        std::result::Result<(), ControlReason>,
-    ) {
+    ) -> std::result::Result<(), ControlReason> {
         if !timeout.is_zero() {
             state = self
                 .changed
@@ -214,14 +193,13 @@ impl Lifecycle {
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
         }
-        let result = if state.is_terminal() {
+        if state.is_terminal() {
             Err(ControlReason::TerminalOutcome)
         } else if state.completed_epoch >= epoch {
             Ok(())
         } else {
             Err(ControlReason::DeadlineTimeout)
-        };
-        (state, result)
+        }
     }
 
     /// Claims the run and closes guest entry if the first pause was reserved.
