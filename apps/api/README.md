@@ -192,8 +192,8 @@ and creation response even after quota fills or the Box changes state. Object ke
 ignored; target parameters, query values, arrays, types, explicit null, and absent bodies matter.
 Equivalent organization-prefixed routes share identity after the prefix is authorized.
 
-Hosted Box API errors carry HTTP details in the response body. Read `code` at the top level
-to distinguish replay failures from business errors with the same HTTP status.
+Hosted Box API errors expose `code` and `message` at the top level; local runtime errors
+nest these fields under `error`. Both use the shared OpenAPI `ErrorResponse` definition.
 The mismatch, pending, and unknown status/code pairs follow [E2B's idempotent creation contract](https://docs.e2b.dev/sandbox/idempotency).
 
 | Condition | Response |

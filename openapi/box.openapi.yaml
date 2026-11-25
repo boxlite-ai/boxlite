@@ -241,15 +241,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/Volume"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "408":
           $ref: "#/components/responses/RequestTimeoutError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
     get:
       operationId: listVolumes
@@ -298,15 +298,15 @@ paths:
         "204":
           description: Volume removal accepted
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Boxes
@@ -352,7 +352,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Box"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "408":
@@ -371,13 +371,13 @@ paths:
                     type: string
                     description: Admitted Box identity; query it before retrying creation.
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "429":
           $ref: "#/components/responses/ResourceExhaustedError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
     get:
       operationId: listBoxes
@@ -452,15 +452,15 @@ paths:
         "204":
           description: Box removed
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Box Lifecycle
@@ -487,15 +487,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/Box"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/stop:
     parameters:
@@ -523,15 +523,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/Box"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/ssh/enable:
     parameters:
@@ -556,15 +556,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/SshStatus"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/ssh:
     parameters:
@@ -600,15 +600,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/SshStatus"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
     get:
       operationId: getSshStatus
       summary: Get guest SSH status
@@ -650,15 +650,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/SshStatus"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Snapshot / Portability
@@ -898,15 +898,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/ExecResponse"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/executions:
     parameters:
@@ -979,15 +979,15 @@ paths:
         "204":
           description: Execution killed and evicted.
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/attach:
     parameters:
@@ -1152,15 +1152,15 @@ paths:
         "204":
           description: Signal sent
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}/resize:
     parameters:
@@ -1186,15 +1186,15 @@ paths:
         "204":
           description: TTY resized
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Files
@@ -1400,15 +1400,15 @@ paths:
         "204":
           description: The tunnel declaration is revoked
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/network/inbound:
     parameters:
@@ -1444,15 +1444,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/InboundNetworkSpec"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/network/outbound:
     parameters:
@@ -1491,13 +1491,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/OutboundNetworkSpec"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "500":
           description: Application or persistence failed; retry the complete policy
           content:
@@ -1505,7 +1505,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/boxes/{box_id}/agents:
     parameters:
@@ -1835,13 +1835,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/Domain"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/domains/{domain}/target:
     parameters:
@@ -1892,7 +1892,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Domain"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "403":
           description: An active organization subscription is required for custom domains
           content:
@@ -1902,11 +1902,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
     delete:
       operationId: unbindDomain
       summary: Stop routing a domain
@@ -1926,15 +1926,15 @@ paths:
         "204":
           description: The domain routes nowhere
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Metrics
@@ -2055,15 +2055,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/Checkpoint"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
     get:
       operationId: listCheckpoints
       summary: List checkpoints in the routing scope
@@ -2124,15 +2124,15 @@ paths:
         "204":
           description: Storage and metadata removed, or missing with force
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/images/{image_name}:
     parameters:
@@ -2168,15 +2168,15 @@ paths:
         "204":
           description: The image is no longer held
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/images/{image_name}/aliases:
     parameters:
@@ -2208,15 +2208,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/ImageDetail"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/images/{image_name}/aliases/{alias}:
     parameters:
@@ -2237,15 +2237,15 @@ paths:
         "204":
           description: The alias was deleted
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   # -------------------------------------------------------------------------
   # Registries
@@ -2294,20 +2294,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/RegistryCredential"
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "409":
           description: A login is already held for this registry and prefix, or a hosted key has different input (idempotency_request_mismatch) or is still in progress (idempotency_in_progress).
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/WriteErrorResponse"
+                $ref: "#/components/schemas/ErrorResponse"
               example:
                 error:
                   message: "A credential for ghcr.io/acme/ already exists; remove it before adding another"
                   type: AlreadyExistsError
                   code: already_exists
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "501":
           description: This server does not pull private images
           content:
@@ -2315,7 +2315,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
   /{prefix}/images/registries/{registry_id}:
     parameters:
@@ -2336,15 +2336,15 @@ paths:
         "204":
           description: The login is gone, and its password destroyed
         "400":
-          $ref: "#/components/responses/WriteBadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/WriteConflictError"
+          $ref: "#/components/responses/ConflictError"
         "422":
-          $ref: "#/components/responses/WriteUnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
         "503":
-          $ref: "#/components/responses/WriteServiceUnavailableError"
+          $ref: "#/components/responses/ServiceUnavailableError"
 
 # ===========================================================================
 # Components
@@ -2551,62 +2551,10 @@ components:
         format: uuid
       example: "017f22e2-79b0-7cc3-98c4-dc0c0c07398f"
 
-  headers:
-    BoxCreationRetryAfter:
-      description: Seconds to wait when Box creation admission is temporarily contended
-      schema:
-        type: integer
-        minimum: 1
-        example: 5
-
   # -------------------------------------------------------------------------
   # Responses (Error Templates)
   # -------------------------------------------------------------------------
   responses:
-    WriteBadRequestError:
-      description: |
-        Invalid parameters or request body. Hosted writes reject duplicate or malformed
-        Idempotency-Key headers and require JSON when a keyed request includes a body.
-      content:
-        application/json:
-          schema: {$ref: "#/components/schemas/WriteErrorResponse"}
-
-    WriteConflictError:
-      description: |
-        Resource state conflict. A hosted write returns idempotency_request_mismatch when
-        the same key has different input, or idempotency_in_progress while the original
-        request is running. Retry a pending request with the same key and input.
-      content:
-        application/json:
-          schema: {$ref: "#/components/schemas/WriteErrorResponse"}
-          example:
-            path: /api/v1/volumes
-            timestamp: "2026-09-02T06:55:28.000Z"
-            statusCode: 409
-            error: Conflict
-            message: The original request has not recorded a response yet. Retry with the same Idempotency-Key.
-            code: idempotency_in_progress
-
-    WriteUnprocessableEntityError:
-      description: |
-        The request cannot be processed. A hosted write returns idempotency_outcome_unknown
-        when the original outcome cannot be established. Check the resource state before
-        issuing another write.
-      content:
-        application/json:
-          schema: {$ref: "#/components/schemas/WriteErrorResponse"}
-
-    WriteServiceUnavailableError:
-      description: |
-        A required backend service is unavailable. A hosted write returns
-        idempotency_storage_unavailable if it cannot reserve the key before dispatch.
-      headers:
-        Retry-After:
-          $ref: "#/components/headers/BoxCreationRetryAfter"
-      content:
-        application/json:
-          schema: {$ref: "#/components/schemas/WriteErrorResponse"}
-
     AgentCloseBadRequest:
       description: Invalid argument or unsupported close operation
       content:
@@ -2665,7 +2613,7 @@ components:
               value: {error: {message: "agent unavailable", type: UpstreamUnavailableError, code: upstream_unavailable, request_id: req_1}}
 
     BadRequestError:
-      description: Invalid request parameters or body
+      description: Invalid request parameters or body, including malformed or duplicate Idempotency-Key headers and non-JSON keyed request bodies on hosted writes.
       content:
         application/json:
           schema:
@@ -2704,7 +2652,7 @@ components:
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     ConflictError:
-      description: Resource state conflict
+      description: Resource state conflict. Hosted keyed writes return idempotency_request_mismatch for changed input or idempotency_in_progress while the original request is running.
       content:
         application/json:
           schema:
@@ -2717,7 +2665,7 @@ components:
               request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     UnprocessableEntityError:
-      description: Request understood but cannot be processed
+      description: Request understood but cannot be processed. Hosted keyed writes return idempotency_outcome_unknown when the original outcome cannot be confirmed.
       content:
         application/json:
           schema:
@@ -2751,10 +2699,14 @@ components:
             code: resource_exhausted
 
     ServiceUnavailableError:
-      description: A required backend service is not configured or available
+      description: A required backend service is not configured or available. Hosted keyed writes return idempotency_storage_unavailable if reserving the key fails before dispatch.
       headers:
         Retry-After:
-          $ref: "#/components/headers/BoxCreationRetryAfter"
+          description: Seconds to wait when Box creation admission is temporarily contended
+          schema:
+            type: integer
+            minimum: 1
+            example: 5
       content:
         application/json:
           schema:
@@ -3163,33 +3115,18 @@ components:
     # =======================================================================
     # Error Model
     # =======================================================================
-    WriteErrorResponse:
-      type: object
-      required: [error]
-      oneOf:
-        - $ref: "#/components/schemas/ErrorResponse"
-        - $ref: "#/components/schemas/HostedWriteErrorResponse"
-
-    HostedWriteErrorResponse:
-      type: object
-      description: HTTP error returned by the hosted Box API. Read the top-level code when the response includes a machine-readable reason.
-      required: [path, timestamp, statusCode, error, message]
-      properties:
-        path: {type: string}
-        timestamp: {type: string, format: date-time}
-        statusCode: {type: integer}
-        error: {type: string, description: HTTP status text}
-        message: {type: string}
-        code:
-          type: string
-          examples: [idempotency_in_progress, idempotency_request_mismatch, idempotency_outcome_unknown, idempotency_storage_unavailable]
-
     ErrorResponse:
       type: object
       required: [error]
       properties:
         error:
-          $ref: "#/components/schemas/ErrorModel"
+          oneOf:
+            - $ref: "#/components/schemas/ErrorModel"
+            - type: string
+        message: {type: string}
+        code:
+          type: string
+          description: Machine-readable reason returned by hosted APIs.
 
     ErrorModel:
       type: object
