@@ -88,6 +88,10 @@ func (e *Executor) resolveCreateSecrets(ctx context.Context, box *dto.CreateBoxD
 		box.Secrets = nil
 		return nil
 	}
+	// Startup recovery cannot tell whether the previous process sent the POST.
+	if ctx.Value(startupRecoveryKey{}) == true {
+		return fmt.Errorf("secret fetch may have been attempted before runner restart. Please submit a new create request")
+	}
 	if e.secretFetcher == nil {
 		return fmt.Errorf("secret server configuration unavailable")
 	}

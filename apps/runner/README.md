@@ -746,16 +746,19 @@ in both `Authorization: Bearer` and `X-Boxlite-Runner-Identity`.
 
 The response must match the box ID and exactly the requested secret names.
 Its values, hosts, headers and placeholders replace the job's definitions.
-Metadata retrieval and fetch share a five-second deadline. Fetch is attempted
-once, without redirects or retries, because a lost response may have consumed
-the credential. Retrieval and subsequent create failures are non-recoverable;
-there is no credential reissue in this MVP.
+Metadata retrieval and fetch share a five-second deadline. A freshly polled
+job makes at most one fetch request, without redirects or retries. A lost
+response may have consumed the credential. Retrieval and subsequent create
+failures are non-recoverable, and this MVP has no credential reissue.
 
-An existing local box skips identity and secret retrieval. Replay only adopts
-that box; if it disappears before adoption, creation fails instead of producing
-a replacement without secrets. Jobs without credentials retain inline values,
-and START_BOX continues using runtime-local secrets. Direct HTTP create/recover
-still require inline values.
+On startup, an in-progress credential job can only adopt an existing local
+box, skipping identity and secret retrieval. If the box is absent, the runner
+reports failure and asks the caller to submit a new create request. This
+also applies if the previous process exited before dispatch. If the target
+disappears before adoption, creation fails.
+
+Jobs without credentials retain inline values, and START_BOX continues using
+runtime-local secrets. Direct HTTP create/recover still require inline values.
 
 Credential-free v2 jobs pass inline secrets to backend validation without extra
 name or value restrictions. Empty names, duplicate names and empty values retain

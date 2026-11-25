@@ -102,7 +102,15 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 	}, nil
 }
 
-// Execute processes a job and updates its status
+type startupRecoveryKey struct{}
+
+// Recover executes a job listed as in progress on runner startup.
+// The job may have run before the previous process exited.
+func (e *Executor) Recover(ctx context.Context, job *apiclient.Job) {
+	e.Execute(context.WithValue(ctx, startupRecoveryKey{}, true), job)
+}
+
+// Execute processes a job and updates its status.
 func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 	if job.Type == apiclient.JOBTYPE_EXPORT_CHECKPOINT || job.Type == apiclient.JOBTYPE_UPLOAD_CHECKPOINT || job.Type == apiclient.JOBTYPE_IMPORT_CHECKPOINT {
 		// Native export cancellation stops waiting, not capture. The accepted
