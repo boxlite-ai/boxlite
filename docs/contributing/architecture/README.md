@@ -218,6 +218,11 @@ with both admissions held.
 Final archive writing releases lifecycle admission but retains disk exclusion
 while its caller awaits it.
 
+QCOW2 [`flatten()`](../../../src/boxlite/src/disk/qcow2.rs) treats an L2
+zero-cluster entry as explicit zeros before considering backing-file fallback.
+It sets `QCOW2_OFLAG_COPIED` on allocated output L1 and L2 entries. If an allocated
+input cluster starts before EOF but extends past it, the unread tail is zero-filled.
+
 Snapshot, clone, and export execute in the caller's future, so cancellation does not guarantee
 completion of disk work or resume/thaw cleanup: a blocking worker may continue
 after the caller drops its guards.
