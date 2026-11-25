@@ -25,6 +25,7 @@ import {
   ForbiddenException,
   HttpException,
 } from '@nestjs/common'
+import { SkipThrottle } from '@nestjs/throttler'
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
 import { Request, Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
@@ -35,7 +36,9 @@ import {
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
+import { ThrottlerScope } from '../common/decorators/throttler-scope.decorator'
 import { UserContext } from '../common/decorators/user-context.decorator'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
@@ -51,6 +54,8 @@ import { Audit, AUDIT_TARGET_ID, MASKED_AUDIT_VALUE, TypedRequest } from '../aud
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import { BoxCostDto } from '../usage/dto/box-cost.dto'
+import { BoxCostService } from '../usage/services/box-cost.service'
 import { Context } from '../common/context/context'
 import { BoxPageQuery } from './dto/box-page-query.dto'
 
@@ -87,6 +92,7 @@ export class BoxliteBoxController {
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
     private readonly checkpointRecoverService: CheckpointRecoverService,
+    private readonly boxCostService: BoxCostService,
   ) {}
 
   @Post()
@@ -299,6 +305,18 @@ export class BoxliteBoxController {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     const dto = await this.boxService.toBoxDtoWithExitCode(box)
     return boxToBoxResponse(dto)
+  }
+
+  // Polling costs must not use up the quota the organization's other requests share.
+  @Get(':boxId/cost')
+  @UseGuards(AuthenticatedRateLimitGuard)
+  @ThrottlerScope('box-cost')
+  @SkipThrottle({ authenticated: true })
+  async getBoxCost(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+  ): Promise<BoxCostDto> {
+    return this.boxCostService.getCost(boxId, authContext.organizationId)
   }
 
   @Head(':boxId')

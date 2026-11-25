@@ -20,6 +20,8 @@ import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { Box } from '../box/entities/box.entity'
 import { Runner } from '../box/entities/runner.entity'
+import { BoxCostService } from './services/box-cost.service'
+import { BoxPricingClient } from './services/box-pricing.client'
 import { UsageConcurrencyService } from './services/usage-concurrency.service'
 
 @Module({
@@ -27,6 +29,8 @@ import { UsageConcurrencyService } from './services/usage-concurrency.service'
   providers: [
     UsageService,
     UsageConcurrencyService,
+    BoxCostService,
+    BoxPricingClient,
     UsageExportOutboxService,
     UsageExportPublisherService,
     UsageAllocationSnapshotService,
@@ -42,6 +46,6 @@ import { UsageConcurrencyService } from './services/usage-concurrency.service'
       ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
     },
   ],
-  exports: [UsageService, UsageConcurrencyService],
+  exports: [UsageService, UsageConcurrencyService, BoxCostService],
 })
 export class UsageModule {}

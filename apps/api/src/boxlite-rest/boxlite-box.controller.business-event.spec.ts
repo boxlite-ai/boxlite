@@ -36,6 +36,7 @@ function makeController() {
     {} as never,
     commerceBoxLimitService as never,
     {} as never,
+    {} as never,
   )
   return { controller, boxService }
 }
@@ -55,6 +56,7 @@ describe('BoxliteBoxController business event actor', () => {
       waiter as never,
       { resolveMaxCreatedBoxes: async () => 3 } as never,
       recovery as never,
+      {} as never,
     )
     try {
       await controller.createBox(authContext as never, { checkpoint_id: 'base' } as never, ctx).catch(() => undefined)

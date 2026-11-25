@@ -22,6 +22,7 @@ import { BoxModule } from '../box/box.module'
 import { AuthModule } from '../auth/auth.module'
 import { ApiKeyModule } from '../api-key/api-key.module'
 import { OrganizationModule } from '../organization/organization.module'
+import { UsageModule } from '../usage/usage.module'
 import { UserModule } from '../user/user.module'
 import { BoxliteMeController } from './boxlite-me.controller'
 import { BoxliteConfigController } from './boxlite-config.controller'
@@ -47,6 +48,7 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     ApiKeyModule,
     OrganizationModule,
     UserModule,
+    UsageModule,
     ImageModule,
     RegistryModule,
     AuditModule,

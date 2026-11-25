@@ -31,6 +31,7 @@ import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
 import { RegistriesService } from '../registry/services/registries.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import { BoxCostService } from '../usage/services/box-cost.service'
 import { AUDIT_CONTEXT_KEY, AuditContext } from '../audit/decorators/audit.decorator'
 
 jest.mock('http-proxy-middleware', () => ({
@@ -89,6 +90,10 @@ describe('BoxLite REST routing', () => {
         {
           provide: CheckpointRecoverService,
           useValue: {},
+        },
+        {
+          provide: BoxCostService,
+          useValue: { getCost: jest.fn(async (...args) => args) },
         },
       ],
     )
@@ -225,6 +230,16 @@ describe('BoxLite REST routing', () => {
     expect(legacy.status).toBe(200)
     expect(await legacy.json()).toEqual({ boxes: [] })
   })
+
+  it.each(['/api/v1/boxes/aB3cD4eF5gH6/cost', '/api/v1/default/boxes/aB3cD4eF5gH6/cost'])(
+    'GET %s reads the cost for the authenticated organization',
+    async (path) => {
+      await startRoutingTestApp()
+      const response = await get(path)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual(['aB3cD4eF5gH6', 'org-123'])
+    },
+  )
 
   it.each([
     ['/api/v1/boxes/box-1/network/inbound', 'enabled'],

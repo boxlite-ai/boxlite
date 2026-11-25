@@ -35,6 +35,7 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   createBox: [WRITE_BOXES],
   listBoxes: null,
   getBox: null,
+  getBoxCost: null,
   headBox: null,
   removeBox: [DELETE_BOXES],
   startBox: [WRITE_BOXES],

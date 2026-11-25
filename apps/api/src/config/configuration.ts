@@ -899,6 +899,10 @@ const configuration = {
         ? parseInt(process.env.RATE_LIMIT_BOX_LIFECYCLE_LIMIT, 10)
         : undefined,
     },
+    boxCost: {
+      ttl: process.env.RATE_LIMIT_BOX_COST_TTL ? parseInt(process.env.RATE_LIMIT_BOX_COST_TTL, 10) : undefined,
+      limit: process.env.RATE_LIMIT_BOX_COST_LIMIT ? parseInt(process.env.RATE_LIMIT_BOX_COST_LIMIT, 10) : undefined,
+    },
   },
   log: {
     console: {
