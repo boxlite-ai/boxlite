@@ -1,0 +1,176 @@
+name: BoxLite full Rust x64 qualification
+on:
+  push:
+    branches: [ci/boxlite-runner-trials-2833]
+    paths: [.github/workflows/runner-rust-trial.yml]
+permissions:
+  contents: read
+jobs:
+  rust:
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 90
+    strategy:
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            target: linux-x64-gnu
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-boxlite-runner
+      - name: Install CI script test dependencies
+        run: sudo apt-get install -y --no-install-recommends gcc libc6-dev patchelf python3-venv
+      - uses: ./.github/actions/setup-boxlite-runner
+      - name: Install native build tools
+        run: sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev patchelf
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/infra/package-lock.json
+      - name: Type-check and test infrastructure scripts and workflows with coverage
+        run: make coverage:infra
+      - name: Upload infrastructure coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/infra/lcov.info
+          flags: infra
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
+      - name: Test CI and coverage scripts against fake tools
+        run: make test:unit:scripts
+
+  # Merge core, shared, REST, CLI, native VMM and Linux guest coverage.
+  # Codecov gates changed lines at 90% and reports total coverage separately.
+  rust:
+    name: Rust Tests (${{ matrix.platform.target }})
+    needs: changes
+    if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' }}
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.changes.outputs.platforms) }}
+
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+
+      - uses: ./.github/actions/setup-python
+        # PyO3 unit tests embed an interpreter instead of building a wheel.
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq libseccomp-dev protobuf-compiler util-linux
+
+      # SSH guest tests need user/mount namespaces; Ubuntu's AppArmor blocks
+      # them by default. This setting lasts only for the disposable runner.
+      - name: Enable unprivileged user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: unshare --user --map-root-user --mount --propagation private true
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Check out vendored libkrun
+        # net::socket_path's vendor-pin unit test reads the libkrun source.
+        # The libkrun build itself stays stubbed below.
+        run: git submodule update --init --depth 1 -- src/deps/libkrun-sys/vendor/libkrun
+
+      - name: Run Rust unit tests with coverage
+        # The core crate's dev-dependency boxlite-test-utils re-enables its
+        # default features, which pull in the -sys crates; those build from
+        # vendored submodules this job does not check out.
+        env:
+          BOXLITE_DEPS_STUB: "1"
+        run: make coverage:lcov NEXTEST_PROFILE=ci
+
+      # The real-kernel boot tests need the pinned vmlinux; rebuild it only
+      # when its pins or build script change.
+      - name: Restore the VMM boot kernel
+        id: vmm-kernel
+        if: matrix.platform.target == 'linux-x64-gnu'
+        uses: actions/cache@v4
+        with:
+          path: target/vmm/boot/x86_64
+          key: vmm-kernel-${{ hashFiles('src/vmm/boot/kernel.lock', 'src/vmm/boot/kernel.config', 'scripts/build/build-vmm-boot.sh') }}
+
+      - name: Build the VMM boot kernel
+        if: matrix.platform.target == 'linux-x64-gnu' && steps.vmm-kernel.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: |
+          sudo apt-get install -y build-essential bc bison flex curl xz-utils libelf-dev \
+            gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+          make vmm:boot:host
+
+      - name: Enable KVM access for native hypervisor tests
+        if: matrix.platform.target == 'linux-x64-gnu'
+        run: sudo chmod a+rw /dev/kvm
+
+      - name: Run KVM hardware tests with coverage
+        if: matrix.platform.target == 'linux-x64-gnu'
+        timeout-minutes: 5
+        run: make coverage:vmm:kvm
+
+      - name: Prepare real-guest test toolchain
+        if: matrix.platform.target == 'linux-x64-gnu'
+        run: |
+          sudo apt-get install -y musl-tools gperf
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Run real-kernel boot tests with coverage
+        if: matrix.platform.target == 'linux-x64-gnu'
+        timeout-minutes: 5
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: x86_64-linux-musl-gcc
+          CC_x86_64_unknown_linux_musl: x86_64-linux-musl-gcc
+        run: make coverage:vmm:boot
+
+      - uses: actions/setup-node@v4
+        if: matrix.platform.target == 'linux-x64-gnu'
+        with:
+          node-version: '22'
+
+      - uses: ./.github/actions/setup-go
+        if: matrix.platform.target == 'linux-x64-gnu'
+
+      - name: Measure native bindings through SDK callers
+        if: matrix.platform.target == 'linux-x64-gnu'
+        env:
+          BOXLITE_DEPS_STUB: '1'
+        run: make coverage:bindings:external
+
+      - name: Measure file-copy workflows with a real guest
+        if: matrix.platform.target == 'linux-x64-gnu'
+        timeout-minutes: 20
+        run: |
+          make setup:submodules
+          make setup:build
+          make coverage:copy:vm
+
+      - name: Run OpenAPI reference-server unit tests
+        # Keyed on BoxliteError's Display text (src/shared/src/errors.rs, in this
+        # filter), so a new variant must add its row there before the reference
+        # server can name the class. stdlib only — no extra setup.
+        run: make test:unit:openapi
+
+      - name: Run guest mount tests
+        if: runner.os == 'Linux'
+        run: make test:guest-perms
