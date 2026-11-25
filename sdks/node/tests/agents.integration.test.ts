@@ -57,12 +57,6 @@ describe("agent namespace", () => {
       expect(box).not.toBeNull();
       const agents = box!.agents;
       expect(agents).toBeInstanceOf(getNativeModule().Agents);
-      await expect(agents.create("agent")).rejects.toThrow(
-        "supported: opencode",
-      );
-      await expect(agents.get("agent")).rejects.toThrow(
-        "agents require a local runtime",
-      );
       expect(requests).toEqual(["GET /v1/boxes/agent-box"]);
     } finally {
       runtime.close();

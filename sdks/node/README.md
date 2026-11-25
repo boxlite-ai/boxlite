@@ -720,9 +720,13 @@ do not build the native module and exclude these integration tests.
 
 From the repository root, run
 `make test:integration:node FILTER='agent namespace'`. The native Box getter test
-obtains a handle from a loopback REST server and checks namespace access without
-starting a VM or sending agent requests. Separate tests reject plain-object and
-prototype-only method receivers before the agent operation runs.
+gets a Box from a loopback REST server and reads `box.agents`. It checks that
+the result is a native `Agents` instance and the server received only the
+initial Box lookup. The
+[Rust REST client tests](../../src/boxlite/src/rest/litebox/tests/agents.rs)
+cover the HTTP requests issued by `agents.create()` and `agents.get()`.
+Separate Node tests reject plain-object and prototype-only method receivers
+before the agent operation runs.
 
 To compare Node and Python agent results with Rust in real OpenCode VMs, set
 `BOXLITE_TEST_OPENCODE_BINARY` to the OpenCode 2.2.2 Linux binary and run
