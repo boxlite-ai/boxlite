@@ -140,6 +140,8 @@ pub struct SandboxContext<'a> {
     pub network_enabled: bool,
     /// Custom sandbox profile path (macOS only).
     pub sandbox_profile: Option<&'a Path>,
+    /// Shared shim cache root to protect from writes in the built-in macOS profile.
+    pub shim_cache_dir: Option<PathBuf>,
     /// Whether the box is detached (`run -d`). Detached boxes must outlive the
     /// launching process, so the sandbox must not tie their lifetime to it
     /// (e.g. bwrap's `--die-with-parent`).

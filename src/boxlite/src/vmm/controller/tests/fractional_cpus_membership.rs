@@ -47,18 +47,19 @@ fn assert_spawn_survives_cgroup_failure(membership_target: Option<&Path>, quota_
 
     let home = tempfile::tempdir().unwrap();
     let layout = BoxFilesystemLayout::new(
-        home.path().to_path_buf(),
+        home.path().join("boxes/membership-test"),
         FsLayoutConfig::without_bind_mount(),
         false,
     );
     layout.prepare().unwrap();
-    // The jailer copies this helper into <box>/bin. Its marker is in the
-    // writable logs binding, since bubblewrap replaces /tmp with a tmpfs.
+    // The staged helper writes its marker through the writable logs binding.
     let helpers = tempfile::tempdir().unwrap();
     let binary = helpers.path().join("membership-helper");
+    let marker = layout.logs_dir().join("executed");
+    let quoted_marker = marker.to_str().unwrap().replace('\'', "'\\''");
     fs::write(
         &binary,
-        "#!/bin/sh\nexec cat > \"${0%/*}/../logs/executed\"\n",
+        format!("#!/bin/sh\nexec cat > '{quoted_marker}'\n"),
     )
     .unwrap();
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
@@ -78,10 +79,7 @@ fn assert_spawn_survives_cgroup_failure(membership_target: Option<&Path>, quota_
     }
     let mut spawned = result.expect("cgroup failure must not prevent child exec");
     assert!(spawned.child.wait().unwrap().success());
-    assert_eq!(
-        fs::read_to_string(layout.logs_dir().join("executed")).unwrap(),
-        config
-    );
+    assert_eq!(fs::read_to_string(marker).unwrap(), config);
     layout.cleanup().unwrap();
 }
 

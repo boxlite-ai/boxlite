@@ -22,6 +22,9 @@ pub mod dirs {
     /// Subdirectory for running boxes
     pub const BOXES_DIR: &str = "boxes";
 
+    /// Subdirectory for the shared shim and firmware cache
+    pub(crate) const SHIMS_DIR: &str = "shims";
+
     /// Subdirectory for managed local volumes
     pub const VOLUMES_DIR: &str = "volumes";
 
@@ -108,6 +111,7 @@ impl FsLayoutConfig {
 /// │       └── {path_hash}-{manifest_short}/
 /// ├── boxes/                               # Per-box directories (BoxFilesystemLayout)
 /// │   └── {box_id}/                            # See BoxFilesystemLayout
+/// ├── shims/                               # Shim and firmware cache by digest
 /// ├── bases/                               # Flat backing files (nanoid-named)
 /// │   ├── {nanoid}.qcow2                       # Snapshot / clone base container disk
 /// │   └── {nanoid}.ext4                        # Guest rootfs cache
@@ -168,6 +172,14 @@ impl FilesystemLayout {
     /// Each box gets a subdirectory containing upper/work dirs for overlayfs
     pub fn boxes_dir(&self) -> PathBuf {
         self.home_dir.join(dirs::BOXES_DIR)
+    }
+
+    pub(crate) fn shims_dir(&self) -> PathBuf {
+        Self::shims_dir_for(&self.home_dir)
+    }
+
+    pub(crate) fn shims_dir_for(home_dir: &Path) -> PathBuf {
+        home_dir.join(dirs::SHIMS_DIR)
     }
 
     /// Root directory for managed local volumes: ~/.boxlite/volumes
@@ -488,10 +500,7 @@ impl BoxFilesystemLayout {
     // BIN AND LOGS (jailer isolation)
     // ========================================================================
 
-    /// Bin directory: ~/.boxlite/boxes/{box_id}/bin
-    ///
-    /// Contains the shim binary and bundled libraries, copied (or reflinked)
-    /// by the jailer for memory isolation between boxes.
+    /// Legacy per-box bin path, retained for API compatibility and cleanup.
     pub fn bin_dir(&self) -> PathBuf {
         self.box_dir.join("bin")
     }
@@ -767,6 +776,23 @@ impl ImageFilesystemLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_shims_dir() {
+        let home = Path::new("/boxlite-home");
+        let layout = FilesystemLayout::new(home.to_path_buf(), FsLayoutConfig::default());
+        assert_eq!(layout.shims_dir(), home.join("shims"));
+        assert_eq!(FilesystemLayout::shims_dir_for(home), layout.shims_dir());
+    }
+
+    #[test]
+    fn test_prepare_accepts_regular_file_at_shims_path() {
+        let home = tempfile::tempdir().unwrap();
+        let layout = FilesystemLayout::new(home.path().to_path_buf(), FsLayoutConfig::default());
+        std::fs::write(layout.shims_dir(), b"legacy file").unwrap();
+        layout.prepare().unwrap();
+        assert_eq!(std::fs::read(layout.shims_dir()).unwrap(), b"legacy file");
+    }
 
     #[test]
     fn test_local_bundle_cache_dir_format() {

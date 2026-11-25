@@ -92,6 +92,7 @@ mod tests {
             resource_limits: limits,
             network_enabled: false,
             sandbox_profile: None,
+            shim_cache_dir: None,
             detached: false,
         }
     }
