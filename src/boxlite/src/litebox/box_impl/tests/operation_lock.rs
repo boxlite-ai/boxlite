@@ -1759,60 +1759,14 @@ async fn stop_commit_tolerates_record_removed_after_lifecycle_admission() {
     assert_disk_admission_released(&bx);
 }
 
-#[tokio::test]
-async fn in_flight_start_aborts_and_coordinates_with_shutdown() {
-    // 1. Fresh init_live_state aborts immediately when shutdown_token is cancelled,
-    //    and clears the starting flag on return.
+async fn non_detached_test_box() -> (TempDir, SharedRuntimeImpl, crate::LiteBox, Arc<BoxImpl>) {
     let home = TempDir::new_in("/tmp").unwrap();
-    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+    let rt = RuntimeImpl::new_for_test(BoxliteOptions {
         home_dir: home.path().to_owned(),
         ..Default::default()
     })
     .unwrap();
-    let handle = persistent_disk_test_box(&runtime).await;
-    let bx = disk_test_backend(&handle);
-    runtime.shutdown_token.cancel();
-    let err = bx.init_live_state(true).await.err().unwrap();
-    assert!(matches!(err, BoxliteError::Stopped(_)), "{err:?}");
-    assert!(!bx.is_starting());
-
-    // 2. Post-build abort_start_on_shutdown is a no-op before shutdown, and tears
-    //    down the PID file + disarms CleanupGuard without marking Failed once cancelled.
-    let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
-    let live = fixture.box_impl.live.get().unwrap();
-    let pid_file = fixture.box_impl.layout.pid_file_path();
-    std::fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
-    std::fs::write(&pid_file, "12345\n").unwrap();
-
-    let mut disarmed = false;
-    fixture
-        .box_impl
-        .abort_start_on_shutdown(live, || disarmed = true)
-        .unwrap();
-    assert!(pid_file.exists());
-    assert!(!disarmed);
-
-    fixture.box_impl.shutdown_token.cancel();
-    let err = fixture
-        .box_impl
-        .abort_start_on_shutdown(live, || disarmed = true)
-        .unwrap_err();
-    assert!(matches!(err, BoxliteError::Stopped(_)), "{err:?}");
-    assert!(!pid_file.exists());
-    assert!(
-        disarmed,
-        "shutdown abort must disarm CleanupGuard so the box is not marked Failed"
-    );
-
-    // 3. Async shutdown waits for an in-flight start whose owner is not yet in DB,
-    //    then stops the box once the start commits Running + owner.
-    let home2 = TempDir::new_in("/tmp").unwrap();
-    let rt2 = RuntimeImpl::new_for_test(BoxliteOptions {
-        home_dir: home2.path().to_owned(),
-        ..Default::default()
-    })
-    .unwrap();
-    let handle2 = rt2
+    let handle = rt
         .create(
             BoxOptions {
                 detach: false,
@@ -1823,8 +1777,49 @@ async fn in_flight_start_aborts_and_coordinates_with_shutdown() {
         )
         .await
         .unwrap();
-    let bx2 = disk_test_backend(&handle2);
+    let bx = disk_test_backend(&handle);
+    (home, rt, handle, bx)
+}
 
+#[tokio::test]
+async fn in_flight_start_aborts_and_coordinates_with_shutdown() {
+    // 1. Fresh init_live_state aborts when shutdown_token is cancelled and clears starting.
+    let (_home, runtime, _handle, bx) = non_detached_test_box().await;
+    runtime.shutdown_token.cancel();
+    let err = bx.init_live_state(true).await.err().unwrap();
+    assert!(matches!(err, BoxliteError::Stopped(_)), "{err:?}");
+    assert!(!bx.is_starting());
+
+    // 2. Post-build abort_start_on_shutdown is a no-op before shutdown, then removes
+    //    the PID file and disarms CleanupGuard once cancelled.
+    let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+    let live = fixture.box_impl.live.get().unwrap();
+    let pid_file = fixture.box_impl.layout.pid_file_path();
+    std::fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
+    std::fs::write(&pid_file, "12345\n").unwrap();
+
+    let mut disarmed = false;
+    fixture
+        .box_impl
+        .abort_start_on_shutdown(live, || disarmed = true)
+        .await
+        .unwrap();
+    assert!(pid_file.exists());
+    assert!(!disarmed);
+
+    fixture.box_impl.shutdown_token.cancel();
+    let err = fixture
+        .box_impl
+        .abort_start_on_shutdown(live, || disarmed = true)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, BoxliteError::Stopped(_)), "{err:?}");
+    assert!(!pid_file.exists());
+    assert!(disarmed);
+
+    // 3. Async shutdown waits for an in-flight start whose owner is not yet in DB,
+    //    then stops the box once the start commits Running + owner.
+    let (_home2, rt2, _handle2, bx2) = non_detached_test_box().await;
     let locker = rt2
         .lock_manager
         .retrieve(bx2.state.read().lock_id.unwrap())
@@ -1838,7 +1833,6 @@ async fn in_flight_start_aborts_and_coordinates_with_shutdown() {
         "shutdown must wait on a box with an in-flight start instead of skipping it"
     );
 
-    // Simulate the in-flight start publishing Running + current owner before releasing the lock.
     let mut started = rt2.box_manager.update_box(bx2.id()).unwrap();
     started.status = BoxStatus::Running;
     started.mark_started();
@@ -1849,6 +1843,44 @@ async fn in_flight_start_aborts_and_coordinates_with_shutdown() {
 
     shutdown.await.unwrap();
     let final_state = rt2.box_manager.update_box(bx2.id()).unwrap();
+    assert_eq!(final_state.status, BoxStatus::Stopped);
+    assert!(final_state.owner.is_none());
+}
+
+#[tokio::test]
+async fn sync_shutdown_defers_while_local_start_holds_lock_and_retries() {
+    let (_home, rt, _handle, bx) = non_detached_test_box().await;
+    let locker = rt
+        .lock_manager
+        .retrieve(bx.state.read().lock_id.unwrap())
+        .unwrap();
+    let lock_guard = LockGuard::new(locker.as_ref());
+    let starting_guard = StartingGuard::enter(&bx.starting);
+
+    // Busy local start keeps sync cleanup retryable instead of skipping the row.
+    rt.shutdown_sync();
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("300")
+        .spawn()
+        .expect("spawn stand-in shim");
+    let pid = child.id();
+
+    let mut started = rt.box_manager.update_box(bx.id()).unwrap();
+    started.status = BoxStatus::Running;
+    started.pid = Some(pid);
+    started.mark_started();
+    rt.box_manager.save_box(bx.id(), &started).unwrap();
+    drop(starting_guard);
+    drop(lock_guard);
+
+    rt.shutdown_sync();
+
+    let alive = crate::util::is_process_alive(pid);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(!alive);
+    let final_state = rt.box_manager.update_box(bx.id()).unwrap();
     assert_eq!(final_state.status, BoxStatus::Stopped);
     assert!(final_state.owner.is_none());
 }

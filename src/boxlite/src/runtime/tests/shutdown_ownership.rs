@@ -222,8 +222,14 @@ async fn test_shutdown_rechecks_ownership_under_lifecycle_lock() {
     let locker = runtime.lock_manager.retrieve(bx.lock_id).unwrap();
     let guard = LockGuard::new(locker.as_ref());
 
-    let mut shutdown = Box::pin(runtime.shutdown(Some(2)));
-    assert!(futures::poll!(&mut shutdown).is_pending());
+    let rt = Arc::clone(&runtime);
+    let shutdown = tokio::spawn(async move { rt.shutdown(Some(2)).await });
+    // Let spawn_blocking complete the pre-filter and queue stop_if_owned_by on guard.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown should pass pre-filter and queue behind the box lifecycle lock"
+    );
 
     let (foreign_owner, _foreign_guard) = spawn_foreign_owner();
     let mut transferred = runtime.box_manager.update_box(&bx.id).unwrap();
@@ -231,7 +237,7 @@ async fn test_shutdown_rechecks_ownership_under_lifecycle_lock() {
     runtime.box_manager.save_box(&bx.id, &transferred).unwrap();
     drop(guard);
 
-    shutdown.await.unwrap();
+    shutdown.await.unwrap().unwrap();
 
     assert!(is_process_alive(bx.pid));
     let (_, db_state) = runtime.box_manager.box_by_id(&bx.id).unwrap().unwrap();

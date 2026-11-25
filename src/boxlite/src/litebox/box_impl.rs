@@ -1545,7 +1545,8 @@ impl BoxImpl {
             };
 
         if !adopting_running {
-            self.abort_start_on_shutdown(&live_state, || cleanup_guard.disarm())?;
+            self.abort_start_on_shutdown(&live_state, || cleanup_guard.disarm())
+                .await?;
         }
 
         {
@@ -1571,12 +1572,15 @@ impl BoxImpl {
                     self.config.id, state.status
                 )));
             }
-            state.set_pid(Some(pid));
-            state.set_status(BoxStatus::Running);
             // A box entering Running publishes its PID, status, `started_at`
             // timestamp, and spawning owner atomically. An adopted Running box
-            // is the same lifecycle, so its existing values must be preserved.
-            if !adopting_running {
+            // preserves its recorded values only when `shim.pid` matches the
+            // persisted PID; a PID swap clears stale `started_at` and `owner`.
+            if adopting_running {
+                state.adopt_recovered_shim(pid);
+            } else {
+                state.set_pid(Some(pid));
+                state.set_status(BoxStatus::Running);
                 state.mark_started();
             }
 
@@ -1637,7 +1641,7 @@ impl BoxImpl {
         Ok(live_state)
     }
 
-    fn abort_start_on_shutdown(
+    async fn abort_start_on_shutdown(
         &self,
         live: &LiveState,
         disarm_cleanup: impl FnOnce(),
@@ -1648,7 +1652,7 @@ impl BoxImpl {
         if let Ok(mut handler) = live.handler.lock() {
             let _ = handler.stop();
         }
-        let _ = std::fs::remove_file(self.layout.pid_file_path());
+        let _ = tokio::fs::remove_file(self.layout.pid_file_path()).await;
         disarm_cleanup();
         Err(BoxliteError::Stopped("Runtime is shutting down".into()))
     }

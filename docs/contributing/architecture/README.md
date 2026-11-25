@@ -187,15 +187,17 @@ Fresh VM starts record the spawning process's `PidRecord` (PID and OS start-time
 fingerprint) in `BoxState.owner`; stopping, failing, reboot reset, or recovery
 adopting a different PID clears it. Both async and synchronous shutdown stop only
 non-detached boxes owned by the current process, leaving foreign-owned and unowned
-rows untouched. Synchronous shutdown skips non-owned boxes before touching their
-locks and defers busy cleanup or lock-retrieval failures for owned boxes, including
-a missing lock file (a missing box row is already gone; a missing lock is not proof
-of completed cleanup). Async shutdown includes in-flight starts alongside persisted
-owned boxes, rechecks ownership under each box's lifecycle write lock, and marks
-cleanup pending before awaiting stops, clearing it only after every stop succeeds so
-timeout, failure, or cancellation leaves a later synchronous shutdown or runtime
-Drop able to retry; fresh starts also abort and stop their VM if shutdown begins
-before publication.
+rows untouched.
+
+Synchronous shutdown skips non-owned boxes unless a local start is in flight, and
+defers busy cleanup or lock-retrieval failures (including a missing lock file) for
+owned boxes and in-flight local starts; a missing box row is already gone, whereas
+a missing lock is not proof of completed cleanup. Async shutdown marks cleanup
+pending before awaiting ownership reads or stops, includes in-flight starts beside
+owned boxes, rechecks ownership under each box's lifecycle write lock, and clears
+the pending flag only when nothing remains or every stop succeeds so timeout,
+failure, or cancellation leaves a later synchronous shutdown or runtime Drop able
+to retry. Fresh starts abort and stop their VM if shutdown begins before publication.
 
 Disk APIs use the runtime's shared lock manager with persisted box lock IDs in
 an independent `<home>/locks/disk/` namespace, serializing operations across handles.

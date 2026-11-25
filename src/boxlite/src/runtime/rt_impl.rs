@@ -853,8 +853,10 @@ impl RuntimeImpl {
 
         tracing::info!("Initiating runtime shutdown");
 
-        // Cancel the shutdown token - marks shutdown and signals all in-flight operations
+        // Cancel the shutdown token and mark sync cleanup pending before any await,
+        // so cancellation or failure at any point leaves Drop able to retry.
         self.shutdown_token.cancel();
+        self.sync_cleanup_pending.store(true, Ordering::Release);
 
         let current_owner = crate::util::PidRecord::current();
 
@@ -868,19 +870,35 @@ impl RuntimeImpl {
                 .collect()
         };
 
-        let active_boxes: Vec<SharedBoxImpl> = candidate_boxes
+        let (mut active_boxes, need_db_check): (Vec<_>, Vec<_>) = candidate_boxes
             .into_iter()
-            .filter(|box_impl| {
-                box_impl.is_starting()
-                    || match self.box_manager.update_box(box_impl.id()) {
-                        Ok(persisted) => persisted.is_owned_by(current_owner),
-                        Err(BoxliteError::NotFound(_)) => false,
-                        Err(_) => box_impl.state.read().is_owned_by(current_owner),
-                    }
+            .partition(|box_impl| box_impl.is_starting());
+
+        if !need_db_check.is_empty() {
+            let box_manager = self.box_manager.clone();
+            let ids: Vec<BoxID> = need_db_check.iter().map(|b| b.id().clone()).collect();
+            let persisted_states = tokio::task::spawn_blocking(move || {
+                ids.into_iter()
+                    .map(|id| box_manager.update_box(&id))
+                    .collect::<Vec<_>>()
             })
-            .collect();
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))?;
+
+            for (box_impl, persisted) in need_db_check.into_iter().zip(persisted_states) {
+                let is_owned = match persisted {
+                    Ok(state) => state.is_owned_by(current_owner),
+                    Err(BoxliteError::NotFound(_)) => false,
+                    Err(_) => box_impl.state.read().is_owned_by(current_owner),
+                };
+                if is_owned {
+                    active_boxes.push(box_impl);
+                }
+            }
+        }
 
         if active_boxes.is_empty() {
+            self.sync_cleanup_pending.store(false, Ordering::Release);
             tracing::info!("No active boxes to shutdown");
             return Ok(());
         }
@@ -904,8 +922,6 @@ impl RuntimeImpl {
             }
         });
 
-        // Drop must retry if this await is cancelled or any stop is incomplete.
-        self.sync_cleanup_pending.store(true, Ordering::Release);
         let results = futures::future::join_all(stop_futures).await;
 
         // Check for errors
@@ -958,6 +974,22 @@ impl RuntimeImpl {
 
         let current_owner = crate::util::PidRecord::current();
 
+        // Snapshot boxes with an in-flight local start after cancelling the
+        // shutdown token so a busy start that has not yet persisted its owner
+        // still defers cleanup for retry instead of being skipped as unowned.
+        let starting_ids: std::collections::HashSet<BoxID> = {
+            let sync = self
+                .sync_state
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            sync.active_boxes_by_id
+                .values()
+                .filter_map(|weak| weak.upgrade())
+                .filter(|box_impl| !box_impl.config.options.detach && box_impl.is_starting())
+                .map(|box_impl| box_impl.id().clone())
+                .collect()
+        };
+
         let boxes = match self.box_manager.all_boxes(true) {
             Ok(b) => b,
             Err(e) => {
@@ -968,7 +1000,9 @@ impl RuntimeImpl {
         };
 
         for (config, initial_state) in boxes {
-            if config.options.detach || !initial_state.is_owned_by(current_owner) {
+            let is_starting = starting_ids.contains(&config.id);
+            if config.options.detach || (!initial_state.is_owned_by(current_owner) && !is_starting)
+            {
                 continue;
             }
             let locker = match self.box_locker(&config.id) {
