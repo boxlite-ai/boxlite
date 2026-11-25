@@ -48,7 +48,7 @@ struct CreateOptions {
 #[serde(deny_unknown_fields)]
 struct CreateRequest {
     agent: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "object")]
     options: CreateOptions,
 }
 
@@ -65,7 +65,7 @@ struct SendOptions {
 #[serde(deny_unknown_fields)]
 struct SendRequest {
     text: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "object")]
     options: SendOptions,
 }
 
@@ -91,9 +91,33 @@ pub(in crate::commands::serve) struct EventQuery {
     after: Option<String>,
 }
 
+// Serde also accepts positional arrays for derived structs. The HTTP schema
+// requires an object, and RawValue fields must retain their original tokens.
+fn object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct ObjectVisitor<T>(std::marker::PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for ObjectVisitor<T> {
+        type Value = T;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a JSON object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_map(ObjectVisitor(std::marker::PhantomData))
+}
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct Object<T: for<'a> Deserialize<'a>>(#[serde(deserialize_with = "object")] T);
+
 fn decode<T: for<'de> Deserialize<'de>>(body: &Bytes) -> Result<T, BoxliteError> {
-    Json::<T>::from_bytes(body)
-        .map(|Json(request)| request)
+    Json::<Object<T>>::from_bytes(body)
+        .map(|Json(Object(request))| request)
         .map_err(|error| BoxliteError::InvalidArgument(error.body_text()))
 }
 
@@ -349,6 +373,8 @@ pub(in crate::commands::serve) async fn send(
             }
             Err(error) => return error_from_boxlite(&error),
         };
+        let admission_lock = state.admission_locks.for_box(&canonical);
+        let _admission = admission_lock.read().await;
         let generation = loop {
             let mut turns = state.agent_turns.lock().await;
             if !turns
@@ -574,8 +600,12 @@ pub(in crate::commands::serve) async fn events(
     State(state): State<Arc<AppState>>,
     Path((box_id, agent_id)): Path<(String, String)>,
     headers: HeaderMap,
-    Query(query): Query<EventQuery>,
+    query: Result<Query<EventQuery>, axum::extract::rejection::QueryRejection>,
 ) -> Response {
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(error) => return error_from_boxlite(&BoxliteError::InvalidArgument(error.body_text())),
+    };
     let after = match headers.get("Last-Event-ID") {
         Some(value) => match value.to_str() {
             Ok(v) => Some(v.to_owned()),

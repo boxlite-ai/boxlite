@@ -131,10 +131,33 @@ struct AppState {
     /// Signed-in browsers of the web console, which present a session cookie
     /// instead of the API key. Empty unless `--api-key` is set.
     browser_sessions: web_console::BrowserSessions,
+    admission_locks: AdmissionLocks,
     agent_turns: tokio::sync::Mutex<HashMap<String, AgentReservation>>,
 }
 
 const AGENT_STOPPING: usize = usize::MAX;
+
+// Stop and admission are ordered per canonical Box ID. An admission releases its
+// read guard once the observer owns the reservation, not when the turn ends.
+type AdmissionLock = tokio::sync::RwLock<()>;
+#[derive(Default)]
+struct AdmissionLocks(std::sync::Mutex<HashMap<String, std::sync::Weak<AdmissionLock>>>);
+
+impl AdmissionLocks {
+    fn for_box(&self, id: &str) -> Arc<AdmissionLock> {
+        let mut locks = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(lock) = locks.get(id).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let lock = Arc::new(AdmissionLock::default());
+        locks.insert(id.to_owned(), Arc::downgrade(&lock));
+        lock
+    }
+}
 
 struct AgentReservation {
     count: usize,
@@ -2225,6 +2248,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
         browser_sessions: Default::default(),
+        admission_locks: Default::default(),
         agent_turns: tokio::sync::Mutex::new(HashMap::new()),
     });
 
@@ -2807,6 +2831,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
@@ -3640,6 +3665,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (control_status, control_error) =
@@ -4267,6 +4293,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let mut archive = tar::Builder::new(Vec::new());
@@ -4324,6 +4351,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (url, server) = serve_router(state).await;
@@ -4387,6 +4415,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: Default::default(),
         });
         let (base, server) = serve_router(state).await;
@@ -4520,6 +4549,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: Default::default(),
         });
         let (base, server) = serve_router(state).await;
@@ -4632,6 +4662,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         state
@@ -4700,6 +4731,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         state
@@ -4760,6 +4792,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         state
@@ -4807,6 +4840,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
@@ -4863,6 +4897,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
@@ -4928,6 +4963,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
@@ -5041,6 +5077,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
@@ -5089,6 +5126,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         state
@@ -5134,6 +5172,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         state
@@ -5179,6 +5218,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
         // The canned box's `last_updated` is a fixed date in the past, so its
@@ -5232,6 +5272,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
         state
@@ -5293,6 +5334,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
 
@@ -5343,6 +5385,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         });
 
@@ -5630,6 +5673,7 @@ mod tests {
             last_activity: RwLock::new(HashMap::new()),
             recovered_terminals: RwLock::new(HashMap::new()),
             browser_sessions: Default::default(),
+            admission_locks: Default::default(),
             agent_turns: tokio::sync::Mutex::new(HashMap::new()),
         };
 

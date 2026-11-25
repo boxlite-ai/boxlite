@@ -454,6 +454,7 @@ async fn serve_over(
         last_activity: RwLock::new(HashMap::new()),
         recovered_terminals: RwLock::new(HashMap::new()),
         browser_sessions: Default::default(),
+        admission_locks: Default::default(),
         agent_turns: tokio::sync::Mutex::new(HashMap::new()),
     });
     let (base, server) = serve_router(Arc::clone(&state)).await;

@@ -196,14 +196,14 @@ These records define SDK data types. The
 maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
 headers. The REST server exposes these routes, and the Rust REST client forwards
-agent operations to them. Agent routes respect a stopped Box's AutoResume setting.
+agent operations to them. Agent operations on a stopped Box return HTTP 409 (`conflict`) when AutoResume is disabled. Start the Box explicitly to continue.
 AutoStop keeps the Box running while an admitted turn is active and can stop it
 after the turn ends. If admission fails with an uncertain outcome and no turn ID,
 the server retains the protection for five minutes or until the Box is removed.
 After that grace period AutoStop may interrupt work that was admitted but could
 not be observed.
 
-Stopping a Box releases its admitted-turn protection. Observers read Box metadata
+An explicit stop and turn submission are ordered per Box. Stop releases protection for the run it ends. A turn accepted after restart receives fresh protection. Observers read Box metadata
 without resuming a stopped Box and exit when its run ends. If OpenCode resumes
 an earlier turn after restart, that resumed turn is not protected from AutoStop;
 only turns admitted through the server in the new run receive protection.

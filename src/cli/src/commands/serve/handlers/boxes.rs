@@ -171,11 +171,21 @@ pub(in crate::commands::serve) async fn stop_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
 ) -> Response {
-    let litebox = match get_or_fetch_box(&state, &box_id).await {
+    let canonical = match state.runtime.get_info(&box_id).await {
+        Ok(Some(info)) => info.id.to_string(),
+        Ok(None) => {
+            return error_from_boxlite(&boxlite::BoxliteError::NotFound(format!(
+                "box {box_id} not found"
+            )));
+        }
+        Err(error) => return error_from_boxlite(&error),
+    };
+    let admission_lock = state.admission_locks.for_box(&canonical);
+    let _stop = admission_lock.write().await;
+    let litebox = match get_or_fetch_box(&state, &canonical).await {
         Ok(b) => b,
         Err(resp) => return resp,
     };
-    let canonical = litebox.id().to_string();
 
     if let Err(e) = litebox.stop().await {
         return error_from_boxlite(&e);
@@ -184,7 +194,15 @@ pub(in crate::commands::serve) async fn stop_box(
     // stop() cancels the box's token, which invalidates this handle for good.
     // Keeping it cached would hand the next request a handle that answers every
     // call with "invalidated after stop()".
-    state.boxes.write().await.remove(&canonical);
+    {
+        let mut boxes = state.boxes.write().await;
+        if boxes
+            .get(&canonical)
+            .is_some_and(|current| Arc::ptr_eq(current, &litebox))
+        {
+            boxes.remove(&canonical);
+        }
+    }
     state.agent_turns.lock().await.remove(&canonical);
 
     let info = match litebox.info().await {

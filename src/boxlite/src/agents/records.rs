@@ -136,6 +136,11 @@ pub fn parse_config(value: Value) -> BoxliteResult<AgentConfig> {
         limits: Option<Value>,
         output_schema: Option<Value>,
     }
+    if !value.is_object() {
+        return Err(BoxliteError::InvalidArgument(
+            "--agent-config must be an object".into(),
+        ));
+    }
     let record: ConfigRecord = serde_json::from_value(value)
         .map_err(|error| BoxliteError::InvalidArgument(format!("--agent-config: {error}")))?;
     Ok(AgentConfig {
@@ -152,6 +157,16 @@ pub fn parse_config(value: Value) -> BoxliteResult<AgentConfig> {
 
 /// Parse the `respond` argument: an answer or a permission decision.
 pub fn parse_response(json: &str) -> BoxliteResult<AgentResponse> {
+    fn present_raw<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<Box<RawValue>>, D::Error> {
+        Box::<RawValue>::deserialize(d).map(Some)
+    }
+    if !json.trim_start().starts_with('{') {
+        return Err(BoxliteError::InvalidArgument(
+            "response must be a JSON object".into(),
+        ));
+    }
     #[derive(Deserialize)]
     #[serde(rename_all = "snake_case")]
     enum Kind {
@@ -170,6 +185,7 @@ pub fn parse_response(json: &str) -> BoxliteResult<AgentResponse> {
         #[serde(rename = "type")]
         _kind: Kind,
         text: String,
+        #[serde(default, deserialize_with = "present_raw")]
         data: Option<Box<RawValue>>,
     }
     #[derive(Deserialize)]

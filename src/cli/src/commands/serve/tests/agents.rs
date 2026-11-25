@@ -443,6 +443,8 @@ async fn remote_wait_reports_terminal_turn_without_a_recorded_result() {
 }
 
 struct AutoStopFixture {
+    stop_barrier: Arc<tokio::sync::Semaphore>,
+    stop_seen: Arc<tokio::sync::Notify>,
     state: Arc<super::AppState>,
     url: String,
     stops: Arc<std::sync::atomic::AtomicUsize>,
@@ -483,6 +485,8 @@ impl AutoStopFixture {
             "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
             "pid":run,"image":"alpine:latest","cpus":1,"memory_mib":512,"auto_resume":true})
         }
+        let stop_barrier = Arc::new(tokio::sync::Semaphore::new(1));
+        let stop_seen = Arc::new(tokio::sync::Notify::new());
         let app = Router::new()
             .route("/v1/boxes", get({
                 let running = Arc::clone(&running);
@@ -511,15 +515,19 @@ impl AutoStopFixture {
                 }}
             }))
             .route("/v1/boxes/{id}/stop", post({
+                let barrier = stop_barrier.clone();
+                let seen = stop_seen.clone();
                 let stops = Arc::clone(&stops);
                 let running = Arc::clone(&running);
                 let invalidated = Arc::clone(&invalidated);
                 let run = Arc::clone(&run);
-                move || { let stops = Arc::clone(&stops); let running = Arc::clone(&running);
+                move || { let barrier = barrier.clone(); let seen = seen.clone(); let stops = Arc::clone(&stops); let running = Arc::clone(&running);
                     let invalidated = Arc::clone(&invalidated); let run = Arc::clone(&run); async move {
                     stops.fetch_add(1, Ordering::SeqCst);
                     running.store(false, Ordering::SeqCst);
                     invalidated.store(true, Ordering::SeqCst);
+                    seen.notify_one();
+                    let _permit = barrier.acquire().await.unwrap();
                     Json(box_info(false, run.load(Ordering::SeqCst)))
                 }}
             }))
@@ -589,6 +597,8 @@ impl AutoStopFixture {
             .await;
         let (url, server) = serve_router(Arc::clone(&state)).await;
         Self {
+            stop_barrier,
+            stop_seen,
             state,
             url,
             stops,
@@ -986,6 +996,11 @@ async fn agent_rest_routes_forward_a_conversation() {
         }))
         .route("/v1/boxes/{id}/agents/{agent}/turns/{turn}", get(|| async { Json(turn()) }))
         .route("/v1/boxes/{id}/agents/{agent}/requests/{request}/respond", post(|axum::extract::Path((_, _, request)): axum::extract::Path<(String, String, String)>, headers: axum::http::HeaderMap, Json(body): Json<Value>| async move {
+            if matches!(request.as_str(), "answer-null" | "answer-omitted") {
+                let expected = (request == "answer-null").then_some(&Value::Null);
+                assert_eq!(body["response"].get("data"), expected);
+                return (StatusCode::OK, Json(turn()));
+            }
             if request == "missing" {
                 return (StatusCode::BAD_REQUEST, Json(json!({"error":{"message":"expected answer to request-1","type":"InvalidArgumentError","code":"invalid_argument"}})));
             }
@@ -1092,6 +1107,25 @@ async fn agent_rest_routes_forward_a_conversation() {
         text: "yes".into(),
         data: None,
     };
+    for (id, data) in [
+        ("answer-omitted", None),
+        (
+            "answer-null",
+            Some(serde_json::value::to_raw_value(&Value::Null).unwrap()),
+        ),
+    ] {
+        agent
+            .respond(
+                id,
+                AgentResponse::Answer {
+                    text: "yes".into(),
+                    data,
+                },
+                Default::default(),
+            )
+            .await
+            .unwrap();
+    }
     let local_error = boxlite::Agent::for_test()
         .respond("missing", answer(), Default::default())
         .await
@@ -1141,6 +1175,11 @@ async fn agent_routes_reject_invalid_bodies_before_dispatch() {
     let (url, server) = serve_router(Arc::new(lifecycle_state())).await;
     let client = reqwest::Client::new();
     for (suffix, body) in [
+        ("", json!(["opencode"])),
+        ("", json!({"agent":"opencode","options":[]})),
+        ("", json!({"agent":"opencode","options":{"config":[]}})),
+        ("/ses_test/turns", json!({"text":"hello","options":[]})),
+        ("/ses_test/close", json!([])),
         ("", json!({"agent":"opencode","options":{"cwd":null}})),
         ("", json!({"agent":"opencode","options":{"config":null}})),
         (
@@ -1233,4 +1272,73 @@ async fn agent_routes_validate_idempotency_key_boundaries_before_dispatch() {
     let error: Value = boundary.json().await.unwrap();
     assert_eq!(error["error"]["code"], "network_unavailable");
     server.abort();
+}
+
+#[tokio::test]
+async fn duplicate_event_cursor_returns_json_error() {
+    let (url, server) = serve_router(Arc::new(lifecycle_state())).await;
+    let r = reqwest::get(format!(
+        "{url}/v1/boxes/{STUB_BOX_ID}/agents/a/events?after=a&after=b"
+    ))
+    .await
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(r.headers()[header::CONTENT_TYPE], "application/json");
+    assert_eq!(
+        r.json::<Value>().await.unwrap()["error"]["code"],
+        "invalid_argument"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn delayed_stop_preserves_new_run_turn() {
+    use std::sync::atomic::Ordering;
+    let f = AutoStopFixture::new().await;
+    let permit = f.stop_barrier.acquire().await.unwrap();
+    let client = reqwest::Client::new();
+    let path = format!("{}/v1/boxes/{STUB_BOX_ID}", f.url);
+    let stop = tokio::spawn(client.post(format!("{path}/stop")).send());
+    tokio::time::timeout(std::time::Duration::from_secs(5), f.stop_seen.notified())
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .post(format!("{path}/start"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    f.invalidated.store(false, Ordering::SeqCst);
+    let mut send = tokio::spawn(
+        client
+            .post(format!("{path}/agents/ses_test/turns"))
+            .json(&json!({"text":"work"}))
+            .send(),
+    );
+    f.finish_admission.notify_one();
+    let early = tokio::time::timeout(std::time::Duration::from_millis(500), &mut send)
+        .await
+        .ok();
+    drop(permit);
+    assert_eq!(stop.await.unwrap().unwrap().status(), StatusCode::OK);
+    let response = match early {
+        Some(response) => response,
+        None => send.await,
+    };
+    assert_eq!(response.unwrap().unwrap().status(), StatusCode::CREATED);
+    f.sweep().await;
+    assert_eq!(f.stops(), 1, "AutoStop stopped a Box with an accepted turn");
+    f.finished.store(true, Ordering::SeqCst);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while f.state.agent_turns.lock().await.contains_key(STUB_BOX_ID) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    f.sweep().await;
+    assert_eq!(f.stops(), 2);
 }
