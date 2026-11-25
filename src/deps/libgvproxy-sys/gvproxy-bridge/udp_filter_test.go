@@ -173,7 +173,7 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	accepted := make(chan struct{})
 	go func() {
 		defer close(accepted)
-		_ = policy.guard.runGuestLink(ctx, stackSide, 4, cfg.RateLimit, vn.AcceptQemu)
+		_ = policy.runGuestLink(ctx, stackSide, 4, cfg.RateLimit, vn.AcceptQemu)
 	}()
 	nic := policy.nic
 	t.Cleanup(func() {

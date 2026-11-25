@@ -78,8 +78,16 @@ type outboundModeTarget struct {
 	next     int
 }
 
+func guestTrafficAllowed(guard platformGuard, snapshot snapshotSource) bool {
+	if !guard.active() {
+		return false
+	}
+	current := snapshot()
+	return current != nil && current.policy.Mode != "disabled"
+}
+
 func (t *outboundModeTarget) Action(pkt *stack.PacketBuffer, _ stack.Hook, _ *stack.Route, _ stack.AddressableEndpoint) (stack.RuleVerdict, int) {
-	if !t.guard.active() || t.snapshot().policy.Mode == "disabled" || (t.guard.cloud && !t.permitsGuestDHCP(pkt)) {
+	if !guestTrafficAllowed(t.guard, t.snapshot) || (t.guard.cloud && !t.permitsGuestDHCP(pkt)) {
 		return stack.RuleDrop, 0
 	}
 	return stack.RuleJump, t.next
