@@ -122,8 +122,8 @@ and [Darwin blocking semantics](https://github.com/apple-oss-distributions/xnu/b
 ### Per-box lifecycle ownership
 
 `BoxImpl::with_operation` acquires the box's lifecycle write lock and refreshes
-persisted state before start/stop, implicit boot/adoption, outbound updates, and
-watcher reports. Internal boot and attach helpers reuse that admission; they never
+persisted state before start/stop, implicit boot/adoption, outbound updates, resize,
+and watcher reports. Internal boot and attach helpers reuse that admission; they never
 acquire a second lifecycle lock. An initialized handle cannot attach its old live
 resources to a different PID or `started_at`.
 
@@ -201,8 +201,16 @@ Disk APIs use the runtime's shared lock manager with persisted box lock IDs in
 an independent `<home>/locks/disk/` namespace, serializing operations across handles.
 Blocking acquisition follows disk → lifecycle → short state guard order, with
 box existence rechecked after disk admission and before disk side effects.
-Clone, export, and snapshot mutations share `with_disk_admission` for acquisition
-and existence rechecks, keeping new entry points on the same admission path.
+
+Export, snapshot mutations, and online resize use `with_disk_admission` to acquire
+the lock and recheck box existence. Clone acquires the same lock with an owned guard
+and rechecks box existence. The provisioning worker holds a reference to that guard
+while it records the clone's base disk dependency.
+
+Resize holds disk and lifecycle admission through device confirmation, guest
+filesystem growth, and the final update to the disk target in box state. Its owned
+task keeps both guards when the caller stops waiting.
+
 If a batch clone fails after staging begins, every unprovisioned staging
 directory is cleaned up, while successfully provisioned clones are retained.
 Snapshot restore queues for disk → lifecycle admission, rechecks that the box is
@@ -210,13 +218,15 @@ inactive after the lifecycle state refresh, and holds both admissions through di
 replacement.
 The quiesce bracket holds lifecycle write admission through freeze, pause, disk
 work, resume, and thaw.
+
 Explicit stop/removal already holding lifecycle admission only tries disk admission
 and returns `InvalidState` when busy, allowing retry without a deadlock. Natural-exit
 cleanup instead waits in disk → lifecycle order, then uses the shared removal core
 with both admissions held.
 Final archive writing releases lifecycle admission but retains disk exclusion
 while its caller awaits it.
-Disk operations execute in the caller's future, so cancellation does not guarantee
+
+Snapshot, clone, and export execute in the caller's future, so cancellation does not guarantee
 completion of disk work or resume/thaw cleanup: a blocking worker may continue
 after the caller drops its guards.
 Lifecycle-read/disk-write composition is not provided.

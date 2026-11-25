@@ -21,6 +21,11 @@ use std::{
 const MOUNTPOINT_VIEW: &str = "/dev/boot-mountpoints";
 
 fn main() {
+    let scenario = std::env::args().nth(1).unwrap_or_else(|| "fresh".into());
+    if scenario == "/dev/vda" {
+        resize_probe();
+        return;
+    }
     assert_eq!(
         std::process::id(),
         1,
@@ -30,7 +35,6 @@ fn main() {
         eprintln!("BOOT_PROBE_FAILED: {info}");
         reset();
     }));
-    let scenario = std::env::args().nth(1).unwrap_or_else(|| "fresh".into());
     let mut agent = Command::new("/boxlite-guest");
     agent.env_remove("HOSTNAME");
     match scenario.as_str() {
@@ -154,6 +158,25 @@ fn main() {
         _ => panic!("unknown scenario: {scenario}"),
     }
     panic!("exec agent: {}", agent.exec());
+}
+
+fn resize_probe() {
+    let gate = std::path::Path::new("/run/boxlite/shared/resize-reaper-probe");
+    if gate.join("armed").exists() {
+        fs::write(gate.join("started"), b"").expect("signal that resize2fs has started");
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !gate.join("release").exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "host did not release resize2fs"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    panic!(
+        "exec real resize2fs: {}",
+        Command::new(gate.join("resize2fs")).arg("/dev/vda").exec()
+    );
 }
 
 fn premount() {

@@ -66,6 +66,9 @@ export type ApiCapability =
 export { publicHostsFor, type PublicHosts } from './hosts.ts'
 
 export type ApiRequest = {
+  minInstances?: number
+  maxInstances?: number
+  instance?: { cpu: number; memoryMiB: number }
   image: $util.Input<string>
   port: number
   /** The stage's own domain. `publicHostsFor` turns it into the two names served. */

@@ -293,6 +293,8 @@ impl RuntimeImpl {
             ))
         })?;
 
+        crate::jailer::shim_cache::cleanup_stale(&layout.shims_dir(), None);
+
         // Clean temp dir contents to avoid stale files from previous runs
         if let Ok(entries) = std::fs::read_dir(layout.temp_dir()) {
             for entry in entries.flatten() {

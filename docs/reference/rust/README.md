@@ -444,11 +444,59 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start or resume the box |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped policy and tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
+| `resize` | `async fn resize(&self, options: ResizeOptions) -> BoxliteResult<BoxResources>` | Query or grow a running native Linux box's root disk |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
 | `executions` | `fn executions(&self) -> ExecutionsHandle` | Live session inventory and control recovery; never boots a box |
 | `attach` | `async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution>` | Attach to init or a named live session; only one output reader is allowed |
+
+#### Online disk growth
+
+`ResizeOptions::disk_size_gb` is an absolute capacity in binary GiB, from 1 through 1024.
+On Linux x86_64, the default Rust build supports this operation for boxes running on the native VMM.
+Shrinking is rejected.
+
+Its kernel needs `CONFIG_BLK_DEV_WRITE_MOUNTED=y` for the guest's `resize2fs`; the [native kernel build](../../../src/vmm/boot/README.md#how-it-works) includes it.
+
+```rust,no_run
+use boxlite::ResizeOptions;
+
+# async fn example(bx: &boxlite::LiteBox) -> boxlite::BoxliteResult<()> {
+let current = bx.resize(ResizeOptions::default()).await?;
+let grown = bx.resize(ResizeOptions { disk_size_gb: Some(20) }).await?;
+assert_eq!(grown.disk_size_gb, 20);
+# Ok(())
+# }
+```
+
+An empty request reads the current virtual capacity from the image.
+For an explicit request, the shim confirms the requested capacity and the guest runs `resize2fs`.
+The guest reaps the resize command alongside other executions, so their exit results remain available during filesystem growth.
+
+The runtime saves the target in box state after both steps succeed. The creation option keeps its original value.
+
+The operation continues in the runtime if the caller drops its waiting future.
+Resize serializes with stop and disk-copy operations; a handle from an earlier VM run is rejected.
+
+If the device reply is lost or times out, the result is unknown and the previously saved target is retained. Retry the same absolute target or query the current image capacity.
+
+After shim confirmation, a filesystem or state write failure reports partial completion and retains the prior saved target.
+Retrying the same target repeats device confirmation and filesystem growth before saving the target.
+An older guest without the RPC returns `Unsupported` with the partial-completion context.
+
+Restarting with an existing root disk preserves its filesystem and saved target.
+Retry an interrupted grow with the same target after the box is running.
+
+A fresh overlay uses the larger of the effective target and the base image capacity.
+The effective target is the saved resize target when present, or the creation option otherwise.
+
+Clone options and export manifests carry the latest saved disk target.
+Their copied images retain the virtual capacity captured by each operation.
+
+The shim's configured or inherited `RLIMIT_FSIZE` soft limit can restrict growth.
+
+Other engines and remote backends return `Unsupported`; this API is not exposed through REST, CLI or other SDKs.
 
 #### ExecutionsHandle
 
@@ -868,7 +916,8 @@ pub struct BoxOptions {
     /// Memory in MiB (default: 512)
     pub memory_mib: Option<u32>,
 
-    /// Disk size in GB for rootfs (sparse, grows as needed)
+    /// Requested virtual root disk capacity in GiB at creation.
+    /// The copy-on-write disk is sparsely allocated.
     pub disk_size_gb: Option<u64>,
 
     /// Working directory inside box

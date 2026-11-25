@@ -1148,6 +1148,7 @@ async fn batch_clone_shares_base_and_records_refs_until_last_removal() {
             Qcow2Helper::qcow2_virtual_size(&child).unwrap(),
             virtual_size
         );
+        assert_eq!(copy.config.options.disk_size_gb, None);
         assert_eq!(copy.state.read().status, BoxStatus::Stopped);
         let policy = OutboundNetworkConfig::from(&copy.config.options.network);
         assert_eq!(Some(policy), state.outbound_policy);

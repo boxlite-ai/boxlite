@@ -203,6 +203,22 @@ impl std::fmt::Display for BoxStatus {
     }
 }
 
+/// Virtual disk capacity in binary GiB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoxResources {
+    pub disk_size_gb: u64,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl BoxResources {
+    pub(crate) fn from_disk(path: &std::path::Path) -> boxlite_shared::BoxliteResult<Self> {
+        let bytes = crate::disk::Qcow2Helper::qcow2_virtual_size(path)?;
+        Ok(Self {
+            disk_size_gb: bytes.div_ceil(1 << 30),
+        })
+    }
+}
+
 /// Dynamic box state (changes during lifecycle).
 ///
 /// This is updated frequently and persisted to database.
@@ -213,6 +229,9 @@ pub struct BoxState {
     /// whether the VM has a NIC; an override never adds or removes the device.
     #[serde(default)]
     pub outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
+    /// Last completed online resize target in GiB.
+    #[serde(default)]
+    pub disk_size_gb: Option<u64>,
     /// Current lifecycle status.
     pub status: BoxStatus,
     pub pid: Option<u32>,
@@ -377,6 +396,7 @@ impl BoxState {
         Self {
             status: BoxStatus::Configured,
             outbound_policy: None,
+            disk_size_gb: None,
             pid: None,
             container_id: None,
             last_updated: Utc::now(),

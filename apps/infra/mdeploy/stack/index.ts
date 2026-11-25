@@ -507,6 +507,7 @@ export const deployStack = ({
       waitFor: [...placed, ...database.ready, ...cache.ready, ...collector.ready, ...(mail.sending ? mail.ready : [])],
     },
   })({
+    ...config.api,
     image: imageFor(images, 'api'),
     port: API_PORT,
     domain: inputs.domain,

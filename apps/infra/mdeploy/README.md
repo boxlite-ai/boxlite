@@ -94,7 +94,8 @@ webhook active until a coordinated hosted cutover can avoid duplicate providers.
 Pin secret versions and deploy a new revision when rotating them. The API receives
 the resolved values at instance startup; it does not fetch Secret Manager itself.
 The GCP API retains `cpuIdle: false` for custom-domain background work.
-Hosted CI additionally configures a service-level minimum of one instance; custom domains add no minimum.
+Set `deploy.api.minInstances` in the mstage declaration to configure the Cloud Run service minimum, including zero.
+When omitted, hosted CI sets a minimum of one; otherwise the service minimum is omitted.
 Continuous CPU applies only while an instance exists and incurs idle instance costs.
 Multiple replicas use the PostgreSQL lease to select one CI scheduler.
 

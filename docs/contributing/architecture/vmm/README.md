@@ -576,21 +576,42 @@ setup. Its empty disk registry makes `resize_disk()` return `InvalidInput`.
   attach order (`vda` container, `vdb` guest root), and defaults to `console=hvc0`.
   The single filesystem device exports logical shares below its aggregate root;
   matching mount instructions are sent only for the native engine.
-- **Runtime control.** The host-only `vmm.sock` handles disk resize and
-  [directory delivery](../../../../src/vmm/README.md#host-directory-delivery)
-  through a serial control thread. The shim routes resize requests by `block_id`
+- **Runtime control.** The host-only `vmm.sock` serves HTTP/1.1 over a serial
+  control thread. `POST /v1/resize-disk` routes a target size by `block_id`
   through [`VmControl::resize_disk`](../../../../src/vmm/README.md#virtio-block-device).
+  `POST /v1/mount-control` accepts [directory delivery](../../../../src/vmm/README.md#host-directory-delivery)
+  operations, with a directory descriptor attached when registering a mount.
+
   The `box.sock` listener forwards guest RPCs, including Mount and Detach.
+- **Runtime resize.** `LiteBox::resize` confirms the requested device size,
+  runs `resize2fs` in the guest, and saves the completed target in box state.
+  Queries read the image capacity, and callers can retry the same target
+  after an uncertain or partial result.
 - **File size limits.** The VMM bounds guest I/O by virtual disk capacity.
   The host kernel enforces the shim's configured or inherited
   [`RLIMIT_FSIZE` soft limit](../../../../src/boxlite/src/jailer/README.md#layer-3-resource-limits).
 - **libkrun assumptions outside `krun/`.**
-  - The jailer copies libkrunfw into every box
-    (`src/boxlite/src/jailer/shim_copy.rs:103-105`).
+  - The jailer stages the shim and its adjacent libkrunfw files together under
+    `<home>/shims/<digest>/`. The sandbox receives read-only access to that
+    directory, and libkrun loads the firmware from beside the shim.
   - The network socket name derives from libkrun's `-krun.sock` suffix
     (`src/boxlite/src/net/socket_path.rs:51-59`).
   - The Linux seccomp filter is written for libkrun's threads
     (`src/boxlite/src/jailer/seccomp.rs:239-243`).
+
+### Shared shim cache
+
+```text
+Installed shim + libkrunfw → content digest → <home>/shims/<digest>/
+                                                  ├─ read-only → Box A shim
+                                                  └─ read-only → Box B shim
+```
+
+The cache hashes filenames, lengths, and contents in filename order. The
+runtime can reuse a digest in-process when source file metadata matches and the
+timestamps were stable before hashing. A cold start copies into a staging
+directory and renames it into place after writing the completion stamp. Boxes
+using the same shim and firmware share one published directory.
 
 ## Guest boot contract
 

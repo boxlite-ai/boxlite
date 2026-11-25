@@ -30,6 +30,7 @@ pub struct JailerBuilder {
     mounts: Vec<MountSpec>,
     box_id: Option<String>,
     layout: Option<BoxFilesystemLayout>,
+    shim_cache_dir: Option<PathBuf>,
     preserved_fds: Vec<(RawFd, i32)>,
     detach: bool,
     additional_path_access: Vec<PathAccess>,
@@ -51,6 +52,7 @@ impl JailerBuilder {
             mounts: Vec::new(),
             box_id: None,
             layout: None,
+            shim_cache_dir: None,
             preserved_fds: Vec::new(),
             detach: false,
             additional_path_access: Vec::new(),
@@ -67,6 +69,11 @@ impl JailerBuilder {
     /// Set the box filesystem layout (required).
     pub fn with_layout(mut self, layout: BoxFilesystemLayout) -> Self {
         self.layout = Some(layout);
+        self
+    }
+
+    pub(crate) fn with_shim_cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.shim_cache_dir = Some(dir.into());
         self
     }
 
@@ -355,6 +362,7 @@ impl JailerBuilder {
             mounts: self.mounts,
             box_id,
             layout,
+            shim_cache_dir: self.shim_cache_dir,
             preserved_fds: self.preserved_fds,
             detach: self.detach,
             additional_path_access: self.additional_path_access,
