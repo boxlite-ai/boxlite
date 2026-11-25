@@ -77,7 +77,7 @@ function isTab(value: string | null): value is AppTab {
 }
 
 function AppDetails() {
-  const { organizationId } = useAppsScope()
+  const { organizationId, canWrite } = useAppsScope()
   const { appId = '' } = useParams<{ appId: string }>()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -218,7 +218,7 @@ function AppDetails() {
     if (!ok) return
     try {
       await mutation.mutateAsync({ kind: 'delete', appId: app.id })
-      toastDeleted(app.name, (name) => restoreApp.mutateAsync(name))
+      toastDeleted(app.name, canWrite ? (name) => restoreApp.mutateAsync(name) : undefined)
       queryClient.removeQueries({ queryKey: queryKeys.apps.detail(organizationId, app.id) })
       navigate(RoutePath.APPS)
     } catch (err) {
@@ -481,7 +481,7 @@ function Header({
             {app.environment !== 'main' && (
               <DropdownMenuItem
                 className="cursor-pointer text-destructive focus:text-destructive"
-                disabled={!canDelete}
+                disabled={!canWrite}
                 onClick={onDeleteEnvironment}
               >
                 Delete environment {app.environment}

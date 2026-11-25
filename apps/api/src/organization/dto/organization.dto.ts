@@ -7,9 +7,18 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { OnboardingDto } from './onboarding.dto'
 import { Organization } from '../entities/organization.entity'
+import { APP_HOSTING_PERMISSIONS, OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
 
 @ApiSchema({ name: 'Organization' })
 export class OrganizationDto {
+  @ApiProperty({
+    enum: APP_HOSTING_PERMISSIONS,
+    isArray: true,
+    readOnly: true,
+    description: 'App Hosting permissions enabled for this organization.',
+  })
+  appHostingPermissions: OrganizationResourcePermission[]
+
   @ApiPropertyOptional({ type: OnboardingDto, nullable: true })
   onboarding: OnboardingDto | null
 
@@ -177,6 +186,7 @@ export class OrganizationDto {
       boxCreateRateLimit: organization.boxCreateRateLimit,
       boxLifecycleRateLimit: organization.boxLifecycleRateLimit,
       experimentalConfig,
+      appHostingPermissions: organization.appHostingPermissions ?? [],
       authenticatedRateLimitTtlSeconds: organization.authenticatedRateLimitTtlSeconds,
       boxCreateRateLimitTtlSeconds: organization.boxCreateRateLimitTtlSeconds,
       boxLifecycleRateLimitTtlSeconds: organization.boxLifecycleRateLimitTtlSeconds,

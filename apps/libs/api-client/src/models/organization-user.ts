@@ -39,6 +39,10 @@ export interface OrganizationUser {
      */
     'role': OrganizationUserRoleEnum;
     /**
+     * Set on the authenticated member when they are a system administrator.
+     */
+    'isSystemAdmin'?: boolean;
+    /**
      * Whether this organization membership is the user default organization
      */
     'isDefaultForUser': boolean;

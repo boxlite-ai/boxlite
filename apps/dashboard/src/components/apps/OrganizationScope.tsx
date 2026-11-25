@@ -18,6 +18,13 @@ export function OrganizationScope({ children }: { children: ReactNode }) {
     previous.current = organizationId
   }, [organizationId])
   if (!organizationId) return <p className="p-6">Select an organization to view Apps.</p>
+  if (changed && pathname !== RoutePath.APPS) return <Navigate to={RoutePath.APPS} replace />
+  if (!canRead)
+    return (
+      <p role="alert" className="p-6">
+        You need App read permission to view Apps.
+      </p>
+    )
   if (!introSeen)
     return (
       <AppHostingAccess
@@ -27,12 +34,5 @@ export function OrganizationScope({ children }: { children: ReactNode }) {
         }}
       />
     )
-  if (!canRead)
-    return (
-      <p role="alert" className="p-6">
-        You need App read permission to view Apps.
-      </p>
-    )
-  if (changed && pathname !== RoutePath.APPS) return <Navigate to={RoutePath.APPS} replace />
   return <Fragment key={organizationId}>{children}</Fragment>
 }

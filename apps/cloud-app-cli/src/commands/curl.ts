@@ -108,7 +108,7 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   let envUrl = await cachedUrl(ctx.cwd, scope)
   const urlCached = envUrl !== undefined
   if (!envUrl) {
-    envUrl = (await api.getEnv()).url
+    envUrl = (await api.getEnv()).url ?? undefined
     if (!envUrl) throw new MicrocloudError('not_found', `${ctx.envName} has no URL yet`, '`boxlite-app deploy` first')
     await rememberUrl(ctx.cwd, scope, envUrl)
   }

@@ -15,6 +15,7 @@ import { OrganizationActionGuard } from '../guards/organization-action.guard'
 import { OrganizationUserService } from '../services/organization-user.service'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
 import { AuthContext as IAuthContext } from '../../common/interfaces/auth-context.interface'
+import { SystemRole } from '../../user/enums/system-role.enum'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
@@ -43,8 +44,16 @@ export class OrganizationUserController {
     description: 'Organization ID',
     type: 'string',
   })
-  async findAll(@Param('organizationId') organizationId: string): Promise<OrganizationUserDto[]> {
-    return this.organizationUserService.findAll(organizationId)
+  async findAll(
+    @Param('organizationId') organizationId: string,
+    @AuthContext() auth: IAuthContext,
+  ): Promise<OrganizationUserDto[]> {
+    const members = await this.organizationUserService.findAll(organizationId)
+    if (auth.role === SystemRole.ADMIN) {
+      const self = members.find((member) => member.userId === auth.userId)
+      if (self) self.isSystemAdmin = true
+    }
+    return members
   }
 
   @Post('/:userId/access')

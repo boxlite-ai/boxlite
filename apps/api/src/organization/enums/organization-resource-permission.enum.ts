@@ -58,3 +58,16 @@ export enum OrganizationResourcePermission {
   WRITE_APPS = 'write:apps',
   DELETE_APPS = 'delete:apps',
 }
+
+export const APP_HOSTING_PERMISSIONS = [
+  OrganizationResourcePermission.READ_APPS,
+  OrganizationResourcePermission.WRITE_APPS,
+  OrganizationResourcePermission.DELETE_APPS,
+]
+
+export function organizationAllowsPermission(
+  permission: OrganizationResourcePermission,
+  enabled: OrganizationResourcePermission[] = [],
+): boolean {
+  return !APP_HOSTING_PERMISSIONS.includes(permission) || enabled.includes(permission)
+}

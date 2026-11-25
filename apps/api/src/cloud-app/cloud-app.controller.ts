@@ -3,6 +3,7 @@ import { ApiExcludeController } from '@nestjs/swagger'
 import type { Request, Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import { CurrentOrganizationPermissions } from '../organization/decorators/current-organization-permissions.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { CloudAppService } from './cloud-app.service'
 import { cloudAppRequest, sendCloudAppResponse } from './cloud-app-http'
@@ -10,6 +11,7 @@ import { cloudAppRequest, sendCloudAppResponse } from './cloud-app-http'
 @Controller('v1/:organizationId')
 @ApiExcludeController()
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@CurrentOrganizationPermissions()
 export class CloudAppController {
   constructor(private readonly apps: CloudAppService) {}
 
@@ -25,7 +27,7 @@ export class CloudAppController {
   @Get('cli/version')
   async cliVersion(@Req() request: Request, @Res() response: Response) {
     const auth = request.user as OrganizationAuthContext
-    const principal = this.apps.principal(auth, 'GET', '/apps')
+    const principal = this.apps.principal(auth, 'GET', '/cli/version')
     await sendCloudAppResponse(
       await this.apps.management(cloudAppRequest(request, 'http://platform.local/cli/version'), principal),
       response,

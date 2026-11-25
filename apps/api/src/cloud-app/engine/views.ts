@@ -29,7 +29,7 @@ export async function deploymentView(
     steps: d.steps,
     changes: d.changes,
     error: d.error,
-    url: await ctx.resources.appUrl(app.name, env.name),
+    url: env.public_url,
   }
   if (detail) {
     out.log_tail = await logTail(ctx, env, d, 50)
@@ -65,7 +65,7 @@ export async function envStatus(ctx: Pick<Ctx, 'store'>, env: EnvRow): Promise<s
 export interface EnvSummaryView {
   name: string
   status: string
-  url: string
+  url: string | null
   access: string
   spec_version: number | null
   latest_deployment: { number: number; kind: string; status: string; message: string | null; created_at: string } | null
@@ -86,7 +86,7 @@ export async function envSummary(
   return {
     name: env.name,
     status: await envStatus(ctx, env),
-    url: await ctx.resources.appUrl(app.name, env.name),
+    url: env.public_url,
     access: await ctx.resources.effectiveAccess(env),
     // The version an agent must plan against: failed deployments do not count (see effectiveSpecVersion).
     spec_version: await ctx.store.effectiveSpecVersion(env.id),

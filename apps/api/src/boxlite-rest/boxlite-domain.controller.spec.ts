@@ -12,7 +12,14 @@ import { DomainTargetDto } from './dto/domain-target.dto'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { REST_COLLECTION_NAMES, RESERVED_PLATFORM_SUBDOMAINS } from '../box/services/domain.service'
 
-const auth = { organizationId: 'org-1', organization: { id: 'org-1' }, role: 'admin' }
+const auth = {
+  organizationId: 'org-1',
+  organization: {
+    id: 'org-1',
+    appHostingPermissions: [OrganizationResourcePermission.READ_APPS, OrganizationResourcePermission.WRITE_APPS],
+  },
+  role: 'admin',
+}
 const member = (...permissions: OrganizationResourcePermission[]) => ({
   ...auth,
   role: 'user',
@@ -245,7 +252,7 @@ describe('BoxliteDomainController', () => {
     const { controller, domainService } = makeHarness()
     const scoped = {
       ...member(OrganizationResourcePermission.WRITE_APPS),
-      apiKey: { permissions: [OrganizationResourcePermission.WRITE_APPS] },
+      apiKey: { organizationId: 'org-1', permissions: [OrganizationResourcePermission.WRITE_APPS] },
     }
     await controller.claim(scoped as never, { name: 'demo1' })
     await controller.list(scoped as never)

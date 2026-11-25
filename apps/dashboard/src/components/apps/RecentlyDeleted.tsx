@@ -20,7 +20,7 @@ import { useConfirm } from './confirm'
 const GRID = 'grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1.4fr)_180px] gap-3'
 
 export function RecentlyDeleted() {
-  const { canDelete } = useAppsScope()
+  const { canDelete, canWrite } = useAppsScope()
   const { data: deleted = [] } = useDeletedApps()
   const restore = useRestoreApp()
   const purge = usePurgeApp()
@@ -82,7 +82,7 @@ export function RecentlyDeleted() {
                   </span>
                   <HoverActions>
                     <ToolButton
-                      disabled={!canDelete || !!busy || expired}
+                      disabled={!canWrite || !!busy || expired}
                       loading={busy?.name === app.name && busy.action === 'restore'}
                       label={`Restore ${app.name}`}
                       title={

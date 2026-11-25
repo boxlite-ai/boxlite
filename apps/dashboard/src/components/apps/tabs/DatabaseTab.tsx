@@ -10,7 +10,7 @@ import { useAppSql, useRestoreDatabase } from '@/hooks/mutations/useAppMutations
 import { useAppDatabase, useTableRows } from '@/hooks/queries/useAppsQuery'
 import { formatBytes, relTime, STATUS } from '@/lib/apps/format'
 import type { AppDatabaseDetail, AppDetail, AppTable, QueryResult } from '@/lib/apps/types'
-import { errorBody, errorText } from '@/lib/apps/client'
+import { errorBody, errorText, useAppsScope } from '@/lib/apps/client'
 import {
   isDdlKind,
   isWriteKind,
@@ -267,6 +267,7 @@ const SNIPPETS: { label: string; sql: string }[] = [
 
 function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; initial?: string | null }) {
   const sql = useAppSql()
+  const { canWrite } = useAppsScope()
   const [confirm, confirmElement] = useConfirm()
   const [query, setQuery] = useState(initial ?? SNIPPETS[0].sql)
   const [history, setHistory] = useState<string[]>(() => loadHistory(app.id, app.environment))
@@ -302,7 +303,7 @@ function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; init
   }
 
   const run = async () => {
-    if (!query.trim()) return
+    if (!query.trim() || (isWrite && !canWrite)) return
     // The control plane refuses schema changes on main; say so, with the migration to write, before sending.
     if (ddl.length > 0 && app.environment === 'main') {
       setRan(query)
@@ -352,6 +353,7 @@ function Sql({ app, db, initial }: { app: AppDetail; db: AppDatabaseDetail; init
           <ToolButton
             primary={!isWrite}
             danger={isWrite}
+            requiresWrite={isWrite}
             onClick={() => void run()}
             disabled={sql.isPending || !query.trim()}
             title="⌘⏎"

@@ -7,6 +7,7 @@ import { JwtStrategy } from '../auth/jwt.strategy'
 import { JWT_REGEX } from '../auth/constants/jwt-regex.constant'
 import { isAuthContext, OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { OrganizationService } from '../organization/services/organization.service'
+import { OrganizationResourcePermission as Permission } from '../organization/enums/organization-resource-permission.enum'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { CloudAppService } from './cloud-app.service'
 import { principalStorage } from './engine/platform-principal'
@@ -42,7 +43,9 @@ export class CloudAppWebsocket {
       const organizationUser = await this.members.findOne(organizationId, user.userId)
       const auth = { ...user, organizationId, organization, organizationUser } as OrganizationAuthContext
       const path = url.pathname.slice(`/api/v1/${organizationId}`.length)
-      const principal = this.apps.principal(auth, url.searchParams.get('write') === '1' ? 'POST' : 'GET', path)
+      const principal = this.apps.authorize(auth, [
+        url.searchParams.get('write') === '1' ? Permission.WRITE_APPS : Permission.READ_APPS,
+      ])
       req.url = `/v1${path}${url.search}`
       await principalStorage.run(principal, () => handleDbConnect(this.apps.context(organizationId), req, socket, head))
     } catch {

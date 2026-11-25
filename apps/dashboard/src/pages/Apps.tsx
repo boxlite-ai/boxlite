@@ -134,7 +134,7 @@ const Apps: React.FC = () => {
                 if (!target) return
                 try {
                   await mutation.mutateAsync({ kind: 'delete', appId: target.id })
-                  toastDeleted(target.name, (name) => restore.mutateAsync(name))
+                  toastDeleted(target.name, canWrite ? (name) => restore.mutateAsync(name) : undefined)
                 } catch (error) {
                   handleApiError(error, 'Failed to delete app')
                 }

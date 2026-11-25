@@ -25,6 +25,7 @@ import { ApiKeysApi } from '../../../libs/api-client/src/api/api-keys-api'
 describe('API key authorization', () => {
   let app: INestApplication
   let principal: Record<string, unknown>
+  let organizationPermissions: Permission[]
   let membership: { role: OrganizationMemberRole; assignedRoles: { permissions: Permission[] }[] }
   const createApiKey = jest.fn(async (_org: string, _user: string, name: string, permissions: Permission[]) => ({
     apiKey: { name, permissions, createdAt: new Date(), keyPrefix: 'blk_test', keySuffix: '123' },
@@ -38,7 +39,10 @@ describe('API key authorization', () => {
       providers: [
         OrganizationResourceActionGuard,
         { provide: ApiKeyService, useValue: { createApiKey, deleteApiKey } },
-        { provide: OrganizationService, useValue: { findOne: async (id: string) => ({ id }) } },
+        {
+          provide: OrganizationService,
+          useValue: { findOne: async (id: string) => ({ id, appHostingPermissions: organizationPermissions }) },
+        },
         {
           provide: OrganizationUserService,
           useValue: { findOne: async (organizationId: string) => (organizationId === 'org-1' ? membership : null) },
@@ -65,6 +69,7 @@ describe('API key authorization', () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+    organizationPermissions = [Permission.READ_APPS, Permission.WRITE_APPS, Permission.DELETE_APPS]
     membership = { role: OrganizationMemberRole.OWNER, assignedRoles: [] }
     principal = {
       userId: 'owner-1',
@@ -82,6 +87,18 @@ describe('API key authorization', () => {
       body: JSON.stringify({ name: 'delegated-key', permissions }),
     })
   }
+
+  it('caps both explicit and default grants at the current organization permissions', async () => {
+    delete principal.apiKey
+    organizationPermissions = []
+    expect((await create([Permission.WRITE_BOXES, Permission.READ_APPS])).status).toBe(403)
+    expect(createApiKey).not.toHaveBeenCalled()
+    expect((await create()).status).toBe(201)
+    expect(createApiKey.mock.calls[0][3]).toEqual(Object.values(Permission).filter((scope) => !scope.endsWith(':apps')))
+    organizationPermissions = [Permission.READ_APPS]
+    expect((await create([Permission.READ_APPS])).status).toBe(201)
+    expect((await create([Permission.WRITE_APPS])).status).toBe(403)
+  })
 
   it('defaults an owner JWT request to all organization permissions', async () => {
     delete principal.apiKey

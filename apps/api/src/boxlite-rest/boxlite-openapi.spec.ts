@@ -207,7 +207,12 @@ describe('Box API JSON Schema nullability', () => {
       }),
     }
     const controller = new BoxliteDomainController(domains as never, {} as never)
-    const list = JSON.parse(JSON.stringify(await controller.list({ organizationId: 'org-1' } as never)))
+    const reader = {
+      organizationId: 'org-1',
+      organization: { appHostingPermissions: ['read:apps'] },
+      organizationUser: { role: 'member', assignedRoles: [{ permissions: ['read:apps'] }] },
+    }
+    const list = JSON.parse(JSON.stringify(await controller.list(reader as never)))
 
     const validate = validator('DomainList')
     expect(validate(list)).toBe(true)

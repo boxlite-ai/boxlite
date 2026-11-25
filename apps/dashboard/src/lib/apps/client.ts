@@ -8,9 +8,16 @@ import { useMemo } from 'react'
 
 export function useAppsScope() {
   const api = useApi()
-  const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
+  const { selectedOrganization, authenticatedUserHasPermission, refreshOrganizationPermissions } =
+    useSelectedOrganization()
   const organizationId = selectedOrganization?.id ?? ''
-  const client = useMemo(() => api.cloudApps(organizationId), [api, organizationId])
+  const client = useMemo(
+    () =>
+      api.cloudApps(organizationId, () => {
+        void refreshOrganizationPermissions(organizationId).catch(() => undefined)
+      }),
+    [api, organizationId, refreshOrganizationPermissions],
+  )
   return {
     client,
     organizationId,

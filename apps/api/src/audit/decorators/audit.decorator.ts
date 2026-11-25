@@ -31,5 +31,6 @@ export interface AuditContext {
 export const AUDIT_CONTEXT_KEY = 'audit_context'
 // Set only after the handler resolves the authorized resource, never from headers/body.
 export const AUDIT_TARGET_ID = Symbol('audit_target_id')
+export const AUDIT_RESULT_METADATA = Symbol('audit_result_metadata')
 
 export const Audit = (context: AuditContext) => SetMetadata(AUDIT_CONTEXT_KEY, context)

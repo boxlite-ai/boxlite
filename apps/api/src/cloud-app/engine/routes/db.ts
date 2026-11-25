@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { requireAppScope } from '../platform-principal'
 import { z } from 'zod'
 import { newId, type Vars } from '../auth'
 import type { EnvRow } from '../db'
@@ -163,7 +164,6 @@ export function dbRoutes(ctx: Ctx) {
 
   r.post('/envs/:env/db/sql', async (c) => {
     const app = c.get('app')
-    const env = await envOf(ctx, c)
     const b = await body(
       c,
       z.object({
@@ -172,6 +172,8 @@ export function dbRoutes(ctx: Ctx) {
         explain: z.boolean().optional(),
       }),
     )
+    requireAppScope(b.write ? 'write:apps' : 'read:apps')
+    const env = await envOf(ctx, c)
     const cls = classify(b.query)
     if (cls.syntaxError)
       throw fail('sql_error', cls.syntaxError.message, undefined, {

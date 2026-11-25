@@ -20,6 +20,7 @@ import { RecentlyDeleted } from './RecentlyDeleted'
 const state = vi.hoisted(() => ({
   organization: { id: 'org-a' },
   canDelete: true,
+  canWrite: true,
   api: null as ApiClient | null,
 }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => state.api }))
@@ -27,7 +28,8 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: state.organization,
     authenticatedUserHasPermission: (permission: OrganizationRolePermissionsEnum) =>
-      permission !== OrganizationRolePermissionsEnum.DELETE_APPS || state.canDelete,
+      (permission !== OrganizationRolePermissionsEnum.DELETE_APPS || state.canDelete) &&
+      (permission !== OrganizationRolePermissionsEnum.WRITE_APPS || state.canWrite),
   }),
 }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
@@ -97,6 +99,7 @@ describe('Recently deleted Apps permanent deletion', () => {
     setAppHostingIntroSeen(true)
     state.organization = { id: 'org-a' }
     state.canDelete = true
+    state.canWrite = true
     requests = []
     deleted = [starter]
     respond = async (request) => {
@@ -169,15 +172,23 @@ describe('Recently deleted Apps permanent deletion', () => {
     expect(confirmButton().disabled).toBe(true)
   })
 
-  it('disables Restore and Delete without App delete permission', async () => {
+  it('allows restoration with write and prevents permanent deletion without delete', async () => {
     state.canDelete = false
     render()
     await settled()
-    expect(action('Restore starter')!.disabled).toBe(true)
+    expect(action('Restore starter')!.disabled).toBe(false)
     expect(action('Delete starter')!.disabled).toBe(true)
     await act(async () => action('Delete starter')!.click())
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(writes()).toHaveLength(0)
+  })
+
+  it('requires write to restore, even with delete permission', async () => {
+    state.canWrite = false
+    render()
+    await settled()
+    expect(action('Restore starter')!.disabled).toBe(true)
+    expect(action('Delete starter')!.disabled).toBe(false)
   })
 
   it('refuses permanent deletion without App delete permission before sending a request', async () => {

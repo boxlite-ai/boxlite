@@ -87,10 +87,10 @@ export async function variablesOf(
   const out: AgentVariable[] = [
     {
       name: 'BOXLITE_APP_URL',
-      value: await ctx.resources.appUrl(app.name, env.name),
+      value: env.public_url,
       secret: false,
       source: 'platform',
-      resolved: true,
+      resolved: !!env.public_url,
     },
     { name: 'BOXLITE_ENV', value: env.name, secret: false, source: 'platform', resolved: true },
     { name: 'BOXLITE_APP', value: app.name, secret: false, source: 'platform', resolved: true },
@@ -206,7 +206,7 @@ export async function buildAgentContext(
   const { box: boxState, services: reported, usage } = await ctx.resources.liveServices(env)
   const services = servicesOf(spec, reported, boxState)
   const exposed = services.find((s) => s.exposed)
-  const appUrl = await ctx.resources.appUrl(app.name, env.name)
+  const appUrl = env.public_url
   const auth = await authStatus(ctx, app, env)
   const live = env.live_deployment ? await ctx.store.deployment(env.id, env.live_deployment) : undefined
   // A release is numbered after the deploy that built it (orchestrator/deploy.ts), so its build log is that deployment's.
@@ -219,7 +219,7 @@ export async function buildAgentContext(
     status: await envStatus(ctx, env),
     urls: {
       app: appUrl,
-      health: exposed?.health_path ? `${appUrl.replace(/\/+$/, '')}${exposed.health_path}` : null,
+      health: appUrl && exposed?.health_path ? `${appUrl.replace(/\/+$/, '')}${exposed.health_path}` : null,
       login: auth.enabled ? auth.login_url : null,
     },
     access: { level: await ctx.resources.effectiveAccess(env), source: env.access_override ? 'online' : 'manifest' },
@@ -227,7 +227,7 @@ export async function buildAgentContext(
       (await ctx.store.envs(app.id)).map(async (e) => ({
         name: e.name,
         status: await envStatus(ctx, e),
-        url: await ctx.resources.appUrl(app.name, e.name),
+        url: e.public_url,
       })),
     ),
     live: live ? { deployment: live.number, spec_version: live.spec_version, live_at: live.live_at } : null,

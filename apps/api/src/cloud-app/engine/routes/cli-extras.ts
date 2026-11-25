@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { assignedAppUrl } from '../origins'
 import { z } from 'zod'
 import type { SQLInputValue } from '../db'
 import { buildAgentContext, schedulesOf, variablesOf } from '../agent-context'
@@ -126,12 +127,12 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
 
   /** GET the health path (or `?path=`) through the same proxy path visitors use; wakes a sleeping Box. */
   r.get('/envs/:env/probe', async (c) => {
-    const a = c.get('app')
+    const app = c.get('app')
     const env = await envOf(ctx, c)
     const spec = await ctx.resources.currentSpec(env)
     const exposed = spec?.services.find((s) => s.port !== undefined || s.static !== undefined)
     const path = c.req.query('path') || (exposed?.command ? (exposed.health ?? '/') : '/')
-    const url = `${(await ctx.resources.appUrl(a.name, env.name)).replace(/\/+$/, '')}${path.startsWith('/') ? path : `/${path}`}`
+    const url = `${assignedAppUrl(env).replace(/\/+$/, '')}${path.startsWith('/') ? path : `/${path}`}`
     if (!env.live_deployment || !env.active_box_id)
       return c.json({
         url,
@@ -147,7 +148,7 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
     const started = Date.now()
     let res: Response
     try {
-      res = await forward(ctx, a, env, {
+      res = await forward(ctx, app, env, {
         method: 'GET',
         path: path.startsWith('/') ? path : `/${path}`,
         headers: new Headers({ 'user-agent': 'boxlite-doctor', accept: '*/*' }),

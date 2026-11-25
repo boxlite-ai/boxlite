@@ -693,15 +693,21 @@ export class ApiClient {
   }
 
   /** App requests use the selected organization and the dashboard's existing bearer/session recovery. */
-  public cloudApps(organizationId: string) {
+  public cloudApps(organizationId: string, onForbidden?: () => void) {
     const request = <T>(path: string, options: AxiosRequestConfig = {}) => {
       if (!organizationId) throw new Error('No organization selected')
-      return this.http.request<T>({
-        ...options,
-        ...this.v1Config(),
-        headers: { ...options.headers, ...this.v1Config().headers },
-        url: `/v1/${encodeURIComponent(organizationId)}${path}`,
-      })
+      return this.http
+        .request<T>({
+          ...options,
+          ...this.v1Config(),
+          headers: { ...options.headers, ...this.v1Config().headers },
+          url: `/v1/${encodeURIComponent(organizationId)}${path}`,
+        })
+        .catch((error) => {
+          const status = error?.cause?.response?.status ?? error?.response?.status
+          if (status === 403) onForbidden?.()
+          throw error
+        })
     }
     return {
       get: <T = unknown>(path: string, options?: AxiosRequestConfig) => request<T>(path, { ...options, method: 'GET' }),

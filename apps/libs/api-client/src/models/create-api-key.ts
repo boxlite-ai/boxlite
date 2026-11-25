@@ -20,7 +20,7 @@ export interface CreateApiKey {
      */
     'name': string;
     /**
-     * Organization resource permissions. When omitted, requests all supported permissions; the caller must be allowed to grant them.
+     * When omitted, requests all non-App permissions and the App Hosting permissions enabled for the organization. The caller must be allowed to grant every requested permission.
      */
     'permissions'?: Array<CreateApiKeyPermissionsEnum>;
     /**

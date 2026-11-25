@@ -8,6 +8,7 @@ import type { ApiKeyService } from '../../../api-key/api-key.service'
 import { generateApiKeyValue } from '../../../common/utils/api-key'
 import { OrganizationResourcePermission as Permission } from '../../../organization/enums/organization-resource-permission.enum'
 import type { OrganizationUserService } from '../../../organization/services/organization-user.service'
+import type { OrganizationService } from '../../../organization/services/organization.service'
 import { CloudAppCredentials } from '../../cloud-app-credentials'
 import type { Ctx } from '../ctx'
 import type { AppRow, EnvRow } from '../db'
@@ -18,6 +19,7 @@ type Key = Pick<ApiKey, 'organizationId' | 'userId' | 'permissions' | 'expiresAt
 
 function gateway() {
   const keys = new Map<string, Key>()
+  const enabled = [Permission.READ_APPS]
   const credentials = new CloudAppCredentials(
     {
       getApiKeyByValue: async (token: string) => {
@@ -29,6 +31,7 @@ function gateway() {
     {
       findOne: async (_organization: string, userId: string) => (userId === 'member' ? { userId } : null),
     } as OrganizationUserService,
+    { getAppHostingPermissions: async () => enabled } as unknown as OrganizationService,
   )
   const apps = ['docs', 'wiki'].map((name) => ({ id: `app_${name}`, name, org_id: 'org-a' }) as AppRow)
   const envs = apps.map(
@@ -58,6 +61,7 @@ function gateway() {
   } as unknown as Ctx
 
   return {
+    enabled,
     ctx,
     key(overrides: Partial<Key> = {}) {
       const token = generateApiKeyValue('blk', 'test')
@@ -77,6 +81,13 @@ function gateway() {
 
 describe('Organization API keys at the App gateway', () => {
   afterEach(() => jest.restoreAllMocks())
+
+  it('denies the same organization key after the organization disables reading', async () => {
+    const app = gateway()
+    const key = app.key()
+    app.enabled.length = 0
+    expect((await app.request('docs', key)).status).toBe(401)
+  })
 
   it('opens multiple private Apps in the organization without forwarding the key', async () => {
     const app = gateway()
