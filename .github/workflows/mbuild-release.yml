@@ -217,49 +217,6 @@ jobs:
       - name: actions/upload-artifact@v4
         shell: bash
         run: printf '%s\n' 'Simulated'
-  check:
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] }}
-    name: Verify deployment image and Runner digests
-    needs:
-      - resolve
-      - publish
-      - publish-runner
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      candidate_id: ${{ steps.upload.outputs.artifact-id }}
-      digest: ${{ steps.stage.outputs.digest }}
-      registry_digests: ${{ steps.stage.outputs.pins }}
-    steps:
-      - name: actions/checkout@v5
-        shell: bash
-        run: printf '%s\n' 'Simulated'
-      - name: actions/download-artifact@v4
-        shell: bash
-        run: printf '%s\n' 'Simulated'
-      - name: Validate the candidate
-        id: stage
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$FAIL" != check ]] || exit 1
-          pins=$(jq -cn --arg tag "$TAG" --arg sha "$GITHUB_SHA" --arg pin "$PIN" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{tag:$tag,sha:$sha,attempt:$attempt,images:{api:$pin},runner:{manifest:$pin,archive:$pin}}')
-          digest=$(printf '%s' "$pins" | sha256sum | cut -d' ' -f1)
-          printf 'digest=sha256:%s\npins=%s\n' "$digest" "$pins" >> "$GITHUB_OUTPUT"
-        env:
-          TAG: ${{ inputs.tag }}
-          PIN: sha256:1111111111111111111111111111111111111111111111111111111111111111
-          FAIL: ${{ inputs['simulate-failure'] }}
-      - name: actions/upload-artifact@v4
-        id: upload
-        shell: bash
-        run: |-
-          {
-            echo "artifact-id=$((GITHUB_RUN_ATTEMPT*2))"
-          } >> "$GITHUB_OUTPUT"
   distribution:
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] }}
     name: Verify complete release distribution
@@ -310,7 +267,8 @@ jobs:
     name: Dev deployment and acceptance
     needs:
       - resolve
-      - check
+      - publish
+      - publish-runner
     if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
     permissions:
       contents: read
@@ -320,9 +278,7 @@ jobs:
       stage: dev
       ref: ${{ inputs.tag }}
       release_sha: ${{ needs.resolve.outputs.sha }}
-      candidate_id: ${{ needs.check.outputs.candidate_id }}
-      candidate_digest: ${{ needs.check.outputs.digest }}
-      registry_digests: ${{ needs.check.outputs.registry_digests }}
+      release_images: ${{ needs.resolve.outputs.artifacts }}
       components: api+runner
       apply: true
       confirm: true
@@ -358,14 +314,13 @@ jobs:
     name: Record dev acceptance and attach verified files
     needs:
       - resolve
-      - check
       - distribution
       - build-go
       - dev
       - accepted-candidate
     if: >-
-      ${{ !cancelled() && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && ((needs.dev.outputs.accepted_attempt != '' && needs.distribution.result == 'success' &&
-      needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success') }}
+      ${{ !cancelled() && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && ((needs.dev.outputs.accepted_attempt != '' &&
+      needs.distribution.result == 'success' && needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success') }}
     outputs:
       candidate: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
       digest: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
@@ -398,8 +353,8 @@ jobs:
         run: printf '%s\n' 'Simulated'
   npm:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-node"]'), inputs.command) &&
-      !cancelled() && needs.attach.result == 'success' }}
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-node"]'), inputs.command) && !cancelled()
+      && needs.attach.result == 'success' }}
     name: Publish accepted npm packages
     needs:
       - resolve
@@ -425,8 +380,8 @@ jobs:
           FAIL: ${{ inputs['simulate-failure'] }}
   pypi:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) &&
-      !cancelled() && needs.attach.result == 'success' }}
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) && !cancelled()
+      && needs.attach.result == 'success' }}
     name: Publish to PyPI
     needs:
       - resolve
@@ -458,8 +413,8 @@ jobs:
         run: printf '%s\n' 'Simulated'
   tag-go-module:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' &&
-      !cancelled() && needs.attach.result == 'success' }}
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !cancelled() && needs.attach.result == 'success'
+      }}
     name: Tag Go Module
     needs:
       - resolve
@@ -477,8 +432,8 @@ jobs:
         run: printf '%s\n' 'Simulated'
   publish_crates:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' &&
-      !cancelled() && needs.finalize.result == 'success' }}
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !cancelled() && needs.finalize.result == 'success'
+      }}
     name: Publish to crates.io
     needs:
       - resolve
@@ -514,8 +469,7 @@ jobs:
       actions: read
   finalize:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' &&
-      !cancelled() && needs.npm.result == 'success' &&
+      ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !cancelled() && needs.npm.result == 'success' &&
       needs.pypi.result == 'success' && needs.tag-go-module.result == 'success' }}
     name: Publish the verified GitHub Release
     needs:
@@ -543,7 +497,6 @@ jobs:
     name: Production deployment
     needs:
       - resolve
-      - check
       - dev
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
     permissions:
@@ -554,9 +507,9 @@ jobs:
       stage: prod
       ref: ${{ inputs.tag }}
       release_sha: ${{ needs.resolve.outputs.sha }}
-      candidate_id: ${{ needs.check.outputs.candidate_id }}
-      candidate_digest: ${{ needs.check.outputs.digest }}
-      registry_digests: ${{ needs.check.outputs.registry_digests }}
+      candidate_id: ${{ needs.dev.outputs.candidate_id }}
+      candidate_digest: ${{ needs.dev.outputs.candidate_digest }}
+      registry_digests: ${{ needs.dev.outputs.registry_digests }}
       accepted_attempt: ${{ needs.dev.outputs.accepted_attempt }}
       components: api+runner
       apply: true
@@ -577,7 +530,6 @@ jobs:
       - build-runner-binary
       - publish
       - publish-runner
-      - check
       - distribution
       - dev
       - accepted-candidate
@@ -588,8 +540,8 @@ jobs:
       - finalize
       - publish_crates
     if: >-
-      ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (contains(needs.*.result, 'failure') || contains(needs.*.result,
-      'cancelled')) }}
+      ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (contains(needs.*.result, 'failure') ||
+      contains(needs.*.result, 'cancelled')) }}
     permissions:
       contents: read
       actions: read
