@@ -25,7 +25,7 @@ describe('VolumeDto', () => {
   it('derives a Filestore backend and preserves only the logical instance name', () => {
     const dto = VolumeDto.fromVolume(volume({ instance: 'ml-scratch' }))
 
-    expect(dto.storageBackend).toBe('filestore')
+    expect(dto.storageBackend).toBe('nfs')
     expect(dto.instance).toBe('ml-scratch')
   })
 })

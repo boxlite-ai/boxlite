@@ -126,7 +126,7 @@ describe('BoxliteVolumeController', () => {
     volumeService.findOne.mockResolvedValue({ ...volume, instance: 'ml-scratch' })
 
     await expect(controller.get(volume.id)).resolves.toMatchObject({
-      storage_backend: 'filestore',
+      storage_backend: 'nfs',
       instance: 'ml-scratch',
     })
   })

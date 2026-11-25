@@ -28,7 +28,7 @@ export interface CreateVolume {
 
 export const CreateVolumeStorageBackendEnum = {
     OBJECT_STORAGE: 'object_storage',
-    FILESTORE: 'filestore',
+    NFS: 'nfs',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

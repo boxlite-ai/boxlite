@@ -67,7 +67,7 @@ export class VolumeService {
     createVolumeDto: CreateVolumeDto,
     volumeId: string,
   ): Promise<Volume> {
-    const isFilestore = createVolumeDto.storageBackend === 'filestore'
+    const isFilestore = createVolumeDto.storageBackend === 'nfs'
     if (isFilestore && this.configService.get('volume.filestoreSupported') === false) {
       throw new NotImplementedException({
         message: 'Filestore volumes are not supported in this deployment',
@@ -75,7 +75,7 @@ export class VolumeService {
       })
     }
     if (!isFilestore && createVolumeDto.instance !== undefined) {
-      throw new BadRequestError('instance is valid only when storageBackend is "filestore"')
+      throw new BadRequestError('instance is valid only when storageBackend is "nfs"')
     }
 
     // Only the object-storage kind needs the API's own bucket backend. A
@@ -125,7 +125,7 @@ export class VolumeService {
   }
 
   private async selectFilestoreInstance(createVolumeDto: CreateVolumeDto, volumeId: string): Promise<string> {
-    if (createVolumeDto.storageBackend !== 'filestore') return ''
+    if (createVolumeDto.storageBackend !== 'nfs') return ''
 
     if (createVolumeDto.instance) {
       await this.filestoreInstanceResolver.resolve(createVolumeDto.instance, 'request')

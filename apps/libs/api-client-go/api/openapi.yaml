@@ -7047,7 +7047,7 @@ components:
           description: The storage backend that owns the volume
           enum:
           - object_storage
-          - filestore
+          - nfs
           example: object_storage
           type: string
         instance:
@@ -7085,7 +7085,7 @@ components:
     CreateVolume:
       example:
         name: my-data
-        storageBackend: filestore
+        storageBackend: nfs
         instance: boxlite-dev-shared
       properties:
         name:
@@ -7095,8 +7095,8 @@ components:
           description: The storage backend that owns the volume; defaults to object_storage
           enum:
           - object_storage
-          - filestore
-          example: filestore
+          - nfs
+          example: nfs
           type: string
         instance:
           description: The Filestore instance the volume stores its data on; filestore

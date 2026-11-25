@@ -565,7 +565,7 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 A box mounts a **Filestore volume** — a Volume row whose data directory lives
 on a Filestore NFS instance, created through the volume API with
-`storageBackend: "filestore"` and an optional `instance` field. It is mounted
+`storageBackend: "nfs"` and an optional `instance` field. It is mounted
 by the same `managed_volume` selector as bucket-backed volumes. The reference
 carries the instance's **logical name**; the API resolves the address from GCP
 Filestore and dispatches it to the runner with the mount, so recreating an

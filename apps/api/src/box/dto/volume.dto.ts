@@ -83,7 +83,7 @@ export class VolumeDto {
       name: volume.name,
       organizationId: volume.organizationId,
       state: volume.state,
-      storageBackend: isFilestoreVolume(volume) ? 'filestore' : 'object_storage',
+      storageBackend: isFilestoreVolume(volume) ? 'nfs' : 'object_storage',
       instance: volume.instance || undefined,
       createdAt: volume.createdAt?.toISOString(),
       updatedAt: volume.updatedAt?.toISOString(),

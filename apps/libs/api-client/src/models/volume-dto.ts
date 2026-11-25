@@ -62,7 +62,7 @@ export interface VolumeDto {
 
 export const VolumeDtoStorageBackendEnum = {
     OBJECT_STORAGE: 'object_storage',
-    FILESTORE: 'filestore',
+    NFS: 'nfs',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

@@ -3576,11 +3576,11 @@ components:
           $ref: "#/components/schemas/VolumeState"
         storage_backend:
           type: string
-          enum: [object_storage, filestore]
+          enum: [object_storage, nfs]
           description: |
             The backend that owns the volume. Derived from whether `instance`
             is present.
-          example: filestore
+          example: nfs
         created_at:
           type: string
           format: date-time
@@ -3619,11 +3619,11 @@ components:
           example: my-data
         storageBackend:
           type: string
-          enum: [object_storage, filestore]
+          enum: [object_storage, nfs]
           default: object_storage
           description: |
             The backend that owns the volume. `object_storage` stores data in
-            `boxlite-volume-<id>`; `filestore` stores it in an NFS data
+            `boxlite-volume-<id>`; `nfs` stores it in an NFS data
             directory on the selected or automatically assigned Filestore
             instance. This field, not the presence of `instance`, selects the
             backend.
@@ -3632,7 +3632,7 @@ components:
           pattern: "^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
           description: |
             The Filestore instance the volume's data directory lives on.
-            Valid only when storageBackend is filestore. When omitted, the
+            Valid only when storageBackend is nfs. When omitted, the
             API assigns an instance by hashing its configured names. The
             instance must exist in GCP and in the API's FILESTORE_INSTANCES
             configuration, checked at create and dispatch time.
@@ -3654,11 +3654,11 @@ components:
           $ref: "#/components/schemas/VolumeState"
         storage_backend:
           type: string
-          enum: [object_storage, filestore]
+          enum: [object_storage, nfs]
           description: |
             The backend that owns the volume. Derived from whether `instance`
             is present.
-          example: filestore
+          example: nfs
         created_at:
           type: string
           format: date-time
