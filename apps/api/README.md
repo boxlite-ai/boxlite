@@ -192,9 +192,13 @@ and creation response even after quota fills or the Box changes state. Object ke
 ignored; target parameters, query values, arrays, types, explicit null, and absent bodies matter.
 Equivalent organization-prefixed routes share identity after the prefix is authorized.
 
+Hosted Box API errors carry HTTP details in the response body. Read `code` at the top level
+to distinguish replay failures from business errors with the same HTTP status.
+
 | Condition | Response |
 | --- | --- |
 | Original success recorded | Original status, serialized bytes, Content-Type and Location |
+| Invalid or duplicate key, or a keyed request body with a non-JSON content type | `400` |
 | Same key with changed business input | `422 idempotency_payload_mismatch` |
 | Original owner still active | `409 idempotency_in_progress` |
 | Outcome cannot be confirmed | `422 idempotency_outcome_unknown`; no redispatch |
