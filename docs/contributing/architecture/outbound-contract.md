@@ -82,6 +82,262 @@ Proxy credentials use a separate host-only channel and do not enter Guest config
 Future disabled configurations may retain supported deny or proxy settings, but those settings cannot enable traffic.
 Their omission and clearing rules remain effective while the NIC is disabled.
 
+## Extended destination rules
+
+The extended rule policy defines `allow_net` and `deny_net` for backends that support them.
+Each list accepts up to 64 entries, counted before normalization or deduplication.
+Reject the entire policy if any entry is invalid.
+
+Create and replace use the same rule grammar.
+The shared fixtures specify parser, matcher, and request outcomes.
+[Extended rule fixtures](../../../tests/fixtures/outbound/policy-rules-v1.json) · [Design and rationale](https://github.com/boxlite-ai/boxlite/issues/2831)
+
+### Rule syntax
+
+| Destination | Any port | One port |
+| --- | --- | --- |
+| Hostname or wildcard | `api.example.com`, `*.example.com` | `api.example.com:443`, `*.example.com:443` |
+| IPv4 address or prefix | `192.0.2.8`, `192.0.2.0/24` | `192.0.2.8:443`, `192.0.2.0/24:443` |
+| IPv6 address or prefix | `2001:db8::8`, `2001:db8::/32` | `[2001:db8::8]:443`, `[2001:db8::/32]:443` |
+
+- Trim surrounding whitespace. Reject blank entries, internal whitespace, commas, inline `!` markers, and URLs.
+- Hostname labels use 1–63 ASCII letters, digits, or hyphens with alphanumeric endpoints. A hostname is at most 253 bytes, excluding a leading `*.`.
+- Rule hostnames omit the root dot. Lowercase both names before comparing and strip one root dot from the observed name. A wildcard matches one or more subdomain labels, excluding its apex.
+- Parse addresses and prefix lengths strictly. Reject malformed dotted IPv4, IPv6 zones, and invalid prefix lengths. Mask CIDRs to their network.
+- Split the port before classifying four nonempty decimal labels as IPv4. Reject an overlong or out-of-range octet, a leading zero, or a wildcard on that numeric suffix.
+- Parse a bare IPv6 address or prefix in full. An IPv6 rule with an explicit port requires brackets. Each explicit port consists of decimal digits in the range 1–65535.
+- Convert mapped IPv6 addresses and mapped prefixes of length 96–128 to IPv4 before matching. Reject shorter prefixes written with mapped literals. Native IPv6 prefixes match native IPv6 addresses.
+
+Reject `192.0.2.999:443`, `192.0.02.8`, `192.0.2.1024`, and `*.192.0.2.8`.
+`192.0.2.8:443` is an IPv4 rule and `192.api.example:443` is a hostname rule.
+
+### Decision order
+
+Evaluate external destinations against one captured snapshot.
+
+| First applicable condition | Outcome |
+| --- | --- |
+| Outbound mode is disabled | Deny. |
+| Trusted platform policy denies the destination | Deny. |
+| A user deny rule matches | Deny. |
+| A hostname deny applies to this port and the name is unavailable | Deny. |
+| A user allow rule matches, or the existing HTTPS secrets permission applies | Allow subject to applicable candidate checks. |
+| The allow list is empty | Allow subject to applicable candidate checks. |
+| No rule grants permission | Deny. |
+
+Use the actual transport destination port even when the HTTP Host header includes a port.
+
+Address rules use the pre-NAT policy address for guest-addressed flows.
+Check each candidate for platform and user address denies using its own address and the actual destination port.
+A candidate matching user deny never reaches the connector, even when the guest address and observed name both match allow.
+
+Skip denied DNS candidates. Try approved candidates in resolver order within the shared deadline.
+If every candidate is denied, fail with zero connector calls.
+
+With `192.0.2.0/24:443` denied, answers `192.0.2.8` and `203.0.113.8` call the connector only for `203.0.113.8:443`.
+Answers `192.0.2.8` and `192.0.2.9` call it zero times.
+
+After deny checks, route secrets by checked name first, then IP allow by address, then hostname allow by checked name, then empty allow by address.
+For example, an allow for `api.example.com:443` can authorize the name while a deny for `192.0.2.0/24` filters a candidate at `192.0.2.8`.
+
+When a hostname rule affects the decision, identify TLS ClientHello SNI or the first plaintext HTTP Host on any TCP port.
+Bound inspection to 16 KiB and the 30-second setup budget, with at most ten simultaneous inspections per Box.
+
+Close excess flows before dialing. Release the slot on completion or failure.
+An invalid, conflicting, or hidden name, or expiration of the inspection budget, makes the name unavailable.
+
+```mermaid
+sequenceDiagram
+    participant A as TCP flow requiring a name
+    participant S as Per-Box inspection slots
+    participant B as Competing TCP arrival
+    A->>S: Acquire the tenth slot before inspection
+    B->>S: Attempt acquisition
+    S-->>B: All slots occupied
+    Note over B: Close before dialing
+    alt Observation completes
+        A->>S: Release slot
+    else Inspection fails or reaches a limit
+        A->>S: Release slot
+    end
+    Note over S: Next eligible arrival can acquire the released slot
+```
+
+Name policy covers connection establishment using the first verified TLS SNI or plaintext HTTP Host and its required address association.
+Filtering per request, URL path, later Host, or encrypted identity falls outside this boundary.
+
+UDP and QUIC have no supported name observation.
+
+| Address allow matches and name is unavailable | TCP | UDP and QUIC |
+| --- | --- | --- |
+| Additional hostname allow | Allow by address | Allow by address |
+| Hostname deny covers the actual port | Deny | Deny |
+| Hostname deny covers a different port | Allow by address | Allow by address |
+
+The table assumes that mode, platform, and address deny checks passed. A hostname rule with no port covers all ports.
+
+An applicable hostname deny requires a usable name even when the flow is otherwise allowed by its address or an empty allow list.
+For a guest-addressed flow, controlled resolution must include the external business IP that the connector will dial.
+An observed name without that association cannot rule out a hostname deny.
+
+In the extended policy, direct and resolved targets both run mandatory address checks after unmapping IPv4-mapped IPv6.
+Link-local, unspecified, IPv4 0/8, multicast, IPv4 limited broadcast, and trusted platform-denied addresses are refused.
+Name-resolved candidates also exclude the Box subnet.
+
+Cloud defaults block loopback, private, CGNAT, and IPv6 ULA regardless of Box allows.
+Local direct access to those ranges follows user rules.
+For a local resolved candidate in those ranges, a nonempty allow list must include an IP rule matching the candidate address and port.
+
+User address rules evaluate the pre-NAT target.
+Platform policy also checks the translated dial destination, so Cloud refuses translated loopback even when the pre-NAT address passes.
+The local alias can map to host loopback when the pre-NAT policy permits it.
+
+PR04 owns the UDP post-NAT platform check.
+The current wrapper checks the guest address, then the pinned forwarder resolves NAT and owns endpoint creation and socket dialing.
+[Pinned UDP forwarder](https://github.com/containers/gvisor-tap-vsock/blob/v0.8.7/pkg/services/forwarder/udp.go#L15-L41)
+
+The UDP forwarder captures the translated address and port once and checks them against the flow's pinned policy.
+It hands that exact destination to the socket.
+A rejected translation reaches neither endpoint creation nor the external dial hook.
+
+While egress stays enabled, an established UDP endpoint keeps its admitting snapshot until it closes or expires.
+A new endpoint takes the latest snapshot, including reuse of a tuple after the old endpoint closes.
+
+To verify a new deny, send over an established endpoint, then create a fresh one and observe zero dial attempts and no delivery.
+The global disabled gate blocks forwarding for both.
+
+```mermaid
+sequenceDiagram
+    participant C as Policy coordinator
+    participant G as UDP handler
+    participant E as Established endpoint
+    G->>E: Admit flow under the current allow snapshot
+    C->>G: Publish a replacement containing deny
+    Note over C,G: Egress remains enabled
+    E->>E: Relay with the captured allow snapshot
+    Note over G: New flow is denied before endpoint creation
+    E-->>G: Endpoint closes or expires
+    Note over G: Reopened tuple also uses the deny snapshot
+```
+
+Platform rollout validates deployment address sets and trusted exceptions.
+
+Enabled mode exempts DNS on the registered gateway TCP/UDP 53 endpoints, DHCP on the registered UDP 67 endpoint, and required ARP/NDP link control.
+Other traffic to the gateway or guest IP and forwarded host aliases follows the normal policy.
+Disabled mode continues to block forwarding and registered DNS/DHCP delivery.
+
+### Creation and replacement
+
+| Input | Required behavior |
+| --- | --- |
+| Image create omits `deny_net` | Start with an empty deny list. |
+| Create with `checkpoint_id` | Inherit its complete saved policy. Keep existing restrictions on request overrides and reject a selected backend that cannot enforce the inherited policy. |
+| Complete replacement omits `deny_net` | Reject if an effective or possibly active snapshot contains denies, including while disabled. Otherwise use an empty list. |
+| Complete replacement supplies `deny_net: []` | Clear user denies. Platform constraints still apply. |
+| `deny_net: null` | Reject invalid input. |
+| Disabled mode supplies supported denies | Store the supplied denies and keep the NIC disabled. A nonempty allow list is invalid. |
+| A valid request requires unsupported enforcement | Return unsupported. An explicitly supplied deny list requires support even when empty. |
+| A supported replacement fails its revision precondition | Return 412 before applying the candidate. |
+
+Under update ownership, a confirmed pending candidate becomes the effective policy before checking omission.
+For unresolved attempts, check both committed and pending snapshots before normalizing the request.
+An explicit replacement uses the existing revision and acknowledgement protocol to fence an older attempt.
+
+Check backend support before reserving pending intent. Recheck support where the dedicated operation applies the snapshot.
+
+Revision support identifies the replacement protocol. Require deny, port, and IPv6 policy enforcement separately when the policy uses them.
+
+| A revision-capable peer lacks | Create | Complete replacement | Restart |
+| --- | --- | --- | --- |
+| Deny enforcement | Explicit member is unsupported before attach | Explicit member is unsupported before application | Nonempty effective deny is unsupported before attach |
+| Destination-port enforcement | Unsupported before attach | Unsupported before application | Unsupported before attach |
+| IPv6 policy enforcement | Unsupported before attach | Unsupported before application | Unsupported before attach |
+
+Create and PUT require deny support whenever the request explicitly supplies the member, including `[]`.
+Restart checks the reconciled, durably confirmed effective policy.
+
+A peer without deny support can restart a Box with a confirmed empty deny list when it supports every other active rule.
+This covers older records that omit deny and policies cleared by a confirmed operation.
+Persist no historical presence marker.
+
+Nonempty deny blocks unsupported attachment.
+Unresolved active state cannot be treated as confirmed empty.
+A refusal leaves committed policy intact.
+
+A definitive refusal before application permits retiring that reservation under its ownership check.
+A complete replacement can supersede an older attempt, but reservation alone does not fence it.
+
+Omission checks see the older candidate's possible active denies until confirmation or an applied CAS fences it.
+If the new candidate explicitly clears deny and the backend refuses it, retire only that reservation.
+The older unresolved evidence remains durable across coordinator restart.
+
+The guard also covers a backend-confirmed candidate whose durable commit failed.
+Keep that candidate's denies visible during unresolved restoration, even if the restoration candidate contains no denies.
+Matching the previously durable revision alone is insufficient.
+
+Clear that evidence after confirmed restoration or durable reconciliation of the effective policy.
+If reconciliation commits the deny, the committed list still blocks omission.
+
+```mermaid
+sequenceDiagram
+    participant C as API coordinator
+    participant S as Durable policy store
+    participant B as Outbound backend
+    alt Older deny apply is ambiguous
+        C->>S: Reserve an explicit clear and retain evidence of the older deny
+        C->>B: Try CAS for the complete clear
+        alt Backend refuses before apply
+            B-->>C: Definitive refusal
+            C->>S: Retire the clear reservation and keep the older deny
+        else CAS fences the older apply and completes
+            B-->>C: Confirm the complete clear
+            C->>S: Commit the clear and retire the fenced deny
+        end
+    else Deny applies but durable commit fails
+        B-->>C: Confirm apply of the deny
+        C->>S: Reserve restoration and retain the applied deny
+        C->>B: Try restoring the previous policy
+        alt Restoration remains unresolved
+            C->>S: Keep the possibly active deny durable
+        else Restoration completes
+            B-->>C: Confirm restoration
+            C->>S: Reconcile effective policy and retire the extra deny evidence
+        end
+    end
+    C->>S: Reload committed policy and unresolved evidence after restart
+    Note over C,S: Reject omission if any confirmed or possibly active deny remains
+```
+
+Ambiguous delivery retains pending evidence. Committed policy advances only after confirmed application of the complete candidate.
+
+At create or restart, attach the guest NIC after the launched backend confirms full policy application. A refusal or uncertain startup leaves the guest unattached and preserves stored policy.
+
+After rollout, nested create and outbound PUT accept up to 64 rules per list, including allow-only policies with 11 or 64 rules.
+Deprecated flat create retains its 10-rule cap and grammar. An older receiver must decline an extended request before apply, including an allow-only policy above 10.
+
+Nested create and PUT to an extended peer use the expanded grammar.
+An old-peer PUT also requires the legacy peer grammar before dispatch.
+It rejects malformed four-label numeric literals, including overlong octets, and numeric wildcard suffixes.
+
+The deprecated flat-create API rejects `192.0.2.999`.
+It can pass `192.0.2.1024` to the legacy bridge, which rejects the launch.
+The mixed-label hostname `192.api.example` is valid on all paths without a port.
+
+Public outbound PUT rejects blank allow entries with both capable and older peers. Legacy internal entry points retain their existing blank normalization.
+
+Previously persisted legacy policies load with their effective allow lists and an empty deny list.
+Every replacement obeys the omission check.
+
+PR02 tests native IPv6 rule parsing and matching in Go.
+Until dual-stack enforcement is available, hostname dials exclude native IPv6 candidates and make zero connector calls for a native-IPv6-only response.
+
+Mapped addresses keep their IPv4 normalization. [Current IPv4 hostname dial](https://github.com/boxlite-ai/boxlite/blob/51b5cf5/src/deps/libgvproxy-sys/gvproxy-bridge/egress_dialer.go#L129-L166)
+
+PR10 validates the virtual link, NDP, and routing.
+PR11 validates native Guest forwarding and hostname dials against permitted and denied IPv6 targets.
+
+Advertise each capability after its own acceptance. [Full dual-stack plan](https://github.com/boxlite-ai/boxlite/issues/2733)
+
 ## Revisions and acknowledgements
 
 A revision is an opaque, Box-scoped token; clients compare for equality rather than ordering tokens or interpreting timestamps.
