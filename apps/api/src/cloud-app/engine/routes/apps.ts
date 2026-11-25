@@ -51,11 +51,12 @@ export function appRoutes(ctx: Ctx) {
 
   r.get('/', async (c) => {
     const app = c.get('app')
+    const envs = await ctx.store.envs(app.id)
     return c.json({
       name: app.name,
       created_at: app.created_at,
-      url: await ctx.resources.appUrl(app.name, 'main'),
-      envs: await Promise.all((await ctx.store.envs(app.id)).map(async (e) => await envSummary(ctx, app, e))),
+      url: envs.find((env) => env.name === 'main')?.public_url ?? null,
+      envs: await Promise.all(envs.map((env) => envSummary(ctx, app, env))),
       // What [auth].providers may list and actually work for this App right now (BoxLite's own
       // OAuth apps plus the App's own, set in the console); `init` writes these.
       sign_in_providers: await appProviders(ctx, app),

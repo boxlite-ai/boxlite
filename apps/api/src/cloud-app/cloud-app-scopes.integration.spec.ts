@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { DataSource, type QueryRunner } from 'typeorm'
 import { AddCloudAppScopes1793780000000 } from '../migrations/pre-deploy/1793780000000-add-cloud-app-scopes-migration'
+import { AddOrganizationAppHostingPermissions1795564800000 } from '../migrations/pre-deploy/1795564800000-add-organization-app-hosting-permissions-migration'
 
 const describeWithDatabase = process.env.DB_HOST ? describe : describe.skip
 
@@ -50,6 +51,27 @@ describeWithDatabase('Cloud App permission migration (real PostgreSQL)', () => {
       await realRunner?.release()
       await source.destroy()
     }
+  })
+
+  it('starts existing and new organizations closed and rejects unsupported App grants', async () => {
+    const migration = new AddOrganizationAppHostingPermissions1795564800000()
+    const organizations = `"${schema}".organization`
+    await source.query(`CREATE TABLE ${organizations} (id text PRIMARY KEY)`)
+    await source.query(`INSERT INTO ${organizations} VALUES ('existing')`)
+    await migration.up(runner)
+    await source.query(`INSERT INTO ${organizations} (id) VALUES ('new')`)
+    expect(await source.query(`SELECT app_hosting_permissions FROM ${organizations} ORDER BY id`)).toEqual([
+      { app_hosting_permissions: [] },
+      { app_hosting_permissions: [] },
+    ])
+    await expect(
+      source.query(`UPDATE ${organizations} SET app_hosting_permissions = ARRAY['write:boxes']`),
+    ).rejects.toMatchObject({ code: '23514' })
+    await migration.down(runner)
+    expect(await source.query(`SELECT * FROM ${organizations} ORDER BY id`)).toEqual([
+      { id: 'existing' },
+      { id: 'new' },
+    ])
   })
 
   it('adds App permissions without changing API key columns, indexes or existing grants', async () => {

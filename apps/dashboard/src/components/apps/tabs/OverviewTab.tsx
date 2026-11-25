@@ -5,6 +5,7 @@
 
 import { ArrowRightIcon, GitBranch } from '@/components/ui/icon'
 import { useAppEnvironments } from '@/hooks/queries/useAppsQuery'
+import { useAppsScope } from '@/lib/apps/client'
 import { appStatusOf, relTime, STATUS } from '@/lib/apps/format'
 import type { AppDetail, AppProblem, AppRelease, AppTab } from '@/lib/apps/types'
 import { toast } from 'sonner'
@@ -41,6 +42,7 @@ function FailurePanel({
   onOpenDeployment: (n: number) => void
   onSetVariable: (name: string) => void
 }) {
+  const { canWrite } = useAppsScope()
   const prompt = failing
     .map((problem) => problem.fixPrompt)
     .filter(Boolean)
@@ -63,7 +65,7 @@ function FailurePanel({
       ))}
       <div className="mt-4 flex flex-wrap items-center gap-1 pl-[15px]">
         {missing && (
-          <FlatButton variant="primary" onClick={() => onSetVariable(missing)}>
+          <FlatButton variant="primary" disabled={!canWrite} onClick={() => onSetVariable(missing)}>
             Set {missing}
           </FlatButton>
         )}
@@ -81,7 +83,9 @@ function FailurePanel({
           <FlatButton onClick={onOpenLogs}>View logs</FlatButton>
         )}
         {previous && !serving && (
-          <FlatButton onClick={() => onRollback(previous)}>Roll back to {previous.id}</FlatButton>
+          <FlatButton disabled={!canWrite} onClick={() => onRollback(previous)}>
+            Roll back to {previous.id}
+          </FlatButton>
         )}
       </div>
       {prompt && (

@@ -39,7 +39,7 @@ export function useAppMutation() {
 
   return useMutation({
     onMutate: (action) => {
-      const allowed = action.kind === 'delete' || action.kind === 'deleteEnvironment' ? canDelete : canWrite
+      const allowed = action.kind === 'delete' ? canDelete : canWrite
       if (!allowed) throw new Error('You do not have permission to change this App')
       return { organizationId, env }
     },
@@ -237,11 +237,11 @@ export function useSetOAuthClient() {
 
 /** Brings a soft-deleted app back; its Boxes wake on the next request. */
 export function useRestoreApp() {
-  const { client: appsClient, organizationId, canDelete } = useAppsScope()
+  const { client: appsClient, organizationId, canWrite } = useAppsScope()
   const queryClient = useQueryClient()
   return useMutation({
     onMutate: () => {
-      if (!canDelete) throw new Error('You do not have permission to change this App')
+      if (!canWrite) throw new Error('You do not have permission to restore this App')
       return { organizationId }
     },
     mutationFn: async (name: string) =>

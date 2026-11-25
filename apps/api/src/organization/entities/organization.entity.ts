@@ -9,6 +9,7 @@ import type { OnboardingDto } from '../dto/onboarding.dto'
 import { OrganizationUser } from './organization-user.entity'
 import { OrganizationRole } from './organization-role.entity'
 import { OrganizationInvitation } from './organization-invitation.entity'
+import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
 
 @Entity()
 @Unique('organization_referral_code_uq', ['referralCode'])
@@ -171,6 +172,9 @@ export class Organization {
 
   @Column({ type: 'boolean', default: false })
   nestedVirtualizationEnabled = false
+
+  @Column({ name: 'app_hosting_permissions', type: 'text', array: true, default: () => "'{}'::text[]" })
+  appHostingPermissions: OrganizationResourcePermission[]
 
   @CreateDateColumn({
     type: 'timestamp with time zone',

@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**appHostingPermissions** | **Array&lt;string&gt;** | App Hosting permissions enabled for this organization. | [readonly] [default to undefined]
 **onboarding** | [**OnboardingDto**](OnboardingDto.md) |  | [optional] [default to undefined]
 **id** | **string** | Organization ID | [default to undefined]
 **name** | **string** | Organization name | [default to undefined]
@@ -37,6 +38,7 @@ Name | Type | Description | Notes
 import { Organization } from './api';
 
 const instance: Organization = {
+    appHostingPermissions,
     onboarding,
     id,
     name,

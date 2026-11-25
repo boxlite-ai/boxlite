@@ -22,6 +22,7 @@ import { CloudAppResources } from './cloud-app-resources'
 import { CloudAppSourceStore } from './cloud-app-source-store'
 import { CloudAppCredentials } from './cloud-app-credentials'
 import { CloudAppDomains } from './cloud-app-domains'
+import { appRoutePermissions } from './cloud-app-route-permissions'
 import { Store } from './engine/db'
 import { buildCtx, createServer } from './engine/server'
 import { defaultPools, PgAppDatabase } from './engine/appdb'
@@ -138,21 +139,19 @@ export class CloudAppService implements OnModuleInit {
   }
 
   principal(auth: OrganizationAuthContext, method: string, path: string): PlatformPrincipal {
+    return this.authorize(auth, appRoutePermissions(method, path))
+  }
+
+  authorize(auth: OrganizationAuthContext, required: readonly Permission[]): PlatformPrincipal {
     const { apiKey } = auth
     if (apiKey && apiKey.organizationId !== auth.organizationId) {
       throw new ForbiddenException('API key belongs to another organization')
     }
     this.organizations.assertOrganizationIsNotSuspended(auth.organization)
-    const permission =
-      method === 'GET' || method === 'HEAD'
-        ? Permission.READ_APPS
-        : method === 'DELETE' && /^\/apps\/(?:deleted\/)?[^/]+\/?$/.test(path)
-          ? Permission.DELETE_APPS
-          : Permission.WRITE_APPS
-    const permissions = apiKey
-      ? apiKey.permissions
-      : Object.values(Permission).filter((value) => hasOrganizationResourcePermissions(auth, [value]))
-    if (!permissions.includes(permission)) throw new ForbiddenException('App permission required')
+    const permissions = (apiKey?.permissions ?? Object.values(Permission)).filter((value) =>
+      hasOrganizationResourcePermissions(auth, [value]),
+    )
+    if (!required.some((scope) => permissions.includes(scope))) throw new ForbiddenException('App permission required')
     return {
       organizationId: auth.organizationId,
       userId: auth.userId,

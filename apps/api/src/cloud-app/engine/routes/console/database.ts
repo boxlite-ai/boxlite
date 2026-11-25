@@ -5,6 +5,7 @@ import { actorLabel } from '../../console-activity'
 import type { AppRow, EnvRow } from '../../db'
 import { quoteIdent, quoteLiteral, TABLES_QUERY } from '../../services/db'
 import { HttpError } from '../../errors'
+import { requireAppScope } from '../../platform-principal'
 import type { ConsoleKit } from './kit'
 
 /** Exact row counts of the given tables in one statement (the SQL guard refuses dynamic SQL, so it is built here). */
@@ -112,12 +113,13 @@ export function consoleDatabaseRoutes(api: Hono, k: ConsoleKit): void {
   })
 
   api.post('/apps/:id/sql', async (c) => {
-    const app = await appOf(c)
-    const env = await envOf(c, app)
     const b = await json(
       c,
       z.object({ query: z.string().min(1), write: z.boolean().optional(), explain: z.boolean().optional() }),
     )
+    requireAppScope(b.write ? 'write:apps' : 'read:apps')
+    const app = await appOf(c)
+    const env = await envOf(c, app)
     const res = await cp<{
       columns: string[]
       rows: unknown[][]

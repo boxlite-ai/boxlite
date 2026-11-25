@@ -4,6 +4,10 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { OrganizationResourcePermission as Permission } from '../organization/enums/organization-resource-permission.enum'
 import { SystemRole } from '../user/enums/system-role.enum'
+import { Organization } from '../organization/entities/organization.entity'
+import { appRoutePermissions } from './cloud-app-route-permissions'
+import { createServer } from './engine/server'
+import type { Ctx } from './engine/ctx'
 
 describe('App management organization permissions', () => {
   const service = Object.assign(Object.create(CloudAppService.prototype), {
@@ -12,12 +16,28 @@ describe('App management organization permissions', () => {
   const member = (permissions: Permission[], keyPermissions?: Permission[]) =>
     ({
       userId: 'user',
+      email: 'user@example.test',
       role: SystemRole.USER,
       organizationId: 'org',
-      organization: {},
+      organization: Object.assign(new Organization(), {
+        id: 'org',
+        appHostingPermissions: [Permission.READ_APPS, Permission.WRITE_APPS, Permission.DELETE_APPS],
+      }),
       organizationUser: { role: OrganizationMemberRole.MEMBER, assignedRoles: [{ permissions }] },
       ...(keyPermissions ? { apiKey: { organizationId: 'org', permissions: keyPermissions, keySuffix: 'abc' } } : {}),
-    }) as OrganizationAuthContext
+    }) as unknown as OrganizationAuthContext
+
+  it.each([false, true])('requires organization authorization for a previously granted scope (key=%s)', (key) => {
+    const grants = [Permission.READ_APPS, Permission.WRITE_APPS, Permission.DELETE_APPS]
+    const auth = member(grants, key ? grants : undefined)
+    Object.assign(auth.organization, { appHostingPermissions: [] })
+    for (const method of ['GET', 'POST', 'DELETE']) {
+      expect(() => service.principal(auth, method, '/apps/example')).toThrow(ForbiddenException)
+    }
+    Object.assign(auth.organization, { appHostingPermissions: [Permission.READ_APPS] })
+    expect(service.principal(auth, 'GET', '/apps/example').permissions).toEqual([Permission.READ_APPS])
+    expect(() => service.principal(auth, 'POST', '/apps/example/restart')).toThrow(ForbiddenException)
+  })
 
   it('uses existing member roles for reads, writes and App deletion', () => {
     const viewer = member([Permission.READ_APPS])
@@ -61,5 +81,30 @@ describe('App management organization permissions', () => {
   it('honors explicit key restrictions for an administrator', () => {
     const admin = { ...member([], []), role: SystemRole.ADMIN }
     expect(() => service.principal(admin, 'GET', '/apps')).toThrow(ForbiddenException)
+  })
+
+  it('declares a scope for every mounted App management handler', () => {
+    const server = createServer({ config: {}, store: {} } as Ctx)
+    const missing: string[] = []
+    for (const { method, path } of server.routes) {
+      if (method === 'ALL' || !(path.startsWith('/v1/apps') || path === '/cli/version')) continue
+      const sample = path
+        .replace(/^\/v1/, '')
+        .replace(/:(\w+)(?:\{[^}]+\})?/g, (_, name: string) => (name === 'op' ? 'block' : '1'))
+      if (!appRoutePermissions(method, sample).length) missing.push(`${method} ${path}`)
+    }
+    expect(missing).toEqual([])
+  })
+
+  it('denies undeclared operations even to a fully invited owner', () => {
+    const auth = member([Permission.READ_APPS, Permission.WRITE_APPS, Permission.DELETE_APPS])
+    auth.organizationUser.role = OrganizationMemberRole.OWNER
+    for (const [method, path] of [
+      ['PATCH', '/apps/crm'],
+      ['GET', '/apps/crm/unsupported'],
+    ]) {
+      expect(() => service.principal(auth, method, path)).toThrow(ForbiddenException)
+    }
+    expect(appRoutePermissions('HEAD', '/apps/crm/view')).toEqual([Permission.READ_APPS])
   })
 })

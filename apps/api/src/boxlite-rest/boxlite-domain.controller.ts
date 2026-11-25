@@ -31,6 +31,7 @@ import {
   hasOrganizationResourcePermissions,
 } from '../organization/guards/organization-resource-action.guard'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
+import { CurrentOrganizationPermissions } from '../organization/decorators/current-organization-permissions.decorator'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
@@ -57,6 +58,7 @@ type RestDomainList = {
 @Controller(['v1/domains', 'v1/:prefix/domains'])
 @ApiExcludeController()
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@CurrentOrganizationPermissions()
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 export class BoxliteDomainController {
   constructor(

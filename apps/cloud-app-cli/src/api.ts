@@ -20,7 +20,7 @@ import type { BuildWarning } from '@boxlite-ai/cloud-app-shared'
 export interface EnvSummary {
   name: string
   status?: string
-  url?: string
+  url?: string | null
   spec_version?: number
   latest_deployment?: { number: number; status: string; spec_version?: number } | null
   [extra: string]: unknown
@@ -77,7 +77,7 @@ export interface Deployment {
   steps?: DeploymentStep[]
   changes?: PlanChange[]
   error?: DeploymentError | null
-  url?: string
+  url?: string | null
   log_tail?: string[]
   [extra: string]: unknown
 }
@@ -815,7 +815,7 @@ export interface AuthStatus {
   enabled: boolean
   providers: { name: string; status: 'ready' | 'not_configured' | string }[]
   protect: string[]
-  login_url: string
+  login_url: string | null
   users: number
 }
 

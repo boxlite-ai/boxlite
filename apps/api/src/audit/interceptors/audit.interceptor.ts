@@ -19,7 +19,13 @@ import {
 import { Reflector } from '@nestjs/core'
 import { Request, Response } from 'express'
 import { Observable, Subscriber, firstValueFrom } from 'rxjs'
-import { AUDIT_CONTEXT_KEY, AUDIT_TARGET_ID, AuditContext, AuditTargetId } from '../decorators/audit.decorator'
+import {
+  AUDIT_CONTEXT_KEY,
+  AUDIT_RESULT_METADATA,
+  AUDIT_TARGET_ID,
+  AuditContext,
+  AuditTargetId,
+} from '../decorators/audit.decorator'
 import { AuditLog, AuditLogMetadata } from '../entities/audit-log.entity'
 import { AuditService, PendingAuditLease } from '../services/audit.service'
 import { AuthContextType, isAuthContext } from '../../common/interfaces/auth-context.interface'
@@ -29,6 +35,7 @@ import { AUDIT_WRITE_TIMEOUT_MS, remainingAuditTime } from '../audit-write-deadl
 type RequestWithUser = Request & {
   user?: AuthContextType
   [AUDIT_TARGET_ID]?: string
+  [AUDIT_RESULT_METADATA]?: AuditLogMetadata
 }
 
 @Injectable()
@@ -118,7 +125,14 @@ export class AuditInterceptor implements NestInterceptor {
         const organizationId = this.resolveOrganizationId(auditContext, request, result)
         const targetId = this.resolveTargetId(auditContext, request, result)
         const statusCode = response.statusCode || HttpStatus.NO_CONTENT
-        if (!completeResponse) await this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
+        if (!completeResponse)
+          await this.recordHandlerSuccess(
+            auditLog,
+            organizationId,
+            targetId,
+            statusCode,
+            request[AUDIT_RESULT_METADATA],
+          )
 
         observer.next(result)
         observer.complete()
@@ -268,6 +282,7 @@ export class AuditInterceptor implements NestInterceptor {
     organizationId: string | null,
     targetId: string | null,
     statusCode: number,
+    metadata?: AuditLogMetadata,
   ): Promise<void> {
     try {
       await this.auditService.updateLog(
@@ -276,6 +291,7 @@ export class AuditInterceptor implements NestInterceptor {
           organizationId,
           targetId,
           statusCode,
+          ...(metadata && { metadata }),
         },
         AUDIT_WRITE_TIMEOUT_MS,
       )

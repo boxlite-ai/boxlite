@@ -40,11 +40,12 @@ vi.mock('@/contexts/ThemeContext', () => ({
 }))
 const organizationState = vi.hoisted(() => {
   const personal = { id: 'org-1', name: 'Default Organization', isDefaultForAuthenticatedUser: true }
-  return { personal, organizations: [personal], onSelectOrganization: vi.fn(async () => true) }
+  return { personal, organizations: [personal], onSelectOrganization: vi.fn(async () => true), canReadApps: true }
 })
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: organizationState.personal,
+    authenticatedUserHasPermission: () => organizationState.canReadApps,
     onSelectOrganization: organizationState.onSelectOrganization,
   }),
 }))
@@ -82,6 +83,7 @@ describe('Sidebar primary navigation', () => {
     vi.useRealTimers()
     // A test that adds organizations must not leak them into the next one.
     organizationState.organizations = [organizationState.personal]
+    organizationState.canReadApps = true
   })
 
   function renderRoute(path: string) {
@@ -507,6 +509,13 @@ describe('Sidebar primary navigation', () => {
     expect(link.querySelector('[data-icon="app"]')?.getAttribute('data-selected')).toBe('true')
     expect(link.getAttribute('aria-current')).toBe('page')
     expect(document.querySelectorAll('a[href="/dashboard/apps"]')).toHaveLength(1)
+  })
+
+  it('hides the App hosting link without effective read permission', () => {
+    organizationState.canReadApps = false
+    renderRoute('/dashboard/boxes')
+    expect(document.querySelector('a[href="/dashboard/apps"]')).toBeNull()
+    expect(document.querySelector('a[href="/dashboard/ci"]')).not.toBeNull()
   })
 
   it('keeps Volumes in primary navigation', () => {

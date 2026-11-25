@@ -22,7 +22,7 @@ export class CreateApiKeyDto {
 
   @ApiPropertyOptional({
     description:
-      'Organization resource permissions. When omitted, requests all supported permissions; the caller must be allowed to grant them.',
+      'When omitted, requests all non-App permissions and the App Hosting permissions enabled for the organization. The caller must be allowed to grant every requested permission.',
     enum: OrganizationResourcePermission,
     isArray: true,
   })

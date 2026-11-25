@@ -116,6 +116,7 @@ docs/NetworkMode.md
 docs/OidcConfig.md
 docs/OnboardingDto.md
 docs/Organization.md
+docs/OrganizationAppHostingPermissionsDto.md
 docs/OrganizationBoxDefaultLimitedNetworkEgress.md
 docs/OrganizationInvitation.md
 docs/OrganizationReferralCode.md
@@ -266,6 +267,7 @@ models/network-info.ts
 models/network-mode.ts
 models/oidc-config.ts
 models/onboarding-dto.ts
+models/organization-app-hosting-permissions-dto.ts
 models/organization-box-default-limited-network-egress.ts
 models/organization-invitation.ts
 models/organization-referral-code.ts

@@ -46,7 +46,7 @@ export function EnvironmentSwitcher({
   onDelete: () => void
 }) {
   const { data: envs = [] } = useAppEnvironments(appId)
-  const { canWrite, canDelete } = useAppsScope()
+  const { canWrite } = useAppsScope()
   const [creating, setCreating] = useState(false)
   return (
     <>
@@ -97,7 +97,7 @@ export function EnvironmentSwitcher({
             <div className="px-2 py-1.5 pl-9 text-meta text-muted-foreground">main is deleted only with the app</div>
           ) : (
             <DropdownMenuItem
-              disabled={!canDelete}
+              disabled={!canWrite}
               className="cursor-pointer gap-3 text-destructive focus:text-destructive"
               onClick={onDelete}
             >

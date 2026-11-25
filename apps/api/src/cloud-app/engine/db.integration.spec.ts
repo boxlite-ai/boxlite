@@ -633,6 +633,7 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
       const unassignedDetail = await request(`/v1/apps/${unassigned.name}/view`)
       expect(unassignedDetail.status).toBe(200)
       expect(await unassignedDetail.json()).toMatchObject({ url: null, auth: { loginUrl: null } })
+      expect((await request(`/v1/apps/${unassigned.name}/envs/main/probe`)).status).toBe(409)
       const environments = await request(`/v1/apps/${assigned.name}/environments`)
       expect(environments.status).toBe(200)
       expect(await environments.json()).toEqual(

@@ -18,6 +18,10 @@
 import type { OnboardingDto } from './onboarding-dto';
 
 export interface Organization {
+    /**
+     * App Hosting permissions enabled for this organization.
+     */
+    'appHostingPermissions': Array<OrganizationAppHostingPermissionsEnum>;
     'onboarding'?: OnboardingDto | null;
     /**
      * Organization ID
@@ -118,3 +122,11 @@ export interface Organization {
     'boxLifecycleRateLimitTtlSeconds': number | null;
 }
 
+export const OrganizationAppHostingPermissionsEnum = {
+    READ_APPS: 'read:apps',
+    WRITE_APPS: 'write:apps',
+    DELETE_APPS: 'delete:apps',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type OrganizationAppHostingPermissionsEnum = typeof OrganizationAppHostingPermissionsEnum[keyof typeof OrganizationAppHostingPermissionsEnum];

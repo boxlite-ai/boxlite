@@ -261,6 +261,11 @@ interleaved pair of handlers could otherwise violate all four.
 
 ### `organization`
 
+`app_hosting_permissions text[] NOT NULL DEFAULT '{}'` contains the App Hosting scopes enabled
+by Backoffice. PostgreSQL restricts entries to `read:apps`, `write:apps` and `delete:apps`.
+Existing and new organizations start with an empty array. Changing the array affects access to
+existing Apps and leaves their deployment state intact.
+
 The tenant. Carries per-box resource ceilings, rate limits, and suspension
 state inline.
 
@@ -396,10 +401,10 @@ Machine credential. The name is part of the identity, so a key is addressed by
 `(organization, user, name)`; only the hash is stored.
 
 Cloud Apps use these organization credentials without adding an App scope column or index.
-The permissions enum includes `read:apps`, `write:apps` and `delete:apps`. Creating a key without
-an explicit permission list requests all supported permissions, subject to the caller's existing
-grant authority; it does not change permissions on stored keys. App deletion leaves organization
-keys intact.
+The permissions enum includes `read:apps`, `write:apps` and `delete:apps`. Omitting the
+permission list requests every non-App scope plus the App scopes enabled for the organization.
+The caller must be able to delegate every requested scope. A stored key regains access after an
+organization grant is restored only if the key already holds that scope and remains valid.
 
 No foreign key ties a key to its `organization_user` row, so the application
 revokes it: removing a member, or a member leaving, deletes that member's keys

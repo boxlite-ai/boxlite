@@ -12,7 +12,7 @@ export interface AuthStatus {
   enabled: boolean
   providers: { name: string; status: 'ready' | 'not_configured' }[]
   protect: string[]
-  login_url: string
+  login_url: string | null
   users: number
 }
 
@@ -35,7 +35,7 @@ export async function signInStatus(ctx: Ctx, app: AppRow, env: EnvRow): Promise<
 export async function authStatus(ctx: Ctx, app: AppRow, env: EnvRow): Promise<AuthStatus> {
   return {
     ...(await signInStatus(ctx, app, env)),
-    login_url: loginUrl(await ctx.resources.appUrl(app.name, env.name)),
+    login_url: env.public_url ? loginUrl(env.public_url) : null,
   }
 }
 

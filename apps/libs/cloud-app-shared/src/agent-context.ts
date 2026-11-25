@@ -15,9 +15,9 @@ export interface AgentContext {
   generated_at: string
   /** new | deploying | live | live (last deployment failed) | failed */
   status: string
-  urls: { app: string; health: string | null; login: string | null }
+  urls: { app: string | null; health: string | null; login: string | null }
   access: { level: string; source: 'manifest' | 'online' }
-  environments: { name: string; status: string; url: string }[]
+  environments: { name: string; status: string; url: string | null }[]
   live: { deployment: number; spec_version: number | null; live_at: string | null } | null
   /** `usage` is read live from the running Box: absent from an older control plane, null while it sleeps. */
   box: { id: string; state: string; usage?: BoxUsage | null } | null
@@ -30,7 +30,7 @@ export interface AgentContext {
     enabled: boolean
     providers: { name: string; status: string }[]
     protect: string[]
-    login_url: string
+    login_url: string | null
     users: number
   }
   variables: AgentVariable[]

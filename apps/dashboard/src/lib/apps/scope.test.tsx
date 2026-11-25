@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   organization: { id: 'org-a' } as { id: string } | null,
   permitted: true,
+  refreshPermissions: vi.fn(async () => undefined),
   api: null as ApiClient | null,
 }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => state.api }))
@@ -27,6 +28,7 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: state.organization,
     authenticatedUserHasPermission: () => state.permitted,
+    refreshOrganizationPermissions: state.refreshPermissions,
   }),
 }))
 
@@ -309,7 +311,7 @@ describe('cloud App organization isolation', () => {
     expect(host.textContent).toBe('/dashboard/apps')
   })
 
-  it('checks App read permission when continuing from early access', () => {
+  it('requires App read permission before showing early access or loading App data', () => {
     setAppHostingIntroSeen(false)
     state.permitted = false
     function Management() {
@@ -321,9 +323,7 @@ describe('cloud App organization isolation', () => {
         <Management />
       </OrganizationScope>,
     )
-    const button = host.querySelector('button')!
-    expect(button.textContent).toBe('Get early access')
-    act(() => button.click())
+    expect(host.querySelector('button')).toBeNull()
     expect(host.textContent).toContain('read permission')
     expect(host.textContent).not.toContain('New app')
     expect(requests).toEqual([])

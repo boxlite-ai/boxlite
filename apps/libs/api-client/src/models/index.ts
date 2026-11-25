@@ -82,6 +82,7 @@ export * from './network-mode';
 export * from './oidc-config';
 export * from './onboarding-dto';
 export * from './organization';
+export * from './organization-app-hosting-permissions-dto';
 export * from './organization-box-default-limited-network-egress';
 export * from './organization-invitation';
 export * from './organization-referral-code';

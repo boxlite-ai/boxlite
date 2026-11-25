@@ -17,7 +17,7 @@ export function contextMarkdown(c: AgentContext): string {
   out.push(
     `- Status: **${c.status}**${c.live ? ` (live: #${c.live.deployment}, spec v${c.live.spec_version ?? '?'})` : ''}`,
   )
-  out.push(`- URL: ${c.urls.app}`)
+  if (c.urls.app) out.push(`- URL: ${c.urls.app}`)
   if (c.urls.health) out.push(`- Health: ${c.urls.health}`)
   out.push(`- Access: ${c.access.level}${c.access.source === 'online' ? ' (set online; overrides boxlite.toml)' : ''}`)
   if (c.box) {

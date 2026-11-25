@@ -1,6 +1,7 @@
 /** App origin access through an organization key, a public path, or a one-time ticket's cookie. */
 import { randomBytes } from 'node:crypto'
 import { bearer, safeEqual, sha256hex } from '../auth'
+import { assignedAppUrl } from '../origins'
 import type { AppRow, EnvRow } from '../db'
 import { now } from '../db'
 import type { Ctx } from '../ctx'
@@ -55,6 +56,7 @@ export async function createOpenTicket(
 ): Promise<{ url: string; expires_at: string }> {
   const path = safeNext(next)
   if (path === null) throw fail('invalid_request', '`next` must be a path inside the app, like /deals?x=1')
+  const origin = assignedAppUrl(env)
   const ticket = randomBytes(24).toString('base64url')
   const expiresAt = new Date(Date.now() + TICKET_TTL_S * 1000).toISOString()
   await ctx.store.run('DELETE FROM open_tickets WHERE expires_at < ?', now())
@@ -76,7 +78,7 @@ export async function createOpenTicket(
     as?.role ?? null,
   )
   return {
-    url: `${await ctx.resources.appUrl(app.name, env.name)}/.boxlite/open?t=${ticket}&next=${encodeURIComponent(path)}`,
+    url: `${origin}/.boxlite/open?t=${ticket}&next=${encodeURIComponent(path)}`,
     expires_at: expiresAt,
   }
 }

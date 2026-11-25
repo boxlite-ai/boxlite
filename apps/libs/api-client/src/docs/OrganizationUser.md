@@ -10,6 +10,7 @@ Name | Type | Description | Notes
 **name** | **string** | User name | [default to undefined]
 **email** | **string** | User email | [default to undefined]
 **role** | **string** | Member role | [default to undefined]
+**isSystemAdmin** | **boolean** | Set on the authenticated member when they are a system administrator. | [optional] [readonly] [default to undefined]
 **isDefaultForUser** | **boolean** | Whether this organization membership is the user default organization | [default to undefined]
 **assignedRoles** | [**Array&lt;OrganizationRole&gt;**](OrganizationRole.md) | Roles assigned to the user | [default to undefined]
 **createdAt** | **Date** | Creation timestamp | [default to undefined]
@@ -26,6 +27,7 @@ const instance: OrganizationUser = {
     name,
     email,
     role,
+    isSystemAdmin,
     isDefaultForUser,
     assignedRoles,
     createdAt,

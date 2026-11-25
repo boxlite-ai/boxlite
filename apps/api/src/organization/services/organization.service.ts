@@ -17,11 +17,14 @@ import {
 } from '@nestjs/common'
 import { randomInt } from 'node:crypto'
 import { InjectRepository } from '@nestjs/typeorm'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import type Redis from 'ioredis'
 import { EntityManager, In, Not, Repository } from 'typeorm'
 import { CreateOrganizationInternalDto } from '../dto/create-organization.internal.dto'
 import { Organization } from '../entities/organization.entity'
 import { OrganizationUser } from '../entities/organization-user.entity'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
+import { APP_HOSTING_PERMISSIONS, OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { UserEvents } from '../../user/constants/user-events.constant'
 import { UserCreatedEvent } from '../../user/events/user-created.event'
@@ -66,6 +69,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
 
   activeJobs = new Set<string>()
   private readonly logger = new Logger(OrganizationService.name)
+  @InjectRedis() private readonly redis: Redis
   private defaultBoxLimitedNetworkEgress: boolean
 
   constructor(
@@ -122,6 +126,35 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     return this.organizationRepository.findOne({
       where: { id: organizationId },
     })
+  }
+
+  async getAppHostingPermissions(id: string): Promise<OrganizationResourcePermission[]> {
+    const org = await this.organizationRepository.findOne({
+      where: { id },
+      select: { appHostingPermissions: true },
+      cache: false,
+    })
+    if (!org) throw new NotFoundException('Organization not found')
+    return org.appHostingPermissions
+  }
+
+  async setAppHostingPermissions(id: string, requested: OrganizationResourcePermission[]) {
+    const after = APP_HOSTING_PERMISSIONS.filter((scope) => requested.includes(scope))
+    const before = await this.organizationRepository.manager.transaction(async (manager) => {
+      const org = await manager.findOne(Organization, {
+        where: { id },
+        select: { appHostingPermissions: true },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!org) throw new NotFoundException('Organization not found')
+      await manager.update(Organization, id, { appHostingPermissions: after })
+      return org.appHostingPermissions
+    })
+    // Access decisions read Postgres. A cache eviction failure cannot undo the committed change.
+    await this.redis
+      .del(`organization:${id}`)
+      .catch((error) => this.logger.warn('Could not evict organization cache', error))
+    return { before, after }
   }
 
   async setNestedVirtualizationEnabled(organizationId: string, enabled: boolean): Promise<void> {
