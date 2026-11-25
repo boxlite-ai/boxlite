@@ -140,7 +140,7 @@ async def _mounted_box(rt, *, mounts: list[dict]):
 
 
 async def _expect_mount_create_failure(
-    mounts: list[dict], *, expected_status: int = 400
+    mounts: list[dict], *, expected_status: int = 400, expected_code: str | None = None
 ):
     """Assert that a bad or unfulfillable mount request does not start a Box."""
     name = e2e_box_name()
@@ -162,10 +162,10 @@ async def _expect_mount_create_failure(
         assert status == expected_status, (
             f"expected HTTP {expected_status}, got {status}: {response}"
         )
-        if expected_status != 400:
+        if expected_code is not None:
             detail = json.dumps(response, sort_keys=True)
-            assert "VOLUME_SUBPATH" in detail or "sub" in detail.lower(), (
-                f"failure did not explain the mount problem: {detail}"
+            assert expected_code in detail, (
+                f"failure did not contain {expected_code}: {detail}"
             )
     finally:
         await _remove_box_by_name(name)
@@ -269,6 +269,15 @@ async def test_read_only_mount_is_accepted_and_enforced(rt, image, managed_volum
         }.items():
             rc, out, err = await _exec_failed(reader, script)
             assert rc != 0, f"{label} succeeded on a read-only volume: {out!r} {err!r}"
+
+        # A guest remount attempt must not turn the share writable. The mount
+        # command itself may be denied by the container's capability set; either
+        # way, a subsequent write must still fail.
+        await _exec_failed(reader, f"mount -o remount,rw {GUEST_PATH}")
+        rc, out, err = await _exec_failed(
+            reader, f"echo after-remount > {GUEST_PATH}/after-remount"
+        )
+        assert rc != 0, f"write succeeded after remount attempt: {out!r} {err!r}"
 
         out = await _exec_ok(reader, f"cat {GUEST_PATH}/probe.txt")
         assert out.strip() == seed, "a rejected write changed the read-only volume"
@@ -420,6 +429,7 @@ async def test_ro_missing_subpath_fails_without_creating_dirs(rt, managed_volume
     await _expect_mount_create_failure(
         [_volume_mount(managed_volume["id"], read_only=True, sub_path=backend)],
         expected_status=500,
+        expected_code="VOLUME_SUBPATH_NOT_FOUND",
     )
 
     async with _mounted_box(
@@ -455,6 +465,7 @@ async def test_subpath_pointing_at_a_file_fails(rt, managed_volume):
     await _expect_mount_create_failure(
         [_volume_mount(managed_volume["id"], sub_path=file_path)],
         expected_status=500,
+        expected_code="VOLUME_SUBPATH_INVALID",
     )
 
     async with _mounted_box(

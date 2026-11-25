@@ -765,10 +765,8 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 	defer operation.Close()
 	ctx = context.WithoutCancel(ctx)
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
-		if isFilestoreVolumePreparationError(err) {
-			return "", err
-		}
 		c.logger.ErrorContext(ctx, "failed to ensure volume mounts", "box", boxId, "error", err)
+		return "", err
 	}
 
 	bx, err := c.getOrFetchBox(ctx, boxId)

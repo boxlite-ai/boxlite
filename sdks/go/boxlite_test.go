@@ -321,6 +321,16 @@ func TestBoxOptions(t *testing.T) {
 	}
 }
 
+func TestBindMountSubPathRejectsInvalidPathBeforeFFI(t *testing.T) {
+	cfg := &boxConfig{}
+	WithBindMountSubPath("/volume-root", "/workspace", "team/../backend", false)(cfg)
+
+	if _, err := buildCOptions("alpine:latest", cfg); err == nil ||
+		!strings.Contains(err.Error(), "VOLUME_SUBPATH_INVALID") {
+		t.Fatalf("buildCOptions error = %v, want VOLUME_SUBPATH_INVALID", err)
+	}
+}
+
 func TestWithBindMountSubPathKeepsCloudVolumeOptions(t *testing.T) {
 	cfg := &boxConfig{}
 	WithBindMountSubPath("/volume-root", "/workspace", "team/backend", true)(cfg)

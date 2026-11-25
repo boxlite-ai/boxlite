@@ -36,8 +36,6 @@ export interface BoxVolume {
     'subpath'?: string;
     /**
      * Mount this Box read-only. The mount is enforced by the runtime, not only by the guest mount flags. Defaults to false.
-     * @type {boolean}
-     * @memberof BoxVolume
      */
     'readOnly'?: boolean;
 }

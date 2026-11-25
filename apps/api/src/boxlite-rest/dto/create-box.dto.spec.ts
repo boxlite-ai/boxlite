@@ -356,6 +356,16 @@ describe('CreateBoxDto managed volumes', () => {
     expect(getReadOnlyConstraints(errors)).toHaveProperty('isBoolean')
   })
 
+  it('treats an empty mounts array as absent', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, {
+        volumes: [{ managed_volume: 'workspace', guest_path: '/workspace' }],
+        mounts: [],
+      }),
+    )
+    expect(errors).toHaveLength(0)
+  })
+
   it('accepts a volume mount with a non-empty sub_path', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {

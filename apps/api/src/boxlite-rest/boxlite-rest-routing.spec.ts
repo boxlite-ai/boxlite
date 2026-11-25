@@ -66,7 +66,11 @@ describe('BoxLite REST routing', () => {
           useValue: new TypedConfigService(
             new ConfigService({
               checkpoint: { archivePrefix: 'gs://checkpoint-test/', enabled: true },
-              volume: { filestoreInstances: { instances: [] } },
+              volume: {
+                filestoreInstances: { instances: [] },
+                readOnlyEnabled: true,
+                typedMountsEnabled: true,
+              },
             }),
           ),
         },

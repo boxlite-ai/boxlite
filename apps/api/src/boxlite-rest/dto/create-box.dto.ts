@@ -230,6 +230,7 @@ export class MountSpecDto {
 
   @IsString()
   @IsNotEmpty()
+  @Validate(IsNotHostPathConstraint)
   source: string
 
   @IsString()
@@ -367,7 +368,6 @@ export class CreateBoxDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayNotEmpty()
   @ValidateNested({ each: true })
   @Validate(OneMountRequestShapeConstraint)
   @Type(() => MountSpecDto)

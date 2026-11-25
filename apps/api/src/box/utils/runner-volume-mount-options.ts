@@ -38,3 +38,13 @@ export function requiresVolumeMountOptions(volumes: BoxVolume[] | undefined): bo
 export function runnerSupportsVolumeMountOptions(runner: Runner): boolean {
   return runner.capabilities?.includes(VOLUME_MOUNT_OPTIONS_CAPABILITY) === true
 }
+
+type CapabilityReporter = {
+  runnerInfo(signal?: AbortSignal): Promise<{ capabilities?: string[] }>
+}
+
+/** Read the adapter's current capability report rather than trusting a stale row. */
+export async function adapterSupportsVolumeMountOptions(adapter: CapabilityReporter): Promise<boolean> {
+  const info = await adapter.runnerInfo()
+  return info.capabilities?.includes(VOLUME_MOUNT_OPTIONS_CAPABILITY) === true
+}

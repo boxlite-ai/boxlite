@@ -13,7 +13,10 @@ describe('BoxService.recover volume mount options', () => {
     const runner = { id: 'runner-1', apiVersion: '0', capabilities: [] }
     const runnerService = { findOneOrFail: jest.fn().mockResolvedValue(runner) } as any
     const runnerAdapterFactory = {
-      create: jest.fn().mockResolvedValue({ recoverBox: jest.fn() }),
+      create: jest.fn().mockResolvedValue({
+        recoverBox: jest.fn(),
+        runnerInfo: jest.fn().mockResolvedValue({ capabilities: [] }),
+      }),
     } as any
     const boxRepository = {
       findOneByIdOrName: jest.fn().mockResolvedValue({
@@ -65,7 +68,12 @@ describe('BoxService.recover volume mount options', () => {
     const runner = { id: 'runner-1', apiVersion: '0', capabilities: [VOLUME_MOUNT_OPTIONS_CAPABILITY] }
     const runnerService = { findOneOrFail: jest.fn().mockResolvedValue(runner) } as any
     const recoverBox = jest.fn().mockResolvedValue(undefined)
-    const runnerAdapterFactory = { create: jest.fn().mockResolvedValue({ recoverBox }) } as any
+    const runnerAdapterFactory = {
+      create: jest.fn().mockResolvedValue({
+        recoverBox,
+        runnerInfo: jest.fn().mockResolvedValue({ capabilities: [VOLUME_MOUNT_OPTIONS_CAPABILITY] }),
+      }),
+    } as any
     const boxRepository = {
       findOneByIdOrName: jest.fn().mockResolvedValue({
         id: 'box-1',

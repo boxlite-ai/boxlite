@@ -1849,8 +1849,10 @@ void boxlite_options_add_bind_mount(CBoxliteOptions *opts,
 
 // Bind a directory from a cloud-managed volume root.
 //
-// `sub_path` is a validated relative path below `host_path`; an empty string
-// selects the whole root. When `read_only` is zero, the guest may create
+// `sub_path` is a relative path below `host_path`; an empty string selects
+// the whole root. The Go SDK validates it before calling this entry point;
+// raw C callers must do the same, because invalid values otherwise fail later
+// when the guest starts. When `read_only` is zero, the guest may create
 // missing subpath components inside `host_path`. A read-only mount never
 // creates or modifies the volume.
 void boxlite_options_add_bind_mount_subdir(CBoxliteOptions *opts,

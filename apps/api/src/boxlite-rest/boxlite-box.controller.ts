@@ -21,10 +21,12 @@ import {
   Res,
   Req,
   BadRequestException,
+  Optional,
   ForbiddenException,
   HttpException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
+import { ConfigService } from '@nestjs/config'
 import { Request, Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import {
@@ -88,6 +90,7 @@ export class BoxliteBoxController {
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
     private readonly checkpointRecoverService: CheckpointRecoverService,
+    @Optional() private readonly config?: ConfigService,
   ) {}
 
   @Post()
@@ -136,6 +139,17 @@ export class BoxliteBoxController {
   ): Promise<BoxResponseDto> {
     if (dto.checkpoint_id !== undefined) {
       return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
+    }
+
+    const readOnlyRequested =
+      dto.volumes?.some((volume) => volume.read_only === true) || dto.mounts?.some((mount) => mount.read_only === true)
+    if (readOnlyRequested && this.config?.get('volume.readOnlyEnabled') !== true) {
+      throw new BadRequestException(
+        'VOLUME_READ_ONLY_DISABLED: read-only managed volumes are not enabled for this deployment',
+      )
+    }
+    if (dto.mounts?.length && this.config?.get('volume.typedMountsEnabled') !== true) {
+      throw new BadRequestException('VOLUME_MOUNT_OPTIONS_DISABLED: typed mounts are not enabled for this deployment')
     }
 
     // Attaching a volume grants the box access to its data, so it is authorized

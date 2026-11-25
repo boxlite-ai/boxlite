@@ -78,6 +78,24 @@ describe('BoxLite lifecycle policy mapper', () => {
     expect(mapped.volumes).toEqual([{ volumeId: 'customer-data', mountPath: '/data', readOnly: false }])
   })
 
+  it('does not let an empty mounts array erase legacy volumes', () => {
+    const mapped = createBoxToCreateBox({
+      volumes: [{ managed_volume: 'workspace', guest_path: '/workspace', read_only: false }],
+      mounts: [],
+    })
+    expect(mapped.volumes).toEqual([{ volumeId: 'workspace', mountPath: '/workspace', readOnly: false }])
+  })
+
+  it('marks typed mounts as requiring a capable runner even for whole-volume RW', () => {
+    const mapped = createBoxToCreateBox({
+      mounts: [{ type: 'volume', source: 'workspace', target: '/workspace' }],
+    })
+    expect(mapped.typedMountsRequested).toBe(true)
+    expect(mapped.volumes).toEqual([
+      { volumeId: 'workspace', mountPath: '/workspace', readOnly: undefined, subpath: undefined },
+    ])
+  })
+
   it('maps mounts and volumes to the same internal shape', () => {
     expect(
       createBoxToCreateBox({

@@ -316,6 +316,11 @@ export class RunnerService {
     const eligible = params.requiresVolumeMountOptions
       ? runners.filter((runner) => runner.capabilities?.includes(VOLUME_MOUNT_OPTIONS_CAPABILITY))
       : runners
+    if (params.requiresVolumeMountOptions && eligible.length === 0 && runners.length > 0) {
+      this.logger.warn(
+        `No runner advertises ${VOLUME_MOUNT_OPTIONS_CAPABILITY}; ${runners.length} otherwise eligible runner(s) were filtered`,
+      )
+    }
 
     return eligible.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
   }

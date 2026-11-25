@@ -3690,6 +3690,7 @@ components:
             `volume_read_only_enabled`.
         sub_path:
           type: string
+          minLength: 1
           description: >
             Relative subtree inside a `type=volume` source. It cannot traverse
             out through symlinks. A local `boxlite serve` requires it to exist;

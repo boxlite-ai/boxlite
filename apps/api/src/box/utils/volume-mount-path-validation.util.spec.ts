@@ -62,12 +62,12 @@ describe('validateMountPaths', () => {
 describe('validateSubpaths', () => {
   it('accepts omitted subpaths and ordinary relative components', () => {
     expect(() => validateSubpaths([{ volumeId: 'vol', mountPath: '/data' }])).not.toThrow()
+    expect(() => validateSubpaths([{ volumeId: 'vol', mountPath: '/data', subpath: '' }])).not.toThrow()
     expect(() => validateSubpaths([{ volumeId: 'vol', mountPath: '/data', subpath: 'foo..bar/team' }])).not.toThrow()
   })
 
-  it('rejects empty strings, separators, traversal, limits, and wrong types', () => {
+  it('rejects separators, traversal, limits, and wrong types', () => {
     const cases = [
-      '',
       '/team/backend',
       'team/backend/',
       'team//backend',
@@ -92,7 +92,7 @@ describe('validateSubpaths', () => {
       validateSubpaths([{ volumeId: 'vol', mountPath: '/data', subpath: components.join('/') }]),
     ).not.toThrow()
 
-    const long = ['a'.repeat(254), 'a'.repeat(254), 'a'.repeat(254), 'a'.repeat(254)]
+    const long = Array.from({ length: 17 }, () => 'a'.repeat(240))
     expect(long.join('/')).toHaveLength(4096)
     expect(() => validateSubpaths([{ volumeId: 'vol', mountPath: '/data', subpath: long.join('/') }])).not.toThrow()
   })

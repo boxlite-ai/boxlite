@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/boxlite-ai/common-go/pkg/log"
@@ -26,7 +27,6 @@ import (
 const volumeMountPrefix = "boxlite-volume-"
 const filestoreMountPrefix = "boxlite-filestore-"
 const volumeMountRecordDir = ".boxlite-volume-mounts"
-const VolumeMountOptionsCapability = "volume-mount-options"
 
 var filestoreInstanceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
@@ -145,11 +145,7 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 	// trailing volume must not leave backend roots or records from earlier
 	// volumes in the same Box request.
 	for _, volume := range volumes {
-		subpath := ""
-		if volume.Subpath != nil {
-			subpath = *volume.Subpath
-		}
-		if err := validateCloudSubPath(subpath); err != nil {
+		if err := validateVolumeDTOShape(volume); err != nil {
 			return nil, err
 		}
 	}
@@ -163,12 +159,19 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 		if vol.Filestore != nil {
 			mount, err := c.filestoreVolumeMount(ctx, boxID, vol, filestoreEnsured)
 			if err != nil {
+				subpath := ""
+				if vol.Subpath != nil {
+					subpath = *vol.Subpath
+				}
 				attrs := []any{
 					"code", "FILESTORE_VOLUME_PREPARE_FAILED",
 					"boxId", boxID,
 					"volumeId", vol.VolumeId,
+					"backend", volumeBackendFilestore,
 					"instance", vol.Filestore.Instance,
 					"mountPath", vol.MountPath,
+					"subpath", subpath,
+					"readOnly", vol.ReadOnly,
 					"error", err,
 				}
 				var exitError *exec.ExitError
@@ -205,6 +208,17 @@ func (c *Client) getVolumeMounts(ctx context.Context, boxID string, volumes []dt
 		// rejects a symlink root or non-directory. Runner never joins subpath
 		// into hostPath: read-write creation is guest-side and descriptor-based.
 		if err := ensureCloudVolumeRoot(baseMountPath, "object storage volume root"); err != nil {
+			c.logger.ErrorContext(
+				ctx, "Failed to prepare object storage volume",
+				"code", "VOLUME_ROOT_INVALID",
+				"boxId", boxID,
+				"volumeId", vol.VolumeId,
+				"backend", c.volumeBackend,
+				"mountPath", vol.MountPath,
+				"subpath", subpathStr,
+				"readOnly", vol.ReadOnly,
+				"error", err,
+			)
 			return nil, err
 		}
 
@@ -322,7 +336,22 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 			if err := os.MkdirAll(dataDir, 0777); err != nil {
 				return fmt.Errorf("failed to create filestore data directory %s: %s", dataDir, err)
 			}
-			if err := os.Chmod(dataDir, 0777); err != nil {
+			// Chmod through a no-follow descriptor. A path-based Chmod would
+			// follow a symlink swapped in after the Lstat above and could change
+			// permissions outside the volume root.
+			dir, err := os.OpenFile(dataDir, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+			if err != nil {
+				return fmt.Errorf("failed to open filestore data directory %s: %s", dataDir, err)
+			}
+			defer dir.Close()
+			info, err := dir.Stat()
+			if err != nil {
+				return fmt.Errorf("failed to stat filestore data directory %s: %s", dataDir, err)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("VOLUME_ROOT_INVALID: filestore data directory %s is not a directory", dataDir)
+			}
+			if err := dir.Chmod(0777); err != nil {
 				return fmt.Errorf("failed to chmod filestore data directory %s: %s", dataDir, err)
 			}
 			return nil
@@ -369,6 +398,128 @@ func (c *Client) filestoreVolumeMount(ctx context.Context, boxID string, vol dto
 	return mount, nil
 }
 
+// preflightRecoveryVolumes checks deterministic mount failures before a
+// recovery destroys the old Box. It may establish shared backend mounts, which
+// live outside the mounted volume, but it never writes volume data or records.
+func (c *Client) preflightRecoveryVolumes(ctx context.Context, volumes []dto.VolumeDTO) error {
+	for _, vol := range volumes {
+		if err := validateVolumeDTOShape(vol); err != nil {
+			return err
+		}
+		subpath := ""
+		if vol.Subpath != nil {
+			subpath = *vol.Subpath
+		}
+		if vol.Filestore == nil {
+			volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
+			baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeIdPrefixed)
+			if err := c.ensureVolumeFuseMounted(ctx, volumeIdPrefixed, baseMountPath); err != nil {
+				return err
+			}
+			if err := ensureCloudVolumeRoot(baseMountPath, "object storage volume root"); err != nil {
+				return err
+			}
+			if err := preflightVolumeSubPath(baseMountPath, subpath, vol.ReadOnly); err != nil {
+				return err
+			}
+			continue
+		}
+
+		ref := vol.Filestore
+		rootPath := filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+ref.Instance)
+		mountKey := filestoreMountPrefix + ref.Instance
+		mutex := c.volumeMutexFor(mountKey)
+		mutex.Lock()
+		if err := c.checkVolumeOperation(mountKey); err != nil {
+			mutex.Unlock()
+			return err
+		}
+		err := c.ensureFilestoreMounted(ctx, ref, rootPath, mountKey)
+		mutex.Unlock()
+		if err != nil {
+			return err
+		}
+
+		dataDir := filestoreDataDir(rootPath, vol.VolumeId)
+		info, err := os.Lstat(dataDir)
+		if err != nil {
+			if os.IsNotExist(err) && !vol.ReadOnly {
+				// RW preparation creates the data directory after Create.
+				continue
+			}
+			if os.IsNotExist(err) {
+				return fmt.Errorf("VOLUME_SUBPATH_NOT_FOUND: read-only filestore volume root %s does not exist", dataDir)
+			}
+			return fmt.Errorf("VOLUME_ROOT_INVALID: cannot inspect filestore volume root %s: %w", dataDir, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("VOLUME_ROOT_INVALID: filestore volume root %s is a symlink or not a directory", dataDir)
+		}
+		if err := preflightVolumeSubPath(dataDir, subpath, vol.ReadOnly); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func preflightVolumeSubPath(root, subPath string, readOnly bool) error {
+	if subPath == "" {
+		info, err := os.Lstat(root)
+		if err != nil {
+			if os.IsNotExist(err) && readOnly {
+				return fmt.Errorf("VOLUME_SUBPATH_NOT_FOUND: volume root %s does not exist", root)
+			}
+			return fmt.Errorf("VOLUME_ROOT_INVALID: cannot inspect volume root %s: %w", root, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("VOLUME_ROOT_INVALID: volume root %s is a symlink or not a directory", root)
+		}
+		return nil
+	}
+	current := root
+	for _, component := range strings.Split(subPath, "/") {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) && !readOnly {
+				// RW may create the remainder after Create.
+				return nil
+			}
+			if os.IsNotExist(err) {
+				return fmt.Errorf("VOLUME_SUBPATH_NOT_FOUND: volume subpath %q does not exist", subPath)
+			}
+			return fmt.Errorf("VOLUME_SUBPATH_INVALID: cannot inspect volume subpath %q: %w", subPath, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("VOLUME_SUBPATH_INVALID: volume subpath %q contains a symlink or non-directory component", subPath)
+		}
+	}
+	return nil
+}
+
+// validateVolumeDTOShape runs the side-effect-free checks for every backend
+// before any FUSE/NFS mount or record write. Backend-specific mount checks still
+// happen later, but malformed later entries can no longer leave earlier mounts.
+func validateVolumeDTOShape(vol dto.VolumeDTO) error {
+	subpath := ""
+	if vol.Subpath != nil {
+		subpath = *vol.Subpath
+	}
+	if err := validateCloudSubPath(subpath); err != nil {
+		return err
+	}
+	if vol.VolumeId == "" || vol.VolumeId == "." || strings.ContainsAny(vol.VolumeId, "/\\") || strings.Contains(vol.VolumeId, "..") {
+		return fmt.Errorf("invalid volume id %q: must be a bare identifier without path separators or '..'", vol.VolumeId)
+	}
+	if vol.Filestore == nil {
+		return nil
+	}
+	if !filestoreInstanceNamePattern.MatchString(vol.Filestore.Instance) {
+		return fmt.Errorf("invalid filestore instance %q: must match %s", vol.Filestore.Instance, filestoreInstanceNamePattern)
+	}
+	return validateFilestoreTarget(vol.Filestore)
+}
+
 func validateCloudSubPath(subPath string) error {
 	if subPath == "" {
 		return nil
@@ -392,12 +543,12 @@ func ensureCloudVolumeRoot(path string, label string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("VOLUME_SUBPATH_NOT_FOUND: %s %s does not exist", label, path)
+			return fmt.Errorf("VOLUME_ROOT_NOT_FOUND: %s %s does not exist", label, path)
 		}
-		return fmt.Errorf("VOLUME_SUBPATH_INVALID: cannot inspect %s %s: %w", label, path, err)
+		return fmt.Errorf("VOLUME_ROOT_INVALID: cannot inspect %s %s: %w", label, path, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("VOLUME_SUBPATH_INVALID: %s %s is a symlink or not a directory", label, path)
+		return fmt.Errorf("VOLUME_ROOT_INVALID: %s %s is a symlink or not a directory", label, path)
 	}
 	return nil
 }
@@ -513,6 +664,13 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 	if err = os.MkdirAll(mountPath, 0755); err != nil {
 		return fmt.Errorf("failed to create mount directory %s: %s", mountPath, err)
 	}
+	// Re-check immediately before the external mount command. This narrows the
+	// replacement window; a symlink swapped in after MkdirAll must not become
+	// the mount target.
+	if info, err := os.Lstat(mountPath); err != nil || !info.IsDir() {
+		c.cleanUpFailedMount(ctx, mountPath, dirExisted)
+		return fmt.Errorf("VOLUME_ROOT_INVALID: volume mount point %s is a symlink or not a directory", mountPath)
+	}
 
 	c.logger.InfoContext(ctx, "mounting volume", "volumeId", volumeId, "mountPath", mountPath, "backend", c.volumeBackend)
 
@@ -558,6 +716,14 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreR
 		return err
 	}
 
+	if info, err := os.Lstat(mountRoot); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("VOLUME_ROOT_INVALID: filestore mount root %s is a symlink or not a directory", mountRoot)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("VOLUME_ROOT_INVALID: cannot inspect filestore mount root %s: %w", mountRoot, err)
+	}
+
 	mounted, err := c.probeMounted(ctx, mountRoot)
 	if err != nil {
 		// Same reasoning as the FUSE twin: guessing here is what makes a stale
@@ -577,6 +743,10 @@ func (c *Client) ensureFilestoreMounted(ctx context.Context, ref *dto.FilestoreR
 
 	if err = os.MkdirAll(mountRoot, 0755); err != nil {
 		return fmt.Errorf("failed to create filestore mount root %s: %s", mountRoot, err)
+	}
+	if info, err := os.Lstat(mountRoot); err != nil || !info.IsDir() {
+		c.cleanUpFailedMount(ctx, mountRoot, dirExisted)
+		return fmt.Errorf("VOLUME_ROOT_INVALID: filestore mount root %s is a symlink or not a directory", mountRoot)
 	}
 
 	// Establish the ownership boundary before the mount starts. If the caller

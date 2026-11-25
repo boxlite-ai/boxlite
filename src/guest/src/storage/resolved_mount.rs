@@ -68,6 +68,12 @@ impl ResolvedMount {
         create_missing: bool,
         before_pin: impl FnOnce(),
     ) -> BoxliteResult<Self> {
+        if read_only && create_missing {
+            return Err(BoxliteError::InvalidArgument(
+                "VOLUME_SUBPATH_INVALID: read-only mount requested missing-directory creation"
+                    .into(),
+            ));
+        }
         let directory = open_subdir(payload_root, sub_path, create_missing)?;
         before_pin();
         // Pre-create a unique directory before mounting so the move target is
@@ -174,6 +180,9 @@ fn open_subdir(
         Mode::empty(),
     )
     .map_err(|error| BoxliteError::Storage(format!("open volume payload: {error}")))?;
+    // Own every descriptor immediately. Reassigning `current` closes the prior
+    // component; returning the final OwnedFd leaves no descriptor behind.
+    let mut current = unsafe { OwnedFd::from_raw_fd(root) };
     let how = OpenHow::new()
         .flags(OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC)
         .resolve(
@@ -181,12 +190,12 @@ fn open_subdir(
                 | ResolveFlag::RESOLVE_NO_SYMLINKS
                 | ResolveFlag::RESOLVE_NO_MAGICLINKS,
         );
-    let mut current = root;
     for component in sub_path.split('/') {
         let mut component_bytes = component.as_bytes().to_vec();
         component_bytes.push(0);
-        let component = std::ffi::CStr::from_bytes_with_nul(&component_bytes)
-            .map_err(|_| BoxliteError::InvalidArgument(format!("invalid volume sub_path {sub_path:?}")))?;
+        let component = std::ffi::CStr::from_bytes_with_nul(&component_bytes).map_err(|_| {
+            BoxliteError::InvalidArgument(format!("invalid volume sub_path {sub_path:?}"))
+        })?;
         let fd = match openat2(current.as_raw_fd(), component, how) {
             Ok(fd) => fd,
             Err(nix::errno::Errno::ENOENT) if create_missing => {
@@ -195,39 +204,48 @@ fn open_subdir(
                 // subject to the process umask, matching the cloud contract.
                 let result = unsafe {
                     nix::libc::mkdirat(
-                        current,
+                        current.as_raw_fd(),
                         component.as_ptr(),
                         Mode::from_bits_truncate(0o755).bits(),
                     )
                 };
-                if result != 0 {
+                if result != 0 && nix::errno::Errno::last() != nix::errno::Errno::EEXIST {
                     return Err(BoxliteError::Storage(format!(
                         "create volume sub_path {sub_path:?} component {component:?}: {}",
                         nix::errno::Errno::last()
                     )));
                 }
+                // Another RW Box may have created the same component after our
+                // ENOENT. Re-resolve it with the same no-follow flags; a symlink
+                // or file still fails closed here.
                 openat2(current.as_raw_fd(), component, how)
                     .map_err(|error| sub_path_error(sub_path, error))?
             }
             Err(error) => return Err(sub_path_error(sub_path, error)),
         };
-        current = fd;
+        current = unsafe { OwnedFd::from_raw_fd(fd) };
     }
-    Ok(unsafe { OwnedFd::from_raw_fd(current) })
+    Ok(current)
 }
 
 fn sub_path_error(sub_path: &str, error: nix::errno::Errno) -> BoxliteError {
     match error {
         nix::errno::Errno::ENOENT => {
-            BoxliteError::NotFound(format!("volume sub_path {sub_path:?} does not exist"))
+            BoxliteError::NotFound(format!(
+            "VOLUME_SUBPATH_NOT_FOUND: volume sub_path {sub_path:?} does not exist"
+        ))
         }
         nix::errno::Errno::ELOOP | nix::errno::Errno::ENOTDIR => BoxliteError::InvalidArgument(
-            format!("volume sub_path {sub_path:?} contains a symlink or non-directory component"),
+            format!(
+                "VOLUME_SUBPATH_INVALID: volume sub_path {sub_path:?} contains a symlink or non-directory component"
+            ),
         ),
         nix::errno::Errno::ENOSYS => BoxliteError::Unsupported(format!(
-            "volume sub_path {sub_path:?} requires openat2 support: {error}"
+            "VOLUME_SUBPATH_UNSUPPORTED: volume sub_path {sub_path:?} requires openat2 support: {error}"
         )),
-        _ => BoxliteError::Storage(format!("resolve volume sub_path {sub_path:?}: {error}")),
+        _ => BoxliteError::Storage(format!(
+            "VOLUME_SUBPATH_INVALID: resolve volume sub_path {sub_path:?}: {error}"
+        )),
     }
 }
 
@@ -244,7 +262,7 @@ fn validate_sub_path(sub_path: &str) -> BoxliteResult<()> {
         || sub_path.split('/').any(|part| part.len() > 255)
     {
         return Err(BoxliteError::InvalidArgument(format!(
-            "invalid volume sub_path {sub_path:?}"
+            "VOLUME_SUBPATH_INVALID: invalid volume sub_path {sub_path:?}"
         )));
     }
     Ok(())
@@ -327,7 +345,11 @@ mod tests {
 
         let empty = tempfile::tempdir().unwrap();
         let error = open_subdir(empty.path(), "team/backend", false).unwrap_err();
-        assert!(matches!(error, BoxliteError::NotFound(_)), "{error:?}");
+        assert!(
+            matches!(&error, BoxliteError::NotFound(_))
+                && error.to_string().contains("VOLUME_SUBPATH_NOT_FOUND"),
+            "{error:?}"
+        );
         assert!(!empty.path().join("team").exists());
         assert!(!empty.path().join("team/backend").exists());
     }
@@ -345,7 +367,7 @@ mod tests {
         for create_missing in [false, true] {
             let error = open_subdir(root.path(), "team/value", create_missing).unwrap_err();
             assert!(
-                matches!(error, BoxliteError::InvalidArgument(_)),
+                matches!(&error, BoxliteError::InvalidArgument(_)),
                 "create_missing={create_missing}: {error:?}"
             );
             assert!(!root.path().join("team/value").exists());
@@ -353,7 +375,7 @@ mod tests {
 
         let error = open_subdir(root.path(), "file", false).unwrap_err();
         assert!(
-            matches!(error, BoxliteError::InvalidArgument(_)),
+            matches!(&error, BoxliteError::InvalidArgument(_)),
             "{error:?}"
         );
     }
@@ -430,7 +452,7 @@ mod tests {
         std::fs::create_dir_all(directory.path().join("team/backend")).unwrap();
         std::os::unix::fs::symlink("backend", directory.path().join("team/link")).unwrap();
 
-        open_subdir(directory.path(), "team/backend").expect("real directory");
+        open_subdir(directory.path(), "team/backend", false).expect("real directory");
         for invalid in [
             "/etc",
             "../escape",
@@ -439,16 +461,21 @@ mod tests {
             "team/link",
             "team/\0backend",
         ] {
-            let error = open_subdir(directory.path(), invalid)
+            let error = open_subdir(directory.path(), invalid, false)
                 .err()
                 .unwrap_or_else(|| panic!("{invalid} must be rejected"));
             assert!(
-                matches!(error, BoxliteError::InvalidArgument(_)),
+                matches!(&error, BoxliteError::InvalidArgument(_))
+                    && error.to_string().contains("VOLUME_SUBPATH_INVALID"),
                 "{invalid}: {error:?}"
             );
         }
         let error =
-            open_subdir(directory.path(), "team/missing").expect_err("missing subdirectory");
-        assert!(matches!(error, BoxliteError::NotFound(_)), "{error:?}");
+            open_subdir(directory.path(), "team/missing", false).expect_err("missing subdirectory");
+        assert!(
+            matches!(&error, BoxliteError::NotFound(_))
+                && error.to_string().contains("VOLUME_SUBPATH_NOT_FOUND"),
+            "{error:?}"
+        );
     }
 }

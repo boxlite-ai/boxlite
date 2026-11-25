@@ -110,7 +110,12 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
-import { requiresVolumeMountOptions, runnerSupportsVolumeMountOptions } from '../utils/runner-volume-mount-options'
+import {
+  adapterSupportsVolumeMountOptions,
+  requiresVolumeMountOptions,
+  runnerSupportsVolumeMountOptions,
+  VOLUME_MOUNT_OPTIONS_CAPABILITY,
+} from '../utils/runner-volume-mount-options'
 import { SecretServerClient } from './secret-server-client'
 import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
@@ -269,7 +274,9 @@ export class BoxService {
     const runner = await this.runnerService.getRandomAvailableRunner({
       ...runnerParams,
       ...(box.privileged ? { requiresPrivileged: true } : {}),
-      ...(requiresVolumeMountOptions(box.volumes) ? { requiresVolumeMountOptions: true } : {}),
+      ...(box.requiresVolumeMountOptions || requiresVolumeMountOptions(box.volumes)
+        ? { requiresVolumeMountOptions: true }
+        : {}),
     })
     box.runnerId = runner.id
     return persist(runner)
@@ -486,6 +493,7 @@ export class BoxService {
       if (createBoxDto.volumes !== undefined) {
         box.volumes = this.resolveVolumes(createBoxDto.volumes)
       }
+      box.requiresVolumeMountOptions = createBoxDto.typedMountsRequested
 
       box.pending = true
 
@@ -1260,6 +1268,13 @@ export class BoxService {
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+
+    if (requiresVolumeMountOptions(box.volumes) && !(await adapterSupportsVolumeMountOptions(runnerAdapter))) {
+      this.logger.warn(`Runner ${runner.id} cannot recover box ${box.id}: missing ${VOLUME_MOUNT_OPTIONS_CAPABILITY}`)
+      throw new ForbiddenException(
+        'VOLUME_MOUNT_OPTIONS_UNSUPPORTED: runner does not support readOnly or subpath mounts',
+      )
+    }
 
     try {
       await runnerAdapter.recoverBox(box)

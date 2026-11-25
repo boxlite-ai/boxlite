@@ -70,7 +70,7 @@ export function containsPathTraversalComponent(subpath: string): boolean {
 }
 
 /**
- * Validates subpaths for box volumes to ensure they are safe S3 key prefixes
+ * Validates relative cloud-volume subpaths and their mount options
  * @param volumes - Array of BoxVolume objects to validate
  * @throws Error with descriptive message if any subpath is invalid
  */
@@ -90,44 +90,52 @@ export function validateSubpaths(volumes: BoxVolume[]): void {
     }
 
     if (typeof subpath !== 'string') {
-      errors.push(`Invalid subpath ${subpath} (must be a string)`)
+      errors.push(`VOLUME_SUBPATH_INVALID: invalid subpath ${subpath} (must be a string)`)
       continue
     }
 
+    // Cloud-native requests use the empty string for a whole-volume mount,
+    // matching the pre-existing behavior. REST `mounts` rejects it at its DTO
+    // boundary before reaching this internal validator.
     if (subpath === '') {
-      errors.push('Invalid subpath "" (omit subpath to mount the entire volume)')
       continue
     }
 
     if (subpath.includes('\0')) {
-      errors.push(`Invalid subpath "${subpath}" (cannot contain NUL)`)
+      errors.push(`VOLUME_SUBPATH_INVALID: invalid subpath "${subpath}" (cannot contain NUL)`)
       continue
     }
 
     if (subpath.startsWith('/') || subpath.endsWith('/')) {
-      errors.push(`Invalid subpath "${subpath}" (must be a relative directory path without a trailing slash)`)
+      errors.push(
+        `VOLUME_SUBPATH_INVALID: invalid subpath "${subpath}" (must be a relative directory path without a trailing slash)`,
+      )
       continue
     }
 
     if (Buffer.byteLength(subpath, 'utf8') > 4096) {
-      errors.push(`Invalid subpath "${subpath}" (must be at most 4096 bytes)`)
+      errors.push(`VOLUME_SUBPATH_INVALID: invalid subpath "${subpath}" (must be at most 4096 bytes)`)
       continue
     }
 
     if (subpath.split('/').length > 64) {
-      errors.push(`Invalid subpath "${subpath}" (must contain at most 64 path components)`)
+      errors.push(`VOLUME_SUBPATH_INVALID: invalid subpath "${subpath}" (must contain at most 64 path components)`)
       continue
     }
 
     let componentError = false
     for (const component of subpath.split('/')) {
       if (component === '' || component === '.' || containsPathTraversalComponent(component)) {
-        errors.push(`Invalid subpath "${subpath}" (cannot contain empty, ".", or ".." path components)`)
+        errors.push(
+          `VOLUME_SUBPATH_INVALID: invalid subpath "${subpath}" (cannot contain empty, ".", or ".." path components)`,
+        )
         componentError = true
         break
       }
       if (Buffer.byteLength(component, 'utf8') > 255) {
-        errors.push(`Invalid subpath "${subpath}" (each path component must be at most 255 bytes)`)
+        errors.push(
+          `VOLUME_SUBPATH_INVALID: invalid subpath "${subpath}" (each path component must be at most 255 bytes)`,
+        )
         componentError = true
         break
       }

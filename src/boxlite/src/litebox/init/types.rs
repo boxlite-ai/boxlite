@@ -145,6 +145,10 @@ pub fn resolve_user_volumes(
                     vol.host_path
                 )));
             }
+            // Cloud uses the volume-root owner for idmap because a read-write
+            // subpath may not exist until the guest creates it. Local named
+            // volumes stat the selected directory instead; that difference is
+            // intentional and keeps creation independent of host-side races.
             let sub_path = vol.sub_path.as_deref().unwrap_or("");
             let kind = if sub_path.is_empty() {
                 ResolvedShareKind::ManagedDirectory

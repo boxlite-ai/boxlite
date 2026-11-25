@@ -41,8 +41,8 @@ export class BoxliteConfigController {
         exec_user_enabled: true,
         idempotency_key_lifetime: REPLAY_LIFETIME,
         idempotency_operations: this.replayPolicy?.operations() ?? [],
-        volume_read_only_enabled: true,
-        typed_mounts_enabled: true,
+        volume_read_only_enabled: this.config?.get('volume.readOnlyEnabled') === true,
+        typed_mounts_enabled: this.config?.get('volume.typedMountsEnabled') === true,
       },
     }
   }

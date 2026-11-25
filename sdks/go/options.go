@@ -380,6 +380,28 @@ func WithBindMountSubPath(hostRoot, guestTarget, subPath string, readOnly bool) 
 	}
 }
 
+// validateCloudBindSubPath applies the same component rules as the Runner and
+// guest. The C ABI cannot return a validation error, so rejecting here keeps a
+// malformed option from disappearing into a later guest-start failure.
+func validateCloudBindSubPath(subPath string) error {
+	if subPath == "" {
+		return nil
+	}
+	if strings.ContainsRune(subPath, 0) ||
+		strings.HasPrefix(subPath, "/") ||
+		strings.HasSuffix(subPath, "/") ||
+		len(subPath) > 4096 ||
+		strings.Count(subPath, "/") > 63 {
+		return fmt.Errorf("VOLUME_SUBPATH_INVALID: invalid subpath %q", subPath)
+	}
+	for _, component := range strings.Split(subPath, "/") {
+		if component == "" || component == "." || component == ".." || len(component) > 255 {
+			return fmt.Errorf("VOLUME_SUBPATH_INVALID: invalid subpath %q", subPath)
+		}
+	}
+	return nil
+}
+
 // WithManagedVolume mounts a managed volume into the box.
 //
 // managedVolume is the volume's server-assigned id or its name — the server
@@ -661,6 +683,12 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		} else {
 			cHost := toCString(volume.hostPath)
 			if volume.cloudVolume {
+				if err := validateCloudBindSubPath(volume.subPath); err != nil {
+					C.free(unsafe.Pointer(cHost))
+					C.free(unsafe.Pointer(cGuest))
+					C.boxlite_options_free(cOpts)
+					return nil, err
+				}
 				cSub := toCString(volume.subPath)
 				C.boxlite_options_add_bind_mount_subdir(cOpts, cHost, cGuest, cSub, readOnly)
 				C.free(unsafe.Pointer(cSub))

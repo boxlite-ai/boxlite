@@ -21,7 +21,12 @@ import { CuratedImagePinService } from '../../../image/services/curated-image-pi
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
 import { boxVolumeForDispatch } from '../../utils/box-volume.util'
 import { FilestoreInstanceResolver } from '../../services/filestore-instance.resolver'
-import { requiresVolumeMountOptions, runnerSupportsVolumeMountOptions } from '../../utils/runner-volume-mount-options'
+import {
+  adapterSupportsVolumeMountOptions,
+  requiresVolumeMountOptions,
+  runnerSupportsVolumeMountOptions,
+  VOLUME_MOUNT_OPTIONS_CAPABILITY,
+} from '../../utils/runner-volume-mount-options'
 
 import { resolveNestedVirtualization } from '../../runner-adapter/nested-virtualization-policy'
 
@@ -88,7 +93,11 @@ export class BoxStartAction extends BoxAction {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-    if (requiresVolumeMountOptions(box.volumes) && !runnerSupportsVolumeMountOptions(runner)) {
+    if (
+      requiresVolumeMountOptions(box.volumes) &&
+      (!runnerSupportsVolumeMountOptions(runner) || !(await adapterSupportsVolumeMountOptions(runnerAdapter)))
+    ) {
+      this.logger.warn(`Runner ${runner.id} cannot start box ${box.id}: missing ${VOLUME_MOUNT_OPTIONS_CAPABILITY}`)
       await this.updateBoxState(
         box,
         BoxState.ERROR,
@@ -132,7 +141,11 @@ export class BoxStartAction extends BoxAction {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-    if (requiresVolumeMountOptions(box.volumes) && !runnerSupportsVolumeMountOptions(runner)) {
+    if (
+      requiresVolumeMountOptions(box.volumes) &&
+      (!runnerSupportsVolumeMountOptions(runner) || !(await adapterSupportsVolumeMountOptions(runnerAdapter)))
+    ) {
+      this.logger.warn(`Runner ${runner.id} cannot start box ${box.id}: missing ${VOLUME_MOUNT_OPTIONS_CAPABILITY}`)
       await this.updateBoxState(
         box,
         BoxState.ERROR,

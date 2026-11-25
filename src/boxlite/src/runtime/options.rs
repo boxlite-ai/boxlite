@@ -1132,6 +1132,18 @@ impl VolumeSpec {
     /// shape, so this runs at create rather than only in the constructors.
     pub fn validate(&self) -> BoxliteResult<()> {
         let guest_path = &self.guest_path;
+        if self.cloud_volume && self.managed_volume.is_some() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!("cloud volume mount {guest_path:?} cannot also set managed_volume"),
+            ));
+        }
+        if !self.cloud_volume && self.sub_path.is_some() {
+            return Err(boxlite_shared::errors::BoxliteError::InvalidArgument(
+                format!(
+                    "volume mount {guest_path:?} cannot set sub_path without the cloud volume marker"
+                ),
+            ));
+        }
         match &self.managed_volume {
             Some(volume) if !self.host_path.is_empty() => Err(
                 boxlite_shared::errors::BoxliteError::InvalidArgument(format!(

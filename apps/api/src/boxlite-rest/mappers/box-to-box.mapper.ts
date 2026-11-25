@@ -74,13 +74,15 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   // `mounts` is the same managed-volume mount expressed in the public
   // mounts vocabulary. Normalize both request shapes onto Box.volumes so
   // create, restart, and recovery have one persisted source of truth.
-  createDto.volumes =
-    dto.mounts?.map((mount) => ({
+  if (dto.mounts?.length) {
+    createDto.volumes = dto.mounts.map((mount) => ({
       volumeId: mount.source,
       mountPath: mount.target,
       readOnly: mount.read_only,
       subpath: mount.sub_path,
-    })) ?? createDto.volumes
+    }))
+    createDto.typedMountsRequested = true
+  }
   createDto.secrets = dto.secrets?.map((secret) => ({
     name: secret.name,
     value: secret.value,

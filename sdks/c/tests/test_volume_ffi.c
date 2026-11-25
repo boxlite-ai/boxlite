@@ -46,8 +46,11 @@ static void test_volume_info_layout(void) {
 static void test_mount_origin_entrypoints(void) {
   boxlite_options_add_bind_mount(NULL, "/host/data", "/data", 0);
   boxlite_options_add_managed_volume(NULL, "my-data", "/data", 0);
+  boxlite_options_add_bind_mount_subdir(NULL, "/mnt/boxlite-volume-id",
+                                        "/workspace", "team/backend", 0);
   printf(
-      "  ok: bind-mount and managed-volume entrypoints accept a NULL handle\n");
+      "  ok: bind-mount, managed-volume, and cloud-subdir entrypoints accept a "
+      "NULL handle\n");
 }
 
 /* (2) The name parameter exists, and a NULL handle is still rejected
