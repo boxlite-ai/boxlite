@@ -842,3 +842,10 @@ same handle establish a fresh vsock connection automatically.
 `vmm_socket` exposes `ControlOp::CaptureCheckpoint`, `ControlReply::CheckpointCaptured`,
 and `ControlError::ShimShutdown` over the existing HTTP/1.1 Unix control channel across
 macOS arm64 and Linux x86_64.
+
+### Krun shim checkpoint capture and restore
+
+`KrunVmmInstance::enter` serves `vmm.sock` on macOS arm64 and Linux x86_64, executing
+`krun_pause -> krun_save_checkpoint -> Qcow2Helper::flatten -> krun_resume` with
+`ResumeOnDrop` and shim exit after replying on `ESHUTDOWN`. Restores bind
+`krun_build_from_checkpoint`.
