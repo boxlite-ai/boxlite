@@ -32,6 +32,14 @@ interface CreateApiKeyDialogProps {
   permissionsStatus?: 'loading' | 'ready' | 'error'
   onRetryPermissions?: () => Promise<void>
 }
+
+const ALL_AVAILABLE_ACCESS = {
+  id: 'all',
+  label: 'All available permissions',
+  description:
+    'Grant every permission available to you in this organization, including deletion and member management when available.',
+}
+
 const EXPIRY_OPTIONS = [
   { value: '30', label: '30 days' },
   { value: '90', label: '90 days' },
@@ -68,7 +76,7 @@ function ApiKeyForm({
   const [expiry, setExpiry] = useState('30')
   const [selected, setSelected] = useState<Permission[]>([])
   const [customize, setCustomize] = useState(false)
-  const [presetId, setPresetId] = useState('operate')
+  const [presetId, setPresetId] = useState(ALL_AVAILABLE_ACCESS.id)
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['Boxes'])
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState<ApiKeyResponse | null>(null)
@@ -81,7 +89,8 @@ function ApiKeyForm({
   const generation = useRef(0)
   const pending = useRef(false)
   const permissionsSignature = [...availablePermissions].sort().join(',')
-  const preset = API_KEY_ACCESS_PRESETS.find((item) => item.id === presetId)
+  const accessPresets = [{ ...ALL_AVAILABLE_ACCESS, permissions: availablePermissions }, ...API_KEY_ACCESS_PRESETS]
+  const preset = accessPresets.find((item) => item.id === presetId)
   const invalid = selected.filter((permission) => !availablePermissions.includes(permission))
   const canSubmit = Boolean(
     organizationId &&
@@ -108,10 +117,14 @@ function ApiKeyForm({
     setSubmitting(false)
     if (!initialized.current && permissionsStatus === 'ready') {
       initialized.current = true
-      const defaultAvailable = availablePermissions.includes(Permission.WRITE_BOXES)
-      setSelected(defaultAvailable ? [Permission.WRITE_BOXES] : [])
-      setCustomize(!defaultAvailable)
-      setPresetId(defaultAvailable ? 'operate' : 'custom')
+      setSelected([...availablePermissions])
+    } else if (
+      permissionsStatus === 'ready' &&
+      presetId === ALL_AVAILABLE_ACCESS.id &&
+      (invalid.length > 0 || selected.length !== availablePermissions.length)
+    ) {
+      // Keep the draft grants stable if a membership refresh changes the available set.
+      setPresetId('custom')
     }
     return () => {
       generation.current += 1
@@ -246,8 +259,9 @@ function ApiKeyForm({
                   setCustomize(true)
                   return
                 }
-                const choice = API_KEY_ACCESS_PRESETS.find((item) => item.id === value)!
-                if (!choice.permissions.every((permission) => availablePermissions.includes(permission))) return
+                const choice = accessPresets.find((item) => item.id === value)
+                if (!choice || !choice.permissions.every((permission) => availablePermissions.includes(permission)))
+                  return
                 setPresetId(value)
                 setSelected([...choice.permissions])
                 setExpandedGroups(
@@ -262,7 +276,7 @@ function ApiKeyForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {API_KEY_ACCESS_PRESETS.map((item) => {
+                {accessPresets.map((item) => {
                   const missing = item.permissions.filter((permission) => !availablePermissions.includes(permission))
                   return (
                     <SelectItem key={item.id} value={item.id} disabled={missing.length > 0}>
@@ -355,7 +369,7 @@ function ApiKeyForm({
                               }}
                             />
                             <label htmlFor={`${id}-${permission}`} className="min-w-0 cursor-pointer text-body">
-                              {API_KEY_PERMISSION_LABELS[permission]}
+                              {API_KEY_PERMISSION_LABELS[permission] ?? permission}
                               {invalid.includes(permission) && <span className="text-destructive"> · Unavailable</span>}
 
                               {API_KEY_PERMISSION_HELP[permission] && (

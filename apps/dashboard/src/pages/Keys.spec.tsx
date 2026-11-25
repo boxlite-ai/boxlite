@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { CreateApiKeyPermissionsEnum as P } from '@boxlite-ai/api-client'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -127,32 +128,30 @@ describe('console member key defaults', () => {
     expect(mocks.create).not.toHaveBeenCalled()
   })
 
-  it('defaults to Box operations for an owner', async () => {
+  it('defaults to all API key permissions for an owner', async () => {
     const permissions = await createKey()
 
-    expect(permissions).toEqual(['write:boxes'])
+    expect(permissions).toEqual(Object.values(P).filter((permission) => permission !== P.UNKNOWN_DEFAULT_OPEN_API))
   })
 
-  it.each(['owner', 'member'])('lets an %s explicitly grant Apps access through Adjust permissions', async (role) => {
+  it.each(['owner', 'member'])('lets a %s limit an API key to Apps through Adjust permissions', async (role) => {
     const appPermissions = ['read:apps', 'write:apps']
-    if (role === 'member') mocks.member = { role, assignedRoles: [{ permissions: appPermissions }] }
+    if (role === 'member') {
+      mocks.member = { role, assignedRoles: [{ permissions: ['write:boxes', ...appPermissions] }] }
+    }
 
     const permissions = await createKey(async () => {
-      if (role === 'owner') {
-        const adjust = [...document.querySelectorAll('button')].find(
-          (button) => button.textContent === 'Adjust permissions',
-        )!
-        await act(async () => adjust.click())
-        const boxes = document.querySelector<HTMLButtonElement>('[role="checkbox"][id$="-write:boxes"]')!
-        await act(async () => boxes.click())
-      }
+      const adjust = [...document.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Adjust permissions',
+      )!
+      await act(async () => adjust.click())
       const group = document.querySelector('fieldset[aria-label="Apps"]')!
       expect(group).not.toBeNull()
-      const details = group.closest('details')!
-      await act(async () => details.querySelector('summary')!.click())
-      expect(details.open).toBe(true)
-      for (const permission of appPermissions) {
-        const checkbox = group.querySelector<HTMLButtonElement>(`[role="checkbox"][id$="-${permission}"]`)!
+      const checkboxes = document.querySelectorAll<HTMLButtonElement>('[role="checkbox"][aria-checked="true"]')
+      for (const checkbox of checkboxes) {
+        if (appPermissions.some((permission) => checkbox.id.endsWith(`-${permission}`))) continue
+        const details = checkbox.closest('details')!
+        if (!details.open) await act(async () => details.querySelector('summary')!.click())
         await act(async () => checkbox.click())
       }
       expect(document.querySelector('[role="combobox"][aria-label="Access"]')?.textContent).toBe('Custom access')
@@ -166,15 +165,21 @@ describe('console member key defaults', () => {
     expect(days).toBeLessThanOrEqual(30)
   })
 
-  it('defaults to Box operations even when member read is available', async () => {
+  it('defaults to the member’s assigned Console permissions', async () => {
     mocks.member = {
       role: 'member',
       assignedRoles: [{ permissions: ['write:boxes', 'read:members', 'write:members'] }],
     }
     const permissions = await createKey()
 
-    expect(permissions).toEqual(['write:boxes'])
+    expect(permissions).toEqual(['write:boxes', 'read:members'])
     expect(permissions).not.toContain('write:members')
+  })
+
+  it('creates an Apps key for a member without Box operations', async () => {
+    mocks.member = { role: 'member', assignedRoles: [{ permissions: ['read:apps', 'write:apps'] }] }
+
+    expect(await createKey()).toEqual(['read:apps', 'write:apps'])
   })
 
   it('does not grant member scopes to a member without them', async () => {

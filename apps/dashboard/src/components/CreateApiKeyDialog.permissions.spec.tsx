@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateApiKeyPermissionsEnum as P } from '@boxlite-ai/api-client'
+import { SUPPORTED_API_KEY_PERMISSIONS } from '@/lib/api-key-permissions'
 import { CreateApiKeyDialog } from './CreateApiKeyDialog'
 
 const mocks = vi.hoisted(() => ({ create: vi.fn() }))
@@ -52,13 +53,51 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 describe('API key permission contract', () => {
-  it('defaults to Box operations and thirty days, not all available permissions', async () => {
-    await render()
+  it('selects all available permissions in the dropdown and submits the full supported set', async () => {
+    await render(SUPPORTED_API_KEY_PERMISSIONS)
     await open()
-    const before = Date.now()
+    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('All available permissions')
+    await openAccessMenu()
+    const allPermissions = accessOption('All available permissions')
+    expect(allPermissions?.dataset.state).toBe('checked')
+    await act(async () => allPermissions!.click())
+
     await submit()
-    expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES])
-    expect(mocks.create.mock.calls[0][0].expiresAt.getTime()).toBeGreaterThanOrEqual(before + 30 * 86400000)
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual(
+      Object.values(P).filter((permission) => permission !== P.UNKNOWN_DEFAULT_OPEN_API),
+    )
+  })
+  it('labels each previously hidden grant and lets the owner remove it before creation', async () => {
+    await render(SUPPORTED_API_KEY_PERMISSIONS)
+    await open()
+    await act(async () => button('Adjust permissions').click())
+
+    const newlyVisibleGrants = [
+      ['Manage legacy templates', P.WRITE_TEMPLATES],
+      ['Delete legacy templates', P.DELETE_TEMPLATES],
+      ['Manage regions', P.WRITE_REGIONS],
+      ['Delete regions', P.DELETE_REGIONS],
+      ['View runners', P.READ_RUNNERS],
+      ['Manage runners', P.WRITE_RUNNERS],
+      ['Delete runners', P.DELETE_RUNNERS],
+      ['View audit logs', P.READ_AUDIT_LOGS],
+    ] as const
+    for (const [label, permission] of newlyVisibleGrants) {
+      const checkboxLabel = [...document.querySelectorAll('label')].find((item) => item.textContent === label)
+      expect(checkboxLabel?.htmlFor).toContain(permission)
+      const checkbox = document.getElementById(checkboxLabel!.htmlFor)!
+      const group = checkbox.closest('details')!
+      if (!group.open) await act(async () => group.querySelector('summary')!.click())
+      expect(checkbox.getAttribute('aria-checked')).toBe('true')
+      await act(async () => checkbox.click())
+      expect(checkbox.getAttribute('aria-checked')).toBe('false')
+    }
+
+    await submit()
+    const removedPermissions = new Set<P>(newlyVisibleGrants.map(([, permission]) => permission))
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual(
+      SUPPORTED_API_KEY_PERMISSIONS.filter((permission) => !removedPermissions.has(permission)),
+    )
   })
   it('sets a finite thirty-day expiry', async () => {
     await render([P.WRITE_BOXES])
@@ -70,11 +109,11 @@ describe('API key permission contract', () => {
     expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + 30 * 86400000)
     expect(expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 30 * 86400000)
   })
-  it('blocks submission when the default permission is unavailable', async () => {
-    await render([P.WRITE_MEMBERS])
+  it('grants only the available subset when Box operations cannot be granted', async () => {
+    await render([P.READ_APPS])
     await open()
     await submit()
-    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.READ_APPS])
   })
   it('discards a secret returned after the organization changes', async () => {
     let resolve!: (value: unknown) => void
@@ -93,14 +132,13 @@ describe('API key permission contract', () => {
   })
   it('keeps a failed request draft and sends the exact custom subset on retry', async () => {
     mocks.create.mockRejectedValueOnce({ response: { status: 400 } })
-    await render()
+    await render([P.WRITE_BOXES, P.DELETE_BOXES])
     await open()
     await act(async () => button('Adjust permissions').click())
     const checkbox = (label: string) =>
       document.getElementById(
         [...document.querySelectorAll('label')].find((l) => l.textContent?.startsWith(label))!.htmlFor,
       )!
-    await act(async () => checkbox('Delete boxes').click())
     await act(async () => checkbox('Operate boxes').click())
     await submit()
     expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.DELETE_BOXES])
@@ -116,6 +154,14 @@ describe('API key permission contract', () => {
     await submit()
     expect(mocks.create).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('no longer available')
+  })
+  it('keeps the draft grants when a membership refresh adds permissions', async () => {
+    await render([P.READ_APPS])
+    await open()
+    await render([P.READ_APPS, P.WRITE_APPS])
+    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    await submit()
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.READ_APPS])
   })
   it('does not issue two requests for simultaneous submissions', async () => {
     mocks.create.mockImplementation(() => new Promise(() => {}))
@@ -155,17 +201,25 @@ describe('API key permission contract', () => {
   })
 })
 
-async function chooseAccess(label: string) {
+async function openAccessMenu() {
   await act(async () =>
     document
       .querySelector('[aria-label="Access"]')!
       .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
   )
-  const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+}
+
+function accessOption(label: string) {
+  return [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
     (item) => item.textContent?.trim() === label,
-  )!
+  )
+}
+
+async function chooseAccess(label: string) {
+  await openAccessMenu()
+  const option = accessOption(label)
   expect(option).toBeTruthy()
-  await act(async () => option.click())
+  await act(async () => option!.click())
 }
 describe('API key access presets', () => {
   it.each([
@@ -181,11 +235,7 @@ describe('API key access presets', () => {
   it('disables a composite preset when any required permission is unavailable', async () => {
     await render([P.WRITE_BOXES, P.READ_VOLUMES])
     await open()
-    await act(async () =>
-      document
-        .querySelector('[aria-label="Access"]')!
-        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
-    )
+    await openAccessMenu()
     const option = [...document.querySelectorAll('[role="option"]')].find((item) =>
       item.textContent?.startsWith('Use boxes with volumes'),
     )!
@@ -193,7 +243,15 @@ describe('API key access presets', () => {
     expect(option.textContent).toContain('Manage volumes')
     await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     await submit()
-    expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES])
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES, P.READ_VOLUMES])
+  })
+  it('can return to all available permissions after choosing a narrower preset', async () => {
+    await render()
+    await open()
+    await chooseAccess('Operate boxes')
+    await chooseAccess('All available permissions')
+    await submit()
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual(all)
   })
   it('marks manual changes as custom and replaces the set when choosing a preset', async () => {
     await render()
@@ -223,7 +281,7 @@ it('preserves the completed secret during a membership refresh', async () => {
 })
 
 it('allows an explicit permanent key with a custom access selection', async () => {
-  await render()
+  await render([P.WRITE_BOXES])
   await open()
   await chooseAccess('Custom access')
   expect(document.body.textContent).toContain('Technical scopes')

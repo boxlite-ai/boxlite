@@ -19,6 +19,14 @@ export const API_KEY_PERMISSION_LABELS: Record<string, string> = {
   'delete:registries': 'Delete registry credentials',
   'read:members': 'View members',
   'write:members': 'Manage members and invitations',
+  'write:templates': 'Manage legacy templates',
+  'delete:templates': 'Delete legacy templates',
+  'write:regions': 'Manage regions',
+  'delete:regions': 'Delete regions',
+  'read:runners': 'View runners',
+  'write:runners': 'Manage runners',
+  'delete:runners': 'Delete runners',
+  'read:audit_logs': 'View audit logs',
 }
 export const API_KEY_PERMISSION_HELP: Record<string, string> = {
   'write:boxes': 'Operate boxes across this organization, including terminal access.',
@@ -29,9 +37,25 @@ export const API_KEY_PERMISSION_HELP: Record<string, string> = {
   'write:images': 'Includes creating and deleting image aliases.',
   'write:members': 'Includes member and invitation management, and API key revocation.',
 }
-export const API_KEY_PERMISSION_GROUPS = ['Boxes', 'Apps', 'Volumes', 'Images', 'Registries', 'Members'].map(
-  (name) => CREATE_API_KEY_PERMISSIONS_GROUPS.find((group) => group.name === name)!,
+// The generated fallback represents an unknown API value, not a grant.
+export const SUPPORTED_API_KEY_PERMISSIONS = Object.values(Permission).filter(
+  (permission) => permission !== Permission.UNKNOWN_DEFAULT_OPEN_API,
 )
+
+const primaryGroupNames = ['Boxes', 'Apps', 'Volumes', 'Images', 'Registries', 'Members']
+const permissionGroups = [
+  ...primaryGroupNames.map((name) => CREATE_API_KEY_PERMISSIONS_GROUPS.find((group) => group.name === name)!),
+  ...CREATE_API_KEY_PERMISSIONS_GROUPS.filter((group) => !primaryGroupNames.includes(group.name)),
+]
+const groupedPermissions = new Set(permissionGroups.flatMap((group) => group.permissions))
+
+export const API_KEY_PERMISSION_GROUPS = [
+  ...permissionGroups,
+  {
+    name: 'Other permissions',
+    permissions: SUPPORTED_API_KEY_PERMISSIONS.filter((permission) => !groupedPermissions.has(permission)),
+  },
+]
 export const IMPLICIT_BOX_READ = 'Reading boxes is included and cannot be disabled here.'
 
 export function apiKeyPermissionSummary(permissions: readonly string[]): string {

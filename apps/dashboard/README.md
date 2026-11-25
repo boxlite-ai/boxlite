@@ -671,16 +671,29 @@ duplicates, updates with fixed scope, write permissions, and refusals named by b
 
 ## Console API key permissions and expiration
 
-**New API key** defaults to **Operate boxes** (`write:boxes`) and **30 days**.
-The Access selector offers Operate boxes, Manage box lifecycle (adds Box deletion),
-and Use boxes with volumes (adds Volume read and write). A preset requires every
-scope in its bundle; unavailable presets explain the missing capabilities.
-Adjust permissions opens resource groups for independent choices within the
-signed-in member's available scopes. Manual changes mark the choice Custom access;
-technical scope identifiers live in expandable details. Deleting Boxes and member management require explicit selection. Without
-Box-write permission the form starts with no selection; empty or revoked selections
-cannot be submitted. Permission loading and failures block creation and failures
-provide refresh. Permissions apply across the selected organization, not a single Box.
+**New API key** defaults to **All available permissions** and **30 days**.
+This selects every grant the signed-in member can choose in the current
+organization. Owners can choose every permission in the API key schema.
+
+The Console includes new schema permissions when it is built with the updated
+API client.
+
+To issue a narrower key, select **Operate boxes**, **Manage box lifecycle** or
+**Use boxes with volumes**. Each of these presets requires every scope in its
+bundle, and an unavailable preset lists the missing scopes.
+
+**Adjust permissions** shows each grant in its resource group. Permissions
+without a dedicated group appear under **Other permissions**. Manual changes
+select **Custom access**, and technical scope identifiers are available in
+expandable details.
+
+A permissions refresh keeps the draft grants. If the available set changes,
+reselect **All available permissions** to update the selection.
+
+Empty and revoked selections block creation. Creation also waits for permissions
+to load, and a refresh is available after a failure.
+
+Permissions apply across the organization.
 Box reading is implicit and cannot be disabled in this form. Managing image aliases
 includes alias deletion; using an image does not automatically require catalog access.
 
