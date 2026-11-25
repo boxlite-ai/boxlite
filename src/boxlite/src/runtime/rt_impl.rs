@@ -6,6 +6,7 @@ use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockGuard, LockManager, Locker};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
+use crate::net::{CompleteOutboundPolicy, OutboundRevision, PreparedOutboundCreate};
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
@@ -21,6 +22,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
+
+enum OutboundCreate {
+    Policy(CompleteOutboundPolicy),
+    Prepared(PreparedOutboundCreate),
+}
 
 fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
     // Every handle this runtime hands out starts following its box's main
@@ -451,7 +457,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         name: Option<String>,
         reuse_existing: bool,
-        complete: Option<crate::net::CompleteOutboundPolicy>,
+        complete: Option<OutboundCreate>,
     ) -> BoxliteResult<(LiteBox, bool)> {
         // Check if runtime has been shut down
         if self.shutdown_token.is_cancelled() {
@@ -468,12 +474,20 @@ impl RuntimeImpl {
             ));
         }
 
-        let snapshot = complete.as_ref().map(|policy| {
+        let exact_revision = matches!(&complete, Some(OutboundCreate::Prepared(_)));
+        let prepared = complete.map(|request| {
             if !matches!(&options.network, crate::runtime::options::NetworkSpec::Enabled { allow_net } if allow_net.is_empty()) {
                 return Err(BoxliteError::InvalidArgument("complete outbound policy requires a NIC and no legacy allow rules".into()));
             }
-            policy.prepare(crate::net::OutboundAdmission::ExtendedIpv4, crate::net::OutboundRevision::initial())
+            match request {
+                OutboundCreate::Policy(policy) => PreparedOutboundCreate::new(&policy, OutboundRevision::initial()),
+                OutboundCreate::Prepared(prepared) => {
+                    prepared.requirements()?;
+                    Ok(prepared)
+                }
+            }
         }).transpose()?;
+        let snapshot = prepared.as_ref().map(|prepared| &prepared.snapshot);
 
         // Check DB for existing name — use lookup_box to get full (config, state)
         // so we can build the LiteBox directly without a second lookup
@@ -481,7 +495,7 @@ impl RuntimeImpl {
             && let Some((config, state)) = self.box_manager.lookup_box(name)?
         {
             return if reuse_existing {
-                self.check_outbound_reuse(&config.id, snapshot.as_ref())?;
+                self.check_outbound_reuse(&config.id, snapshot, exact_revision)?;
                 self.adopt_existing_box(&options, config, state)
             } else {
                 Err(BoxliteError::InvalidArgument(format!(
@@ -496,19 +510,27 @@ impl RuntimeImpl {
         options.validate_cpus()?;
         options.validate_secrets()?;
 
-        if let (Some(policy), Some(snapshot)) = (&complete, &snapshot) {
-            let mut required = snapshot.requirements();
-            required.deny |= policy.deny_net.is_some();
-            crate::vmm::controller::probe_outbound_capabilities()
-                .await?
-                .require(required)?;
+        let (config, mut state) = self.init_box_variables(&options, name.clone());
+        if let Some(prepared) = &prepared {
+            if let Some(pin) = &prepared.rebuild_pin {
+                crate::vmm::controller::copy_rebuild_shim(
+                    self.layout.home_dir(),
+                    &config.box_home,
+                    pin,
+                    prepared.requirements()?,
+                )
+                .await?;
+            } else if exact_revision {
+                require_hosted_create_capabilities(prepared).await?;
+            } else {
+                crate::vmm::controller::probe_outbound_capabilities()
+                    .await?
+                    .require(prepared.requirements()?)?;
+            }
         }
 
-        // Initialize box variables with defaults
-        let (config, mut state) = self.init_box_variables(&options, name.clone());
-
         // Persist Configured state only after both lock namespaces are allocated.
-        let outbound = snapshot.clone().map(|committed| {
+        let outbound = snapshot.cloned().map(|committed| {
             crate::litebox::box_impl::outbound::CompleteOutboundControl {
                 committed,
                 pending: None,
@@ -527,7 +549,7 @@ impl RuntimeImpl {
                 && let Some(ref name) = name
                 && let Some((config, state)) = self.box_manager.lookup_box(name)?
             {
-                self.check_outbound_reuse(&config.id, snapshot.as_ref())?;
+                self.check_outbound_reuse(&config.id, snapshot, exact_revision)?;
                 return self.adopt_existing_box(&options, config, state);
             }
 
@@ -561,6 +583,7 @@ impl RuntimeImpl {
         &self,
         id: &BoxID,
         requested: Option<&crate::net::CompleteOutboundSnapshot>,
+        exact_revision: bool,
     ) -> BoxliteResult<()> {
         let Some(requested) = requested else {
             return Ok(());
@@ -570,6 +593,7 @@ impl RuntimeImpl {
             state.pending.is_none()
                 && state.committed.admission == requested.admission
                 && state.committed.policy == requested.policy
+                && (!exact_revision || state.committed.revision == requested.revision)
         }) {
             return Err(BoxliteError::InvalidState(
                 "existing Box does not have the requested committed outbound policy".into(),
@@ -2008,6 +2032,20 @@ async fn sanitize_local_options(
     })?
 }
 
+async fn require_hosted_create_capabilities(
+    prepared: &PreparedOutboundCreate,
+) -> BoxliteResult<()> {
+    let requirements = prepared.requirements()?;
+    let capabilities = crate::vmm::controller::probe_outbound_capabilities()
+        .await
+        .map_err(|error| {
+            BoxliteError::Engine(format!(
+                "could not determine outbound create capabilities: {error}"
+            ))
+        })?;
+    capabilities.require(requirements)
+}
+
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
@@ -2033,7 +2071,44 @@ impl super::backend::RuntimeBackend for LocalRuntime {
     ) -> BoxliteResult<(LiteBox, bool)> {
         let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0
-            .create_inner(options, name, reuse_existing, Some(policy))
+            .create_inner(
+                options,
+                name,
+                reuse_existing,
+                Some(OutboundCreate::Policy(policy)),
+            )
+            .await
+    }
+
+    async fn prepare_hosted_outbound_create(
+        &self,
+        policy: CompleteOutboundPolicy,
+        revision: OutboundRevision,
+    ) -> BoxliteResult<PreparedOutboundCreate> {
+        if revision == OutboundRevision::initial() {
+            return Err(BoxliteError::InvalidArgument(
+                "hosted outbound create requires an allocated revision".into(),
+            ));
+        }
+        let prepared = PreparedOutboundCreate::new(&policy, revision)?;
+        require_hosted_create_capabilities(&prepared).await?;
+        Ok(prepared)
+    }
+
+    async fn get_or_create_with_prepared_outbound(
+        &self,
+        options: BoxOptions,
+        name: String,
+        prepared: PreparedOutboundCreate,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        let options = sanitize_local_options(&self.0.experimental_features, options).await?;
+        self.0
+            .create_inner(
+                options,
+                Some(name),
+                true,
+                Some(OutboundCreate::Prepared(prepared)),
+            )
             .await
     }
 

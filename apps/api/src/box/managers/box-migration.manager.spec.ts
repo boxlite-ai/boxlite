@@ -89,6 +89,7 @@ function makeHarness(
   const lockedMigration = locked?.migration ?? migrations[0]
   const entityManager = {
     findOne: jest.fn().mockImplementation(async (entity: any) => (entity === Box ? lockedBox : lockedMigration)),
+    existsBy: jest.fn().mockResolvedValue(false),
     createQueryBuilder,
   }
   const find = jest.fn().mockResolvedValue(migrations)
@@ -212,6 +213,22 @@ describe('BoxMigrationManager submitter loop', () => {
     expect(h.jobService.createJob).not.toHaveBeenCalled()
     expect(h.writes).toHaveLength(0)
   })
+
+  it.each([JobType.EXPORT_BOX, JobType.IMPORT_BOX])(
+    'turns around a protected Box before submitting %s',
+    async (jobType) => {
+      const state = jobType === JobType.EXPORT_BOX ? BoxMigrationState.PENDING_EXPORT : BoxMigrationState.PENDING_IMPORT
+      const migration = makeMigration(state, { arcPath: 'box-migrations/box-1.boxlite' })
+      const h = makeHarness([migration])
+      h.entityManager.existsBy.mockResolvedValue(true)
+
+      await h.manager.submitMigrationJobs()
+
+      expect(h.jobService.createJob).not.toHaveBeenCalled()
+      expect(h.writes).toMatchObject([{ kind: 'update', values: { state: BoxMigrationState.PENDING_ROLLBACK } }])
+      expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, jobType))
+    },
+  )
 
   it('requires runner privilege support when placing a privileged import', async () => {
     const migration = makeMigration(BoxMigrationState.PENDING_IMPORT, {

@@ -10,6 +10,7 @@ describe('JobType', () => {
   it('exposes only job types with an active producer and runner handler', () => {
     expect(Object.values(JobType)).toEqual([
       'CREATE_BOX',
+      'CREATE_COMPLETE_OUTBOUND_BOX',
       'START_BOX',
       'STOP_BOX',
       'DESTROY_BOX',

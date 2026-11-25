@@ -347,7 +347,7 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 </details>
 
 <details>
-<summary><b>Runners and jobs</b> · 16 routes</summary>
+<summary><b>Runners and jobs</b> · 19 routes</summary>
 
 | Method   | Path                                   | What it does                                                   |
 | -------- | -------------------------------------- | -------------------------------------------------------------- |
@@ -368,6 +368,8 @@ See [rotation ordering and recovery](../../../../apps/api/README.md#registry-cre
 | `GET`    | `/jobs/poll`                       | Long-polls for work assigned to the runner.                    |
 | `GET`    | `/jobs/{jobId}`                    | Gets a job by ID.                                              |
 | `POST`   | `/jobs/{jobId}/status`             | Reports job progress, success, or failure.                     |
+| `POST` | `/jobs/complete-outbound/claim` | Claims one protected V2 create using the Runner bearer and current `X-BoxLite-Complete-Lease`. |
+| `POST` | `/jobs/complete-outbound/{jobId}/receipt` | Commits terminal proof for the exact protected claim before Box publication. |
 
 </details>
 
@@ -653,7 +655,7 @@ for storage and lifecycle details.
 </details>
 
 <details>
-<summary><b>Execution, files, metrics, networking, and SSH</b> · 23 routes</summary>
+<summary><b>Execution, files, metrics, networking, and SSH</b> · 26 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
@@ -673,9 +675,12 @@ for storage and lifecycle details.
 | `PUT`    | `/v1[/{prefix}]/domains/{domain}/target`                  | Routes an owned full hostname to a box port using `{"type":"box","box":"<id-or-name>","port":3000}`; replaces any existing binding without declaring the port public. |
 | `DELETE` | `/v1[/{prefix}]/domains/{domain}/target`                  | Requires the full held hostname; stops routing it and keeps ownership; `204`, idempotent. |
 | `PUT`    | `/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
-| `GET`    | `/v1[/{prefix}]/boxes/{boxId}/network/outbound` | Reads the persisted complete policy and its strong revision ETag. |
+| `GET`    | `/v1[/{prefix}]/boxes/{boxId}/network/outbound` | Reads the persisted legacy policy and its strong revision ETag. |
 | `GET`    | `/v1[/{prefix}]/boxes/{boxId}/network/outbound/status` | Compares Cloud persistence, Runtime persistence and completed backend observation; pending or uncertain state is explicit. |
-| `PUT`    | `/v1[/{prefix}]/boxes/{boxId}/network/outbound` | Replaces the complete policy; optional strong `If-Match` enforces the public precondition, and success returns the confirmed revision ETag. |
+| `GET` | `/v1[/{prefix}]/boxes/{boxId}/network/outbound/complete` | Reads the committed allow and deny lists, admission mode, and strong ETag. An uncommitted policy returns `409 outbound_pending`. |
+| `GET` | `/v1[/{prefix}]/boxes/{boxId}/network/outbound/complete/status` | Compares Cloud persistence and complete Runner and backend evidence. |
+| `PUT` | `/v1[/{prefix}]/boxes/{boxId}/network/outbound/complete` | Replaces the complete policy and returns its confirmed revision ETag. |
+| `PUT`    | `/v1[/{prefix}]/boxes/{boxId}/network/outbound` | Replaces the legacy policy and returns its strong revision ETag. |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration on a running box; no auto-resume or activity. |
 | `GET`    | `/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |
@@ -685,7 +690,7 @@ Outbound policy and status reads require organization membership; writes additio
 Policy GET returns configuration, while status reports completion metadata rather than probing live destination traffic.
 Public callers provide optional `If-Match`; the internal candidate-revision header is rejected.
 
-See the [outbound control contract](../outbound-contract.md#public-cloud-control-resources) for strong comparison, durable pending and uncertain outcomes.
+See the [outbound control contract](../outbound-contract.md#public-cloud-control-resources) for revision preconditions and [hosted recovery](../outbound-contract.md#hosted-replacement-and-rebuild) for pending outcomes.
 
 Execution inventory is an organization-member read, like execution status; it
 does not require `write:boxes`. Box lookup remains scoped to that organization.
@@ -1193,7 +1198,7 @@ runtime and its microVMs.
 </details>
 
 <details>
-<summary><b>Embedded BoxLite operations</b> · 19 routes</summary>
+<summary><b>Embedded BoxLite operations</b> · 26 routes</summary>
 
 | Method    | Path                                           | What it does                                          |
 | --------- | ---------------------------------------------- | ----------------------------------------------------- |
@@ -1212,6 +1217,13 @@ runtime and its microVMs.
 | `GET`     | `/v1/boxes/{boxId}/network/outbound/status` | Reads Runtime persistence, backend observation, completion phase and `revision-v1` capability. |
 | `PUT`     | `/v1/boxes/{boxId}/network/outbound` | Replaces the complete local policy; rejects revision headers, which require the dedicated snapshot resource. |
 | `PUT`     | `/v1/boxes/{boxId}/network/outbound/snapshot` | Requires one strong expected ETag and a fresh `X-Boxlite-Outbound-Revision`; acknowledges the exact policy and candidate revision. |
+| `GET` | `/v1/boxes/{boxId}/network/outbound/complete` | Reads the complete durable Runtime policy. |
+| `GET` | `/v1/boxes/{boxId}/network/outbound/complete/status` | Compares complete durable and live policy. |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/complete/prepare-create` | Checks capabilities and prepares an exact create snapshot. |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/complete/create` | Provisions a bound V0 create. |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/complete/cancel-create` | Settles the matching create attempt or returns evidence of its installed policy. |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/complete/replace-control` | Carries owned replacement, restoration and finalization commands. |
+| `POST` | `/v1/boxes/{boxId}/network/outbound/complete/rebuild` | Rebuilds V0 with the verified backend and saved revision. |
 | `POST`    | `/v1/boxes/{boxId}/ssh`                        | Configures guest SSH once after checking that the box is running; otherwise `409 invalid_state`. |
 | `POST`    | `/v1/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration only while running; otherwise `409 invalid_state`. |
 | `GET`     | `/v1/boxes/{boxId}/ssh`                        | Reads guest SSH status; a stopped box answers disabled status without a handle. |

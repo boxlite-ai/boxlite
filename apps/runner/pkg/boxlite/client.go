@@ -8,6 +8,7 @@ package boxlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/checkpoint"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
 	"github.com/containerd/errdefs"
@@ -444,16 +446,10 @@ func (c *Client) NestedVirtualizationEnabled() bool {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
-	cpus, err := dto.CPUAllocation(boxDto.CpuQuota)
+	resources, err := validateCreateResources(boxDto)
 	if err != nil {
-		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
+		return "", "", err
 	}
-	memoryMiB, err := dto.MemoryMiB(boxDto.MemoryQuota)
-	if err != nil {
-		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
-	}
-	// Before any side effect: a request without a policy must not leave
-	// volume mounts or a box behind.
 	network, err := networkSpec(boxDto)
 	if err != nil {
 		return "", "", err
@@ -466,26 +462,43 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		return "", "", err
 	}
 	defer operation.Close()
-	if err := operation.CheckIdle(); err != nil {
+	if err := operation.CheckNoCompleteCreate(); err != nil {
 		return "", "", err
 	}
-	candidate, err := operation.UnpublishedCandidate()
+	return c.create(ctx, boxDto, operation, resources, network, nil)
+}
+
+type createResources struct {
+	cpus      float64
+	memoryMiB int
+}
+
+func validateCreateResources(boxDto dto.CreateBoxDTO) (createResources, error) {
+	cpus, err := dto.CPUAllocation(boxDto.CpuQuota)
 	if err != nil {
-		return "", "", err
+		return createResources{}, errdefs.ErrInvalidArgument.WithMessage(err.Error())
 	}
-	if candidate != "" {
-		if err := c.runtime.ForceRemove(ctx, candidate); err != nil && !boxlite.IsNotFound(err) {
+	memoryMiB, err := dto.MemoryMiB(boxDto.MemoryQuota)
+	if err != nil {
+		return createResources{}, errdefs.ErrInvalidArgument.WithMessage(err.Error())
+	}
+	return createResources{cpus: cpus, memoryMiB: memoryMiB}, nil
+}
+
+func (c *Client) create(
+	ctx context.Context, boxDto dto.CreateBoxDTO, operation *checkpoint.TargetLease,
+	resources createResources, network boxlite.NetworkSpec, complete *completeCreatePreparation,
+) (string, string, error) {
+	if complete == nil {
+		if err := c.prepareLegacyCreate(ctx, operation); err != nil {
 			return "", "", err
 		}
-	}
-	if err := operation.Invalidate(); err != nil {
-		return "", "", err
 	}
 
 	opts := []boxlite.BoxOption{
 		boxlite.WithName(boxDto.Id),
-		boxlite.WithCPUs(cpus),
-		boxlite.WithMemory(memoryMiB),
+		boxlite.WithCPUs(resources.cpus),
+		boxlite.WithMemory(resources.memoryMiB),
 		boxlite.WithAutoRemove(false),
 		boxlite.WithDetach(true),
 	}
@@ -552,7 +565,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
 	}
 
-	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
+	volumeMounts, err := planVolumeMounts(boxDto.Volumes)
 	if err != nil {
 		return "", "", err
 	}
@@ -562,15 +575,15 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithBindMount(vol.hostPath, vol.mountPath))
 	}
 
-	if len(volumeMounts) > 0 {
-		if err := c.recordBoxVolumeMounts(ctx, boxDto.Id, volumeMounts); err != nil {
+	if complete == nil {
+		if err := c.prepareCreateVolumes(ctx, boxDto.Id, volumeMounts); err != nil {
 			return "", "", err
 		}
 	}
 
 	opts = append(opts, boxlite.WithNetwork(network))
 	if err := ctx.Err(); err != nil {
-		if len(volumeMounts) > 0 {
+		if complete == nil && len(volumeMounts) > 0 {
 			cleanupCtx, cancel := cleanupContext(ctx)
 			defer cancel()
 			if cleanupErr := c.removeBoxVolumeMountRecord(cleanupCtx, boxDto.Id); cleanupErr != nil {
@@ -591,27 +604,30 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// failing with "already exists", which the API would surface as a 400.
 	// The created flag (new vs adopted) is irrelevant here: either way the box
 	// now exists locally and the job can proceed, so it is discarded.
-	id, err := c.nativeBoxID(boxDto.Id)
-	if err != nil {
-		return "", "", err
-	}
 	var bx *boxlite.Box
-	if id != boxDto.Id {
-		bx, err = c.runtime.Get(ctx, id)
-	}
-	if bx == nil && (err == nil || boxlite.IsNotFound(err)) {
-		if err := operation.ClearPublished(); err != nil {
-			return "", "", err
+	if complete != nil {
+		if !complete.rebuild {
+			if err := operation.BeginCompleteProvisioning(complete.owner); err != nil {
+				return "", "", err
+			}
 		}
-		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+		bx, err = c.createPreparedNative(ctx, boxDto.Image, operation, *complete, opts)
+	} else {
+		bx, err = c.getOrCreateLegacyNative(ctx, boxDto, operation, opts)
 	}
 	if err != nil {
-		if len(volumeMounts) > 0 {
+		if complete == nil && len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
 				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
 			}
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
+	}
+	if complete != nil {
+		if err := c.prepareCreateVolumes(ctx, boxDto.Id, volumeMounts); err != nil {
+			bx.Close()
+			return "", "", err
+		}
 	}
 
 	c.mu.Lock()
@@ -647,6 +663,65 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 
 	return bx.ID(), "boxlite", nil
+}
+
+func (c *Client) prepareLegacyCreate(ctx context.Context, operation *checkpoint.TargetLease) error {
+	if err := operation.CheckIdle(); err != nil {
+		return err
+	}
+	candidate, err := operation.UnpublishedCandidate()
+	if err != nil {
+		return err
+	}
+	if candidate != "" {
+		if err := c.runtime.ForceRemove(ctx, candidate); err != nil && !boxlite.IsNotFound(err) {
+			return err
+		}
+	}
+	return operation.Invalidate()
+}
+
+func (c *Client) getOrCreateLegacyNative(ctx context.Context, boxDto dto.CreateBoxDTO, operation *checkpoint.TargetLease, opts []boxlite.BoxOption) (*boxlite.Box, error) {
+	id, err := c.nativeBoxID(boxDto.Id)
+	if err != nil {
+		return nil, err
+	}
+	if id != boxDto.Id {
+		box, err := c.runtime.Get(ctx, id)
+		if !boxlite.IsNotFound(err) {
+			return box, err
+		}
+	}
+	if err := operation.ClearPublished(); err != nil {
+		return nil, err
+	}
+	box, _, err := c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+	return box, err
+}
+
+func (c *Client) createPreparedNative(ctx context.Context, image string, operation *checkpoint.TargetLease, complete completeCreatePreparation, opts []boxlite.BoxOption) (*boxlite.Box, error) {
+	box, created, err := c.runtime.GetOrCreateWithPreparedOutbound(ctx, image, complete.prepared, opts...)
+	var nativeError *boxlite.Error
+	if !complete.rebuild && errors.As(err, &nativeError) && nativeError.Code == boxlite.ErrUnsupported {
+		if fenceErr := operation.FenceRefusedCompleteCreate(complete.owner); fenceErr != nil {
+			return nil, fmt.Errorf("persist complete create refusal: %w", fenceErr)
+		}
+	}
+	if err == nil && !created && !complete.rebuild {
+		box.Close()
+		return nil, checkpoint.ErrCompleteCreateConflict
+	}
+	return box, err
+}
+
+func (c *Client) prepareCreateVolumes(ctx context.Context, id string, mounts []volumeMount) error {
+	if len(mounts) == 0 {
+		return nil
+	}
+	if err := c.mountPlannedVolumes(ctx, mounts); err != nil {
+		return err
+	}
+	return c.recordBoxVolumeMounts(ctx, id, mounts)
 }
 
 // boxInfoReader is the one thing recordPulledImage needs from a box. A
@@ -738,6 +813,10 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 		return err
 	}
 	defer operation.Close()
+	return c.destroy(ctx, boxId, operation)
+}
+
+func (c *Client) destroy(ctx context.Context, boxId string, operation *checkpoint.TargetLease) error {
 	if err := operation.Invalidate(); err != nil {
 		return err
 	}

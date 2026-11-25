@@ -80,6 +80,9 @@ export class Job {
   })
   traceContext: Record<string, string> | null
 
+  @Column({ type: 'boolean', default: false, select: false })
+  completeOutboundReconciling: boolean
+
   @Column({
     nullable: true,
     type: 'text',

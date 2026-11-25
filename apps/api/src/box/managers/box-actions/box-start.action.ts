@@ -4,14 +4,19 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { HttpException, Injectable, Logger } from '@nestjs/common'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
+import { BoxDesiredState } from '../../enums/box-desired-state.enum'
+import { CompleteOutboundControlRecord, createAttempt } from '../../entities/outbound-control-record'
+import type { Runner } from '../../entities/runner.entity'
 import { BoxState } from '../../enums/box-state.enum'
 import { DONT_SYNC_AGAIN, BoxAction, SYNC_AGAIN, SyncState } from './box.action'
 import { RunnerState } from '../../enums/runner-state.enum'
 import { RunnerService } from '../../services/runner.service'
 import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
+import { RunnerAdapterV0 } from '../../runner-adapter/runnerAdapter.v0'
+import { RunnerOutboundControl } from '../../runner-adapter/outbound-control'
 import { OrganizationService } from '../../../organization/services/organization.service'
 import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
@@ -61,6 +66,31 @@ export class BoxStartAction extends BoxAction {
     return DONT_SYNC_AGAIN
   }
 
+  async runCompleteV0Create(box: Box, reservation: CompleteOutboundControlRecord, dispatch: boolean): Promise<void> {
+    const owner = reservation.pending
+    if (owner?.kind !== 'create' || owner.transport !== 'v0' || !owner.runnerLeaseId || owner.runnerId !== box.runnerId)
+      return
+    const attempt = createAttempt(owner)
+    const create = dispatch && box.desiredState === BoxDesiredState.STARTED
+    const result = await this.boxRepository.withCompleteRunner(
+      owner.runnerId,
+      owner.runnerLeaseId,
+      !create,
+      async (runner) => {
+        if (runner.apiVersion !== '0') return
+        const control = new RunnerOutboundControl(runner, box.id)
+        if (!create || runner.state !== RunnerState.READY) return control.cancelCompleteCreate(attempt)
+        const { adapter, image, metadata, nested } = await this.createConfiguration(box, runner)
+        if (!(adapter instanceof RunnerAdapterV0)) return
+        return adapter.createCompleteBox(box, image, attempt, metadata, nested).catch((error: unknown) => {
+          if (!(error instanceof HttpException) || error.getStatus() !== 501) throw error
+          return control.cancelCompleteCreate(attempt)
+        })
+      },
+    )
+    if (result) await this.boxRepository.settleCompleteCreate(box, reservation, result)
+  }
+
   private async handleRunnerBoxUnknownStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {
     const runner = await this.runnerService.findOneOrFail(box.runnerId)
     if (runner.state !== RunnerState.READY) {
@@ -72,6 +102,14 @@ export class BoxStartAction extends BoxAction {
       return DONT_SYNC_AGAIN
     }
 
+    const { adapter, image, metadata, nested } = await this.createConfiguration(box, runner)
+    await adapter.createBox(box, image, metadata, nested)
+
+    await this.updateBoxState(box, BoxState.CREATING, lockCode)
+    return SYNC_AGAIN
+  }
+
+  async createConfiguration(box: Box, runner: Runner) {
     const organization = await this.organizationService.findOne(box.organizationId)
 
     const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
@@ -86,21 +124,14 @@ export class BoxStartAction extends BoxAction {
     // is pinned here instead, to the build this runner already booted.
     const image = boxImageIsOrgOwned(box) ? box.image : await this.curatedImagePins.refFor(runner.id, box.image)
 
-    const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    await runnerAdapter.createBox(
-      box,
-      image,
-      metadata,
-      await resolveNestedVirtualization(
-        box.organizationId,
-        this.organizationService,
-        runnerAdapter,
-        this.configService.getOrThrow('runnerHealthTimeout') * 1000,
-      ),
+    const adapter = await this.runnerAdapterFactory.create(runner)
+    const nested = await resolveNestedVirtualization(
+      box.organizationId,
+      this.organizationService,
+      adapter,
+      this.configService.getOrThrow('runnerHealthTimeout') * 1000,
     )
-
-    await this.updateBoxState(box, BoxState.CREATING, lockCode)
-    return SYNC_AGAIN
+    return { adapter, image, metadata, nested }
   }
 
   private async handleRunnerBoxStoppedStateOnDesiredStateStart(box: Box, lockCode: LockCode): Promise<SyncState> {

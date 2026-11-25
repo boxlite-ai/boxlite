@@ -122,6 +122,164 @@ pub struct CompleteOutboundSnapshot {
     pub admission: OutboundAdmission,
 }
 
+/// Canonical create snapshot and the original presence of `deny_net`.
+///
+/// Used by the hosted coordinator to reserve the same identity that Runtime installs.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedOutboundCreate {
+    pub snapshot: CompleteOutboundSnapshot,
+    pub deny_present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rebuild_pin: Option<OutboundRevision>,
+}
+
+/// Private control-plane ownership for a hosted replacement.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostedOutboundAttempt {
+    pub incarnation: String,
+    pub attempt_id: OutboundRevision,
+    pub generation: u64,
+    pub previous: CompleteOutboundSnapshot,
+    pub candidate: PreparedOutboundCreate,
+}
+
+/// Commands admitted only by the local hosted Runtime.
+#[doc(hidden)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HostedOutboundCommand {
+    CheckRebuild {
+        snapshot: CompleteOutboundSnapshot,
+        #[serde(default)]
+        pin_backend: bool,
+    },
+    Prepare {
+        previous: CompleteOutboundSnapshot,
+        revision: OutboundRevision,
+        policy: CompleteOutboundPolicy,
+    },
+    Apply {
+        attempt: HostedOutboundAttempt,
+    },
+    Cancel {
+        attempt: HostedOutboundAttempt,
+    },
+    Reconcile {
+        attempt: HostedOutboundAttempt,
+    },
+    Restore {
+        attempt: HostedOutboundAttempt,
+        revision: OutboundRevision,
+    },
+    Finalize {
+        attempt: HostedOutboundAttempt,
+    },
+}
+
+/// Exact result of a private hosted outbound operation.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HostedOutboundReceipt {
+    RebuildReady {
+        snapshot: CompleteOutboundSnapshot,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rebuild_pin: Option<OutboundRevision>,
+    },
+    Prepared {
+        candidate: PreparedOutboundCreate,
+    },
+    Pending,
+    Cancelled,
+    Applied {
+        snapshot: CompleteOutboundSnapshot,
+    },
+    Restored {
+        snapshot: CompleteOutboundSnapshot,
+    },
+    Finalized {
+        snapshot: CompleteOutboundSnapshot,
+    },
+}
+
+impl PreparedOutboundCreate {
+    pub(crate) fn new(
+        policy: &CompleteOutboundPolicy,
+        revision: OutboundRevision,
+    ) -> BoxliteResult<Self> {
+        Ok(Self {
+            snapshot: policy.prepare(OutboundAdmission::ExtendedIpv4, revision)?,
+            deny_present: policy.deny_net.is_some(),
+            rebuild_pin: None,
+        })
+    }
+
+    pub(crate) fn requirements(&self) -> BoxliteResult<OutboundCapabilities> {
+        self.snapshot.validate_installed()?;
+        if !self.deny_present && !self.snapshot.policy.deny_net.is_empty() {
+            return Err(BoxliteError::InvalidArgument(
+                "prepared outbound rules require explicit deny presence".into(),
+            ));
+        }
+        let mut requirements = self.snapshot.requirements();
+        requirements.deny |= self.deny_present;
+        Ok(requirements)
+    }
+}
+
+#[cfg(test)]
+mod prepared_outbound_create_tests {
+    use super::*;
+
+    #[test]
+    fn prepared_outbound_create_preserves_deny_presence_and_snapshot() {
+        let revision = OutboundRevision::parse("cloud-revision").unwrap();
+        let mut policy = CompleteOutboundPolicy {
+            mode: NetworkMode::Enabled,
+            allow_net: vec!["EXAMPLE.com:0443".into()],
+            deny_net: None,
+        };
+        let omitted = PreparedOutboundCreate::new(&policy, revision.clone()).unwrap();
+        policy.deny_net = Some(Vec::new());
+        let empty = PreparedOutboundCreate::new(&policy, revision.clone()).unwrap();
+
+        assert_eq!(omitted.snapshot, empty.snapshot);
+        assert_eq!(empty.snapshot.revision, revision);
+        assert_eq!(empty.snapshot.policy.allow_net, ["example.com:443"]);
+        let legacy_extended = omitted.requirements().unwrap();
+        assert!(legacy_extended.port);
+        assert!(!legacy_extended.deny);
+        assert!(matches!(
+            legacy_extended.require(empty.requirements().unwrap()),
+            Err(BoxliteError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn prepared_outbound_create_rejects_noncanonical_or_missing_deny_presence() {
+        let policy = CompleteOutboundPolicy {
+            mode: NetworkMode::Enabled,
+            allow_net: vec!["example.com".into()],
+            deny_net: Some(vec!["example.net".into()]),
+        };
+        let mut prepared = PreparedOutboundCreate::new(
+            &policy,
+            OutboundRevision::parse("cloud-revision").unwrap(),
+        )
+        .unwrap();
+        prepared.deny_present = false;
+        assert!(prepared.requirements().is_err());
+
+        prepared.deny_present = true;
+        prepared.snapshot.policy.allow_net[0] = "EXAMPLE.com".into();
+        assert!(prepared.requirements().is_err());
+    }
+}
+
 /// Readback always carries both effective lists, including an empty deny list.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -6,9 +6,12 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { OutboundPolicy } from '../runner-adapter/network-policy'
 import {
+  CompleteOutboundSnapshot,
+  CompleteOutboundStatus,
   OutboundControl,
   OutboundSnapshot,
   OutboundStatus,
+  sameCompleteOutboundSnapshot,
   sameOutboundSnapshot,
   validOutboundSnapshot,
 } from '../runner-adapter/outbound-control'
@@ -17,12 +20,77 @@ import {
   OutboundCommitUnknown,
   OutboundPolicyStore,
   outboundRecord,
+  pendingCompleteOutboundRevision,
+  persistedCompleteOutbound,
   persistedOutbound,
 } from '../stores/outbound-policy.store'
 
 type Attempt = { pending: OutboundPending; previous: OutboundSnapshot; confirmed: boolean }
 type Reservation = { attempt: Attempt } | { completed: Box } | { preconditionFailed: true }
 export type OutboundPrecondition = (revision: string) => boolean
+
+type CompleteCloudStatus = Omit<CompleteOutboundStatus, 'persisted' | 'observation_error'> & {
+  persisted: CompleteOutboundSnapshot | null
+  runtime_persisted: CompleteOutboundSnapshot | null
+}
+
+export async function completeCloudStatus(
+  store: OutboundPolicyStore,
+  id: string,
+  organizationId: string,
+  observe: (box: Box) => Promise<CompleteOutboundStatus>,
+): Promise<CompleteCloudStatus> {
+  const before = await store.read(id, organizationId)
+  const pendingBefore = pendingCompleteOutboundRevision(before)
+  if (pendingBefore) {
+    return {
+      persisted: persistedCompleteOutbound(before),
+      runtime_persisted: null,
+      observed: null,
+      application_state: 'pending',
+      pending_revision: pendingBefore,
+    }
+  }
+
+  let runtime: CompleteOutboundStatus | undefined
+  try {
+    runtime = await observe(before)
+  } catch (error) {
+    if (!(error instanceof HttpException)) throw error
+  }
+
+  // Recheck the owner and intent after the bounded Runner call.
+  const current = await store.read(id, organizationId)
+  const persisted = persistedCompleteOutbound(current)
+  const pendingRevision = pendingCompleteOutboundRevision(current)
+  const prior = persistedCompleteOutbound(before)
+  if (
+    pendingRevision ||
+    current.runnerId !== before.runnerId ||
+    !persisted ||
+    !prior ||
+    !sameCompleteOutboundSnapshot(persisted, prior)
+  ) {
+    runtime = undefined
+  }
+  const confirmed =
+    persisted &&
+    runtime?.application_state === 'confirmed' &&
+    runtime.observed?.application_state === 'confirmed' &&
+    runtime.pending_revision === undefined &&
+    runtime.observation_error === undefined &&
+    sameCompleteOutboundSnapshot(persisted, runtime.persisted) &&
+    sameCompleteOutboundSnapshot(persisted, runtime.observed.snapshot)
+  const pending = pendingRevision ?? runtime?.pending_revision
+  return {
+    persisted,
+    runtime_persisted: runtime?.persisted ?? null,
+    observed: runtime?.observed ?? null,
+    application_state:
+      pending || runtime?.application_state === 'pending' ? 'pending' : confirmed ? 'confirmed' : 'uncertain',
+    ...(pending ? { pending_revision: pending } : {}),
+  }
+}
 
 function samePending(left: OutboundPending | undefined, right: OutboundPending): boolean {
   return (

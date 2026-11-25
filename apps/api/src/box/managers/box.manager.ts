@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
+import { Injectable, Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { randomUUID } from 'crypto'
 
@@ -48,7 +48,7 @@ import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
 
 @Injectable()
-export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown {
+export class BoxManager implements TrackableJobExecutions, OnApplicationBootstrap, OnApplicationShutdown {
   activeJobs = new Set<string>()
 
   private readonly logger = new Logger(BoxManager.name)
@@ -64,11 +64,34 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     private readonly imagePullFailureService: ImagePullFailureService,
   ) {}
 
+  onApplicationBootstrap(): void {
+    void this.reconcileV0Creates().catch(() => this.logger.warn('Could not reconcile complete V0 creates at startup'))
+  }
+
   async onApplicationShutdown() {
     //  wait for all active jobs to finish
     while (this.activeJobs.size > 0) {
       this.logger.log(`Waiting for ${this.activeJobs.size} active jobs to finish`)
       await setTimeout(1000)
+    }
+  }
+
+  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'reconcile-complete-v0-creates', waitForCompletion: true })
+  @TrackJobExecution()
+  async reconcileV0Creates(): Promise<void> {
+    // Allow the post-commit create dispatch to reach the Runner before issuing
+    // an absence fence. The fence is still authoritative if the sender is late.
+    const before = new Date(Date.now() - 30_000)
+    let after = ''
+    for (;;) {
+      const ids = await this.boxRepository.pendingV0CreateIds(after, before)
+      if (!ids.length) return
+      for (let index = 0; index < ids.length; index += 10) {
+        await Promise.allSettled(
+          ids.slice(index, index + 10).map((id) => this.syncInstanceState(id, undefined, 'reconcile')),
+        )
+      }
+      after = ids[ids.length - 1]
     }
   }
 
@@ -329,7 +352,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
    * The box entity is mutated in-place by repository.update() on each iteration,
    * and the lock guarantees no concurrent modification.
    */
-  async syncInstanceState(boxId: string, force?: boolean): Promise<void> {
+  async syncInstanceState(boxId: string, force?: boolean, completeCreate?: 'dispatch' | 'reconcile'): Promise<void> {
     // Track the start time of the sync operation.
     const startedAt = new Date()
 
@@ -344,11 +367,21 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     }
 
     try {
-      const { box, checkpointState } = await this.boxRepository.findWithCheckpointState(boxId)
+      const { box, checkpointState, outboundCreate } = await this.boxRepository.findWithCheckpointState(boxId)
 
       // Checkpoint import commits its configuration before ordinary lifecycle
       // reconciliation may start or stop the replacement.
       if (checkpointState?.activeJobId) return
+      if (outboundCreate) {
+        if (!completeCreate) return
+        try {
+          await this.boxStartAction.runCompleteV0Create(box, outboundCreate, completeCreate === 'dispatch')
+        } catch {
+          this.logger.debug(`Complete create for Box ${boxId} still needs reconciliation`)
+        }
+        return
+      }
+      if (completeCreate === 'reconcile') return
 
       while (new Date().getTime() - startedAt.getTime() <= 10000) {
         if (
@@ -462,6 +495,6 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
   @TrackJobExecution()
   @WithSpan()
   private async handleBoxCreatedEvent(event: BoxCreatedEvent) {
-    await this.syncInstanceState(event.box.id)
+    await this.syncInstanceState(event.box.id, undefined, 'dispatch')
   }
 }

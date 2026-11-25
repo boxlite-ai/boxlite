@@ -21,7 +21,9 @@ pub(crate) async fn probe_outbound_capabilities() -> BoxliteResult<OutboundCapab
     probe_outbound_capabilities_at(crate::util::find_binary("boxlite-shim")?).await
 }
 
-async fn probe_outbound_capabilities_at(shim: PathBuf) -> BoxliteResult<OutboundCapabilities> {
+pub(super) async fn probe_outbound_capabilities_at(
+    shim: PathBuf,
+) -> BoxliteResult<OutboundCapabilities> {
     use std::{process::Stdio, time::Duration};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_util::sync::CancellationToken;

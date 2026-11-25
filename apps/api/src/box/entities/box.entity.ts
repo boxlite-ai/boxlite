@@ -11,7 +11,7 @@ import { BoxClass } from '../enums/box-class.enum'
 import { BoxSecret, BoxVolume } from '../dto/box.dto'
 import { nanoid } from 'nanoid'
 import { BoxLastActivity } from './box-last-activity.entity'
-import type { OutboundControlRecord } from './outbound-control-record'
+import type { CompleteOutboundControlRecord, OutboundControlRecord } from './outbound-control-record'
 import { BOX_ID_LENGTH, BOX_ID_REGEX, generateBoxId } from '../utils/box-id.util'
 import {
   AUTO_DELETE_DISABLED,
@@ -166,6 +166,12 @@ export class Box {
   // Loaded only by outbound coordination; ordinary lifecycle saves leave this column untouched.
   @Column('jsonb', { nullable: true, select: false })
   outboundControl?: OutboundControlRecord | null
+
+  @Column('jsonb', { nullable: true, select: false })
+  completeOutboundControl?: CompleteOutboundControlRecord | null
+
+  @Column({ type: 'int', default: 0, select: false })
+  completeOutboundGeneration?: number
 
   @Column('jsonb', { nullable: true })
   labels: { [key: string]: string }
@@ -351,7 +357,7 @@ export class Box {
    * absent.
    */
   toJSON() {
-    const { secrets, ...rest } = this
+    const { secrets, completeOutboundControl, completeOutboundGeneration, ...rest } = this
     return rest
   }
 }

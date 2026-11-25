@@ -1,25 +1,58 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
-import { createServer, Server, ServerResponse } from 'node:http'
+import { createServer, IncomingHttpHeaders, Server, ServerResponse } from 'node:http'
 import { AddressInfo } from 'node:net'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
+import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { AddOutboundControl1794888000000 } from '../../migrations/pre-deploy/1794888000000-add-outbound-control-migration'
-import { OutboundCommitUnknown, OutboundPolicyStore, outboundRecord, persistedOutbound } from './outbound-policy.store'
+import { AddCompleteOutboundControl1795096800000 } from '../../migrations/pre-deploy/1795096800000-add-complete-outbound-control-migration'
+import { AddPendingCompleteV0CreateIndex1795096801000 } from '../../migrations/pre-deploy/1795096801000-add-pending-complete-v0-create-index'
+import { AddCompleteOutboundAdmission1795096802000 } from '../../migrations/pre-deploy/1795096802000-add-complete-outbound-admission'
+import { AddCompleteOutboundEnrollmentAndClaims1795096803000 } from '../../migrations/pre-deploy/1795096803000-add-complete-outbound-enrollment-and-claims'
+import { Job } from '../entities/job.entity'
+import {
+  OutboundCommitUnknown,
+  OutboundPolicyStore,
+  outboundRecord,
+  persistedCompleteOutbound,
+  persistedOutbound,
+} from './outbound-policy.store'
 import { PostgresCommitProxy } from './tests/postgres-commit-proxy'
 import { Runner } from '../entities/runner.entity'
-import { RunnerOutboundControl, OutboundSnapshot } from '../runner-adapter/outbound-control'
+import { CompleteOutboundSnapshot, RunnerOutboundControl, OutboundSnapshot } from '../runner-adapter/outbound-control'
 import { OutboundPolicyCoordinator } from '../services/outbound-policy.coordinator'
+import { CompleteOutboundCoordinator } from '../services/complete-outbound.coordinator'
 import { BoxRepository } from '../repositories/box.repository'
+import { BoxStartAction } from '../managers/box-actions/box-start.action'
+import { BoxManager } from '../managers/box.manager'
+import { RunnerAdapterV0 } from '../runner-adapter/runnerAdapter.v0'
+import { RunnerState } from '../enums/runner-state.enum'
+import { BoxService } from '../services/box.service'
+import { Context } from '../../common/context/context'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `outbound_${process.pid}_${randomUUID().replaceAll('-', '')}`
 const org = '00000000-0000-4000-8000-0000000000aa'
 const runnerId = '00000000-0000-4000-8000-0000000000bb'
+const runnerLeaseId = '00000000-0000-4000-8000-0000000000cc'
 const candidate = { revision: 'candidate-b', policy: { mode: 'disabled' as const, allow_net: [] } }
 const reserved = { version: 1 as const, revision: 'initial', pending: { expected: 'initial', candidate, runnerId } }
+const complete: CompleteOutboundSnapshot = {
+  revision: 'complete-b',
+  admission: 'extended_ipv4',
+  policy: { mode: 'enabled', allow_net: [], deny_net: [] },
+}
+
+const completeIntent = {
+  attemptId: 'attempt-1',
+  runnerId,
+  runnerLeaseId,
+  generation: 1,
+  candidate: { snapshot: complete, deny_present: true },
+}
 
 describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
   let primary: DataSource
@@ -30,6 +63,14 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
   let ownsSchema = false
   let http: Server
   let live: OutboundSnapshot
+  let readCompleteRuntime: (response: ServerResponse) => Promise<void>
+  let completeCreatePeer: (
+    path: string,
+    body: any,
+    response: ServerResponse,
+    headers: IncomingHttpHeaders,
+  ) => Promise<void>
+  let runner: Runner
   let writes: { expected: string; candidate: OutboundSnapshot }[]
   let onApply: (next: OutboundSnapshot) => Promise<void>
   let acknowledge: (next: OutboundSnapshot, response: ServerResponse) => void
@@ -48,7 +89,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema,
-      entities: [Box, BoxLastActivity],
+      entities: [Box, BoxLastActivity, BoxCheckpointState, Runner, Job],
       synchronize: false,
       entitySkipConstructor: true,
       ssl: false as const,
@@ -58,6 +99,14 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     await primary.query(`CREATE SCHEMA "${schema}"`)
     ownsSchema = true
     await primary.synchronize()
+    const migration = primary.createQueryRunner()
+    try {
+      await migration.query('ALTER TABLE "job" DROP "completeOutboundReconciling"')
+      await new AddCompleteOutboundEnrollmentAndClaims1795096803000().up(migration)
+      await new AddCompleteOutboundAdmission1795096802000().up(migration)
+    } finally {
+      await migration.release()
+    }
     proxy = new PostgresCommitProxy(options.host, options.port)
     const port = await proxy.start()
     transport = await new DataSource({
@@ -79,6 +128,9 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
   })
 
   beforeEach(async () => {
+    await primary.query(
+      "UPDATE complete_outbound_admission SET phase = 'closed', minimum_release = NULL, api_principal = NULL WHERE id = 1",
+    )
     proxy.rejectConnections = false
     proxy.rejectAfterCut = false
     box = Object.assign(new Box('local', randomUUID()), {
@@ -95,6 +147,12 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     writes = []
     onApply = async () => undefined
     runtimePhase = 'confirmed'
+    readCompleteRuntime = async (response) => {
+      response.writeHead(404).end()
+    }
+    completeCreatePeer = async (_path, _body, response) => {
+      response.writeHead(404).end()
+    }
     acknowledge = (next, response) => {
       response.setHeader('ETag', `"${next.revision}"`)
       response.end(JSON.stringify(next.policy))
@@ -102,6 +160,10 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     http = createServer((request, response) => {
       void (async () => {
         expect(request.headers.authorization).toBe('Bearer synthetic-secret')
+        if (request.method === 'GET' && request.url.endsWith('/complete/status')) {
+          await readCompleteRuntime(response)
+          return
+        }
         if (request.method === 'GET' && request.url.endsWith('/status')) {
           response.end(
             JSON.stringify({
@@ -116,6 +178,10 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
         }
         const chunks: Buffer[] = []
         for await (const chunk of request) chunks.push(Buffer.from(chunk))
+        if (request.url.includes('/complete/')) {
+          await completeCreatePeer(request.url, JSON.parse(Buffer.concat(chunks).toString()), response, request.headers)
+          return
+        }
         const next: OutboundSnapshot = {
           revision: request.headers['x-boxlite-outbound-revision'] as string,
           policy: JSON.parse(Buffer.concat(chunks).toString()),
@@ -136,10 +202,20 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       })
     })
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve))
-    const runner = {
-      apiUrl: `http://127.0.0.1:${(http.address() as AddressInfo).port}`,
-      apiKey: 'synthetic-secret',
-    } as Runner
+    runner = Object.assign(
+      new Runner({
+        region: 'local',
+        name: 'fixture-v0',
+        apiUrl: `http://127.0.0.1:${(http.address() as AddressInfo).port}`,
+        apiKey: 'synthetic-secret',
+        apiVersion: '0',
+      }),
+      {
+        id: runnerId,
+        state: RunnerState.READY,
+      },
+    )
+    await primary.getRepository(Runner).save(runner)
     control = async (locked) => new RunnerOutboundControl(runner, locked.id)
     coordinator = new OutboundPolicyCoordinator(store, control)
   })
@@ -151,6 +227,17 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     await new Promise<void>((resolve) => http.close(() => resolve()))
     jest.restoreAllMocks()
   })
+
+  async function enrollV0(release: string) {
+    const hash = createHash('sha256').update(runner.apiKey).digest('hex')
+    await primary.query(
+      `INSERT INTO complete_outbound_runner_enrollment
+      (runner_id, lease_id, token_sha256, runner_key_sha256, verified_floor, expires_at)
+      VALUES ($1, $2, $3, $3, $4, clock_timestamp() + interval '1 hour')
+      ON CONFLICT (runner_id) DO UPDATE SET verified_floor = EXCLUDED.verified_floor, expires_at = EXCLUDED.expires_at`,
+      [runner.id, runnerLeaseId, hash, release],
+    )
+  }
 
   it('expands and reverts the actual schema without rewriting existing policy', async () => {
     const runner = primary.createQueryRunner()
@@ -165,6 +252,460 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     } finally {
       await runner.release()
     }
+  })
+
+  it('expands complete storage and refuses downgrade with a protected empty policy', async () => {
+    const runner = primary.createQueryRunner()
+    const migration = new AddCompleteOutboundControl1795096800000()
+    try {
+      await runner.startTransaction()
+      await migration.down(runner)
+      await migration.up(runner)
+      await runner.commitTransaction()
+      const restarted = new OutboundPolicyStore(primary)
+      expect(persistedCompleteOutbound(await restarted.read(box.id, org))).toEqual({
+        revision: 'initial',
+        admission: 'legacy',
+        policy: { mode: 'enabled', allow_net: [], deny_net: [] },
+      })
+      await primary.getRepository(Box).update(box.id, { completeOutboundControl: { version: 2, committed: complete } })
+
+      await runner.startTransaction()
+      await expect(migration.down(runner)).rejects.toThrow('Complete outbound policy or pending work blocks downgrade')
+      await runner.rollbackTransaction()
+      expect(persistedCompleteOutbound(await restarted.read(box.id, org))).toEqual(complete)
+    } finally {
+      if (runner.isTransactionActive) await runner.rollbackTransaction()
+      await runner.release()
+    }
+  })
+
+  it('builds and retires the live V0 pagination index outside the migration transaction', async () => {
+    const runner = primary.createQueryRunner()
+    const index = new AddPendingCompleteV0CreateIndex1795096801000()
+    try {
+      await index.up(runner)
+      await index.up(runner)
+      const [present] = await runner.query(
+        "SELECT to_regclass('idx_box_pending_complete_v0_create') IS NOT NULL AS found",
+      )
+      expect(present.found).toBe(true)
+      await index.down(runner)
+      const [removed] = await runner.query("SELECT to_regclass('idx_box_pending_complete_v0_create') IS NULL AS gone")
+      expect(removed.gone).toBe(true)
+    } finally {
+      await runner.release()
+    }
+  })
+
+  it('returns only the committed complete snapshot during promotion and blocks the legacy update', async () => {
+    const predecessor: CompleteOutboundSnapshot = {
+      revision: 'legacy-a',
+      admission: 'legacy',
+      policy: { mode: 'enabled', allow_net: ['example.com'], deny_net: [] },
+    }
+    await primary.getRepository(Box).update(box.id, {
+      completeOutboundControl: {
+        version: 2,
+        committed: predecessor,
+        pending: { ...completeIntent, kind: 'replace', incarnation: box.id, previousProtected: false },
+      },
+    })
+    const persistedBox = await store.read(box.id, org)
+    expect(persistedCompleteOutbound(persistedBox)).toEqual(predecessor)
+    await expect(store.read(box.id, randomUUID())).rejects.toThrow('Box not found')
+    expect(() => persistedOutbound(persistedBox)).toThrow('Box requires complete outbound control')
+    await expect(coordinator.replace(box.id, org, candidate.policy)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'complete_policy_required' }),
+    })
+    expect(writes).toHaveLength(0)
+    expect(persistedCompleteOutbound(await store.read(box.id, org))).toEqual(predecessor)
+  })
+
+  it('does not read a pending first create as an installed complete policy', async () => {
+    await primary.getRepository(Box).update(box.id, {
+      completeOutboundControl: {
+        version: 2,
+        committed: null,
+        pending: { ...completeIntent, kind: 'create', transport: 'v0', incarnation: box.id },
+      },
+    })
+    const pending = await store.read(box.id, org)
+    expect(persistedCompleteOutbound(pending)).toBeNull()
+    expect(() => persistedOutbound(pending)).toThrow('Box requires complete outbound control')
+    const repository = new BoxRepository(primary, { emit: jest.fn() } as never, {} as never)
+    const observe = jest.fn()
+    await expect(repository.completeOutboundStatus(box.id, org, observe)).resolves.toEqual({
+      persisted: null,
+      runtime_persisted: null,
+      observed: null,
+      application_state: 'pending',
+      pending_revision: complete.revision,
+    })
+    expect(observe).not.toHaveBeenCalled()
+  })
+
+  async function reserveV0Create(createdAt = new Date(Date.now() - 60_000)) {
+    await enrollV0('test-release')
+    await primary.query(
+      "UPDATE complete_outbound_admission SET minimum_release = 'test-release', api_principal = current_user WHERE id = 1",
+    )
+    const pending = { ...completeIntent, kind: 'create', transport: 'v0', incarnation: box.id } as const
+    const reservation = { version: 2, committed: null, pending } as const
+    await primary.getRepository(Box).update(box.id, {
+      state: BoxState.UNKNOWN,
+      pending: true,
+      createdAt,
+      image: 'base',
+      outboundAllowNet: ['legacy-shadow.example'],
+      volumes: [{ volumeId: 'volume-a', mountPath: '/workspace' }],
+      completeOutboundControl: reservation,
+    })
+    return reservation
+  }
+
+  async function v0Manager() {
+    const emit = jest.fn()
+    const repository = new BoxRepository(
+      primary,
+      { emit } as never,
+      {
+        invalidate: jest.fn(),
+        invalidateOrgId: jest.fn(),
+      } as never,
+    )
+    const runnerService = { findOne: async () => runner }
+    const adapter = new RunnerAdapterV0()
+    await adapter.init(runner)
+    const action = new BoxStartAction(
+      runnerService as never,
+      { create: async () => adapter } as never,
+      repository,
+      { findOne: async () => ({}), isNestedVirtualizationEnabled: async () => false } as never,
+      { getOrThrow: () => 1 } as never,
+      {} as never,
+      {} as never,
+      { refFor: async (_runner: string, image: string) => image } as never,
+    )
+    const manager = new BoxManager(
+      repository,
+      runnerService as never,
+      {} as never,
+      { lock: async () => true, unlock: async () => undefined } as never,
+      action,
+      {} as never,
+      {} as never,
+      {} as never,
+    )
+    return { manager, emit, repository }
+  }
+
+  it('admits from BoxService only after an exact preparation and holds the release lock through insert', async () => {
+    const { manager, repository } = await v0Manager()
+    const events: Promise<void>[] = []
+    const trace: string[] = []
+    const open =
+      "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'test-release', api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1"
+    const close = "UPDATE complete_outbound_admission SET phase = 'closed', minimum_release = NULL WHERE id = 1"
+    const service = Object.assign(Object.create(BoxService.prototype), {
+      boxRepository: repository,
+      organizationService: {
+        isNestedVirtualizationEnabled: async () => false,
+        assertOrganizationIsNotSuspended: () => undefined,
+      },
+      getValidatedOrDefaultRegion: async () => ({ id: 'local' }),
+      runnerService: { getRandomAvailableRunner: async () => runner },
+      organizationBoxLimits: { resolve: async () => ({}) },
+      imageAdmissionService: {
+        assert: async () => undefined,
+        spendColdPullBudget: async () => trace.push('budget'),
+      },
+      imageResolverService: { resolve: async () => ({ ref: 'base', isOrgOwned: false }) },
+      eventEmitter: {
+        emitAsync: (_event: string, payload: { box: Box }) => {
+          const work = manager.syncInstanceState(payload.box.id, undefined, 'dispatch')
+          events.push(work)
+          return work
+        },
+      },
+      toBoxDto: async (row: Box) => ({ id: row.id, state: row.state }),
+    }) as BoxService
+    const create = () =>
+      service.create({ name: 'admitted-v0', image: 'base' }, { id: org } as never, Context.user(), {
+        completeOutbound: { mode: 'enabled', allow_net: [], deny_net: [] },
+        onPersist: async () => {
+          // Release close takes an exclusive row lock. A second connection
+          // cannot acquire it while the transaction that reserved the Box commits.
+          await expect(
+            primary.query('SELECT id FROM complete_outbound_admission FOR UPDATE NOWAIT'),
+          ).rejects.toMatchObject({ code: '55P03' })
+          trace.push('reserved')
+        },
+      })
+    try {
+      await expect(create()).rejects.toMatchObject({
+        status: 503,
+        response: expect.objectContaining({ code: 'complete_outbound_closed' }),
+      })
+      expect(trace).toEqual([])
+      await primary.query(open)
+      await enrollV0('test-release')
+      completeCreatePeer = async (path, _body, response) => {
+        trace.push(path.split('/').at(-1))
+        response.writeHead(501).end(JSON.stringify({ error: { code: 'unsupported' } }))
+      }
+      await expect(create()).rejects.toMatchObject({ status: 501 })
+      expect(trace).toEqual(['prepare-create'])
+      expect(await primary.getRepository(Box).findOneBy({ organizationId: org, name: 'admitted-v0' })).toBeNull()
+      expect(events).toHaveLength(0)
+
+      let closing: Promise<unknown> | undefined
+      const reserve = repository.insertCompleteCreate.bind(repository)
+      jest.spyOn(repository, 'insertCompleteCreate').mockImplementationOnce(async (...args) => {
+        expect(closing).toBeDefined()
+        await closing
+        return reserve(...args)
+      })
+      completeCreatePeer = async (_path, _body, response, headers) => {
+        trace.push('prepared-while-closing')
+        await expect(
+          primary.query('SELECT id FROM complete_outbound_admission FOR UPDATE NOWAIT'),
+        ).rejects.toMatchObject({ code: '55P03' })
+        closing = primary.query(close)
+        response.end(
+          JSON.stringify({
+            snapshot: { ...complete, revision: headers['x-boxlite-outbound-revision'] },
+            deny_present: true,
+          }),
+        )
+      }
+      await expect(create()).rejects.toMatchObject({
+        status: 503,
+        response: expect.objectContaining({ code: 'complete_outbound_closed' }),
+      })
+      expect(trace).toEqual(['prepare-create', 'prepared-while-closing'])
+      expect(await primary.getRepository(Box).findOneBy({ organizationId: org, name: 'admitted-v0' })).toBeNull()
+      await primary.query(open)
+
+      completeCreatePeer = async (path, body, response, headers) => {
+        trace.push(path.split('/').at(-1))
+        if (path.endsWith('/prepare-create')) {
+          expect(body).toEqual({ mode: 'enabled', allow_net: [], deny_net: [] })
+          response.end(
+            JSON.stringify({
+              snapshot: { ...complete, revision: headers['x-boxlite-outbound-revision'] },
+              deny_present: true,
+            }),
+          )
+          return
+        }
+        const committed = await store.read(body.box.id, org)
+        expect(committed.completeOutboundControl?.pending?.candidate).toEqual(body.attempt.prepared)
+        response.end(
+          JSON.stringify({ attempt: body.attempt, outcome: 'installed', snapshot: body.attempt.prepared.snapshot }),
+        )
+      }
+      const created = await create()
+      await Promise.all(events)
+      expect(trace).toEqual([
+        'prepare-create',
+        'prepared-while-closing',
+        'prepare-create',
+        'budget',
+        'reserved',
+        'create',
+      ])
+      expect(await store.read(created.id, org)).toMatchObject({ state: BoxState.STARTED, pending: false })
+    } finally {
+      await Promise.allSettled(events)
+      await primary.getRepository(Box).delete({ organizationId: org, name: 'admitted-v0' })
+      await primary.query(close)
+    }
+  })
+
+  it('dispatches a committed V0 create through the complete route and publishes its exact installation once', async () => {
+    const reservation = await reserveV0Create(new Date())
+    const { manager, emit } = await v0Manager()
+    const routes: string[] = []
+    completeCreatePeer = async (path, body, response) => {
+      routes.push(path)
+      expect((await store.read(box.id, org)).completeOutboundControl).toEqual(reservation)
+      expect(body.box).toMatchObject({ id: box.id, volumes: [{ volumeId: 'volume-a', mountPath: '/workspace' }] })
+      expect(body.box).not.toHaveProperty('outboundEnabled')
+      expect(body.box).not.toHaveProperty('outboundAllowNet')
+      response.end(JSON.stringify({ attempt: body.attempt, outcome: 'installed', snapshot: complete }))
+    }
+    await manager.reconcileV0Creates()
+    expect(routes).toEqual([])
+    await manager.syncInstanceState(box.id, undefined, 'dispatch')
+    await manager.syncInstanceState(box.id, undefined, 'dispatch')
+    expect(routes).toEqual([`/v1/boxes/${box.id}/network/outbound/complete/create`])
+    expect(await store.read(box.id, org)).toMatchObject({
+      state: BoxState.STARTED,
+      pending: false,
+      completeOutboundControl: { version: 2, committed: complete },
+    })
+    expect(emit.mock.calls.filter(([type]) => type === 'box.state.updated')).toHaveLength(1)
+  })
+
+  it('keeps a V0 reservation pending when the enrolled Runner identity has changed', async () => {
+    const reservation = await reserveV0Create()
+    const { manager } = await v0Manager()
+    const peer = jest.fn()
+    completeCreatePeer = peer
+    try {
+      await primary.getRepository(Runner).update(runner.id, { apiKey: 'unenrolled-credential' })
+      await manager.syncInstanceState(box.id, undefined, 'dispatch')
+      await manager.reconcileV0Creates()
+      expect(peer).not.toHaveBeenCalled()
+      expect(await store.read(box.id, org)).toMatchObject({ pending: true, completeOutboundControl: reservation })
+    } finally {
+      await primary.getRepository(Box).delete(box.id)
+    }
+  })
+
+  it('uses cancellation to recover an aged V0 intent and ignores a receipt from a superseded runner', async () => {
+    const reservation = await reserveV0Create()
+    const { manager } = await v0Manager()
+    const routes: string[] = []
+    const changeRunner = async () => primary.getRepository(Box).update(box.id, { runnerId: randomUUID() })
+    completeCreatePeer = async (path, attempt, response) => {
+      routes.push(path)
+      await changeRunner()
+      response.end(JSON.stringify({ attempt, outcome: 'no_effect', failure: 'unsupported' }))
+    }
+    await manager.reconcileV0Creates()
+    expect(await store.read(box.id, org)).toMatchObject({ pending: true, completeOutboundControl: reservation })
+    await primary.getRepository(Box).update(box.id, { runnerId })
+    completeCreatePeer = async (path, attempt, response) => {
+      routes.push(path)
+      response.end(JSON.stringify({ attempt, outcome: 'no_effect', failure: 'unsupported' }))
+    }
+    await manager.reconcileV0Creates()
+    expect(routes).toEqual(Array(2).fill(`/v1/boxes/${box.id}/network/outbound/complete/cancel-create`))
+    expect(await store.read(box.id, org)).toMatchObject({
+      state: BoxState.ERROR,
+      pending: false,
+      runnerId: null,
+      errorReason: 'outbound_create_unsupported',
+      completeOutboundControl: null,
+    })
+  })
+
+  it.each(['lost reply', 'execution refusal'] as const)(
+    'settles %s through the bound Runner receipt without retrying creation',
+    async (scenario) => {
+      const reservation = await reserveV0Create()
+      const { manager } = await v0Manager()
+      const routes: string[] = []
+      completeCreatePeer = async (path, body, response) => {
+        routes.push(path.split('/').at(-1))
+        if (path.endsWith('/create')) {
+          if (scenario === 'lost reply') {
+            response.destroy()
+          } else {
+            response.writeHead(501).end(JSON.stringify({ error: { code: 'unsupported' } }))
+          }
+          return
+        }
+        const evidence =
+          scenario === 'lost reply'
+            ? { outcome: 'installed', snapshot: reservation.pending.candidate.snapshot }
+            : { outcome: 'no_effect', failure: 'unsupported' }
+        response.end(JSON.stringify({ attempt: body, ...evidence }))
+      }
+      await manager.syncInstanceState(box.id, undefined, 'dispatch')
+      if (scenario === 'lost reply') {
+        expect(await store.read(box.id, org)).toMatchObject({ pending: true, completeOutboundControl: reservation })
+        await manager.reconcileV0Creates()
+        expect(await store.read(box.id, org)).toMatchObject({
+          state: BoxState.STARTED,
+          pending: false,
+          completeOutboundControl: { version: 2, committed: complete },
+        })
+      } else {
+        expect(await store.read(box.id, org)).toMatchObject({
+          state: BoxState.ERROR,
+          pending: false,
+          completeOutboundControl: null,
+          errorReason: 'outbound_create_unsupported',
+        })
+      }
+      await manager.reconcileV0Creates()
+      expect(routes).toEqual(['create', 'cancel-create'])
+    },
+  )
+
+  it('confirms only exact Cloud, durable Runtime, and live Runtime agreement', async () => {
+    const repository = new BoxRepository(primary, { emit: jest.fn() } as never, {} as never)
+    const readStatus = () =>
+      repository.completeOutboundStatus(box.id, org, async (row) => (await control(row)).completeStatus())
+    await primary.getRepository(Box).update(box.id, { completeOutboundControl: { version: 2, committed: complete } })
+    const respondWith = (response: ServerResponse, installed: CompleteOutboundSnapshot) =>
+      response.end(
+        JSON.stringify({
+          persisted: installed,
+          observed: { snapshot: installed, application_state: 'confirmed' },
+          application_state: 'confirmed',
+        }),
+      )
+
+    await expect(readStatus()).resolves.toMatchObject({
+      persisted: complete,
+      runtime_persisted: null,
+      observed: null,
+      application_state: 'uncertain',
+    })
+    const different = { ...complete, policy: { ...complete.policy, deny_net: ['example.com'] } }
+    readCompleteRuntime = async (response) => {
+      respondWith(response, different)
+    }
+    await expect(readStatus()).resolves.toMatchObject({
+      persisted: complete,
+      runtime_persisted: different,
+      application_state: 'uncertain',
+    })
+    readCompleteRuntime = async (response) => {
+      respondWith(response, complete)
+    }
+    await expect(readStatus()).resolves.toMatchObject({
+      persisted: complete,
+      runtime_persisted: complete,
+      observed: { snapshot: complete },
+      application_state: 'confirmed',
+    })
+  })
+
+  it('discards a late Runner confirmation when a Cloud replacement starts during the read', async () => {
+    const repository = new BoxRepository(primary, { emit: jest.fn() } as never, {} as never)
+    const predecessor = { ...complete, revision: 'complete-a' }
+    await primary.getRepository(Box).update(box.id, { completeOutboundControl: { version: 2, committed: predecessor } })
+    readCompleteRuntime = async (response) => {
+      await primary.getRepository(Box).update(box.id, {
+        completeOutboundControl: {
+          version: 2,
+          committed: predecessor,
+          pending: { ...completeIntent, kind: 'replace', incarnation: box.id, previousProtected: true },
+        },
+      })
+      response.end(
+        JSON.stringify({
+          persisted: predecessor,
+          observed: { snapshot: predecessor, application_state: 'confirmed' },
+          application_state: 'confirmed',
+        }),
+      )
+    }
+    await expect(
+      repository.completeOutboundStatus(box.id, org, async (row) => (await control(row)).completeStatus()),
+    ).resolves.toEqual({
+      persisted: predecessor,
+      runtime_persisted: null,
+      observed: null,
+      application_state: 'pending',
+      pending_revision: complete.revision,
+    })
   })
 
   it('commits full pending intent before returning and hides it from ordinary loads', async () => {
@@ -234,6 +775,85 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       persisted: live,
       runtime_persisted: live,
     })
+  })
+
+  it.each(['before', 'after'] as const)('settles an owned replacement after a lost %s-COMMIT reply', async (fault) => {
+    const coordinator = new CompleteOutboundCoordinator(store)
+    const requests: string[] = []
+    const predecessor = persistedCompleteOutbound(await store.read(box.id, org))!
+    let installed = predecessor
+    try {
+      await primary.query(
+        "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'fixture', api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1",
+      )
+      await enrollV0('fixture')
+      completeCreatePeer = async (path, command, response) => {
+        expect(path).toBe(`/v1/boxes/${box.id}/network/outbound/complete/replace-control`)
+        requests.push(command.operation)
+        const current = await new OutboundPolicyStore(primary).read(box.id, org)
+        const pending = current.completeOutboundControl?.pending
+        switch (command.operation) {
+          case 'prepare':
+            expect(command.previous).toEqual(predecessor)
+            expect(current.completeOutboundControl).toBeNull()
+            response.end(
+              JSON.stringify({
+                outcome: 'prepared',
+                candidate: { snapshot: { ...complete, revision: command.revision }, deny_present: true },
+              }),
+            )
+            break
+          case 'apply':
+            expect(pending).toMatchObject({
+              kind: 'replace',
+              incarnation: command.attempt.incarnation,
+              attemptId: command.attempt.attempt_id,
+              generation: command.attempt.generation,
+              candidate: command.attempt.candidate,
+            })
+            installed = command.attempt.candidate.snapshot
+            proxy.arm(fault)
+            response.end(JSON.stringify({ outcome: 'applied', snapshot: installed }))
+            break
+          case 'cancel':
+            response.end(JSON.stringify({ outcome: 'applied', snapshot: installed }))
+            break
+          case 'restore':
+            expect(pending).toMatchObject({ restorationRevision: command.revision })
+            expect(command.revision).not.toBe(predecessor.revision)
+            installed = { ...predecessor, revision: command.revision }
+            response.end(JSON.stringify({ outcome: 'restored', snapshot: installed }))
+            break
+          case 'finalize':
+            expect(current.completeOutboundControl?.finalization?.attempt).toEqual(command.attempt)
+            expect(persistedCompleteOutbound(current)).toEqual(installed)
+            response.end(JSON.stringify({ outcome: 'finalized', snapshot: installed }))
+            break
+          default:
+            response.writeHead(500).end()
+        }
+      }
+      await expect(coordinator.replace(box.id, org, complete.policy, () => false)).rejects.toMatchObject({
+        status: 412,
+      })
+      expect(requests).toEqual([])
+      const result = coordinator.replace(box.id, org, complete.policy)
+      if (fault === 'before') {
+        await expect(result).rejects.toMatchObject({ status: 503 })
+        expect(requests).toEqual(['prepare', 'apply', 'cancel', 'restore', 'finalize'])
+      } else {
+        await expect(result).resolves.toMatchObject({ admission: 'extended_ipv4', policy: complete.policy })
+        expect(requests).toEqual(['prepare', 'apply', 'finalize'])
+      }
+      const resolved = await store.read(box.id, org)
+      expect(persistedCompleteOutbound(resolved)).toEqual(installed)
+      expect(resolved.completeOutboundGeneration).toBe(1)
+      expect(resolved.completeOutboundControl?.pending).toBeUndefined()
+      expect(resolved.completeOutboundControl?.finalization).toBeUndefined()
+      if (fault === 'before') expect(resolved.completeOutboundControl).toBeNull()
+    } finally {
+      await primary.query("UPDATE complete_outbound_admission SET phase = 'closed' WHERE id = 1")
+    }
   })
 
   it('exposes the persisted snapshot and guarded replacement through BoxRepository', async () => {

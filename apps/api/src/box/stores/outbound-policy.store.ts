@@ -1,8 +1,17 @@
-import { NotFoundException, ServiceUnavailableException } from '@nestjs/common'
-import { DataSource, EntityManager } from 'typeorm'
+import { ConflictException, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import { DataSource, EntityManager, IsNull, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
-import { OutboundControlRecord } from '../entities/outbound-control-record'
-import { OutboundSnapshot, validOutboundRevision, validOutboundSnapshot } from '../runner-adapter/outbound-control'
+import { Runner } from '../entities/runner.entity'
+import { CompleteOutboundControlRecord, OutboundControlRecord } from '../entities/outbound-control-record'
+import {
+  CompleteOutboundSnapshot,
+  OutboundSnapshot,
+  validCompleteOutboundSnapshot,
+  validOutboundRevision,
+  validOutboundSnapshot,
+  validPreparedOutbound,
+  validPreparedOutboundCreate,
+} from '../runner-adapter/outbound-control'
 
 /** COMMIT may have succeeded; callers must inspect a new primary transaction before recovery. */
 export class OutboundCommitUnknown extends Error {
@@ -33,6 +42,7 @@ export function outboundRecord(box: Box): OutboundControlRecord {
 }
 
 export function persistedOutbound(box: Box): OutboundSnapshot {
+  requireLegacyOutbound(box)
   const result: OutboundSnapshot = {
     revision: outboundRecord(box).revision,
     policy: { mode: box.outboundEnabled ? 'enabled' : 'disabled', allow_net: box.outboundAllowNet ?? [] },
@@ -41,9 +51,136 @@ export function persistedOutbound(box: Box): OutboundSnapshot {
   return result
 }
 
+function requireLegacyOutbound(box: Box): void {
+  if (box.completeOutboundControl != null) {
+    throw new ConflictException({ code: 'complete_policy_required', message: 'Box requires complete outbound control' })
+  }
+}
+
+/** Call with the Box row locked when making an archive admission decision. */
+export function hasCompleteOutboundControl(manager: EntityManager, id: string): Promise<boolean> {
+  return manager.existsBy(Box, { id, completeOutboundControl: Not(IsNull()) })
+}
+
+export async function requireCompleteOutboundAdmission(manager: EntityManager, lock: boolean): Promise<void> {
+  const [control] = await manager.query(
+    'SELECT phase, minimum_release FROM complete_outbound_admission WHERE id = 1 AND api_principal = current_user' +
+      (lock ? ' FOR SHARE' : ''),
+  )
+  if (control?.phase !== 'open' || !control.minimum_release) {
+    throw new ServiceUnavailableException({
+      code: 'complete_outbound_closed',
+      message: 'Complete outbound admission is closed',
+    })
+  }
+}
+
+export async function verifiedCompleteRunner(
+  manager: EntityManager,
+  runnerId?: string,
+  expectedLease?: string,
+  allowExpired = false,
+): Promise<{ runner: Runner; leaseId: string }> {
+  if (!runnerId) throw new ServiceUnavailableException('No Runner owns the Box')
+  const [enrollment] = await manager.query(
+    `SELECT e.lease_id FROM complete_outbound_runner_enrollment e
+    JOIN "runner" r ON r.id = e.runner_id
+    JOIN complete_outbound_admission a ON a.id = 1 AND a.minimum_release = e.verified_floor
+    WHERE e.runner_id = $1 AND a.api_principal = current_user AND a.phase <> 'downgrading'
+      AND r."apiVersion" IN ('0', '2')
+      AND e.runner_key_sha256 = encode(sha256(convert_to(r."apiKey", 'UTF8')), 'hex')
+      AND ($2::uuid IS NULL OR e.lease_id = $2) AND ($3 OR e.expires_at > clock_timestamp())
+    FOR SHARE OF r`,
+    [runnerId, expectedLease ?? null, allowExpired],
+  )
+  if (!enrollment) throw new ServiceUnavailableException('Runner has no verified complete outbound enrollment')
+  const runner = await manager.findOneByOrFail(Runner, { id: runnerId })
+  return { runner, leaseId: enrollment.lease_id }
+}
+
+export async function lockCompleteOutboundFloor(manager: EntityManager): Promise<void> {
+  await manager.query('SELECT id FROM complete_outbound_admission WHERE id = 1 FOR SHARE')
+}
+
+export function completeOutboundRecord(box: Box): CompleteOutboundControlRecord | null {
+  const control = box.completeOutboundControl
+  if (control == null) return null
+  const pending = control.pending
+  const finalization = control.finalization
+  if (
+    control.version !== 2 ||
+    (control.committed === null ? pending?.kind !== 'create' : !validCompleteOutboundSnapshot(control.committed)) ||
+    (pending !== undefined &&
+      (!pending ||
+        pending.kind !== (control.committed === null ? 'create' : 'replace') ||
+        !validOutboundRevision(pending.attemptId) ||
+        !pending.runnerId ||
+        typeof pending.runnerId !== 'string' ||
+        !Number.isSafeInteger(pending.generation) ||
+        pending.generation <= 0 ||
+        !validPreparedOutbound(pending.candidate) ||
+        (pending.kind === 'create' &&
+          ((pending.transport !== 'v0' && pending.transport !== 'v2') ||
+            (pending.transport === 'v0' && !validOutboundRevision(pending.runnerLeaseId)) ||
+            (pending.transport === 'v2' &&
+              (!validOutboundRevision(pending.jobId) || !validOutboundRevision(pending.claimId))) ||
+            !validOutboundRevision(pending.incarnation) ||
+            !validPreparedOutboundCreate(pending.candidate))) ||
+        (pending.kind === 'replace' &&
+          (!validOutboundRevision(pending.incarnation) ||
+            !validOutboundRevision(pending.runnerLeaseId) ||
+            typeof pending.previousProtected !== 'boolean' ||
+            (pending.restorationRevision !== undefined &&
+              (!validOutboundRevision(pending.restorationRevision) ||
+                pending.restorationRevision === 'initial' ||
+                pending.restorationRevision === pending.candidate.snapshot.revision ||
+                pending.restorationRevision === control.committed?.revision)))) ||
+        pending.candidate.snapshot.revision === control.committed?.revision)) ||
+    (finalization !== undefined &&
+      (!finalization ||
+        pending !== undefined ||
+        !control.committed ||
+        typeof finalization.retainProtection !== 'boolean' ||
+        typeof finalization.runnerId !== 'string' ||
+        !finalization.runnerId ||
+        !validOutboundRevision(finalization.runnerLeaseId) ||
+        !validOutboundRevision(finalization.attempt?.incarnation) ||
+        !validOutboundRevision(finalization.attempt.attempt_id) ||
+        !Number.isSafeInteger(finalization.attempt.generation) ||
+        finalization.attempt.generation <= 0 ||
+        !validCompleteOutboundSnapshot(finalization.attempt.previous) ||
+        !validPreparedOutbound(finalization.attempt.candidate)))
+  ) {
+    throw new ServiceUnavailableException('Stored complete outbound control metadata is invalid')
+  }
+  return control
+}
+
+export function persistedCompleteOutbound(box: Box): CompleteOutboundSnapshot | null {
+  const control = completeOutboundRecord(box)
+  if (control) return control.committed
+  const legacy = persistedOutbound(box)
+  return { revision: legacy.revision, admission: 'legacy', policy: { ...legacy.policy, deny_net: [] } }
+}
+
+export function pendingCompleteOutboundRevision(box: Box): string | undefined {
+  const control = completeOutboundRecord(box)
+  return control ? control.pending?.candidate.snapshot.revision : outboundRecord(box).pending?.candidate.revision
+}
+
 export type LockedOutboundBox = {
   box: Box
   write(control: OutboundControlRecord, confirmed?: OutboundSnapshot): Promise<void>
+}
+
+export type LockedCompleteOutboundBox = {
+  box: Box
+  runner(expectedLease?: string, allowExpired?: boolean): ReturnType<typeof verifiedCompleteRunner>
+  write(
+    control: CompleteOutboundControlRecord | null,
+    generation?: number,
+    legacy?: CompleteOutboundSnapshot,
+  ): Promise<void>
 }
 
 /** All callbacks use a primary connection; a failed transaction is released before another operation starts. */
@@ -64,14 +201,9 @@ export class OutboundPolicyStore {
     organizationId: string,
     operation: (locked: LockedOutboundBox) => Promise<T>,
   ): Promise<T> {
-    const runner = this.dataSource.createQueryRunner('master')
-    let committing = false
-    try {
-      await runner.connect()
-      await runner.startTransaction()
-      await runner.query("SET LOCAL lock_timeout = '5s'")
-      const box = await this.find(runner.manager, id, organizationId, true)
-      const result = await operation({
+    return this.transaction(id, organizationId, 'legacy', async (manager, box) => {
+      requireLegacyOutbound(box)
+      return operation({
         box,
         write: async (control, confirmed) => {
           outboundRecord({ outboundControl: control } as Box)
@@ -81,20 +213,92 @@ export class OutboundPolicyStore {
           ) {
             throw new ServiceUnavailableException('Invalid confirmed outbound transaction')
           }
-          const update = {
+          await this.update(manager, box, {
             outboundControl: control,
-            ...(confirmed
-              ? {
-                  outboundEnabled: confirmed.policy.mode === 'enabled',
-                  outboundAllowNet: confirmed.policy.allow_net.length ? confirmed.policy.allow_net : null,
-                }
-              : {}),
-          }
-          const result = await runner.manager.update(Box, { id, organizationId }, update)
-          if (result.affected !== 1) throw new NotFoundException('Box not found')
-          Object.assign(box, update)
+            ...(confirmed ? this.legacyPolicy(confirmed) : {}),
+          })
         },
       })
+    })
+  }
+
+  async lockedComplete<T>(
+    id: string,
+    organizationId: string,
+    admit: boolean,
+    operation: (locked: LockedCompleteOutboundBox) => Promise<T>,
+  ): Promise<T> {
+    return this.transaction(id, organizationId, admit ? 'reserve' : 'owned', (manager, box) =>
+      operation({
+        box,
+        runner: (expectedLease, allowExpired = !admit) =>
+          verifiedCompleteRunner(manager, box.runnerId, expectedLease, allowExpired),
+        write: async (control, generation, legacy) => {
+          completeOutboundRecord({ completeOutboundControl: control } as Box)
+          if (
+            legacy &&
+            (control ||
+              legacy.admission !== 'legacy' ||
+              legacy.policy.deny_net.length ||
+              !validOutboundSnapshot({
+                revision: legacy.revision,
+                policy: { mode: legacy.policy.mode, allow_net: legacy.policy.allow_net },
+              }))
+          ) {
+            throw new ServiceUnavailableException('Invalid legacy restoration')
+          }
+          await this.update(manager, box, {
+            completeOutboundControl: control,
+            ...(generation === undefined ? {} : { completeOutboundGeneration: generation }),
+            ...(legacy
+              ? { outboundControl: { version: 1, revision: legacy.revision }, ...this.legacyPolicy(legacy) }
+              : {}),
+          })
+        },
+      }),
+    )
+  }
+
+  private async update(
+    manager: EntityManager,
+    box: Box,
+    update: Pick<
+      Partial<Box>,
+      | 'outboundControl'
+      | 'outboundEnabled'
+      | 'outboundAllowNet'
+      | 'completeOutboundControl'
+      | 'completeOutboundGeneration'
+    >,
+  ) {
+    const result = await manager.update(Box, { id: box.id, organizationId: box.organizationId }, update as never)
+    if (result.affected !== 1) throw new NotFoundException('Box not found')
+    Object.assign(box, update)
+  }
+
+  private legacyPolicy(snapshot: OutboundSnapshot) {
+    return {
+      outboundEnabled: snapshot.policy.mode === 'enabled',
+      outboundAllowNet: snapshot.policy.allow_net.length ? snapshot.policy.allow_net : null,
+    }
+  }
+
+  private async transaction<T>(
+    id: string,
+    organizationId: string,
+    admission: 'legacy' | 'reserve' | 'owned',
+    operation: (manager: EntityManager, box: Box) => Promise<T>,
+  ): Promise<T> {
+    const runner = this.dataSource.createQueryRunner('master')
+    let committing = false
+    try {
+      await runner.connect()
+      await runner.startTransaction()
+      await runner.query("SET LOCAL lock_timeout = '5s'")
+      if (admission === 'reserve') await requireCompleteOutboundAdmission(runner.manager, true)
+      if (admission === 'owned') await lockCompleteOutboundFloor(runner.manager)
+      const box = await this.find(runner.manager, id, organizationId, true)
+      const result = await operation(runner.manager, box)
       committing = true
       await runner.commitTransaction()
       return result
@@ -112,11 +316,14 @@ export class OutboundPolicyStore {
     const query = manager
       .createQueryBuilder(Box, 'box')
       .addSelect('box.outboundControl')
+      .addSelect('box.completeOutboundControl')
+      .addSelect('box.completeOutboundGeneration')
       .where('box.id = :id AND box.organizationId = :organizationId', { id, organizationId })
     if (lock) query.setLock('pessimistic_write')
     const box = await query.getOne()
     if (!box) throw new NotFoundException('Box not found')
-    persistedOutbound(box)
+    if (box.completeOutboundControl == null) persistedOutbound(box)
+    else completeOutboundRecord(box)
     return box
   }
 }

@@ -6,6 +6,7 @@
 
 export enum JobType {
   CREATE_BOX = 'CREATE_BOX',
+  CREATE_COMPLETE_OUTBOUND_BOX = 'CREATE_COMPLETE_OUTBOUND_BOX',
   START_BOX = 'START_BOX',
   STOP_BOX = 'STOP_BOX',
   DESTROY_BOX = 'DESTROY_BOX',
@@ -18,3 +19,6 @@ export enum JobType {
   UPLOAD_CHECKPOINT = 'UPLOAD_CHECKPOINT',
   IMPORT_CHECKPOINT = 'IMPORT_CHECKPOINT',
 }
+
+// Complete outbound creates use the private, lease-scoped worker API.
+export const LEGACY_JOB_TYPES = Object.values(JobType).filter((type) => type !== JobType.CREATE_COMPLETE_OUTBOUND_BOX)

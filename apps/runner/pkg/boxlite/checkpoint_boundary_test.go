@@ -246,13 +246,18 @@ func TestCheckpointNativeAdapterLookupAndRemoval(t *testing.T) {
 					w.WriteHeader(http.StatusNoContent)
 					return
 				}
+				if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/network/outbound") {
+					w.Header().Set("ETag", `"initial"`)
+					_, _ = io.WriteString(w, `{"mode":"enabled","allow_net":[]}`)
+					return
+				}
 				_, _ = io.WriteString(w, checkpointWireBox("native-target", "target", "stopped", "alpine:latest"))
 			})
 			native := nativeCheckpointRecovery{client: client, target: "target"}
 			info, err := native.Lookup(t.Context(), "target")
 			switch status {
 			case http.StatusOK:
-				if err != nil || info == nil || info.ID != "native-target" || info.State != "stopped" {
+				if err != nil || info == nil || info.ID != "native-target" || info.State != "stopped" || info.ProtectedOutbound {
 					t.Fatalf("lookup: %#v %v", info, err)
 				}
 			case http.StatusNotFound:

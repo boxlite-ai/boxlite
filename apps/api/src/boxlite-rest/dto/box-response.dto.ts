@@ -7,6 +7,10 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { NetworkInfoResponseDto } from '../../box/dto/network-info.dto'
 
+type DashboardProtectedNetwork = Pick<NetworkInfoResponseDto, 'inbound'> & {
+  outbound: { mode: 'unavailable'; allow_net: [] }
+}
+
 @ApiSchema({ name: 'Box' })
 export class BoxResponseDto {
   @ApiProperty({
@@ -118,7 +122,7 @@ export class BoxResponseDto {
     description: 'The effective network policy in both directions',
     type: NetworkInfoResponseDto,
   })
-  network?: NetworkInfoResponseDto
+  network?: NetworkInfoResponseDto | DashboardProtectedNetwork
 }
 
 @ApiSchema({ name: 'ListBoxesResponse' })

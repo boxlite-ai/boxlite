@@ -27,6 +27,7 @@ describe('BoxliteBoxController existing box lookup', () => {
     organization.nestedVirtualizationEnabled = enabled
     const boxService = {
       findOneByIdOrName: jest.fn().mockResolvedValue(box),
+      getBoxNetworkProjections: jest.fn().mockResolvedValue([]),
       toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: box.id, name: box.name, state: 'started' }),
     }
     const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, {} as any)
@@ -199,6 +200,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
   function makeController() {
     const boxService = {
       create: jest.fn().mockResolvedValue({ id: 'box-1', state: 'started' }),
+      getBoxNetworkProjections: jest.fn().mockResolvedValue([]),
       toBoxDto: jest.fn(),
     }
     const boxStateWaiter = { waitForStarted: jest.fn() }

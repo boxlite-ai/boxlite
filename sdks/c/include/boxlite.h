@@ -1118,6 +1118,15 @@ enum BoxliteErrorCode boxlite_get_or_create_box(CBoxliteRuntime *runtime,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
 
+// Create or adopt a named Box with the exact prepared outbound identity.
+// The prepared JSON is copied before return. On success, consumes `opts`.
+enum BoxliteErrorCode boxlite_get_or_create_box_with_prepared_outbound(CBoxliteRuntime *runtime,
+                                                                       CBoxliteOptions *opts,
+                                                                       const char *prepared_json,
+                                                                       CBoxGetOrCreateBoxCb cb,
+                                                                       void *user_data,
+                                                                       CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle,
                                        CBoxStopBoxCb cb,
                                        void *user_data,
@@ -1741,6 +1750,32 @@ enum BoxliteErrorCode boxlite_network_outbound_snapshot(CBoxNetworkHandle *netwo
 enum BoxliteErrorCode boxlite_network_outbound_status(CBoxNetworkHandle *network,
                                                       char **out_json,
                                                       CBoxliteError *out_error);
+
+// Read a complete persisted snapshot, including deny rules and admission mode.
+// Release a successful response with boxlite_free_string.
+enum BoxliteErrorCode boxlite_network_complete_outbound_snapshot(CBoxNetworkHandle *network,
+                                                                 char **out_json,
+                                                                 CBoxliteError *out_error);
+
+// Read complete durable and live observations without applying a policy.
+// Release a successful response with boxlite_free_string.
+enum BoxliteErrorCode boxlite_network_complete_outbound_status(CBoxNetworkHandle *network,
+                                                               char **out_json,
+                                                               CBoxliteError *out_error);
+
+// Execute a private hosted control-plane command. Free the receipt with boxlite_free_string.
+enum BoxliteErrorCode boxlite_network_hosted_outbound(CBoxNetworkHandle *network,
+                                                      const char *command_json,
+                                                      char **out_json,
+                                                      CBoxliteError *out_error);
+
+// Prepare a hosted create snapshot without provisioning a Box.
+// Revision and policy inputs are borrowed UTF-8. Free the result with boxlite_free_string.
+enum BoxliteErrorCode boxlite_runtime_prepare_outbound_create(CBoxliteRuntime *runtime,
+                                                              const char *candidate_revision,
+                                                              const char *policy_json,
+                                                              char **out_json,
+                                                              CBoxliteError *out_error);
 
 // Apply a trusted coordinator's complete policy and fresh candidate revision.
 // Inputs are borrowed UTF-8 strings for the call; revisions are outside policy JSON.
