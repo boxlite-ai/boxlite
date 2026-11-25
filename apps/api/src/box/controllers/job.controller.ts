@@ -39,6 +39,12 @@ export class JobController {
     description: 'Returns a paginated list of jobs for the runner, optionally filtered by status.',
   })
   @ApiQuery({
+    name: 'afterId',
+    required: false,
+    schema: { type: 'string', format: 'uuid' },
+    description: 'List jobs in ascending ID order after this UUID. Start with the nil UUID.',
+  })
+  @ApiQuery({
     name: 'status',
     required: false,
     enum: JobStatus,

@@ -2671,15 +2671,6 @@ paths:
         \ by status."
       operationId: listJobs
       parameters:
-      - description: List jobs in ascending ID order after this UUID. Start with the nil UUID.
-        explode: true
-        in: query
-        name: afterId
-        required: false
-        schema:
-          format: uuid
-          type: string
-        style: form
       - description: Page number of the results
         explode: true
         in: query
@@ -2716,6 +2707,16 @@ paths:
         required: false
         schema:
           type: number
+        style: form
+      - description: List jobs in ascending ID order after this UUID. Start with the
+          nil UUID.
+        explode: true
+        in: query
+        name: afterId
+        required: false
+        schema:
+          format: uuid
+          type: string
         style: form
       responses:
         "200":
