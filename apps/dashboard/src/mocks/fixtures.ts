@@ -267,7 +267,7 @@ export const MOCK_PAGINATED_BOXES: PaginatedBoxes = {
 function buildVolume(overrides: Partial<VolumeDto> & Pick<VolumeDto, 'id' | 'name' | 'state'>): VolumeDto {
   return {
     organizationId: MOCK_ORGANIZATION_ID,
-    storageBackend: 'object_storage',
+    storageBackend: 'standard',
     createdAt: daysAgo(31),
     updatedAt: now,
     lastUsedAt: undefined,
@@ -310,7 +310,7 @@ export const MOCK_VOLUMES: VolumeDto[] = [
     state: VolumeState.READY,
     createdAt: daysAgo(3),
     lastUsedAt: hoursAgo(1),
-    storageBackend: 'nfs',
+    storageBackend: 'performance',
     instance: 'boxlite-dev-shared',
   }),
   buildVolume({

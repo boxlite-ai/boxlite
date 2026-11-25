@@ -133,7 +133,7 @@ See [Checkpoint controls and recovery](#checkpoint-controls-and-recovery) for re
 
 ## Managed volumes
 
-**Volumes → New Volume** selects object storage by default. NFS is offered only when the
+**Volumes → New Volume** selects Standard storage by default. Performance storage is offered only when the
 API advertises `filestore_enabled`; unsupported deployments keep the option disabled. The API
 assigns the underlying Filestore instance. Creation and Box failures retain the server reason plus non-sensitive
 HTTP status, error code and Box ID when available.

@@ -2,7 +2,7 @@
 stop/start, cross-box sharing, and lifecycle rules.
 
 A Filestore volume is a Volume row like any other (volume.service): created
-through `POST /volumes` with `storageBackend: "nfs"` and an optional
+through `POST /volumes` with `storageBackend: "performance"` and an optional
 `instance` naming the NFS instance that holds its data directory, mounted by
 box volume references that carry only `managed_volume` — the same selector
 form as bucket-backed volumes. The API resolves the instance address at
@@ -114,7 +114,7 @@ def filestore_instance():
             with_bounded_lifetime(
                 {
                     "name": probe_volume_name,
-                    "storageBackend": "nfs",
+                    "storageBackend": "performance",
                     **({"instance": candidate} if candidate else {}),
                 }
             ),
@@ -182,7 +182,7 @@ def _create_filestore_volume(
 ) -> tuple[int, dict[str, Any] | None]:
     """POST a filestore volume: a Volume row whose data directory will live on
     the named NFS instance."""
-    body: dict[str, Any] = {"storageBackend": "nfs"}
+    body: dict[str, Any] = {"storageBackend": "performance"}
     if instance is not None:
         body["instance"] = instance
     if name is not None:

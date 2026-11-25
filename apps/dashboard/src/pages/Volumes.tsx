@@ -119,7 +119,7 @@ const Volumes: React.FC = () => {
   const [createOpen, setCreateOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [newStorageBackend, setNewStorageBackend] = useState<CreateVolumeStorageBackendEnum>(
-    CreateVolumeStorageBackendEnum.OBJECT_STORAGE,
+    CreateVolumeStorageBackendEnum.STANDARD,
   )
   const [pendingDelete, setPendingDelete] = useState<VolumeDto | null>(null)
   const [boxVolumeId, setBoxVolumeId] = useState<string | null>(null)
@@ -148,10 +148,10 @@ const Volumes: React.FC = () => {
   // not ask users to know one. Falling back to the only available backend
   // avoids opening with a choice that is guaranteed to fail.
   const selectedStorageBackend = objectStorageAvailable
-    ? newStorageBackend === CreateVolumeStorageBackendEnum.NFS && !filestoreAvailable
-      ? CreateVolumeStorageBackendEnum.OBJECT_STORAGE
+    ? newStorageBackend === CreateVolumeStorageBackendEnum.PERFORMANCE && !filestoreAvailable
+      ? CreateVolumeStorageBackendEnum.STANDARD
       : newStorageBackend
-    : CreateVolumeStorageBackendEnum.NFS
+    : CreateVolumeStorageBackendEnum.PERFORMANCE
   const storageUnavailable = !objectStorageAvailable && !filestoreAvailable
 
   // Exact match, untrimmed: a pasted name with a stray space is exactly the
@@ -176,7 +176,7 @@ const Volumes: React.FC = () => {
       setCreateOpen(false)
       setNewName('')
       toast.success(
-        selectedStorageBackend === CreateVolumeStorageBackendEnum.NFS
+        selectedStorageBackend === CreateVolumeStorageBackendEnum.PERFORMANCE
           ? `Created volume ${name}`
           : `Creating volume ${name}`,
       )
@@ -237,7 +237,7 @@ const Volumes: React.FC = () => {
             type="button"
             onClick={() => {
               setNewName('')
-              setNewStorageBackend(CreateVolumeStorageBackendEnum.OBJECT_STORAGE)
+              setNewStorageBackend(CreateVolumeStorageBackendEnum.STANDARD)
               setCreateOpen(true)
             }}
           >
@@ -308,7 +308,7 @@ const Volumes: React.FC = () => {
                   <StatusMark tone={STATE_TONE[volume.state] ?? 'idle'}>{volume.state}</StatusMark>
                 </span>
                 <span className="font-mono text-meta text-muted-foreground">
-                  {volume.storageBackend === CreateVolumeStorageBackendEnum.NFS ? 'NFS' : 'ObjectStorage'}
+                  {volume.storageBackend === CreateVolumeStorageBackendEnum.PERFORMANCE ? 'Performance' : 'Standard'}
                 </span>
                 <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.createdAt)}</span>
                 <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.lastUsedAt)}</span>
@@ -396,19 +396,19 @@ const Volumes: React.FC = () => {
                 aria-label="Volume storage"
                 className="form-field-input"
               >
-                <option value={CreateVolumeStorageBackendEnum.OBJECT_STORAGE} disabled={!objectStorageAvailable}>
-                  ObjectStorage
+                <option value={CreateVolumeStorageBackendEnum.STANDARD} disabled={!objectStorageAvailable}>
+                  Standard
                 </option>
-                <option value={CreateVolumeStorageBackendEnum.NFS} disabled={!filestoreAvailable}>
-                  NFS
+                <option value={CreateVolumeStorageBackendEnum.PERFORMANCE} disabled={!filestoreAvailable}>
+                  Performance
                 </option>
               </select>
             </div>
             {!objectStorageAvailable && !filestoreAvailable ? (
               <PanelNote>This deployment has no volume storage configured.</PanelNote>
             ) : !filestoreAvailable ? (
-              <PanelNote>NFS is not configured on this deployment.</PanelNote>
-            ) : selectedStorageBackend === CreateVolumeStorageBackendEnum.NFS ? (
+              <PanelNote>Performance storage is not configured on this deployment.</PanelNote>
+            ) : selectedStorageBackend === CreateVolumeStorageBackendEnum.PERFORMANCE ? (
               <PanelNote>Used to mount this volume into a box. It is ready immediately after creation.</PanelNote>
             ) : (
               <PanelNote>Used to mount this volume into a box. It takes a few seconds to become ready.</PanelNote>

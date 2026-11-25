@@ -401,7 +401,7 @@ moves to another target during the test is left intact and reported as a failure
 
 `cases/test_filestore.py` covers **Filestore volumes** — Volume rows whose
 data directory lives on a Filestore NFS instance, created through
-`POST /volumes` with `storageBackend: "nfs"` and an optional
+`POST /volumes` with `storageBackend: "performance"` and an optional
 `instance` field. They mount by box volume references that carry only
 `managed_volume`, exactly like bucket-backed volumes. Instances themselves are
 **ops-provisioned API env config** (`FILESTORE_INSTANCES`, a JSON object list

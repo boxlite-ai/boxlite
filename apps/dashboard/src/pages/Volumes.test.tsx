@@ -18,7 +18,7 @@ const READY_VOLUME = {
   state: 'ready',
   createdAt: new Date().toISOString(),
   lastUsedAt: null,
-  storageBackend: 'object_storage',
+  storageBackend: 'standard',
 }
 
 // Stands in for the real form so the assertions can read what the page decided
@@ -40,7 +40,7 @@ const state = vi.hoisted(() => ({
   refetch: vi.fn(),
   volumeState: 'ready',
   errorReason: undefined as string | undefined,
-  storageBackend: 'object_storage',
+  storageBackend: 'standard',
   instance: undefined as string | undefined,
   capabilities: { object_storage_enabled: true, filestore_enabled: false },
   capabilitiesLoading: false,
@@ -139,7 +139,7 @@ describe('Volumes row action "New Box"', () => {
     state.empty = false
     state.volumeState = 'ready'
     state.errorReason = undefined
-    state.storageBackend = 'object_storage'
+    state.storageBackend = 'standard'
     state.instance = undefined
     state.capabilities = { object_storage_enabled: true, filestore_enabled: false }
     state.capabilitiesLoading = false
@@ -371,7 +371,7 @@ describe('Volumes storage selection', () => {
     state.empty = false
     state.volumeState = 'ready'
     state.errorReason = undefined
-    state.storageBackend = 'object_storage'
+    state.storageBackend = 'standard'
     state.instance = undefined
     state.capabilities = { object_storage_enabled: true, filestore_enabled: false }
     state.capabilitiesLoading = false
@@ -396,35 +396,35 @@ describe('Volumes storage selection', () => {
     })
   }
 
-  it('defaults to object storage and sends no implicit Filestore instance', async () => {
+  it('defaults to standard storage and sends no implicit Filestore instance', async () => {
     renderPage()
     await act(async () => rowAction('New Volume')!.click())
-    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('object_storage')
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('standard')
     inputText('Volume name', 'shared-data')
     await act(async () => rowAction('Create')!.click())
 
-    expect(state.createdVolume).toEqual({ name: 'shared-data', storageBackend: 'object_storage' })
+    expect(state.createdVolume).toEqual({ name: 'shared-data', storageBackend: 'standard' })
     expect(toast.success).toHaveBeenCalledWith('Creating volume shared-data')
   })
 
-  it('keeps unconfigured NFS visible but disabled', () => {
+  it('keeps unconfigured Performance storage visible but disabled', () => {
     renderPage()
     act(() => rowAction('New Volume')?.click())
 
-    expect(document.querySelector<HTMLOptionElement>('option[value="nfs"]')!.disabled).toBe(true)
-    expect(document.body.textContent).toContain('NFS is not configured on this deployment.')
+    expect(document.querySelector<HTMLOptionElement>('option[value="performance"]')!.disabled).toBe(true)
+    expect(document.body.textContent).toContain('Performance storage is not configured on this deployment.')
   })
 
-  it('creates an NFS volume through server assignment and immediate-ready copy', async () => {
+  it('creates a Performance volume through server assignment and immediate-ready copy', async () => {
     state.capabilities = { object_storage_enabled: true, filestore_enabled: true }
     renderPage()
     await act(async () => rowAction('New Volume')!.click())
-    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('object_storage')
-    selectStorage('nfs')
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('standard')
+    selectStorage('performance')
     inputText('Volume name', 'nfs-data')
     await act(async () => rowAction('Create')!.click())
 
-    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'nfs' })
+    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'performance' })
     expect(Object.hasOwn(state.createdVolume!, 'instance')).toBe(false)
     expect(toast.success).toHaveBeenCalledWith('Created volume nfs-data')
     expect(document.body.textContent).not.toContain('It takes a few seconds to become ready.')
@@ -437,7 +437,7 @@ describe('Volumes storage selection', () => {
     )
     renderPage()
     await act(async () => rowAction('New Volume')!.click())
-    selectStorage('nfs')
+    selectStorage('performance')
     inputText('Volume name', 'nfs-data')
     await act(async () => rowAction('Create')!.click())
 
@@ -452,10 +452,10 @@ describe('Volumes storage selection', () => {
     renderPage()
     await act(async () => rowAction('New Volume')!.click())
 
-    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('nfs')
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('performance')
     inputText('Volume name', 'nfs-data')
     await act(async () => rowAction('Create')!.click())
-    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'nfs' })
+    expect(state.createdVolume).toEqual({ name: 'nfs-data', storageBackend: 'performance' })
 
     act(() => root?.unmount())
     root = null
@@ -481,19 +481,19 @@ describe('Volumes storage selection', () => {
     state.capabilities = { object_storage_enabled: true, filestore_enabled: true }
     renderPage()
     act(() => rowAction('New Volume')?.click())
-    selectStorage('nfs')
+    selectStorage('performance')
     act(() => rowAction('Cancel')?.click())
 
     act(() => rowAction('New Volume')?.click())
-    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('object_storage')
+    expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('standard')
   })
 
   it('shows only the storage backend', () => {
-    state.storageBackend = 'nfs'
+    state.storageBackend = 'performance'
     state.instance = 'boxlite-dev-shared'
     renderPage()
 
-    expect(document.body.textContent).toContain('NFS')
+    expect(document.body.textContent).toContain('Performance')
     expect(document.body.textContent).not.toContain('boxlite-dev-shared')
   })
 })
