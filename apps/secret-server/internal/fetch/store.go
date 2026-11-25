@@ -33,11 +33,14 @@ type store interface {
 type postgres struct{ pool *pgxpool.Pool }
 
 func (p postgres) load(ctx context.Context, ids []string) (map[string]secret, error) {
-	// Allow 64 KiB of plaintext plus the 29-byte v1 envelope overhead.
-	// The row budget also covers hex encoding and routing and wrapping metadata.
-	rows, err := p.pool.Query(ctx, `SELECT CASE WHEN octet_length(ciphertext)<=65565
- AND octet_length(row_to_json(s)::text)<=147456 THEN row_to_json(s) ELSE NULL END
- FROM secret s WHERE id=ANY($1::uuid[])`, ids)
+	// A 1 MiB write request fits after JSON reformatting and envelope hex encoding.
+	// Bound the entire grant set before transferring any payload to the service.
+	rows, err := p.pool.Query(ctx, `WITH checked AS MATERIALIZED (
+ SELECT CASE WHEN octet_length(ciphertext)<=65565 AND octet_length(encrypted_dek)<=65536
+ AND octet_length(row_to_json(s)::text)<=2097152 THEN row_to_json(s) END AS payload
+ FROM secret s WHERE id=ANY($1::uuid[]))
+ SELECT CASE WHEN count(payload) OVER () = count(*) OVER ()
+ AND sum(octet_length(payload::text)) OVER ()<=12582912 THEN payload END FROM checked`, ids)
 	if err != nil {
 		return nil, err
 	}

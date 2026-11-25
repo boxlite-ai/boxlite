@@ -203,6 +203,23 @@ func TestIntegration(t *testing.T) {
 	if err := h.store.record(ctx, audit{Result: "invalid-result"}); err == nil {
 		t.Fatal("invalid audit result accepted")
 	}
+	t.Run("grant set exceeds read budget", func(t *testing.T) {
+		var ids []string
+		err := pool.QueryRow(ctx, `WITH inserted AS (
+ INSERT INTO secret(organization_id,scope,name,name_normalized,ciphertext,encrypted_dek,key_id,hosts,headers,placeholder,created_by)
+ SELECT organization_id,scope,'BUDGET_'||n,'BUDGET_'||n,ciphertext,encrypted_dek,key_id,hosts,headers,repeat('p',1048576),created_by
+ FROM secret CROSS JOIN generate_series(1,12) n WHERE id=$1 RETURNING id
+ ) SELECT array_agg(id::text) FROM inserted`, first).Scan(&ids)
+		if err != nil || len(ids) != 12 {
+			t.Fatalf("create budget fixture: rows=%d error=%v", len(ids), err)
+		}
+		if _, err := h.store.load(ctx, ids[:1]); err != nil {
+			t.Fatalf("individual row did not fit: %v", err)
+		}
+		if rows, err := h.store.load(ctx, ids); err == nil || len(rows) != 0 {
+			t.Fatalf("oversized grant set was not rejected: rows=%d error=%v", len(rows), err)
+		}
+	})
 	_, err = pool.Exec(ctx, "UPDATE secret SET disabled_at=now() WHERE id=$1", second)
 	if err != nil {
 		t.Fatal(err)

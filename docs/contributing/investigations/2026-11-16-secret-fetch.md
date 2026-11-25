@@ -62,8 +62,11 @@ log message, without changing the fetch outcome.
 
 Request bodies are limited to 4 KiB, API replies to 64 KiB, grants to 64,
 and concurrent fetch operations to 16. A single database statement checks
-ciphertext (64 KiB plus 29 bytes for the v1 envelope) and serialized row (144 KiB) sizes before returning bounded
-columns. This avoids a separate check/read race and limits memory allocation.
+ciphertext (64 KiB plus 29 bytes for the v1 envelope), wrapped key (64 KiB),
+serialized row (2 MiB) and grant set (12 MiB) sizes before returning payloads.
+The row budget accommodates the 1 MiB write request, including metadata and
+envelope serialization overhead. One statement avoids a race between checking
+sizes and reading rows.
 Success JSON is limited to 8 MiB, including escaping expansion. Oversized stored
 rows and saturation return `store_unavailable`; oversized API replies return
 `api_unavailable`. Tests cover limits and saturation.

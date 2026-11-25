@@ -332,9 +332,11 @@ consume credentials; failures after successful introspection leave them consumed
 
 Resource bounds are 4 KiB request bodies, 64 KiB API replies, 64 grants,
 65,565 bytes of ciphertext (64 KiB plaintext plus 29 bytes of envelope overhead),
-144 KiB serialized stored rows, 8 MiB success JSON and
-16 concurrent fetch operations. A single SQL statement suppresses oversized
-stored payloads before transfer. No unbounded request queue is created.
+64 KiB wrapped keys, 2 MiB per serialized stored row, 12 MiB of serialized rows
+per grant set, 8 MiB success JSON and 16 concurrent fetch operations. The row
+budget accommodates the write endpoint's 1 MiB JSON request after PostgreSQL
+reformats metadata and hex encodes the envelope. A single SQL statement checks
+row and grant-set sizes before returning payloads.
 
 Audit attempts use a separate 100 ms context for the complete outcome, with at
 most 16 concurrent audit operations. Each batch uses one atomic SQL insert, so
@@ -377,7 +379,7 @@ API schema and a separate secret database, then removes both. Its loopback-only
 issuance fixture invokes the real service; it is not a production API endpoint.
 
 The test verifies wrong-runner rejection without consumption, successful
-redemption and decryption of a 64 KiB value, replay rejection, and persisted
-audit outcomes. A missing or skipped Go test fails the harness. This validates the pinned API
-contract in an isolated Nest application, not full API startup, ingress controls,
+redemption of a 64 KiB value with a 920 KiB placeholder, replay rejection, and
+persisted audit outcomes. A missing or skipped Go test fails the harness. This
+validates the pinned API contract in an isolated Nest application, not full API startup, ingress controls,
 service deployment, or GCP attestation. Those checks remain pending.
