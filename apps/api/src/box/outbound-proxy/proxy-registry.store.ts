@@ -59,6 +59,7 @@ export class ProxyRegistryStore implements OnModuleInit {
     private readonly source: DataSource,
     private readonly cipher: ProxyCredentialCipher,
     private readonly enabled: boolean,
+    private readonly firstKeyId?: string,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -69,6 +70,12 @@ export class ProxyRegistryStore implements OnModuleInit {
         UNION SELECT key_id FROM outbound_proxy_revision WHERE key_id IS NOT NULL
       `)
       for (const { key_id } of ids) this.cipher.requireKey(key_id)
+      if (this.firstKeyId === undefined) return
+
+      this.cipher.requireKey(this.firstKeyId)
+      const [selected] = await tx.query('SELECT key_id FROM outbound_proxy_key_selector FOR UPDATE')
+      if (!selected || (selected.key_id !== null && selected.key_id !== this.firstKeyId)) throw conflict()
+      if (selected.key_id === null) await this.selectKey(tx, this.firstKeyId)
     })
   }
 
@@ -606,11 +613,15 @@ export class ProxyRegistryStore implements OnModuleInit {
     this.cipher.requireKey(keyId)
     await this.transaction(async (tx) => {
       await tx.query('SELECT key_id FROM outbound_proxy_key_selector FOR UPDATE')
-      await tx.query('INSERT INTO outbound_proxy_key (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [keyId])
-      const [key] = await tx.query('SELECT retired FROM outbound_proxy_key WHERE id = $1', [keyId])
-      if (key.retired) throw conflict()
-      await tx.query('UPDATE outbound_proxy_key_selector SET key_id = $1', [keyId])
+      await this.selectKey(tx, keyId)
     })
+  }
+
+  private async selectKey(tx: RegistryTransaction, keyId: string): Promise<void> {
+    await tx.query('INSERT INTO outbound_proxy_key (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [keyId])
+    const [key] = await tx.query('SELECT retired FROM outbound_proxy_key WHERE id = $1', [keyId])
+    if (key.retired) throw conflict()
+    await tx.query('UPDATE outbound_proxy_key_selector SET key_id = $1', [keyId])
   }
 
   async retireKey(keyId: string): Promise<void> {

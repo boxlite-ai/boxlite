@@ -53,7 +53,7 @@ export const REGISTER_RUNNERS_COMMAND = 'node scripts/register-extra-runners.mjs
  * no command should be created at all — see `stack.test.ts`.
  */
 export const extraRunnersOf = (fleet: readonly RunnerAssignment[]): RunnerAssignment[] =>
-  fleet.slice(1).filter(({ slot }) => !slot.protectedProxy)
+  fleet.slice(1).filter(({ slot }) => !slot.protectedProxy || slot.protectedProxy.apiVersion === 2)
 
 /**
  * What the script is handed, as the one JSON value it parses.

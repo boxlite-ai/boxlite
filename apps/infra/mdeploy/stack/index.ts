@@ -379,7 +379,9 @@ export const deployStack = ({
    * invalidating every row already registered.
    */
   const fleet: RunnerAssignment[] = inputs.runnerFleet.map((slot) => {
-    if (!slot.protectedProxy) return { slot, token: providers.mintRunnerToken(`RunnerToken-${slot.controlPlaneRunnerName}`) }
+    if (!slot.protectedProxy || slot.protectedProxy.apiVersion === 2) {
+      return { slot, token: providers.mintRunnerToken(`RunnerToken-${slot.controlPlaneRunnerName}`) }
+    }
     const token = inputs.protectedRunnerTokens?.[slot.resourceName]
     if (!token) throw new Error('Protected Runner enrollment requires its pre-registered token')
     return { slot, token: $util.secret(token) }

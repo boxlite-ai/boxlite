@@ -35,7 +35,11 @@ import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
 import { CLOUD_RUNNER_KERNEL, kernelDeployment } from './runner-kernel.ts'
 import { runnerHealthProbe } from './runner-health-probe.ts'
 import { renderRunnerEnvironment, RUNNER_ENV_BEGIN, RUNNER_ENV_END } from './runner-environment.ts'
-import { protectedRunnerServiceEnvironment, type RunnerProtectedProxy } from './runner-protected-proxy.ts'
+import {
+  PROTECTED_V2_LISTENER_ENV,
+  protectedRunnerServiceEnvironment,
+  type RunnerProtectedProxy,
+} from './runner-protected-proxy.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
@@ -557,6 +561,7 @@ type UnitEnvironmentInput = Pick<
   'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv' | 'protectedProxy'
 > & {
   apiUrl: string
+  protectedProxyByHost?: ReadonlyMap<string, RunnerProtectedProxy>
   /**
    * The fleet's data-disk identity, or null where the cloud's runners keep box
    * state on the root disk and have no disk to name. Only the GCP policy names
@@ -566,6 +571,13 @@ type UnitEnvironmentInput = Pick<
   dataDiskIdentity?: RunnerDataDiskIdentity | null
 }
 
+const protectedV2Settings = (enrollment: RunnerProtectedProxy | undefined): string[] =>
+  enrollment?.apiVersion === 2
+    ? Object.entries(protectedRunnerServiceEnvironment(enrollment)).map(
+        ([key, value]) => `'${key}=${value.replaceAll("'", "'\\''")}'`,
+      )
+    : []
+
 export const unitEnvironmentBlock = ({
   apiUrl,
   otlpUrl,
@@ -573,11 +585,13 @@ export const unitEnvironmentBlock = ({
   registryProxyHost,
   runnerEnv,
   protectedProxy,
+  protectedProxyByHost,
   dataDiskIdentity = null,
 }: UnitEnvironmentInput): string => {
   assertUnitEnvironment({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })
   if (dataDiskIdentity) assertDataDiskIdentity(dataDiskIdentity)
-  const custom = renderRunnerEnvironment(runnerEnv, Object.keys(protectedRunnerServiceEnvironment(protectedProxy)))
+  const enrollment = protectedRunnerServiceEnvironment(protectedProxy)
+  const custom = renderRunnerEnvironment(runnerEnv, Object.keys(enrollment))
   // An array, so an optional key is absent rather than empty: an AWS host's
   // boot script writes no backend, a caller that supplied no collector has no
   // endpoint to enforce, and a stage without a registry proxy has no host to
@@ -590,6 +604,7 @@ export const unitEnvironmentBlock = ({
     ...(volumeBackend ? [`'VOLUME_STORAGE_BACKEND=${volumeBackend}'`] : []),
     ...(registryProxyHost ? [`'REGISTRY_PROXY_HOST=${registryProxyHost}'`] : []),
     ...(dataDiskIdentity ? [`'GCP_PROJECT_ID=${dataDiskIdentity.project}'`, `'GCP_ZONE=${dataDiskIdentity.zone}'`] : []),
+    ...protectedV2Settings(protectedProxy),
   ].join(' ')
   /*
    * Prefixed names, because this block is concatenated after the binary half,
@@ -618,10 +633,11 @@ export const unitEnvironmentBlock = ({
 UNIT_HOST_NAME="\${BOXLITE_RUNNER_HOST_NAME:-$(curl -fsS -H "Metadata-Flavor: Google" --max-time 5 http://metadata.google.internal/computeMetadata/v1/instance/name)}"
 case "$UNIT_HOST_NAME" in
 ${dataDiskIdentity.hosts
-  .map(
-    (host) =>
-      `  ${host}) runner_data_disk='${runnerDataDiskNameFor({ app: dataDiskIdentity.app, stage: dataDiskIdentity.stage, host })}' ;;`,
-  )
+  .map((host) => {
+    const lines = protectedV2Settings(protectedProxyByHost?.get(host)).join(' ')
+    return `  ${host}) runner_data_disk='${runnerDataDiskNameFor({ app: dataDiskIdentity.app, stage: dataDiskIdentity.stage, host })}'
+    ${lines ? `UNIT_ENV_EXPECTED+=(${lines}); UNIT_ENV_UNSET=''` : ':'} ;;`
+  })
   .join('\n')}
   *)
     echo "FATAL: $UNIT_HOST_NAME is not one of this stage's runner hosts; refusing to name a data disk" >&2
@@ -633,9 +649,10 @@ UNIT_ENV_EXPECTED+=("RUNNER_DATA_DISK_NAME=$runner_data_disk")
     : ''
   return `UNIT_ENV_FILE="\${BOXLITE_RUNNER_ENV_FILE:-${RUNNER_ENV_FILE}}"
 UNIT_ENV_EXPECTED=(${expected})
+UNIT_ENV_UNSET='${protectedProxy?.apiVersion === 2 ? '' : Object.values(PROTECTED_V2_LISTENER_ENV).join(' ')}'
 ${dataDisk}
 UNIT_ENV_CUSTOM="$(printf '%s' '${Buffer.from(custom.block).toString('base64')}' | base64 -d)"
-UNIT_ENV_KEYS='${custom.keys.join(' ')}'
+UNIT_ENV_KEYS="${custom.keys.join(' ')} $UNIT_ENV_UNSET"
 
 # Extract the managed block or its complement. Invalid boundaries fail closed;
 # newly managed names outside the block are migrated, never left to resurface.
@@ -654,11 +671,13 @@ custom_unit_environment() {
   ' "$UNIT_ENV_FILE"
 }
 
-${dataDisk}
 unit_environment_matches() {
-  local line current
+  local line current key
   for line in "\${UNIT_ENV_EXPECTED[@]}"; do
     grep -qxF "$line" "$UNIT_ENV_FILE" || return 1
+  done
+  for key in $UNIT_ENV_UNSET; do
+    if grep -q "^$key=" "$UNIT_ENV_FILE"; then return 1; fi
   done
   current="$(custom_unit_environment block)" || return 1
   [ "$current" = "$UNIT_ENV_CUSTOM" ]

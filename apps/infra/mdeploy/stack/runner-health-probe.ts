@@ -4,7 +4,8 @@ export const runnerHealthProbe = `runner_http_health() {
   shift
   local env_file="\${BOXLITE_RUNNER_ENV_FILE:-/etc/boxlite/runner.env}"
   local name ca
-  if [ -r "$env_file" ] && grep -q '^BOXLITE_PROTECTED_PROXY_RUNNER_ID=' "$env_file"; then
+  if [ -r "$env_file" ] && grep -q '^BOXLITE_PROTECTED_PROXY_RUNNER_ID=' "$env_file" &&
+    ! grep -qx 'API_VERSION=2' "$env_file"; then
     name=$(sed -n 's/^BOXLITE_PROTECTED_PROXY_DNS_NAME=//p' "$env_file")
     ca=$(sed -n 's/^BOXLITE_PROTECTED_PROXY_CA_FILE=//p' "$env_file")
     [[ "$name" =~ ^[a-z0-9.-]+$ && -r "$ca" ]] || return 1

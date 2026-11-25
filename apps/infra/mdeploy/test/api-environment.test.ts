@@ -17,6 +17,37 @@ const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://au
 const assemble = (environment: Record<string, string | undefined>, declaration = groups([])) =>
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
 
+test('managed outbound key rings reach the API only as a pinned Secret Manager version', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  const required = Object.fromEntries(
+    declared.envSelectGroup.api!.filter((name) => !declared.envOptional.api!.includes(name)).map((name) => [name, 'fixture']),
+  )
+  const assemble = (keyRing?: string) => apiEnvironmentFrom({
+    environment: {
+      ...base,
+      ...required,
+      OUTBOUND_PROXY_REGISTRY_ENABLED: 'true',
+      OUTBOUND_PROXY_REGISTRY_FIRST_KEY_ID: 'first',
+      OUTBOUND_PROXY_REGISTRY_KEYS: keyRing,
+    },
+    declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+    region: 'us-east1',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  const reference = 'projects/project/secrets/proxy-keys/versions/7'
+  const { environment, secrets } = assemble(JSON.stringify({ address: reference }))
+  assert.equal(environment.OUTBOUND_PROXY_REGISTRY_ENABLED, 'true')
+  assert.equal(environment.OUTBOUND_PROXY_REGISTRY_FIRST_KEY_ID, 'first')
+  assert.equal(environment.OUTBOUND_PROXY_REGISTRY_KEYS, undefined)
+  assert.equal(secrets.OUTBOUND_PROXY_REGISTRY_KEYS, reference)
+  assert.throws(() => assemble('plaintext'), /OUTBOUND_PROXY_REGISTRY_KEYS does not hold JSON/)
+  for (const keyRing of [undefined, '{"address":"projects/project/secrets/proxy-keys/versions/latest"}']) {
+    assert.throws(() => assemble(keyRing), /requires a pinned Secret Manager version/)
+  }
+})
+
 for (const home of ['aws', 'gcp'] as const) {
   for (const enabled of [undefined, 'false', 'true']) {
     test(`${home} delivers checkpoint admission ${enabled ?? '(unset)'} through the stage API group`, () => {

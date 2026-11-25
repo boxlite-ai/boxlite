@@ -25,6 +25,11 @@ type Config struct {
 	ProtectedProxyRunnerID             string        `envconfig:"BOXLITE_PROTECTED_PROXY_RUNNER_ID"`
 	ProtectedProxyDoHURL               string        `envconfig:"BOXLITE_PROTECTED_PROXY_DOH_URL"`
 	ProtectedProxyDoHAddress           string        `envconfig:"BOXLITE_PROTECTED_PROXY_DOH_ADDRESS"`
+	ProtectedProxyListenAddress        string        `envconfig:"BOXLITE_PROTECTED_PROXY_LISTEN_ADDRESS"`
+	ProtectedProxyCertFile             string        `envconfig:"BOXLITE_PROTECTED_PROXY_CERT_FILE"`
+	ProtectedProxyKeyFile              string        `envconfig:"BOXLITE_PROTECTED_PROXY_KEY_FILE"`
+	ProtectedProxyClientCAFile         string        `envconfig:"BOXLITE_PROTECTED_PROXY_CLIENT_CA_FILE"`
+	ProtectedProxyClientDNSName        string        `envconfig:"BOXLITE_PROTECTED_PROXY_CLIENT_DNS_NAME"`
 	OtelLoggingEnabled                 bool          `envconfig:"OTEL_LOGGING_ENABLED"`
 	OtelTracingEnabled                 bool          `envconfig:"OTEL_TRACING_ENABLED"`
 	OtelEndpoint                       string        `envconfig:"OTEL_EXPORTER_OTLP_ENDPOINT"`

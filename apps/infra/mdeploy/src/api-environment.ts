@@ -350,6 +350,11 @@ export const apiEnvironmentFrom = ({
   // below asks whether a credential arrived, and asking the raw environment
   // would miss one delivered as an address.
   const delivered = serviceSecretsFrom({ group: API_GROUP, declaration, environment })
+  const registryEnabled = flag(delivered, 'OUTBOUND_PROXY_REGISTRY_ENABLED')
+  const keyRing = 'OUTBOUND_PROXY_REGISTRY_KEYS'
+  if (delivered.OUTBOUND_PROXY_REGISTRY_FIRST_KEY_ID !== undefined && !registryEnabled) {
+    throw new ApiEnvironmentError('OUTBOUND_PROXY_REGISTRY_FIRST_KEY_ID requires the proxy registry to be enabled')
+  }
   if (delivered.TURNSTILE_SITEKEY) {
     for (const key of ['TURNSTILE_SECRET_KEY', 'TURNSTILE_EXPECTED_HOSTNAMES']) {
       if (!delivered[key]) throw new ApiEnvironmentError(`${key} is required when TURNSTILE_SITEKEY is set`)
@@ -360,6 +365,12 @@ export const apiEnvironmentFrom = ({
     }
   }
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
+  if (
+    (registryEnabled || keyRing in delivered) &&
+    (home !== 'gcp' || !/\/versions\/[1-9][0-9]*$/.test(addresses[keyRing] ?? ''))
+  ) {
+    throw new ApiEnvironmentError(`${keyRing} requires a pinned Secret Manager version`)
+  }
   validateCiChannels(values, addresses)
 
   return {

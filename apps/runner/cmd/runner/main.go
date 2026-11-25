@@ -7,10 +7,12 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -266,22 +268,30 @@ func run() int {
 		}()
 	}
 
-	apiServer := api.NewApiServer(api.ApiServerConfig{
-		Logger:      logger,
-		ApiPort:     cfg.ApiPort,
-		ApiToken:    cfg.ApiToken,
-		TLSCertFile: cfg.TLSCertFile,
-		TLSKeyFile:  cfg.TLSKeyFile,
-		EnableTLS:   cfg.EnableTLS,
-		LogRequests: cfg.ApiLogRequests,
-		ApiVersion:  cfg.ApiVersion,
-		ProtectedBoot: api.ProtectedBootConfig{
-			RunnerID:   cfg.ProtectedProxyRunnerID,
-			DoHURL:     cfg.ProtectedProxyDoHURL,
-			DoHAddress: cfg.ProtectedProxyDoHAddress,
-		},
-	})
+	protectedBoot := api.ProtectedBootConfig{
+		RunnerID:   cfg.ProtectedProxyRunnerID,
+		DoHURL:     cfg.ProtectedProxyDoHURL,
+		DoHAddress: cfg.ProtectedProxyDoHAddress,
+	}
+	var stopProtected func()
+	if cfg.ApiVersion == 2 && cfg.ProtectedProxyListenAddress != "" {
+		stopProtected = startProtectedListener(ctx, logger, cfg, protectedBoot)
+		if stopProtected != nil {
+			defer stopProtected()
+		}
+	}
 
+	apiServer := api.NewApiServer(api.ApiServerConfig{
+		Logger:        logger,
+		ApiPort:       cfg.ApiPort,
+		ApiToken:      cfg.ApiToken,
+		TLSCertFile:   cfg.TLSCertFile,
+		TLSKeyFile:    cfg.TLSKeyFile,
+		EnableTLS:     cfg.EnableTLS,
+		LogRequests:   cfg.ApiLogRequests,
+		ApiVersion:    cfg.ApiVersion,
+		ProtectedBoot: protectedBoot,
+	})
 	apiServerErrChan := make(chan error)
 
 	go func() {
@@ -298,6 +308,9 @@ func run() int {
 		return 1
 	case <-interruptChannel:
 		logger.Info("Signal received, shutting down")
+		if stopProtected != nil {
+			stopProtected()
+		}
 
 		// Gracefully stop all running boxes BEFORE freeing the runtime / killing
 		// the API server. Without this step, the systemd SIGTERM that restarts
@@ -317,6 +330,28 @@ func run() int {
 		logger.Info("Shutdown complete")
 		return 143
 	}
+}
+
+func startProtectedListener(ctx context.Context, logger *slog.Logger, cfg *config.Config, boot api.ProtectedBootConfig) func() {
+	_, port, addressErr := net.SplitHostPort(cfg.ProtectedProxyListenAddress)
+	portNumber, portErr := strconv.ParseUint(port, 10, 16)
+	if addressErr != nil || portErr != nil || portNumber == 0 || int(portNumber) == cfg.ApiPort {
+		logger.Error("Protected listener requires a port distinct from the ordinary Runner API")
+		return nil
+	}
+	address, stop, err := api.StartProtectedListener(ctx, logger, api.ProtectedListenerConfig{
+		Address:       cfg.ProtectedProxyListenAddress,
+		CertFile:      cfg.ProtectedProxyCertFile,
+		KeyFile:       cfg.ProtectedProxyKeyFile,
+		ClientCAFile:  cfg.ProtectedProxyClientCAFile,
+		ClientDNSName: cfg.ProtectedProxyClientDNSName,
+	}, boot, cfg.ApiToken)
+	if err != nil {
+		logger.Error("Protected listener unavailable", "error", err)
+		return nil
+	}
+	logger.Info("Protected listener started", "address", address.String())
+	return stop
 }
 
 // buildBoxliteClientConfig keeps startup policy mapping separate from runtime

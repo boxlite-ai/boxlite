@@ -118,6 +118,30 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
     return store.create(org, proxyCreate(registration))
   }
 
+  it('converges concurrent provisioning of the first key and accepts a credential write', async () => {
+    await db.query('UPDATE outbound_proxy_key_selector SET key_id = NULL')
+    const first = new ProxyRegistryStore(db, cipher, true, 'b')
+    const retry = new ProxyRegistryStore(db, cipher, true, 'b')
+    await Promise.all([first.onModuleInit(), retry.onModuleInit()])
+
+    await expect(create()).resolves.toMatchObject({ credential_configured: true })
+    expect(await db.query('SELECT key_id FROM outbound_proxy_revision')).toEqual([{ key_id: 'b' }])
+  })
+
+  it('preserves a selected key and rejects unknown or retired first keys', async () => {
+    await expect(new ProxyRegistryStore(db, cipher, true, 'b').onModuleInit()).rejects.toMatchObject({ status: 409 })
+    await expect(create()).resolves.toMatchObject({ credential_configured: true })
+    expect(await db.query('SELECT key_id FROM outbound_proxy_revision')).toEqual([{ key_id: 'a' }])
+
+    await db.query('UPDATE outbound_proxy_key_selector SET key_id = NULL')
+    await db.query("INSERT INTO outbound_proxy_key (id, retired) VALUES ('b', true)")
+    await expect(new ProxyRegistryStore(db, cipher, true, 'unknown').onModuleInit()).rejects.toMatchObject({
+      status: 503,
+    })
+    await expect(new ProxyRegistryStore(db, cipher, true, 'b').onModuleInit()).rejects.toMatchObject({ status: 409 })
+    expect(await db.query('SELECT key_id FROM outbound_proxy_key_selector')).toEqual([{ key_id: null }])
+  })
+
   it('schedules protected previous-Runner cleanup and keeps ownership and its pin', async () => {
     await create()
     await store.reserveReference(owner, registration.name)

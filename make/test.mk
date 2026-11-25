@@ -751,6 +751,10 @@ test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
 	@cd apps/runner && go test -tags boxlite_dev $(GOTEST_RACE) ./... $(GOTEST_FILTER)
 
+PHONY_TARGETS += test\:apps\:api-client-go
+test\:apps\:api-client-go: _ensure-apps-deps
+	@cd apps && yarn nx run api-client-go:test
+
 PHONY_TARGETS += test\:integration\:runner
 test\:integration\:runner: dev\:go
 	@cd apps/runner && go test -count=1 -tags boxlite_dev,boxlite_integration ./pkg/boxlite $(GOTEST_FILTER)

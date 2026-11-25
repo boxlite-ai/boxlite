@@ -298,6 +298,19 @@ the intent. Guest applications receive native network failures.
 
 ## Protected Runner bootstrap
 
+On GCP, `mdeploy` delivers `OUTBOUND_PROXY_REGISTRY_KEYS` by reference to a
+numeric Secret Manager version. Registry enablement requires that reference and
+the old-writer isolation in [the registry contract](#acceptance-and-ownership).
+
+To provision an empty selector, set
+`OUTBOUND_PROXY_REGISTRY_FIRST_KEY_ID` to a key from that key ring. Concurrent API
+starts given the same first key converge on one selector.
+
+An attempt to select a different first key fails startup and preserves the
+current selection. Clear the first-key setting before a later key rotation.
+
+### HTTPS V0 enrollment
+
 An operator enrolls a fresh, non-default mdeploy Runner slot with an admin-registered V0 UUID and HTTPS API URL. Set `STACK_RUNNER_PROTECTED_PROXY_SLOTS` to a JSON object keyed by the slot's resource name, such as `Runner-runner-2`. The registered URL must use the enrolled DNS name and the Runner service port.
 
 Each entry contains `runnerId`, `url`, `caPem`, `caFile`, `certFile`, `keyFile`, `dohUrl`, and `dohAddress`. Provision the certificate, key, and CA files at those absolute host paths. The CA stays scoped to that Runner in Cloud, and both upgrade probes verify the DNS name and CA over loopback HTTPS.
@@ -427,6 +440,20 @@ On a disposable Linux KVM host, add loopback aliases `11.23.0.1` through `11.23.
 Run `make test:integration:runner FILTER=TestIntegrationProtectedBootTCPPaths`. Its recovery subtest restarts a Box with a closed gate. It checks Guest TCP, UDP, and DNS before and after an authenticated HTTPS release.
 
 The proxy test runs `curl --noproxy '*'` in the Guest and checks CONNECT and application requests received by the fixtures.
+
+### V2 capability listener
+
+For an existing GCP V2 slot, include `apiVersion: 2`, a private HTTPS `url` on port
+`3004`, `clientCaFile`, and `clientDnsName` in its enrollment. Use `Runner` as
+the key for the default slot.
+
+Keep the slot's existing UUID under `runnerId`.
+GCP convergence applies the matching settings and preserves the slot token.
+Removing enrollment clears the private listener settings from that slot.
+
+The HTTPS probe returns the serving process UUID and binary identity. An
+empty operations list means the process offers the capability probe only.
+Ordinary V2 health and the job poller use the existing service configuration.
 
 ## Acceptance and ownership
 

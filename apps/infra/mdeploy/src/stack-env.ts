@@ -367,9 +367,12 @@ export const readStackEnvironment = ({
     fleetFrom({ environment, app, stage }),
     optional(environment, 'STACK_RUNNER_PROTECTED_PROXY_SLOTS'),
   )
+  if (home !== 'gcp' && runnerFleet.some(({ protectedProxy }) => protectedProxy?.apiVersion === 2)) {
+    throw new StackEnvError('Protected V2 Runner enrollment requires a GCP stage')
+  }
   const protectedRunnerTokens = Object.fromEntries(
     runnerFleet
-      .filter((slot) => slot.protectedProxy)
+      .filter((slot) => slot.protectedProxy && slot.protectedProxy.apiVersion !== 2)
       .map((slot) => {
         const name = `STACK_RUNNER_PROTECTED_PROXY_TOKEN_${slot.resourceName.replaceAll('-', '_').toUpperCase()}`
         const token = required(environment, name, 'an enrolled Runner uses the token from its admin registration')

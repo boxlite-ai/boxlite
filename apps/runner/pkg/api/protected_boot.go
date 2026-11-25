@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/internal"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -21,7 +22,7 @@ import (
 // Match Runtime's opaque Box IDs, including both Cloud IDs and local UUIDs.
 var protectedBoxID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
-// ProtectedBootConfig is fixed by deployment for one enrolled HTTPS V0 Runner.
+// ProtectedBootConfig pins the Runner identity and resolver for protected operations.
 type ProtectedBootConfig struct {
 	RunnerID   string
 	DoHURL     string
@@ -88,19 +89,9 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 	if version != 0 || !serveTLS || !c.validPin() {
 		return
 	}
-	protected := group.Group("/v1")
-	protected.Use(func(ctx *gin.Context) {
-		if ctx.Request.TLS == nil || ctx.GetHeader("X-BoxLite-Runner-Id") != c.RunnerID {
-			ctx.AbortWithStatus(http.StatusForbidden)
-			return
-		}
-		ctx.Next()
-	})
-	protected.GET("/outbound-proxy/bootstrap", func(ctx *gin.Context) {
-		ctx.JSON(http.StatusOK, gin.H{
-			"runner_id": c.RunnerID, "version": 1,
-			"operations": []string{"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired", "restart-volumes"},
-		})
+	protected := protectedBootGroup(group, c)
+	registerProtectedBootCapability(protected, c, 1, "", []string{
+		"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired", "restart-volumes",
 	})
 	path := "/boxes/:boxId/network/outbound/bootstrap"
 	protected.POST(path, c.handleBoot(boxlite.ProtectedBootStart))
@@ -110,6 +101,32 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 	protected.POST(path+"/seal-gate", c.handleBoot(boxlite.ProtectedBootSealGate))
 	protected.POST(path+"/remove-retired", c.handleBoot(boxlite.ProtectedBootRemove))
 	protected.POST("/boxes/:boxId/network/outbound/managed-route", c.handleBoot(boxlite.ProtectedOutboundControl))
+}
+
+func protectedBootGroup(group *gin.RouterGroup, c ProtectedBootConfig) *gin.RouterGroup {
+	protected := group.Group("/v1")
+	protected.Use(func(ctx *gin.Context) {
+		if ctx.Request.TLS == nil || ctx.GetHeader("X-BoxLite-Runner-Id") != c.RunnerID {
+			ctx.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		ctx.Next()
+	})
+	return protected
+}
+
+func registerProtectedBootCapability(protected *gin.RouterGroup, c ProtectedBootConfig, version int, processID string, operations []string) {
+	protected.GET("/outbound-proxy/bootstrap", func(ctx *gin.Context) {
+		capability := gin.H{
+			"runner_id": c.RunnerID, "version": version,
+			"operations": operations,
+		}
+		if processID != "" {
+			capability["process_id"] = processID
+			capability["binary_identity"] = internal.Version
+		}
+		ctx.JSON(http.StatusOK, capability)
+	})
 }
 
 func (c ProtectedBootConfig) handleBoot(operation boxlite.ProtectedBootOperation) gin.HandlerFunc {
