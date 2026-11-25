@@ -637,7 +637,7 @@ impl<S: Sandbox> Jailer<S> {
                     .map(|name| sockets.real_dir().join(name));
                 std::iter::once(binding).chain(real)
             };
-            let mut bind = vec![sockets.box_sock()];
+            let mut bind = vec![sockets.box_sock(), sockets.vmm_sock()];
             let mut connect = vec![sockets.ready_sock()];
             if self.network_backend_enabled {
                 bind.extend([
@@ -1434,6 +1434,8 @@ mod tests {
                 "net.sock",
                 "net.sock-krun.sock",
                 "net.sock-krun.sock",
+                "vmm.sock",
+                "vmm.sock",
             ]
         );
         assert_eq!(
@@ -1513,7 +1515,7 @@ mod tests {
 
         assert_eq!(
             socket_names(&ctx.unix_sockets.bind),
-            ["box.sock", "box.sock"]
+            ["box.sock", "box.sock", "vmm.sock", "vmm.sock"]
         );
         assert_eq!(
             socket_names(&ctx.unix_sockets.connect),
@@ -1545,5 +1547,48 @@ mod tests {
             error.contains("failed to create sockets dir") || error.contains("Not a directory"),
             "socket setup failure should be reported before command construction: {error}"
         );
+    }
+
+    #[test]
+    fn x86_64_seccomp_vmm_profiles_allow_checkpoint_and_socket_syscalls() {
+        // Cross-platform check so macOS builds catch seccomp profile drift before Linux runs.
+        for (name, raw) in [
+            (
+                "x86_64-unknown-linux-gnu.json",
+                include_str!("../../resources/seccomp/x86_64-unknown-linux-gnu.json"),
+            ),
+            (
+                "x86_64-unknown-linux-musl.json",
+                include_str!("../../resources/seccomp/x86_64-unknown-linux-musl.json"),
+            ),
+        ] {
+            let parsed: serde_json::Value =
+                serde_json::from_str(raw).unwrap_or_else(|e| panic!("{name} invalid JSON: {e}"));
+            let filter = parsed["vmm"]["filter"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name} missing vmm.filter array"));
+            let syscalls: std::collections::HashSet<&str> = filter
+                .iter()
+                .filter_map(|entry| entry["syscall"].as_str())
+                .collect();
+
+            for required in [
+                "fchmodat",
+                "renameat2",
+                "rmdir",
+                "faccessat",
+                "faccessat2",
+                "ftruncate",
+                "lseek",
+                "pread64",
+                "pwrite64",
+                "fsync",
+            ] {
+                assert!(
+                    syscalls.contains(required),
+                    "{name} vmm filter must allow {required}"
+                );
+            }
+        }
     }
 }

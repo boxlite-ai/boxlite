@@ -554,4 +554,46 @@ mod tests {
         );
         assert_eq!(libc::WEXITSTATUS(status), 0);
     }
+
+    #[test]
+    fn seccomp_profiles_allow_checkpoint_and_vmm_socket_syscalls() {
+        for (name, raw) in [
+            (
+                "x86_64-unknown-linux-gnu.json",
+                include_str!("../../resources/seccomp/x86_64-unknown-linux-gnu.json"),
+            ),
+            (
+                "x86_64-unknown-linux-musl.json",
+                include_str!("../../resources/seccomp/x86_64-unknown-linux-musl.json"),
+            ),
+        ] {
+            let parsed: serde_json::Value =
+                serde_json::from_str(raw).unwrap_or_else(|e| panic!("{name} invalid JSON: {e}"));
+            let filter = parsed["vmm"]["filter"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name} missing vmm.filter array"));
+            let syscalls: std::collections::HashSet<&str> = filter
+                .iter()
+                .filter_map(|entry| entry["syscall"].as_str())
+                .collect();
+
+            for required in [
+                "fchmodat",
+                "renameat2",
+                "rmdir",
+                "faccessat",
+                "faccessat2",
+                "ftruncate",
+                "lseek",
+                "pread64",
+                "pwrite64",
+                "fsync",
+            ] {
+                assert!(
+                    syscalls.contains(required),
+                    "{name} vmm filter must allow {required}"
+                );
+            }
+        }
+    }
 }

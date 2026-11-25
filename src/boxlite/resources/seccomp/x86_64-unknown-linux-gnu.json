@@ -20,6 +20,14 @@
         "comment": "Native virtio-fs applies guest-requested modes to shared container metadata through pinned descriptors."
       },
       {
+        "syscall": "renameat2",
+        "comment": "libkrun checkpoint publish atomically renames the saved state file into place."
+      },
+      {
+        "syscall": "rmdir",
+        "comment": "libkrun checkpoint/restore cleans up transient TempDir directories."
+      },
+      {
         "syscall": "getxattr",
         "comment": "virtiofs xattr passthrough (e.g. dropping security.capability on write); a blocked xattr syscall SIGSYS-kills the VMM"
       },
@@ -689,6 +697,14 @@
       {
         "syscall": "access",
         "comment": "libkrun: check file access permissions. TODO(seccomp): likely setup-only, may be removable after audit."
+      },
+      {
+        "syscall": "faccessat",
+        "comment": "libkrun checkpoint/restore: check file access permissions via dirfd."
+      },
+      {
+        "syscall": "faccessat2",
+        "comment": "libkrun checkpoint/restore: faccessat2 used by glibc/rust std on Linux."
       },
       {
         "syscall": "arch_prctl",

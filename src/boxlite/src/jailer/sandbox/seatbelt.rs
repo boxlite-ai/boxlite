@@ -245,6 +245,10 @@ fn build_sandbox_policy(
     policy.push_str(&build_dynamic_read_paths(binary_path, paths));
     policy.push('\n');
 
+    // 3b. Literal ancestor directory metadata for path canonicalization (stat/lstat only)
+    policy.push_str(&build_ancestor_metadata_grants(paths));
+    policy.push('\n');
+
     // 4. Static file WRITE (tmp paths from .sbpl)
     policy.push_str(SEATBELT_FILE_WRITE_POLICY);
     policy.push('\n');
@@ -407,6 +411,46 @@ fn build_dynamic_read_paths(binary_path: &Path, paths: &[PathAccess]) -> String 
         String::from("; Dynamic read grants skipped: no path was representable\n")
     } else {
         format!("; Dynamic readable paths\n(allow file-read*\n{rules})\n")
+    }
+}
+
+/// Generate minimal `file-read-metadata` (`stat`/`lstat`) grants for literal
+/// ancestor prefixes of authorized paths so `realpath`/`canonicalize` can
+/// traverse sandboxed intermediate directories without reading directory entries.
+fn build_ancestor_metadata_grants(paths: &[PathAccess]) -> String {
+    let mut literals = std::collections::BTreeSet::new();
+
+    for pa in paths {
+        let canonical = canonicalize_or_original(&pa.path);
+        for candidate in [pa.path.as_path(), canonical.as_path()] {
+            for ancestor in candidate.ancestors().skip(1) {
+                if ancestor.as_os_str().is_empty()
+                    || ancestor == Path::new("/")
+                    || ancestor == Path::new("/var")
+                    || ancestor == Path::new("/tmp")
+                {
+                    continue;
+                }
+                if let Some(literal) = sbpl_path_literal(ancestor) {
+                    literals.insert(literal);
+                } else {
+                    tracing::warn!(path = ?ancestor, "Skipping non-UTF-8 Seatbelt ancestor path");
+                }
+            }
+        }
+    }
+
+    if literals.is_empty() {
+        String::from("; Ancestor metadata grants skipped: no ancestor paths\n")
+    } else {
+        let mut rules = String::new();
+        for literal in literals {
+            rules.push_str(&format!("    (literal {literal})\n"));
+        }
+        format!(
+            "; Ancestor directory metadata for path canonicalization (stat/lstat only)\n\
+             (allow file-read-metadata\n{rules})\n"
+        )
     }
 }
 
@@ -2311,5 +2355,76 @@ mod tests {
             String::from_utf8_lossy(&deny_out.stderr)
         );
         assert!(deny_out.stdout.is_empty());
+    }
+
+    #[test]
+    fn test_ancestor_metadata_grants_are_literal_metadata_only_and_deduplicated() {
+        let dir = tempfile::tempdir_in("/tmp").expect("tempdir in /tmp");
+        let box_root = dir.path().join("boxes").join("box-1");
+        let shared = box_root.join("shared");
+        let tmp_dir = box_root.join("tmp");
+        std::fs::create_dir_all(&shared).expect("create shared dir");
+        std::fs::create_dir_all(&tmp_dir).expect("create tmp dir");
+
+        let paths = vec![
+            PathAccess {
+                path: shared.clone(),
+                writable: true,
+            },
+            PathAccess {
+                path: tmp_dir,
+                writable: true,
+            },
+        ];
+        let policy = build_sandbox_policy(
+            &paths,
+            &UnixSocketAccess::default(),
+            Path::new("/bin/sh"),
+            None,
+            false,
+        );
+        let grants = build_ancestor_metadata_grants(&paths);
+
+        assert!(grants.starts_with(
+            "; Ancestor directory metadata for path canonicalization (stat/lstat only)\n\
+             (allow file-read-metadata\n"
+        ));
+        assert!(!grants.contains("file-read*"));
+        assert!(!grants.contains("file-read-data"));
+        assert!(!grants.contains("file-write*"));
+        assert!(!grants.contains("(subpath "));
+
+        // Both unresolved (/tmp/...) and canonical (/private/tmp/...) ancestor chains appear once.
+        let canon_box_root = box_root.canonicalize().expect("canonicalize box_root");
+        for ancestor in [box_root.as_path(), canon_box_root.as_path()] {
+            let line = format!(
+                "    (literal {})",
+                sbpl_path_literal(ancestor).expect("utf-8 literal")
+            );
+            assert_eq!(
+                grants.lines().filter(|l| *l == line).count(),
+                1,
+                "expected deduplicated metadata literal {line} in:\n{grants}"
+            );
+            assert!(
+                !policy.contains(&format!("    (subpath \"{}\")", ancestor.display())),
+                "ancestor {} must never receive subpath access",
+                ancestor.display()
+            );
+            assert!(
+                !policy.contains(&format!("    (literal \"{}\")  ; (", ancestor.display())),
+                "ancestor {} must never receive file-read* access",
+                ancestor.display()
+            );
+        }
+
+        // Statically allowed roots are excluded from dynamic ancestor metadata.
+        for static_root in ["\"/\"", "\"/var\"", "\"/tmp\""] {
+            let line = format!("    (literal {static_root})");
+            assert!(
+                !grants.lines().any(|l| l == line),
+                "static root {static_root} should not be duplicated in:\n{grants}"
+            );
+        }
     }
 }

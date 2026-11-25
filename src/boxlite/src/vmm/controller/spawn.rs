@@ -48,6 +48,7 @@ pub struct ShimSpawner<'a> {
     options: &'a BoxOptions,
     nested_virtualization: bool,
     volume_access: Vec<PathAccess>,
+    extra_ro_paths: Vec<PathBuf>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -65,6 +66,7 @@ impl<'a> ShimSpawner<'a> {
             options,
             nested_virtualization: false,
             volume_access: Vec::new(),
+            extra_ro_paths: Vec::new(),
         }
     }
 
@@ -110,6 +112,14 @@ impl<'a> ShimSpawner<'a> {
         self
     }
 
+    /// Grant the confined shim additional read-only paths (for example,
+    /// checkpoint restore artifacts such as `vmstate.krun` and `guest-rootfs.ext4`).
+    #[allow(dead_code)]
+    pub fn with_extra_ro_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.extra_ro_paths = paths;
+        self
+    }
+
     /// Host files this shim's VM request needs to read. Empty unless the box
     /// asked for nesting, so an ordinary box widens its sandbox by nothing.
     fn required_probe_paths(&self) -> &'static [&'static str] {
@@ -123,7 +133,8 @@ impl<'a> ShimSpawner<'a> {
     /// Filesystem grants beyond the jailer's standard set: read-only, and only
     /// the probes this host actually has — bwrap refuses to bind a missing one.
     fn additional_path_access(&self) -> Vec<PathAccess> {
-        self.required_probe_paths()
+        let mut access: Vec<PathAccess> = self
+            .required_probe_paths()
             .iter()
             .map(PathBuf::from)
             .filter(|path| path.exists())
@@ -132,7 +143,17 @@ impl<'a> ShimSpawner<'a> {
                 writable: false,
             })
             .chain(self.volume_access.clone())
-            .collect()
+            .collect();
+
+        for path in &self.extra_ro_paths {
+            if !access.iter().any(|existing| existing.path == *path) {
+                access.push(PathAccess {
+                    path: path.clone(),
+                    writable: false,
+                });
+            }
+        }
+        access
     }
 
     fn jailer_builder(&self, detach: bool) -> JailerBuilder {
@@ -434,6 +455,24 @@ mod tests {
                 .any(|entry| entry.path == payload && !entry.writable)
         );
         assert!(!paths.iter().any(|entry| entry.path == volume_root));
+    }
+
+    #[test]
+    fn extra_ro_paths_grants_read_only_access_without_duplicates() {
+        let layout = test_layout();
+        let options = BoxOptions::default();
+        let vmstate = PathBuf::from("/home/test/checkpoints/c1/vmstate.krun");
+        let rootfs = PathBuf::from("/home/test/checkpoints/c1/guest-rootfs.ext4");
+        let spawner = ShimSpawner::new(Path::new("/bin/true"), &layout, "box", &options)
+            .with_volume_access(vec![PathAccess {
+                path: rootfs.clone(),
+                writable: false,
+            }])
+            .with_extra_ro_paths(vec![vmstate.clone(), rootfs.clone()]);
+
+        let paths = spawner.additional_path_access();
+        assert!(paths.iter().any(|p| p.path == vmstate && !p.writable));
+        assert_eq!(paths.iter().filter(|p| p.path == rootfs).count(), 1);
     }
 
     #[test]

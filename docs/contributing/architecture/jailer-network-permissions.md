@@ -60,3 +60,14 @@ grants those paths but still omits the IP networking policy
 [exact grants](../../../src/boxlite/src/jailer/sandbox/seatbelt.rs#L340-L375)).
 
 The box can therefore start while the guest remains offline.
+
+## libkrun full checkpoint permissions
+
+- **macOS (Seatbelt):** The shim can bind the exact `vmm.sock` path to receive
+  checkpoint requests. Literal `file-read-metadata` grants on ancestors of
+  authorized paths let libkrun canonicalize those paths without granting file
+  reads or directory listings on the ancestors.
+- **Linux x86-64 (seccomp):** The GNU and musl VMM filters allow `fchmodat` for
+  socket permissions, `renameat2` for atomic checkpoint publication, `rmdir` for
+  temporary-directory cleanup, and `faccessat` and `faccessat2` for path access
+  checks during capture and restore.

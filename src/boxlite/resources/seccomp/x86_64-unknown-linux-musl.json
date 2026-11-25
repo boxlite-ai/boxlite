@@ -671,6 +671,14 @@
         "comment": "libkrun: check file access permissions"
       },
       {
+        "syscall": "faccessat",
+        "comment": "libkrun checkpoint/restore: check file access permissions via dirfd."
+      },
+      {
+        "syscall": "faccessat2",
+        "comment": "libkrun checkpoint/restore: faccessat2 used by glibc/rust std on Linux."
+      },
+      {
         "syscall": "arch_prctl",
         "comment": "libkrun: x86_64 TLS setup (called by new threads via clone)"
       },
@@ -865,6 +873,18 @@
             "comment": "any accept4 flags"
           }
         ]
+      },
+      {
+        "syscall": "fchmodat",
+        "comment": "VMM control socket (vmm.sock) restricts permissions to 0600 via fchmodat."
+      },
+      {
+        "syscall": "renameat2",
+        "comment": "libkrun checkpoint publish atomically renames the saved state file into place."
+      },
+      {
+        "syscall": "rmdir",
+        "comment": "libkrun checkpoint/restore cleans up transient TempDir directories."
       }
     ]
   },
