@@ -152,6 +152,11 @@ An array group makes every key required. An object distinguishes `required` from
 Missing required values fail before deployment. Optional values enable features only when supplied.
 The exact key list lives in the manifest; avoid maintaining a second list in a runbook.
 
+## API database connection pool
+
+Set `DB_POOL_MAX` in the stage store to limit the number of PostgreSQL connections per API instance.
+Redeploy the API to deliver the value, for example `25`, through the optional API environment group.
+
 ## Invitation link lifetime
 
 Set `ORGANIZATION_INVITATION_TTL_SECONDS` in the stage store to change the default
