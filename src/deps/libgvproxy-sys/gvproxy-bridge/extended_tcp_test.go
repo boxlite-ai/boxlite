@@ -238,7 +238,7 @@ func TestExtendedTCPInspectionSlotsReleaseBeforeRelay(t *testing.T) {
 func TestExtendedTCPTrustedModeAndWireProjection(t *testing.T) {
 	cfg := testGvproxyConfig()
 	cfg.AllowNet = []string{unlistedIP}
-	rules := trustedTCPRules{deny: []string{"blocked.example.com"}}
+	rules := trustedTCPRules{deny: []string{"blocked.example.com:443"}}
 	tap := startNetworkWithSeams(t, cfg, networkSeams{tcp: &rules})
 	upstream, port := listenUDP(t)
 	send := registeredDNSProbe(t, tap, "udp", port)
@@ -305,7 +305,7 @@ func TestExtendedTCPTrustedModeAndWireProjection(t *testing.T) {
 		}
 		checkWire("/network/outbound", http.MethodPut, "", `{"mode":"enabled"}`, http.StatusConflict)
 		checkWire(outboundSnapshotPath, http.MethodPut, step.revision, `{"mode":"enabled"}`, http.StatusConflict)
-		if snapshot := tap.policy.active.Load(); snapshot.revision != step.revision || len(snapshot.tcpPolicy.deny) != 1 {
+		if snapshot := tap.policy.active.Load(); snapshot.revision != step.revision || len(snapshot.extended.deny) != 1 {
 			t.Fatalf("wire PUT changed extended policy: revision=%s", snapshot.revision)
 		}
 	}

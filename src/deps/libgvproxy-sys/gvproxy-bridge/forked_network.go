@@ -39,6 +39,7 @@ func installOutboundHandlers(
 	ec2MetadataAccess bool,
 	snapshot snapshotSource,
 	tcpInspectionSlots chan struct{},
+	udpFlows *udpFlowPool,
 	ca *BoxCA,
 	secretMatcher *SecretHostMatcher,
 ) error {
@@ -51,8 +52,8 @@ func installOutboundHandlers(
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 	logrus.Info("allowNet TCP: handler overridden with SNI-inspecting forwarder")
 
-	s.SetTransportProtocolHandler(udp.ProtocolNumber, UDPWithFilter(s, nat, &natLock, snapshot))
-	logrus.Info("allowNet UDP: handler overridden with allowlist-checking forwarder")
+	s.SetTransportProtocolHandler(udp.ProtocolNumber, outboundUDPHandler(s, nat, &natLock, snapshot, udpFlows))
+	logrus.Info("outbound UDP: installed policy-aware forwarder")
 
 	return installOutboundModeGate(s, snapshot)
 }

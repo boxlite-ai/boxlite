@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -435,6 +436,17 @@ func wrapConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig) net.Conn {
 		return conn
 	}
 	return newShapedConn(conn, prefixLen, cfg, nil)
+}
+
+// The accepted connection owns the guest link. Closing it outside the switch
+// wakes any read or write already in progress when the Box is destroyed.
+func runGuestLink(ctx context.Context, conn net.Conn, prefixLen int, cfg *RateLimitConfig, accept func(context.Context, net.Conn) error) error {
+	link := wrapConn(conn, prefixLen, cfg)
+	closeLink := sync.OnceFunc(func() { link.Close() })
+	stop := context.AfterFunc(ctx, closeLink)
+	defer stop()
+	defer closeLink()
+	return accept(ctx, link)
 }
 
 func newShapedConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig, now func() time.Time) *shapedConn {
