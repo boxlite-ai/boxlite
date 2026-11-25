@@ -4,7 +4,7 @@
 use std::{
     fs, io,
     marker::PhantomData,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
     rc::Rc,
     sync::{Mutex, mpsc},
@@ -229,20 +229,20 @@ fn machine(backend: Backend) -> Vm<Backend> {
     .unwrap()
 }
 
+struct StopOnDrop<'a>(&'a VmControl);
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
+
 fn with_paused<H: X86Vm, R>(
     mut vm: Vm<H>,
     test: impl FnOnce(&VmControl, &Lifecycle, ThreadId) -> R,
 ) -> R {
-    struct StopOnDrop<'a>(&'a VmControl);
-    impl Drop for StopOnDrop<'_> {
-        fn drop(&mut self) {
-            self.0.stop();
-        }
-    }
-
     let control = vm.control();
     let lifecycle = vm.lifecycle().clone();
-    control.pause().unwrap();
+    control.request_pause().unwrap();
     thread::scope(|scope| {
         let driver = scope.spawn(|| vm.run());
         let stop = StopOnDrop(&control);
@@ -317,10 +317,18 @@ fn driver_captures_platform_first_and_owning_threads_produce_id_ordered_records(
     assert_eq!(header.ram_len, 1 << 20);
     assert_eq!(&memory[..9], b"guest RAM");
     assert!(memory[9..].iter().all(|&byte| byte == 0));
+    let probe_path = dir.path().join("umask-probe");
+    fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o777)
+        .open(&probe_path)
+        .unwrap();
+    let probe_mode = fs::metadata(&probe_path).unwrap().permissions().mode() & 0o777;
     for path in [&state_path, &memory_path] {
         assert_eq!(
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o600
+            0o600 & probe_mode
         );
     }
     assert_eq!(
@@ -426,17 +434,28 @@ fn capture_error_keeps_export_exclusive_until_every_vcpu_replies() {
     });
 }
 
+struct ReleaseOnDrop(Vec<mpsc::Sender<()>>);
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        for release in self.0.drain(..) {
+            let _ = release.send(());
+        }
+    }
+}
+
 #[test]
 fn vcpu_panic_interrupts_capture_before_a_blocked_vcpu_replies() {
-    let (backend, mut releases, observed) = backend(false, false);
+    let (backend, releases, observed) = backend(false, false);
     let dir = tempfile::tempdir().unwrap();
     let state_path = dir.path().join("state");
     let memory_path = dir.path().join("memory");
     let mut vm = machine(backend);
     let control = vm.control();
-    control.pause().unwrap();
+    control.request_pause().unwrap();
     thread::scope(|scope| {
         let driver = scope.spawn(|| vm.run());
+        let mut releases = ReleaseOnDrop(releases);
+        let _stop = StopOnDrop(&control);
         control.wait_paused(WAIT).unwrap();
         let (reply, result) = mpsc::channel();
         let control = &control;
@@ -454,9 +473,9 @@ fn vcpu_panic_interrupts_capture_before_a_blocked_vcpu_replies() {
         }
 
         // Disconnect vCPU 0's gate so its save_state panics while the others are blocked.
-        drop(releases.remove(0));
+        drop(releases.0.remove(0));
         let result = result.recv_timeout(Duration::from_millis(500));
-        for release in releases {
+        for release in releases.0.drain(..) {
             release.send(()).unwrap();
         }
         assert!(matches!(
@@ -473,15 +492,6 @@ fn vcpu_panic_interrupts_capture_before_a_blocked_vcpu_replies() {
 
 #[test]
 fn stop_interrupts_capture_before_a_blocked_vcpu_replies() {
-    struct ReleaseOnDrop(Vec<mpsc::Sender<()>>);
-    impl Drop for ReleaseOnDrop {
-        fn drop(&mut self) {
-            for release in self.0.drain(..) {
-                let _ = release.send(());
-            }
-        }
-    }
-
     let (backend, releases, observed) = backend(false, false);
     let mut releases = ReleaseOnDrop(releases);
     let dir = tempfile::tempdir().unwrap();
@@ -824,7 +834,7 @@ fn kvm_export_captures_executed_guest_state_and_ram() {
             );
             thread::sleep(Duration::from_millis(10));
         }
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         control.wait_paused(WAIT).unwrap();
         assert_eq!(control.status(), VmStatus::Paused);
         let paused_counter = read_u32(COUNTER_ADDR);
@@ -887,7 +897,7 @@ fn kvm_export_captures_executed_guest_state_and_ram() {
             );
             thread::sleep(Duration::from_millis(10));
         }
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         control.wait_paused(WAIT).unwrap();
         assert_eq!(control.status(), VmStatus::Paused);
         let resumed_counter = read_u32(COUNTER_ADDR);
@@ -1086,13 +1096,6 @@ fn kvm_export_after_split_mmio_pause() {
         }
     }
 
-    struct StopOnDrop<'a>(&'a VmControl);
-    impl Drop for StopOnDrop<'_> {
-        fn drop(&mut self) {
-            self.0.stop();
-        }
-    }
-
     for access in [SplitAccess::Read, SplitAccess::Write] {
         let dir = tempfile::tempdir().unwrap();
         let state_path = dir.path().join("state");
@@ -1136,7 +1139,7 @@ fn kvm_export_after_split_mmio_pause() {
             let driver = scope.spawn(|| vm.run());
             let stop = StopOnDrop(&control);
             ready.recv_timeout(WAIT).unwrap();
-            control.pause().unwrap();
+            control.request_pause().unwrap();
             let deadline = Instant::now() + WAIT;
             while control.status() != VmStatus::Pausing {
                 assert!(Instant::now() < deadline);

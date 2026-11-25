@@ -32,9 +32,12 @@ impl VmControl {
 
     /// Requests a stop, including before execution starts, without waiting for exit.
     ///
-    /// During [`Self::export`], stop requests take effect at export checkpoints;
-    /// an in-flight `save_state` ioctl or file I/O call delays `export()` and
-    /// `Vm::run()` until it returns.
+    /// During [`Self::export`], stop requests take effect at export checkpoints.
+    /// An in-flight platform `save_state` ioctl or file I/O call on the driver
+    /// delays both `export()` and `Vm::run()` until it returns. If stop is
+    /// requested during a vCPU's `save_state`, the driver abandons the capture
+    /// request so `export()` returns `TerminalOutcome` without waiting, but
+    /// `Vm::run()` still waits for the vCPU thread to exit.
     pub fn stop(&self) {
         self.lifecycle.stop();
     }

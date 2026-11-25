@@ -765,9 +765,12 @@ including reuse of the state path for memory, returns `Error::Snapshot` with
 Callers must have exclusive use of both target paths during export. Failure
 cleanup is best-effort and attempts to unlink a path only if its device and
 inode still match the open file. Capture and I/O failures leave a live VM
-paused. `stop()` takes effect at export checkpoints; an in-flight `save_state`
-ioctl or file I/O call delays `export()` and `run()` until it returns. A
-terminal state at the final lifecycle check yields `TerminalOutcome`.
+paused. `stop()` takes effect at export checkpoints. An in-flight platform
+`save_state` ioctl or file I/O call on the driver delays both `export()` and
+`run()` until it returns. If stop is requested during a vCPU's `save_state`,
+the driver abandons the capture request so `export()` returns `TerminalOutcome`
+without waiting, but `run()` still waits for the vCPU thread to exit. A terminal
+state at the final lifecycle check yields `TerminalOutcome`.
 
 The state file starts with a 32-byte little-endian header with the magic
 `BXLVMST1`, followed by Postcard machine state with vCPU records in ID order.
