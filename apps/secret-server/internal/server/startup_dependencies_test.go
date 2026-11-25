@@ -61,6 +61,31 @@ func TestStartupDependencyFailures(t *testing.T) {
 	}
 }
 
+func TestStartupRespectsPoolConnectionLimit(t *testing.T) {
+	stop := errors.New("stop before opening a database connection")
+	for _, tc := range []struct {
+		query string
+		want  int32
+	}{
+		{"pool_max_conns=3", 3},
+		{"pool_max_conns=20", 10},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			deps := defaultStartupDependencies()
+			var got int32
+			deps.newPool = func(_ context.Context, c *pgxpool.Config) (*pgxpool.Pool, error) {
+				got = c.MaxConns
+				return nil, stop
+			}
+			config := Config{KeyID: "env:test", Key: base64.StdEncoding.EncodeToString(make([]byte, 32)), DatabaseURL: "postgres://localhost/test?" + tc.query}
+			_, _ = newServer(context.Background(), config, deps)
+			if got != tc.want {
+				t.Fatalf("pool constructor received MaxConns=%d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestStartupClosesPoolWhenValidatorConstructionFails(t *testing.T) {
 	dsn := os.Getenv("SECRET_TEST_DATABASE_URL")
 	if dsn == "" {

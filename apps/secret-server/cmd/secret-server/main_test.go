@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,11 +23,6 @@ import (
 )
 
 func TestWrongKeyDoesNotStartServer(t *testing.T) {
-	if os.Getenv("SECRET_TEST_STARTUP_CHILD") == "1" {
-		os.Args = []string{"secret-server"}
-		main()
-		return
-	}
 	dsn := os.Getenv("SECRET_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set SECRET_TEST_DATABASE_URL for startup integration test")
@@ -44,7 +40,8 @@ func TestWrongKeyDoesNotStartServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	provider, err := encryption.NewEnvKeyProvider("env:test", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	originalKey := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	provider, err := encryption.NewEnvKeyProvider("env:test", originalKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,32 +52,58 @@ func TestWrongKeyDoesNotStartServer(t *testing.T) {
 	if err := database.Initialize(ctx, pool, cipher); err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	_, port, err := net.SplitHostPort(address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	listener.Close()
-	wrong := make([]byte, 32)
-	wrong[0] = 1
-	for name, value := range map[string]string{"SECRET_TEST_STARTUP_CHILD": "1", "DATABASE_URL": databaseURL, "ENVIRONMENT": "local", "SECRET_SERVER_ROLE": "write", "SECRET_SERVER_AUTH_MODE": "dev", "SECRET_SERVER_DEV_TOKEN": "integration-token", "SECRET_MASTER_KEY_ID": "env:test", "SECRET_MASTER_KEY_BASE64": base64.StdEncoding.EncodeToString(wrong), "PORT": port} {
+	for name, value := range map[string]string{"DATABASE_URL": databaseURL, "ENVIRONMENT": "local", "SECRET_SERVER_ROLE": "write", "SECRET_SERVER_AUTH_MODE": "dev", "SECRET_SERVER_DEV_TOKEN": "integration-token", "SECRET_MASTER_KEY_ID": "env:test", "SECRET_MASTER_KEY_BASE64": originalKey, "PORT": "8080", "SHUTDOWN_TIMEOUT_SEC": "5"} {
 		t.Setenv(name, value)
 	}
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestWrongKeyDoesNotStartServer$")
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() != nil || err == nil || !strings.Contains(string(output), "database initialization failed") {
-		t.Fatalf("wrong-key startup = %v, output %q", err, output)
-	}
-	client := &http.Client{Timeout: time.Second}
-	response, err := client.Get("http://" + address + "/ready")
-	if err == nil {
-		response.Body.Close()
-		t.Fatal("server reported readiness with wrong key")
-	}
+
+	t.Run("original key restarts against existing canary", func(t *testing.T) {
+		runCtx, stop := context.WithCancel(ctx)
+		defer stop()
+		probe := make(chan error, 1)
+		err := runWithListener(runCtx, nil, func(network, _ string) (net.Listener, error) {
+			listener, err := net.Listen(network, "127.0.0.1:0")
+			if err != nil {
+				return nil, err
+			}
+			go func() {
+				defer stop()
+				client := &http.Client{Timeout: 3 * time.Second}
+				response, err := client.Get("http://" + listener.Addr().String() + "/ready")
+				if err == nil {
+					response.Body.Close()
+					if response.StatusCode != http.StatusOK {
+						err = fmt.Errorf("/ready returned %d", response.StatusCode)
+					}
+				}
+				probe <- err
+			}()
+			return listener, nil
+		})
+		if err != nil {
+			t.Fatalf("restart with original key: %v", err)
+		}
+		select {
+		case err := <-probe:
+			if err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("restart did not serve readiness")
+		}
+	})
+
+	t.Run("different valid key never listens", func(t *testing.T) {
+		wrong := make([]byte, 32)
+		wrong[0] = 1
+		t.Setenv("SECRET_MASTER_KEY_BASE64", base64.StdEncoding.EncodeToString(wrong))
+		err := runWithListener(ctx, nil, func(_, _ string) (net.Listener, error) {
+			t.Fatal("startup reached the listen step with the wrong key")
+			return nil, nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "database initialization failed") {
+			t.Fatalf("wrong-key startup returned %v, want database initialization failure", err)
+		}
+	})
 }
 
 func TestRunRejectsInvalidArgumentsAndMissingDatabase(t *testing.T) {

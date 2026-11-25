@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/boxlite-ai/secret-server/internal/database"
@@ -23,6 +24,9 @@ type Server struct {
 	config Config
 	db     *pgxpool.Pool
 	http   *http.Server
+
+	dbCloseOnce sync.Once
+	dbClosed    chan struct{}
 }
 
 type startupDependencies struct {
@@ -78,7 +82,7 @@ func newServer(ctx context.Context, c Config, deps startupDependencies) (*Server
 	if err != nil {
 		return nil, errors.New("invalid DATABASE_URL")
 	}
-	dbConfig.MaxConns = 10
+	dbConfig.MaxConns = min(dbConfig.MaxConns, 10)
 	db, err := deps.newPool(ctx, dbConfig)
 	if err != nil {
 		return nil, databaseError(err)
@@ -162,7 +166,43 @@ func routes(c Config, ping func(context.Context) error, validate validateToken) 
 	return recoverRequests(mux)
 }
 
-func (s *Server) Close() error { s.db.Close(); return nil }
+func (s *Server) startDatabaseClose() bool {
+	started := false
+	s.dbCloseOnce.Do(func() {
+		started = true
+		s.dbClosed = make(chan struct{})
+		go func() {
+			defer close(s.dbClosed)
+			s.db.Close()
+		}()
+	})
+	return started
+}
+
+func (s *Server) waitForDatabaseClose(ctx context.Context) error {
+	select {
+	case <-s.dbClosed:
+		return nil
+	default:
+	}
+	select {
+	case <-s.dbClosed:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("close database pool: %w", ctx.Err())
+	}
+}
+
+func (s *Server) Close() error {
+	// Run owns the wait once it has started pool cleanup. A deferred Close
+	// after Run must not give a stalled pool another shutdown budget.
+	if !s.startDatabaseClose() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
+	defer cancel()
+	return s.waitForDatabaseClose(ctx)
+}
 
 func recoverRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -182,28 +222,35 @@ func recoverRequests(next http.Handler) http.Handler {
 func (s *Server) Run(ctx context.Context, listener net.Listener) error {
 	result := make(chan error, 1)
 	go func() { result <- s.http.Serve(listener) }()
+	var serveErr error
 	select {
-	case err := <-result:
-		s.db.Close()
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
+	case serveErr = <-result:
 	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
-		defer cancel()
-		err := s.http.Shutdown(shutdown)
-		if err != nil {
-			_ = s.http.Close()
-		}
-		serveErr := <-result
-		s.db.Close()
-		if err != nil {
-			return err
-		}
-		if !errors.Is(serveErr, http.ErrServerClosed) {
-			return serveErr
-		}
-		return nil
 	}
+
+	shutdown, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
+	defer cancel()
+	httpErr := s.http.Shutdown(shutdown)
+	if httpErr != nil {
+		_ = s.http.Close()
+	}
+	s.startDatabaseClose()
+	dbErr := s.waitForDatabaseClose(shutdown)
+	if serveErr == nil {
+		select {
+		case serveErr = <-result:
+		default:
+			select {
+			case serveErr = <-result:
+			case <-shutdown.Done():
+			}
+		}
+	}
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
+	if httpErr == nil && dbErr == nil {
+		return serveErr
+	}
+	return errors.Join(serveErr, httpErr, dbErr)
 }

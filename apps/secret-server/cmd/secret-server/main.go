@@ -25,6 +25,10 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	return runWithListener(ctx, args, net.Listen)
+}
+
+func runWithListener(ctx context.Context, args []string, listen func(network, address string) (net.Listener, error)) error {
 	if len(args) > 0 {
 		if len(args) != 1 || args[0] != "migrate" {
 			return fmt.Errorf("usage: secret-server [migrate]")
@@ -53,7 +57,7 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	defer s.Close()
-	listener, err := net.Listen("tcp", net.JoinHostPort("", c.Port))
+	listener, err := listen("tcp", net.JoinHostPort("", c.Port))
 	if err != nil {
 		return err
 	}

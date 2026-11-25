@@ -29,6 +29,19 @@ server listens. A failed migration or key check prevents startup and readiness.
 If token validator initialization fails, startup closes the database pool and
 returns an error before opening the listener.
 
+The server caps the PostgreSQL pool at 10 connections and honors a lower
+`pool_max_conns` in `DATABASE_URL`. Without that option, the pgx default
+applies up to the cap.
+
+`SHUTDOWN_TIMEOUT_SEC` bounds HTTP draining and database cleanup together.
+On a shutdown signal or a permanent listener error, the server stops accepting
+connections and drains active requests.
+
+If the deadline expires, the server closes any remaining HTTP connections and
+stops waiting for the database pool. Pool cleanup can continue until the process
+exits. A permanent listener error remains part of the returned error even if
+cleanup times out.
+
 Request logging and OpenTelemetry integration remain open under [#2570](https://github.com/boxlite-ai/boxlite/issues/2570);
 the current service emits only startup and recovery logs. Configuration uses explicit
 environment parsing and validation to keep errors limited to variable names and avoid
@@ -41,8 +54,11 @@ the key or token. The local database must use the same key across restarts.
 
 To exercise startup and readiness against a disposable PostgreSQL database, set
 `SECRET_TEST_DATABASE_URL` and run `make test:apps:secret-server`. Integration
-tests are skipped when this variable is absent. The configured user must be able
-to create and drop temporary databases.
+tests are skipped by the general test target when this variable is absent.
+
+The dedicated `test:apps:secret-server:integration` and
+`coverage:apps:secret-server:integration` targets fail without it. The
+configured user must be able to create and drop temporary databases.
 
 Design: [envelope encryption and KeyProvider](https://github.com/boxlite-ai/boxlite/issues/2495).
 Routing metadata follows the [headers map contract](https://github.com/boxlite-ai/boxlite/issues/2467).
@@ -254,8 +270,8 @@ make test:apps:secret-server GOTEST_FILTER='-fuzz=FuzzDecryptEnvelope -fuzztime=
 
 The unit test target runs with the race detector and `GOWORK=off`. The integration
 target requires PostgreSQL and permission to create a temporary database. Set
-`SECRET_TEST_DATABASE_URL` to run it; without that variable, integration tests
-are skipped. Tests create uniquely named databases and drop them afterward.
+`SECRET_TEST_DATABASE_URL` before running either dedicated integration target.
+Tests create uniquely named databases and drop them afterward.
 The coverage target runs the same tests and writes `target/coverage/secret-server-integration.out`.
 Database and command tests share the temporary database setup and cleanup helper.
 It also checks that SIGTERM cancels the migration command while it waits for a lock.

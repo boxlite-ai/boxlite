@@ -784,9 +784,13 @@ PHONY_TARGETS += run\:apps\:secret-server
 run\:apps\:secret-server:
 	@cd apps/secret-server && ENVIRONMENT=local SECRET_SERVER_ROLE=$${SECRET_SERVER_ROLE:-write} SECRET_SERVER_AUTH_MODE=dev GOWORK=off go run ./cmd/secret-server
 
-PHONY_TARGETS += test\:apps\:secret-server\:integration
-test\:apps\:secret-server\:integration:
-	@cd apps/secret-server && GOWORK=off go test -race -count=1 ./internal/database ./internal/server ./cmd/secret-server -run '^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer|RunRejectsOccupiedPort|StartupClosesPoolWhenValidatorConstructionFails)$$'
+SECRET_SERVER_INTEGRATION_TESTS := ^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer|RunRejectsOccupiedPort|StartupClosesPoolWhenValidatorConstructionFails|RunBoundsDatabaseCleanup)$$
+PHONY_TARGETS += _require-secret-test-database test\:apps\:secret-server\:integration
+_require-secret-test-database:
+	@test -n "$$SECRET_TEST_DATABASE_URL" || { echo "Set SECRET_TEST_DATABASE_URL to a disposable PostgreSQL server before running Secret Server integration tests." >&2; exit 1; }
+
+test\:apps\:secret-server\:integration: _require-secret-test-database
+	@cd apps/secret-server && GOWORK=off go test -race -count=1 ./internal/database ./internal/server ./cmd/secret-server -run '$(SECRET_SERVER_INTEGRATION_TESTS)'
 
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
