@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { resolveRunnerBinary } from '../stack/runner-binary.ts'
 import { renderRunnerBoot } from '../stack/runner-boot.ts'
-import { renderUpgradePayload, upgradeTrigger } from '../stack/runner-upgrade.ts'
+import { renderUpgradePayload, renderHostConvergence, upgradeTrigger } from '../stack/runner-upgrade.ts'
 
 import { createHash } from 'node:crypto'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -155,5 +155,51 @@ printf '%s %s %s' "$RUNNER_MANIFEST" "$RUNNER_ARCHIVE" "$RUNNER_REVISION"`,
   assert.equal(selected.stdout, [receipt.runner.manifest, receipt.runner.archive, sha].join(' '))
   assert.notEqual(read({ ...receipt, tag: 'v1.2.4' }).status, 0)
   assert.notEqual(read({ ...receipt, runner: { ...receipt.runner, archive: 'invalid' } }).status, 0)
+  assert.match(read({}).stderr, /backfill/i, 'missing metadata must identify the required backfill')
   assert.throws(() => target(digest('a'), 'invalid'), /Invalid release candidate pins/)
+})
+
+test('concurrent host installers stop before reading or swapping the installed Runner', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'runner-lock-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const item = target(digest('1'), digest('2'))
+  const boot = renderRunnerBoot({
+    ...item,
+    environment: {},
+    apiUrl: 'https://api.example.com',
+    otlpUrl: 'http://localhost:4318',
+    platform: {
+      hostAddress: '',
+      installVolumeMount: '',
+      prepareHome: '',
+      prepareKvm: '',
+      unitEnvironment: {},
+      startWrapper: null,
+    },
+  })
+  const lock = join(dir, 'boxlite-runner-upgrade.lock')
+  for (const payload of [
+    renderUpgradePayload(item),
+    renderHostConvergence(item),
+    Buffer.from(boot, 'base64').toString(),
+  ]) {
+    const start = payload.indexOf('exec 8>')
+    const guard = payload.indexOf('if [ ! -x /usr/local/bin/boxlite-runner ]', start)
+    const end = guard < 0 ? payload.indexOf('RUNNER_TAG=', start) : guard
+    const critical = payload
+      .slice(Math.max(0, start), end)
+      .replaceAll('/run/lock/boxlite-runner-upgrade.lock', lock)
+      .replace('flock -w 120 8', 'flock -n 8')
+    const run = (held: boolean) =>
+      spawnSync(
+        'bash',
+        [
+          '-ec',
+          (held ? 'exec 9>"$TEST_LOCK"; flock -n 9; ' : '') + '(\n' + (start < 0 ? '' : critical) + '\necho READY\n)',
+        ],
+        { env: { ...process.env, TEST_LOCK: lock }, encoding: 'utf8' },
+      )
+    assert.notEqual(run(true).status, 0, 'a second installer entered the binary swap')
+    assert.equal(run(false).status, 0, 'lock must release when the installer exits')
+  }
 })

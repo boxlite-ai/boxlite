@@ -338,7 +338,6 @@ jobs:
           RESOLVED: ${{ steps.tag.outputs.sha }}
           VERSION: ${{ steps.classify.outputs.version }}
           STAGE: ${{ inputs.stage }}
-          ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/mbuild-release.yml@refs/heads/main" &&
@@ -347,12 +346,30 @@ jobs:
           case "$STAGE" in
             dev) ;;
             prod)
-              [[ "$ACCEPTED_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] ||
-                { echo '::error::Rerun dev deployment and acceptance in this attempt'; exit 1; }
               gh api "repos/$GITHUB_REPOSITORY/environments/prod" | jq -e 'any(.protection_rules[]?; .type == "required_reviewers" and (.reviewers | length) > 0)' >/dev/null
               ;;
             *) exit 1 ;;
           esac
+
+      - &verify-dev-acceptance
+        name: Verify dev acceptance for the production candidate
+        if: inputs.release_sha && inputs.stage == 'prod'
+        env:
+          ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
+          CANDIDATE: ${{ inputs.candidate_id }}
+          DIGEST: ${{ inputs.candidate_digest }}
+          TAG: ${{ inputs.ref }}
+          SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE" =~ ^[1-9][0-9]*$ && "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          [[ "$ACCEPTED_ATTEMPT" =~ ^[1-9][0-9]*$ && "$ACCEPTED_ATTEMPT" -le "$GITHUB_RUN_ATTEMPT" ]]
+          receipt=$(mktemp -d "$RUNNER_TEMP/acceptance.XXXXXX")
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-accepted-$CANDIDATE" --dir "$receipt"
+          jq -e --argjson run "$GITHUB_RUN_ID" --argjson id "$CANDIDATE" --argjson attempt "$ACCEPTED_ATTEMPT" \
+            --arg digest "$DIGEST" --arg tag "$TAG" --arg sha "$SHA" \
+            '.run == $run and .candidate == $id and .attempt == $attempt and .digest == $digest and .tag == $tag and .sha == $sha' \
+            "$receipt/acceptance.json" >/dev/null
 
       - name: Read immutable release image and Runner digests
         id: pins
@@ -404,6 +421,7 @@ jobs:
   plan:
     name: ${{ matrix.component == 'release' && 'deploy release' || format('plan and build {0}', matrix.component) }} ${{ inputs.stage }}
     permissions:
+      actions: read
       contents: read
       id-token: write
       packages: read
@@ -422,11 +440,7 @@ jobs:
       group: ${{ matrix.component == 'runner' && 'runner-build' || 'mbuild-publish' }}-${{ inputs.stage }}
       cancel-in-progress: false
     steps:
-      - name: Require acceptance from this attempt
-        if: inputs.release_sha && inputs.stage == 'prod'
-        env:
-          ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
-        run: test "$ACCEPTED_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+      - *verify-dev-acceptance
       - uses: actions/checkout@v5
         with:
           persist-credentials: false

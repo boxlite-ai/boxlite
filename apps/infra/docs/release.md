@@ -29,9 +29,24 @@ The Runner package at `ghcr.io/boxlite-ai/boxlite/runner` must allow anonymous p
 
 Rerunning the API build replaces that API version's GHCR tag with the rebuilt manifest. Other successful matrix entries keep their digests. A failed Docker upload retries the image already built by that job.
 
+For a failed production job, use **Re-run failed jobs** in the original release run. Before requesting approval and after approval, production checks the saved dev acceptance against the run ID, accepted attempt, candidate artifact ID, manifest digest, tag and source commit. A different candidate needs its own dev E2E.
+
+If finalization loses the GitHub response after publishing, retry the failed job. It verifies the published files and their digests without modifying them. PyPI compares existing wheel hashes before it uploads any missing files and verifies the full set afterward.
+
 A same-version Runner rebuild changes the pinned manifest. Hosts record the installed manifest and archive digests and reapply when either changes.
 
 Each Runtime or CLI tarball sidecar and the installer sidecar `install.sh.sha256` occupies one entry in the release inventory. A retry of an interrupted draft upload compares each existing attachment with the accepted file. A conflicting digest stops publication. Inspect the originating run before replacing an already distributed version.
+
+### Roll back to a release that predates the manifest
+
+A version-only installation requires a published `release-candidate.json`. For a historical release missing the file, complete this one-time backfill before selecting the version for installation or rollback.
+
+1. Resolve the product tag to its original commit and download the original Linux AMD64 Runner tarball and its checksum from that GitHub Release. Verify the exact filename and SHA-256 against the recorded checksum and the GitHub asset digest. Stop if the original bytes or independent evidence cannot be verified.
+2. With approval to update that version, publish those verified bytes as the single `application/gzip` layer to `ghcr.io/boxlite-ai/boxlite/runner`. Use the same OCI artifact type and source, revision and version annotations as the **Push the exact Runner archive** step. Check the manifest and blob by digest with anonymous credentials.
+3. Record the original `tag`, resolved commit in `sha`, OCI digest in `runner.manifest` and archive digest in `runner.archive`. For an `mdeploy-all` rollout, also populate `images` with the original verified manifest digest of each application image. Abort if a digest cannot be tied to the historical release.
+4. Attach the verified metadata as `release-candidate.json` to that version and check its downloaded SHA-256. Preserve any existing manifest and investigate conflicting bytes. A rollback can then select the version and use the usual downgrade approval.
+
+The host fetches its Runner bytes from GHCR by digest. Backfilling metadata does not confer a dev E2E acceptance receipt or make the historical build eligible for component repairs.
 
 ### Manually republish a component
 

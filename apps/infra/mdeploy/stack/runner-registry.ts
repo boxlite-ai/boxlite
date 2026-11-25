@@ -6,6 +6,9 @@ function shellLiteral(value: string) {
 /** Public OCI artifact produced by the release workflow. Hosts need only anonymous pull access. */
 const repository = 'boxlite-ai/boxlite/runner'
 export const runnerRegistry = `https://ghcr.io/v2/${repository}`
+// All host writers share this lock through the binary swap, health probe, and digest record.
+export const runnerInstallLock = `exec 8>/run/lock/boxlite-runner-upgrade.lock
+flock -w 120 8 || { echo 'Timed out waiting for the Runner installer' >&2; exit 1; }`
 export const runnerDigestFile = '/usr/local/bin/boxlite-runner.oci-digest'
 const sha256 = /^sha256:[0-9a-f]{64}$/
 export type ReleaseRunner = { tag: string; pins?: { manifest: string; archive: string; sha: string } }
@@ -47,7 +50,7 @@ r = m["runner"]
 if m["tag"] != sys.argv[1] or not re.fullmatch("[a-f0-9]{40}", m["sha"]) or not all(re.fullmatch("sha256:[a-f0-9]{64}", r[k]) for k in ("manifest","archive")):
     sys.exit("invalid Runner release receipt")
 print(r["manifest"], r["archive"], m["sha"])
-' "$RUNNER_TAG")
+' "$RUNNER_TAG") || { echo "Cannot read valid release-candidate.json for $RUNNER_TAG. For a historical release, backfill its verified Runner into GHCR before installing." >&2; exit 1; }
 read -r RUNNER_MANIFEST RUNNER_ARCHIVE RUNNER_REVISION <<< "$RUNNER_RECEIPT"`
 }
 

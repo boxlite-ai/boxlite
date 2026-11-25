@@ -34,7 +34,7 @@ import { CLOUD_RUNNER_KERNEL, kernelDeployment } from './runner-kernel.ts'
 import { renderRunnerEnvironment, RUNNER_ENV_BEGIN, RUNNER_ENV_END } from './runner-environment.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { registrySetup, recordRunnerDigest, runnerDigestFile } from './runner-registry.ts'
+import { registrySetup, runnerInstallLock, recordRunnerDigest, runnerDigestFile } from './runner-registry.ts'
 import { fetchVerifiedRunner } from './runner-binary.ts'
 import { runnerDataDiskNameFor, type RunnerBinary, type RunnerSlot } from './runners.ts'
 
@@ -470,6 +470,7 @@ export const renderUpgradePayload = (target: UpgradeTarget): string => {
   assertUpgradeTarget(target)
   return `set -euo pipefail
 (
+${runnerInstallLock}
 ${preamble(target)}${guards(target, 'exit 0')}${swapSequence(target)}
 )
 ${kernelDeployment(target.kernel, target.port).enforce}`
@@ -784,8 +785,9 @@ exit 101
  */
 export const renderHostConvergence = (target: UpgradeTarget): string => {
   assertUpgradeTarget(target)
-  const binary = `upgrade_binary() {
-${guards(target, 'return 0')}${swapSequence(target, 'return 0')}}
+  const binary = `upgrade_binary() (
+${runnerInstallLock}
+${guards(target, 'return 0')}${swapSequence(target, 'return 0')})
 `
   const environment = target.apiUrl
     ? `${unitEnvironmentBlock({

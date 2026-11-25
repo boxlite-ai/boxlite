@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { load } from 'js-yaml'
 
 const digest = (data) => 'sha256:' + createHash('sha256').update(data).digest('hex')
 test('publishing a runtime includes each sidecar once and resumes without replacing it', (t) => {
@@ -30,10 +31,11 @@ test('publishing a runtime includes each sidecar once and resumes without replac
     `#!/usr/bin/env node
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const args=process.argv.slice(2), ledger=process.env.LEDGER;
-if(args[0]==='release' && args[1]==='upload') fs.appendFileSync(ledger,path.basename(args[3])+'\\n');
+if(args.includes('PATCH')) {fs.appendFileSync(ledger+'.patch','P'); fs.writeFileSync(ledger+'.public','1'); process.exit(9)}
+else if(args[0]==='release' && args[1]==='upload') fs.appendFileSync(ledger,path.basename(args[3])+'\\n');
 else if(args.at(-1).endsWith('/assets?per_page=100')) console.log(JSON.stringify([fs.readFileSync(ledger,'utf8').split('\\n').filter(Boolean).map(name=>({name,state:'uploaded',digest:'sha256:'+crypto.createHash('sha256').update(fs.readFileSync(path.join(process.env.RELEASE_ASSET_DIR,name))).digest('hex')}))]));
 else if(args.at(-1).includes('/commits/')) console.log(JSON.stringify({sha:process.env.SHA}));
-else if(args.at(-1).endsWith('/releases/1')) console.log(JSON.stringify({tag_name:process.env.TAG,draft:true}));
+else if(args.at(-1).endsWith('/releases/1')) console.log(JSON.stringify({tag_name:process.env.TAG,draft:!fs.existsSync(ledger+'.public')}));
 else process.exit(9);
 `,
     { mode: 0o755 },
@@ -61,5 +63,27 @@ else process.exit(9);
   assert.deepEqual(
     readFileSync(env.LEDGER, 'utf8').trim().split('\n').sort(),
     [...names, 'release-candidate.json'].sort(),
+  )
+  const workflow = load(readFileSync(new URL('../../../.github/workflows/mbuild-release.yml', import.meta.url), 'utf8'))
+  const finalize = workflow.jobs.finalize.steps
+    .at(-1)
+    .run.replace('apps/infra/scripts/release-candidate.mjs', JSON.stringify(code.pathname))
+  const run = () => spawnSync('bash', ['-ec', finalize], { cwd: dir, env, encoding: 'utf8' })
+  assert.notEqual(run().status, 0, 'simulate a lost response to the publication request')
+  assert.equal(readFileSync(env.LEDGER + '.public', 'utf8'), '1')
+  let result = run()
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(readFileSync(env.LEDGER + '.patch', 'utf8'), 'P', 'retry must only verify the public release')
+  assert.deepEqual(
+    readFileSync(env.LEDGER, 'utf8').trim().split('\n').sort(),
+    [...names, 'release-candidate.json'].sort(),
+  )
+  writeFileSync(env.LEDGER, names.join('\n') + '\n')
+  result = run()
+  assert.notEqual(result.status, 0, 'incomplete public release must fail')
+  assert.equal(
+    readFileSync(env.LEDGER, 'utf8').trim().split('\n').length,
+    names.length,
+    'public release must be read-only',
   )
 })

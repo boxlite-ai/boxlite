@@ -37,7 +37,7 @@
  * the wrapper fetches it like any other secret.
  */
 
-import { registrySetup, recordRunnerDigest } from './runner-registry.ts'
+import { registrySetup, runnerInstallLock, recordRunnerDigest } from './runner-registry.ts'
 import { fetchVerifiedRunner, type RunnerArtifact } from './runner-binary.ts'
 import { kernelDeployment } from './runner-kernel.ts'
 import { renderRunnerEnvironment } from './runner-environment.ts'
@@ -164,6 +164,7 @@ ${platform.prepareKvm}
 # box is a silent one.
 [ -e /dev/kvm ] || { echo "FATAL: /dev/kvm is absent; this host cannot run boxes" >&2; exit 1; }
 
+${runnerInstallLock}
 ${input.binary.release ? registrySetup(input.binary.release) : ''}
 ${fetchVerifiedRunner(input.binary, 'boot', region)}
 tar -xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/

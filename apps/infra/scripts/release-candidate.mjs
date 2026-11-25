@@ -155,26 +155,31 @@ function releaseAssets(releaseId) {
     ),
   ).flat()
 }
-async function publishFiles(candidate, id, scope) {
+async function publishFiles(candidate, id, scope, finalize = false) {
   const release = api('releases/' + numberId(id))
   assert.equal(release.tag_name, candidate.tag)
-  if (!scope) assert.equal(release.draft, true, 'Release must be a draft during normal asset publication')
+  if (!scope && !finalize) assert.equal(release.draft, true, 'Release must be a draft during normal asset publication')
   const files = Object.fromEntries(
     Object.entries(candidate.assets).filter(([, { group }]) => !scope || group.startsWith(scope)),
   )
   assert.ok(Object.keys(files).length, 'No files for requested component')
   if (!scope) files[metadata] = { digest: await fileDigest(join(bundle, metadata)) }
-  let uploaded = new Map(releaseAssets(id).map((entry) => [entry.name, entry]))
-  for (const [name, { digest }] of Object.entries(files)) {
-    if (uploaded.has(name))
-      assert.equal(uploaded.get(name).digest, digest, 'Release already holds different bytes for ' + name)
-    else gh('release', 'upload', candidate.tag, join(bundle, name), '--repo', process.env.GITHUB_REPOSITORY)
+  const uploadedAssets = () => new Map(releaseAssets(id).map((entry) => [entry.name, entry]))
+  if (!finalize) {
+    const existing = uploadedAssets()
+    for (const [name, { digest }] of Object.entries(files)) {
+      if (existing.has(name))
+        assert.equal(existing.get(name).digest, digest, 'Release already holds different bytes for ' + name)
+      else gh('release', 'upload', candidate.tag, join(bundle, name), '--repo', process.env.GITHUB_REPOSITORY)
+    }
   }
-  uploaded = new Map(releaseAssets(id).map((entry) => [entry.name, entry]))
+  const uploaded = uploadedAssets()
   for (const [name, { digest }] of Object.entries(files)) {
     assert.equal(uploaded.get(name)?.state, 'uploaded', 'Incomplete upload ' + name)
     assert.equal(uploaded.get(name)?.digest, digest, 'Uploaded asset differs from candidate: ' + name)
   }
+  if (finalize && release.draft)
+    gh('api', '--method', 'PATCH', 'repos/' + process.env.GITHUB_REPOSITORY + '/releases/' + numberId(id), '-F', 'draft=false')
 }
 async function main(command) {
   const { TAG: tag, SHA: sha, CANDIDATE_DIGEST: fingerprint, RELEASE_ID } = process.env
@@ -187,6 +192,7 @@ async function main(command) {
   if (command === 'verify') return
   await tagIdentity(tag, sha)
   if (command === 'attach') return publishFiles(candidate, RELEASE_ID, process.env.REPAIR_GROUP)
+  if (command === 'finalize') return publishFiles(candidate, RELEASE_ID, undefined, true)
   throw new Error('Unknown release candidate operation ' + command)
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main(process.argv[2])

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -109,14 +109,11 @@ test('release admission checks caller, tag, reviewers and deployment attempt bef
     { RESOLVED: 'b'.repeat(40) },
     { VERSION: '' },
     { STAGE: 'stage' },
-    { ACCEPTED_ATTEMPT: '1' },
     { REVIEWERS: '{"protection_rules":[]}' },
     { GH_EXIT: '1' },
   ])
     assert.notEqual(run(guard.run, overrides), 0)
   assert.equal(run(guard.run, { STAGE: 'dev', ACCEPTED_ATTEMPT: '', GH_EXIT: '1' }), 0)
-  const applyGuard = rollout.jobs.plan.steps.find((step) => step.name === 'Require acceptance from this attempt')
-  assert.notEqual(run(applyGuard.run, { ACCEPTED_ATTEMPT: '1' }), 0)
   const cloud = readWorkflow('e2e-cloud')
   const e2eGuard = cloud.jobs.e2e.steps.find((step) => step.env?.DEPLOYMENT_ATTEMPT)
   for (const [attempt, sha, expected] of [
@@ -147,6 +144,96 @@ test('release admission checks caller, tag, reviewers and deployment attempt bef
   assert.notEqual(run(e2eGuard.run, { ...standalone, REVIEWERS: base.VERSION }), 0)
   assert.equal(run(e2eGuard.run, { ...standalone, REVIEWERS: base.RELEASE_SHA }), 0)
   assert.equal(readFileSync(outputs, 'utf8'), 'sha=' + base.RELEASE_SHA + '\n')
+})
+
+test('prod may retry a previous attempt only with the exact dev acceptance receipt', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'prod-retry-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  writeFileSync(
+    join(dir, 'gh'),
+    '#!/bin/bash\nset -eu\nmkdir -p "${@: -1}"\ncp "$RECEIPT" "${@: -1}/acceptance.json"\n',
+    { mode: 0o755 },
+  )
+  const sha = 'a'.repeat(40),
+    digest = 'sha256:' + 'b'.repeat(64)
+  const accepted = { run: 44, attempt: 1, candidate: 77, digest, sha, tag: 'v1.2.3' }
+  const env = {
+    ...process.env,
+    PATH: dir + ':' + process.env.PATH,
+    RUNNER_TEMP: dir,
+    RECEIPT: join(dir, 'receipt'),
+    GITHUB_RUN_ATTEMPT: '2',
+    GITHUB_RUN_ID: '44',
+    GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
+    ACCEPTED_ATTEMPT: '1',
+    CANDIDATE: '77',
+    DIGEST: digest,
+    TAG: accepted.tag,
+    SHA: sha,
+  }
+  for (const job of [rollout.jobs.plan, rollout.jobs.resolve]) {
+    const guard = job.steps.find((step) => step.name === 'Verify dev acceptance for the production candidate')
+    for (const [changed, expected] of [
+      [{}, 0],
+      [{ candidate: 78 }, 1],
+      [{ digest: 'sha256:' + 'c'.repeat(64) }, 1],
+      [{ sha: 'd'.repeat(40) }, 1],
+      [{ run: 45 }, 1],
+      [{ attempt: 3 }, 1],
+      [{ tag: 'v1.2.4' }, 1],
+    ]) {
+      writeFileSync(env.RECEIPT, JSON.stringify({ ...accepted, ...changed }))
+      const result = spawnSync('bash', ['-c', guard.run], { env, encoding: 'utf8' })
+      assert.equal(result.status === 0, expected === 0, 'receipt ' + JSON.stringify(changed) + ' ' + result.stderr)
+    }
+  }
+})
+
+test('PyPI publication rejects conflicting wheels before the upload action can run', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'pypi-preflight-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const steps = release.jobs.pypi.steps
+  const source = join(dir, 'source'),
+    filename = 'boxlite-1.2.3-py3-none-any.whl'
+  mkdirSync(source)
+  writeFileSync(join(source, filename), 'accepted')
+  writeFileSync(
+    join(dir, 'curl'),
+    '#!/bin/bash\nset -eu\nwhile [[ $# -gt 0 ]]; do if [[ "$1" == "-o" ]]; then cp "$DATA" "$2"; shift; fi; shift; done\nprintf %s "$STATUS"\n',
+    { mode: 0o755 },
+  )
+  const env = {
+    ...process.env,
+    PATH: dir + ':' + process.env.PATH,
+    TAG: 'v1.2.3',
+    RELEASE_ASSET_DIR: source,
+    DATA: join(dir, 'pypi-response'),
+  }
+  const select = steps.findIndex((step) => step.name === 'Select accepted wheels')
+  const upload = steps.findIndex((step) => step.uses?.startsWith('pypa/'))
+  const repo = new URL('../../../', import.meta.url).pathname.replace(/\/$/, '')
+  const before = steps
+    .slice(select, upload)
+    .map((step) => step.run)
+    .join('\n')
+    .replaceAll('scripts/release/', repo + '/scripts/release/')
+  const after = steps[upload + 1].run.replaceAll('scripts/release/', repo + '/scripts/release/')
+  function check(script, status, sha) {
+    writeFileSync(env.DATA, JSON.stringify({ urls: sha ? [{ filename, digests: { sha256: sha } }] : [] }))
+    return spawnSync('bash', ['-ec', script], { cwd: dir, env: { ...env, STATUS: status }, encoding: 'utf8' }).status
+  }
+  const hash = execFileSync('shasum', ['-a', '256', join(source, filename)], { encoding: 'utf8' }).split(' ')[0]
+  for (const [status, sha, allowed, complete] of [
+    ['200', '0'.repeat(64), false, false],
+    ['200', hash, true, true],
+    ['404', '', true, false],
+    ['500', '', false, false],
+    ['200', '', true, false],
+  ]) {
+    rmSync(join(dir, 'dist'), { recursive: true, force: true })
+    assert.equal(check(before, status, sha) === 0, allowed, 'before publisher ' + status + ' ' + sha)
+    assert.equal(check(after, status, sha) === 0, complete, 'after publisher ' + status + ' ' + sha)
+  }
 })
 
 test('build-only never enters deployment, checks, or reporting; failed E2E cannot stamp acceptance', () => {

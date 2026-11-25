@@ -544,6 +544,11 @@ jobs:
       - name: Select accepted wheels
         run: mkdir dist && cp "$RELEASE_ASSET_DIR"/*.whl dist/
 
+      - name: Check existing PyPI wheels before uploading
+        env:
+          TAG: ${{ inputs.tag }}
+        run: bash scripts/release/verify-pypi-wheels.sh before
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -552,13 +557,7 @@ jobs:
       - name: Verify PyPI recorded the accepted wheel hashes
         env:
           TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          curl -fsS --retry 5 --retry-all-errors "https://pypi.org/pypi/boxlite/${TAG#v}/json" > pypi.json
-          for wheel in dist/*.whl; do
-            sha=$(sha256sum "$wheel" | cut -d' ' -f1)
-            jq -e --arg file "${wheel##*/}" --arg sha "$sha" 'any(.urls[]; .filename == $file and .digests.sha256 == $sha)' pypi.json >/dev/null
-          done
+        run: bash scripts/release/verify-pypi-wheels.sh after
 
   tag-go-module:
     if: ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' }}
@@ -737,10 +736,7 @@ jobs:
           SHA: ${{ needs.resolve.outputs.sha }}
           CANDIDATE_DIGEST: ${{ needs.check.outputs.digest }}
           RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
-        run: |
-          set -euo pipefail
-          node apps/infra/scripts/release-candidate.mjs attach
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false --jq '.html_url'
+        run: node apps/infra/scripts/release-candidate.mjs finalize
 
   prod:
     name: Production deployment
