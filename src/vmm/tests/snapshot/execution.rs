@@ -684,3 +684,83 @@ fn kvm_export_of_parked_device_less_guest() {
         control.resume().unwrap();
     });
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+fn kvm_export_captures_executed_guest_state_and_ram() {
+    use std::{sync::atomic::Ordering, time::Instant};
+    use vm_memory::GuestAddressSpace;
+
+    use crate::flat_guest;
+
+    const MARKER_ADDR: GuestAddress = GuestAddress(0x2000);
+    const MARKER: u32 = 0x1234_5678;
+    #[rustfmt::skip]
+    const PROGRAM: [u8; 12] = [
+        0xb8, 0x78, 0x56, 0x34, 0x12, // mov eax, 0x12345678
+        0xa3, 0x00, 0x20, 0x00, 0x00, // mov dword ptr ds:[0x2000], eax
+        0xeb, 0xfe,                   // jmp $ (0x100a)
+    ];
+
+    let dir = tempfile::tempdir().unwrap();
+    let state_path = dir.path().join("state");
+    let memory_path = dir.path().join("memory");
+    let mut guest_memory = None;
+    let vm = Vm::with_backend(
+        config(),
+        boxlite_hypervisor::KvmVm::new,
+        |ram, _| {
+            guest_memory = Some(ram.memory().clone());
+            Ok(flat_guest::load(ram.boot_memory(), &PROGRAM))
+        },
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    let guest_memory = guest_memory.unwrap();
+    let read_marker = || {
+        guest_memory
+            .memory()
+            .load::<u32>(MARKER_ADDR, Ordering::Relaxed)
+            .unwrap()
+    };
+
+    with_paused(vm, |control, _, _| {
+        assert_eq!(read_marker(), 0);
+        control.resume().unwrap();
+        // The store is immediately followed by the self-loop, so the next RIP
+        // and the marker stay fixed once the store is visible to the host.
+        let deadline = Instant::now() + WAIT;
+        while read_marker() != MARKER {
+            assert!(
+                Instant::now() < deadline,
+                "guest did not write the RAM marker"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        control.pause().unwrap();
+        assert_eq!(control.status(), VmStatus::Paused);
+        control.export(&state_path, &memory_path).unwrap();
+
+        let memory = fs::read(&memory_path).unwrap();
+        let (header, state) = decode(&fs::read(&state_path).unwrap(), &memory);
+        assert_eq!(header.vcpus, 3);
+        assert_eq!(header.ram_len, 1 << 20);
+        assert_eq!(state.vcpus.len(), 3);
+        let ids: Vec<_> = state.vcpus.iter().map(|record| record.id).collect();
+        assert_eq!(ids, [0, 1, 2]);
+        let regs = &state.vcpus[0].state.regs;
+        assert_eq!(regs.rax, u64::from(MARKER));
+        assert_eq!(regs.rip, 0x100a);
+        let marker = MARKER_ADDR.0 as usize;
+        assert_eq!(
+            u32::from_le_bytes(memory[marker..marker + 4].try_into().unwrap()),
+            MARKER
+        );
+        let code = flat_guest::CODE as usize;
+        assert_eq!(&memory[code..code + PROGRAM.len()], &PROGRAM);
+        assert_eq!(control.status(), VmStatus::Paused);
+        control.resume().unwrap();
+        assert_eq!(control.status(), VmStatus::Running);
+    });
+}
