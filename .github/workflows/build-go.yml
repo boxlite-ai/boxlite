@@ -1,73 +1,57 @@
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: Build Go SDK
-
-on:
-  workflow_dispatch:
+'on':
+  workflow_dispatch: null
   workflow_call:
     inputs:
       ref:
         required: true
         type: string
-
 permissions:
   contents: read
-
+  actions: read
 jobs:
   config:
     uses: ./.github/workflows/config.yml
-
+    permissions:
+      contents: read
+      actions: read
   build-c:
     name: Build manual commit C SDK
     if: ${{ !inputs.ref }}
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/build-c.yml
     with:
       ref: ${{ github.sha }}
-
   test:
     name: Test (${{ matrix.target }})
-    needs: [config, build-c]
+    needs:
+      - config
+      - build-c
     permissions:
       contents: read
       actions: read
-    if: >-
-      !cancelled() &&
-      needs.config.result == 'success' &&
-      (needs['build-c'].result == 'success' || needs['build-c'].result == 'skipped')
+    if: '!cancelled() && needs.config.result == ''success'' && (needs[''build-c''].result == ''success'' || needs[''build-c''].result == ''skipped'')'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.config.outputs.platforms) }}
-
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-          persist-credentials: false
-
-      - uses: ./.github/actions/setup-go
-        with:
-          go-version: ${{ needs.config.outputs.go-version }}
-
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/setup-go
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Download commit libboxlite.a
-        uses: actions/download-artifact@v4
-        with:
-          name: c-sdk-${{ matrix.target }}
-          path: /tmp/c-sdk
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Extract commit libboxlite.a
-        env:
-          PLATFORM: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          archive=$(find /tmp/c-sdk -maxdepth 1 -name "boxlite-c-v*-${PLATFORM}.tar.gz" -print -quit)
-          test -n "$archive"
-          tar xzf "$archive" -C /tmp/
-          cp "/tmp/$(basename "$archive" .tar.gz)/lib/libboxlite.a" sdks/go/libboxlite.a
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Test Go SDK
-        run: |
-          cd sdks/go
-          go build ./...
-          go test -v ./...
+        shell: bash
+        run: printf '%s\n' 'Simulated'

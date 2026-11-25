@@ -1,37 +1,29 @@
-# Release workflows need configuration before expanding their build matrix.
-# PR workflows load the same action inside their existing changes job.
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: Config
-
-on:
+'on':
   workflow_call:
     outputs:
-      # === Platform/Matrix Configuration ===
       platforms:
-        description: 'JSON array of platform configurations (os and target)'
+        description: JSON array of platform configurations (os and target)
         value: ${{ jobs.config.outputs.platforms }}
-
-      # === Version Configuration ===
       python-versions:
-        description: 'JSON array of Python versions to test'
+        description: JSON array of Python versions to test
         value: ${{ jobs.config.outputs.python-versions }}
       node-versions:
-        description: 'JSON array of Node.js versions to test'
+        description: JSON array of Node.js versions to test
         value: ${{ jobs.config.outputs.node-versions }}
       node-build-version:
-        description: 'Node.js version for building'
+        description: Node.js version for building
         value: ${{ jobs.config.outputs.node-build-version }}
       go-version:
-        description: 'Go version for building and testing'
+        description: Go version for building and testing
         value: ${{ jobs.config.outputs.go-version }}
       rust-toolchain:
-        description: 'Rust toolchain version'
+        description: Rust toolchain version
         value: ${{ jobs.config.outputs.rust-toolchain }}
-
-      # === Artifact Configuration ===
       artifact-retention-days:
-        description: 'Number of days to retain artifacts'
+        description: Number of days to retain artifacts
         value: ${{ jobs.config.outputs.artifact-retention-days }}
-
 jobs:
   config:
     name: Load configuration
@@ -44,8 +36,15 @@ jobs:
       go-version: ${{ steps.config.outputs.go-version }}
       rust-toolchain: ${{ steps.config.outputs.rust-toolchain }}
       artifact-retention-days: ${{ steps.config.outputs.artifact-retention-days }}
-
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/ci-config
         id: config
+    permissions:
+      contents: read
+      actions: read
+permissions:
+  contents: read
+  actions: read

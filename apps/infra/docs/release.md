@@ -4,7 +4,7 @@ Start `mbuild-release` on `main` to build a draft release, test its files on dev
 
 ## Shadow rehearsal
 
-On `codex/shadow-release-3069-v2`, the `mbuild-release` rehearsal simulates builds, uploads, publication, cloud deployment and E2E. A synthetic candidate and its acceptance receipt travel through job outputs inside the run. Its concurrency groups are exclusive to the shadow workflow.
+On `codex/shadow-release-3069-v2`, the `mbuild-release` rehearsal simulates builds, uploads, publication, cloud deployment and E2E. A synthetic candidate and its acceptance receipt travel through job outputs inside the run. The rehearsal uses the release workflow’s callable build jobs, platform and Node version matrices, job dependencies and step order. Its concurrency groups are exclusive to shadow.
 
 Dev and prod approvals use the existing GitHub Environment reviewer rules with `deployment: false`; the approval job has an empty token permission set. The workflow requests no cloud identity. GitHub records the run and approvals, and the configured release Slack webhook receives messages marked `[SHADOW]`.
 

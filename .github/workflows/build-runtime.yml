@@ -1,8 +1,8 @@
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: Build Runtime
-
-on:
+'on':
   schedule:
-    - cron: '0 1 * * 1'
+    - cron: 0 1 * * 1
   workflow_call:
     inputs:
       ref:
@@ -11,21 +11,16 @@ on:
       tag:
         required: true
         type: string
-  workflow_dispatch:
-
+  workflow_dispatch: null
 concurrency:
-  group: build-runtime-${{ inputs.tag || github.ref }}
+  group: shadow-v2-build-runtime-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: '0'
-  SKIP_INSTALL_NODEJS: '1'
-
 jobs:
   config:
     uses: ./.github/workflows/config.yml
-
+    permissions:
+      contents: read
+      actions: read
   build:
     name: Build Runtime (${{ matrix.target }})
     needs: config
@@ -34,77 +29,44 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.config.outputs.platforms) }}
-
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-          submodules: recursive
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
-          cache: ${{ runner.os != 'Linux' }}
-
-      - uses: ./.github/actions/sccache
-        with:
-          tolerate-failure: ${{ github.event_name != 'schedule' }}
-
-      - uses: ./.github/actions/build-guest
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/setup-rust
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/sccache
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/build-guest
         if: runner.os == 'Linux'
-        with:
-          show-sccache-stats: ${{ github.event_name == 'schedule' }}
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Build and package runtime (Linux)
         if: runner.os == 'Linux'
-        uses: ./.github/actions/run-in-manylinux
-        with:
-          target: ${{ matrix.target }}
-          script: |
-            bash scripts/build/package-runtime.sh "$BOXLITE_CI_TARGET"
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Build and package runtime (macOS)
         if: runner.os == 'macOS'
-        env:
-          BOXLITE_CI_TARGET: ${{ matrix.target }}
-        run: |
-          make setup:build runtime
-          bash scripts/build/package-runtime.sh "$BOXLITE_CI_TARGET"
-          command -v sccache &>/dev/null && sccache --show-stats || true
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Upload runtime artifact
-        uses: actions/upload-artifact@v4
-        with:
-          overwrite: true
-          if-no-files-found: error
-          name: runtime-${{ matrix.target }}
-          path: boxlite-runtime-v*-${{ matrix.target }}.tar.gz
-          retention-days: 7
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Package CLI binary
-        run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          CLI_BIN="target/release/boxlite"
-          [ -f "$CLI_BIN" ] || { echo "ERROR: CLI binary not found at $CLI_BIN"; exit 1; }
-          tar czf "boxlite-cli-v${VERSION}-${{ matrix.rust_target }}.tar.gz" -C target/release boxlite
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Record CLI build origin
         if: inputs.tag && matrix.target == 'linux-x64-gnu'
-        run: |
-          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{sha:$sha,run:$run,attempt:$attempt}' > producer.json
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
-        with:
-          overwrite: true
-          if-no-files-found: error
-          name: cli-${{ matrix.target }}
-          path: |
-            boxlite-cli-v*-${{ matrix.rust_target }}.tar.gz
-            producer.json
-          retention-days: 7
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+    permissions:
+      contents: read
+      actions: read
   package:
     name: Stage runtime distribution
     needs: build
@@ -112,105 +74,38 @@ jobs:
     if: inputs.tag != ''
     permissions:
       contents: read
-      id-token: write
-      attestations: write
-
+      actions: read
     steps:
       - name: Checkout (for scripts/release/install.sh.template)
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: "@(runtime|cli)-*"
-          path: dist
-          merge-multiple: true
-
-      # Per-tarball sidecars come first so the install.sh render step can read
-      # them to embed checksums for the fast path.
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Generate per-tarball .sha256 sidecars
-        working-directory: dist
-        run: |
-          for f in boxlite-runtime-*.tar.gz boxlite-cli-*.tar.gz; do
-            sha256sum "$f" > "$f.sha256"
-          done
-          ls -1 *.sha256
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Render install.sh for this release
-        working-directory: dist
-        env:
-          VERSION: ${{ inputs.tag }}
-        run: |
-          sha_for() {
-            awk '{print $1}' < "boxlite-cli-${VERSION}-$1.tar.gz.sha256"
-          }
-          DARWIN_ARM64=$(sha_for aarch64-apple-darwin)
-          LINUX_X64=$(sha_for x86_64-unknown-linux-gnu)
-          LINUX_ARM64=$(sha_for aarch64-unknown-linux-gnu)
-
-          sed \
-            -e "s|__VERSION__|${VERSION}|g" \
-            -e "s|__SHA_AARCH64_APPLE_DARWIN__|${DARWIN_ARM64}|g" \
-            -e "s|__SHA_X86_64_UNKNOWN_LINUX_GNU__|${LINUX_X64}|g" \
-            -e "s|__SHA_AARCH64_UNKNOWN_LINUX_GNU__|${LINUX_ARM64}|g" \
-            ../scripts/release/install.sh.template > install.sh
-          chmod +x install.sh
-
-          # Sanity-check substitution succeeded.
-          if grep -q '__VERSION__\|__SHA_' install.sh; then
-            echo "ERROR: install.sh still contains placeholders" >&2
-            exit 1
-          fi
-          # Gate the release on a rendered-script syntax check; a broken
-          # installer would otherwise only surface on user machines.
-          sh -n install.sh
-          head -25 install.sh
-
-      # install.sh sidecar lives in the same integrity envelope as the
-      # tarballs: users who pipe `curl ... install.sh | sh` are running this
-      # script as their own user, so the wrapper itself must be verifiable
-      # (sha256 + sigstore attestation), not just its tarball payload.
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Generate install.sh.sha256 sidecar
-        working-directory: dist
-        run: |
-          sha256sum install.sh > install.sh.sha256
-          cat install.sh.sha256
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Generate SHA256SUMS
-        working-directory: dist
-        run: |
-          sha256sum boxlite-runtime-*.tar.gz boxlite-cli-*.tar.gz install.sh > SHA256SUMS
-          cat SHA256SUMS
-
-      # Final gate against installer regressions before the release goes
-      # public. The lint workflow also runs this on PRs touching the
-      # template; this re-run validates the actually-rendered dist/install.sh
-      # (placeholders substituted, real digests embedded).
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Validate rendered installer
-        env:
-          BOXLITE_INSTALL_TEMPLATE: dist/install.sh
-        run: bash scripts/release/test_install.sh
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: |
-            dist/boxlite-runtime-*.tar.gz
-            dist/boxlite-cli-*.tar.gz
-            dist/install.sh
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Record build origin
-        working-directory: dist
-        run: |
-          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Stage release files
-        uses: actions/upload-artifact@v4
-        with:
-          overwrite: true
-          if-no-files-found: error
-          name: runtime-distribution
-          path: dist/
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+permissions:
+  contents: read
+  actions: read

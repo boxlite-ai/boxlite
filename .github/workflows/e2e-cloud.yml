@@ -1,4 +1,4 @@
-# Shadow rehearsal: fixtures only, with real GitHub Environment approvals and Slack.
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: E2E cloud
 run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format(' using {0}', inputs.tag) || '' }}
 'on':
@@ -7,15 +7,15 @@ run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format
       release_result:
         description: Outcome of the release acceptance suite
         value: ${{ jobs.e2e.outputs.release_result }}
+      shadow_receipt:
+        description: Simulated dev acceptance held in this run
+        value: ${{ jobs.e2e.outputs.shadow_receipt }}
     inputs:
       candidate_id:
         required: false
         type: string
       candidate_digest:
         required: false
-        type: string
-      shadow_pins:
-        required: true
         type: string
       release_sha:
         description: Exact tagged commit deployed by release acceptance.
@@ -46,45 +46,210 @@ run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format
       shadow_failure:
         type: string
         required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release client tag, e.g. v0.13.1 (blank = build from source)
+        required: false
+        type: string
+      stage:
+        description: Stage to test
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+      api_url:
+        description: API base URL (blank = the stage default)
+        type: string
+        required: false
+      image:
+        description: Box image to run cases against (blank = apps/box-images/VERSION)
+        type: string
+        required: false
+      sweep:
+        description: Reclaim boxes earlier runs stranded (dev only)
+        type: boolean
+        required: true
+        default: true
 permissions:
   contents: read
   actions: read
 concurrency:
   group: shadow-v2-e2e-cloud-${{ inputs.stage || 'dev' }}
   cancel-in-progress: false
-env:
-  BOXLITE_DEPS_STUB: '1'
-  STAGE: ${{ inputs.stage || 'dev' }}
-  RELEASE_TAG: ${{ inputs.tag || '' }}
 jobs:
   e2e:
+    name: E2E suite (${{ inputs.stage || 'dev' }})
+    if: ${{ contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.candidate_id && 165 || 45 }}
+    outputs:
+      release_result: ${{ steps.acceptance.outputs.result }}
+      shadow_receipt: ${{ steps.acceptance.outputs.receipt }}
+    steps:
+      - name: actions/checkout@v5
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Download the dev deployment's release candidate
+        if: inputs.candidate_id
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Locate this run's Linux client artifacts
+        if: inputs.candidate_id
+        id: clients
+        shell: bash
+        run: |-
+          {
+            echo "ids=1,2,3,4"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download only the Linux client artifacts
+        if: inputs.candidate_id
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Verify and stage Linux acceptance clients
+        if: inputs.candidate_id
+        shell: bash
+        run: test "$FAIL" != e2e
+        env:
+          FAIL: ${{ inputs.shadow_failure }}
+      - name: Validate client release
+        if: inputs.tag || inputs.deployment_attempt
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Resolve the published SDK commit
+        id: release_commit
+        if: inputs.deployment_attempt || (inputs.tag && (inputs.stage || 'dev') == 'dev')
+        shell: bash
+        run: |-
+          [[ -z "$APPLIED" || "$APPLIED" == "$GITHUB_RUN_ATTEMPT" ]] || exit 1
+          {
+            echo "sha=$SHA"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          SHA: ${{ inputs.release_sha }}
+          APPLIED: ${{ inputs.deployment_attempt }}
+      - name: Checkout release SDK sources for subdomain clients
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Require the shared subdomain (dev)
+        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Probe API health
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Configure pytest profiles
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Sweep stranded boxes
+        if: ${{ (inputs.stage || 'dev') == 'dev' && inputs.sweep }}
+        continue-on-error: true
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Install system dependencies
+        if: ${{ inputs.tag == '' || (inputs.stage || 'dev') == 'dev' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Setup Rust toolchain
+        if: ${{ inputs.tag == '' || (inputs.stage || 'dev') == 'dev' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Build CLI
+        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') != 'prod' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Install release CLI
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') != 'prod' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Setup Node.js
+        if: ${{ (inputs.stage || 'dev') != 'prod' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Build Node SDK (napi + tsc)
+        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') != 'prod' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Install release Node SDK
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') != 'prod' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Setup Go for subdomain clients
+        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Build C, Go and Rust subdomain clients
+        if: ${{ inputs.tag == '' && (inputs.stage || 'dev') == 'dev' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Build release C, Go and Rust subdomain clients
+        if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Build & install Python SDK
+        if: ${{ inputs.tag == '' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Setup Python for release wheel
+        if: ${{ inputs.tag != '' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Install release Python SDK
+        if: ${{ inputs.tag != '' }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Install pytest dependencies
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Run identity E2E (dev and stage)
+        if: ${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}
+        timeout-minutes: 5
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Run image catalog E2E (dev and stage)
+        if: ${{ (inputs.stage || 'dev') == 'dev' || inputs.stage == 'stage' }}
+        timeout-minutes: 10
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Run E2E suite
+        timeout-minutes: 35
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Upload pytest junit XML
+        if: always()
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Record the deployed pins and tested client hashes
+        if: success() && inputs.candidate_id && inputs.deployment_attempt
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Save dev acceptance for production retries
+        if: success() && inputs.candidate_id && inputs.deployment_attempt
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Summarize release acceptance
+        id: acceptance
+        if: always() && inputs.deployment_attempt
+        shell: bash
+        run: |-
+          {
+            echo "result=$RESULT"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$RESULT" == success ]]; then
+            receipt=$(jq -cn --argjson run "$GITHUB_RUN_ID" --argjson attempt "$ATTEMPT" --argjson id "$CANDIDATE" --arg digest "$DIGEST" --arg tag "$TAG" --arg sha "$SHA" '{run:$run,attempt:$attempt,candidate:$id,digest:$digest,tag:$tag,sha:$sha}')
+            echo "receipt=$receipt" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          RESULT: ${{ job.status }}
+          CANDIDATE: ${{ inputs.candidate_id }}
+          DIGEST: ${{ inputs.candidate_digest }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.release_sha }}
+          ATTEMPT: ${{ inputs.deployment_attempt }}
     permissions:
       contents: read
       actions: read
-    outputs:
-      release_result: ${{ steps.acceptance.outputs.result }}
-    steps:
-      - name: Verify fixture outputs and simulate dev cloud E2E
-        shell: bash
-        env:
-          FAIL: ${{ inputs.shadow_failure }}
-          PINS: ${{ inputs.shadow_pins }}
-          EXPECTED: ${{ inputs.candidate_digest }}
-          ID: ${{ inputs.candidate_id }}
-          SHA: ${{ inputs.release_sha }}
-          APPLIED: ${{ inputs.deployment_attempt }}
-        run: |
-          set -euo pipefail
-          [[ "$FAIL" != e2e && "$APPLIED" == "$GITHUB_RUN_ATTEMPT" ]] || exit 1
-          digest=$(printf '%s' "$PINS" | sha256sum | cut -d' ' -f1)
-          [[ "sha256:$digest" == "$EXPECTED" ]] || exit 1
-          jq -e --arg tag "$RELEASE_TAG" --arg sha "$SHA" --argjson id "$ID" \
-            '.tag == $tag and .sha == $sha and .attempt == $id' <<< "$PINS" >/dev/null
-      - id: acceptance
-        if: always()
-        name: Record simulated E2E outcome
-        shell: bash
-        env:
-          RESULT: ${{ job.status }}
-        run: echo "result=$RESULT" >> "$GITHUB_OUTPUT"

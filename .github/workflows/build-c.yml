@@ -1,162 +1,90 @@
-# Stage C SDK archives for SDK consumers and release publication.
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: Build C SDK
-
-on:
-  workflow_dispatch:
+'on':
+  workflow_dispatch: null
   workflow_call:
     inputs:
       ref:
-        description: 'Full commit SHA to build. Defaults to the event commit.'
+        description: Full commit SHA to build. Defaults to the event commit.
         required: false
         default: ''
         type: string
       linux_x64_only:
-        description: 'Build only the C archive the Linux AMD64 Runner consumes.'
+        description: Build only the C archive the Linux AMD64 Runner consumes.
         required: false
         default: false
         type: boolean
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: '0'
-
 permissions:
   contents: read
-
+  actions: read
 jobs:
   config:
     uses: ./.github/workflows/config.yml
-
+    permissions:
+      contents: read
+      actions: read
   resolve-ref:
     name: Resolve build commit
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Validate build commit
         id: ref
         shell: bash
-        env:
-          INPUT_REF: ${{ inputs.ref }}
-        run: |
-          set -euo pipefail
-          candidate="${INPUT_REF:-$GITHUB_SHA}"
-          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
-          # fetch-depth: 0 above only brings THIS repo's own branches. A commit proposed by an
-          # open pull request — same-repo or fork — isn't on any of them, so it isn't here yet;
-          # fetch it directly by SHA. (Unlike a ref name, a bare SHA is only a "want" GitHub can
-          # refuse, so this is a fallback, not the first attempt.)
-          git cat-file -e "$candidate^{commit}" 2>/dev/null || git fetch origin "$candidate"
-          git cat-file -e "$candidate^{commit}"
-          echo "sha=$candidate" >> "$GITHUB_OUTPUT"
-
-  # ============================================================================
-  # BUILD
-  # ============================================================================
-  # Builds libboxlite for each platform (static + shared) and packages with
-  # C headers.
-  #
-  # Platform-specific considerations:
-  # - Linux: Uses manylinux_2_28 container for glibc compatibility
-  #   - Guest binary built on host first (Ubuntu has musl-tools, manylinux doesn't)
-  #   - Runtime/libkrun built in container (needs glibc 2.28)
-  # - macOS: Builds directly on runner (ARM64 only)
-  #
-  # After building, fix-go-symbols.sh localizes Go runtime symbols from
-  # embedded libgvproxy in the static library, preventing conflicts when
-  # linked into a Go binary.
-  # ============================================================================
+        run: |-
+          {
+            echo "sha=$GITHUB_SHA"
+          } >> "$GITHUB_OUTPUT"
+    permissions:
+      contents: read
+      actions: read
   build:
     name: Build (${{ matrix.target }})
-    needs: [ config, resolve-ref ]
+    needs:
+      - config
+      - resolve-ref
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' || needs.config.outputs.platforms) }}
-
+        include: >-
+          ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' ||
+          needs.config.outputs.platforms) }}
     steps:
-      # This job builds a caller-selected commit, and a `uses: ./...` action is resolved from the
-      # checked-out tree rather than from this workflow's own ref. So the steps below need
-      # .github/actions/ to exist in the SELECTED commit, not just in the one defining this file.
-      # A commit predating those directories fails with "Can't find 'action.yml'" — the fix is to
-      # select a newer commit, the same versioning split deploy-infra.yml describes at its
-      # "Require deployment capabilities in the selected commit" step.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve-ref.outputs.sha }}
-          submodules: recursive
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
-          cache: ${{ runner.os != 'Linux' }}
-
-      - uses: ./.github/actions/sccache
-
-      - uses: ./.github/actions/build-guest
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/setup-rust
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/sccache
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/build-guest
         if: runner.os == 'Linux'
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Build C SDK (Linux)
         if: runner.os == 'Linux'
-        uses: ./.github/actions/run-in-manylinux
-        with:
-          target: ${{ matrix.target }}
-          script: |
-            # Build the C FFI library (static + shared)
-            cargo build --release -p boxlite-c
-
-            # Fix Go runtime symbol conflicts in the static library
-            bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Build C SDK (macOS)
         if: runner.os == 'macOS'
-        run: |
-          make setup:build runtime
-
-          # Build the C FFI library (static + shared)
-          cargo build --release -p boxlite-c
-
-          # Fix Go runtime symbol conflicts in the static library
-          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
-
-          command -v sccache &>/dev/null && sccache --show-stats || true
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Package C SDK archive
-        run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          ARCHIVE_DIR="boxlite-c-v${VERSION}-${{ matrix.target }}"
-
-          mkdir -p "${ARCHIVE_DIR}/lib" "${ARCHIVE_DIR}/include"
-          cp target/release/libboxlite.a "${ARCHIVE_DIR}/lib/"
-          cp sdks/c/include/boxlite.h "${ARCHIVE_DIR}/include/"
-
-          # Copy shared library (platform-specific extension)
-          if [ -f target/release/libboxlite.dylib ]; then
-            cp target/release/libboxlite.dylib "${ARCHIVE_DIR}/lib/"
-          elif [ -f target/release/libboxlite.so ]; then
-            cp target/release/libboxlite.so "${ARCHIVE_DIR}/lib/"
-          fi
-
-          tar czf "${ARCHIVE_DIR}.tar.gz" "${ARCHIVE_DIR}/"
-          rm -rf "${ARCHIVE_DIR}"
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Record build origin
-        working-directory: .
-        run: |
-          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          overwrite: true
-          if-no-files-found: error
-          name: c-sdk-${{ matrix.target }}
-          path: |
-            boxlite-c-v*-${{ matrix.target }}.tar.gz
-            ./producer.json
-          retention-days: ${{ needs.config.outputs.artifact-retention-days }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+    permissions:
+      contents: read
+      actions: read

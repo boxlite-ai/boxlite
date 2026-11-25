@@ -1,22 +1,18 @@
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: Build Wheels
-
-on:
+'on':
   workflow_call:
     inputs:
       ref:
         required: true
         type: string
-  workflow_dispatch:  # Allow manual triggering
-
-env:
-  SKIP_INSTALL_NODEJS: '1'
-  CARGO_INCREMENTAL: '0'
-
+  workflow_dispatch: null
 jobs:
-  # Load shared configuration
   config:
     uses: ./.github/workflows/config.yml
-
+    permissions:
+      contents: read
+      actions: read
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
     needs: config
@@ -25,53 +21,36 @@ jobs:
       fail-fast: true
       matrix:
         include: ${{ fromJson(needs.config.outputs.platforms) }}
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-          submodules: recursive
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
-          cache: ${{ runner.os != 'Linux' }}
-
-      - uses: ./.github/actions/sccache
-
-      - uses: ./.github/actions/build-guest
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/setup-rust
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/sccache
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/build-guest
         if: runner.os == 'Linux'
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Build wheels
-        uses: pypa/cibuildwheel@v3.2.0
-        env:
-          CIBW_BUILD_VERBOSITY: 0
-          BOXLITE_HOST_SCCACHE_DIR: ${{ env.SCCACHE_DIR }}
-          BOXLITE_HOST_SCCACHE_BIN: ${{ env.SCCACHE_PATH }}
-        with:
-          package-dir: sdks/python
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Return container cache to the runner
         if: always() && runner.os == 'Linux'
-        run: |
-          if [ -d "$SCCACHE_DIR" ]; then
-            sudo chown -R "$(id -u):$(id -g)" "$SCCACHE_DIR"
-          fi
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Record build origin
-        working-directory: wheelhouse
-        run: |
-          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Upload wheels as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          overwrite: true
-          if-no-files-found: error
-          name: wheels-${{ matrix.os }}
-          path: |
-            ./wheelhouse/*.whl
-            wheelhouse/producer.json
-          retention-days: 7
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+    permissions:
+      contents: read
+      actions: read
+permissions:
+  contents: read
+  actions: read

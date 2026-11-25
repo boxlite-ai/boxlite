@@ -1,4 +1,4 @@
-# Shadow rehearsal: fixtures only, with real GitHub Environment approvals and Slack.
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: mbuild-release
 run-name: '[SHADOW] release ${{ inputs.tag }} to GHCR${{ !inputs[''build-only''] && '' · dev acceptance · prod review'' || '''' }}'
 'on':
@@ -11,12 +11,19 @@ run-name: '[SHADOW] release ${{ inputs.tag }} to GHCR${{ !inputs[''build-only'']
         type: choice
         options:
           - publish
+          - repair-runtime
+          - repair-wheels
+          - repair-node
+          - repair-c
+      candidate-id:
+        description: For repair, the Actions artifact ID of the dev-accepted release candidate
+        type: string
       tag:
         description: Release tag v<X.Y.Z>, naming a commit on main
         required: true
         type: string
       build-only:
-        description: Simulate the build jobs only
+        description: Build and upload only; skip deployment, E2E and Slack reporting
         required: true
         default: false
         type: boolean
@@ -37,8 +44,6 @@ concurrency:
 permissions:
   contents: read
   actions: read
-env:
-  GH_TOKEN: ${{ github.token }}
 jobs:
   resolve:
     name: resolve ${{ inputs.tag }}
@@ -49,121 +54,215 @@ jobs:
       actions: read
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
-      release_id: ${{ steps.ref.outputs.release_id }}
-      artifacts: ${{ steps.ref.outputs.artifacts }}
+      artifacts: ${{ steps.artifacts.outputs.names }}
+      release_id: ${{ steps.draft.outputs.id }}
     steps:
-      - id: ref
-        name: Select synthetic release
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Validate repair inputs
+        if: inputs.command != 'publish'
         shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Require a released version
+        id: version
+        shell: bash
+        run: |-
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          {
+            echo "ref=refs/tags/$TAG"
+          } >> "$GITHUB_OUTPUT"
         env:
           TAG: ${{ inputs.tag }}
+      - name: ./.github/actions/resolve-ref
+        id: ref
+        shell: bash
         run: |-
-          set -eu
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          printf 'sha=%s\nrelease_id=1\nartifacts=%s\n' "$GITHUB_SHA" '["api","proxy","otel-collector","registry-proxy"]' >> "$GITHUB_OUTPUT"
+          {
+            echo "sha=$GITHUB_SHA"
+          } >> "$GITHUB_OUTPUT"
+      - name: Create or select the release draft
+        id: draft
+        if: ${{ !inputs['build-only'] }}
+        shell: bash
+        run: |-
+          {
+            echo "id=1"
+          } >> "$GITHUB_OUTPUT"
+      - name: Read the artifacts this release declares
+        id: artifacts
+        shell: bash
+        run: |-
+          names=$(jq -c ".artifacts | keys" apps/infra/mstage.env.json)
+          {
+            echo "names=$names"
+          } >> "$GITHUB_OUTPUT"
   build-runtime:
     needs: resolve
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/build-runtime.yml
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Simulate build-runtime
-        shell: bash
-        run: echo "Simulated $GITHUB_JOB"
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+      tag: ${{ inputs.tag }}
   build-wheels:
     needs: resolve
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/build-wheels.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Simulate build-wheels
-        shell: bash
-        run: echo "Simulated $GITHUB_JOB"
   build-node:
     needs: resolve
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/build-node.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Simulate build-node
-        shell: bash
-        run: echo "Simulated $GITHUB_JOB"
   build-c:
     needs: resolve
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/build-c.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Simulate build-c
-        shell: bash
-        run: echo "Simulated $GITHUB_JOB"
   build-go:
     needs:
       - resolve
       - build-c
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' && !inputs['build-only'] }}
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Simulate build-go
-        shell: bash
-        run: echo "Simulated $GITHUB_JOB"
+    uses: ./.github/workflows/build-go.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
   build-runner-binary:
     needs:
       - resolve
       - build-c
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/build-runner-binary.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+      libboxlite_source: artifact
+      release_tag: ${{ inputs.tag }}
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Simulate build-runner-binary
-        shell: bash
-        run: echo "Simulated $GITHUB_JOB"
   publish:
     name: publish ${{ inputs.tag }} · ${{ matrix.artifact }}
     needs:
       - resolve
     if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
         artifact: ${{ fromJSON(needs.resolve.outputs.artifacts) }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
     steps:
-      - name: Simulate publish
+      - name: actions/checkout@v5
         shell: bash
-        run: echo "Simulated $GITHUB_JOB"
+        run: printf '%s\n' 'Simulated'
+      - name: actions/checkout@v5
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/setup-infra
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Keep registry credentials out of HOME
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Build and upload
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: actions/upload-artifact@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Report
+        if: always()
+        shell: bash
+        run: printf '%s\n' 'Simulated'
   publish-runner:
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
     name: Publish Runner archive to GHCR
     needs:
       - resolve
       - build-runner-binary
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     steps:
-      - name: Simulate publish-runner
+      - name: actions/download-artifact@v4
         shell: bash
-        run: echo "Simulated $GITHUB_JOB"
+        run: printf '%s\n' 'Simulated'
+      - name: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Push the exact Runner archive
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: actions/upload-artifact@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
   check:
-    name: Verify release candidate
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] }}
+    name: Verify deployment image and Runner digests
+    needs:
+      - resolve
+      - publish
+      - publish-runner
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      candidate_id: ${{ steps.upload.outputs.artifact-id }}
+      digest: ${{ steps.stage.outputs.digest }}
+      registry_digests: ${{ steps.stage.outputs.pins }}
+    steps:
+      - name: actions/checkout@v5
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: actions/download-artifact@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Validate the candidate
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$FAIL" != check ]] || exit 1
+          pins=$(jq -cn --arg tag "$TAG" --arg sha "$GITHUB_SHA" --arg pin "$PIN" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{tag:$tag,sha:$sha,attempt:$attempt,images:{api:$pin},runner:{manifest:$pin,archive:$pin}}')
+          digest=$(printf '%s' "$pins" | sha256sum | cut -d' ' -f1)
+          printf 'digest=sha256:%s\npins=%s\n' "$digest" "$pins" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ inputs.tag }}
+          PIN: sha256:1111111111111111111111111111111111111111111111111111111111111111
+          FAIL: ${{ inputs['simulate-failure'] }}
+      - name: actions/upload-artifact@v4
+        id: upload
+        shell: bash
+        run: |-
+          {
+            echo "artifact-id=$((GITHUB_RUN_ATTEMPT*2))"
+          } >> "$GITHUB_OUTPUT"
+  distribution:
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] }}
+    name: Verify complete release distribution
     needs:
       - resolve
       - publish
@@ -172,31 +271,41 @@ jobs:
       - build-wheels
       - build-node
       - build-c
-      - build-go
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     outputs:
-      candidate_id: ${{ github.run_attempt }}
+      candidate_id: ${{ steps.upload.outputs.artifact-id }}
       digest: ${{ steps.stage.outputs.digest }}
-      registry_digests: ${{ steps.stage.outputs.pins }}
     steps:
-      - id: stage
-        name: Write a local candidate fixture
+      - name: actions/checkout@v5
         shell: bash
-        env:
-          TAG: ${{ inputs.tag }}
-          PIN: sha256:1111111111111111111111111111111111111111111111111111111111111111
-          FAIL: ${{ inputs['simulate-failure'] }}
+        run: printf '%s\n' 'Simulated'
+      - name: actions/download-artifact@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Validate the candidate
+        id: stage
+        shell: bash
         run: |
           set -euo pipefail
-          [[ "$FAIL" != check ]]
+          :
           pins=$(jq -cn --arg tag "$TAG" --arg sha "$GITHUB_SHA" --arg pin "$PIN" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
             '{tag:$tag,sha:$sha,attempt:$attempt,images:{api:$pin},runner:{manifest:$pin,archive:$pin}}')
           digest=$(printf '%s' "$pins" | sha256sum | cut -d' ' -f1)
           printf 'digest=sha256:%s\npins=%s\n' "$digest" "$pins" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ inputs.tag }}
+          PIN: sha256:1111111111111111111111111111111111111111111111111111111111111111
+          FAIL: ${{ inputs['simulate-failure'] }}
+      - name: actions/upload-artifact@v4
+        id: upload
+        shell: bash
+        run: |-
+          {
+            echo "artifact-id=$((GITHUB_RUN_ATTEMPT*2+1))"
+          } >> "$GITHUB_OUTPUT"
   dev:
     name: Dev deployment and acceptance
     needs:
@@ -228,133 +337,203 @@ jobs:
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Simulate accepted-candidate
-        shell: bash
-        run: echo "Simulated $GITHUB_JOB"
     outputs:
-      id: unused
-      run: unused
-      digest: unused
+      id: ${{ steps.receipt.outputs.id }}
+      run: ${{ steps.receipt.outputs.run }}
+      digest: ${{ steps.receipt.outputs.digest }}
+    steps:
+      - name: Run receipt
+        id: receipt
+        shell: bash
+        run: |-
+          [[ "$ID" =~ ^[1-9][0-9]*$ ]] || exit 1
+          {
+            echo "id=$ID"
+            echo "run=$GITHUB_RUN_ID"
+            echo "digest=sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          ID: ${{ inputs['candidate-id'] }}
   attach:
-    name: Simulate attaching the dev-accepted candidate
+    name: Record dev acceptance and attach verified files
     needs:
       - resolve
       - check
+      - distribution
+      - build-go
       - dev
       - accepted-candidate
     if: >-
-      ${{ !cancelled() && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (needs.dev.outputs.accepted_attempt != '' ||
-      needs.accepted-candidate.result == 'success') }}
+      ${{ !cancelled() && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && ((needs.dev.outputs.accepted_attempt != '' && needs.distribution.result == 'success' &&
+      needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success') }}
     outputs:
-      receipt: ${{ steps.acceptance.outputs.receipt }}
+      candidate: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
+      digest: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
+      run: ${{ needs.accepted-candidate.outputs.run || github.run_id }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     steps:
-      - name: Pass the dev acceptance receipt as a job output
-        id: acceptance
+      - name: actions/checkout@v5
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/release-candidate
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Match release files to the client bytes accepted by dev
         if: inputs.command == 'publish'
-        env:
-          CANDIDATE: ${{ needs.distribution.outputs.candidate_id }}
-          DIGEST: ${{ needs.distribution.outputs.digest }}
-          TAG: ${{ inputs.tag }}
-          SHA: ${{ needs.resolve.outputs.sha }}
-          ACCEPTED: ${{ needs.dev.outputs.accepted_attempt }}
-        run: |
-          set -euo pipefail
-          receipt=$(jq -cn --argjson run "$GITHUB_RUN_ID" --argjson attempt "$ACCEPTED" --argjson id "$CANDIDATE" \
-            --arg digest "$DIGEST" --arg tag "$TAG" --arg sha "$SHA" \
-            '{run:$run,attempt:$attempt,candidate:$id,digest:$digest,tag:$tag,sha:$sha}')
-          printf 'receipt=%s\n' "$receipt" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Record the exact candidate accepted by dev
+        if: inputs.command == 'publish'
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: actions/upload-artifact@v4
+        if: inputs.command == 'publish'
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Verify every draft attachment
+        shell: bash
+        run: printf '%s\n' 'Simulated'
   npm:
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-node"]'), inputs.command) }}
     name: Publish accepted npm packages
     needs:
       - resolve
       - attach
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-node"]'), inputs.command) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     steps:
-      - name: Simulate package publication
+      - name: actions/checkout@v5
         shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/release-candidate
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: actions/setup-node@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Publish platform packages before the main package
+        shell: bash
+        run: test "$FAIL" != publish
         env:
           FAIL: ${{ inputs['simulate-failure'] }}
-        run: test "$FAIL" != publish
   pypi:
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) }}
     name: Publish to PyPI
     needs:
       - resolve
       - attach
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && contains(fromJSON('["publish","repair-wheels"]'), inputs.command) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     steps:
-      - name: Simulate package publication
+      - name: actions/checkout@v5
         shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/release-candidate
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Select accepted wheels
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Check existing PyPI wheels before uploading
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Publish to PyPI
+        shell: bash
+        run: test "$FAIL" != publish
         env:
           FAIL: ${{ inputs['simulate-failure'] }}
-        run: test "$FAIL" != publish
+      - name: Verify PyPI recorded the accepted wheel hashes
+        shell: bash
+        run: printf '%s\n' 'Simulated'
   tag-go-module:
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
     name: Tag Go Module
     needs:
       - resolve
       - attach
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     steps:
-      - name: Simulate tag-go-module
+      - name: actions/checkout@v4
         shell: bash
-        run: echo "Simulated $GITHUB_JOB"
+        run: printf '%s\n' 'Simulated'
+      - name: Create Go module tag
+        shell: bash
+        run: printf '%s\n' 'Simulated'
   publish_crates:
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
     name: Publish to crates.io
     needs:
       - resolve
       - finalize
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
     runs-on: ubuntu-latest
+    steps:
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/setup-rust
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Install protoc
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Publish leaf crates (Tier 1)
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Wait for crates.io indexing
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Publish boxlite (Tier 2)
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Wait for boxlite indexing
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Publish boxlite-cli (Tier 3)
+        shell: bash
+        run: printf '%s\n' 'Simulated'
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Simulate publish_crates
-        shell: bash
-        run: echo "Simulated $GITHUB_JOB"
   finalize:
+    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
     name: Publish the verified GitHub Release
     needs:
       - resolve
-      - check
+      - distribution
       - attach
       - pypi
       - npm
       - tag-go-module
-    if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && inputs.command == 'publish' }}
-    outputs:
-      receipt: ${{ needs.attach.outputs.receipt }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     steps:
-      - name: Simulate finalize
+      - name: actions/checkout@v5
         shell: bash
-        run: echo "Simulated $GITHUB_JOB"
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/release-candidate
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Recheck release attachments and publish
+        shell: bash
+        run: printf '%s\n' 'Simulated'
   prod:
     name: Production deployment
     needs:
       - resolve
       - check
       - dev
-      - finalize
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' && !inputs['build-only'] && needs.dev.outputs.accepted_attempt != '' }}
     permissions:
       contents: read
@@ -367,12 +546,12 @@ jobs:
       candidate_id: ${{ needs.check.outputs.candidate_id }}
       candidate_digest: ${{ needs.check.outputs.digest }}
       registry_digests: ${{ needs.check.outputs.registry_digests }}
-      shadow_receipt: ${{ needs.finalize.outputs.receipt }}
       accepted_attempt: ${{ needs.dev.outputs.accepted_attempt }}
       components: api+runner
       apply: true
       confirm: true
       shadow_failure: ${{ inputs['simulate-failure'] }}
+      shadow_receipt: ${{ needs.dev.outputs.shadow_receipt }}
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
   report:
@@ -388,6 +567,7 @@ jobs:
       - publish
       - publish-runner
       - check
+      - distribution
       - dev
       - accepted-candidate
       - attach
@@ -397,8 +577,8 @@ jobs:
       - finalize
       - publish_crates
     if: >-
-      ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (contains(needs.*.result, 'failure') ||
-      contains(needs.*.result, 'cancelled')) }}
+      ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/codex/shadow-release-3069-v2' && (contains(needs.*.result, 'failure') || contains(needs.*.result,
+      'cancelled')) }}
     permissions:
       contents: read
       actions: read
@@ -413,3 +593,5 @@ jobs:
           RELEASE_RESULTS: ${{ toJSON(needs) }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: node apps/infra/scripts/release-pipeline.mjs report
+    env:
+      GH_TOKEN: ${{ github.token }}

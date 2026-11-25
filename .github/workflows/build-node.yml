@@ -1,39 +1,21 @@
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: Build Node.js
-
-on:
+'on':
   workflow_call:
     inputs:
       ref:
         required: true
         type: string
-  workflow_dispatch:
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: '0'
-
+  workflow_dispatch: null
 permissions:
   contents: read
-
+  actions: read
 jobs:
   config:
     uses: ./.github/workflows/config.yml
-
-  # ============================================================================
-  # BUILD
-  # ============================================================================
-  # Builds native Node.js bindings for each platform using napi-rs.
-  #
-  # Platform-specific considerations:
-  # - Linux: Uses manylinux_2_28 container for glibc compatibility
-  #   - Guest binary built on host first (Ubuntu has musl-tools, manylinux doesn't)
-  #   - Shim/libkrun built in container (needs glibc 2.28)
-  # - macOS: Builds directly on runner (ARM64 only)
-  #
-  # Outputs artifacts containing:
-  # - native/boxlite.js (JS loader)
-  # - npm/<platform>/boxlite.<platform>.node (native binary)
-  # ============================================================================
+    permissions:
+      contents: read
+      actions: read
   build:
     name: Build (${{ matrix.target }})
     needs: config
@@ -42,190 +24,102 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJson(needs.config.outputs.platforms) }}
-
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-          submodules: recursive
-
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ needs.config.outputs.node-build-version }}
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
-          cache: ${{ runner.os != 'Linux' }}
-
-      - uses: ./.github/actions/sccache
-
-      - uses: ./.github/actions/build-guest
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/setup-rust
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/sccache
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/build-guest
         if: runner.os == 'Linux'
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Build Node.js package (Linux)
         if: runner.os == 'Linux'
-        uses: ./.github/actions/run-in-manylinux
-        with:
-          target: ${{ matrix.target }}
-          script: |
-            export PATH="$HOME/.cargo/bin:$PATH"
-            cd sdks/node
-            npm install --silent
-            npm run build:native -- --release
-            npm run artifacts
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Build Node.js package (macOS)
         if: runner.os == 'macOS'
-        run: |
-          make setup:build runtime
-
-          # Build Node.js artifacts (no pack - CI uploads raw artifacts)
-          cd sdks/node
-          npm install --silent
-          npm run build:native -- --release
-          npm run artifacts
-
-          command -v sccache &>/dev/null && sccache --show-stats || true
-
-      # Create tar archive to preserve Unix file permissions (especially execute bits).
-      # GitHub Actions upload-artifact uses ZIP which doesn't preserve permissions.
-      # See: https://github.com/actions/upload-artifact/issues/38
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Create artifact tarball
-        run: tar -cvf sdks/node/artifacts-${{ matrix.target }}.tar -C sdks/node native/boxlite.js npm/
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          overwrite: true
-          if-no-files-found: error
-          name: artifacts-${{ matrix.target }}
-          path: sdks/node/artifacts-${{ matrix.target }}.tar
-          retention-days: ${{ needs.config.outputs.artifact-retention-days }}
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Pack the native package and the Linux acceptance clients
-        working-directory: sdks/node
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          # The native build runs inside manylinux. Install the host tools in a clean checkout.
-          src="$RUNNER_TEMP/npm-release"
-          git worktree add --quiet --detach "$src" HEAD
-          tar xf "artifacts-$TARGET.tar" -C "$src/sdks/node"
-          cd "$src/sdks/node"
-          mkdir -p "$GITHUB_WORKSPACE/sdks/node/packages"
-          dest="$GITHUB_WORKSPACE/sdks/node/packages"
-          if [[ "$TARGET" == linux-x64-gnu ]]; then
-            npm install --ignore-scripts --workspaces=false
-            # The existing prepack hook writes optional dependencies for every supported target.
-            npx --no-install napi create-npm-dirs --npm-dir npm
-            npm run build
-            npm pack --pack-destination "$dest"
-          fi
-          test -s "npm/$TARGET/boxlite.$TARGET.node"
-          npm pack "./npm/$TARGET" --ignore-scripts --pack-destination "$dest"
-          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{sha:$sha,run:$run,attempt:$attempt}' > "$dest/producer.json"
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Stage platform npm packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: npm-${{ matrix.target }}
-          overwrite: true
-          if-no-files-found: error
-          path: sdks/node/packages/
-
-  # ============================================================================
-  # TEST
-  # ============================================================================
-  # Tests the built packages on each platform with multiple Node.js versions.
-  #
-  # Key steps:
-  # - Removes npm/* from git checkout (contains all platforms)
-  # - Downloads only the matching platform's artifacts
-  # - Verifies the package can be loaded and exports are accessible
-  # ============================================================================
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+    permissions:
+      contents: read
+      actions: read
   test:
     name: Test (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
-    needs: [ config, build ]
+    needs:
+      - config
+      - build
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
         platform: ${{ fromJson(needs.config.outputs.platforms) }}
         node-version: ${{ fromJson(needs.config.outputs.node-versions) }}
-
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-          submodules: recursive
-
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-
-      # Remove npm/* from git checkout to avoid platform mismatch
-      # (git contains all platforms, but we only want the one from artifacts)
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Clean npm workspaces
-        run: rm -rf sdks/node/npm
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: artifacts-${{ matrix.platform.target }}
-          path: sdks/node
-
-      # Extract tar to restore file permissions (see build job comment)
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Extract artifacts
-        run: tar -xvf sdks/node/artifacts-${{ matrix.platform.target }}.tar -C sdks/node
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Test package
-        run: |
-          cd sdks/node
-          npm install --ignore-scripts
-          npm run build
-          node -e "import('./dist/index.js').then(m => console.log('BoxLite loaded:', Object.keys(m)))"
-
-  # ============================================================================
-  # PUBLISH TO NPM
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+    permissions:
+      contents: read
+      actions: read
   package:
     name: Pack npm distributions
-    needs: [ config, build, test ]
+    needs:
+      - config
+      - build
+      - test
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || github.sha }}
-
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Collect the packages built by each platform
-        uses: actions/download-artifact@v4
-        with:
-          pattern: npm-*
-          path: staged-npm
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Assemble npm distributions without repacking
-        run: |
-          mkdir -p sdks/node/packages
-          cp staged-npm/*/*.tgz sdks/node/packages/
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Record build origin
-        working-directory: sdks/node/packages
-        run: |
-          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Stage npm distributions
-        uses: actions/upload-artifact@v4
-        with:
-          overwrite: true
-          if-no-files-found: error
-          name: node-packages
-          path: |
-            sdks/node/packages/*.tgz
-            sdks/node/packages/producer.json
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+    permissions:
+      contents: read
+      actions: read

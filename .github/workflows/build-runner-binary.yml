@@ -1,10 +1,10 @@
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: Build Runner Binary
-
-on:
+'on':
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Full commit SHA to build with its matching C SDK.'
+        description: Full commit SHA to build with its matching C SDK.
         required: false
         type: string
   workflow_call:
@@ -14,202 +14,113 @@ on:
         required: false
         type: string
       libboxlite_source:
-        description: 'Explicitly choose artifact for matching-commit deployments or release for published SDKs.'
+        description: Explicitly choose artifact for matching-commit deployments or release for published SDKs.
         required: true
         type: string
       ref:
         required: false
         default: ''
         type: string
-
 permissions:
   contents: read
-
-env:
-  CARGO_TERM_COLOR: always
-
+  actions: read
 jobs:
   config:
     uses: ./.github/workflows/config.yml
-
+    permissions:
+      contents: read
+      actions: read
   resolve-ref:
     name: Resolve build commit
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Validate build commit
         id: ref
         shell: bash
-        env:
-          INPUT_REF: ${{ inputs.ref }}
-        run: |
-          set -euo pipefail
-          candidate="${INPUT_REF:-$GITHUB_SHA}"
-          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || { echo "ref must be a full commit SHA" >&2; exit 1; }
-          # fetch-depth: 0 above only brings THIS repo's own branches. A commit proposed by an
-          # open pull request — same-repo or fork — isn't on any of them, so it isn't here yet;
-          # fetch it directly by SHA. (Unlike a ref name, a bare SHA is only a "want" GitHub can
-          # refuse, so this is a fallback, not the first attempt.)
-          git cat-file -e "$candidate^{commit}" 2>/dev/null || git fetch origin "$candidate"
-          git cat-file -e "$candidate^{commit}"
-          echo "sha=$candidate" >> "$GITHUB_OUTPUT"
-
+        run: |-
+          {
+            echo "sha=$GITHUB_SHA"
+          } >> "$GITHUB_OUTPUT"
+    permissions:
+      contents: read
+      actions: read
   build-c:
     name: Build manual commit C SDK
     needs: resolve-ref
-    # Reusable callers supply a source, even when their event is workflow_dispatch.
     if: github.event_name == 'workflow_dispatch' && !inputs.libboxlite_source
     permissions:
       contents: read
+      actions: read
     uses: ./.github/workflows/build-c.yml
     with:
       ref: ${{ needs['resolve-ref'].outputs.sha }}
       linux_x64_only: true
-
   build:
     name: Build Runner (linux-amd64)
-    needs: [config, resolve-ref, build-c]
+    needs:
+      - config
+      - resolve-ref
+      - build-c
     if: >-
-      !cancelled() &&
-      needs.config.result == 'success' &&
-      needs['resolve-ref'].result == 'success' &&
-      (needs['build-c'].result == 'success' || needs['build-c'].result == 'skipped')
+      !cancelled() && needs.config.result == 'success' && needs['resolve-ref'].result == 'success' && (needs['build-c'].result == 'success' ||
+      needs['build-c'].result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
+      actions: read
     steps:
-      # As in build-c.yml: this job builds a caller-selected commit, and a `uses: ./...` action
-      # resolves from the checked-out tree, so .github/actions/ must exist in that commit. One
-      # predating it fails with "Can't find 'action.yml'"; select a newer commit.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.resolve-ref.outputs.sha }}
-
-      - uses: ./.github/actions/setup-go
-        with:
-          go-version: ${{ needs.config.outputs.go-version }}
-
+      - name: actions/checkout@v4
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/setup-go
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Resolve artifact identity
         id: artifact
         shell: bash
-        env:
-          BUILD_SHA: ${{ needs.resolve-ref.outputs.sha }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          INPUT_SOURCE: ${{ inputs.libboxlite_source || (github.event_name == 'workflow_dispatch' && 'artifact' || 'release') }}
-        run: |
-          set -euo pipefail
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          SOURCE="${INPUT_SOURCE:-release}"
-          if [[ -n "$RELEASE_TAG" ]]; then
-            [[ "$RELEASE_TAG" == "v$VERSION" && "$SOURCE" == artifact ]] || exit 1
-            identity="$VERSION"
-            archive="boxlite-runner-$RELEASE_TAG-linux-amd64.tar.gz"
-          else
-            case "$SOURCE" in
-            release)
-              identity="$VERSION"
-              archive="boxlite-runner-v${VERSION}-linux-amd64.tar.gz"
-              ;;
-            artifact)
-              identity="${VERSION}+${BUILD_SHA}"
-              archive="boxlite-runner-v${VERSION}-${BUILD_SHA}-linux-amd64.tar.gz"
-              ;;
-            *) echo "libboxlite_source must be release or artifact" >&2; exit 1 ;;
-            esac
-          fi
+        run: |-
           {
-            echo "version=$VERSION"
             echo "source=$SOURCE"
-            echo "identity=$identity"
-            echo "archive=$archive"
+            echo "identity=$GITHUB_SHA"
+            echo "archive=shadow.tar.gz"
           } >> "$GITHUB_OUTPUT"
-
+        env:
+          SOURCE: ${{ inputs.libboxlite_source }}
       - name: Download published libboxlite.a
         if: steps.artifact.outputs.source == 'release'
-        env:
-          VERSION: ${{ steps.artifact.outputs.version }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          ARCHIVE="boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz"
-          URL="https://github.com/${GH_REPO}/releases/download/v${VERSION}/${ARCHIVE}"
-          echo "Downloading $URL"
-          curl -fsSL "$URL" | tar xz -C /tmp/
-          cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Download commit libboxlite.a
         if: steps.artifact.outputs.source == 'artifact'
-        uses: actions/download-artifact@v4
-        with:
-          name: c-sdk-linux-x64-gnu
-          path: /tmp/c-sdk
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Extract commit libboxlite.a
         if: steps.artifact.outputs.source == 'artifact'
         shell: bash
-        run: |
-          set -euo pipefail
-          archive=$(find /tmp/c-sdk -maxdepth 1 -name 'boxlite-c-v*-linux-x64-gnu.tar.gz' -print -quit)
-          test -n "$archive"
-          tar xzf "$archive" -C /tmp/
-          # Derived, not searched. build-c.yml packages a single top-level directory named after
-          # the archive, which is what the release branch above already assumes. Searching /tmp
-          # instead walks root-owned siblings (snap-private-tmp, systemd-private-*), and find then
-          # returns non-zero for the permission errors even when it matched — which under `set -e`
-          # failed this step with the library sitting right there.
-          cp "/tmp/$(basename "$archive" .tar.gz)/lib/libboxlite.a" sdks/go/libboxlite.a
-
+        run: printf '%s\n' 'Simulated'
       - name: Rewrite go.work for minimal modules
-        run: |
-          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./libs/common-go\n\t./libs/api-client-go\n\t../sdks/go\n)\n' > apps/go.work
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Download Go dependencies
-        run: |
-          go -C apps/runner mod download
-          go -C apps/libs/common-go mod download
-          go -C apps/libs/api-client-go mod download
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Build runner
-        env:
-          VERSION_IDENTITY: ${{ steps.artifact.outputs.identity }}
-        run: |
-          set -euo pipefail
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
-            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION_IDENTITY}'" \
-            -o /tmp/boxlite-runner \
-            ./runner/cmd/runner/
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Package runner binary
-        env:
-          ARCHIVE: ${{ steps.artifact.outputs.archive }}
-        run: |
-          set -euo pipefail
-          tar czf "$ARCHIVE" -C /tmp boxlite-runner
-          # Integrity manifest both user-data and the in-place updater verify before installing.
-          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Record build origin
-        working-directory: .
-        run: |
-          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
-            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
-
+        shell: bash
+        run: printf '%s\n' 'Simulated'
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          overwrite: true
-          if-no-files-found: error
-          name: runner-linux-amd64
-          path: |
-            boxlite-runner-*-linux-amd64.tar.gz
-            boxlite-runner-*-linux-amd64.tar.gz.sha256
-            producer.json
-          retention-days: ${{ needs.config.outputs.artifact-retention-days }}
+        shell: bash
+        run: printf '%s\n' 'Simulated'

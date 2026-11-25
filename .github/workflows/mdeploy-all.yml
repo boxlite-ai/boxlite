@@ -1,6 +1,8 @@
-# Shadow rehearsal: fixtures only, with real GitHub Environment approvals and Slack.
+# Shadow rehearsal: real approvals and marked Slack notifications, with simulated build, upload and deployment steps.
 name: mdeploy-all
-run-name: '[SHADOW] release deployment ${{ inputs.stage }}'
+run-name: >-
+  ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }} · ${{ inputs.ref || github.sha }} · ${{ inputs.components }}${{ inputs.requested_by
+  != '' && inputs.request_id != '' && format(' · @{0} · {1}', inputs.requested_by, inputs.request_id) || '' }}
 'on':
   workflow_call:
     inputs:
@@ -22,9 +24,6 @@ run-name: '[SHADOW] release deployment ${{ inputs.stage }}'
       release_sha:
         required: true
         type: string
-      shadow_receipt:
-        type: string
-        required: false
       accepted_attempt:
         required: false
         type: string
@@ -40,6 +39,9 @@ run-name: '[SHADOW] release deployment ${{ inputs.stage }}'
       shadow_failure:
         type: string
         required: false
+      shadow_receipt:
+        type: string
+        required: false
     secrets:
       SLACK_WEBHOOK_URL:
         required: false
@@ -52,50 +54,183 @@ run-name: '[SHADOW] release deployment ${{ inputs.stage }}'
       e2e_result:
         description: Dev cloud acceptance outcome for release failure reporting
         value: ${{ jobs.e2e.outputs.release_result }}
+      shadow_receipt:
+        description: Simulated dev acceptance held in this run
+        value: ${{ jobs.e2e.outputs.shadow_receipt }}
+  workflow_dispatch:
+    inputs:
+      requested_by:
+        description: Public GitHub username of the requester
+        required: false
+        type: string
+      request_id:
+        description: Opaque request ID for run attribution
+        required: false
+        type: string
+      stage:
+        description: Stage to deploy
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - stage
+          - prod
+      components:
+        description: Components to deploy
+        required: true
+        default: api+runner
+        type: choice
+        options:
+          - api+runner
+          - api
+          - runner
+      ref:
+        description: >-
+          A stable tag (v<X.Y.Z>); a full commit SHA or pull request (#<number>) for dev/stage. Stage builds the commit named by a tag. Empty uses
+          this dispatch's own commit.
+        required: false
+      apply:
+        description: Apply the change. Off previews it and stops.
+        required: true
+        type: boolean
+        default: false
+      confirm:
+        description: Required for a stage whose declaration marks it protected
+        required: true
+        type: boolean
+        default: false
 concurrency:
   group: shadow-v2-mdeploy-all-${{ inputs.stage }}
   cancel-in-progress: false
 permissions:
   contents: read
-env:
-  GH_TOKEN: ${{ github.token }}
+  actions: read
 jobs:
   resolve:
     name: resolve ${{ inputs.ref || github.sha }}
     if: ${{ github.ref == 'refs/heads/codex/shadow-release-3069-v2' || inputs.stage == 'dev' || inputs.stage == 'stage' }}
-    runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
+    runs-on: ubuntu-latest
     outputs:
-      sha: ${{ steps.fixture.outputs.sha }}
-      version: ${{ steps.fixture.outputs.version }}
-      prepare_components: ${{ steps.fixture.outputs.prepare_components }}
+      sha: ${{ steps.tag.outputs.sha }}
+      version: ${{ steps.classify.outputs.version }}
+      image_tag: ${{ steps.tag.outputs.image }}
+      registry_digests: ${{ steps.pins.outputs.digests }}
+      line: ${{ steps.classify.outputs.line }}
+      prepare_components: ${{ steps.tag.outputs.prepare_components }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - id: fixture
-        name: Select shadow deployment
+      - name: Classify the ref
+        id: classify
         shell: bash
+        run: |
+          set -Eeuo pipefail
+          candidate="${REF:-$FALLBACK}"
+          version=''
+          pr=''
+          case "$STAGE" in
+            dev|stage|prod) ;;
+            *) echo "::error title=stage::unknown deployment stage '$STAGE'"; exit 1 ;;
+          esac
+          # Three shapes, told apart here and nowhere else, so every job below
+          # reads a decision rather than re-parsing the input.
+          #
+          # `v` and a stable X.Y.Z is how this repository spells a release tag,
+          # and the same shape mbuild's RELEASE_VERSION accepts. `#` and digits
+          # is a pull request, written the way GitHub writes one — a bare
+          # number would be a valid abbreviated SHA in a repository that has
+          # one, and the sigil keeps the operator's intent explicit rather than
+          # letting the shape guess it.
+          if [[ "$candidate" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            # Stage uses the tag only to identify a commit, not release artifacts.
+            if [ "$STAGE" != 'stage' ]; then version="$candidate"; fi
+          elif [[ "$candidate" =~ ^#[1-9][0-9]*$ ]]; then
+            pr="${candidate#\#}"
+          elif [[ ! "$candidate" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=ref::'$candidate' is none of a release tag (v<X.Y.Z>), a pull request (#<number>), or a full lowercase commit SHA"
+            exit 1
+          fi
+          # Explicit commit destinations keep prod release-only and fail closed
+          # if another stage is added without its own admission decision.
+          if [ "$STAGE" != 'dev' ] && [ "$STAGE" != 'stage' ] && [ -z "$version" ]; then
+            echo "::error title=ref::$STAGE deploys released versions only; give a release tag (v<X.Y.Z>) rather than a commit or a pull request"
+            exit 1
+          fi
+          # Release rollouts keep the protected main workflow definition.
+          if [ -n "$version" ] && [ "$GITHUB_REF" != 'refs/heads/codex/shadow-release-3069-v2' ]; then
+            echo "::error title=ref::a release rollout runs from main; $GITHUB_REF can deploy dev from a commit instead"
+            exit 1
+          fi
+          # What this run is, in words, decided here with everything else that
+          # reads the ref's shape. The run title cannot use it — GitHub renders
+          # that before any job starts — so the title carries the raw input and
+          # this carries the reading of it.
+          line="commit ${candidate:0:12}"
+          [ -z "$version" ] || line="release $version"
+          [ -z "$pr" ] || line="pull request #$pr"
+
+          {
+            printf 'version=%s\n' "$version"
+            printf 'pr=%s\n' "$pr"
+            printf 'candidate=%s\n' "$candidate"
+            printf 'line=%s\n' "$line"
+          } >> "$GITHUB_OUTPUT"
+          echo "${STAGE}: ${line}"
         env:
+          REF: ${{ inputs.ref }}
+          FALLBACK: ${{ github.sha }}
           STAGE: ${{ inputs.stage }}
-          TAG: ${{ inputs.ref }}
-          SHA: ${{ inputs.release_sha }}
+      - name: Resolve a pull request to the commit it would merge
+        id: pr
+        if: steps.classify.outputs.pr != ''
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/resolve-ref
+        id: ref
+        if: steps.classify.outputs.pr == ''
+        shell: bash
         run: |-
-          set -euo pipefail
-          [[ "$STAGE" == dev || "$STAGE" == prod ]]
-          printf 'sha=%s\nversion=%s\nprepare_components=["release"]\n' "$SHA" "$TAG" >> "$GITHUB_OUTPUT"
-      - &verify-dev-acceptance
-        name: Verify dev acceptance for the production candidate
-        if: inputs.release_sha && inputs.stage == 'prod'
+          {
+            echo "sha=$GITHUB_SHA"
+          } >> "$GITHUB_OUTPUT"
+      - name: Address the images
+        id: tag
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sha="${RESOLVED:-$MERGED}"
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=ref::nothing resolved this dispatch to a commit"
+            exit 1
+          fi
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+          printf 'image=%s\n' "${VERSION:+${VERSION}-}${sha}" >> "$GITHUB_OUTPUT"
+          if [ -n "$VERSION" ]; then
+            echo 'prepare_components=["release"]' >> "$GITHUB_OUTPUT"
+          else
+            case "$COMPONENTS" in
+              api+runner) echo 'prepare_components=["api","runner"]' >> "$GITHUB_OUTPUT" ;;
+              api|runner) printf 'prepare_components=["%s"]\n' "$COMPONENTS" >> "$GITHUB_OUTPUT" ;;
+              *) echo '::error title=components::Unsupported artifact selection'; exit 1 ;;
+            esac
+          fi
         env:
-          RECEIPT: ${{ inputs.shadow_receipt }}
-          ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
-          CANDIDATE: ${{ inputs.candidate_id }}
-          DIGEST: ${{ inputs.candidate_digest }}
-          TAG: ${{ inputs.ref }}
-          SHA: ${{ inputs.release_sha }}
+          VERSION: ${{ steps.classify.outputs.version }}
+          RESOLVED: ${{ steps.ref.outputs.sha }}
+          MERGED: ${{ steps.pr.outputs.sha }}
+          COMPONENTS: ${{ inputs.components }}
+      - name: Validate release caller and published commit
+        if: github.workflow_ref != format('{0}/.github/workflows/mdeploy-all.yml@{1}', github.repository, github.ref)
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Verify dev acceptance for the production candidate
+        if: inputs.release_sha && inputs.stage == 'prod'
+        shell: bash
         run: |
           set -euo pipefail
           [[ -n "$RECEIPT" && "$CANDIDATE" =~ ^[1-9][0-9]*$ && "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
@@ -104,14 +239,30 @@ jobs:
             --arg digest "$DIGEST" --arg tag "$TAG" --arg sha "$SHA" \
             'length == 1 and (.[0] | .run == $run and .candidate == $id and .attempt == $attempt and .digest == $digest and .tag == $tag and .sha == $sha)' \
             <<< "$RECEIPT" >/dev/null
-
+        env:
+          RECEIPT: ${{ inputs.shadow_receipt }}
+          ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
+          CANDIDATE: ${{ inputs.candidate_id }}
+          DIGEST: ${{ inputs.candidate_digest }}
+          TAG: ${{ inputs.ref }}
+          SHA: ${{ inputs.release_sha }}
+      - name: Read immutable release image and Runner digests
+        id: pins
+        if: steps.classify.outputs.version != ''
+        shell: bash
+        run: |-
+          {
+            echo "digests=$PINS"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          PINS: ${{ inputs.registry_digests }}
       - name: Notify dev reviewers
         if: inputs.apply && inputs.stage == 'dev' && !inputs.release_sha
         continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEV_DEPLOYMENT_WEBHOOK_URL }}
           DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
-          APPROVAL_PHASE: Release deployment approval
+          APPROVAL_PHASE: ${{ steps.classify.outputs.version != '' && 'Release deployment approval' || 'Commit preparation approval' }}
         run: node apps/infra/scripts/release-pipeline.mjs approval
       - name: Notify release reviewers
         if: inputs.apply && (inputs.stage == 'prod' || (inputs.stage == 'dev' && inputs.release_sha))
@@ -122,37 +273,106 @@ jobs:
           APPROVAL_PHASE: Release deployment approval
           ACCEPTED_TAG: ${{ inputs.stage == 'prod' && inputs.accepted_attempt && inputs.ref || '' }}
         run: node apps/infra/scripts/release-pipeline.mjs approval
+    env:
+      GH_TOKEN: ${{ github.token }}
   plan:
     name: ${{ matrix.component == 'release' && 'deploy release' || format('plan and build {0}', matrix.component) }} ${{ inputs.stage }}
+    permissions: {}
     needs:
       - resolve
     if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/codex/shadow-release-3069-v2' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
+    environment:
+      name: ${{ inputs.stage }}
+      deployment: false
+    runs-on: ubuntu-latest
+    outputs:
+      deployment_attempt: ${{ steps.applied.outputs.attempt }}
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
         component: ${{ fromJSON(needs.resolve.outputs.prepare_components) }}
-    runs-on: ubuntu-latest
-    permissions: {}
-    outputs:
-      deployment_attempt: ${{ steps.applied.outputs.attempt }}
-    environment:
-      name: ${{ inputs.stage }}
-      deployment: false
     concurrency:
-      group: shadow-v2-plan-${{ inputs.stage }}
+      group: shadow-v2-${{ matrix.component == 'runner' && 'runner-build' || 'mbuild-publish' }}-${{ inputs.stage }}
       cancel-in-progress: false
     steps:
-      - *verify-dev-acceptance
-      - name: Simulate the approved apply
+      - name: Verify dev acceptance for the production candidate
+        if: inputs.release_sha && inputs.stage == 'prod'
         shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$RECEIPT" && "$CANDIDATE" =~ ^[1-9][0-9]*$ && "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
+          [[ "$ACCEPTED_ATTEMPT" =~ ^[1-9][0-9]*$ && "$ACCEPTED_ATTEMPT" -le "$GITHUB_RUN_ATTEMPT" ]] || exit 1
+          jq -se --argjson run "$GITHUB_RUN_ID" --argjson id "$CANDIDATE" --argjson attempt "$ACCEPTED_ATTEMPT" \
+            --arg digest "$DIGEST" --arg tag "$TAG" --arg sha "$SHA" \
+            'length == 1 and (.[0] | .run == $run and .candidate == $id and .attempt == $attempt and .digest == $digest and .tag == $tag and .sha == $sha)' \
+            <<< "$RECEIPT" >/dev/null
+        env:
+          RECEIPT: ${{ inputs.shadow_receipt }}
+          ACCEPTED_ATTEMPT: ${{ inputs.accepted_attempt }}
+          CANDIDATE: ${{ inputs.candidate_id }}
+          DIGEST: ${{ inputs.candidate_digest }}
+          TAG: ${{ inputs.ref }}
+          SHA: ${{ inputs.release_sha }}
+      - name: actions/checkout@v5
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/setup-infra
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Resolve the stage
+        id: config
+        shell: bash
+        env:
+          STAGE: ${{ inputs.stage }}
+          CONFIG: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
+        run: |
+          set -euo pipefail
+          kind=$(jq -er --arg stage "$STAGE" '.[$stage].registry.kind | select(. == "ecr" or . == "artifact-registry")' <<< "$CONFIG")
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+      - name: Check component deployment support
+        if: inputs.components != 'api+runner' && steps.config.outputs.kind != 'artifact-registry'
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Federate an AWS identity
+        if: steps.config.outputs.kind == 'ecr'
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Federate a GCP identity
+        if: steps.config.outputs.kind == 'artifact-registry'
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Install gcloud
+        if: steps.config.outputs.kind == 'artifact-registry'
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Decide
+        id: plan
+        shell: bash
+        run: |-
+          {
+            echo "api=skip"
+            echo "runner=skip"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build and upload missing images
+        if: steps.plan.outputs.api == 'build'
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Build and upload the missing Runner
+        if: steps.plan.outputs.runner == 'build'
+        shell: bash
+        run: printf '%s\n' 'Simulated'
+      - name: Deploy the released version
+        if: needs.resolve.outputs.version != ''
+        shell: bash
+        run: test "$FAIL" != "$STAGE-deploy"
         env:
           FAIL: ${{ inputs.shadow_failure }}
           STAGE: ${{ inputs.stage }}
-        run: test "$FAIL" != "$STAGE-deploy"
       - name: Record the approved dev apply
         id: applied
         if: inputs.release_sha && inputs.stage == 'dev'
+        shell: bash
         run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
   notify-deploy:
     name: Notify reviewers of the commit deployment
@@ -175,8 +395,11 @@ jobs:
           DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
           APPROVAL_PHASE: Commit deployment approval
         run: node apps/infra/scripts/release-pipeline.mjs approval
+    env:
+      GH_TOKEN: ${{ github.token }}
   deploy:
     name: ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
+    permissions: {}
     needs:
       - resolve
       - plan
@@ -184,21 +407,26 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.resolve.result == 'success' && needs.plan.result == 'success' && needs.resolve.outputs.version == '' && (github.ref ==
       'refs/heads/codex/shadow-release-3069-v2' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
+    environment:
+      name: ${{ inputs.stage }}
+      deployment: false
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
     steps:
-      - name: Simulate standalone commit apply
+      - name: actions/checkout@v5
         shell: bash
-        run: echo "simulated apply"
+        run: printf '%s\n' 'Simulated'
+      - name: ./.github/actions/mdeploy
+        shell: bash
+        run: printf '%s\n' 'Simulated'
   result:
     name: Notify deployment result
     needs:
       - resolve
       - plan
       - deploy
-    if: ${{ always() && !cancelled() && inputs.apply && needs.resolve.result != 'skipped' && contains(fromJSON('["dev","stage","prod"]'), inputs.stage) }}
+    if: >-
+      ${{ always() && !cancelled() && inputs.apply && needs.resolve.result != 'skipped' && contains(fromJSON('["dev","stage","prod"]'), inputs.stage)
+      }}
     permissions:
       contents: read
       actions: read
@@ -207,8 +435,9 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ inputs.stage }}
       DEPLOY_REF: ${{ inputs.ref || github.sha }}
       DEPLOY_RESULT: >-
-        ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result == 'success') &&
-        'success' || 'failure' }}
+        ${{ needs.resolve.result == 'success' && needs.plan.result == 'success' && (needs.resolve.outputs.version || needs.deploy.result == 'success')
+        && 'success' || 'failure' }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -242,6 +471,5 @@ jobs:
       tag: ${{ inputs.ref }}
       candidate_id: ${{ inputs.candidate_id }}
       candidate_digest: ${{ inputs.candidate_digest }}
-      shadow_pins: ${{ inputs.registry_digests }}
       deployment_attempt: ${{ needs.plan.outputs.deployment_attempt || 'missing' }}
       shadow_failure: ${{ inputs.shadow_failure }}
