@@ -1,0 +1,142 @@
+name: BoxLite Docker and Dashboard qualification
+on:
+  push:
+    branches: [ci/boxlite-runner-trials-2833]
+    paths: [.github/workflows/runner-docker-trials.yml]
+permissions:
+  contents: read
+jobs:
+  check-generated-clients:
+    name: Regenerate API clients and diff
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    timeout-minutes: 30
+    services:
+      # generate-openapi.ts boots the full NestJS app; SKIP_CONNECTIONS=true
+      # defers DB/queue connections but bootstrap still issues Redis commands
+      # (notification pub/sub), so a real Redis avoids a retry-exhaustion race.
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+    env:
+      REDIS_HOST: localhost
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/setup-boxlite-runner
+      - name: Install native Node build dependencies
+        run: sudo apt-get install -y --no-install-recommends build-essential python3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: ./.github/actions/setup-go
+        with:
+          cache: 'false'
+
+      # corepack must be enabled before setup-node's yarn cache probe runs
+      - name: Enable corepack (yarn 4)
+        run: corepack enable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: apps/yarn.lock
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Prepare offline app env
+        run: |
+          printf 'DEFAULT_PACKAGE_VERSION=0.0.0-dev\n' > .env
+          cp api/.env.example api/.env
+
+      - name: Pin openapi-generator version
+        run: |
+          openapi_version="$(node -e "console.log(require('./openapitools.json')['generator-cli'].version)")"
+          yarn openapi-generator-cli version-manager set "$openapi_version"
+
+      - name: Regenerate API clients
+        run: |
+          yarn nx run api-client:generate:api-client
+          yarn nx run api-client-go:generate:api-client
+          yarn nx run analytics-api-client:generate:api-client
+
+      - name: Contract boundary guard (single-owner contracts)
+        run: |
+          # The exported cloud spec must not re-grow box-operation endpoints —
+          # those belong to openapi/box.openapi.yaml (served by boxlite-rest).
+          spec=dist/apps/api/openapi.json
+          if [ ! -f "$spec" ]; then
+            echo "::error::$spec not found; the openapi export step must run before this guard."
+            exit 1
+          fi
+          if jq -r '.paths | keys[]' "$spec" | grep -E '/toolbox/|/exec|/files|/workspace'; then
+            echo "::error::Cloud API spec contains box-operation paths. Box operations belong to the Box API contract (openapi/box.openapi.yaml), served by apps/api/src/boxlite-rest."
+            exit 1
+          fi
+          # The Box API dialect must stay tenancy-free so one SDK dialect works
+          # against local, self-hosted, and cloud servers.
+          if grep -nE 'organizationId|/organizations|billing' ../openapi/box.openapi.yaml; then
+            echo "::error::Box API spec contains cloud/tenancy concepts. Those belong to the cloud API (apps/api controllers outside boxlite-rest)."
+            exit 1
+          fi
+
+      - name: Fail on drift
+        run: |
+          if [ -n "$(git status --porcelain -- libs/api-client libs/api-client-go libs/analytics-api-client)" ]; then
+            git status --porcelain -- libs/api-client libs/api-client-go libs/analytics-api-client
+            git diff -- libs/api-client libs/api-client-go libs/analytics-api-client | head -200
+            echo "::error::Generated API clients are stale. Run 'yarn nx run api-client:generate:api-client && yarn nx run api-client-go:generate:api-client && yarn nx run analytics-api-client:generate:api-client' in apps/ and commit the result."
+            exit 1
+          fi
+
+  images:
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-buildx
+      - name: Build the three flavors for both architectures
+        env:
+          IMAGES: base,python,node
+          PUSH: '0'
+          PLATFORMS: linux/amd64,linux/arm64
+        run: bash apps/box-images/build.sh
+  dashboard:
+    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    timeout-minutes: 20
+    defaults: # Keep package-manager commands inside the apps workspace.
+      run:
+        working-directory: "apps"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: ${{ false }}
+      - uses: ./.github/actions/setup-boxlite-runner
+      - name: Install native Node build dependencies
+        run: sudo apt-get install -y --no-install-recommends build-essential python3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Enable Corepack
+        run: "corepack enable"
+      - uses: actions/setup-node@v4
+        with: # Match the apps workspace toolchain and cache key.
+          node-version: "22"
+          cache: "yarn"
+          cache-dependency-path: "apps/yarn.lock"
+      - name: Install app dependencies
+        run: "yarn install --immutable"
+      - name: Run dashboard unit tests
+        run: "yarn nx run dashboard:test --coverage --skip-nx-cache"
