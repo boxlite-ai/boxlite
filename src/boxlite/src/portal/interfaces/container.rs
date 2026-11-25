@@ -174,16 +174,23 @@ impl ContainerInterface {
         let proto_mounts: Vec<BindMount> = mounts
             .into_iter()
             .map(|m| {
-                let (kind, subpath) = match m.payload {
+                let (kind, subpath, record) = match m.payload {
                     crate::volumes::ContainerMountPayload::WholeDirectory => {
-                        (BindMountKind::WholeDirectory, String::new())
+                        (BindMountKind::WholeDirectory, String::new(), None)
                     }
                     crate::volumes::ContainerMountPayload::SingleFile { file_name } => {
-                        (BindMountKind::SingleFile, file_name)
+                        (BindMountKind::SingleFile, file_name, None)
                     }
                     crate::volumes::ContainerMountPayload::ManagedSubDirectory { sub_path } => {
-                        (BindMountKind::ManagedSubDirectory, sub_path)
+                        (BindMountKind::ManagedSubDirectory, sub_path, None)
                     }
+                    // The runtime mounts the directory as it mounts a whole
+                    // directory; the guest records that mount under the key.
+                    crate::volumes::ContainerMountPayload::RecordedDirectory { key, added } => (
+                        BindMountKind::WholeDirectory,
+                        String::new(),
+                        Some((key, added)),
+                    ),
                 };
                 BindMount {
                     volume_name: m.volume_name,
@@ -193,6 +200,8 @@ impl ContainerInterface {
                     owner_gid: m.owner_gid,
                     kind: kind as i32,
                     subpath,
+                    record_key: record.as_ref().map_or_default(|(key, _)| key.clone()),
+                    added: record.is_some_and(|(_, added)| added),
                 }
             })
             .collect();

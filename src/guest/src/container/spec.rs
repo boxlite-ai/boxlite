@@ -76,6 +76,8 @@ pub struct UserMount {
     pub owner_uid: u32,
     /// Owner GID of host directory (for auto-idmap)
     pub owner_gid: u32,
+    /// Saved while the box was stopped: its owner is never remapped.
+    pub added: bool,
 }
 
 /// Device nodes the host asked to republish inside the container, resolved
@@ -1736,6 +1738,7 @@ mod tests {
             read_only: false,
             owner_uid: 0,
             owner_gid: 0,
+            added: false,
         }];
 
         let spec = create_oci_spec(

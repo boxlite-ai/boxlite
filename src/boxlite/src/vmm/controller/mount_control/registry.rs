@@ -1,4 +1,4 @@
-use super::{ControlMount, MountState};
+use super::{ControlMount, MountRequestId};
 use crate::vmm::vmm_socket::{ControlOp, ControlReply, MAX_MOUNT_BODY};
 use boxlite_vmm::lookup_aggregate;
 use std::fs::File;
@@ -8,11 +8,20 @@ use std::path::{Component, Path};
 /// Maximum length in bytes of a source or target path in a mount request.
 const MAX_PATH_BYTES: usize = 4096;
 
+/// The exports of one VM. Each names a directory descriptor the aggregate
+/// device serves. Nothing here outlives the VM.
 #[derive(Default)]
 pub(crate) struct Registry {
     next: u64,
-    mounts: Vec<ControlMount>,
+    mounts: Vec<RegisteredMount>,
     list_bytes: usize,
+}
+
+/// One registered export. The request that registered it lets a client whose
+/// reply was lost find the export again.
+struct RegisteredMount {
+    mount: ControlMount,
+    request_id: Option<MountRequestId>,
 }
 
 fn errno(code: i32) -> io::Error {
@@ -32,11 +41,12 @@ fn record_cost(mount: &ControlMount) -> io::Result<usize> {
     }
     let mut counter = Counter(0);
     serde_json::to_writer(&mut counter, mount)?;
-    // Reserve a comma per record (one extra is harmless). `Preparing` is as
-    // long as the record ever serializes: `Detaching` matches it, `Mounted` is shorter.
+    // Reserve a comma per record (one extra is harmless).
     Ok(counter.0 + 1)
 }
 
+/// The target as the registry reports it: absolute, without `.` or repeated
+/// separators, and one path component at least.
 fn normalize_target(target: &str) -> io::Result<String> {
     if target.len() > MAX_PATH_BYTES || target.contains('\0') || !target.starts_with('/') {
         return Err(errno(libc::EINVAL));
@@ -70,13 +80,20 @@ impl Registry {
                 source,
                 target,
                 read_only,
+                request_id,
             } => {
                 let directory = directory.ok_or_else(|| errno(libc::EINVAL))?;
                 if source.is_empty() || source.len() > MAX_PATH_BYTES || source.contains('\0') {
                     return Err(errno(libc::EINVAL));
                 }
                 let target = normalize_target(&target)?;
-                if self.mounts.iter().any(|mount| mount.target == target) {
+                // One request registers one export: a retry must not publish a second.
+                if request_id.is_some()
+                    && self
+                        .mounts
+                        .iter()
+                        .any(|entry| entry.request_id == request_id)
+                {
                     return Err(errno(libc::EBUSY));
                 }
                 let next = self
@@ -88,7 +105,6 @@ impl Registry {
                     source,
                     target,
                     read_only,
-                    state: MountState::Preparing,
                 };
                 // Empty List envelope plus worst-case serialized records; the
                 // counter includes JSON escaping without copying existing records.
@@ -104,36 +120,39 @@ impl Registry {
                     .map_err(|_| errno(libc::ENOMEM))?;
                 self.next = next;
                 filesystem.register_fd(mount.export.clone(), directory, read_only)?;
-                self.mounts.push(mount.clone());
+                self.mounts.push(RegisteredMount {
+                    mount: mount.clone(),
+                    request_id,
+                });
                 self.list_bytes += cost;
                 Ok(ControlReply::MountRegistered(mount))
             }
-            ControlOp::ListMounts => Ok(ControlReply::Mounts(self.mounts.clone())),
-            ControlOp::SetMountState { export, state } => {
+            ControlOp::ListMounts => Ok(ControlReply::Mounts(
+                self.mounts
+                    .iter()
+                    .map(|entry| entry.mount.clone())
+                    .collect(),
+            )),
+            ControlOp::FindRegisteredMount { request_id } => {
                 let mount = self
                     .mounts
-                    .iter_mut()
-                    .find(|mount| mount.export == export)
-                    .ok_or_else(|| errno(libc::ENOENT))?;
-                match (mount.state, state) {
-                    (current, requested) if current == requested => (),
-                    (MountState::Preparing, MountState::Mounted | MountState::Detaching)
-                    | (MountState::Mounted, MountState::Detaching) => mount.state = state,
-                    _ => return Err(errno(libc::EINVAL)),
-                }
-                Ok(ControlReply::MountUpdated)
+                    .iter()
+                    .find(|entry| entry.request_id == Some(request_id))
+                    .map(|entry| entry.mount.clone());
+                Ok(ControlReply::RegisteredMount(mount))
             }
             ControlOp::RemoveMount { export } => {
-                let index = self
+                // An export that is already gone stays gone, so a retry after a
+                // lost reply finishes.
+                let Some(index) = self
                     .mounts
                     .iter()
-                    .position(|mount| mount.export == export)
-                    .ok_or_else(|| errno(libc::ENOENT))?;
-                if self.mounts[index].state != MountState::Detaching {
-                    return Err(errno(libc::EBUSY));
-                }
-                let cost = record_cost(&self.mounts[index])?;
+                    .position(|entry| entry.mount.export == export)
+                else {
+                    return Ok(ControlReply::MountUpdated);
+                };
                 filesystem.remove(&export)?;
+                let cost = record_cost(&self.mounts[index].mount)?;
                 self.mounts.remove(index);
                 self.list_bytes -= cost;
                 Ok(ControlReply::MountUpdated)

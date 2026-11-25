@@ -1,0 +1,381 @@
+//! A directory declaration belongs to the box; delivery progress belongs to
+//! one VM run. Both live in the `mounts` object of the box's state row, next to
+//! the outbound policy, and every write is one short transaction.
+//!
+//! Only the native engine changes declarations and progress; other builds
+//! compile the storage but have no such caller.
+#![cfg_attr(
+    not(all(feature = "native", target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use chrono::{DateTime, Utc};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+
+use super::BoxStore;
+use crate::db::db_err;
+use crate::litebox::mounts::{
+    MountInfo, MountProgress, MountRequest, MountState, normalize_target,
+};
+use crate::runtime::advanced_options::AdvancedBoxOptions;
+use crate::runtime::options::{BoxOptions, MountSpec, MountType, VolumeSpec};
+use crate::runtime::types::BoxState;
+use crate::volumes::{ContainerMount, ContainerMountPayload};
+
+/// What the row keeps besides the creation options.
+#[derive(Default, Serialize, Deserialize)]
+struct Saved {
+    /// Added directories, and `None` where a directory was removed.
+    #[serde(default)]
+    changes: BTreeMap<String, Option<MountRequest>>,
+    /// The progress of the run that last wrote one. No other run shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run: Option<Run>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Run {
+    pid: u32,
+    started_at: Option<DateTime<Utc>>,
+    targets: BTreeMap<String, MountProgress>,
+}
+
+/// The directory declarations of a box, with the progress of its current VM run.
+#[derive(Debug)]
+pub(crate) struct Mounts {
+    /// The state the declarations were read with. A start stores its live
+    /// state again together with the mounts it confirmed.
+    pub state: BoxState,
+    /// The directories the box boots with, by normalized target: the ones it
+    /// was created with, with every committed change applied.
+    pub declarations: BTreeMap<String, MountRequest>,
+    /// Last committed progress of the current VM run, by target.
+    pub progress: BTreeMap<String, MountProgress>,
+    /// Creation targets that are no directory declaration: files and managed volumes.
+    unmanaged: BTreeSet<String>,
+    changes: BTreeMap<String, Option<MountRequest>>,
+}
+
+fn info(request: &MountRequest, state: MountState) -> MountInfo {
+    MountInfo {
+        source: request.source.clone(),
+        target: request.target.clone(),
+        read_only: request.read_only,
+        state,
+    }
+}
+
+impl Mounts {
+    fn load(conn: &Connection, id: &str) -> BoxliteResult<Self> {
+        // One statement, so every field comes from the same WAL snapshot.
+        let row: Option<(String, String, String, Option<String>)> = db_err!(
+            conn.query_row(
+                "SELECT s.json, coalesce(c.json ->> '$.options.volumes', '[]'),
+                    coalesce(c.json ->> '$.options.mounts', '[]'), s.json ->> '$.mounts'
+             FROM box_state s JOIN box_config c USING (id) WHERE s.id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+        )?;
+        let (state, volumes, mounts, saved) =
+            row.ok_or_else(|| BoxliteError::NotFound(id.to_owned()))?;
+        let state: BoxState = db_err!(serde_json::from_str(&state))?;
+        let saved: Saved = match saved {
+            Some(json) => db_err!(serde_json::from_str(&json))?,
+            None => Saved::default(),
+        };
+        let volumes: Vec<VolumeSpec> = db_err!(serde_json::from_str(&volumes))?;
+        let mounts: Vec<MountSpec> = db_err!(serde_json::from_str(&mounts))?;
+        let mut this = Self {
+            // Progress belongs to one run. A stopped box, or a later run, has none.
+            progress: saved
+                .run
+                .filter(|run| Some(run.pid) == state.pid && run.started_at == state.started_at)
+                .map(|run| run.targets)
+                .unwrap_or_default(),
+            state,
+            declarations: BTreeMap::new(),
+            unmanaged: volumes
+                .iter()
+                .filter(|volume| volume.managed_volume.is_some())
+                .map(|volume| volume.guest_path.as_str())
+                .chain(
+                    mounts
+                        .iter()
+                        .filter(|mount| mount.mount_type != MountType::Bind)
+                        .map(|mount| mount.target.as_str()),
+                )
+                .filter_map(normalize_target)
+                .collect(),
+            changes: saved.changes,
+        };
+        let directories = volumes
+            .iter()
+            .filter(|volume| volume.managed_volume.is_none())
+            .map(|volume| {
+                (
+                    volume.host_path.as_str(),
+                    volume.guest_path.as_str(),
+                    volume.read_only,
+                )
+            })
+            .chain(
+                mounts
+                    .iter()
+                    .filter(|mount| mount.mount_type == MountType::Bind)
+                    .filter_map(|mount| {
+                        Some((
+                            mount.source.as_deref()?,
+                            mount.target.as_str(),
+                            mount.read_only,
+                        ))
+                    }),
+            );
+        for (source, target, read_only) in directories {
+            let Some(key) = normalize_target(target) else {
+                continue;
+            };
+            // Both creation formats take a file in the same field. A bind whose
+            // source is gone still counts as a directory, so it stays removable.
+            if this.unmanaged.contains(&key)
+                || std::fs::metadata(source).is_ok_and(|metadata| !metadata.is_dir())
+            {
+                this.unmanaged.insert(key);
+            } else {
+                this.declarations.insert(
+                    key.clone(),
+                    MountRequest {
+                        source: source.into(),
+                        target: key.into(),
+                        read_only,
+                    },
+                );
+            }
+        }
+        for (target, change) in &this.changes {
+            match change {
+                Some(request) => this.declarations.insert(target.clone(), request.clone()),
+                None => this.declarations.remove(target),
+            };
+        }
+        Ok(this)
+    }
+
+    /// Refuse a progress write once the box no longer runs the given VM.
+    pub(crate) fn ensure_run(
+        &self,
+        pid: u32,
+        started_at: Option<DateTime<Utc>>,
+    ) -> BoxliteResult<()> {
+        if Some(pid) == self.state.pid && self.state.started_at == started_at {
+            Ok(())
+        } else {
+            Err(BoxliteError::Stopped(
+                "the box's VM run ended; use runtime.get() for its next run".into(),
+            ))
+        }
+    }
+
+    /// Whether a target has a mount on record.
+    pub(crate) fn occupied(&self, target: &str) -> bool {
+        self.declarations.contains_key(target)
+            || self.unmanaged.contains(target)
+            || self.progress.contains_key(target)
+    }
+
+    /// Whether `target` was added through `mount()`, not created with the box.
+    pub(crate) fn is_added(&self, target: &str) -> bool {
+        self.changes.get(target).is_some_and(Option::is_some)
+    }
+
+    /// Save a declaration for the next start.
+    pub(crate) fn declare(&mut self, request: MountRequest) {
+        let target = request.target.to_string_lossy().into_owned();
+        self.changes.insert(target.clone(), Some(request.clone()));
+        self.declarations.insert(target, request);
+    }
+
+    /// Drop the declaration at `target`.
+    pub(crate) fn forget(&mut self, target: &str) {
+        self.declarations.remove(target);
+        self.changes.insert(target.to_owned(), None);
+    }
+
+    pub(crate) fn lookup(&self, target: &str) -> Option<MountInfo> {
+        self.progress
+            .get(target)
+            .map(|entry| info(&entry.request, entry.state))
+            .or_else(|| {
+                self.declarations
+                    .get(target)
+                    .map(|request| info(request, MountState::Configured))
+            })
+    }
+
+    pub(crate) fn visible(&self) -> Vec<MountInfo> {
+        self.progress
+            .values()
+            .map(|entry| info(&entry.request, entry.state))
+            .chain(
+                self.declarations
+                    .iter()
+                    .filter(|(target, _)| !self.progress.contains_key(*target))
+                    .map(|(_, request)| info(request, MountState::Configured)),
+            )
+            .collect()
+    }
+
+    /// Write the committed changes into the options a box boots under: removed
+    /// targets go, added directories join in the box's own creation format.
+    pub(crate) fn apply_to_boot(&self, options: &mut BoxOptions) {
+        if self.changes.is_empty() {
+            return;
+        }
+        let changed = |target: &str| {
+            normalize_target(target).is_some_and(|key| self.changes.contains_key(&key))
+        };
+        options
+            .volumes
+            .retain(|volume| !changed(&volume.guest_path));
+        options.mounts.retain(|mount| !changed(&mount.target));
+        // The volume resolver rejects a mixture of the two formats.
+        let legacy = !options.volumes.is_empty();
+        for request in self.changes.values().flatten() {
+            // A declaration always comes from a checked request.
+            let bind = (
+                request.source.to_string_lossy(),
+                request.target.to_string_lossy(),
+            );
+            if legacy {
+                options.volumes.push(VolumeSpec {
+                    read_only: request.read_only,
+                    ..VolumeSpec::bind_mount(bind.0, bind.1)
+                });
+            } else {
+                options.mounts.push(MountSpec {
+                    read_only: request.read_only,
+                    ..MountSpec::bind_mount(bind.0, bind.1)
+                });
+            }
+        }
+    }
+
+    /// Refuse a declared source that is no longer a directory, before the
+    /// volume resolver runs: it would mount a file in the directory's place,
+    /// or fail without naming the target. A directory added through `mount()`
+    /// also refuses a link, as it did when it was added.
+    pub(crate) fn check_sources(&self) -> BoxliteResult<()> {
+        for request in self.declarations.values() {
+            let added = self.is_added(&request.target.to_string_lossy());
+            let metadata = if added {
+                std::fs::symlink_metadata(&request.source)
+            } else {
+                std::fs::metadata(&request.source)
+            };
+            let problem = match metadata {
+                Ok(metadata) if metadata.is_dir() => continue,
+                Ok(_) => "is not a directory anymore".to_owned(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    "does not exist".to_owned()
+                }
+                Err(error) => format!("cannot be inspected: {error}"),
+            };
+            return Err(undeliverable(request, problem));
+        }
+        Ok(())
+    }
+
+    /// Have the guest record the mount the container runtime makes for each
+    /// declared directory, so an online removal can select it. Returns the
+    /// progress the start confirms for them.
+    pub(crate) fn record(
+        &self,
+        mounts: &mut [ContainerMount],
+        advanced: &AdvancedBoxOptions,
+    ) -> BTreeMap<String, MountProgress> {
+        let permits = advanced.permits_aggregate_mounts();
+        let mut confirmed = BTreeMap::new();
+        for mount in mounts {
+            let Some((target, request)) = normalize_target(&mount.destination).and_then(|target| {
+                self.declarations
+                    .get(&target)
+                    .map(|request| (target, request))
+            }) else {
+                continue;
+            };
+            let added = self.is_added(&target);
+            // A directory created with the box keeps its static delivery
+            // unless the container may detach it.
+            if !added && !permits {
+                continue;
+            }
+            let key = uuid::Uuid::new_v4();
+            mount.payload = ContainerMountPayload::RecordedDirectory {
+                key: key.to_string(),
+                added,
+            };
+            confirmed.insert(
+                target,
+                MountProgress {
+                    request: request.clone(),
+                    state: MountState::Mounted,
+                    request_id: key.into_bytes(),
+                    export: None,
+                },
+            );
+        }
+        confirmed
+    }
+}
+
+/// A start cannot use a declared directory. The target leads the message: it
+/// is what the caller can query, and remove, while the box is stopped.
+fn undeliverable(request: &MountRequest, cause: impl Display) -> BoxliteError {
+    BoxliteError::InvalidState(format!(
+        "cannot deliver the directory declared at {}: source {} {cause}",
+        request.target.display(),
+        request.source.display()
+    ))
+}
+impl BoxStore {
+    /// The declarations of box `id` and the progress of its current VM run.
+    pub(crate) fn mounts(&self, id: &str) -> BoxliteResult<Mounts> {
+        Mounts::load(&self.db.conn(), id)
+    }
+
+    /// Apply `change` to the declarations and progress of box `id`, with the
+    /// state they were read with, in one write transaction.
+    pub(crate) fn update_mounts<T>(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut Mounts) -> BoxliteResult<T>,
+    ) -> BoxliteResult<T> {
+        let mut conn = self.db.conn();
+        let tx = db_err!(conn.transaction_with_behavior(TransactionBehavior::Immediate))?;
+        let mut mounts = Mounts::load(&tx, id)?;
+        let result = change(&mut mounts)?;
+        Self::write_state(&tx, id, &mounts.state)?;
+        db_err!(tx.execute(
+            "UPDATE box_state SET json = json_set(json, '$.mounts', json(?1)) WHERE id = ?2",
+            params![
+                db_err!(serde_json::to_string(&Saved {
+                    changes: mounts.changes,
+                    run: (!mounts.progress.is_empty()).then(|| Run {
+                        pid: mounts.state.pid.unwrap_or_default(),
+                        started_at: mounts.state.started_at,
+                        targets: mounts.progress,
+                    }),
+                }))?,
+                id
+            ],
+        ))?;
+        db_err!(tx.commit())?;
+        Ok(result)
+    }
+}

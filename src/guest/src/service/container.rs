@@ -49,6 +49,74 @@ fn init_error(context: &str, error: &BoxliteError) -> ContainerInitError {
     }
 }
 
+/// A mount the container runtime makes for a declared directory. Once the
+/// container exists, the guest records its identity under `key`.
+struct RecordedMount {
+    key: String,
+    source: PathBuf,
+    destination: PathBuf,
+    read_only: bool,
+}
+
+/// A directory saved while the box was stopped keeps the rules of its first
+/// delivery: the target is created when missing, and must then be empty and
+/// be reached through no symbolic link.
+fn require_empty_target(rootfs: &Path, destination: &Path) -> BoxliteResult<()> {
+    let mut path = rootfs.to_path_buf();
+    for component in destination.components().skip(1) {
+        path.push(component);
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() => (),
+            Ok(_) => {
+                return Err(BoxliteError::InvalidState(format!(
+                    "{destination:?} is not reached through directories only"
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&path)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let mut entries = std::fs::read_dir(&path)?;
+    match entries.next() {
+        None => Ok(()),
+        Some(_) => Err(BoxliteError::InvalidState(format!(
+            "{destination:?} already has entries"
+        ))),
+    }
+}
+
+/// Record each mount the runtime made for a declared directory, under the
+/// identity every process of the container will find. Init is created and has
+/// not run, so nothing has touched these mounts since the runtime made them.
+async fn record_mounts(container: &Container, mounts: Vec<RecordedMount>) -> BoxliteResult<()> {
+    if mounts.is_empty() {
+        return Ok(());
+    }
+    container.ensure_runtime_mounts_supported()?;
+    let init = container.init_pid().ok_or_else(|| {
+        BoxliteError::InvalidState("the container is created but its init process is gone".into())
+    })?;
+    let target = Target::open(init)?;
+    let mut attacher = container.attacher().write_owned().await;
+    tokio::task::spawn_blocking(move || {
+        for mount in mounts {
+            attacher.adopt_runtime(
+                &mount.key,
+                &mount.source,
+                &target,
+                &mount.destination,
+                mount.read_only,
+            )?;
+        }
+        Ok::<(), BoxliteError>(())
+    })
+    .await
+    .map_err(|error| BoxliteError::Internal(format!("mount record task failed: {error}")))??;
+    Ok(())
+}
+
 #[derive(Debug, PartialEq)]
 enum BindMountSource<'a> {
     WholeDirectory,
@@ -417,6 +485,7 @@ impl ContainerService for GuestServer {
 
         // Keep every resolved volume subpath mount alive until startup is done.
         let mut resolved_mounts = Vec::new();
+        let mut recorded = Vec::new();
         let mut user_mounts = Vec::with_capacity(init_req.mounts.len());
         for m in &init_req.mounts {
             let volume_dir = container_layout.volume_dir(&m.volume_name);
@@ -458,12 +527,32 @@ impl ContainerService for GuestServer {
                     }
                 }
             };
+            if !m.record_key.is_empty() {
+                recorded.push(RecordedMount {
+                    key: m.record_key.clone(),
+                    source: source.clone(),
+                    destination: PathBuf::from(&m.destination),
+                    read_only: m.read_only,
+                });
+            }
+            if m.added {
+                if let Err(error) = require_empty_target(&bundle_rootfs, Path::new(&m.destination))
+                {
+                    return Ok(Response::new(ContainerInitResponse {
+                        result: Some(container_init_response::Result::Error(init_error(
+                            "check the target of a saved directory",
+                            &error,
+                        ))),
+                    }));
+                }
+            }
             user_mounts.push(UserMount {
                 source: source.to_string_lossy().to_string(),
                 destination: m.destination.clone(),
                 read_only: m.read_only,
                 owner_uid: m.owner_uid,
                 owner_gid: m.owner_gid,
+                added: m.added,
             });
         }
 
@@ -537,6 +626,18 @@ impl ContainerService for GuestServer {
                 // exist already is what lets the session below be registered
                 // against it, and a client attach to it, before it runs.
                 debug!(container_id = %container_id, "Container created");
+
+                // The runtime made the mounts of declared directories. Their
+                // identity is recorded now: the container is created and
+                // nothing in it has run.
+                if let Err(error) = record_mounts(&container, recorded).await {
+                    return Ok(Response::new(ContainerInitResponse {
+                        result: Some(container_init_response::Result::Error(init_error(
+                            "record the mount of a declared directory",
+                            &error,
+                        ))),
+                    }));
+                }
 
                 info!(
                     container_id = %container_id,

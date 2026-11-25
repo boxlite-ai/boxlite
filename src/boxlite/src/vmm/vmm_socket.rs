@@ -41,7 +41,7 @@ use {
 };
 
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-use super::controller::mount_control::{ControlMount, MountState};
+use super::controller::mount_control::{ControlMount, MountRequestId};
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 mod transport;
 
@@ -83,11 +83,13 @@ pub(crate) enum ControlOp {
         source: String,
         target: String,
         read_only: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<MountRequestId>,
     },
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     ListMounts,
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-    SetMountState { export: String, state: MountState },
+    FindRegisteredMount { request_id: MountRequestId },
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     RemoveMount { export: String },
 }
@@ -105,6 +107,8 @@ pub(crate) enum ControlReply {
     MountRegistered(ControlMount),
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     Mounts(Vec<ControlMount>),
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    RegisteredMount(Option<ControlMount>),
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     MountUpdated,
 }

@@ -1,7 +1,7 @@
 //! Host directory delivery to a single VM through its `vmm.sock`.
 //!
-//! Registration publishes `Preparing` before replying. A lost reply can be
-//! reconciled with `list`. The caller owns guest acknowledgment and recovery.
+//! The shim keeps exports, not state. Registration publishes an export before
+//! replying; a client whose reply was lost finds it again by request ID.
 
 use crate::vmm::vmm_socket::{self, ControlError, ControlOp, ControlReply};
 use serde::{Deserialize, Serialize};
@@ -16,12 +16,7 @@ pub(crate) use registry::Registry;
 // Include time queued behind an online disk resize in the exchange budget.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MountState {
-    Preparing,
-    Mounted,
-    Detaching,
-}
+pub(crate) type MountRequestId = [u8; 16];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlMount {
@@ -29,7 +24,6 @@ pub struct ControlMount {
     pub source: String,
     pub target: String,
     pub read_only: bool,
-    pub state: MountState,
 }
 
 /// Blocking client. Each operation opens a connection for one exchange.
@@ -64,11 +58,23 @@ impl MountControlClient {
         file: File,
         read_only: bool,
     ) -> io::Result<ControlMount> {
+        self.register_with_request_id(source, target, file, read_only, None)
+    }
+
+    pub(crate) fn register_with_request_id(
+        &self,
+        source: String,
+        target: String,
+        file: File,
+        read_only: bool,
+        request_id: Option<MountRequestId>,
+    ) -> io::Result<ControlMount> {
         match self.exchange(
             ControlOp::RegisterMount {
                 source,
                 target,
                 read_only,
+                request_id,
             },
             Some(&file),
         )? {
@@ -77,22 +83,20 @@ impl MountControlClient {
         }
     }
 
-    pub fn list(&self) -> io::Result<Vec<ControlMount>> {
-        match self.exchange(ControlOp::ListMounts, None)? {
-            ControlReply::Mounts(mounts) => Ok(mounts),
+    /// The export registered under `request_id`, if any.
+    pub(crate) fn find_registered(
+        &self,
+        request_id: MountRequestId,
+    ) -> io::Result<Option<ControlMount>> {
+        match self.exchange(ControlOp::FindRegisteredMount { request_id }, None)? {
+            ControlReply::RegisteredMount(mount) => Ok(mount),
             _ => Err(unexpected_reply()),
         }
     }
 
-    pub fn set_state(&self, export: &str, state: MountState) -> io::Result<()> {
-        match self.exchange(
-            ControlOp::SetMountState {
-                export: export.into(),
-                state,
-            },
-            None,
-        )? {
-            ControlReply::MountUpdated => Ok(()),
+    pub fn list(&self) -> io::Result<Vec<ControlMount>> {
+        match self.exchange(ControlOp::ListMounts, None)? {
+            ControlReply::Mounts(mounts) => Ok(mounts),
             _ => Err(unexpected_reply()),
         }
     }

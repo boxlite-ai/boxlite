@@ -181,6 +181,16 @@ async fn run_guest_init(
     if requires_safe_volume_sub_path(&bootstrap.container.mounts) {
         guest_interface.require_safe_volume_sub_path().await?;
     }
+    // The guest records the mounts of declared directories while it creates
+    // the container. Fail before initialization if it cannot.
+    if bootstrap.container.mounts.iter().any(|mount| {
+        matches!(
+            mount.payload,
+            crate::volumes::ContainerMountPayload::RecordedDirectory { .. }
+        )
+    }) {
+        guest_interface.require_boot_mount_records().await?;
+    }
     guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");
 
@@ -329,6 +339,7 @@ mod tests {
             Ok(tonic::Response::new(boxlite_shared::PingResponse {
                 version: self.version.to_string(),
                 safe_managed_volume_sub_path: self.safe_managed_volume_sub_path,
+                records_boot_mounts: true,
             }))
         }
 

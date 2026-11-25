@@ -20,7 +20,7 @@
 //! past that the agent kills it, so a late child never mounts.
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString, OsStr};
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::File;
 use std::io;
 use std::num::NonZeroU64;
@@ -50,6 +50,8 @@ const NR_PIDFD_SEND_SIGNAL: libc::c_long = 424;
 const NR_CLONE3: libc::c_long = 435;
 const NR_CLOSE_RANGE: libc::c_long = 436;
 const NR_STATMOUNT: libc::c_long = 457;
+/// Symbolic links one destination may resolve through, the kernel's own limit.
+const MAX_SYMLINKS: usize = 40;
 const P_PIDFD: libc::idtype_t = 3;
 
 /// Accept only an absolute path of normal components other than `/`, shorter
@@ -99,6 +101,9 @@ pub(crate) struct Attacher {
 struct RuntimeMount {
     source: PathBuf,
     destination: PathBuf,
+    /// Where the mount sits in the container, links resolved. It differs from
+    /// `destination` only for a mount the container runtime made at creation.
+    mount_point: PathBuf,
     read_only: bool,
     namespace_id: Option<NonZeroU64>,
     // Retain the tree while it may still be published, even if confirmation was lost.
@@ -199,12 +204,89 @@ impl Target {
     }
 }
 
+/// Resolve an OCI destination against the created container's held root.
+/// Detach needs its absolute in-container path even when the image uses links.
+fn resolve_in_root(root: &File, destination: &Path) -> BoxliteResult<PathBuf> {
+    // Components to walk, innermost last: the next one is popped from the end.
+    let queue = |pending: &mut Vec<OsString>, path: &Path| {
+        pending.extend(
+            path.components()
+                .filter_map(|component| match component {
+                    Component::Normal(name) => Some(name.to_os_string()),
+                    Component::ParentDir => Some("..".into()),
+                    Component::RootDir | Component::CurDir | Component::Prefix(_) => None,
+                })
+                .rev(),
+        );
+    };
+    let unreachable = |error: std::io::Error| {
+        BoxliteError::InvalidState(format!(
+            "{} is not reachable in the container: {error}",
+            destination.display()
+        ))
+    };
+    let root = PathBuf::from(format!("/proc/self/fd/{}", root.as_raw_fd()));
+    let mut resolved = PathBuf::new();
+    let mut pending = Vec::new();
+    queue(&mut pending, destination);
+    let mut links = 0;
+    while let Some(component) = pending.pop() {
+        if component == ".." {
+            resolved.pop();
+            continue;
+        }
+        resolved.push(component);
+        let path = root.join(&resolved);
+        let metadata = std::fs::symlink_metadata(&path).map_err(unreachable)?;
+        if !metadata.file_type().is_symlink() {
+            continue;
+        }
+        links += 1;
+        if links > MAX_SYMLINKS {
+            return Err(BoxliteError::InvalidState(format!(
+                "{} resolves through more than {MAX_SYMLINKS} symbolic links",
+                destination.display()
+            )));
+        }
+        let link = std::fs::read_link(&path).map_err(unreachable)?;
+        resolved.pop();
+        if link.is_absolute() {
+            resolved.clear();
+        }
+        queue(&mut pending, &link);
+    }
+    if resolved.as_os_str().is_empty() {
+        return Err(BoxliteError::InvalidState(format!(
+            "{} resolves to the container root",
+            destination.display()
+        )));
+    }
+    Ok(resolved)
+}
+
+/// Open the resolved target under the same root. A concurrent change to a
+/// path component must fail before the guest records an unrelated mount.
+fn open_mounted(root: &File, relative: &Path) -> BoxliteResult<File> {
+    use rustix::fs::{openat2, Mode, OFlags, ResolveFlags};
+
+    openat2(
+        root,
+        relative,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+    )
+    .map(File::from)
+    .map_err(|error| BoxliteError::Storage(format!("open boot mount {relative:?}: {error}")))
+}
+
 impl Attacher {
     pub(crate) fn runtime_attached(&self, key: &str) -> bool {
         self.runtime
             .get(key)
             .is_some_and(|record| record.tree.is_some())
     }
+
     /// The caller holds the container's attacher write lock across the syscall
     /// and its metadata update. Tombstones outlive canceled RPC callers.
     pub(crate) fn attach_runtime(
@@ -255,6 +337,7 @@ impl Attacher {
             RuntimeMount {
                 source: source.to_owned(),
                 destination: destination.to_owned(),
+                mount_point: destination.to_owned(),
                 read_only,
                 namespace_id: Some(namespace_id),
                 tree: Some(tree),
@@ -264,6 +347,45 @@ impl Attacher {
             added: true,
             confirmation: confirmation.and_then(|()| target.check_current_namespace(namespace_id)),
         })
+    }
+
+    /// Record the mount the container runtime installed for `key` at
+    /// `destination`, under the identity the container's first process finds.
+    /// The container is created and nothing in it has run, so no process has
+    /// touched the mount since the runtime made it.
+    /// The caller holds the container's attacher write lock.
+    pub(crate) fn adopt_runtime(
+        &mut self,
+        key: &str,
+        source: &Path,
+        target: &Target,
+        destination: &Path,
+        read_only: bool,
+    ) -> BoxliteResult<()> {
+        target.check_runtime_owner()?;
+        let namespace_id = target.namespace_id()?;
+        let root = File::open(format!("/proc/{}/root", target.pid))?;
+        let relative = resolve_in_root(&root, destination)?;
+        let fd = open_mounted(&root, &relative)?;
+        let id = mount_identity(fd.as_raw_fd()).map_err(|code| {
+            BoxliteError::Storage(format!(
+                "statx the mount at {}: {}",
+                destination.display(),
+                io::Error::from_raw_os_error(code)
+            ))
+        })?;
+        self.runtime.insert(
+            key.to_owned(),
+            RuntimeMount {
+                source: source.to_owned(),
+                destination: destination.to_owned(),
+                mount_point: Path::new("/").join(relative),
+                read_only,
+                namespace_id: Some(namespace_id),
+                tree: Some(MountedTree { fd: fd.into(), id }),
+            },
+        );
+        Ok(())
     }
 
     pub(crate) fn detach_runtime(
@@ -287,6 +409,7 @@ impl Attacher {
                 RuntimeMount {
                     source: PathBuf::new(),
                     destination: destination.to_owned(),
+                    mount_point: destination.to_owned(),
                     read_only: false,
                     namespace_id: None,
                     tree: None,
@@ -294,10 +417,13 @@ impl Attacher {
             );
             return Ok(false);
         }
+        // `mount_point` is where each mount sits with links resolved, so two
+        // spellings of one directory still compare as parent and child.
+        let mount_point = self.runtime[key].mount_point.clone();
         if self.runtime.values().any(|record| {
             record.tree.is_some()
-                && record.destination != destination
-                && record.destination.starts_with(destination)
+                && record.mount_point != mount_point
+                && record.mount_point.starts_with(&mount_point)
         }) {
             return Err(BoxliteError::InvalidState(
                 "detach runtime descendants first".into(),
@@ -306,7 +432,7 @@ impl Attacher {
         let record = &self.runtime[key];
         let namespace_id = target.check_namespace(record.namespace_id)?;
         let id = record.tree.as_ref().expect("attached tree").id;
-        if let Err(error) = self.check_runtime(target, destination, Mode::Detach(id)) {
+        if let Err(error) = self.check_runtime(target, &mount_point, Mode::Detach(id)) {
             let tree = self.runtime[key].tree.as_ref().expect("attached tree");
             // A different tree at the path does not prove the original was detached.
             let absent = matches!(tree.is_mounted_in(namespace_id.get()), Ok(false));

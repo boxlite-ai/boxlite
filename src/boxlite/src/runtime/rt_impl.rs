@@ -253,6 +253,15 @@ impl RuntimeImpl {
         Self::initialize(options, ExperimentalFeatures::default())
     }
 
+    /// Like [`Self::new_for_test`], with explicit experimental opt-ins.
+    #[cfg(all(test, feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn new_for_test_with_features(
+        options: BoxliteOptions,
+        experimental_features: ExperimentalFeatures,
+    ) -> BoxliteResult<SharedRuntimeImpl> {
+        Self::initialize(options, experimental_features)
+    }
+
     pub(super) fn initialize(
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,

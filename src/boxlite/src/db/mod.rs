@@ -24,6 +24,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 pub(crate) use base_disk::BaseDiskStore;
 pub use boxes::BoxStore;
+pub(crate) use boxes::mounts::Mounts;
 pub use images::{CachedImage, ImageIndexStore};
 pub(crate) use snapshot::SnapshotStore;
 
