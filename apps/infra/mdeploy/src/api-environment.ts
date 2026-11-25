@@ -372,15 +372,7 @@ export const apiEnvironmentFrom = ({
       // name, which is what the status sync's dedup prefix uses.
       ENVIRONMENT: 'production',
       POSTHOG_ENVIRONMENT: stage,
-      /*
-       * The API applies its own schema at boot, on both clouds.
-       *
-       * Carried over from the incumbent stack (`stack/api.ts`), which sets it
-       * unconditionally and always has. Dropping it in the port was invisible
-       * against a database that already had a schema and fatal against one that
-       * did not: the first deploy of a new stage comes up, connects, and exits
-       * on `42P01 undefined_table` with nothing in the deploy having failed.
-       */
+      // Bootstrap an empty database by default. Phased deployments apply migration jobs before startup.
       RUN_MIGRATIONS: runMigrations,
       /*
        * The container still requires `PORT`; only the channel differs.

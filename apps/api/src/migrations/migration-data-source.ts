@@ -55,13 +55,13 @@ async function withLockQueryTimeout(
   await timedQuery(session, deadline, setting, [`${previous.timeout}ms`])
 }
 
-async function discardMigrationSession(session: MigrationSession, error: unknown): Promise<never> {
+async function discardMigrationSession(session: MigrationSession, error: unknown) {
   try {
     await session.end()
   } catch (closeError) {
-    throw new AggregateError([error, closeError], 'Could not close the PostgreSQL migration session')
+    return new AggregateError([error, closeError], 'Could not close the PostgreSQL migration session')
   }
-  throw error
+  return error
 }
 
 export class MigrationDataSource extends DataSource {
@@ -102,15 +102,11 @@ export class MigrationDataSource extends DataSource {
         })
       } catch (error) {
         // The server can acquire the lock before a timed-out response reaches the client.
-        return await discardMigrationSession(session, error)
+        throw await discardMigrationSession(session, error)
       }
 
-      let migrationError: unknown
       try {
         return await execute(new MigrationExecutor(this, runner))
-      } catch (error) {
-        migrationError = error
-        throw error
       } finally {
         try {
           await withLockQueryTimeout(session, performance.now() + LOCK_QUERY_MS, async (query) => {
@@ -119,10 +115,9 @@ export class MigrationDataSource extends DataSource {
             }
           })
         } catch (error) {
-          await discardMigrationSession(
-            session,
-            migrationError ? new AggregateError([migrationError, error], 'Migration and unlock failed') : error,
-          )
+          const failure = await discardMigrationSession(session, error)
+          // A retry following a committed revert would target the preceding migration.
+          console.warn(`PostgreSQL migration lock cleanup failed: ${String(failure)}`)
         }
       }
     } finally {
