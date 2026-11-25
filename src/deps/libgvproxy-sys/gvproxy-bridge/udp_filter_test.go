@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 )
@@ -48,6 +50,7 @@ type guestTap struct {
 	conn   net.Conn
 	frames chan []byte
 	policy *outboundPolicyController
+	cancel context.CancelFunc
 }
 
 // startNetwork builds the same virtual network gvproxy_create builds
@@ -82,6 +85,10 @@ type networkSeams struct {
 	resolve       resolveFunc
 	dial          dialFunc
 	connect       connectFunc
+	nat           map[string]string
+	configureUDP  func(*udpFlowPool)
+	wrapUDP       func(udpTestHandler) udpTestHandler
+	wrapGuestLink func(net.Conn) net.Conn
 }
 
 func refuseResolve(_ context.Context, host string) ([]net.IP, error) {
@@ -116,14 +123,26 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	// listener. The forwarders dial the NAT-translated address; the allowlist
 	// still sees 198.51.100.9.
 	tapConfig.NAT[unlistedIP] = "127.0.0.1"
+	for original, translated := range seams.nat {
+		tapConfig.NAT[original] = translated
+	}
 
 	vn, err := virtualnetwork.New(tapConfig)
 	if err != nil {
 		t.Fatalf("virtualnetwork.New: %v", err)
 	}
-	policy, err := newOutboundPolicyController(vn, tapConfig, cfg.GuestIP, seams.ca, seams.secretMatcher, outboundPolicy{Mode: "enabled", AllowNet: cfg.AllowNet, tcp: seams.tcp}, cfg.OutboundRevision)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	policy, err := newOutboundPolicyController(ctx, vn, tapConfig, cfg.GuestIP, seams.ca, seams.secretMatcher, outboundPolicy{Mode: "enabled", AllowNet: cfg.AllowNet, tcp: seams.tcp}, cfg.OutboundRevision)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if seams.configureUDP != nil {
+		seams.configureUDP(policy.udpFlows)
+	}
+	if seams.wrapUDP != nil {
+		handler := outboundUDPHandler(policy.stack, natTable(tapConfig), new(sync.Mutex), policy.active.Load, policy.udpFlows)
+		policy.stack.SetTransportProtocolHandler(udp.ProtocolNumber, seams.wrapUDP(handler))
 	}
 
 	// Configure test-owned seams before attaching the guest, then publish the
@@ -135,19 +154,21 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	policy.publish(&snapshot, "confirmed")
 
 	guestSide, stackSide := net.Pipe()
-	ctx, cancel := context.WithCancel(context.Background())
+	if seams.wrapGuestLink != nil {
+		stackSide = seams.wrapGuestLink(stackSide)
+	}
 	accepted := make(chan struct{})
 	go func() {
 		defer close(accepted)
-		_ = vn.AcceptQemu(ctx, wrapConn(stackSide, 4, cfg.RateLimit))
+		_ = runGuestLink(ctx, stackSide, 4, cfg.RateLimit, vn.AcceptQemu)
 	}()
 	nic := policy.nic
 	t.Cleanup(func() {
 		// Stop packet delivery before disconnecting the switch's peer. Closing
 		// endpoints may emit resets, so their routes must already be disabled.
 		_ = policy.stack.DisableNIC(nic)
-		policy.stack.Close()
 		cancel()
+		policy.stack.Close()
 		_ = guestSide.Close()
 		select {
 		case <-accepted:
@@ -157,12 +178,14 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 		policy.stack.Wait()
 	})
 
-	tap := &guestTap{conn: guestSide, frames: make(chan []byte, 64), policy: policy}
+	tap := &guestTap{conn: guestSide, frames: make(chan []byte, 64), policy: policy, cancel: cancel}
 	// Drain the gateway→guest direction: the switch writes ARP requests and
 	// replies synchronously over net.Pipe and would block without a reader.
 	go tap.readLoop()
 	return tap
 }
+
+type udpTestHandler func(stack.TransportEndpointID, *stack.PacketBuffer) bool
 
 func (g *guestTap) readLoop() {
 	var size [4]byte
@@ -305,13 +328,16 @@ func ipv4Frame(t *testing.T, src, dst tcpip.Address, proto tcpip.TransportProtoc
 
 func udpFrame(t *testing.T, dstIP string, dstPort uint16, payload []byte) []byte {
 	t.Helper()
-	cfg := testGvproxyConfig()
-	src, dst := addr(t, cfg.GuestIP), addr(t, dstIP)
+	return udpFrameFrom(t, testGvproxyConfig().GuestIP, dstIP, guestSrcPort, dstPort, payload)
+}
 
+func udpFrameFrom(t *testing.T, srcIP, dstIP string, srcPort, dstPort uint16, payload []byte) []byte {
+	t.Helper()
+	src, dst := addr(t, srcIP), addr(t, dstIP)
 	length := header.UDPMinimumSize + len(payload)
 	segment := header.UDP(make([]byte, length))
 	segment.Encode(&header.UDPFields{
-		SrcPort: guestSrcPort,
+		SrcPort: srcPort,
 		DstPort: dstPort,
 		Length:  uint16(length),
 	})

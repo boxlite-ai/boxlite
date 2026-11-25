@@ -10,14 +10,14 @@ import (
 // Published snapshots are immutable. A flow keeps its filter and dialer even
 // when a replacement publishes another snapshot or changes application state.
 type outboundSnapshot struct {
-	policy    outboundPolicy
-	revision  string
-	filter    *AllowNetFilter
-	udpAllow  []string
-	tcpPolicy *extendedOutboundPolicy
-	cloudTCP  bool
-	dialer    *egressDialer
-	state     string
+	policy      outboundPolicy
+	revision    string
+	filter      *AllowNetFilter
+	legacyAllow []string
+	extended    *extendedOutboundPolicy
+	cloud       bool
+	dialer      *egressDialer
+	state       string
 }
 
 type snapshotSource func() *outboundSnapshot
@@ -32,7 +32,7 @@ func (p *outboundPolicyController) compile(policy outboundPolicy, revision strin
 	rules := policy.tcp
 	policy.tcp = nil
 	snapshot := &outboundSnapshot{
-		policy: policy, revision: revision, filter: filter, dialer: dialer, udpAllow: policy.AllowNet,
+		policy: policy, revision: revision, filter: filter, dialer: dialer, legacyAllow: policy.AllowNet,
 	}
 	if rules != nil {
 		if err := snapshot.setTCPPolicy(policy.Mode, *rules); err != nil {
@@ -47,8 +47,8 @@ func (s *outboundSnapshot) setTCPPolicy(mode string, rules trustedTCPRules) erro
 	if err != nil {
 		return err
 	}
-	s.tcpPolicy, s.cloudTCP = policy, rules.cloud
-	s.policy = outboundPolicy{Mode: mode, AllowNet: s.udpAllow}
+	s.extended, s.cloud = policy, rules.cloud
+	s.policy = outboundPolicy{Mode: mode, AllowNet: s.legacyAllow}
 	if mode == "disabled" {
 		s.policy.AllowNet = []string{}
 	}
