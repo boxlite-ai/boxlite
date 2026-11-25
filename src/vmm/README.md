@@ -91,9 +91,11 @@ adapter depends on `boxlite-vmm`.
 
 On Linux x86_64 native Boxes, the host delivers directory descriptors to the
 shim on `vmm.sock`. The host-only socket uses mode `0600`. Mount requests also
-check the peer UID. Each connection carries one version 1 request and reply,
-with a four-byte little-endian length and up to 64 KiB of JSON. Registration
-accepts one directory FD via `SCM_RIGHTS`. Guest RPCs use `box.sock`.
+check the peer UID. Each connection carries one `POST /v1/mount-control`
+request and reply over HTTP/1.1, with JSON bodies capped at 64 KiB.
+
+Registration attaches one directory FD to the first request byte via `SCM_RIGHTS`.
+Guest RPCs use `box.sock`.
 
 ```mermaid
 sequenceDiagram
@@ -116,7 +118,7 @@ including escaping and later state changes.
 
 The kernel queues connections for the serial control thread. The client has
 one deadline for connect, queue wait, and I/O, including time behind a disk
-resize. The frame reader owns received descriptors before validating the
+resize. The shim owns received descriptors before validating the
 request, so rejection releases them.
 
 Aggregate Mount and Detach reject containers whose capability bounding set
@@ -130,7 +132,7 @@ directory references survive detach; repeating an old detach does not remove a
 replacement. Descendant mounts must be detached first. A detach received before
 its corresponding mount retains a tombstone that rejects that delayed mount.
 
-Run `make test:unit:rust FILTER=vmm_socket` for frame and record checks.
+Run `make test:unit:rust FILTER=vmm_socket` for HTTP and record checks.
 Run `make test:integration:vmm:mount-delivery` with a compatible `VMM_KERNEL`
 to register, attach, and retire a directory through the native shim and guest.
 

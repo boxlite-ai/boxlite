@@ -385,11 +385,9 @@ pub struct BoxOptions {
     #[serde(serialize_with = "super::cpu_count::serialize_optional")]
     pub cpus: Option<f64>,
     pub memory_mib: Option<u32>,
-    /// Disk size in GB for the container rootfs (sparse, grows as needed).
+    /// Requested virtual capacity of the container rootfs at creation, in GiB.
     ///
-    /// The actual disk will be at least as large as the base image.
-    /// If set, the COW overlay will have this virtual size, allowing
-    /// the container to write more data than the base image size.
+    /// A new sparse COW disk is at least as large as the base image.
     pub disk_size_gb: Option<u64>,
 
     pub working_dir: Option<String>,

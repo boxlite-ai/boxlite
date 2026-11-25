@@ -198,6 +198,11 @@ impl BoxManager {
         Ok(())
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub fn save_disk_size(&self, id: &BoxID, disk_size_gb: u64) -> BoxliteResult<()> {
+        self.store.update_disk_size(id.as_str(), disk_size_gb)
+    }
+
     pub fn save_outbound(
         &self,
         id: &BoxID,

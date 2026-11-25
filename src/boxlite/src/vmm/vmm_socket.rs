@@ -3,51 +3,76 @@
 //! The shim serves one Unix socket, `vmm.sock` in the box's socket
 //! directory, for runtime operations on the VMM it hosts. The socket is
 //! host-only (mode 0600, never bridged into guest vsock) and at a fixed path,
-//! so a runtime that restarts can still reach a running box. Each connection
-//! carries one request and one response: a 4-byte little-endian length, then
-//! a JSON object of at most [`MAX_FRAME`] bytes. Native directory registration
-//! carries one open directory via `SCM_RIGHTS`. Requests name [`VERSION`].
+//! so a runtime that restarts can still reach a running box with a matching
+//! shim. Each connection carries one HTTP/1.1 JSON request and response.
+//! Directory registration attaches one open directory via `SCM_RIGHTS`.
 
-use std::fs::File;
 use std::io;
-#[cfg(test)]
-use std::io::{Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::time::Duration;
 
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full, Limited};
+use hyper::header::{CONNECTION, CONTENT_TYPE, HOST};
+use hyper::{Request, StatusCode};
+use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
+use tokio::time::timeout;
+
+#[cfg(any(test, feature = "native"))]
+use {
+    http_body_util::LengthLimitError,
+    hyper::{
+        Method, Response,
+        body::Incoming,
+        header::{ALLOW, HeaderValue},
+    },
+    hyper_util::rt::TokioTimer,
+    std::{
+        cell::RefCell,
+        convert::Infallible,
+        fs::File,
+        os::unix::net::{UnixListener, UnixStream},
+    },
+    tokio::{
+        runtime::Runtime,
+        time::{Instant, timeout_at},
+    },
+};
 
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 use super::controller::mount_control::{ControlMount, MountState};
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-use std::time::Instant;
-
-#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 mod transport;
 
-/// The protocol version a request names.
-pub(crate) const VERSION: u32 = 1;
-/// The largest frame either side accepts.
+const RESIZE_PATH: &str = "/v1/resize-disk";
+const MAX_BODY: usize = 4096;
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-pub(crate) const MAX_FRAME: u32 = 64 * 1024;
-#[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
-const MAX_FRAME: u32 = 4096;
-/// How long the shim waits for a request or a reply write.
-const IO_TIMEOUT: Duration = Duration::from_secs(2);
+const MOUNT_PATH: &str = "/v1/mount-control";
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+pub(super) const MAX_MOUNT_BODY: usize = 64 * 1024;
+const HTTP_BUFFER: usize = 8192;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg(any(test, feature = "native"))]
+const READ_TIMEOUT: Duration = Duration::from_secs(2);
+// Allow the request read, ten-second device reply wait, and reply write.
+#[cfg(any(test, feature = "native"))]
+const SERVER_TIMEOUT: Duration = Duration::from_secs(14);
+#[cfg(any(test, feature = "native"))]
 const ACCEPT_RETRY_INITIAL: Duration = Duration::from_millis(5);
+#[cfg(any(test, feature = "native"))]
 const ACCEPT_RETRY_MAX: Duration = Duration::from_millis(50);
 
-/// One versioned request. Its operation sits beside `version`, tagged by
-/// `op`; an unknown operation fails to parse.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct ControlRequest {
-    pub(crate) version: u32,
-    #[serde(flatten)]
-    pub(crate) op: ControlOp,
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResizeDiskRequest {
+    block_id: String,
+    bytes: u64,
 }
 
 /// The operations a shim may serve.
+#[cfg(any(test, feature = "native"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum ControlOp {
@@ -101,6 +126,7 @@ pub(crate) enum ControlError {
 
 /// Binds `path` (replacing a stale socket), makes it owner-only, and serves
 /// each connection on a `vmm-control` thread with `handle`.
+#[cfg(any(test, feature = "native"))]
 pub(crate) fn serve(
     path: &Path,
     handle: impl FnMut(ControlOp, Option<File>) -> ControlResponse + Send + 'static,
@@ -112,14 +138,36 @@ pub(crate) fn serve(
     restrict_to_owner(path)?;
     // SAFETY: `geteuid` has no preconditions.
     let owner = unsafe { libc::geteuid() };
+    let (ready, started) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("vmm-control".into())
-        .spawn(move || serve_connections(listener.incoming(), owner, handle, std::thread::sleep))?;
-    Ok(())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build();
+            match runtime {
+                Ok(runtime) => {
+                    let _ = ready.send(Ok(()));
+                    serve_connections(
+                        &runtime,
+                        listener.incoming(),
+                        owner,
+                        handle,
+                        std::thread::sleep,
+                    );
+                }
+                Err(error) => {
+                    let _ = ready.send(Err(error));
+                }
+            }
+        })?;
+    started.recv().map_err(io::Error::other)?
 }
 
-/// `owner` is the uid whose mount control requests this shim accepts.
+#[cfg(any(test, feature = "native"))]
 fn serve_connections(
+    runtime: &Runtime,
     incoming: impl Iterator<Item = io::Result<UnixStream>>,
     owner: libc::uid_t,
     mut handle: impl FnMut(ControlOp, Option<File>) -> ControlResponse,
@@ -153,71 +201,261 @@ fn serve_connections(
                 continue;
             }
         };
-        if let Err(error) = answer(stream, owner, &mut handle) {
+        if let Err(error) = answer(runtime, stream, owner, &mut handle) {
             tracing::debug!(%error, "control connection ended");
         }
     }
 }
 
+#[cfg(any(test, feature = "native"))]
 fn answer(
+    runtime: &Runtime,
     stream: UnixStream,
     owner: libc::uid_t,
     handle: &mut impl FnMut(ControlOp, Option<File>) -> ControlResponse,
 ) -> io::Result<()> {
-    // The resize path of other platforms has no peer check.
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    let same_user = transport::same_user(&stream, owner)
+        .map_err(|error| error.raw_os_error().unwrap_or(libc::EIO));
     #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
     let _ = owner;
-    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-    let (frame, file) = transport::receive_frame(&stream, Instant::now() + IO_TIMEOUT)?;
-    #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
-    let (mut stream, frame, file) = {
-        let mut stream = stream;
-        stream.set_read_timeout(Some(IO_TIMEOUT))?;
-        stream.set_write_timeout(Some(IO_TIMEOUT))?;
-        let frame = read_frame(&mut stream)?;
-        (stream, frame, None)
-    };
-    let response = match serde_json::from_slice::<ControlRequest>(&frame) {
-        Ok(request) if request.version == VERSION => {
-            #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-            let checked = check_request(&stream, owner, &request.op, file.is_some());
-            #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
-            let checked = Ok(());
-            checked.and_then(|()| handle(request.op, file))
-        }
-        Ok(request) => Err(ControlError::Unsupported(format!(
-            "protocol version {}",
-            request.version
-        ))),
-        Err(error) => Err(ControlError::InvalidInput(error.to_string())),
-    };
-    let reply = serde_json::to_vec(&response)?;
-    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
-    return transport::send_frame(&stream, &reply, None, Instant::now() + IO_TIMEOUT);
-    #[cfg(not(all(feature = "native", target_os = "linux", target_arch = "x86_64")))]
-    write_frame(&mut stream, &reply)
+
+    runtime.block_on(async {
+        stream.set_nonblocking(true)?;
+        let stream = tokio::net::UnixStream::from_std(stream)?;
+        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        let (stream, received) = transport::AncillaryIo::new(stream, None);
+
+        // One request per connection. The listener owns the mutable handler
+        // and lends it to Hyper only for synchronous dispatch.
+        let handle = RefCell::new(handle);
+        let read_deadline = Instant::now() + READ_TIMEOUT;
+        let connection = hyper::server::conn::http1::Builder::new()
+            .keep_alive(false)
+            .half_close(true)
+            .max_buf_size(HTTP_BUFFER)
+            .timer(TokioTimer::new())
+            .header_read_timeout(READ_TIMEOUT)
+            .serve_connection(
+                TokioIo::new(stream),
+                hyper::service::service_fn(|request| async {
+                    let reply = handle_http(request, read_deadline, |op| {
+                        #[cfg(all(
+                            feature = "native",
+                            target_os = "linux",
+                            target_arch = "x86_64"
+                        ))]
+                        let file = {
+                            let file = received.take();
+                            check_request(&op, file.is_some(), same_user)?;
+                            file
+                        };
+                        #[cfg(not(all(
+                            feature = "native",
+                            target_os = "linux",
+                            target_arch = "x86_64"
+                        )))]
+                        let file = None;
+                        handle.borrow_mut()(op, file)
+                    })
+                    .await;
+                    Ok::<_, Infallible>(reply)
+                }),
+            );
+        timeout(SERVER_TIMEOUT, connection)
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "control connection timed out"))?
+            .map_err(io::Error::other)
+    })
 }
 
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 fn check_request(
-    stream: &UnixStream,
-    owner: libc::uid_t,
     op: &ControlOp,
     has_fd: bool,
+    same_user: Result<bool, i32>,
 ) -> Result<(), ControlError> {
     let register = matches!(op, ControlOp::RegisterMount { .. });
     if has_fd != register {
         return Err(ControlError::Mount(libc::EINVAL));
     }
-    if !matches!(op, ControlOp::ResizeDisk { .. })
-        && !transport::same_user(stream, owner)
-            .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap_or(libc::EIO)))?
-    {
+    if !matches!(op, ControlOp::ResizeDisk { .. }) && !same_user.map_err(ControlError::Mount)? {
         return Err(ControlError::Mount(libc::EPERM));
     }
     Ok(())
 }
 
+#[cfg(any(test, feature = "native"))]
+async fn handle_http(
+    request: Request<Incoming>,
+    read_deadline: Instant,
+    handle: impl FnOnce(ControlOp) -> ControlResponse,
+) -> Response<Full<Bytes>> {
+    type ParseControlOp = fn(&[u8]) -> Result<ControlOp, ControlError>;
+    let (parse, max_body): (ParseControlOp, _) = match request.uri().path() {
+        RESIZE_PATH => (parse_resize, MAX_BODY),
+        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        MOUNT_PATH => (parse_mount, MAX_MOUNT_BODY),
+        _ => return invalid_request(StatusCode::NOT_FOUND, "unknown control path"),
+    };
+    if request.method() != Method::POST {
+        let mut response = invalid_request(StatusCode::METHOD_NOT_ALLOWED, "control requires POST");
+        response
+            .headers_mut()
+            .insert(ALLOW, HeaderValue::from_static("POST"));
+        return response;
+    }
+
+    let body = Limited::new(request.into_body(), max_body);
+    let body = match timeout_at(read_deadline, body.collect()).await {
+        Ok(Ok(body)) => body.to_bytes(),
+        Ok(Err(error)) if error.is::<LengthLimitError>() => {
+            return invalid_request(StatusCode::PAYLOAD_TOO_LARGE, "control request too large");
+        }
+        Ok(Err(_)) => {
+            return invalid_request(StatusCode::BAD_REQUEST, "incomplete control request");
+        }
+        Err(_) => return invalid_request(StatusCode::REQUEST_TIMEOUT, "control request timed out"),
+    };
+    let reply = parse(&body).and_then(handle);
+    json_reply(reply_status(&reply), &reply, max_body)
+}
+
+#[cfg(any(test, feature = "native"))]
+fn parse_resize(body: &[u8]) -> Result<ControlOp, ControlError> {
+    let request: ResizeDiskRequest = serde_json::from_slice(body)
+        .map_err(|error| ControlError::InvalidInput(error.to_string()))?;
+    Ok(ControlOp::ResizeDisk {
+        block_id: request.block_id,
+        bytes: request.bytes,
+    })
+}
+
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+fn parse_mount(body: &[u8]) -> Result<ControlOp, ControlError> {
+    let op = serde_json::from_slice(body)
+        .map_err(|error| ControlError::InvalidInput(error.to_string()))?;
+    if matches!(op, ControlOp::ResizeDisk { .. }) {
+        return Err(ControlError::InvalidInput(
+            "expected a mount operation".into(),
+        ));
+    }
+    Ok(op)
+}
+
+#[cfg(any(test, feature = "native"))]
+fn invalid_request(status: StatusCode, message: impl Into<String>) -> Response<Full<Bytes>> {
+    json_reply(
+        status,
+        &Err(ControlError::InvalidInput(message.into())),
+        MAX_BODY,
+    )
+}
+
+fn reply_status(reply: &ControlResponse) -> StatusCode {
+    match reply {
+        Ok(_) => StatusCode::OK,
+        Err(ControlError::InvalidInput(_)) => StatusCode::BAD_REQUEST,
+        Err(ControlError::Unsupported(_)) => StatusCode::NOT_IMPLEMENTED,
+        Err(ControlError::Failed(_)) => StatusCode::INTERNAL_SERVER_ERROR,
+        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        Err(ControlError::Mount(errno)) => match *errno {
+            libc::EINVAL | libc::ENOTDIR => StatusCode::BAD_REQUEST,
+            libc::EPERM | libc::EACCES => StatusCode::FORBIDDEN,
+            libc::ENOENT => StatusCode::NOT_FOUND,
+            libc::EBUSY => StatusCode::CONFLICT,
+            libc::ENOSPC => StatusCode::INSUFFICIENT_STORAGE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        },
+    }
+}
+
+#[cfg(any(test, feature = "native"))]
+fn json_reply(
+    status: StatusCode,
+    reply: &ControlResponse,
+    max_body: usize,
+) -> Response<Full<Bytes>> {
+    let (status, body) = match serde_json::to_vec(reply) {
+        Ok(body) if body.len() <= max_body => (status, Bytes::from(body)),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Bytes::from_static(br#"{"Err":{"failed":"control reply exceeds the size limit"}}"#),
+        ),
+    };
+    let mut response = Response::new(Full::new(body));
+    *response.status_mut() = status;
+    response
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response
+}
+
+async fn request(path: &Path, block_id: &str, bytes: u64) -> io::Result<ControlResponse> {
+    let body = serde_json::to_vec(&ResizeDiskRequest {
+        block_id: block_id.into(),
+        bytes,
+    })?;
+    let stream = tokio::net::UnixStream::connect(path).await?;
+    exchange_http(TokioIo::new(stream), RESIZE_PATH, body, MAX_BODY).await
+}
+
+async fn exchange_http(
+    stream: impl hyper::rt::Read + hyper::rt::Write + Unpin,
+    route: &'static str,
+    body: Vec<u8>,
+    max_body: usize,
+) -> io::Result<ControlResponse> {
+    if body.len() > max_body {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "control request too large",
+        ));
+    }
+    let (mut sender, connection) = hyper::client::conn::http1::Builder::new()
+        .max_buf_size(HTTP_BUFFER)
+        .handshake(stream)
+        .await
+        .map_err(io::Error::other)?;
+    let request = Request::post(route)
+        .header(HOST, "vmm")
+        .header(CONTENT_TYPE, "application/json")
+        .header(CONNECTION, "close")
+        .body(Full::new(Bytes::from(body)))
+        .map_err(io::Error::other)?;
+    let exchange = async {
+        let response = sender
+            .send_request(request)
+            .await
+            .map_err(io::Error::other)?;
+        let status = response.status();
+        let body = Limited::new(response.into_body(), max_body)
+            .collect()
+            .await
+            .map_err(io::Error::other)?;
+        let reply: ControlResponse = serde_json::from_slice(&body.to_bytes())?;
+        if status != reply_status(&reply) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected HTTP control status {status}"),
+            ));
+        }
+        Ok(reply)
+    };
+    tokio::pin!(exchange);
+    // Drive the connection within this exchange so canceling it closes the socket.
+    // Drop the socket at completion because the peer may already have closed.
+    tokio::select! {
+        biased;
+        reply = &mut exchange => reply,
+        result = connection.without_shutdown() => {
+            result.map_err(io::Error::other)?;
+            exchange.await
+        }
+    }
+}
+
+/// A blocking exchange for the native mount client and shim tests.
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn exchange(
     path: &Path,
@@ -225,68 +463,89 @@ pub(crate) fn exchange(
     directory: Option<&File>,
     timeout: Duration,
 ) -> io::Result<ControlResponse> {
-    use std::os::fd::AsRawFd;
-
-    let deadline = Instant::now() + timeout;
-    let stream = transport::connect(path, deadline)?;
-    let request = ControlRequest {
-        version: VERSION,
-        op,
+    let deadline = std::time::Instant::now() + timeout;
+    let (route, body, max_body) = match op {
+        ControlOp::ResizeDisk { block_id, bytes } => (
+            RESIZE_PATH,
+            serde_json::to_vec(&ResizeDiskRequest { block_id, bytes })?,
+            MAX_BODY,
+        ),
+        op => (MOUNT_PATH, serde_json::to_vec(&op)?, MAX_MOUNT_BODY),
     };
-    let frame = serde_json::to_vec(&request)?;
-    transport::send_frame(&stream, &frame, directory.map(AsRawFd::as_raw_fd), deadline)?;
-    let (reply, attached) = transport::receive_frame(&stream, deadline)?;
-    if attached.is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "descriptor in control reply",
-        ));
-    }
-    Ok(serde_json::from_slice(&reply)?)
+    // A blocking Unix connect waits on a full listen backlog until the deadline.
+    let stream = transport::connect(path, deadline)?;
+    stream.set_nonblocking(true)?;
+    let directory = directory.map(File::try_clone).transpose()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()?;
+    runtime.block_on(async {
+        let stream = tokio::net::UnixStream::from_std(stream)?;
+        let (stream, received) = transport::AncillaryIo::new(stream, directory);
+        let reply = timeout_at(
+            Instant::from_std(deadline),
+            exchange_http(TokioIo::new(stream), route, body, max_body),
+        )
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "VMM control deadline"))??;
+        if received.take().is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "descriptor in control reply",
+            ));
+        }
+        Ok(reply)
+    })
 }
 
-/// Sends `request` to the shim at `path` and waits up to `timeout` for the
-/// answer, as the host side of one exchange.
-#[cfg(test)]
-pub(crate) fn request(
+/// Request an absolute disk capacity through the native shim's host-only channel.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) async fn grow_disk(
     path: &Path,
-    request: &ControlRequest,
-    timeout: Duration,
-) -> io::Result<ControlResponse> {
-    let mut stream = UnixStream::connect(path)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    write_frame(&mut stream, &serde_json::to_vec(request)?)?;
-    Ok(serde_json::from_slice(&read_frame(&mut stream)?)?)
-}
+    block_id: &str,
+    bytes: u64,
+) -> boxlite_shared::BoxliteResult<()> {
+    use boxlite_shared::BoxliteError;
 
-#[cfg(test)]
-fn read_frame(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
-    let mut length = [0u8; 4];
-    stream.read_exact(&mut length)?;
-    let length = u32::from_le_bytes(length);
-    if length > MAX_FRAME {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("control frame of {length} bytes exceeds {MAX_FRAME}"),
-        ));
+    // The worker waits up to ten seconds; allow the bounded exchange to outlast it.
+    let response = timeout(CLIENT_TIMEOUT, request(path, block_id, bytes))
+        .await
+        .map_err(|_| {
+            BoxliteError::Engine(
+                "disk resize completion is unknown: reply timed out; retry the target".into(),
+            )
+        })?
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
+                BoxliteError::Unsupported(
+                    "shim has no disk control channel; restart with the current runtime".into(),
+                )
+            }
+            _ => BoxliteError::Engine(format!(
+                "disk resize completion is unknown: {error}; retry the target. \
+                 If the shim is older than the runtime, restart the box with matching versions."
+            )),
+        })?;
+    match response {
+        Ok(ControlReply::DiskSize(actual)) if actual == bytes => Ok(()),
+        Ok(ControlReply::DiskSize(actual)) => Err(BoxliteError::Engine(format!(
+            "disk resize completion is unknown: shim reported {actual} disk bytes, requested {bytes}; retry the target"
+        ))),
+        Err(ControlError::Unsupported(message)) => Err(BoxliteError::Unsupported(message)),
+        Err(ControlError::InvalidInput(message)) => Err(BoxliteError::InvalidArgument(message)),
+        Err(ControlError::Failed(message)) => Err(BoxliteError::Engine(format!(
+            "disk resize completion is unknown: {message}; query allocation or retry the target"
+        ))),
+        #[cfg(feature = "native")]
+        _ => Err(BoxliteError::Engine(
+            "disk resize completion is unknown: unexpected shim reply; retry the target".into(),
+        )),
     }
-    let mut frame = vec![0u8; length as usize];
-    stream.read_exact(&mut frame)?;
-    Ok(frame)
-}
-
-#[cfg(test)]
-fn write_frame(stream: &mut UnixStream, frame: &[u8]) -> io::Result<()> {
-    let length = u32::try_from(frame.len())
-        .ok()
-        .filter(|length| *length <= MAX_FRAME)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "control frame too large"))?;
-    stream.write_all(&length.to_le_bytes())?;
-    stream.write_all(frame)
 }
 
 /// `fchmodat`, which the shim's seccomp profile allows, rather than `chmod`.
+#[cfg(any(test, feature = "native"))]
 fn restrict_to_owner(path: &Path) -> io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;

@@ -26,10 +26,7 @@ pub mod krun;
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 pub mod native;
 pub mod registry;
-#[cfg(any(
-    test,
-    all(feature = "native", target_os = "linux", target_arch = "x86_64")
-))]
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
 pub(crate) mod vmm_socket;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};

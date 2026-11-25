@@ -1,4 +1,3 @@
-use super::MAX_FRAME;
 use std::fs::File;
 use std::io;
 use std::mem::{size_of, zeroed};
@@ -6,7 +5,12 @@ use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant};
+
+use tokio::io::{AsyncRead, AsyncWrite, Interest, ReadBuf};
 
 fn remaining(end: Instant) -> io::Result<Duration> {
     end.checked_duration_since(Instant::now())
@@ -63,182 +67,230 @@ struct Ancillary {
     bytes: [u8; 64],
 }
 
-pub(super) fn send_frame(
-    stream: &UnixStream,
-    payload: &[u8],
-    fd: Option<RawFd>,
-    end: Instant,
-) -> io::Result<()> {
-    if payload.len() > MAX_FRAME as usize {
-        return Err(io::Error::from_raw_os_error(libc::EMSGSIZE));
+/// A connection can deliver one descriptor with its HTTP request.
+#[derive(Clone, Default)]
+pub(super) struct ReceivedFile(Arc<Mutex<Option<File>>>);
+
+impl ReceivedFile {
+    pub(super) fn take(&self) -> Option<File> {
+        self.0.lock().expect("received file lock poisoned").take()
     }
-    send_parts(
-        stream,
-        &(payload.len() as u32).to_le_bytes(),
-        payload,
-        fd,
-        end,
+
+    fn store(&self, file: File) {
+        *self.0.lock().expect("received file lock poisoned") = Some(file);
+    }
+}
+
+/// Preserves Unix ancillary data while Hyper reads and writes HTTP bytes.
+pub(super) struct AncillaryIo {
+    stream: tokio::net::UnixStream,
+    outgoing: Option<File>,
+    received: ReceivedFile,
+    first_read: bool,
+}
+
+impl AncillaryIo {
+    pub(super) fn new(
+        stream: tokio::net::UnixStream,
+        outgoing: Option<File>,
+    ) -> (Self, ReceivedFile) {
+        let received = ReceivedFile::default();
+        (
+            Self {
+                stream,
+                outgoing,
+                received: received.clone(),
+                first_read: true,
+            },
+            received,
+        )
+    }
+}
+
+impl AsyncRead for AncillaryIo {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        if buffer.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+        // recvmsg can return preceding bytes together with a later descriptor.
+        // Isolating the first byte binds the descriptor to this HTTP exchange.
+        let limit = if this.first_read {
+            1
+        } else {
+            buffer.remaining()
+        };
+        loop {
+            ready!(this.stream.poll_read_ready(cx))?;
+            let result = this.stream.try_io(Interest::READABLE, || {
+                receive_with_file(
+                    this.stream.as_raw_fd(),
+                    buffer.initialize_unfilled_to(limit),
+                )
+            });
+            match result {
+                Ok((count, file)) => {
+                    if let Some(file) = file {
+                        if !this.first_read {
+                            return Poll::Ready(Err(invalid_ancillary()));
+                        }
+                        this.received.store(file);
+                    }
+                    this.first_read = false;
+                    buffer.advance(count);
+                    return Poll::Ready(Ok(()));
+                }
+                Err(error) if retry_io(&error) => continue,
+                Err(error) => return Poll::Ready(Err(error)),
+            }
+        }
+    }
+}
+
+impl AsyncWrite for AncillaryIo {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        let Some(file) = &this.outgoing else {
+            return Pin::new(&mut this.stream).poll_write(cx, bytes);
+        };
+        if bytes.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+        loop {
+            ready!(this.stream.poll_write_ready(cx))?;
+            let result = this.stream.try_io(Interest::WRITABLE, || {
+                send_with_file(this.stream.as_raw_fd(), bytes, file.as_raw_fd())
+            });
+            match result {
+                Ok(0) => return Poll::Ready(Err(io::ErrorKind::WriteZero.into())),
+                Ok(count) => {
+                    // The kernel transfers the descriptor on the first positive write.
+                    this.outgoing = None;
+                    return Poll::Ready(Ok(count));
+                }
+                Err(error) if retry_io(&error) => continue,
+                Err(error) => return Poll::Ready(Err(error)),
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_shutdown(cx)
+    }
+}
+
+fn retry_io(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
     )
 }
 
-pub(super) fn send_parts(
-    stream: &UnixStream,
-    head: &[u8],
-    body: &[u8],
-    mut fd: Option<RawFd>,
-    end: Instant,
-) -> io::Result<()> {
-    let mut offset = 0;
-    while offset < head.len() + body.len() {
-        stream.set_write_timeout(Some(remaining(end)?))?;
-        let mut control = Ancillary {
-            alignment: [],
-            bytes: [0; 64],
-        };
-        let (first, second) = if offset < head.len() {
-            (&head[offset..], body)
-        } else {
-            (&body[offset - head.len()..], &[][..])
-        };
-        let mut iov = [
-            libc::iovec {
-                iov_base: first.as_ptr().cast_mut().cast(),
-                iov_len: first.len(),
-            },
-            libc::iovec {
-                iov_base: second.as_ptr().cast_mut().cast(),
-                iov_len: second.len(),
-            },
-        ];
-        // SAFETY: a zeroed msghdr has no optional address or ancillary pointers.
-        let mut msg: libc::msghdr = unsafe { zeroed() };
-        msg.msg_iov = iov.as_mut_ptr();
-        msg.msg_iovlen = if second.is_empty() { 1 } else { 2 };
-        if let Some(fd) = fd {
-            msg.msg_control = control.bytes.as_mut_ptr().cast();
-            msg.msg_controllen = unsafe { libc::CMSG_SPACE(size_of::<RawFd>() as _) } as _;
-            unsafe {
-                let header = libc::CMSG_FIRSTHDR(&msg);
-                (*header).cmsg_level = libc::SOL_SOCKET;
-                (*header).cmsg_type = libc::SCM_RIGHTS;
-                (*header).cmsg_len = libc::CMSG_LEN(size_of::<RawFd>() as _) as _;
-                std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), fd);
-            }
-        }
-        let sent = unsafe { libc::sendmsg(stream.as_raw_fd(), &msg, libc::MSG_NOSIGNAL) };
-        if sent < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(timed_out(error));
-        }
-        if sent == 0 {
-            return Err(io::Error::new(io::ErrorKind::WriteZero, "VMM control send"));
-        }
-        offset += sent as usize;
-        // A positive send transferred ancillary ownership even on a short write.
-        fd = None;
+pub(super) fn send_with_file(socket: RawFd, bytes: &[u8], file: RawFd) -> io::Result<usize> {
+    let mut control = Ancillary {
+        alignment: [],
+        bytes: [0; 64],
+    };
+    let mut iov = libc::iovec {
+        iov_base: bytes.as_ptr().cast_mut().cast(),
+        iov_len: bytes.len(),
+    };
+    // SAFETY: a zeroed msghdr has no optional address pointers.
+    let mut msg: libc::msghdr = unsafe { zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.bytes.as_mut_ptr().cast();
+    // SAFETY: the aligned control buffer fits a header and a single descriptor.
+    let sent = unsafe {
+        msg.msg_controllen = libc::CMSG_SPACE(size_of::<RawFd>() as _) as _;
+        let header = libc::CMSG_FIRSTHDR(&msg);
+        (*header).cmsg_level = libc::SOL_SOCKET;
+        (*header).cmsg_type = libc::SCM_RIGHTS;
+        (*header).cmsg_len = libc::CMSG_LEN(size_of::<RawFd>() as _) as _;
+        std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), file);
+        libc::sendmsg(socket, &msg, libc::MSG_NOSIGNAL)
+    };
+    if sent < 0 {
+        return Err(io::Error::last_os_error());
     }
-    Ok(())
+    Ok(sent as usize)
 }
 
-pub(super) fn receive_exact(
-    stream: &UnixStream,
-    bytes: &mut [u8],
-    file: &mut Option<File>,
-    end: Instant,
-) -> io::Result<()> {
-    let mut offset = 0;
-    while offset < bytes.len() {
-        stream.set_read_timeout(Some(remaining(end)?))?;
-        let mut control = Ancillary {
-            alignment: [],
-            bytes: [0; 64],
-        };
-        let mut iov = libc::iovec {
-            iov_base: bytes[offset..].as_mut_ptr().cast(),
-            iov_len: bytes.len() - offset,
-        };
-        let mut msg: libc::msghdr = unsafe { zeroed() };
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = control.bytes.as_mut_ptr().cast();
-        msg.msg_controllen = control.bytes.len() as _;
-        let received =
-            unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC) };
-        if received < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(timed_out(error));
-        }
-        let mut invalid = false;
-        // SAFETY: recvmsg populated msg and its aligned control buffer.
-        let (mut header, base) = unsafe { (libc::CMSG_FIRSTHDR(&msg), libc::CMSG_LEN(0) as usize) };
-        while !header.is_null() {
-            // SAFETY: this header was returned by the walk over the live buffer.
-            let cmsg = unsafe { &*header };
-            let length = cmsg.cmsg_len;
-            #[cfg(target_env = "musl")]
-            let length = length as usize;
-            if length < base {
-                invalid = true;
-                break;
-            }
-            if cmsg.cmsg_level == libc::SOL_SOCKET && cmsg.cmsg_type == libc::SCM_RIGHTS {
-                let count = (length - base) / size_of::<RawFd>();
-                // SAFETY: the kernel initialized this header and its payload.
-                let data = unsafe { libc::CMSG_DATA(header) }.cast::<RawFd>();
-                for index in 0..count {
-                    // SAFETY: each full FD fits in the payload. recvmsg transferred
-                    // ownership, including descriptors from a rejected frame.
-                    let received = unsafe { File::from_raw_fd(data.add(index).read_unaligned()) };
-                    if file.is_some() {
-                        invalid = true;
-                    } else {
-                        *file = Some(received);
-                    }
-                }
-                invalid |= !(length - base).is_multiple_of(size_of::<RawFd>());
-            } else {
-                invalid = true;
-            }
-            // SAFETY: header belongs to msg's live, kernel-populated buffer.
-            header = unsafe { libc::CMSG_NXTHDR(&msg, header) };
-        }
-        if invalid || msg.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "VMM control ancillary data",
-            ));
-        }
-        if received == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "VMM control frame",
-            ));
-        }
-        offset += received as usize;
+fn receive_with_file(socket: RawFd, bytes: &mut [u8]) -> io::Result<(usize, Option<File>)> {
+    let mut control = Ancillary {
+        alignment: [],
+        bytes: [0; 64],
+    };
+    let mut iov = libc::iovec {
+        iov_base: bytes.as_mut_ptr().cast(),
+        iov_len: bytes.len(),
+    };
+    // SAFETY: a zeroed msghdr has no optional address pointers.
+    let mut msg: libc::msghdr = unsafe { zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.bytes.as_mut_ptr().cast();
+    msg.msg_controllen = control.bytes.len() as _;
+    // SAFETY: the iovec and control buffer are live and writable for their declared lengths.
+    let received = unsafe { libc::recvmsg(socket, &mut msg, libc::MSG_CMSG_CLOEXEC) };
+    if received < 0 {
+        return Err(io::Error::last_os_error());
     }
-    Ok(())
-}
-
-pub(super) fn receive_frame(
-    stream: &UnixStream,
-    end: Instant,
-) -> io::Result<(Vec<u8>, Option<File>)> {
     let mut file = None;
-    let mut header = [0; 4];
-    receive_exact(stream, &mut header, &mut file, end)?;
-    let length = u32::from_le_bytes(header);
-    if length > MAX_FRAME {
-        return Err(io::Error::from_raw_os_error(libc::EMSGSIZE));
+    let mut invalid = msg.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0;
+    // SAFETY: recvmsg populated msg and its aligned control buffer.
+    let (mut header, base) = unsafe { (libc::CMSG_FIRSTHDR(&msg), libc::CMSG_LEN(0) as usize) };
+    while !header.is_null() {
+        // SAFETY: this header was returned by the walk over the live buffer.
+        let cmsg = unsafe { &*header };
+        let length = cmsg.cmsg_len;
+        #[cfg(target_env = "musl")]
+        let length = length as usize;
+        if length < base {
+            invalid = true;
+            break;
+        }
+        if cmsg.cmsg_level == libc::SOL_SOCKET && cmsg.cmsg_type == libc::SCM_RIGHTS {
+            let count = (length - base) / size_of::<RawFd>();
+            // SAFETY: the kernel initialized this header and its payload.
+            let data = unsafe { libc::CMSG_DATA(header) }.cast::<RawFd>();
+            for index in 0..count {
+                // SAFETY: each full FD fits in the payload. Take ownership so
+                // even descriptors from invalid messages are closed.
+                let descriptor = unsafe { File::from_raw_fd(data.add(index).read_unaligned()) };
+                if file.is_some() {
+                    invalid = true;
+                } else {
+                    file = Some(descriptor);
+                }
+            }
+            invalid |= !(length - base).is_multiple_of(size_of::<RawFd>());
+        } else {
+            invalid = true;
+        }
+        // SAFETY: header belongs to msg's live, kernel-populated buffer.
+        header = unsafe { libc::CMSG_NXTHDR(&msg, header) };
     }
-    let mut payload = vec![0; length as usize];
-    receive_exact(stream, &mut payload, &mut file, end)?;
-    Ok((payload, file))
+    if invalid {
+        return Err(invalid_ancillary());
+    }
+    Ok((received as usize, file))
+}
+
+fn invalid_ancillary() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "VMM control ancillary data")
 }
 
 /// Whether the peer connected as `owner`, the uid this shim serves.

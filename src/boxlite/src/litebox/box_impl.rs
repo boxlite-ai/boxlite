@@ -47,6 +47,10 @@ use operations::{StopCommit, StopReason};
 /// Shared reference to BoxImpl.
 pub type SharedBoxImpl = Arc<BoxImpl>;
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "box_impl/tests/resize.rs"]
+mod resize_tests;
+
 // ============================================================================
 // LIVE STATE
 // ============================================================================
@@ -58,7 +62,7 @@ pub type SharedBoxImpl = Arc<BoxImpl>;
 pub(crate) struct LiveState {
     // VM process control
     handler: std::sync::Mutex<Box<dyn VmmHandler>>,
-    guest_session: GuestSession,
+    pub(super) guest_session: GuestSession,
 
     /// Host-side network control backend (gvproxy ServicesMux client), owned
     /// beside `guest_session`. `None` when the box was created network-disabled.
@@ -786,19 +790,20 @@ impl BoxImpl {
                 self.config.id
             )));
         }
-        self.with_operation(async {
-            if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running
-            {
-                return Err(BoxliteError::InvalidState(format!(
-                    "Box {} is not running",
-                    self.id()
-                )));
-            }
-            self.live
-                .get_or_try_init(|| self.init_live_state(false))
-                .await
-        })
-        .await
+        self.with_operation(self.existing_live_state_locked()).await
+    }
+
+    /// Caller holds lifecycle admission; attaching here must never boot a new VM.
+    pub(super) async fn existing_live_state_locked(&self) -> BoxliteResult<&LiveState> {
+        if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(format!(
+                "Box {} is not running",
+                self.id()
+            )));
+        }
+        self.live
+            .get_or_try_init(|| self.init_live_state(false))
+            .await
     }
 
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
@@ -1448,12 +1453,11 @@ impl BoxImpl {
         // New and restarted VMs remain guarded until DB persistence succeeds.
         // Running adoption disarms cleanup before reconnecting to the live VM.
         let mut state = state;
-        state.outbound_policy = self
-            .runtime
-            .box_manager
-            .update_box(&self.config.id)?
-            .outbound_policy;
-        let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
+        let persisted = self.runtime.box_manager.update_box(self.id())?;
+        state.outbound_policy = persisted.outbound_policy;
+        let mut config = self.config.clone();
+        config.options.disk_size_gb = persisted.disk_size_gb.or(config.options.disk_size_gb);
+        let builder = BoxBuilder::new(Arc::clone(&self.runtime), config, state)?;
         let crate::litebox::init::BuiltBox {
             live: live_state,
             guard: mut cleanup_guard,
@@ -1780,6 +1784,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     async fn start(&self) -> BoxliteResult<()> {
         self.start().await
+    }
+
+    async fn resize(&self, options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
+        self.resize(options).await
     }
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {

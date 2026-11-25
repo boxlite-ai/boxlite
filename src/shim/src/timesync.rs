@@ -244,6 +244,14 @@ mod tests {
                 None => Ok(tonic::Response::new(boxlite_shared::SyncClockResponse {})),
             }
         }
+
+        async fn resize_filesystem(
+            &self,
+            _: tonic::Request<boxlite_shared::ResizeFilesystemRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ResizeFilesystemResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("test fake"))
+        }
     }
 
     async fn serve_fake(
