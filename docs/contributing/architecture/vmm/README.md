@@ -849,3 +849,10 @@ macOS arm64 and Linux x86_64.
 `krun_pause -> krun_save_checkpoint -> Qcow2Helper::flatten -> krun_resume` with
 `ResumeOnDrop` and shim exit after replying on `ESHUTDOWN`. Restores bind
 `krun_build_from_checkpoint`.
+
+### Checkpoint options, shim forwarding, and one-shot restore state
+
+`ExportOptions::full()` requests memory checkpoints locally while REST rejects
+`include_memory: true` with `Unsupported`. `ShimController` forwards `checkpoint_restore`
+and grants RO access to checkpoint files, and `BoxState::pending_memory_restore` tracks
+one-shot restore.

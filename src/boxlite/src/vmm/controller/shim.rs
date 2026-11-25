@@ -298,6 +298,52 @@ impl ShimController {
     }
 }
 
+fn build_serializable_config(
+    engine: VmmKind,
+    box_id: &BoxID,
+    security: &crate::jailer::SecurityOptions,
+    config: &InstanceSpec,
+    guest_entrypoint: crate::vmm::Entrypoint,
+) -> InstanceSpec {
+    InstanceSpec {
+        engine,
+        box_id: box_id.to_string(),
+        security: security.clone(),
+        nested_virtualization: config.nested_virtualization,
+        cpus: config.cpus,
+        memory_mib: config.memory_mib,
+        kernel: config.kernel.clone(),
+        fs_shares: config.fs_shares.clone(),
+        volume_access: Vec::new(),
+        block_devices: config.block_devices.clone(),
+        guest_entrypoint,
+        transport: config.transport.clone(),
+        ready_transport: config.ready_transport.clone(),
+        guest_rootfs: config.guest_rootfs.clone(),
+        network_backend_spec: config.network_backend_spec.clone(),
+        network_backend_endpoint: None,
+        disable_network: config.disable_network,
+        home_dir: config.home_dir.clone(),
+        console_output: config.console_output.clone(),
+        exit_file: config.exit_file.clone(),
+        detach: config.detach,
+        checkpoint_restore: config.checkpoint_restore.clone(),
+    }
+}
+
+fn collect_extra_ro_paths(config: &InstanceSpec) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(ref checkpoint_path) = config.checkpoint_restore {
+        paths.push(checkpoint_path.clone());
+        for device in config.block_devices.devices() {
+            if device.read_only {
+                paths.push(device.disk_path.clone());
+            }
+        }
+    }
+    paths
+}
+
 #[async_trait::async_trait]
 impl VmmController for ShimController {
     async fn start(&mut self, config: &InstanceSpec) -> BoxliteResult<Box<dyn VmmHandlerTrait>> {
@@ -319,32 +365,13 @@ impl VmmController for ShimController {
         let mut guest_entrypoint = config.guest_entrypoint.clone();
         guest_entrypoint.env = env; // Use the modified env with RUST_LOG
 
-        let serializable_config = InstanceSpec {
-            engine: self.engine_type,
-            // Box identification and security (from ShimController)
-            box_id: self.box_id.to_string(),
-            security: self.options.advanced.security.clone(),
-            nested_virtualization: config.nested_virtualization,
-            checkpoint_restore: None,
-            // VM configuration
-            cpus: config.cpus,
-            memory_mib: config.memory_mib,
-            kernel: config.kernel.clone(),
-            fs_shares: config.fs_shares.clone(),
-            volume_access: Vec::new(),
-            block_devices: config.block_devices.clone(),
+        let serializable_config = build_serializable_config(
+            self.engine_type,
+            &self.box_id,
+            &self.options.advanced.security,
+            config,
             guest_entrypoint,
-            transport: config.transport.clone(),
-            ready_transport: config.ready_transport.clone(),
-            guest_rootfs: config.guest_rootfs.clone(),
-            network_backend_spec: config.network_backend_spec.clone(), // provisioning spec passed to the shim (stands up gvproxy)
-            network_backend_endpoint: None, // Will be populated by shim (not serialized)
-            disable_network: config.disable_network,
-            home_dir: config.home_dir.clone(),
-            console_output: config.console_output.clone(),
-            exit_file: config.exit_file.clone(),
-            detach: config.detach,
-        };
+        );
 
         // Serialize the config for passing to subprocess
         let config_json = serde_json::to_string(&serializable_config)
@@ -378,7 +405,8 @@ impl VmmController for ShimController {
         )
         .with_shim_cache_dir(FilesystemLayout::shims_dir_for(&config.home_dir))
         .with_nested_virtualization(config.nested_virtualization)
-        .with_volume_access(config.volume_access.clone());
+        .with_volume_access(config.volume_access.clone())
+        .with_extra_ro_paths(collect_extra_ro_paths(config));
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();
@@ -562,5 +590,76 @@ mod tests {
              log through `emit_redacted_box_config_trace` instead.\n  {}",
             offenders.join("\n  ")
         );
+    }
+
+    #[test]
+    fn shim_config_serialization_forwards_checkpoint_restore() {
+        use crate::jailer::SecurityOptions;
+        use crate::rootfs::guest::{GuestRootfs, Strategy};
+        use crate::runtime::id::BoxIDMint;
+        use crate::vmm::{BlockDevice, BlockDevices, DiskFormat, Entrypoint, FsShares};
+
+        let box_id = BoxIDMint::mint();
+        let checkpoint_path = PathBuf::from("/tmp/checkpoints/ckpt-1/vmstate.krun");
+        let rootfs_path = PathBuf::from("/tmp/checkpoints/ckpt-1/guest-rootfs.ext4");
+        let mut block_devices = BlockDevices::new();
+        block_devices.add(BlockDevice {
+            block_id: "vdb".to_string(),
+            disk_path: rootfs_path.clone(),
+            read_only: true,
+            format: DiskFormat::Raw,
+        });
+
+        let spec = InstanceSpec {
+            engine: VmmKind::Libkrun,
+            box_id: box_id.to_string(),
+            security: SecurityOptions::default(),
+            nested_virtualization: false,
+            cpus: Some(2),
+            memory_mib: Some(512),
+            kernel: None,
+            fs_shares: FsShares::new(),
+            volume_access: Vec::new(),
+            block_devices,
+            guest_entrypoint: Entrypoint {
+                executable: "/boxlite/bin/boxlite-guest".to_string(),
+                args: Vec::new(),
+                env: Vec::new(),
+            },
+            transport: boxlite_shared::BoxTransport::unix(PathBuf::from("/tmp/box.sock")),
+            ready_transport: boxlite_shared::BoxTransport::unix(PathBuf::from("/tmp/ready.sock")),
+            guest_rootfs: GuestRootfs {
+                path: PathBuf::new(),
+                strategy: Strategy::Disk {
+                    disk_path: rootfs_path.clone(),
+                    device_path: Some("/dev/vdb".to_string()),
+                },
+                kernel: None,
+                initrd: None,
+                env: Vec::new(),
+            },
+            network_backend_spec: None,
+            network_backend_endpoint: None,
+            disable_network: true,
+            home_dir: PathBuf::from("/tmp/home"),
+            console_output: None,
+            exit_file: PathBuf::from("/tmp/exit"),
+            detach: false,
+            checkpoint_restore: Some(checkpoint_path.clone()),
+        };
+
+        let serialized_spec = build_serializable_config(
+            VmmKind::Libkrun,
+            &box_id,
+            &SecurityOptions::default(),
+            &spec,
+            spec.guest_entrypoint.clone(),
+        );
+        let json = serde_json::to_string(&serialized_spec).unwrap();
+        let decoded: InstanceSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.checkpoint_restore, Some(checkpoint_path.clone()));
+
+        let extra_ro = collect_extra_ro_paths(&spec);
+        assert_eq!(extra_ro, vec![checkpoint_path, rootfs_path]);
     }
 }

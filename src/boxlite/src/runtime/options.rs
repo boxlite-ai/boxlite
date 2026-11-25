@@ -1666,9 +1666,24 @@ impl BoxArchive {
 #[derive(Debug, Clone, Default)]
 pub struct SnapshotOptions {}
 
-/// Forward-compatible options for exporting a box archive.
+/// Options for exporting a box archive.
 #[derive(Debug, Clone, Default)]
-pub struct ExportOptions {}
+pub struct ExportOptions {
+    /// Include live VM memory and device state (full checkpoint archive, v8).
+    ///
+    /// Requires a running `libkrun` box on macOS arm64 (HVF) or Linux x86_64 (KVM)
+    /// without nested virtualization.
+    pub include_memory: bool,
+}
+
+impl ExportOptions {
+    /// Export a full checkpoint archive including disk, memory, and device state.
+    pub fn full() -> Self {
+        Self {
+            include_memory: true,
+        }
+    }
+}
 
 /// Forward-compatible options for cloning a box.
 #[derive(Debug, Clone, Default)]

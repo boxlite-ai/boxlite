@@ -114,7 +114,6 @@ impl<'a> ShimSpawner<'a> {
 
     /// Grant the confined shim additional read-only paths (for example,
     /// checkpoint restore artifacts such as `vmstate.krun` and `guest-rootfs.ext4`).
-    #[allow(dead_code)]
     pub fn with_extra_ro_paths(mut self, paths: Vec<PathBuf>) -> Self {
         self.extra_ro_paths = paths;
         self
