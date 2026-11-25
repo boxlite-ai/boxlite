@@ -7,7 +7,8 @@ organization API key with Apps permissions. `boxlite-app login` saves the key by
 
 Select the App with `--app <name>`, an existing `.boxlite/link.json`, or `BOXLITE_APP`.
 `boxlite-app init --app <name>` links the directory for later `check`, `plan`, `apply`, and
-`deploy` commands.
+`deploy` commands. `boxlite-app --app <name> app pull` also links the directory to
+the selected App and environment, so the next plan or deploy uses the pulled spec version.
 `boxlite-app docs` includes the Agent guide and command reference offline.
 
 Build and test from the repository root:

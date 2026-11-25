@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
+import { readLink } from '../src/context.js'
 import {
   API,
   BASE_TOML,
@@ -619,6 +620,25 @@ test('app pull rewrites boxlite.toml from the spec and keeps a backup; app expor
 
   const exported = await cli(['app', 'export', '--json'], { cwd: dir, dispatcher: agent })
   assert.deepEqual(JSON.parse(exported.stdout), spec)
+})
+
+test('app pull records the online base version in an unlinked directory', async () => {
+  const dir = await project(root, { 'boxlite.toml': BASE_TOML })
+  const { agent, pool } = mockApi()
+  pool.intercept({ path: '/apps/crm/envs/main/spec', method: 'GET' }).reply(
+    200,
+    {
+      app: 'crm',
+      environment: 'main',
+      version: 5,
+      runtime: { image: 'node', size: 'small' },
+      services: [],
+    },
+    { headers: JSON_HEADERS },
+  )
+  const pull = await cli(['--app', 'crm', 'app', 'pull'], { cwd: dir, dispatcher: agent })
+  assert.equal(pull.code, 0, pull.stderr)
+  assert.deepEqual(await readLink(dir), { app: 'crm', env: 'main', api_url: API, base_version: 5 })
 })
 
 test('app deployment --follow prints steps; rollback posts kind=rollback; env delete confirms', async () => {
