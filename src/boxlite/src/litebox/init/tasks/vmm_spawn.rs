@@ -34,13 +34,14 @@ struct VmmSpawnInputs {
     outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
     options: BoxOptions,
     layout: BoxFilesystemLayout,
-    container_image_config: ContainerImageConfig,
+    container_image_config: Option<ContainerImageConfig>,
     prepared_kernel: Option<PreparedKernel>,
     container_disk_path: PathBuf,
     container_id: ContainerID,
     engine_kind: VmmKind,
     runtime: SharedRuntimeImpl,
     reuse_rootfs: bool,
+    checkpoint_restore: bool,
 }
 
 impl VmmSpawnInputs {
@@ -49,22 +50,32 @@ impl VmmSpawnInputs {
             .layout
             .clone()
             .ok_or_else(|| BoxliteError::Internal("filesystem task must run first".into()))?;
-        let container_image_config = ctx
-            .container_image_config
-            .clone()
-            .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
-        let prepared_kernel = ctx
-            .boot_assets
-            .as_ref()
-            .ok_or_else(|| BoxliteError::Internal("boot assets task must run first".into()))?
-            .kernel
-            .clone();
-        let container_disk_path = ctx
-            .container_disk
-            .as_ref()
-            .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?
-            .path()
-            .to_path_buf();
+        let checkpoint_restore = ctx.checkpoint_restore;
+        let (container_image_config, prepared_kernel, container_disk_path) = if checkpoint_restore {
+            (None, None, layout.disk_path())
+        } else {
+            let container_image_config = ctx
+                .container_image_config
+                .clone()
+                .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
+            let prepared_kernel = ctx
+                .boot_assets
+                .as_ref()
+                .ok_or_else(|| BoxliteError::Internal("boot assets task must run first".into()))?
+                .kernel
+                .clone();
+            let container_disk_path = ctx
+                .container_disk
+                .as_ref()
+                .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?
+                .path()
+                .to_path_buf();
+            (
+                Some(container_image_config),
+                prepared_kernel,
+                container_disk_path,
+            )
+        };
 
         Ok(Self {
             outbound_policy: ctx.outbound_policy.clone(),
@@ -77,6 +88,7 @@ impl VmmSpawnInputs {
             engine_kind: ctx.config.engine_kind,
             runtime: ctx.runtime.clone(),
             reuse_rootfs: ctx.reuse_rootfs,
+            checkpoint_restore,
         })
     }
 }
@@ -93,6 +105,15 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
             VmmSpawnInputs::from_context(&ctx)?
         };
 
+        if inputs.checkpoint_restore && !inputs.container_disk_path.exists() {
+            let err = BoxliteError::Storage(format!(
+                "Checkpoint container disk not found at {}",
+                inputs.container_disk_path.display()
+            ));
+            log_task_error(&box_id, task_name, &err);
+            return Err(err);
+        }
+
         // Build config and get outputs
         let (instance_spec, volume_mgr, rootfs_init, container_mounts, network_backend) =
             build_config(&box_id, &inputs)
@@ -106,6 +127,30 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
 
         let mut ctx = ctx.lock().await;
         ctx.guard.set_handler(handler);
+        if inputs.checkpoint_restore {
+            ctx.container_disk = Some(crate::disk::Disk::new(
+                inputs.container_disk_path.clone(),
+                crate::disk::DiskFormat::Qcow2,
+                true,
+            ));
+            ctx.guard.mark_checkpoint_restore_spawned();
+            // Consume pending_memory_restore immediately after spawn_vm succeeds:
+            // once the VM opens disk.qcow2 RW, retries or crash recovery must
+            // never replay vmstate.krun against the modified disk.
+            if let Err(err) =
+                inputs
+                    .runtime
+                    .box_manager
+                    .update_box(&box_id)
+                    .and_then(|mut state| {
+                        state.pending_memory_restore = false;
+                        inputs.runtime.box_manager.save_box(&box_id, &state)
+                    })
+            {
+                log_task_error(&box_id, task_name, &err);
+                return Err(err);
+            }
+        }
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
         ctx.container_mounts = Some(container_mounts);
@@ -146,6 +191,7 @@ async fn build_config(
         engine_kind,
         runtime,
         reuse_rootfs,
+        checkpoint_restore,
     } = inputs;
 
     // BoxTransport setup
@@ -169,6 +215,11 @@ async fn build_config(
     // Prepare container directories (image/, rw/, rootfs/)
     let container_layout = layout.shared_layout().container(container_id.as_str());
     container_layout.prepare()?;
+    if *checkpoint_restore {
+        boxlite_shared::layout::SharedGuestLayout::new(layout.mounts_dir())
+            .container(container_id.as_str())
+            .prepare()?;
+    }
 
     // Create GuestVolumeManager and configure volumes
     let mut volume_mgr = GuestVolumeManager::new();
@@ -184,7 +235,7 @@ async fn build_config(
     // 3. Guest mount: Only resize on fresh start, not restart
     //    - Fresh start with custom size: resize2fs expands filesystem
     //    - Restart: filesystem already at correct size, skip resize
-    let need_resize = options.disk_size_gb.is_some() && !reuse_rootfs;
+    let need_resize = options.disk_size_gb.is_some() && !reuse_rootfs && !*checkpoint_restore;
     let rootfs_device = volume_mgr.add_block_device(
         container_disk_path,
         DiskFormat::Qcow2,
@@ -247,14 +298,47 @@ async fn build_config(
     }
     let container_mounts = container_mgr.build_container_mounts();
 
-    // Get guest rootfs from runtime cache and configure with disk
-    let guest_rootfs = runtime
-        .guest_rootfs
-        .get()
-        .ok_or_else(|| BoxliteError::Internal("guest_rootfs not initialized".into()))?
-        .clone();
-
-    let guest_rootfs = configure_guest_rootfs(guest_rootfs, &mut volume_mgr)?;
+    let (guest_rootfs, checkpoint_restore) = if *checkpoint_restore {
+        let checkpoint_dir = layout
+            .root()
+            .join(crate::litebox::archive::CHECKPOINT_DIRNAME);
+        let vmstate_path = checkpoint_dir.join(crate::litebox::archive::VMSTATE_FILENAME);
+        if !vmstate_path.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "Checkpoint vmstate not found at {}",
+                vmstate_path.display()
+            )));
+        }
+        let guest_rootfs_path = checkpoint_dir.join(crate::litebox::archive::GUEST_ROOTFS_FILENAME);
+        if !guest_rootfs_path.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "Checkpoint guest rootfs not found at {}",
+                guest_rootfs_path.display()
+            )));
+        }
+        let guest_rootfs = GuestRootfs::new(
+            guest_rootfs_path.clone(),
+            Strategy::Disk {
+                disk_path: guest_rootfs_path,
+                device_path: None,
+            },
+            None,
+            None,
+            Vec::new(),
+        )?;
+        (
+            configure_guest_rootfs(guest_rootfs, &mut volume_mgr)?,
+            Some(vmstate_path),
+        )
+    } else {
+        // Get guest rootfs from runtime cache and configure with disk
+        let guest_rootfs = runtime
+            .guest_rootfs
+            .get()
+            .ok_or_else(|| BoxliteError::Internal("guest_rootfs not initialized".into()))?
+            .clone();
+        (configure_guest_rootfs(guest_rootfs, &mut volume_mgr)?, None)
+    };
 
     // Build VMM config from volume manager
     let vmm_config = volume_mgr.build_vmm_config();
@@ -265,7 +349,9 @@ async fn build_config(
 
     // The box's one network backend: it produces the wire spec now, and is
     // threaded on to LiveState (via the init ctx) for runtime control.
-    warn_unpublished_exposed_ports(container_image_config, options);
+    if let Some(container_image_config) = container_image_config {
+        warn_unpublished_exposed_ports(container_image_config, options);
+    }
     warn_cpus_beyond_guest_kernel(options);
     let network_backend =
         build_network_backend(options, layout, runtime, outbound_policy.as_ref())?;
@@ -293,7 +379,6 @@ async fn build_config(
         box_id: box_id.to_string(),
         security: options.advanced.security.clone(),
         nested_virtualization: options.advanced.nested_virtualization,
-        checkpoint_restore: None,
         // VM resources
         cpus: options.cpu_count()?.map(|cpu| cpu.vcpus()),
         memory_mib: options.memory_mib,
@@ -314,6 +399,7 @@ async fn build_config(
         console_output: Some(layout.console_output_path()),
         exit_file: layout.exit_file_path(),
         detach: options.detach,
+        checkpoint_restore,
     };
 
     Ok((

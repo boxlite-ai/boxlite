@@ -869,3 +869,10 @@ checksums, `outbound_disabled`) and bundles `vmstate.krun` + `guest-rootfs.ext4`
 manifest/checksum validation, and stages `checkpoint/{vmstate.krun, guest-rootfs.ext4}`
 with `pending_memory_restore = true`. `recover_boxes` preserves pre-spawn checkpoints and
 clears aborted post-spawn restores.
+
+### BoxBuilder checkpoint restore pipeline
+
+When `pending_memory_restore` is set, `BoxBuilder` runs `FilesystemTask -> VmmSpawnTask ->
+GuestConnectTask -> PortPublishTask`, skipping rootfs creation and `GuestInit`.
+`VmmSpawnTask` consumes `pending_memory_restore` after spawn, and `GuestConnectTask` polls
+`Guest.Ping` instead of `ready.sock`.

@@ -25,6 +25,12 @@
 //!   5. GuestInit       ─┬─   (re-initialize container in new VM)
 //!      PortPublish     ─┘    (republish host ports)
 //!
+//! Checkpoint restore (first start from a full checkpoint):
+//!   1. Filesystem           (create layout)
+//!   2. VmmSpawn             (build restore config + spawn VM from vmstate)
+//!   3. GuestConnect         (poll guest ping; skip ready.sock)
+//!   4. PortPublish          (publish host ports on new shim)
+//!
 //! Running (reattach):
 //!   1. VmmAttach            (attach to running VM)
 //!   2. GuestConnect         (reconnect to guest)
@@ -79,7 +85,25 @@ use types::InitPipelineContext;
 /// Returns Err for states that aren't valid init entry points
 /// (e.g. Unknown from a corrupted DB row, or future variants). Callers
 /// should treat this as a user-facing precondition error.
-fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>> {
+fn get_execution_plan(
+    status: BoxStatus,
+    checkpoint_restore: bool,
+) -> BoxliteResult<ExecutionPlan<InitCtx>> {
+    if checkpoint_restore
+        && matches!(
+            status,
+            BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed
+        )
+    {
+        let stages: Vec<Stage<BoxedTask<InitCtx>>> = vec![
+            Stage::sequential(vec![Box::new(FilesystemTask)]),
+            Stage::sequential(vec![Box::new(VmmSpawnTask)]),
+            Stage::sequential(vec![Box::new(GuestConnectTask)]),
+            Stage::sequential(vec![Box::new(PortPublishTask)]),
+        ];
+        return Ok(ExecutionPlan::new(stages));
+    }
+
     let stages: Vec<Stage<BoxedTask<InitCtx>>> = match status {
         BoxStatus::Configured => vec![
             // First start: Full pipeline
@@ -97,12 +121,9 @@ fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
             Stage::parallel(vec![Box::new(GuestInitTask), Box::new(PortPublishTask)]),
         ],
-        // Stopped and Failed both run the restart pipeline. A Failed box
-        // has its rootfs preserved (per BoxStatus::Failed doc) and is
-        // retryable per BoxStatus::can_start.
+        // Stopped and Failed run the same tasks. The reuse flag determines
+        // whether those tasks use an initialized disk or build a fresh rootfs.
         BoxStatus::Stopped | BoxStatus::Failed => vec![
-            // Restart: Same flow but rootfs tasks reuse existing COW disks
-            // (preserves user modifications from previous run)
             Stage::sequential(vec![Box::new(FilesystemTask)]),
             Stage::parallel(vec![
                 Box::new(BootAssetsTask),
@@ -214,6 +235,17 @@ impl BoxBuilder {
         })
     }
 
+    fn resolve_init_flags(state: &BoxState) -> (bool, bool, bool) {
+        let status = state.status;
+        let checkpoint_restore = status != BoxStatus::Running && state.pending_memory_restore;
+        let reuse_rootfs = status == BoxStatus::Stopped
+            || (status == BoxStatus::Failed
+                && !checkpoint_restore
+                && (state.rootfs_initialized || state.started_at.is_some()));
+        let skip_guest_wait = status == BoxStatus::Running;
+        (reuse_rootfs, skip_guest_wait, checkpoint_restore)
+    }
+
     /// Build and initialize LiveState.
     ///
     /// Failed starts clean up automatically. Reattaching to a Running box leaves
@@ -237,8 +269,14 @@ impl BoxBuilder {
         } = self;
 
         let status = state.status;
-        let reuse_rootfs = status == BoxStatus::Stopped;
-        let skip_guest_wait = status == BoxStatus::Running;
+        let (reuse_rootfs, skip_guest_wait, checkpoint_restore) = Self::resolve_init_flags(&state);
+        if (reuse_rootfs || checkpoint_restore) && !state.rootfs_initialized {
+            // Persist this disk's provenance before a start can consume its
+            // checkpoint or fail and replace Stopped with Failed.
+            let mut persisted = runtime.box_manager.update_box(&config.id)?;
+            persisted.rootfs_initialized = true;
+            runtime.box_manager.save_box(&config.id, &persisted)?;
+        }
 
         let mut ctx = InitPipelineContext::new(
             config,
@@ -247,6 +285,7 @@ impl BoxBuilder {
             skip_guest_wait,
             state.resolved_image.clone(),
         );
+        ctx.checkpoint_restore = checkpoint_restore;
         if status == BoxStatus::Running {
             // Adoption borrows an existing VM; a reconnect failure must not stop it
             // or replace its Running state with an initialization failure.
@@ -259,7 +298,7 @@ impl BoxBuilder {
         // New and restarted VMs stay guarded through the caller's DB persist.
         // Capture initialization errors so cleanup preserves their cause.
         let inner = async move {
-            let plan = get_execution_plan(status)?;
+            let plan = get_execution_plan(status, checkpoint_restore)?;
             let pipeline = PipelineBuilder::from_plan(plan);
             let pipeline_metrics = PipelineExecutor::execute(pipeline, Arc::clone(&ctx)).await?;
 
@@ -353,6 +392,7 @@ impl BoxBuilder {
 
 #[cfg(test)]
 mod plan_tests {
+    use super::checkpoint_tests::plan_shape_with_restore;
     use super::*;
     use crate::experimental::ExperimentalFeatures;
     use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
@@ -437,21 +477,7 @@ mod plan_tests {
     }
 
     fn plan_shape(status: BoxStatus) -> Vec<(ExecutionMode, Vec<String>)> {
-        get_execution_plan(status)
-            .unwrap()
-            .stages()
-            .into_iter()
-            .map(|stage| {
-                (
-                    stage.execution,
-                    stage
-                        .tasks
-                        .into_iter()
-                        .map(|task| task.name().to_string())
-                        .collect(),
-                )
-            })
-            .collect()
+        plan_shape_with_restore(status, false)
     }
 
     fn boot_pipeline_shape() -> Vec<(ExecutionMode, Vec<String>)> {
@@ -651,3 +677,7 @@ mod required_start_safety_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/checkpoint.rs"]
+mod checkpoint_tests;
