@@ -1,6 +1,6 @@
 # RegionType
 
-The type of the region
+The region type of the runner
 
 ## Enum
 

@@ -15,7 +15,7 @@
 
 
 /**
- * The type of the region
+ * The region type of the runner
  */
 
 export const RegionType = {

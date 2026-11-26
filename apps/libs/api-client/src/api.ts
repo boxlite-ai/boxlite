@@ -19,6 +19,7 @@ export * from './api/api-keys-api';
 export * from './api/audit-api';
 export * from './api/auth-api';
 export * from './api/box-api';
+export * from './api/boxlite-timing-api';
 export * from './api/config-api';
 export * from './api/health-api';
 export * from './api/images-api';

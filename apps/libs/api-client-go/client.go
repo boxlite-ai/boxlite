@@ -60,6 +60,8 @@ type APIClient struct {
 
 	BoxAPI BoxAPI
 
+	BoxliteTimingAPI BoxliteTimingAPI
+
 	ConfigAPI ConfigAPI
 
 	HealthAPI HealthAPI
@@ -108,6 +110,7 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.AuditAPI = (*AuditAPIService)(&c.common)
 	c.AuthAPI = (*AuthAPIService)(&c.common)
 	c.BoxAPI = (*BoxAPIService)(&c.common)
+	c.BoxliteTimingAPI = (*BoxliteTimingAPIService)(&c.common)
 	c.ConfigAPI = (*ConfigAPIService)(&c.common)
 	c.HealthAPI = (*HealthAPIService)(&c.common)
 	c.ImagesAPI = (*ImagesAPIService)(&c.common)

@@ -130,3 +130,5 @@ export const OrganizationAppHostingPermissionsEnum = {
 } as const;
 
 export type OrganizationAppHostingPermissionsEnum = typeof OrganizationAppHostingPermissionsEnum[keyof typeof OrganizationAppHostingPermissionsEnum];
+
+

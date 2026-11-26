@@ -273,9 +273,9 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Read organization App Hosting permissions
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1011,10 +1011,10 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         *
+         * 
          * @summary Replace organization App Hosting permissions
-         * @param {string} organizationId
-         * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto
+         * @param {string} organizationId 
+         * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1211,9 +1211,9 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Read organization App Hosting permissions
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1423,10 +1423,10 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Replace organization App Hosting permissions
-         * @param {string} organizationId
-         * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto
+         * @param {string} organizationId 
+         * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1524,9 +1524,9 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminGetJobOverview(id, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Read organization App Hosting permissions
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1694,10 +1694,10 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminRecoverBox(boxId, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Replace organization App Hosting permissions
-         * @param {string} organizationId
-         * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto
+         * @param {string} organizationId 
+         * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1789,9 +1789,9 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Read organization App Hosting permissions
-     * @param {string} organizationId
+     * @param {string} organizationId 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -1973,10 +1973,10 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Replace organization App Hosting permissions
-     * @param {string} organizationId
-     * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto
+     * @param {string} organizationId 
+     * @param {OrganizationAppHostingPermissionsDto} organizationAppHostingPermissionsDto 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
