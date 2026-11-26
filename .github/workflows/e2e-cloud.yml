@@ -581,8 +581,11 @@ jobs:
           API_OVERRIDE: ${{ inputs.api_url }}
         run: |
           set -euo pipefail
-          test "$STAGE" = dev && test -z "$API_OVERRIDE" && test -z "$RELEASE_TAG"
-          test -n "$CONFIG" && test -n "$BOXLITE_E2E_API_KEY"
+          test "$STAGE" = dev
+          test -z "$API_OVERRIDE"
+          test -z "$RELEASE_TAG"
+          test -n "$CONFIG"
+          test -n "$BOXLITE_E2E_API_KEY"
           umask 077
           config="$PROTECTED_RUN_DIR/lab.json"
           printf '%s' "$CONFIG" > "$config"
@@ -606,18 +609,8 @@ jobs:
             echo 'The dev acceptance runner needs its read-only PostgreSQL service'
             exit 1
           fi
-          export BOXLITE_PROTECTED_V2_ACCEPTANCE_COMMIT="$(git rev-parse HEAD)"
-          export BOXLITE_PROTECTED_V2_ACCEPTANCE_OUTPUT="$PROTECTED_RUN_DIR/protected-v2-dev-acceptance.json"
-          rm -f "$BOXLITE_PROTECTED_V2_ACCEPTANCE_OUTPUT"
+          export BOXLITE_PROTECTED_V2_ACCEPTANCE=1
           make test:rest:e2e AUTH=api-key PYTEST_FILTER="-k protected_v2_release_acceptance --managed-outbound-config=\"$config\""
-          test -s "$BOXLITE_PROTECTED_V2_ACCEPTANCE_OUTPUT"
-
-      - name: Publish protected V2 dev evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: protected-v2-dev-acceptance
-          path: ${{ env.PROTECTED_RUN_DIR }}/protected-v2-dev-acceptance.json
-          if-no-files-found: error
 
       - name: Clean the acceptance workspace
         if: always()

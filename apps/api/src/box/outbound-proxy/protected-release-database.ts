@@ -194,17 +194,10 @@ export async function runProtectedReleaseDatabase(
         await fenceFormerProtectedApiLogin(db)
         await enableProtectedRegistryWrites(runtime, release.key)
       }
-    } else if (phase === 'record-proof' || phase === 'approve') {
+    } else if (phase === 'approve') {
       const witnesses: unknown = JSON.parse(value('PROTECTED_RELEASE_WITNESSES'))
       if (!Array.isArray(witnesses)) throw new Error('Invalid final Runner proof')
-      const organization = environment.PROTECTED_RELEASE_DEV_ORGANIZATION
-      await recordProtectedProcessProof(runtime, release.key, witnesses, {
-        openAdmission: phase === 'approve',
-        devAcceptance:
-          phase === 'record-proof' && environment.PROTECTED_RELEASE_STAGE === 'dev' && organization
-            ? { organization, commit: value('PROTECTED_RELEASE_DEV_COMMIT') }
-            : undefined,
-      })
+      await recordProtectedProcessProof(runtime, release.key, witnesses)
     } else if (phase === 'reserve-restore' || phase === 'verify-restore' || phase === 'finish-restore') {
       const restore: ProtectedRestore = JSON.parse(value('PROTECTED_RELEASE_RESTORE'))
       if (!restore || typeof restore !== 'object' || restore.releaseKey !== release.key) {

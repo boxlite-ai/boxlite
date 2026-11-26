@@ -24,7 +24,7 @@
 
 import { readStackEnvironment } from '../src/stack-env.ts'
 import { gcpRunnerArtifactsBucket, resolveRunnerBinary } from '../stack/runner-binary.ts'
-import { PROTECTED_RELEASE_ADMIN_REF, PROTECTED_RELEASE_DEV_ORGANIZATION } from '../stack/providers/gcp/protected-release.ts'
+import { PROTECTED_RELEASE_ADMIN_REF } from '../stack/providers/gcp/protected-release.ts'
 import type { deployStack } from '../stack/index.ts'
 
 export class PulumiProgramError extends Error {
@@ -251,17 +251,6 @@ export const gcpProgram =
     const adminRef = environment[PROTECTED_RELEASE_ADMIN_REF]
     const deployer = environment.BOXLITE_GCP_DEPLOYER
     const releaseKey = environment.BOXLITE_CI_RELEASE_KEY
-    const devAcceptanceOrganization = stage === 'dev' ? environment[PROTECTED_RELEASE_DEV_ORGANIZATION] : undefined
-    const releaseCommit = environment.BOXLITE_CI_RELEASE_SHA ?? ''
-    const devAcceptance = devAcceptanceOrganization
-      ? { organization: devAcceptanceOrganization, commit: releaseCommit }
-      : undefined
-    const acceptanceRun = environment.BOXLITE_CI_PROTECTED_ACCEPTANCE
-    const acceptance = acceptanceRun ? {
-      runId: acceptanceRun,
-      repository: environment.BOXLITE_CI_REPOSITORY ?? '',
-      commit: releaseCommit,
-    } : undefined
     const requiresProtectedRelease = stackEnvironment.runnerFleet.some(({ protectedProxy }) => protectedProxy?.apiVersion === 2)
     if ((requiresProtectedRelease || adminRef) && (!adminRef || !deployer || !releaseKey)) {
       throw new PulumiProgramError('Protected V2 releases require mdeploy-all, its GCP deployer and the pinned database admin secret')
@@ -293,7 +282,7 @@ export const gcpProgram =
         otelOpenapiEnabled: stackEnvironment.otelOpenapiEnabled,
         clickStackConsumer: stackEnvironment.clickStackConsumer,
         protectedRelease: adminRef && deployer && releaseKey
-          ? { adminRef, deployer, key: releaseKey, acceptance, devAcceptance, cutoverTestKey: environment.BOXLITE_CI_RELEASE_TEST_KEY }
+          ? { adminRef, deployer, key: releaseKey, cutoverTestKey: environment.BOXLITE_CI_RELEASE_TEST_KEY }
           : undefined,
       }),
       config,

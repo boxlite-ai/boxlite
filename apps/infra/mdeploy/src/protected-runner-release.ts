@@ -406,7 +406,7 @@ export function runReleaseDatabaseJob({
   run,
   evidence,
 }: {
-  phase: 'prepare' | 'fence' | 'record-proof' | 'approve' | 'reserve-restore' | 'verify-restore' | 'finish-restore'
+  phase: 'prepare' | 'fence' | 'approve' | 'reserve-restore' | 'verify-restore' | 'finish-restore'
   project: string
   region: string
   job: string

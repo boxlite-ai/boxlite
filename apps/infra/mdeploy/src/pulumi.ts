@@ -218,10 +218,7 @@ export const pulumiDeploy = async ({
     ...stageEnvironment,
     BOXLITE_GCP_DEPLOYER: process.env.BOXLITE_GCP_DEPLOYER,
     BOXLITE_CI_RELEASE_KEY: process.env.BOXLITE_CI_RELEASE_KEY,
-    BOXLITE_CI_PROTECTED_ACCEPTANCE: process.env.BOXLITE_CI_PROTECTED_ACCEPTANCE,
     BOXLITE_CI_RELEASE_TEST_KEY: process.env.BOXLITE_CI_RELEASE_TEST_KEY,
-    BOXLITE_CI_RELEASE_SHA: process.env.BOXLITE_CI_RELEASE_SHA,
-    BOXLITE_CI_REPOSITORY: process.env.GITHUB_REPOSITORY,
   })
   if (!environment[PASSPHRASE_KEY]?.trim()) {
     throw new PulumiDeployError(

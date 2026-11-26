@@ -147,15 +147,7 @@ export async function recordProtectedProcessProof(
   db: Client,
   key: string,
   witnesses: readonly ApprovedProcess[],
-  authorization: { openAdmission?: boolean; devAcceptance?: { organization: string; commit: string } } = {},
 ): Promise<void> {
-  const { openAdmission = false, devAcceptance } = authorization
-  if (
-    devAcceptance &&
-    (openAdmission || !uuid.test(devAcceptance.organization) || !/^[a-f0-9]{40}$/.test(devAcceptance.commit))
-  ) {
-    throw new Error('Dev acceptance requires one isolated organization and closed public admission')
-  }
   await inGateTransaction(db, async (gate) => {
     if (!gate.controlled || !gate.registry_writes || gate.release_key !== key || gate.restore_permit) {
       throw new Error('Runner approval does not match the fenced release')
@@ -180,18 +172,8 @@ export async function recordProtectedProcessProof(
       )
       if (update.rowCount !== 1) throw new Error('The Runner process changed before release approval')
     }
-    if (openAdmission || devAcceptance) {
-      if (devAcceptance) {
-        const organization = await db.query('SELECT 1 FROM organization WHERE id = $1', [devAcceptance.organization])
-        if (!organization.rowCount) throw new Error('The configured dev acceptance organization does not exist')
-      }
-      await db.query(
-        `UPDATE outbound_proxy_admission SET enabled = $1, dev_acceptance_organization = $2, dev_acceptance_commit = $3,
-           dev_acceptance_until = CASE WHEN $2::uuid IS NOT NULL THEN clock_timestamp() + interval '30 minutes' END
-         WHERE singleton`,
-        [openAdmission, devAcceptance?.organization ?? null, devAcceptance?.commit ?? null],
-      )
-    }
+    await db.query(`UPDATE outbound_proxy_admission SET enabled = true,
+      dev_acceptance_organization = NULL, dev_acceptance_until = NULL, dev_acceptance_commit = NULL WHERE singleton`)
   })
 }
 

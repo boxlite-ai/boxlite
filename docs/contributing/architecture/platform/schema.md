@@ -962,7 +962,7 @@ One row coordinates new proxy bindings and registry writes across API revisions.
 | `generation`, `release_key` | `bigint`, `text` | Bind changes to the CI rollout generation |
 | `pins` | `jsonb` | Runner identities, endpoints and fingerprints of the configured trust |
 | `standalone_update` | `uuid` | Nullable claim that serializes an ordinary OS Config update with enrollment |
-| `dev_acceptance_organization`, `dev_acceptance_until`, `dev_acceptance_commit` | `uuid`, `timestamptz`, `varchar(40)` | Temporary dev test organization and exact source commit while public admission is closed |
+| `dev_acceptance_organization`, `dev_acceptance_until`, `dev_acceptance_commit` | `uuid`, `timestamptz`, `varchar(40)` | Compatibility columns for older revisions. Release and restore operations clear these values. |
 | `restore_permit`, `restore_runner`, `restore_digest`, `restore_generation` | `uuid`, `uuid`, `varchar(64)`, `bigint` | Exact downgrade approval for one controlled Runner, executable, and closed release generation |
 
 ### `job`

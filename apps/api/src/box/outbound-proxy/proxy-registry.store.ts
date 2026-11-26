@@ -23,7 +23,6 @@ type ProxyAdmission = {
   controlled: boolean
   enabled: boolean
   registry_writes: boolean
-  acceptance_organization: string | null
 }
 type PublicProxy = { name: string; url: string; revision: number; credential_configured: boolean }
 type ReferenceOwner<Epoch extends string | null = string> = {
@@ -71,9 +70,7 @@ export class ProxyRegistryStore implements OnModuleInit {
 
   private async lockAdmission(tx: RegistryTransaction): Promise<ProxyAdmission> {
     const [gate]: ProxyAdmission[] = await tx.query(
-      `SELECT controlled, enabled, registry_writes,
-         CASE WHEN dev_acceptance_until > clock_timestamp() THEN dev_acceptance_organization END AS acceptance_organization
-       FROM outbound_proxy_admission WHERE singleton FOR SHARE`,
+      'SELECT controlled, enabled, registry_writes FROM outbound_proxy_admission WHERE singleton FOR SHARE',
     )
     if (!gate) throw unavailable()
     return { ...gate, controlled: gate.controlled || this.admissionControlled }
@@ -83,8 +80,8 @@ export class ProxyRegistryStore implements OnModuleInit {
     return !(await this.lockAdmission(tx)).controlled
   }
 
-  private requireBindingAdmission(gate: ProxyAdmission, organizationId: string): void {
-    if (gate.controlled && !gate.enabled && gate.acceptance_organization !== organizationId) {
+  private requireBindingAdmission(gate: ProxyAdmission): void {
+    if (gate.controlled && !gate.enabled) {
       throw new ServiceUnavailableException('Protected proxy admission is closed')
     }
   }
@@ -437,7 +434,7 @@ export class ProxyRegistryStore implements OnModuleInit {
     if (!this.enabled) throw unavailable()
     if (name !== null) {
       const gate = await this.lockAdmission(tx)
-      this.requireBindingAdmission(gate, owner.organizationId)
+      this.requireBindingAdmission(gate)
     }
     let id: string | undefined
     if (name !== null) {
@@ -634,7 +631,7 @@ export class ProxyRegistryStore implements OnModuleInit {
         throw conflict()
       return { ...owner, registrationId: pending.registrationId, revision: pending.revision }
     }
-    this.requireBindingAdmission(gate, owner.organizationId)
+    this.requireBindingAdmission(gate)
     await tx.query(
       `INSERT INTO outbound_proxy_reference
         (organization_id, box_id, kind, registration_id, revision, runner_id, runtime_epoch, attempt_id, purpose)

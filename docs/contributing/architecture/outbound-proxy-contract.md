@@ -360,9 +360,9 @@ CI waits for each host to report compliance for the deployed OS Config assignmen
 
 CI compares the executable with the verified archive bytes. It asks the serving API revision to check the UUID through pinned mTLS and authenticated health. A second IAP sample must match.
 
-Set `OUTBOUND_PROXY_DEV_ACCEPTANCE_ORGANIZATION` to the existing dev test organization UUID. Once every dev Runner is verified, the private release job grants that organization 30 minutes to create test bindings on the exact deployed commit. A new rollout, restore, or public activation clears the test authorization.
+Once every enrolled Runner passes, `mdeploy-all` opens shared admission in the same applying run. Dev, stage, and prod use this sequence. A failed cutover or Runner check leaves new proxy bindings closed.
 
-Run the protected V2 lane in `e2e-cloud` during that window. It checks rollback and real scheduling after restart using the [dev test fixture](../../../apps/e2e/README.md#protected-v2-release-acceptance). Supply the successful run ID as `protected_dev_acceptance` in `mdeploy-all` so CI can open public admission after verifying the current fleet.
+After dev opens, run the protected V2 lane in `e2e-cloud` with the [dev test fixture](../../../apps/e2e/README.md#protected-v2-release-acceptance). It checks abnormal-exit rollback and real scheduling after restart through the public API.
 
 ```mermaid
 sequenceDiagram
@@ -376,7 +376,7 @@ sequenceDiagram
     CI->>Host: Sample final process and verified executable
     CI->>API: Verify the same process over mTLS and health
     CI->>Host: Sample the process again
-    Note over CI,SQL: dev release acceptance gates admission
+    CI->>SQL: Open shared admission
 ```
 
 A controlled stage retains its mode when its last V2 pin is removed. Changing or removing a pin requires all references, managed Boxes and unresolved attempts for that Runner to be settled first. CI can still update a previously enrolled host using the verified artifact, while its local enrollment marker continues to fence standalone upgrades.

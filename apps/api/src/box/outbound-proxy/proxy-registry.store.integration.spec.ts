@@ -289,15 +289,13 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
       ).toEqual([{ approved: 0 }])
       const final = [witnesses[0], { ...witnesses[1], process_id: restarted }]
       await recordProtectedProcessProof(sql, release.key, final)
-      expect(await db.query('SELECT enabled FROM outbound_proxy_admission')).toEqual([{ enabled: false }])
-      await recordProtectedProcessProof(sql, release.key, final, { openAdmission: true })
       expect(await db.query('SELECT enabled FROM outbound_proxy_admission')).toEqual([{ enabled: true }])
     } finally {
       await connection.release()
     }
   })
 
-  it('permits only the isolated dev test organization while public admission remains closed', async () => {
+  it('opens bindings for both organizations with one final approval even if a legacy lease exists', async () => {
     const runnerId = randomUUID()
     const processId = randomUUID()
     const release = releaseContext(
@@ -308,36 +306,41 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
     const connection = db.createQueryRunner()
     const sql: Client = await connection.connect()
     const otherBox = { ...owner, organizationId: otherOrg, boxId: 'other-box' }
-    const expiredBox = { ...owner, boxId: 'expired-box' }
     try {
       await create()
       await store.create(otherOrg, proxyCreate(registration))
-      await db.query('INSERT INTO box (id, "organizationId", "runnerId") VALUES ($1, $2, $3), ($4, $5, $3)', [
+      await db.query('INSERT INTO box (id, "organizationId", "runnerId") VALUES ($1, $2, $3)', [
         otherBox.boxId,
         otherOrg,
         owner.runnerId,
-        expiredBox.boxId,
-        org,
       ])
       await db.query(`INSERT INTO runner VALUES ($1, '2', $2, NULL, now())`, [runnerId, processId])
       await beginProtectedRelease(sql, release)
       await enableProtectedRegistryWrites(sql, release.key)
-      await recordProtectedProcessProof(sql, release.key, witnesses, {
-        devAcceptance: { organization: org, commit: 'a'.repeat(40) },
-      })
-      expect(await db.query('SELECT enabled FROM outbound_proxy_admission')).toEqual([{ enabled: false }])
+      await db.query(
+        `UPDATE outbound_proxy_admission SET dev_acceptance_organization = $1,
+           dev_acceptance_until = now() + interval '1 hour', dev_acceptance_commit = $2 WHERE singleton`,
+        [org, 'a'.repeat(40)],
+      )
       await expect(store.reserveReference(otherBox, registration.name)).rejects.toMatchObject({ status: 503 })
+      await expect(store.reserveReference(owner, registration.name)).rejects.toMatchObject({ status: 503 })
+      await recordProtectedProcessProof(sql, release.key, witnesses)
+      await expect(store.reserveReference(otherBox, registration.name)).resolves.toMatchObject({
+        registrationId: expect.any(String),
+        organizationId: otherOrg,
+      })
       await expect(
         db.transaction((tx) => store.reserveUpdateInTransaction(tx, owner, null, registration.name)),
       ).resolves.toMatchObject({ registration_id: expect.any(String) })
-      await db.query('UPDATE outbound_proxy_admission SET dev_acceptance_until = now()')
-      await expect(store.reserveReference(expiredBox, registration.name)).rejects.toMatchObject({ status: 503 })
-      await beginProtectedRelease(sql, release)
       expect(await db.query('SELECT dev_acceptance_organization FROM outbound_proxy_admission')).toEqual([
         { dev_acceptance_organization: null },
       ])
     } finally {
-      await db.query('DELETE FROM box WHERE id IN ($1, $2)', [otherBox.boxId, expiredBox.boxId])
+      await db.query('DELETE FROM outbound_proxy_reference WHERE organization_id = $1 AND box_id = $2', [
+        otherOrg,
+        otherBox.boxId,
+      ])
+      await db.query('DELETE FROM box WHERE id = $1', [otherBox.boxId])
       await connection.release()
     }
   })

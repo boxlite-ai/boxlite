@@ -1715,7 +1715,7 @@ test('the cloud E2E suite is reachable only from a deploy or a human', () => {
   assert.equal(checkout.with.ref, '${{ inputs.ref || github.sha }}')
 })
 
-test('the protected V2 evidence is produced on the dev fixture worker', () => {
+test('protected V2 acceptance runs on the dev fixture worker', () => {
   const workflow = load(readFileSync(E2E_CLOUD_WORKFLOW, 'utf8'))
   const protectedJob = workflow.jobs['protected-v2-dev']
   assert.ok(protectedJob, 'protected acceptance needs a separate fixture worker')
@@ -1726,11 +1726,9 @@ test('the protected V2 evidence is produced on the dev fixture worker', () => {
   assert.ok(testStep)
   assert.match(testStep.run, /os\.access\(controller, os\.X_OK\)/)
   assert.match(testStep.run, /PGOPTIONS='-c default_transaction_read_only=on'/)
+  assert.match(testStep.run, /export BOXLITE_PROTECTED_V2_ACCEPTANCE=1/)
   assert.match(testStep.run, /make test:rest:e2e.*protected_v2_release_acceptance/)
   assert.equal(spawnSync('bash', ['-n'], { input: testStep.run }).status, 0)
-  const upload = protectedJob.steps.find((step: any) => step.uses?.startsWith('actions/upload-artifact'))
-  assert.equal(upload?.with.name, 'protected-v2-dev-acceptance')
-  assert.equal(upload?.with['if-no-files-found'], 'error')
 })
 
 test('cloud E2E requires the dev identity lane and forwards its scoped credentials', () => {

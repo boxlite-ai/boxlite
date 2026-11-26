@@ -17,25 +17,22 @@ from preview import require
 from test_managed_outbound import managed_box, remove_registration, wait_for_confirmed_proxy
 
 
-async def verify_test_organization(lab, commit):
-    gate = await query_postgres_json(lab.postgres_service, "commit", commit, """
-        SELECT jsonb_build_object('organization', dev_acceptance_organization, 'public_open', enabled)
+async def read_open_release(lab, organization):
+    release = await query_postgres_json(lab.postgres_service, "organization", organization, """
+        SELECT jsonb_build_object('release', release_key, 'generation', generation)
         FROM outbound_proxy_admission
-        WHERE singleton AND dev_acceptance_commit = :'commit' AND dev_acceptance_until > clock_timestamp();
+        WHERE singleton AND controlled AND enabled AND registry_writes AND restore_permit IS NULL
+          AND EXISTS (SELECT 1 FROM organization WHERE id = :'organization'::uuid);
     """)
-    require(isinstance(gate, dict) and gate["public_open"] is False and gate["organization"],
-            "the bounded dev test organization must have access with public admission closed")
-    return gate["organization"]
+    require(isinstance(release, dict) and release["release"], "dev must serve an open protected release")
+    return release
 
 
 @pytest.mark.e2e
 @pytest.mark.managed_outbound
 async def test_protected_v2_release_acceptance(pytestconfig, e2e_auth, rt, image):
-    output = os.environ.get("BOXLITE_PROTECTED_V2_ACCEPTANCE_OUTPUT")
-    if not output:
+    if os.environ.get("BOXLITE_PROTECTED_V2_ACCEPTANCE") != "1":
         pytest.skip("run the protected V2 dev acceptance workflow")
-    commit = os.environ["BOXLITE_PROTECTED_V2_ACCEPTANCE_COMMIT"]
-    require(re.fullmatch(r"[a-f0-9]{40}", commit), "invalid acceptance commit")
     config_path = pytestconfig.getoption("--managed-outbound-config")
     require(config_path, "configure the existing dev protected outbound test organization")
     config = json.loads(Path(config_path).read_text())
@@ -43,7 +40,8 @@ async def test_protected_v2_release_acceptance(pytestconfig, e2e_auth, rt, image
     require(e2e_auth.url.rstrip("/") == lab.api_origin and e2e_auth.path_prefix == lab.organization_prefix
             and e2e_auth.auth == "api-key", "expected the existing isolated dev API identity")
     deployment = load_deployment(config.get("deployment"), lab)
-    organization = await verify_test_organization(lab, commit)
+    organization = str(UUID(e2e_auth.path_prefix))
+    release = await read_open_release(lab, organization)
 
     proxy = e2e_box_name()
     registry = rt.outbound_proxies()
@@ -106,13 +104,4 @@ async def test_protected_v2_release_acceptance(pytestconfig, e2e_auth, rt, image
             require(isinstance(runner, dict) and runner["version"] == "2" and runner["process"] == process_id
                     and isinstance(runner["digest"], str) and re.fullmatch(r"[a-f0-9]{64}", runner["digest"]),
                     "placement did not match the authenticated final V2 process")
-            require(await verify_test_organization(lab, commit) == organization, "the dev acceptance scope changed")
-
-    Path(output).write_text(json.dumps({
-        "version": 1,
-        "stage": "dev",
-        "commit": commit,
-        "executableDigest": runner["digest"],
-        "abnormalExitRollback": "passed",
-        "finalRestartAdmission": "passed",
-    }), encoding="utf-8")
+            require(await read_open_release(lab, organization) == release, "the active dev release changed")

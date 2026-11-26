@@ -5,17 +5,13 @@ import { registrationDir } from '../../runner-registration.ts'
 import { containerEnvironment, secretCoordinatesOf, secretIdOf, splitSecretRef } from './secret-env.ts'
 
 export const PROTECTED_RELEASE_ADMIN_REF = 'OUTBOUND_PROXY_RELEASE_DB_ADMIN_PASSWORD'
-export const PROTECTED_RELEASE_DEV_ORGANIZATION = 'OUTBOUND_PROXY_DEV_ACCEPTANCE_ORGANIZATION'
 export const PROTECTED_RELEASE_RUNTIME_USER = 'boxlite_runtime'
 
-export type DevAcceptance = { runId: string; repository: string; commit: string }
 export type GcpProtectedRelease = {
   deployer: string
   adminRef: string
   key: string
   cutoverTestKey?: string
-  acceptance?: DevAcceptance
-  devAcceptance?: { organization: string; commit: string }
 }
 
 export function protectedReleaseJobName(scope: { app: string; stage: string }): string {
@@ -109,13 +105,6 @@ export function createProtectedDatabaseRelease({
               PROTECTED_RELEASE_KEY: release.key,
               PROTECTED_RELEASE_PINS: pins,
               PROTECTED_RELEASE_CLIENT_CREDENTIAL_VERSIONS: clientCredentials,
-              PROTECTED_RELEASE_STAGE: $app.stage,
-              ...($app.stage === 'dev' && release.devAcceptance
-                ? {
-                    PROTECTED_RELEASE_DEV_ORGANIZATION: release.devAcceptance.organization,
-                    PROTECTED_RELEASE_DEV_COMMIT: release.devAcceptance.commit,
-                  }
-                : {}),
             },
             addresses,
           }),

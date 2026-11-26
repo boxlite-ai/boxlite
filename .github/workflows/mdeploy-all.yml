@@ -65,10 +65,6 @@ on:
         description: Existing protected V2 Runner UUID to restore to the selected artifact
         required: false
         type: string
-      protected_dev_acceptance:
-        description: Successful dev protected V2 E2E run ID for this exact release
-        required: false
-        type: string
 
 concurrency:
   # One of these per stage. The image workflows it calls hold their own groups —
@@ -784,12 +780,10 @@ jobs:
           BOXLITE_GCP_DEPLOYER: ${{ vars.GCP_DEPLOYER }}
           BOXLITE_CI_RELEASE_KEY: ${{ github.run_id }}.${{ github.run_attempt }}
           BOXLITE_CI_RESTORE_RUNNER: ${{ inputs.restore_runner }}
-          BOXLITE_CI_PROTECTED_ACCEPTANCE: ${{ inputs.protected_dev_acceptance }}
           BOXLITE_CI_RELEASE_TEST_KEY: >-
             ${{ (inputs.stage == 'dev' && secrets.BOXLITE_DEV_P2_API_KEY)
                 || (inputs.stage == 'stage' && secrets.BOXLITE_STAGE_P2_API_KEY)
                 || (inputs.stage == 'prod' && secrets.BOXLITE_PROD_API_KEY) || '' }}
-          BOXLITE_CI_RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           set -Eeuo pipefail
           if [ "${{ inputs.apply }}" = "true" ]; then

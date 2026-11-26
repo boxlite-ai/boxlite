@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { RunnerArtifact } from '../stack/runner-binary.ts'
-import { PROTECTED_RELEASE_RUNTIME_USER, type DevAcceptance } from '../stack/providers/gcp/protected-release.ts'
-import { verifyDevProtectedAcceptance } from './protected-dev-acceptance.ts'
+import { PROTECTED_RELEASE_RUNTIME_USER } from '../stack/providers/gcp/protected-release.ts'
 import {
   createOrdinaryCutoverBox,
   protectedRunnerArtifactDigest,
@@ -22,7 +21,7 @@ import { sleepSeconds, spawnWith, waitForRunnerPolicyCompliance } from './upgrad
 const {
   API_URL, ADMIN_API_KEY, RELEASE_SLOTS, RELEASE_ARTIFACT, RELEASE_DIGEST,
   RELEASE_PROJECT, RELEASE_REGION, RELEASE_ZONE, RELEASE_API_SERVICE, RELEASE_DB_JOB,
-  RELEASE_DEV_ACCEPTANCE, RELEASE_COMPLIANCE,
+  RELEASE_COMPLIANCE,
   RELEASE_TEST_KEY,
 } = process.env
 
@@ -104,12 +103,8 @@ if (phase === 'enrollment' && RELEASE_ARTIFACT && RELEASE_DB_JOB) {
       run, sleep: sleepSeconds, log: console.log,
     })
   }
-  const acceptance: DevAcceptance | undefined = RELEASE_DEV_ACCEPTANCE ? JSON.parse(RELEASE_DEV_ACCEPTANCE) : undefined
   const revision = servingApiRevision(service)
   const expectedDigest = RELEASE_DIGEST.trim()
-  if (acceptance) await verifyDevProtectedAcceptance({
-    ...acceptance, executableDigest: expectedDigest, run: spawnWith(process.env, 40_000),
-  })
   const witnesses = []
   for (const slot of slots) {
     const host = { target: slot.host, project: RELEASE_PROJECT, zone: RELEASE_ZONE }
@@ -126,7 +121,7 @@ if (phase === 'enrollment' && RELEASE_ARTIFACT && RELEASE_DB_JOB) {
   }
   if (servingApiRevision(service) !== revision) throw new Error('API traffic changed during Runner verification')
   runReleaseDatabaseJob({
-    ...service, job: RELEASE_DB_JOB, phase: acceptance ? 'approve' : 'record-proof', run: spawnWith(process.env, 150_000),
+    ...service, job: RELEASE_DB_JOB, phase: 'approve', run: spawnWith(process.env, 150_000),
     evidence: { key: 'PROTECTED_RELEASE_WITNESSES', value: witnesses },
   })
   console.log(JSON.stringify({ revision, witnesses }))

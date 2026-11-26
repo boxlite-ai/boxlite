@@ -46,7 +46,7 @@ import { renderPolicyScripts, renderUnitEnvironmentPolicyScripts } from '../../r
 import { REGISTRY_PROXY_HOST_VARIABLE } from '../../registry-proxy.ts'
 import { splitSecretRef } from './secret-env.ts'
 import { volumeConditionFor } from './storage.ts'
-import { protectedReleaseJobName, type DevAcceptance } from './protected-release.ts'
+import { protectedReleaseJobName } from './protected-release.ts'
 
 /**
  * What each requested size answers to.
@@ -212,7 +212,6 @@ export const gcpRunnerProvider =
     dependsOn,
     protectedDatabase = false,
     cutoverTestKey,
-    devAcceptance,
   }: {
     project: string
     /** A zone. An instance is zonal even where its subnet is not. */
@@ -229,7 +228,6 @@ export const gcpRunnerProvider =
     dependsOn: any[]
     protectedDatabase?: boolean
     cutoverTestKey?: string
-    devAcceptance?: DevAcceptance
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
     const labels = request.fleet.map(({ slot }) => runnerLabelValue(slot.controlPlaneRunnerName))
@@ -800,7 +798,6 @@ udevadm trigger --name-match=kvm || true`,
           ...releaseEnvironment,
           RELEASE_DIGEST: enrollment.stdout,
           RELEASE_COMPLIANCE: $resolve(compliance).apply((batches) => JSON.stringify(batches)),
-          ...(devAcceptance ? { RELEASE_DEV_ACCEPTANCE: JSON.stringify(devAcceptance) } : {}),
         },
         triggers: releaseTriggers,
       }, { dependsOn: [...runnerDependencies, ...instances, ...(previousBatch ? [previousBatch] : [])] })

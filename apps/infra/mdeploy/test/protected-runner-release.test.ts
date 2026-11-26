@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict'
-import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   createOrdinaryCutoverBox,
@@ -15,8 +13,7 @@ import {
   verifyServingApiLogin,
   verifyServingRunnerCompletion,
 } from '../src/protected-runner-release.ts'
-import { verifyDevProtectedAcceptance } from '../src/protected-dev-acceptance.ts'
-import { waitForRunnerPolicyCompliance, type RunCommand } from '../src/upgrade-runners.ts'
+import { waitForRunnerPolicyCompliance } from '../src/upgrade-runners.ts'
 
 const runnerId = 'c536e70c-e230-4499-9f9c-d4a49ea85775'
 const processId = '55b491dd-dfb8-49b4-ab41-396109e78280'
@@ -275,32 +272,4 @@ test('ordinary cutover creates a fresh bounded Box in the existing test organiza
     '/v1/me', `${collection}/${name}`, `${collection}/_protected-release`,
     '/v1/me', `${collection}/${name}`, `${collection}/abc123xyz789`,
   ])
-})
-
-test('activation requires successful dev evidence for both checks and the selected release', async () => {
-  const target = { runId: '1234', repository: 'boxlite-ai/boxlite', commit: 'a'.repeat(40), executableDigest: digest }
-  const workflow = {
-    conclusion: 'success', path: '.github/workflows/e2e-cloud.yml',
-    head_sha: target.commit, head_repository: { full_name: target.repository },
-  }
-  const receipt = {
-    version: 1, stage: 'dev', commit: target.commit, executableDigest: digest,
-    abnormalExitRollback: 'passed', finalRestartAdmission: 'passed',
-  }
-  const commands = (runInfo: object, evidence: object): RunCommand => (_, args) => {
-    if (args[0] === 'api') return { ok: true, status: 0, stdout: JSON.stringify(runInfo), stderr: '' }
-    const directory = args[args.indexOf('--dir') + 1]
-    writeFileSync(join(directory, 'protected-v2-dev-acceptance.json'), JSON.stringify(evidence))
-    return { ok: true, status: 0, stdout: '', stderr: '' }
-  }
-  await verifyDevProtectedAcceptance({ ...target, run: commands(workflow, receipt) })
-  await assert.rejects(verifyDevProtectedAcceptance({
-    ...target, run: commands({ ...workflow, conclusion: 'failure' }, receipt),
-  }), /did not pass/)
-  await assert.rejects(verifyDevProtectedAcceptance({
-    ...target, run: commands(workflow, { ...receipt, executableDigest: 'b'.repeat(64) }),
-  }), /does not cover/)
-  await assert.rejects(verifyDevProtectedAcceptance({
-    ...target, run: commands(workflow, { ...receipt, abnormalExitRollback: 'pending' }),
-  }), /does not cover/)
 })

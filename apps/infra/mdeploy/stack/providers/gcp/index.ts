@@ -246,7 +246,6 @@ export const gcpStackProviders = ({
         dependsOn,
         protectedDatabase: Boolean(protectedRelease),
         cutoverTestKey: protectedRelease?.cutoverTestKey,
-        devAcceptance: protectedRelease?.acceptance,
       }),
     alarms: ({ subjects }) => gcpAlarmProvider({ subjects, project, notificationChannels }),
   }

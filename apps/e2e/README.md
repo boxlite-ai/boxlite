@@ -795,7 +795,7 @@ make test:rest:e2e PYTEST_FILTER='-k managed_proxy_deployment --managed-outbound
 
 #### Protected V2 release acceptance
 
-Use the existing dev test organization and two enrolled V2 Runners. Run the dedicated acceptance job on the Linux fixture machine registered with the Actions label `boxlite-protected-dev`. The ordinary cloud suite uses its regular worker.
+After an applying `mdeploy-all` run opens dev admission, run the dedicated acceptance job on the Linux fixture machine labeled `boxlite-protected-dev`. Use the existing dev test organization and two enrolled V2 Runners. The case requires open admission on the same release throughout the test.
 
 Set `BOXLITE_DEV_PROTECTED_OUTBOUND_CONFIG` to the fixture configuration. The test worker needs the configured executable controller, its read-only PostgreSQL service, and the Python SDK build tools. The job checks controller and database access before injecting a fault.
 
