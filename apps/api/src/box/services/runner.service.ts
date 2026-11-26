@@ -312,7 +312,11 @@ export class RunnerService {
       where: runnerFilter,
     })
 
-    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    const { requiredCapability } = params
+    return runners
+      .filter((runner) => requiredCapability === undefined || runner.capabilities?.includes(requiredCapability))
+      .sort((a, b) => b.availabilityScore - a.availabilityScore)
+      .slice(0, 10)
   }
 
   /**
@@ -1048,6 +1052,7 @@ export class GetRunnerParams {
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
   requiresPrivileged?: boolean
+  requiredCapability?: string
 }
 
 interface AvailabilityScoreParams {

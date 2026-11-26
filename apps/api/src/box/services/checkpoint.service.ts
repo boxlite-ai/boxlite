@@ -15,7 +15,7 @@ import { isUUID } from 'class-validator'
 import { Box } from '../entities/box.entity'
 import { memoryMibOf } from '../utils/memory-allocation'
 import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
-import { Checkpoint, CheckpointEnvironment } from '../entities/checkpoint.entity'
+import { Checkpoint, CheckpointEnvironment, CheckpointKind } from '../entities/checkpoint.entity'
 import { Runner } from '../entities/runner.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
@@ -48,7 +48,20 @@ export class CheckpointService {
     return settings
   }
 
-  async create(organizationId: string, source: string, name?: string): Promise<Checkpoint> {
+  assertMemoryEnabled(): void {
+    const settings = this.config.get<ReturnType<typeof checkpointConfig>>('checkpoint')
+    if (!settings?.memoryEnabled) {
+      throw new BadRequestException({ message: 'Full checkpoints are not supported', code: 'unsupported' })
+    }
+  }
+
+  async create(
+    organizationId: string,
+    source: string,
+    name?: string,
+    kind: CheckpointKind = 'disk',
+  ): Promise<Checkpoint> {
+    if (kind === 'full') this.assertMemoryEnabled()
     if (!source || source.includes('\0') || source.length > 128) throw new BadRequestException('Invalid source box')
     if (name !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name))
       throw new BadRequestException('Invalid checkpoint name')
@@ -80,10 +93,13 @@ export class CheckpointService {
           box.pending ||
           checkpointState.activeJobId ||
           String(box.state) !== String(box.desiredState) ||
-          box.state !== BoxState.STOPPED
+          box.state !== (kind === 'full' ? BoxState.STARTED : BoxState.STOPPED)
         ) {
           throw new ConflictException({
-            message: 'Checkpoint source must be idle and stopped; stop the Box before creating a checkpoint',
+            message:
+              kind === 'full'
+                ? 'Full checkpoint source must be idle and started'
+                : 'Checkpoint source must be idle and stopped; stop the Box before creating a checkpoint',
             code: 'invalid_state',
           })
         }
@@ -104,6 +120,8 @@ export class CheckpointService {
             })
           : null
         if (!runner) throw new ConflictException('Source runner is not ready for checkpoint jobs')
+        if (kind === 'full' && !runner.capabilities?.includes('memory_checkpoint'))
+          throw new ConflictException('Source runner does not support full checkpoints')
         if (
           await manager.exists(Job, {
             where: {
@@ -132,12 +150,15 @@ export class CheckpointService {
           state: 'creating',
           arcPath: `${settings.archivePrefix}${organizationId}/${id}/archive.boxlite`,
           environment: captureEnvironment(box),
+          kind,
+          memorySizeBytes: null,
           archive: null,
           errorReason: null,
         })
         const job = await this.jobs.createJob(manager, JobType.EXPORT_CHECKPOINT, runner.id, ResourceType.BOX, box.id, {
           checkpointId: id,
           arcPath: checkpoint.arcPath,
+          kind,
         })
         checkpoint.exportJobId = job.id
         checkpoint.activeJobId = job.id

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -25,7 +24,7 @@ import { RequiredOrganizationResourcePermissions } from '../organization/decorat
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
-import { Checkpoint } from '../box/entities/checkpoint.entity'
+import { Checkpoint, CheckpointKind } from '../box/entities/checkpoint.entity'
 import { CheckpointService } from '../box/services/checkpoint.service'
 
 class CreateCheckpointRequest {
@@ -33,7 +32,7 @@ class CreateCheckpointRequest {
   @IsOptional() @IsString() @Matches(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/) name?: string
   @ValidateIf((_obj, value) => value !== undefined)
   @IsIn(['disk', 'full'])
-  kind?: 'disk' | 'full'
+  kind?: CheckpointKind
 }
 
 @Controller(['v1/checkpoints', 'v1/:prefix/checkpoints'])
@@ -47,11 +46,13 @@ export class BoxliteCheckpointController {
   @HttpCode(201)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async create(@AuthContext() auth: OrganizationAuthContext, @Body() request: CreateCheckpointRequest) {
-    if (request.kind === 'full') {
-      throw new BadRequestException({ message: 'Full checkpoints are not supported', code: 'unsupported' })
-    }
     return response(
-      await this.checkpoints.create(auth.organizationId, request.source_box_id, request.name ?? undefined),
+      await this.checkpoints.create(
+        auth.organizationId,
+        request.source_box_id,
+        request.name ?? undefined,
+        request.kind ?? 'disk',
+      ),
     )
   }
 
@@ -85,14 +86,16 @@ export class BoxliteCheckpointController {
 }
 
 function response(checkpoint: Checkpoint) {
+  const memorySizeBytes = checkpoint.memorySizeBytes ?? checkpoint.archive?.memorySizeBytes
   return {
     id: checkpoint.id,
     name: checkpoint.name,
     source_box_id: checkpoint.sourceBoxId,
     state: checkpoint.state,
-    kind: 'disk',
+    kind: checkpoint.kind ?? 'disk',
     created_at: checkpoint.createdAt.toISOString(),
     size_bytes: checkpoint.archive?.sizeBytes ?? 0,
+    ...(memorySizeBytes != null ? { memory_size_bytes: memorySizeBytes } : {}),
     ...(checkpoint.errorReason ? { error_reason: checkpoint.errorReason } : {}),
   }
 }

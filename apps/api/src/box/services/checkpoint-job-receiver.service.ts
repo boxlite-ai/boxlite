@@ -90,7 +90,9 @@ export class CheckpointJobReceiver {
         checkpoint.archive &&
         archive.sizeBytes === checkpoint.archive.sizeBytes &&
         archive.sha256 === checkpoint.archive.sha256 &&
-        archive.pinnedImage === checkpoint.archive.pinnedImage
+        archive.pinnedImage === checkpoint.archive.pinnedImage &&
+        archive.kind === (checkpoint.archive.kind ?? 'disk') &&
+        archive.memorySizeBytes === checkpoint.archive.memorySizeBytes
       if (job.status === JobStatus.FAILED || !archive || (!exporting && !unchangedArchive)) {
         checkpoint.state = 'failed'
         checkpoint.activeJobId = null
@@ -103,6 +105,7 @@ export class CheckpointJobReceiver {
       }
       if (exporting) {
         checkpoint.archive = archive
+        checkpoint.memorySizeBytes = archive.memorySizeBytes ?? null
         const upload = new Job({
           type: JobType.UPLOAD_CHECKPOINT,
           runnerId: checkpoint.sourceRunnerId,
@@ -247,6 +250,8 @@ export class CheckpointJobReceiver {
 }
 
 function validateArchive(value: Record<string, unknown> | null, checkpoint: Checkpoint): CheckpointArchive | null {
+  const kind = checkpoint.kind ?? 'disk'
+  const memorySizeBytes = value?.memorySizeBytes
   if (
     !checkpoint.exportJobId ||
     !value ||
@@ -254,6 +259,10 @@ function validateArchive(value: Record<string, unknown> | null, checkpoint: Chec
     value.exportJobId !== checkpoint.exportJobId ||
     value.sourceBoxId !== checkpoint.sourceBoxId ||
     value.arcPath !== checkpoint.arcPath ||
+    (value.kind !== undefined && value.kind !== kind) ||
+    (kind === 'full'
+      ? typeof memorySizeBytes !== 'number' || !Number.isSafeInteger(memorySizeBytes) || memorySizeBytes < 0
+      : memorySizeBytes !== undefined) ||
     !Number.isSafeInteger(value.sizeBytes) ||
     (value.sizeBytes as number) <= 0 ||
     typeof value.sha256 !== 'string' ||
@@ -270,5 +279,7 @@ function validateArchive(value: Record<string, unknown> | null, checkpoint: Chec
     sizeBytes: value.sizeBytes as number,
     sha256: value.sha256,
     pinnedImage: value.pinnedImage,
+    kind,
+    ...(typeof memorySizeBytes === 'number' ? { memorySizeBytes } : {}),
   }
 }

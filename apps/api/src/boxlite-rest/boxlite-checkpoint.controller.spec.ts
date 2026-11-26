@@ -194,7 +194,7 @@ describe('Checkpoint REST authentication and request admission', () => {
       })
     }
     expect(checkpoints.create.mock.calls).toEqual(
-      Array.from({ length: 3 }, () => [organizationId, 'source-id', 'base']),
+      Array.from({ length: 3 }, () => [organizationId, 'source-id', 'base', 'disk']),
     )
   })
 
@@ -205,7 +205,7 @@ describe('Checkpoint REST authentication and request admission', () => {
     })
     expect(result.status).toBe(201)
     expect(await result.json()).toMatchObject({ id: record.id, kind: 'disk' })
-    expect(checkpoints.create).toHaveBeenCalledWith(organizationId, 'source-id', undefined)
+    expect(checkpoints.create).toHaveBeenCalledWith(organizationId, 'source-id', undefined, 'disk')
   })
 
   it('preserves the invalid_state code from a checkpoint source state conflict', async () => {
@@ -232,14 +232,35 @@ describe('Checkpoint REST authentication and request admission', () => {
     expect(body).not.toHaveProperty('code')
   })
 
-  it('rejects full capture before calling the service', async () => {
+  it('passes full capture to the service and preserves its unsupported error', async () => {
+    checkpoints.create.mockRejectedValueOnce(
+      new BadRequestException({ message: 'Full checkpoints are not supported', code: 'unsupported' }),
+    )
     const result = await request('/v1/checkpoints', 'checkpoint-write-key', {
       source_box_id: 'source-id',
       kind: 'full',
     })
     expect(result.status).toBe(400)
     expect(await result.json()).toMatchObject({ code: 'unsupported' })
-    expect(checkpoints.create).not.toHaveBeenCalled()
+    expect(checkpoints.create).toHaveBeenCalledWith(organizationId, 'source-id', undefined, 'full')
+  })
+
+  it('returns full checkpoint metadata including zero bytes and falls back to archive metadata', async () => {
+    checkpoints.create.mockResolvedValueOnce({ ...record, kind: 'full', memorySizeBytes: 0 })
+    checkpoints.get.mockResolvedValueOnce({
+      ...record,
+      kind: 'full',
+      memorySizeBytes: null,
+      archive: { memorySizeBytes: 42 },
+    })
+    const created = await request('/v1/checkpoints', 'checkpoint-write-key', {
+      source_box_id: 'source-id',
+      kind: 'full',
+    })
+    expect(created.status).toBe(201)
+    expect(await created.json()).toMatchObject({ kind: 'full', memory_size_bytes: 0 })
+    const fetched = await request('/v1/checkpoints/base', 'checkpoint-read-key')
+    expect(await fetched.json()).toMatchObject({ kind: 'full', memory_size_bytes: 42 })
   })
 
   it.each([null, 'bogus', 123])('rejects invalid checkpoint kind %j before calling the service', async (kind) => {

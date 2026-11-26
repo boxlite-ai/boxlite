@@ -2,7 +2,12 @@ import { checkpointConfig } from './checkpoint-config'
 
 describe('checkpoint storage configuration', () => {
   it('stays disabled without a bucket-qualified prefix', () => {
-    expect(checkpointConfig({})).toEqual({ archivePrefix: undefined, maxPerOrganization: 10, enabled: false })
+    expect(checkpointConfig({})).toEqual({
+      archivePrefix: undefined,
+      maxPerOrganization: 10,
+      enabled: false,
+      memoryEnabled: false,
+    })
   })
 
   it.each(['gs://checkpoint-bucket/checkpoints', 'gs://checkpoint-bucket/checkpoints/'])('normalizes %s', (prefix) => {
@@ -10,6 +15,7 @@ describe('checkpoint storage configuration', () => {
       archivePrefix: 'gs://checkpoint-bucket/checkpoints/',
       maxPerOrganization: 20,
       enabled: false,
+      memoryEnabled: false,
     })
   })
 
@@ -20,6 +26,21 @@ describe('checkpoint storage configuration', () => {
     expect(checkpointConfig({ ...storage, CHECKPOINTS_ENABLED: 'true' }).enabled).toBe(true)
     expect(checkpointConfig({ CHECKPOINTS_ENABLED: 'true' }).enabled).toBe(false)
     expect(() => checkpointConfig({ ...storage, CHECKPOINTS_ENABLED: 'yes' })).toThrow('CHECKPOINTS_ENABLED')
+  })
+
+  it('enables memory only with both rollout flags and archive storage', () => {
+    const storage = { CHECKPOINT_ARCHIVE_PREFIX: 'gs://checkpoint-bucket/checkpoints' }
+    const enabled = { ...storage, CHECKPOINTS_ENABLED: 'true' }
+    const memory = { MEMORY_CHECKPOINTS_ENABLED: 'true' }
+    expect(checkpointConfig(enabled).memoryEnabled).toBe(false)
+    expect(checkpointConfig({ ...enabled, MEMORY_CHECKPOINTS_ENABLED: 'false' }).memoryEnabled).toBe(false)
+    expect(checkpointConfig({ ...storage, ...memory }).memoryEnabled).toBe(false)
+    expect(checkpointConfig({ CHECKPOINTS_ENABLED: 'true', ...memory }).memoryEnabled).toBe(false)
+    expect(checkpointConfig({ ...enabled, ...memory }).memoryEnabled).toBe(true)
+  })
+
+  it.each(['', 'TRUE', '1', ' true '])('rejects invalid memory flag %j', (flag) => {
+    expect(() => checkpointConfig({ MEMORY_CHECKPOINTS_ENABLED: flag })).toThrow('MEMORY_CHECKPOINTS_ENABLED')
   })
 
   it.each([

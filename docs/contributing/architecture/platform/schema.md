@@ -907,6 +907,34 @@ Job types: `CREATE_BOX`, `START_BOX`, `STOP_BOX`, `DESTROY_BOX`, `EXPORT_BOX`,
 **Indexes:** `(runnerId, status)` · `(status, createdAt)` ·
 `(resourceType, resourceId)`.
 
+### `checkpoint`
+
+Durable metadata for captured Box checkpoints, independent of the source Box's
+lifetime. Created by `1793923200000-add-checkpoints-migration.ts` and extended
+by `1795564800000-add-checkpoint-kind-migration.ts`.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `organizationId` | `uuid` | |
+| `name` | `character varying` | unique per organization |
+| `sourceBoxId` | `character varying` | historical source identity; no FK |
+| `sourceRunnerId` | `uuid` | |
+| `sourceState` | `character varying` | source Box state at capture |
+| `state` | `character varying` | `creating` \| `ready` \| `failed` \| `deleting`, default `creating` |
+| `kind` | `character varying` | `disk` \| `full`, default `disk`; check-constrained |
+| `memorySizeBytes` | `bigint` | nullable; check-constrained `>= 0`; populated for `full` checkpoints |
+| `arcPath` | `character varying` | object store URI |
+| `exportJobId` / `activeJobId` | `uuid` | nullable; `activeJobId` has a partial unique index when non-null |
+| `environment` / `archive` | `jsonb` | captured Box environment and immutable export artifact metadata |
+| `errorReason` | `text` | nullable |
+| `createdAt` / `updatedAt` | `timestamptz` | |
+
+The migration defaults existing checkpoints to `disk`. An accepted full export
+records its memory size both in `memorySizeBytes` and in the archive JSON; disk
+archives omit it. Reverting the migration locks the table and refuses rollback if
+any row has `kind = 'full'`.
+
 ### `box_migration`
 
 A box in flight between runners, one row per box being moved. The row _is_ the

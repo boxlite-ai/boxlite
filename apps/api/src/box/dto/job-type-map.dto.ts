@@ -6,6 +6,7 @@
 
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
+import { CheckpointArchive, CheckpointKind } from '../entities/checkpoint.entity'
 
 /**
  * Type-safe mapping between JobType and its corresponding ResourceType(s) + Payload
@@ -21,12 +22,26 @@ import { ResourceType } from '../enums/resource-type.enum'
 export interface JobTypeMap {
   [JobType.EXPORT_CHECKPOINT]: {
     resourceType: [ResourceType.BOX]
+    payload?: {
+      checkpointId: string
+      arcPath: string
+      kind?: CheckpointKind
+    }
   }
   [JobType.UPLOAD_CHECKPOINT]: {
     resourceType: [ResourceType.CHECKPOINT]
   }
   [JobType.IMPORT_CHECKPOINT]: {
     resourceType: [ResourceType.BOX]
+    payload?: {
+      operationId: string
+      targetSequence: number
+      targetBoxId: string
+      mode: string
+      archive: CheckpointArchive | null
+      kind?: CheckpointKind
+      platformEnv: Record<string, string>
+    }
   }
   [JobType.CREATE_BOX]: {
     resourceType: [ResourceType.BOX]

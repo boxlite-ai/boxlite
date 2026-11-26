@@ -296,7 +296,7 @@ describe('POST /api/organizations/:organizationId/coupon-claims', () => {
     ['system administrator without ownership', 'admin', otherOrganizationId, 403],
     ['unverified owner', 'unverified', organizationId, 403],
   ] as const)('rejects %s before contacting Commerce', async (_label, identity, org, expected) => {
-    const token = identity === null ? null : tokens[identity] ?? identity
+    const token = identity === null ? null : (tokens[identity] ?? identity)
     const response = await post(claim, token, org)
     expect(response.status).toBe(expected)
     if (identity === 'unverified') expect(response.data.code).toBe('email_verification_required')
