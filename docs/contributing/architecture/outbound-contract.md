@@ -1055,6 +1055,25 @@ policy replacement, and protected checkpoint capture and restore check the authe
 organization when reserving new work. The primary's clock is checked after taking the
 admission lock, so a request waiting across expiry cannot reserve work.
 
+```mermaid
+sequenceDiagram
+    participant R as Owner reconciler
+    participant P as PostgreSQL primary
+    participant A as API reservation
+    par Reconcile an expired attempt
+        R->>P: Find expired attempt candidates
+        R->>P: Lock admission and attempt rows for update
+        P->>P: Recheck attempt state and clock under lock
+        P->>P: Close only the window with the matching receipt
+        P-->>R: Commit and release locks
+    and Reserve new work
+        A->>P: Acquire shared admission lock
+        P->>P: Check admission, organization and clock after locking
+        P-->>A: Reject a closed or expired window
+    end
+    Note over P,A: Keep the release floor and leases for owned work
+```
+
 Provisional expiry blocks new reservations. Existing work can still reconcile under
 its recorded floor and lease. Open admission without an acceptance organization
 applies to all eligible organizations.

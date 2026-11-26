@@ -291,6 +291,31 @@ declaration with the rendered API identity and database. The owner Job probes
 its connection, applies baseline and pre-deploy entries under the migration
 lock, and verifies the journal before Apply can launch the API.
 
+```mermaid
+sequenceDiagram
+    participant D as mdeploy
+    participant J as Cloud Run Job
+    participant P as PostgreSQL
+    participant I as Pulumi
+    participant A as Cloud Run API
+    Note over D,I: Hold the stage write slot through Apply
+    D->>J: Submit the pinned bootstrap Job
+    J->>P: Apply baseline and pre-deploy migrations
+    D->>J: Run journal verification
+    J->>P: Read applied migrations
+    D->>I: Apply the pinned API image
+    I->>A: Deploy the first revision
+    opt Retry after the API service is created
+        Note over D,J: Wait for prior provider writes to settle
+        D->>A: Check the pending template or ready revision
+        D->>J: Verify the original Job execution
+        D->>J: Run journal verification
+        J->>P: Read applied migrations
+        D->>I: Resume Apply
+    end
+    D->>A: Verify the ready revision and traffic
+```
+
 A retry of the same GitHub Actions run reuses the migration phase's Cloud Run
 Job name. Apply verifies the Job specification, its one execution and the
 database journal before advancing.
