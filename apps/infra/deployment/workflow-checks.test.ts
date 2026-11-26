@@ -56,7 +56,7 @@ for (const [name, job, linuxRunner] of [
 for (const [name, job, runner] of [
   ['build-go.yml', 'config', 'boxlite'],
   ['build-plugins.yml', 'build', 'boxlite'],
-  ['api-client-drift.yml', 'check-generated-clients', 'boxlite-2vcpu-4gbmem-30gbdisk'],
+  ['api-client-drift.yml', 'check-generated-clients', 'boxlite-2vcpu-8gbmem-30gbdisk'],
   ['test.yml', 'dashboard', 'boxlite-2vcpu-8gbmem-30gbdisk'],
   ['test.yml', 'secret-server-postgres', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['test.yml', 'nix', 'boxlite-4vcpu-16gbmem-64gbdisk'],
