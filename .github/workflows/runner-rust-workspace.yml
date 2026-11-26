@@ -1,0 +1,134 @@
+---
+name: BoxLite full Rust x64 coverage on runner scratch space
+'on':
+  push:
+    branches:
+    - ci/boxlite-runner-trials-2833
+    paths:
+    - ".github/workflows/runner-rust-workspace.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  rust:
+    name: rust (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+        - os: ubuntu-latest
+          target: linux-x64-gnu
+          rust_target: x86_64-unknown-linux-gnu
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+        persist-credentials: false
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+    - uses: "./.github/actions/setup-python"
+    - name: Install system dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y jq libseccomp-dev protobuf-compiler
+        util-linux
+    - name: Verify unprivileged user namespaces (Linux)
+      if: runner.os == 'Linux'
+      run: if [ "$(id -u)" -eq 0 ]; then sudo -u nobody unshare --user --map-root-user
+        --mount --propagation private true; else unshare --user --map-root-user --mount
+        --propagation private true; fi
+    - name: Install system dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install protobuf
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+    - name: Check out vendored libkrun
+      run: git submodule update --init --depth 1 -- src/deps/libkrun-sys/vendor/libkrun
+    - name: Run Rust unit tests with coverage
+      env:
+        BOXLITE_DEPS_STUB: '1'
+        TMPDIR: "${{ runner.temp }}"
+      run: make coverage:lcov NEXTEST_PROFILE=ci
+    - name: Restore the VMM boot kernel
+      id: vmm-kernel
+      if: matrix.platform.target == 'linux-x64-gnu'
+      uses: actions/cache@v4
+      with:
+        path: target/vmm/boot/x86_64
+        key: vmm-kernel-${{ hashFiles('src/vmm/boot/kernel.lock', 'src/vmm/boot/kernel.config',
+          'scripts/build/build-vmm-boot.sh') }}
+    - name: Build the VMM boot kernel
+      if: matrix.platform.target == 'linux-x64-gnu' && steps.vmm-kernel.outputs.cache-hit
+        != 'true'
+      timeout-minutes: 20
+      run: |
+        sudo apt-get install -y build-essential bc bison flex curl xz-utils libelf-dev \
+          gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+        make vmm:boot:host
+    - name: Enable KVM access for native hypervisor tests
+      if: matrix.platform.target == 'linux-x64-gnu'
+      run: sudo chmod a+rw /dev/kvm
+    - name: Run KVM hardware tests with coverage
+      if: matrix.platform.target == 'linux-x64-gnu'
+      timeout-minutes: 5
+      run: make coverage:vmm:kvm
+    - name: Prepare real-guest test toolchain
+      if: matrix.platform.target == 'linux-x64-gnu'
+      run: |
+        sudo apt-get install -y musl-tools gperf
+        rustup target add x86_64-unknown-linux-musl
+    - name: Run real-kernel boot tests with coverage
+      if: matrix.platform.target == 'linux-x64-gnu'
+      timeout-minutes: 5
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: x86_64-linux-musl-gcc
+        CC_x86_64_unknown_linux_musl: x86_64-linux-musl-gcc
+      run: make coverage:vmm:boot
+    - uses: actions/setup-node@v4
+      if: matrix.platform.target == 'linux-x64-gnu'
+      with:
+        node-version: '22'
+    - uses: "./.github/actions/setup-go"
+      if: matrix.platform.target == 'linux-x64-gnu'
+    - name: Measure native bindings through SDK callers
+      if: matrix.platform.target == 'linux-x64-gnu'
+      env:
+        BOXLITE_DEPS_STUB: '1'
+      run: make coverage:bindings:external
+    - name: Measure file-copy workflows with a real guest
+      if: matrix.platform.target == 'linux-x64-gnu'
+      timeout-minutes: 20
+      run: |
+        make setup:submodules
+        make setup:build
+        make coverage:copy:vm
+    - name: Run OpenAPI reference-server unit tests
+      run: make test:unit:openapi
+    - name: Run guest mount tests
+      if: runner.os == 'Linux'
+      run: make test:guest-perms
+    - name: Verify coverage files for Upload coverage to Codecov
+      working-directory: "."
+      shell: bash
+      run: test -s target/coverage/lcov.info
+    - name: Verify coverage files for Upload external native binding coverage
+      if: matrix.platform.target == 'linux-x64-gnu'
+      working-directory: "."
+      shell: bash
+      run: |-
+        test -s target/coverage/native-sdk/lcov.info
+        test -s target/coverage/native-sdk/go-lcov.info
+        test -s target/coverage/python/coverage.xml
+        test -s target/coverage/go-checkpoint-native.out
+    timeout-minutes: 100
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
