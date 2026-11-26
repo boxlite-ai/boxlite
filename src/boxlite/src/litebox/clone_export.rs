@@ -171,9 +171,15 @@ impl BoxImpl {
 
     pub(crate) async fn export_box(
         &self,
-        _options: crate::runtime::options::ExportOptions,
+        options: crate::runtime::options::ExportOptions,
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        if options.include_memory {
+            return Err(BoxliteError::Unsupported(
+                "full memory checkpoint export is not yet supported by the VMM backend".into(),
+            ));
+        }
+
         let t0 = Instant::now();
         self.with_disk_admission(async {
             let box_home = self.config.box_home.clone();
@@ -332,4 +338,30 @@ fn do_export_finalize(
     );
 
     Ok(crate::runtime::options::BoxArchive::new(output_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::runtime::options::{BoxliteOptions, ExportOptions};
+    use crate::runtime::rt_impl::RuntimeImpl;
+    use boxlite_shared::errors::BoxliteError;
+
+    #[tokio::test]
+    async fn export_box_rejects_full_checkpoint_without_writing() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().to_path_buf(),
+            ..Default::default()
+        })
+        .unwrap();
+        let litebox = runtime.create(Default::default(), None).await.unwrap();
+        let dest = tempfile::tempdir().unwrap();
+
+        let err = litebox
+            .export(ExportOptions::full(), dest.path())
+            .await
+            .expect_err("full checkpoint export must be rejected");
+        assert!(matches!(err, BoxliteError::Unsupported(_)), "{err:?}");
+        assert!(dest.path().read_dir().unwrap().next().is_none());
+    }
 }

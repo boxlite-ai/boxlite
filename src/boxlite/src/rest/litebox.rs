@@ -650,6 +650,12 @@ impl BoxBackend for RestBox {
         options: ExportOptions,
         dest: &Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        if options.include_memory {
+            return Err(BoxliteError::Unsupported(
+                "full memory checkpoint export (ExportOptions::full) is not supported over the REST backend".into(),
+            ));
+        }
+
         self.client.require_export_enabled().await?;
 
         let box_id = self.box_id_str();
@@ -3164,6 +3170,16 @@ mod tests {
 
         assert!(matches!(err, BoxliteError::NotFound(_)), "{err:?}");
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn export_box_rejects_include_memory_over_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let rest_box = rest_box_for(1, "rest-export-box");
+        let err = BoxBackend::export_box(&rest_box, ExportOptions::full(), dir.path())
+            .await
+            .expect_err("REST export must reject include_memory=true");
+        assert!(matches!(err, BoxliteError::Unsupported(_)), "{err:?}");
     }
 
     mod agents;

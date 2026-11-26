@@ -1666,9 +1666,22 @@ impl BoxArchive {
 #[derive(Debug, Clone, Default)]
 pub struct SnapshotOptions {}
 
-/// Forward-compatible options for exporting a box archive.
+/// Options for exporting a box archive.
 #[derive(Debug, Clone, Default)]
-pub struct ExportOptions {}
+pub struct ExportOptions {
+    /// Request VM memory and device state in addition to disk contents.
+    /// Currently rejected with `Unsupported` by the local and REST backends.
+    pub include_memory: bool,
+}
+
+impl ExportOptions {
+    /// Request a full checkpoint archive including disk, memory, and device state.
+    pub fn full() -> Self {
+        Self {
+            include_memory: true,
+        }
+    }
+}
 
 /// Forward-compatible options for cloning a box.
 #[derive(Debug, Clone, Default)]

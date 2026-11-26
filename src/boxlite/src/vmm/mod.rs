@@ -265,6 +265,9 @@ pub struct InstanceSpec {
     /// Whether the box should continue running when the parent process exits.
     /// When false, the shim detects parent death via watchdog pipe POLLHUP.
     pub detach: bool,
+    /// Optional path to a saved checkpoint file to restore instead of cold booting.
+    #[serde(default)]
+    pub checkpoint_restore: Option<PathBuf>,
 }
 
 /// Entrypoint configuration that the guest should run.
