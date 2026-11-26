@@ -26,7 +26,7 @@ export const RUNNER_ENV_END = '# END BOXLITE_RUNNER_ENV'
 export const renderRunnerEnvironment = (
   raw?: string,
   ownedNames: readonly string[] = [],
-): { block: string; keys: string[] } => {
+): { block: string; keys: string[]; values: Record<string, string> } => {
   let values: unknown
   try {
     values = JSON.parse(raw || '{}')
@@ -50,6 +50,7 @@ export const renderRunnerEnvironment = (
   )
   return {
     keys: entries.map(([key]) => key),
+    values: Object.fromEntries(entries),
     block: lines.length ? [RUNNER_ENV_BEGIN, ...lines, RUNNER_ENV_END].join('\n') : '',
   }
 }

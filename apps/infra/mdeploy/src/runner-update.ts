@@ -38,6 +38,7 @@ import { resolveHome } from 'mstage/home'
 import { run as mstage } from 'mstage/run'
 import { resolveScope } from 'mstage/scope'
 import { deployRoot } from './config.ts'
+import { isCompleteOutboundStage, QUALIFIED_RELEASE_WORKFLOW } from './release-stage.ts'
 import {
   sleepSeconds,
   spawnWith,
@@ -241,6 +242,7 @@ export const updateRunners = async ({
   // `resolveScope` refuses a missing --stage itself, and names the stages this
   // repository declares while doing it.
   const scope = resolveScope({ options: options as Options, config, environment })
+  if (isCompleteOutboundStage(config, scope)) throw new RunnerUpdateError(QUALIFIED_RELEASE_WORKFLOW)
 
   // Same gate a deploy applies, for the same reason: this restarts every runner
   // in the fleet, and boxes on a host take the restart.

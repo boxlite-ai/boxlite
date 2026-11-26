@@ -114,7 +114,7 @@ jobs:
           go-version: ${{ needs.config.outputs.go-version }}
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
+        run: sudo apt-get update && sudo apt-get install -y clang libx11-dev libxtst-dev libxinerama-dev
 
       - name: Resolve artifact identity
         id: artifact
@@ -204,7 +204,15 @@ jobs:
           ARCHIVE: ${{ steps.artifact.outputs.archive }}
         run: |
           set -euo pipefail
-          tar czf "$ARCHIVE" -C /tmp boxlite-runner
+          files=(-C /tmp boxlite-runner)
+          if [[ -f apps/runner/platform-guard/boxlite-platform-guard.service ]]; then
+            make build:platform-guard
+            files+=(
+              -C "$PWD/target/platform-guard" boxlite-platform-guard deadline.bpf.o
+              -C "$PWD/apps/runner/platform-guard" boxlite-platform-guard.service
+            )
+          fi
+          tar czf "$ARCHIVE" "${files[@]}"
           # Integrity manifest both user-data and the in-place updater verify before installing.
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
 

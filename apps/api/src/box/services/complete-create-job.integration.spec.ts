@@ -13,6 +13,8 @@ import { AddCompleteOutboundAdmission1795096802000 } from '../../migrations/pre-
 import { AddCompleteOutboundEnrollmentAndClaims1795096803000 } from '../../migrations/pre-deploy/1795096803000-add-complete-outbound-enrollment-and-claims-migration'
 import { AddPendingCompleteV2CreateIndex1795096804000 } from '../../migrations/pre-deploy/1795096804000-add-pending-complete-v2-create-index-migration'
 import { AddCompleteOutboundReleaseControl1795096806000 } from '../../migrations/pre-deploy/1795096806000-add-complete-outbound-release-control-migration'
+import { AddCompleteOutboundAcceptanceWindow1795096809000 } from '../../migrations/pre-deploy/1795096809000-add-complete-outbound-acceptance-window-migration'
+import { AddCompleteOutboundReleaseAttempts1795096810000 } from '../../migrations/pre-deploy/1795096810000-add-complete-outbound-release-attempts-migration'
 import { CompleteCreateJobController } from '../controllers/complete-create-job.controller'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
@@ -25,7 +27,11 @@ import { BoxState } from '../enums/box-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BoxRepository } from '../repositories/box.repository'
 import { CompleteCreateAttempt, CompleteCreateBox } from '../runner-adapter/outbound-control'
-import { OutboundPolicyStore, requireCompleteOutboundAdmission } from '../stores/outbound-policy.store'
+import {
+  OutboundPolicyStore,
+  requireCompleteOutboundAdmission,
+  verifiedCompleteRunner,
+} from '../stores/outbound-policy.store'
 import { BoxService } from './box.service'
 import { CompleteCreateJobService } from './complete-create-job.service'
 import { JobService } from './job.service'
@@ -77,6 +83,8 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
       await new AddCompleteOutboundEnrollmentAndClaims1795096803000().up(migration)
       await new AddPendingCompleteV2CreateIndex1795096804000().up(migration)
       await new AddCompleteOutboundReleaseControl1795096806000().up(migration)
+      await new AddCompleteOutboundAcceptanceWindow1795096809000().up(migration)
+      await new AddCompleteOutboundReleaseAttempts1795096810000().up(migration)
     } finally {
       await migration.release()
     }
@@ -125,7 +133,9 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
     } as never)
     await db.query('TRUNCATE "job", "box", "box_last_activity", "runner", complete_outbound_runner_enrollment')
     await db.query(
-      "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = $1, api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1",
+      `UPDATE complete_outbound_admission SET phase = 'open', minimum_release = $1,
+       api_principal = current_user, deployment_receipt = 'fixture', acceptance_organization_id = NULL,
+       acceptance_expires_at = NULL WHERE id = 1`,
       [release],
     )
     runner = await db.getRepository(Runner).save(
@@ -393,6 +403,31 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
     expect((await jobs.claim(context, token)).attempt.job_id).toBe(first.owner.jobId)
   })
 
+  it('isolates complete create reservations to the live release acceptance organization', async () => {
+    await enroll()
+    await db.query(
+      `UPDATE complete_outbound_admission SET acceptance_organization_id = $1,
+       acceptance_expires_at = clock_timestamp() + interval '1 hour' WHERE id = 1`,
+      [organizationId],
+    )
+    const foreign = reservation()
+    foreign.box.organizationId = randomUUID()
+    await expect(foreign.reserve()).rejects.toMatchObject({ status: 503 })
+    expect(await db.getRepository(Box).existsBy({ id: foreign.box.id })).toBe(false)
+    expect(await db.getRepository(Job).existsBy({ id: foreign.owner.jobId })).toBe(false)
+
+    const accepted = reservation()
+    await expect(accepted.reserve()).resolves.toMatchObject({ id: accepted.box.id })
+    expect(await db.getRepository(Job).existsBy({ id: accepted.owner.jobId })).toBe(true)
+
+    await db.query(`UPDATE complete_outbound_admission
+      SET acceptance_expires_at = clock_timestamp() - interval '1 second' WHERE id = 1`)
+    const expired = reservation()
+    expired.box.name = 'expired-window'
+    await expect(expired.reserve()).rejects.toMatchObject({ status: 503 })
+    expect(await db.getRepository(Job).existsBy({ id: expired.owner.jobId })).toBe(false)
+  })
+
   it('closes never-delivered work after lease rotation and retains a delivered lease until recovery', async () => {
     await enroll()
     const first = reservation()
@@ -419,27 +454,36 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
     const application = `${schema}_api`
     const retired = `${schema}_old`
     const connection = db.createQueryRunner()
-    const activate = () =>
-      db.query('SELECT complete_outbound_activate($1, $2, $3, $4)', [
-        release,
-        application,
-        [retired],
-        'verified-fixture-receipt',
-      ])
+    const attempt = randomUUID()
+    const activate = () => db.query('SELECT complete_outbound_activate_attempt($1, $2)', [attempt, [retired]])
     try {
       await db.query('SELECT complete_outbound_close()')
       await db.query(`CREATE ROLE "${application}" LOGIN`)
       await db.query(`CREATE ROLE "${retired}" LOGIN`)
       await db.query(`GRANT USAGE ON SCHEMA "${schema}" TO "${application}"`)
+      await db.query('UPDATE complete_outbound_admission SET api_principal = $1', [application])
+      await db.query(
+        `SELECT complete_outbound_begin_attempt($1, 'dev', $2, $3, $4, 'fixture', $5,
+          clock_timestamp() + interval '1 hour')`,
+        [attempt, release, application, organizationId, 'a'.repeat(64)],
+      )
       await expect(activate()).rejects.toThrow('old application principal')
       await db.query(`ALTER ROLE "${retired}" NOLOGIN`)
       await db.getRepository(Runner).update(runner.id, { state: RunnerState.READY })
       await expect(activate()).rejects.toThrow('cohort is incomplete')
       await enroll()
+      await expect(
+        db.query('SELECT complete_outbound_activate($1, $2, $3, $4)', [release, application, [retired], 'legacy']),
+      ).rejects.toMatchObject({ code: '42883' })
       await activate()
-      await expect(requireCompleteOutboundAdmission(db.manager, false)).rejects.toMatchObject({ status: 503 })
+      await expect(requireCompleteOutboundAdmission(db.manager, false, organizationId)).rejects.toMatchObject({
+        status: 503,
+      })
       await connection.query(`SET ROLE "${application}"`)
-      await expect(requireCompleteOutboundAdmission(connection.manager, true)).resolves.toBeUndefined()
+      await expect(requireCompleteOutboundAdmission(connection.manager, true, organizationId)).resolves.toBeUndefined()
+      await expect(requireCompleteOutboundAdmission(connection.manager, true, randomUUID())).rejects.toMatchObject({
+        status: 503,
+      })
       await expect(connection.query("UPDATE complete_outbound_admission SET phase = 'closed'")).rejects.toMatchObject({
         code: '42501',
       })
@@ -455,6 +499,7 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
     } finally {
       await connection.query('RESET ROLE').catch(() => undefined)
       await connection.release()
+      await db.query('DELETE FROM complete_outbound_release_attempt WHERE id = $1', [attempt])
       await db.query(`DROP OWNED BY "${application}"`).catch(() => undefined)
       await db.query(`DROP ROLE IF EXISTS "${application}", "${retired}"`)
     }
@@ -528,6 +573,339 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
       expect(await store.read(box.id, organizationId)).toMatchObject({ state: BoxState.STARTED, pending: false })
     } finally {
       await app.close()
+    }
+  })
+
+  it('refuses a provisional organization window in the release target', async () => {
+    await db.query('SELECT complete_outbound_close()')
+    await expect(
+      db.query(
+        `SELECT complete_outbound_begin_attempt($1, 'target', $2, current_user, $3, 'fixture', $4,
+          clock_timestamp() + interval '1 hour')`,
+        [randomUUID(), release, organizationId, 'a'.repeat(64)],
+      ),
+    ).rejects.toThrow('Acceptance organizations are only available in dev')
+  })
+
+  it('keeps a successor rehearsal out until the previous writer and its cleanup settle', async () => {
+    const attempt = randomUUID()
+    const checkpointJob = await db.getRepository(Job).save(
+      new Job({
+        type: JobType.UPLOAD_PROTECTED_CHECKPOINT,
+        status: JobStatus.IN_PROGRESS,
+        resourceType: ResourceType.CHECKPOINT,
+        resourceId: randomUUID(),
+        runnerId: runner.id,
+      }),
+    )
+    const begin = () =>
+      db.query(
+        `SELECT complete_outbound_begin_attempt($1, 'dev', $2, current_user, $3, 'fixture', $4,
+          clock_timestamp() + interval '1 hour')`,
+        [attempt, release, organizationId, 'a'.repeat(64)],
+      )
+
+    await db.query('SELECT complete_outbound_close()')
+    try {
+      await expect(begin()).rejects.toThrow('Previous rehearsal still owns protected checkpoint work')
+      await db.getRepository(Job).update(checkpointJob.id, {
+        status: JobStatus.FAILED,
+        completedAt: new Date(),
+        checkpointCleanupRequired: true,
+      })
+      await expect(begin()).rejects.toThrow('Previous rehearsal still owns protected checkpoint work')
+      await db.getRepository(Job).update(checkpointJob.id, { checkpointCleanupRequired: false })
+      await begin()
+      const [row] = await db.query('SELECT state FROM complete_outbound_release_attempt WHERE id = $1', [attempt])
+      expect(row.state).toBe('pending')
+    } finally {
+      await db.query('SELECT complete_outbound_end_attempt($1, false)', [attempt])
+    }
+  })
+
+  it('reconciles expired release attempts without closing an accepted or later opening', async () => {
+    const application = `${schema}_rel`
+    const retired = `${schema}_retired`
+    const expired = randomUUID()
+    const aborted = randomUUID()
+    const abandoned = randomUUID()
+    const current = randomUUID()
+    const later = randomUUID()
+    const manifest = 'a'.repeat(64)
+    const evidence = 'b'.repeat(64)
+    const connection = db.createQueryRunner()
+    const begin = (id: string, previousReceipt: string, stage = 'dev') =>
+      db.query(
+        `SELECT complete_outbound_begin_attempt($1, $7, $2, $3, $4, $5, $6,
+          clock_timestamp() + interval '1 hour')`,
+        [id, release, application, stage === 'dev' ? organizationId : null, previousReceipt, manifest, stage],
+      )
+    const activate = (id: string) => db.query('SELECT complete_outbound_activate_attempt($1, $2)', [id, [retired]])
+    const open = (id: string, result = evidence, artifact = manifest) =>
+      db.query('SELECT complete_outbound_activate_attempt($1, $2, NULL, $3, $4)', [id, [retired], artifact, result])
+    const close = async (id: string, result = evidence) => {
+      const [row] = await db.query('SELECT complete_outbound_close_target_attempt($1, $2) AS closed', [id, result])
+      return row.closed
+    }
+    const expire = async (id: string) => {
+      const [result] = await db.query('SELECT complete_outbound_expire_attempt($1) AS expired', [id])
+      return result.expired
+    }
+    const reconcile = (stage: string) =>
+      db.query('SELECT attempt_id FROM complete_outbound_reconcile_attempts($1)', [stage])
+    const abort = async (id: string) => {
+      const [result] = await db.query('SELECT complete_outbound_end_attempt($1, false) AS aborted', [id])
+      return result.aborted
+    }
+    const moveDeadline = (id: string) =>
+      db.query(
+        `UPDATE complete_outbound_release_attempt SET expires_at = clock_timestamp() - interval '1 second' WHERE id = $1`,
+        [id],
+      )
+    try {
+      await db.query(`CREATE ROLE "${application}" LOGIN`)
+      await db.query(`CREATE ROLE "${retired}" NOLOGIN`)
+      await db.query(`GRANT USAGE ON SCHEMA "${schema}" TO "${application}"`)
+      await db.query('SELECT complete_outbound_close()')
+      await db.query('UPDATE complete_outbound_admission SET api_principal = $1', [application])
+      await db.getRepository(Runner).update(runner.id, { state: RunnerState.READY })
+      await enroll()
+
+      await begin(expired, 'fixture')
+      await expect(reconcile('dev')).resolves.toEqual([])
+      await moveDeadline(expired)
+      await expect(activate(expired)).rejects.toThrow('Release attempt is no longer eligible')
+      await expect(reconcile('another-stage')).resolves.toEqual([])
+      await expect(reconcile('dev')).resolves.toEqual([{ attempt_id: expired }])
+
+      await begin(aborted, 'fixture')
+      await expect(open(aborted)).rejects.toThrow('Release evidence must match the target attempt')
+      await activate(aborted)
+      await expect(abort(aborted)).resolves.toBe(true)
+      await expect(abort(aborted)).resolves.toBe(false)
+
+      await begin(abandoned, aborted)
+      await activate(abandoned)
+      await expect(abort(aborted)).resolves.toBe(false)
+      await moveDeadline(abandoned)
+      await expect(reconcile('dev')).resolves.toEqual([{ attempt_id: abandoned }])
+      const [closed] = await db.query(
+        'SELECT phase, minimum_release, deployment_receipt FROM complete_outbound_admission',
+      )
+      expect(closed).toEqual({ phase: 'closed', minimum_release: release, deployment_receipt: abandoned })
+
+      await begin(current, abandoned, 'target')
+      await expect(activate(current)).rejects.toThrow('Release evidence must match the target attempt')
+      await expect(expire(abandoned)).resolves.toBe(false)
+      await expect(open(current, evidence, evidence)).rejects.toThrow('Release evidence must match the target attempt')
+      await db.query(
+        "UPDATE complete_outbound_runner_enrollment SET expires_at = clock_timestamp() - interval '1 second'",
+      )
+      await expect(open(current)).rejects.toThrow('The Runner cohort is incomplete or incompatible')
+      await db.query(
+        "UPDATE complete_outbound_runner_enrollment SET expires_at = clock_timestamp() + interval '1 hour'",
+      )
+      await open(current)
+      await open(current)
+      await moveDeadline(current)
+      await expect(expire(current)).resolves.toBe(false)
+      await expect(abort(current)).resolves.toBe(false)
+      const [promoted] = await db.query(
+        'SELECT phase, deployment_receipt, acceptance_organization_id, acceptance_expires_at FROM complete_outbound_admission',
+      )
+      expect(promoted).toEqual({
+        phase: 'open',
+        deployment_receipt: current,
+        acceptance_organization_id: null,
+        acceptance_expires_at: null,
+      })
+      await expect(close(current, manifest)).resolves.toBe(false)
+      await expect(close(current)).resolves.toBe(true)
+      const [retained] = await db.query('SELECT phase, minimum_release, api_principal FROM complete_outbound_admission')
+      expect(retained).toEqual({ phase: 'closed', minimum_release: release, api_principal: application })
+      await begin(later, current, 'target')
+      await expect(open(later)).rejects.toMatchObject({ code: '23505' })
+      await open(later, 'c'.repeat(64))
+      await expect(close(current)).resolves.toBe(false)
+      const [latest] = await db.query('SELECT phase, deployment_receipt FROM complete_outbound_admission')
+      expect(latest).toEqual({ phase: 'open', deployment_receipt: later })
+      await connection.query(`SET ROLE "${application}"`)
+      await expect(
+        connection.query('SELECT complete_outbound_close_target_attempt($1, $2)', [later, 'c'.repeat(64)]),
+      ).rejects.toMatchObject({ code: '42501' })
+      await expect(connection.query('SELECT complete_outbound_expire_attempt($1)', [current])).rejects.toMatchObject({
+        code: '42501',
+      })
+      await expect(connection.query("SELECT * FROM complete_outbound_reconcile_attempts('dev')")).rejects.toMatchObject(
+        { code: '42501' },
+      )
+    } finally {
+      await connection.query('RESET ROLE').catch(() => undefined)
+      await connection.release()
+      await db.query(`DROP OWNED BY "${application}"`).catch(() => undefined)
+      await db.query(`DROP ROLE IF EXISTS "${application}", "${retired}"`)
+    }
+  })
+
+  it('requires trusted fresh-stage evidence before first activation without a predecessor', async () => {
+    const application = `${schema}_first`
+    const attempt = randomUUID()
+    const rejected = randomUUID()
+    const manifest = 'a'.repeat(64)
+    const bootstrap = 'b'.repeat(64)
+    const begin = (id: string, receipt: string | null, proof: string | null) =>
+      db.query(
+        `SELECT complete_outbound_begin_attempt($1, 'dev', $2, $3, $4, $5, $6,
+          clock_timestamp() + interval '1 hour', $7)`,
+        [id, release, application, organizationId, receipt, manifest, proof],
+      )
+    try {
+      await db.query(`CREATE ROLE "${application}" LOGIN`)
+      await db.query('SELECT complete_outbound_close()')
+      await db.query('UPDATE complete_outbound_admission SET api_principal = $1', [application])
+      await expect(begin(rejected, 'fixture', bootstrap)).rejects.toThrow('Release attempt is no longer eligible')
+      await begin(rejected, 'fixture', null)
+      await expect(db.query('SELECT complete_outbound_activate_attempt($1, $2)', [rejected, []])).rejects.toThrow(
+        'Release attempt has no verified initial rollout',
+      )
+      await db.query(
+        `UPDATE complete_outbound_release_attempt SET expires_at = clock_timestamp() - interval '1 second' WHERE id = $1`,
+        [rejected],
+      )
+      await db.query('SELECT complete_outbound_expire_attempt($1)', [rejected])
+
+      await db.query(
+        'UPDATE complete_outbound_admission SET minimum_release = NULL, api_principal = NULL, deployment_receipt = NULL',
+      )
+      await db.getRepository(Runner).update(runner.id, { state: RunnerState.READY })
+      await enroll()
+      await begin(attempt, null, bootstrap)
+      await db.query('SELECT complete_outbound_activate_attempt($1, $2)', [attempt, []])
+      const [control] = await db.query(
+        'SELECT phase, api_principal, acceptance_organization_id FROM complete_outbound_admission',
+      )
+      expect(control).toEqual({ phase: 'open', api_principal: application, acceptance_organization_id: organizationId })
+    } finally {
+      await db.query('TRUNCATE complete_outbound_release_attempt')
+      await db.query(`DROP OWNED BY "${application}"`).catch(() => undefined)
+      await db.query(`DROP ROLE IF EXISTS "${application}"`)
+    }
+  })
+
+  it('transfers recovery on the closed floor in the same transaction that retires the old login', async () => {
+    const application = `${schema}_next`
+    const predecessor = `${schema}_prev`
+    const unrelated = `${schema}_unrelated`
+    const attempt = randomUUID()
+    const password = randomUUID()
+    if (db.options.type !== 'postgres') throw new Error('Recovery handoff requires PostgreSQL')
+    const candidate = new DataSource({ ...db.options, username: application, password })
+    const current = new DataSource({ ...db.options, username: predecessor, password })
+    const handoff = 'SELECT complete_outbound_handoff_attempt($1, $2)'
+    const activate = (retired: string[]) =>
+      db.query('SELECT complete_outbound_activate_attempt($1, $2)', [attempt, retired])
+    const state = async () => {
+      const [control] = await db.query(
+        `SELECT phase, minimum_release, api_principal, deployment_receipt,
+         (SELECT handed_off_from FROM complete_outbound_release_attempt WHERE id = $2) AS handed_off_from,
+         (SELECT rolcanlogin FROM pg_roles WHERE rolname = $1) AS old_login FROM complete_outbound_admission`,
+        [predecessor, attempt],
+      )
+      return control
+    }
+    try {
+      await db.query(`CREATE ROLE "${application}" LOGIN CREATEROLE PASSWORD '${password}'`)
+      await db.query(`CREATE ROLE "${predecessor}" LOGIN PASSWORD '${password}'`)
+      await db.query(`CREATE ROLE "${unrelated}" NOLOGIN`)
+      await current.initialize()
+      await db.query(`GRANT USAGE ON SCHEMA "${schema}" TO "${application}"`)
+      await db.query(`GRANT SELECT, UPDATE ON "job", "box" TO "${application}"`)
+      await db.query(`GRANT SELECT, INSERT, UPDATE ON "box_last_activity" TO "${application}"`)
+      await db.query(`GRANT SELECT, UPDATE (id) ON "runner" TO "${application}"`)
+      await enroll()
+      const { box, owner, reserve } = reservation()
+      await reserve()
+      const claim = await jobs.claim(context, token)
+      const old = new Date(Date.now() - 11 * 60_000)
+      await db.query('UPDATE "job" SET "startedAt" = $1 WHERE id = $2', [old, owner.jobId])
+      await db.query('SELECT complete_outbound_close()')
+      await db.query('UPDATE complete_outbound_admission SET api_principal = $1', [predecessor])
+      await db.query(
+        `SELECT complete_outbound_begin_attempt($1, 'dev', $2, $3, $4, 'fixture', $5,
+          clock_timestamp() + interval '1 hour')`,
+        [attempt, release, application, organizationId, 'a'.repeat(64)],
+      )
+      await expect(db.query(handoff, [attempt, predecessor])).rejects.toThrow(
+        'dedicated non-owner application principal',
+      )
+      await expect(state()).resolves.toMatchObject({
+        api_principal: predecessor,
+        old_login: true,
+        handed_off_from: null,
+      })
+
+      await db.query(`ALTER ROLE "${application}" NOCREATEROLE`)
+      await expect(
+        db.transaction(async (manager) => {
+          await manager.query(handoff, [attempt, predecessor])
+          throw new Error('Injected failure after transfer within the transaction')
+        }),
+      ).rejects.toThrow('Injected failure after transfer')
+      await expect(state()).resolves.toMatchObject({
+        api_principal: predecessor,
+        old_login: true,
+        handed_off_from: null,
+      })
+      await expect(
+        db.query(handoff, [attempt, predecessor]).then(() => {
+          throw new Error('Injected missing operator reply')
+        }),
+      ).rejects.toThrow('Injected missing operator reply')
+      await expect(state()).resolves.toEqual({
+        phase: 'closed',
+        minimum_release: release,
+        api_principal: application,
+        deployment_receipt: 'fixture',
+        handed_off_from: predecessor,
+        old_login: false,
+      })
+      await expect(activate([unrelated])).rejects.toThrow('retired principal does not match the release handoff')
+      await expect(activate([predecessor])).rejects.toThrow(
+        'old application principal can still connect or has an active session',
+      )
+      await current.destroy()
+      await candidate.initialize()
+      await expect(verifiedCompleteRunner(candidate.manager, runner.id)).resolves.toMatchObject({
+        runner: { id: runner.id },
+      })
+      await expect(requireCompleteOutboundAdmission(candidate.manager, false, organizationId)).rejects.toMatchObject({
+        status: 503,
+      })
+      const recoveryRepository = new BoxRepository(
+        candidate,
+        { emit } as never,
+        {
+          invalidate: jest.fn(),
+          invalidateOrgId: jest.fn(),
+        } as never,
+      )
+      const recovery = new CompleteCreateJobService(candidate, recoveryRepository, ordinary, {} as never)
+      cancelProof = async (request) => {
+        expect(request).toEqual(claim?.attempt)
+        return { attempt: request, outcome: 'no_effect', failure: 'unsupported' }
+      }
+      await recovery.reconcileJob(owner.jobId)
+      expect((await ordinary.findOne(owner.jobId)).status).toBe(JobStatus.FAILED)
+      expect(await store.read(box.id, organizationId)).toMatchObject({ state: BoxState.ERROR, pending: false })
+      await db.getRepository(Runner).update(runner.id, { state: RunnerState.READY })
+      await activate([predecessor])
+      await expect(state()).resolves.toMatchObject({ phase: 'open', deployment_receipt: attempt })
+    } finally {
+      if (current.isInitialized) await current.destroy()
+      if (candidate.isInitialized) await candidate.destroy()
+      await db.query('TRUNCATE complete_outbound_release_attempt')
+      await db.query(`DROP OWNED BY "${application}"`).catch(() => undefined)
+      await db.query(`DROP ROLE IF EXISTS "${application}", "${predecessor}", "${unrelated}"`)
     }
   })
 

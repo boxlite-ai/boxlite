@@ -225,11 +225,31 @@ With the job's database environment, run these commands from the image's working
 ```bash
 node dist/apps/api/migrate.js list pre-deploy
 node dist/apps/api/migrate.js run pre-deploy
+node dist/apps/api/migrate.js verify pre-deploy
 node dist/apps/api/migrate.js list post-deploy
 node dist/apps/api/migrate.js run post-deploy --old-replicas-retired
+node dist/apps/api/migrate.js verify post-deploy
 ```
 
 Compare each list to the release's migration identities. The phase-specific commands apply pending migrations from that phase only.
+
+For a newly provisioned empty database, use `run pre-deploy --include-baseline`.
+It records the baseline and expansion without running contraction. `verify pre-deploy`
+checks both the baseline and expansion against the journal in read-only mode.
+
+Verification rejects unknown, duplicate, or inconsistent journal entries. Known
+entries from the other phase can be present when verifying a completed release.
+
+Set `BOXLITE_EXPECTED_MIGRATIONS` to the expected migration class names from the
+reviewed commit, grouped by `baseline`, `pre-deploy`, and `post-deploy`. The
+qualified owner Job supplies this declaration to `run` and `verify`. The CLI
+compares all three groups with the loaded image bundle before connecting to
+PostgreSQL, including any explicitly empty groups.
+
+Generate the declaration
+with `node apps/api/scripts/release-migration-identities.cjs <reviewed-commit>`
+from the repository. `migrate.js check-bundle` checks the image without opening
+a database connection.
 
 The [F1 schema transition paper](https://research.google/pubs/online-asynchronous-schema-change-in-f1/) and [Strong Migrations](https://github.com/ankane/strong_migrations#removing-a-column) inform transition ordering.
 BoxLite's CLI owns the phase jobs described here.
@@ -292,6 +312,20 @@ Existing policies remain unchanged and acquire the documented `initial` revision
 Pending candidates and assigned Runner ownership survive coordinator restarts in the same row.
 Reverting drops this recovery evidence; stop versioned outbound writers and resolve pending attempts before rollback.
 See the [outbound durability contract](../../../../docs/contributing/architecture/outbound-contract.md#cloud-durable-intent).
+
+### Dev rehearsal checkpoint recovery
+
+The owner command `migrate.js release` rejects a new dev attempt while the
+previous rehearsal database has unfinished protected checkpoint work or cleanup
+holds. The check runs under the admission row lock.
+
+Close the old window and let the enrolled writer finish its cleanup. For a
+permanently lost writer, verify retirement before starting the next attempt.
+
+The owner status command reports `rehearsal_replacement_ready` for a dev
+attempt. The flag requires the attempt to hold the current receipt, be aborted
+or expired, and have a closed admission window and no protected checkpoint
+work. Query the old database to check this state before replacing its bindings.
 
 ## Reverting Migrations
 

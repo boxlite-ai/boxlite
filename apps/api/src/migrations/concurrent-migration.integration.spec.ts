@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { DataSource, MigrationInterface, QueryRunner } from 'typeorm'
 import cliDataSource, { baseDataSourceOptions } from './data-source'
+import { MigrationDataSource } from './migration-data-source'
 
 class CreateMigrationProbe1796096799000 implements MigrationInterface {
   async up(runner: QueryRunner) {
@@ -43,6 +44,62 @@ async function waitForActivity(observer: DataSource, name: string, patterns: str
 }
 
 const databaseTest = process.env.DB_HOST ? it : it.skip
+
+databaseTest('keeps the migration guard and DDL on the same locked PostgreSQL session', async () => {
+  const schema = `migration_guard_${randomUUID().replaceAll('-', '')}`
+  const observer = await new DataSource({ ...baseDataSourceOptions, entities: [] }).initialize()
+  const contender = observer.createQueryRunner()
+  let guardPid: number
+  class GuardedMigration1796096799000 implements MigrationInterface {
+    async up(runner: QueryRunner) {
+      expect(await runner.query('SELECT pg_backend_pid() AS pid')).toEqual([{ pid: guardPid }])
+      await runner.query('CREATE TABLE guarded_probe (id integer)')
+    }
+
+    async down(runner: QueryRunner) {
+      await runner.query('DROP TABLE guarded_probe')
+    }
+  }
+  const source = new MigrationDataSource({
+    ...baseDataSourceOptions,
+    schema,
+    entities: [],
+    migrations: [GuardedMigration1796096799000],
+    extra: { options: `-c search_path=${schema},public` },
+  })
+
+  try {
+    await observer.query(`CREATE SCHEMA "${schema}"`)
+    await source.initialize()
+    await expect(
+      source.runMigrations({
+        guard: async () => {
+          throw new Error('Refuse before DDL')
+        },
+      }),
+    ).rejects.toThrow('Refuse before DDL')
+    expect(await source.readMigrationJournal()).toEqual([])
+    await expect(
+      source.runMigrations({
+        guard: async (runner, journal) => {
+          expect(journal).toEqual([])
+          const [{ pid }] = await runner.query('SELECT pg_backend_pid() AS pid')
+          guardPid = pid
+          expect(
+            await contender.query('SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired', [
+              'boxlite:typeorm:migrations',
+            ]),
+          ).toEqual([{ acquired: false }])
+        },
+      }),
+    ).resolves.toHaveLength(1)
+  } finally {
+    await contender.release()
+    if (source.isInitialized) await source.destroy()
+    await observer.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+    await observer.destroy()
+  }
+})
 
 databaseTest('reports a committed revert as successful when unlock fails', async () => {
   const schema = `migration_revert_${randomUUID().replaceAll('-', '')}`

@@ -11,9 +11,16 @@ import { parseInvocation, type Options } from 'mstage/cli'
 import { loadConfig } from 'mstage/config'
 import { resolveScope } from 'mstage/scope'
 import { run as mstage } from 'mstage/run'
+import { identityFor, instanceFor } from 'naming'
+import { GCP_API_DATABASE_LOGIN } from '../stack/providers/gcp/database.ts'
+import { gcpWorkloadArtifact } from '../stack/providers/gcp/network.ts'
+import { loadDeployConfig } from './config.ts'
 import { resolveDeployTarget } from './deploy.ts'
 import type { Intent } from './deploy.ts'
 import { ambientEnvironment, assertAddressesAreNotSpent, fetchStageEnvironment, type StageEnvironment } from './env.ts'
+import { federatedReleaseDeployer, verifyReleaseIamWithAdc } from './release-iam.ts'
+import { runReleasePreDeployWithAdc, verifyReleaseApiWithAdc } from './release-migrations.ts'
+import { assertQualifiedApply, isCompleteOutboundStage, QUALIFIED_RELEASE_WORKFLOW } from './release-stage.ts'
 
 export class UsageError extends Error {
   constructor(message: string) {
@@ -26,6 +33,7 @@ const USAGE = [
   'usage: npm run mdeploy -- --stage <stage> [--confirm] [--local-env]',
   '       npm run mdeploy -- --stage <stage> --diff',
   '       npm run mdeploy -- --stage <stage> --refresh',
+  '       npm run mdeploy -- --stage <stage> --check-release-iam',
   '       npm run mdeploy -- --stage <stage> --remove --confirm',
   '',
   '--refresh reconciles the state with the cloud and clears the operations an',
@@ -34,7 +42,7 @@ const USAGE = [
 ].join('\n')
 
 /** mdeploy's own switches. mstage parses them but never advertises them. */
-const OWN_OPTIONS = { flags: ['local-env', 'diff', 'remove', 'refresh'] }
+const OWN_OPTIONS = { flags: ['local-env', 'diff', 'remove', 'refresh', 'check-release-iam'] }
 
 export type RunInput = {
   argv: string[]
@@ -45,6 +53,10 @@ export type RunInput = {
   /** The one dispatch: which cloud this repository lives in, and what serves it. */
   targetWith?: typeof resolveDeployTarget
   fetchEnv?: typeof fetchStageEnvironment
+  checkReleaseIam?: typeof verifyReleaseIamWithAdc
+  checkReleaseDeployer?: (deployer: string | undefined) => Promise<unknown>
+  runReleasePreDeploy?: typeof runReleasePreDeployWithAdc
+  verifyReleaseApi?: typeof verifyReleaseApiWithAdc
 }
 
 export const run = async ({
@@ -55,6 +67,10 @@ export const run = async ({
   checkLogin = mstage,
   targetWith = resolveDeployTarget,
   fetchEnv = fetchStageEnvironment,
+  checkReleaseIam = verifyReleaseIamWithAdc,
+  checkReleaseDeployer = federatedReleaseDeployer,
+  runReleasePreDeploy = runReleasePreDeployWithAdc,
+  verifyReleaseApi = verifyReleaseApiWithAdc,
 }: RunInput): Promise<number> => {
   if (argv[0] === 'help' || argv[0] === '--help') {
     log(USAGE)
@@ -68,6 +84,31 @@ export const run = async ({
 
   const config = loadConfig({ cwd, environment })
   const scope = resolveScope({ options: options as Options, config, environment })
+  if (options['check-release-iam'] === true) {
+    if (options.diff || options.refresh || options.remove || options['local-env']) {
+      throw new UsageError('--check-release-iam runs by itself')
+    }
+    const checks = await checkReleaseIam(environment.BOXLITE_RELEASE_IAM, scope, environment.GCP_DEPLOYER)
+    log(`GCP release IAM verification passed (${checks} checks)`)
+    return 0
+  }
+
+  const named = [
+    options.diff === true && 'diff',
+    options.remove === true && 'remove',
+    options.refresh === true && 'refresh',
+  ].filter(Boolean) as Intent[]
+  if (named.length > 1)
+    throw new UsageError(`${named.map((one) => `--${one}`).join(' and ')} ask for different things; name one`)
+  const intent: Intent = named[0] ?? 'deploy'
+  const qualifiedApply = isCompleteOutboundStage(config, scope) && intent !== 'diff'
+  if (qualifiedApply) {
+    if (intent !== 'deploy' || options.confirm !== true || options['local-env'] === true) {
+      throw new UsageError(QUALIFIED_RELEASE_WORKFLOW)
+    }
+    assertQualifiedApply(environment, cwd)
+    await checkReleaseDeployer(environment.GCP_DEPLOYER)
+  }
 
   /*
    * Ask mstage first: a deploy that starts without a usable session fails later
@@ -86,13 +127,6 @@ export const run = async ({
     log,
   })
   if (signedIn !== 0) throw new UsageError('Required sign-ins are missing; run `npm run mstage login -- -f` first')
-  // One intent, named once. Three switches rather than two, so the pair test
-  // this replaces would have let `--diff --refresh` through.
-  const named = [options.diff === true && 'diff', options.remove === true && 'remove', options.refresh === true && 'refresh'].filter(
-    Boolean,
-  ) as Intent[]
-  if (named.length > 1) throw new UsageError(`${named.map((one) => `--${one}`).join(' and ')} ask for different things; name one`)
-  const intent: Intent = named[0] ?? 'deploy'
   // A protected stage is asked before its state is rewritten, for the reason it
   // is asked before a rollout: the resources are the same ones, and a refresh
   // that reads a resource as gone is the first half of recreating it.
@@ -141,5 +175,42 @@ export const run = async ({
   // into a CI log.
   log(`environment from ${stageEnvironment.source}${names.length > 0 ? `: ${names.join(', ')}` : ''}`)
 
-  return target.run({ intent, stageEnvironment: stageEnvironment.values, log })
+  const apply = () => target.run({ intent, stageEnvironment: stageEnvironment.values, log })
+  if (!qualifiedApply) return apply()
+  if (stageEnvironment.values.RUN_MIGRATIONS !== 'false') {
+    throw new UsageError('A qualified release requires RUN_MIGRATIONS=false for the candidate API')
+  }
+
+  const { stage, project } = scope
+  if (!stage || !project) throw new UsageError('Complete outbound release requires a GCP stage and project')
+  const deploy = loadDeployConfig({ cwd: config.root, environment, stage })
+  const identity = { app: config.app, stage }
+  const account = identityFor({
+    appShort: config.appShort,
+    stage,
+    artifact: gcpWorkloadArtifact(stage, 'api'),
+    action: 'run',
+  })
+  const candidate = {
+    database: deploy.database.name,
+    application: GCP_API_DATABASE_LOGIN,
+    service: instanceFor({ ...identity, artifact: 'api' }),
+    account: `${account}@${project}.iam.gserviceaccount.com`,
+    instance: instanceFor({ ...identity, artifact: 'database' }),
+  }
+  const apiImage = await runReleasePreDeploy({
+    declaration: environment.BOXLITE_RELEASE_IAM,
+    expected: environment.BOXLITE_EXPECTED_MIGRATIONS,
+    scope,
+    deployer: environment.GCP_DEPLOYER,
+    runId: environment.GITHUB_RUN_ID,
+    runAttempt: environment.GITHUB_RUN_ATTEMPT,
+    log,
+    readCandidate: () => candidate,
+  })
+  const status = await target.run({ intent, stageEnvironment: stageEnvironment.values, apiImage, log })
+  if (status === 0) {
+    await verifyReleaseApi(environment.BOXLITE_RELEASE_IAM, scope, environment.GCP_DEPLOYER, candidate)
+  }
+  return status
 }

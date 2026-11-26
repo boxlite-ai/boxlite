@@ -10,7 +10,7 @@ name: mdeploy-all
 # The title is rendered before any job starts, so it can only use `inputs`.
 # `resolve` writes the same thing in words, once it has read them.
 run-name: >-
-  ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }} ·
+  ${{ inputs.check_complete_outbound && 'check complete outbound' || inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }} ·
   ${{ inputs.ref || github.sha }} · ${{ inputs.components }}${{ inputs.requested_by != '' && inputs.request_id != '' && format(' · @{0} · {1}', inputs.requested_by, inputs.request_id) || '' }}
 
 on:
@@ -59,6 +59,11 @@ on:
       confirm:
         description: Required for a stage whose declaration marks it protected
         required: true
+        type: boolean
+        default: false
+      check_complete_outbound:
+        description: Check the published GCP API image and release IAM without applying
+        required: false
         type: boolean
         default: false
 
@@ -124,6 +129,10 @@ jobs:
           REF: ${{ inputs.ref }}
           FALLBACK: ${{ github.sha }}
           STAGE: ${{ inputs.stage }}
+          CHECK_COMPLETE_OUTBOUND: ${{ inputs.check_complete_outbound }}
+          COMPONENTS: ${{ inputs.components }}
+          APPLY: ${{ inputs.apply }}
+          CONFIRMED: ${{ inputs.confirm }}
         run: |
           set -Eeuo pipefail
           candidate="${REF:-$FALLBACK}"
@@ -161,6 +170,13 @@ jobs:
           if [ -n "$version" ] && [ "$GITHUB_REF" != 'refs/heads/main' ]; then
             echo "::error title=ref::a release rollout runs from main; $GITHUB_REF can deploy dev from a commit instead"
             exit 1
+          fi
+          if [ "${CHECK_COMPLETE_OUTBOUND:-false}" = 'true' ]; then
+            if [ "$GITHUB_REF" != 'refs/heads/main' ] || [ "$GITHUB_REF_PROTECTED" != 'true' ] ||
+              [ -n "$pr" ] || [ "$COMPONENTS" != 'api+runner' ] || [ "$APPLY" = 'true' ] || [ "$CONFIRMED" != 'true' ]; then
+              echo '::error title=release preflight::Select a main commit or release for both components, confirm, and leave apply off.'
+              exit 1
+            fi
           fi
           # What this run is, in words, decided here with everything else that
           # reads the ref's shape. The run title cannot use it — GitHub renders
@@ -349,7 +365,7 @@ jobs:
       id-token: write
       packages: read
     needs: [resolve]
-    if: ${{ !cancelled() && !failure() && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
+    if: ${{ !cancelled() && !failure() && !inputs.check_complete_outbound && (github.ref == 'refs/heads/main' || inputs.stage == 'dev' || inputs.stage == 'stage') }}
     environment: ${{ inputs.stage }}
     runs-on: ubuntu-latest
     outputs:
@@ -367,10 +383,17 @@ jobs:
       - name: Resolve the stage
         id: config
         working-directory: apps/infra
+        env:
+          STAGE: ${{ inputs.stage }}
         run: |
           set -Eeuo pipefail
-          output="$(npm run --silent mbuild inspect -- --stage "${{ inputs.stage }}")"
+          output="$(npm run --silent mbuild inspect -- --stage "$STAGE")"
           echo "$output" >> "$GITHUB_OUTPUT"
+          node -e '
+            const { loadConfig, stageIn } = require("mstage/config");
+            const { deploy } = stageIn(loadConfig(), process.env.STAGE);
+            console.log(`complete_outbound=${deploy.completeOutboundRelease === true}`);
+          ' >> "$GITHUB_OUTPUT"
 
       - name: Federate an AWS identity
         if: steps.config.outputs.kind == 'ecr'
@@ -406,6 +429,7 @@ jobs:
           STAGE: ${{ inputs.stage }}
           COMPONENTS: ${{ inputs.components }}
           GHCR_REPOSITORY: ${{ github.repository }}
+          COMPLETE_OUTBOUND_STAGE: ${{ steps.config.outputs.complete_outbound }}
         run: |
           set -Eeuo pipefail
           api=skip
@@ -414,7 +438,7 @@ jobs:
           case "$COMPONENTS" in
             *api*)
               held=0
-              if [ -n "$VERSION" ]; then
+              if [ -n "$VERSION" ] && [ "${COMPLETE_OUTBOUND_STAGE:-false}" != 'true' ]; then
                 npm run --silent mbuild verify -- --tag "$SHA" --ghcr "$GHCR_REPOSITORY" --version "$VERSION" || held=$?
                 if [ "$held" -eq 66 ]; then
                   echo "::error title=missing release::GHCR is missing images for $IMAGE_TAG. Run manually: gh workflow run mbuild-release.yml --repo $GITHUB_REPOSITORY --ref main -f command=publish -f tag=$VERSION"
@@ -430,6 +454,9 @@ jobs:
                   echo "$STAGE already holds the images for $IMAGE_TAG"
                 elif [ "$held" -ne 66 ]; then
                   echo "::error title=registry::could not tell whether $STAGE holds the images for $IMAGE_TAG; mbuild verify exited $held"
+                  exit 1
+                elif [ "${COMPLETE_OUTBOUND_STAGE:-false}" = 'true' ]; then
+                  echo '::error title=release image::First publish the pinned images in the target registry.'
                   exit 1
                 else
                   api=build
@@ -453,6 +480,9 @@ jobs:
                 staged="$(npm run --silent runner:build -- --stage "$STAGE" --check --tag "$SHA" | sed -n 's/^staged=//p')"
                 if [ "$staged" = 'complete' ]; then
                   echo "$STAGE already holds a runner binary for $SHA"
+                elif [ "${COMPLETE_OUTBOUND_STAGE:-false}" = 'true' ]; then
+                  echo '::error title=runner artifact::First publish the pinned Runner artifact.'
+                  exit 1
                 else
                   runner=build
                 fi
@@ -571,7 +601,10 @@ jobs:
         run: npm run runner:build -- --stage "${{ inputs.stage }}"
 
   deploy:
-    name: ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
+    name: ${{ inputs.check_complete_outbound && 'check complete outbound' || inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
+    concurrency:
+      group: mdeploy-stage-write-${{ inputs.stage }}
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -644,14 +677,26 @@ jobs:
       - name: Resolve the stage
         id: config
         working-directory: apps/infra
+        env:
+          STAGE: ${{ inputs.stage }}
+          CHECK_COMPLETE_OUTBOUND: ${{ inputs.check_complete_outbound }}
         run: |
           set -Eeuo pipefail
-          if ! output="$(npm run --silent mbuild inspect -- --stage "${{ inputs.stage }}" 2>&1)"; then
+          if ! output="$(npm run --silent mbuild inspect -- --stage "$STAGE" 2>&1)"; then
             echo "::error title=stage::$output"
+            exit 1
+          fi
+          if [ "$CHECK_COMPLETE_OUTBOUND" = 'true' ] && ! grep -qx 'kind=artifact-registry' <<< "$output"; then
+            echo '::error title=release preflight::Complete outbound requires a GCP stage.'
             exit 1
           fi
           echo "$output"
           echo "$output" >> "$GITHUB_OUTPUT"
+          node -e '
+            const { loadConfig, stageIn } = require("mstage/config");
+            const { deploy } = stageIn(loadConfig(), process.env.STAGE);
+            console.log(`complete_outbound=${deploy.completeOutboundRelease === true}`);
+          ' >> "$GITHUB_OUTPUT"
 
       # ----------------------------------------------------------- 2/5
       # An identity for that cloud. GitHub's OIDC token is the only thing this
@@ -710,14 +755,14 @@ jobs:
       # composes the address the deploy resolves — a check that built its own
       # string could pass against an address nothing pulls.
       - name: Use the GCP image publisher for release import
-        if: needs.plan.outputs.api == 'release-import' && steps.config.outputs.kind == 'artifact-registry'
+        if: needs.plan.outputs.api == 'release-import' && steps.config.outputs.kind == 'artifact-registry' && steps.config.outputs.complete_outbound != 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_IMAGE_PUBLISHER }}
 
       - name: Import release images from GHCR
-        if: needs.plan.outputs.api == 'release-import'
+        if: needs.plan.outputs.api == 'release-import' && steps.config.outputs.complete_outbound != 'true'
         working-directory: apps/infra
         env:
           SHA: ${{ needs.resolve.outputs.sha }}
@@ -731,13 +776,14 @@ jobs:
           npm run --silent mbuild import-release -- --tag "$SHA" --version "$VERSION" --ghcr "$GHCR_REPOSITORY" --stage "$STAGE"
 
       - name: Restore the GCP deployment identity
-        if: needs.plan.outputs.api == 'release-import' && steps.config.outputs.kind == 'artifact-registry'
+        if: needs.plan.outputs.api == 'release-import' && steps.config.outputs.kind == 'artifact-registry' && steps.config.outputs.complete_outbound != 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOYER }}
 
       - name: Verify the images
+        if: ${{ !inputs.check_complete_outbound }}
         working-directory: apps/infra
         env:
           STAGE: ${{ inputs.stage }}
@@ -754,23 +800,68 @@ jobs:
         env:
           STAGE: ${{ inputs.stage }}
           CONFIRMED: ${{ inputs.confirm }}
+          CHECK_COMPLETE_OUTBOUND: ${{ inputs.check_complete_outbound }}
         run: |
           set -Eeuo pipefail
           protected="$(node -e "
             const { loadConfig, stageIn } = require('mstage/config');
             process.stdout.write(String(Boolean(stageIn(loadConfig(), process.env.STAGE).protect)))
           ")"
+          if [ "$CHECK_COMPLETE_OUTBOUND" = 'true' ] && [ "$protected" != 'true' ]; then
+            echo '::error title=release preflight::Complete outbound requires a protected stage.'
+            exit 1
+          fi
           if [ "$protected" = 'true' ] && [ "$CONFIRMED" != 'true' ]; then
             echo "::error title=protected::$STAGE is protected; re-dispatch with confirm"
             exit 1
           fi
+
+      - name: Check complete outbound release inputs
+        if: inputs.check_complete_outbound || (inputs.apply && steps.config.outputs.complete_outbound == 'true')
+        working-directory: apps/infra
+        env:
+          STAGE: ${{ inputs.stage }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          GCP_DEPLOYER: ${{ vars.GCP_DEPLOYER }}
+          BOXLITE_RELEASE_IAM: ${{ vars.BOXLITE_RELEASE_IAM }}
+        run: |
+          set -Eeuo pipefail
+          npm run mdeploy -- --stage "$STAGE" --check-release-iam
+          image="$(jq -er '.image' <<< "$BOXLITE_RELEASE_IAM")"
+          api="$(npm run --silent mbuild verify -- --artifact api --tag "$BOXLITE_IMAGE_TAG" --stage "$STAGE" | sed -n 's/^api=//p')"
+          registry_image="${api%:*}"
+          if [ "$api" != "${image%@*}:$BOXLITE_IMAGE_TAG" ]; then
+            echo '::error title=release image::The selected API artifact does not match the migration Job repository.'
+            exit 1
+          fi
+          digest="$(gcloud artifacts docker images list "$registry_image" --include-tags \
+            --filter="tags:$BOXLITE_IMAGE_TAG" --format='json(version,tags)' --quiet | \
+            jq -er --arg tag "$BOXLITE_IMAGE_TAG" '[.[] | select(.tags | index($tag)) | .version] | unique | if length == 1 then .[0] else error("Expected one API image digest") end')"
+          if [ "$registry_image@$digest" != "$image" ]; then
+            echo '::error title=release image::The selected API artifact does not match the approved migration Job digest.'
+            exit 1
+          fi
+          BOXLITE_EXPECTED_MIGRATIONS="$(node ../api/scripts/release-migration-identities.cjs "$SHA")"
+          export BOXLITE_EXPECTED_MIGRATIONS
+          export DOCKER_CONFIG="$RUNNER_TEMP/boxlite-release-docker"
+          install -d -m 700 "$DOCKER_CONFIG"
+          gcloud auth configure-docker "${registry_image%%/*}" --quiet
+          docker run --rm --network none --entrypoint node --env BOXLITE_EXPECTED_MIGRATIONS \
+            "$image" dist/apps/api/migrate.js check-bundle
+          printf 'BOXLITE_EXPECTED_MIGRATIONS=%s\n' "$BOXLITE_EXPECTED_MIGRATIONS" >> "$GITHUB_ENV"
 
       # Never retried. A run killed mid-apply can leave the per-stage lock held,
       # and a second attempt then fails on the lock rather than on the cause
       # worth reading. Clearing it by hand is a first-class command:
       # `npm run mstage state unlock -- --stage <stage>`.
       - name: Apply
+        if: ${{ !inputs.check_complete_outbound }}
         working-directory: apps/infra
+        env:
+          GCP_DEPLOYER: ${{ vars.GCP_DEPLOYER }}
+          BOXLITE_RELEASE_IAM: ${{ vars.BOXLITE_RELEASE_IAM }}
+          BOXLITE_RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+          BOXLITE_RELEASE_COMPONENTS: ${{ inputs.components }}
         run: |
           set -Eeuo pipefail
           if [ "${{ inputs.apply }}" = "true" ]; then
@@ -784,6 +875,7 @@ jobs:
         env:
           LINE: ${{ needs.resolve.outputs.line }}
           SHA: ${{ needs.resolve.outputs.sha }}
+          INTENT: ${{ inputs.check_complete_outbound && 'check complete outbound' || inputs.apply && 'deploy' || 'preview' }}
         run: |
           set -Eeuo pipefail
           # `if: always()`, so this also renders after a checkout or a setup
@@ -800,7 +892,7 @@ jobs:
             runner="$RUNNER_ARTIFACT_SOURCE at ${VERSION:-${RUNNER_ARTIFACT_REF:-the workspace version}}"
           fi
           {
-            echo "### ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }} · $LINE"
+            echo "### $INTENT ${{ inputs.stage }} · $LINE"
             echo
             echo "| | |"
             echo "|---|---|"
@@ -809,14 +901,18 @@ jobs:
             echo "| commit | \`$SHA\` |"
             echo "| components | \`${{ inputs.components }}\` |"
             echo "| images | \`${BOXLITE_IMAGE_TAG:-$unchosen}\` |"
-            echo "| runner | \`$runner\` |"
+            if [ "$INTENT" != 'check complete outbound' ]; then
+              echo "| runner | \`$runner\` |"
+            fi
             echo "| cloud | \`${{ steps.config.outputs.kind == 'ecr' && 'aws' || 'gcp' }}\` in \`${{ steps.config.outputs.region }}\` |"
-            echo "| intent | \`${{ inputs.apply && 'apply' || 'preview' }}\` |"
+            echo "| intent | \`$INTENT\` |"
             echo "| result | \`${{ job.status }}\` |"
-            echo
-            echo "From a checkout:"
-            echo
-            echo '```'
-            echo "npm run mdeploy -- --stage ${{ inputs.stage }} --diff"
-            echo '```'
+            if [ "$INTENT" != 'check complete outbound' ]; then
+              echo
+              echo "From a checkout:"
+              echo
+              echo '```'
+              echo "npm run mdeploy -- --stage ${{ inputs.stage }} --diff"
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

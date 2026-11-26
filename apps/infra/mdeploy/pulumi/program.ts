@@ -172,6 +172,7 @@ export type ProgramInput = {
    * the store is the one place a stage's configuration comes from.
    */
   environment: NodeJS.ProcessEnv
+  apiImage?: string
   /** Where `mdeploy.config.json` is found. Defaults to the process's own directory. */
   cwd?: string
   loadModules?: ModuleLoader
@@ -193,7 +194,18 @@ export type ProgramInput = {
  * the stack.
  */
 export const gcpProgram =
-  ({ app, stage, region, project, zone = null, environment, cwd, loadModules: load = loadModules, deployStackWith }: ProgramInput) =>
+  ({
+    app,
+    stage,
+    region,
+    project,
+    zone = null,
+    environment,
+    apiImage,
+    cwd,
+    loadModules: load = loadModules,
+    deployStackWith,
+  }: ProgramInput) =>
   async (): Promise<ProgramOutputs> => {
     const modules = await load()
     installGlobals({ modules, app, stage })
@@ -273,6 +285,7 @@ export const gcpProgram =
         clickHouseRetentionHours: stackEnvironment.clickHouseRetentionHours,
         stage,
         tag: stackEnvironment.tag,
+        ...(apiImage ? { apiImage } : {}),
         domain: stackEnvironment.domain,
         proxyDomain: stackEnvironment.proxyDomain,
         proxyProtocol: stackEnvironment.proxyProtocol,

@@ -62,12 +62,24 @@ export function hasCompleteOutboundControl(manager: EntityManager, id: string): 
   return manager.existsBy(Box, { id, completeOutboundControl: Not(IsNull()) })
 }
 
-export async function requireCompleteOutboundAdmission(manager: EntityManager, lock: boolean): Promise<void> {
+export async function requireCompleteOutboundAdmission(
+  manager: EntityManager,
+  lock: boolean,
+  organizationId: string,
+): Promise<void> {
+  // Materialize the row before checking the clock so a wait for the share lock cannot extend the window.
   const [control] = await manager.query(
-    'SELECT phase, minimum_release FROM complete_outbound_admission WHERE id = 1 AND api_principal = current_user' +
-      (lock ? ' FOR SHARE' : ''),
+    `WITH admission AS MATERIALIZED (
+      SELECT phase, minimum_release, acceptance_organization_id, acceptance_expires_at
+      FROM complete_outbound_admission WHERE id = 1 AND api_principal = current_user${lock ? ' FOR SHARE' : ''}
+    )
+    SELECT phase, minimum_release,
+      (acceptance_organization_id IS NULL OR
+       (acceptance_organization_id::text = $1 AND acceptance_expires_at > clock_timestamp())) AS accepts_organization
+    FROM admission`,
+    [organizationId],
   )
-  if (control?.phase !== 'open' || !control.minimum_release) {
+  if (control?.phase !== 'open' || !control.minimum_release || !control.accepts_organization) {
     throw new ServiceUnavailableException({
       code: 'complete_outbound_closed',
       message: 'Complete outbound admission is closed',
@@ -295,7 +307,7 @@ export class OutboundPolicyStore {
       await runner.connect()
       await runner.startTransaction()
       await runner.query("SET LOCAL lock_timeout = '5s'")
-      if (admission === 'reserve') await requireCompleteOutboundAdmission(runner.manager, true)
+      if (admission === 'reserve') await requireCompleteOutboundAdmission(runner.manager, true, organizationId)
       if (admission === 'owned') await lockCompleteOutboundFloor(runner.manager)
       const box = await this.find(runner.manager, id, organizationId, true)
       const result = await operation(runner.manager, box)

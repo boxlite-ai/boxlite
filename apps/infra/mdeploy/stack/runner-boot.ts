@@ -65,6 +65,8 @@ export const runnerApiUrl = (apiUrl: string): string => `${apiUrl.replace(/\/$/,
 
 /** What one cloud contributes to the boot script. */
 export type BootPlatform = {
+  /** The GCP boot path can install the packaged Linux platform guard. */
+  installsCloudGuard?: boolean
   /** Shell that sets `HOST_IP` to the address the control plane reaches. */
   hostAddress: string
   /**
@@ -138,6 +140,11 @@ export const renderRunnerBoot = (input: BootInput): string => {
     ...Object.keys(environment),
     ...Object.keys(platform.unitEnvironment),
   ])
+  const guardProfile =
+    platform.unitEnvironment.BOXLITE_PLATFORM_GUARD_PROFILE ??
+    environment.BOXLITE_PLATFORM_GUARD_PROFILE ??
+    customEnvironment.values.BOXLITE_PLATFORM_GUARD_PROFILE
+  const installGuard = platform.installsCloudGuard === true && guardProfile === 'cloud'
   const region = input.region ?? null
   const fetch = (url: string, destination: string) =>
     artifactFetchCommand({ artifact: input.binary, url, destination, region })
@@ -190,7 +197,8 @@ ${platform.prepareKvm}
 ${fetchTarball}
 ${fetchManifest}
 ${verify}
-tar -xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/
+${installGuard ? guardInstall : ''}
+tar -xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/ boxlite-runner
 rm -f /tmp/boxlite-runner.tar.gz /tmp/boxlite-runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
 
@@ -216,7 +224,7 @@ chmod 640 ${RUNNER_ENV_FILE}
 cat > /etc/systemd/system/boxlite-runner.service << 'UNIT'
 [Unit]
 Description=BoxLite Runner
-After=network.target
+After=network.target${installGuard ? ' boxlite-platform-guard.service\nRequires=boxlite-platform-guard.service' : ''}
 # Never on the disk beneath a mount that failed. Where the home is on the root
 # filesystem, this names only that mount, which is always there.
 RequiresMountsFor=${RUNNER_HOME}
@@ -238,6 +246,7 @@ UNIT
 ${platform.prepareHome}
 mkdir -p ${RUNNER_HOME}
 systemctl daemon-reload
+${installGuard ? 'systemctl enable --now boxlite-platform-guard' : ''}
 systemctl enable boxlite-runner
 systemctl start boxlite-runner
 
@@ -245,3 +254,27 @@ echo "Runner setup complete"
 `
   return Buffer.from(script).toString('base64')
 }
+
+const guardInstall = `(
+  set -euo pipefail
+  apt-get install -y linux-tools-common "linux-tools-$(uname -r)"
+  bpftool version
+  test -r /sys/kernel/btf/vmlinux
+  test -f /sys/fs/cgroup/cgroup.controllers
+  grep -Eq '(^|,)bpf(,|$)' /sys/kernel/security/lsm
+  if ! mountpoint -q /sys/fs/bpf; then
+    mount -t bpf bpffs /sys/fs/bpf
+  fi
+  test "$(findmnt -n -o FSTYPE --mountpoint /sys/fs/bpf)" = bpf
+  guard_work=$(mktemp -d)
+  trap 'rm -rf -- "$guard_work"' EXIT
+  tar -xzf /tmp/boxlite-runner.tar.gz -C "$guard_work" -- \\
+    boxlite-platform-guard deadline.bpf.o boxlite-platform-guard.service
+  for member in boxlite-platform-guard deadline.bpf.o boxlite-platform-guard.service; do
+    test -f "$guard_work/$member" && test ! -L "$guard_work/$member" || exit 1
+  done
+  install -m 0755 "$guard_work/boxlite-platform-guard" /usr/local/bin/boxlite-platform-guard
+  install -d -m 0755 /usr/lib/boxlite
+  install -m 0644 "$guard_work/deadline.bpf.o" /usr/lib/boxlite/deadline.bpf.o
+  install -m 0644 "$guard_work/boxlite-platform-guard.service" /etc/systemd/system/boxlite-platform-guard.service
+)`

@@ -88,6 +88,7 @@ export type StackInputs = {
   stage: string
   /** The commit being deployed. Every container runs the same one. */
   tag: string
+  apiImage?: string
   /** The stage's own domain. The control plane answers at `api.<domain>`. */
   domain: string
   /** The zone `*.<proxyDomain>` is written into. Every box is a name under it. */
@@ -275,7 +276,7 @@ export const deployStack = ({
   config: DeployConfig
   inputs: StackInputs
 }): StackOutputs => {
-  const images = providers.images({ tag: inputs.tag })
+  const images = providers.images({ tag: inputs.tag, ...(inputs.apiImage ? { apiImage: inputs.apiImage } : {}) })
 
   const network = providers.network({ internetEgress: inputs.internetEgress })
   const storage: Storage = providers.storage(config.storage)
@@ -511,7 +512,12 @@ export const deployStack = ({
     domain: inputs.domain,
     environment: apiEnvironment,
     secrets: inputs.apiSecrets,
-    capabilities: capabilitiesFor({ storage, clickhouse, registryCredentials, resizeRunnerDisks: providers.resizeRunnerDisks() }),
+    capabilities: capabilitiesFor({
+      storage,
+      clickhouse,
+      registryCredentials,
+      resizeRunnerDisks: providers.resizeRunnerDisks(),
+    }),
   })
 
   const proxyEnvironment = {

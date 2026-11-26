@@ -3,7 +3,7 @@
 
 const assert = require('node:assert/strict')
 const { execFileSync } = require('node:child_process')
-const { readFileSync } = require('node:fs')
+const { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('node:fs')
 const { test } = require('node:test')
 const { Socket } = require('node:net')
 const { join } = require('node:path')
@@ -38,6 +38,84 @@ test('the shipped migration CLI reports exactly the source identities for each p
   assert.throws(
     () => execFileSync(process.execPath, [cli, 'run', 'post-deploy'], { stdio: 'pipe' }),
     /Post-deploy requires --old-replicas-retired/,
+  )
+})
+
+test('the shipped release admission command rejects an invalid request before connecting', () => {
+  const cli = join(__dirname, '../../dist/apps/api/migrate.js')
+  for (const operation of ['activate', 'activate-target', 'close-target']) {
+    assert.throws(
+      () =>
+        execFileSync(process.execPath, [cli, 'release'], {
+          env: { ...process.env, BOXLITE_RELEASE_REQUEST: JSON.stringify({ operation, cohort: [] }) },
+          stdio: 'pipe',
+        }),
+      /Invalid release admission request/,
+    )
+  }
+  assert.throws(
+    () =>
+      execFileSync(process.execPath, [cli, 'check-database'], {
+        env: { ...process.env, BOXLITE_EXPECTED_DATABASE: '{"database":""}' },
+        stdio: 'pipe',
+      }),
+    /Provide the expected database and owner login/,
+  )
+})
+
+test('release phase commands reject an omitted migration before connecting to PostgreSQL', (t) => {
+  const source = join(__dirname, '../src/migrations')
+  const original = join(__dirname, '../../dist/apps/api')
+  const copy = mkdtempSync(join(original, '../release-migrations-'))
+  t.after(() => rmSync(copy, { recursive: true, force: true }))
+  for (const name of ['migrate.js', 'migrations', 'migration-phases.json']) {
+    cpSync(join(original, name), join(copy, name), { recursive: true })
+  }
+  const phasePath = join(copy, 'migration-phases.json')
+  const phases = JSON.parse(readFileSync(phasePath, 'utf8'))
+  const patterns = {
+    baseline: '*-migration.ts',
+    'pre-deploy': 'pre-deploy/*-migration.ts',
+    'post-deploy': 'post-deploy/*-migration.ts',
+  }
+  const expected = Object.fromEntries(
+    Object.entries(patterns).map(([phase, pattern]) => [
+      phase,
+      globSync(pattern, { cwd: source }).map((file) => {
+        const match = readFileSync(join(source, file), 'utf8').match(/export class (\w+\d{13})\b/)
+        assert.ok(match, file)
+        return match[1]
+      }),
+    ]),
+  )
+  const omitted = phases['post-deploy'].shift()
+  assert.ok(omitted)
+  rmSync(join(copy, omitted))
+  writeFileSync(phasePath, JSON.stringify(phases))
+  const env = {
+    ...process.env,
+    DB_HOST: '127.0.0.1',
+    DB_PORT: '1',
+    BOXLITE_EXPECTED_MIGRATIONS: JSON.stringify(expected),
+  }
+  for (const args of [
+    ['check-bundle'],
+    ['verify', 'post-deploy'],
+    ['run', 'post-deploy', '--old-replicas-retired'],
+    ['run', 'pre-deploy', '--include-baseline', '--require-first-provisioning'],
+  ]) {
+    assert.throws(
+      () => execFileSync(process.execPath, [join(copy, 'migrate.js'), ...args], { env, stdio: 'pipe', timeout: 5000 }),
+      /Migration bundle does not match the expected post-deploy identities/,
+    )
+  }
+  assert.match(
+    execFileSync(process.execPath, [join(original, 'migrate.js'), 'check-bundle'], {
+      env,
+      encoding: 'utf8',
+      timeout: 5000,
+    }),
+    /Migration bundle verified/,
   )
 })
 

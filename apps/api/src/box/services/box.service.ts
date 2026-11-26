@@ -343,7 +343,7 @@ export class BoxService implements OnApplicationBootstrap {
     const completeOutbound = options.completeOutbound
     if (completeOutbound !== undefined) {
       if (!validCompleteOutboundPolicy(completeOutbound)) throw new BadRequestError('Invalid complete outbound policy')
-      await this.boxRepository.assertCompleteCreateAdmission()
+      await this.boxRepository.assertCompleteOutboundAdmission(organization.id)
     }
     // Authentication caches organizations; admission must use the current policy.
     const nestedVirtualizationEnabled = await this.organizationService.isNestedVirtualizationEnabled(organization.id)
@@ -571,32 +571,39 @@ export class BoxService implements OnApplicationBootstrap {
         501,
       )
     }
-    return this.boxRepository.withCompleteCreateRunner(runner.id, async (verifiedRunner, leaseId) => {
-      const candidate = await new RunnerOutboundControl(verifiedRunner, box.id)
-        .prepareCreate(randomUUID(), policy)
-        .catch((error: unknown) => {
-          if (!(error instanceof HttpException)) throw error
-          const response = error.getResponse()
-          throw new HttpException(
-            { ...(typeof response === 'string' ? { message: response } : response), creation_effect: 'not_allocated' },
-            error.getStatus(),
-            { cause: error },
-          )
-        })
-      const owner = {
-        kind: 'create',
-        incarnation: box.id,
-        attemptId: randomUUID(),
-        generation: 1,
-        runnerId: verifiedRunner.id,
-        candidate,
-      } as const
-      const intent: CompleteCreateIntent =
-        verifiedRunner.apiVersion === '2'
-          ? { ...owner, transport: 'v2', claimId: randomUUID(), jobId: randomUUID() }
-          : { ...owner, transport: 'v0' }
-      return { intent, runner: verifiedRunner, leaseId }
-    })
+    return this.boxRepository.withCompleteCreateRunner(
+      runner.id,
+      box.organizationId,
+      async (verifiedRunner, leaseId) => {
+        const candidate = await new RunnerOutboundControl(verifiedRunner, box.id)
+          .prepareCreate(randomUUID(), policy)
+          .catch((error: unknown) => {
+            if (!(error instanceof HttpException)) throw error
+            const response = error.getResponse()
+            throw new HttpException(
+              {
+                ...(typeof response === 'string' ? { message: response } : response),
+                creation_effect: 'not_allocated',
+              },
+              error.getStatus(),
+              { cause: error },
+            )
+          })
+        const owner = {
+          kind: 'create',
+          incarnation: box.id,
+          attemptId: randomUUID(),
+          generation: 1,
+          runnerId: verifiedRunner.id,
+          candidate,
+        } as const
+        const intent: CompleteCreateIntent =
+          verifiedRunner.apiVersion === '2'
+            ? { ...owner, transport: 'v2', claimId: randomUUID(), jobId: randomUUID() }
+            : { ...owner, transport: 'v0' }
+        return { intent, runner: verifiedRunner, leaseId }
+      },
+    )
   }
 
   private async assignWarmPoolBox(

@@ -217,10 +217,116 @@ npm run mdeploy -- --stage dev --refresh
 | `--refresh`          | Reconcile deployment state with the cloud; protected stages require `--confirm` |
 | `--remove --confirm` | Remove an unprotected stage; always refused for a protected stage               |
 | `--local-env`        | Read ambient environment instead of the encrypted stage store                   |
+| `--check-release-iam` | Verify a GCP stage's migration and serving identity boundary without applying resources |
 
-`--diff`, `--refresh`, and `--remove` are mutually exclusive. All intents check the selected
+`--diff`, `--refresh`, and `--remove` are mutually exclusive. Deployment intents check the selected
 stage's login requirements. `--local-env` is an explicit diagnostic override, not the ordinary
 configuration path; the caller must supply the required inputs.
+
+### Check the GCP release identities
+
+Run `npm run mdeploy -- --stage <stage> --check-release-iam` with stage-approved
+federated credentials for the existing `GCP_DEPLOYER`. Supply `BOXLITE_RELEASE_IAM`
+as JSON with the `stage`, `project`, Cloud Run `job` and `service`, Cloud SQL
+`instance`, `apiAccount` and `ownerAccount`. List the other ordinary and legacy
+deployment accounts in `ordinaryAccounts`, using an explicit empty list for an
+isolated project without such accounts.
+
+Provide the Job's `ownerSecret`, its
+numeric `ownerSecretVersion` as a string, and the exact `image` with its
+Artifact Registry digest.
+
+The command checks the live Job and API service before querying [Google Cloud's
+effective IAM decisions](https://docs.cloud.google.com/policy-intelligence/docs/troubleshoot-access).
+Enable Policy Troubleshooter in the target project and give `GCP_DEPLOYER` read
+access to the policies that govern the inspected principals and resources.
+
+The release checks job creation and execution read permissions for the
+deployment identity. It uses the named Job's service identity to read the
+owner secret.
+
+A grant to an ordinary identity, a missing expected grant, or an unknown
+result fails the check.
+
+Protected release approval, Runner qualification, and
+release acceptance are separate checks.
+
+In `mdeploy-all`, select `check_complete_outbound` on protected `main` for a
+protected GCP stage. Select `api+runner`, set `confirm`, and leave `apply` off.
+The job uses the stage's `BOXLITE_RELEASE_IAM` declaration and existing
+`GCP_DEPLOYER`.
+
+It checks the already published API image by digest and compares
+all packaged migration identities with the selected Git commit. This check
+reads the registry and IAM, without applying resources or opening admission.
+An apply for a complete outbound stage runs the same checks before deployment.
+
+Use artifacts already published for the selected revision. Plans for these stages
+check the artifacts without publishing Runner archives or importing API images.
+
+For an existing service, the qualified Apply executes and verifies the pinned
+pre-deploy migrations before invoking Pulumi. The Cloud Run migration Job uses a
+named container with `node` as its command. The Job and API mount the same Cloud
+SQL instance with distinct database logins.
+
+The pinned Job first verifies its
+database, owner login and primary connection through its configured socket.
+The candidate, current service template and reachable revisions,
+including tagged routes, must have `RUN_MIGRATIONS=false`.
+The migration command checks the existing baseline and requires complete outbound
+admission to be closed before expanding the database.
+
+For a first deployment with prepared private Cloud SQL and a migration Job, set
+`initialProvisioning` in the protected IAM declaration. It binds `database`,
+`application`, `subnetwork`, and the 32-hex-character `receipt` from the
+instance's `boxlite_release_bootstrap` label. Issue the record only after
+verifying the stage has never served.
+
+Keep the declaration until Apply verifies the first ready API revision. A
+retry needs it to recognize the original bootstrap Job while the API is pending.
+
+Apply requires the Cloud Run service to be absent for the first-provisioning
+path. It checks the receipt, private network and Job egress, and compares the
+declaration with the rendered API identity and database. The owner Job probes
+its connection, applies baseline and pre-deploy entries under the migration
+lock, and verifies the journal before Apply can launch the API.
+
+A retry of the same GitHub Actions run reuses the migration phase's Cloud Run
+Job name. Apply verifies the Job specification, its one execution and the
+database journal before advancing.
+
+If first Apply stopped after creating the API service, the retry checks the
+pinned service template and completed bootstrap Job before resuming. The check
+also covers a service whose first revision is still pending.
+
+A terminally failed migration can submit a
+new phase Job on a later attempt. Keep the original Job while its execution
+status or the Apply outcome is pending.
+
+With no journal, the application schema must be empty. A known serving API
+follows the existing-stage path.
+
+Qualified Apply passes the verified API digest to Pulumi. After either path, mdeploy checks that
+the selected image digest serves all traffic and tagged routes. It verifies
+the live revision's service account, database, and disabled startup migration.
+
+### Schedule changes to a complete outbound stage
+
+`deploy.completeOutboundRelease: true` marks a protected GCP stage in a dedicated
+project other than `dev`. Dev supports ordinary deployments and the scoped
+rehearsal.
+
+For a declared target, use `mdeploy-all` from protected `main` with
+`api+runner` and `confirm` to apply. The workflow uses the existing `GCP_DEPLOYER`.
+
+Local `mdeploy --diff` can still preview the changes. Runner rollout is part of
+the protected apply, so a direct `runner:update` is refused for this stage.
+
+The workflow's concurrency group serializes its runs per stage. Keep the stage in
+the external release queue through acceptance, and route rollbacks and manual
+changes through the same queue. After a failed or cancelled release, wait for
+outstanding cloud operations, migration jobs and Runner work to settle before
+allowing another write.
 
 ## Checkpoint archive bucket
 

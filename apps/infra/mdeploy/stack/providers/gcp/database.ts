@@ -44,7 +44,7 @@ export const MACHINE = {
 const PORT = '5432'
 
 /** The account every connection is made as. Cloud SQL's own superuser is not used. */
-const USERNAME = 'boxlite'
+export const GCP_API_DATABASE_LOGIN = 'boxlite'
 
 export const gcpDatabaseProvider =
   ({
@@ -163,7 +163,7 @@ export const gcpDatabaseProvider =
     })
 
     const user = new gcp.sql.User('DatabaseUser', {
-      name: USERNAME,
+      name: GCP_API_DATABASE_LOGIN,
       project,
       instance: instance.name,
       password: $util.secret(password.result),
@@ -195,7 +195,7 @@ export const gcpDatabaseProvider =
          */
         host: instance.connectionName.apply((connection: string) => `/cloudsql/${connection}`),
         port: $util.output(PORT),
-        username: $util.output(USERNAME),
+        username: $util.output(GCP_API_DATABASE_LOGIN),
         database: $util.output(request.name),
         // The proxy holds the certificates; the client encrypts nothing itself.
         applicationTls: false,

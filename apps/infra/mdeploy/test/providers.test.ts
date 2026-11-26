@@ -54,9 +54,9 @@ const aws = () =>
     managedClickHouse: null,
   })
 
-const gcp = () =>
+const gcp = (stage = 'gcp-dev') =>
   gcpStackProviders({
-    stage: 'gcp-dev',
+    stage,
     region: 'asia-southeast1',
     project: 'boxlite-gcp-dev',
     appShort: 'bl-app',
@@ -98,6 +98,16 @@ test('only the cloud whose edge writes the wildcard serves a user domain', () =>
   // the cloud with no record or certificate for it must not claim to serve one.
   assert.equal(gcp().servesUserDomain(), true)
   assert.equal(aws().servesUserDomain(), false)
+})
+
+test('qualified GCP Apply renders the verified digest for the API image', () => {
+  const images = gcp('dev2').images
+  const tag = 'b'.repeat(40)
+  const ordinary = images({ tag })
+  const apiImage = `${String(ordinary.api).slice(0, -tag.length - 1)}@sha256:${'c'.repeat(64)}`
+  const pinned = images({ tag, apiImage })
+  assert.deepEqual(pinned, { ...ordinary, api: apiImage })
+  assert.throws(() => images({ tag, apiImage: apiImage.replace('@sha256:', '-other@sha256:') }), /stage API repository/)
 })
 
 test('every entry is a function, so a bundle exists before the first resource does', () => {

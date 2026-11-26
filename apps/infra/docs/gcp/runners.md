@@ -93,13 +93,22 @@ Confirm the kernel can run the pinned lease renewal program.
 Run `make test:platform-guard-bpf` on an isolated host with the same kernel.
 On the target Runner, test Cloud launch, detached reattachment, and expiry.
 
-Build with `make build:platform-guard` and install the artifacts on the Runner.
+The Linux Runner release archive ships the guard binary, BPF object, and
+service unit under the same checksum as the Runner binary. For a standalone
+build, use `make build:platform-guard`.
+
+New GCP Runners with the `cloud` guard profile install these artifacts after
+verifying the archive. Boot checks the running kernel and bpffs, then starts the
+guard before Runner.
+
+For an existing Runner, drain affected workloads under the [release admission contract](../../../../docs/contributing/architecture/outbound-contract.md#release-admission)
+before installing the verified artifacts.
 
 - Place the binary at `/usr/local/bin/boxlite-platform-guard`.
 - Place the BPF object at `/usr/lib/boxlite/deadline.bpf.o`.
 - Install the [systemd service unit](../../../runner/platform-guard/boxlite-platform-guard.service).
 
-Enable the guard service and configure Runner to start after it.
+Enable the guard service and configure existing Runners to start after it.
 The root service retains live pins and records across service restarts on the
 same boot. It reclaims retired pins once the cgroup is confirmed empty.
 

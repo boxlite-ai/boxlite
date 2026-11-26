@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm'
 
-export class AddCompleteOutboundReleaseControl1795096806000 implements MigrationInterface {
-  async up(runner: QueryRunner): Promise<void> {
-    await runner.query(`
+export const createLegacyCompleteOutboundActivation = `
       CREATE FUNCTION complete_outbound_activate(release_floor text, application name, retired name[], receipt text)
       RETURNS void LANGUAGE plpgsql AS $body$
       DECLARE control complete_outbound_admission%ROWTYPE;
@@ -34,7 +32,12 @@ export class AddCompleteOutboundReleaseControl1795096806000 implements Migration
       END
       $body$;
       REVOKE ALL ON FUNCTION complete_outbound_activate(text, name, name[], text) FROM PUBLIC;
+`
 
+export class AddCompleteOutboundReleaseControl1795096806000 implements MigrationInterface {
+  async up(runner: QueryRunner): Promise<void> {
+    await runner.query(`
+      ${createLegacyCompleteOutboundActivation}
       CREATE FUNCTION complete_outbound_close()
       RETURNS void LANGUAGE plpgsql AS $body$
       BEGIN

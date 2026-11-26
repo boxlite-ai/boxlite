@@ -216,10 +216,10 @@ export class BoxRepository extends BaseRepository<Box> {
     }
   }
 
-  async assertCompleteCreateAdmission(): Promise<void> {
+  async assertCompleteOutboundAdmission(organizationId: string): Promise<void> {
     const primary = this.dataSource.createQueryRunner('master')
     try {
-      await requireCompleteOutboundAdmission(primary.manager, false)
+      await requireCompleteOutboundAdmission(primary.manager, false, organizationId)
     } finally {
       await primary.release()
     }
@@ -227,10 +227,11 @@ export class BoxRepository extends BaseRepository<Box> {
 
   async withCompleteCreateRunner<T>(
     runnerId: string,
+    organizationId: string,
     prepare: (runner: Runner, leaseId: string) => Promise<T>,
   ): Promise<T> {
     return this.dataSource.transaction(async (manager) => {
-      await requireCompleteOutboundAdmission(manager, true)
+      await requireCompleteOutboundAdmission(manager, true, organizationId)
       const { runner, leaseId } = await verifiedCompleteRunner(manager, runnerId)
       return prepare(runner, leaseId)
     })
@@ -248,7 +249,7 @@ export class BoxRepository extends BaseRepository<Box> {
     }
     try {
       return await this.insert(box, maxCreatedBoxes, onPersist, async (manager) => {
-        await requireCompleteOutboundAdmission(manager, true)
+        await requireCompleteOutboundAdmission(manager, true, box.organizationId)
         const { runner, leaseId } = await verifiedCompleteRunner(manager, pending.runnerId, preparation.leaseId)
         if (
           runner.id !== preparation.runner.id ||

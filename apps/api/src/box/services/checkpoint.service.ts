@@ -32,7 +32,7 @@ import { CheckpointArchiveStore } from '../stores/checkpoint-archive.store'
 import {
   completeOutboundRecord,
   hasCompleteOutboundControl,
-  lockCompleteOutboundFloor,
+  requireCompleteOutboundAdmission,
 } from '../stores/outbound-policy.store'
 import { requireProtectedCheckpointOwner } from '../stores/protected-checkpoint.store'
 
@@ -69,7 +69,7 @@ export class CheckpointService {
           (await manager.findOneBy(Box, { organizationId, id: source })) ??
           (await manager.findOneBy(Box, { organizationId, name: source }))
         const protectedCopy = locator && (await hasCompleteOutboundControl(manager, locator.id))
-        if (protectedCopy) await lockCompleteOutboundFloor(manager)
+        if (protectedCopy) await requireCompleteOutboundAdmission(manager, true, organizationId)
         const byId = await manager.findOne(Box, {
           where: { organizationId, id: source },
           lock: { mode: 'pessimistic_write' },

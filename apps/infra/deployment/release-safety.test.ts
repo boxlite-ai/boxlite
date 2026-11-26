@@ -2130,8 +2130,7 @@ test('every workflow that selects a deployment Environment does so from an allow
  *
  * Named rather than derived: which of them reaches `checkLogin` is a property
  * of the tools (`mdeploy/src/run.ts`, `runner-build.ts`, `runner-promote.ts`,
- * `runner-update.ts`), and pinning the set is what makes a sixth one a reviewed
- * addition rather than one that appeared.
+ * `runner-update.ts`), and pinning the count requires review of each addition.
  */
 const SESSION_CHECKING = /npm run (?:--silent )?(?:mstage login|mdeploy|runner:build|runner:promote|runner:update)\b/
 
@@ -2174,14 +2173,14 @@ test('every step that asks mstage for a session is given a token to answer with'
     }
   }
 
-  // Six: mbuild's session check; then the five in
+  // Seven: mbuild's session check; then the six in
   // mdeploy-all's three tool-reaching jobs — `plan`'s `--check` read,
-  // `build-runner`'s session check and its build, `deploy`'s session check and
-  // its apply.
+  // `build-runner`'s session check and its build, and `deploy`'s session check,
+  // complete outbound release preflight, and apply.
   // The exact count, not a floor: a step that stops being swept is exactly the
   // drop this exists to catch, and one that appears is a tool call nobody
   // reviewed. Adding a legitimate one means changing this number with it.
-  assert.equal(checked, 6, `expected every session-checking step swept, saw ${checked}`)
+  assert.equal(checked, 7, `expected every session-checking step swept, saw ${checked}`)
 })
 
 test('API publishing builds once and promotes that exact image without rebuilding', () => {

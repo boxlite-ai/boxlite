@@ -3,7 +3,13 @@
 
 import { setTimeout } from 'node:timers/promises'
 import type { Client, QueryResultRow } from 'pg'
-import { CannotExecuteNotConnectedError, DataSource, MigrationExecutor } from 'typeorm'
+import {
+  CannotExecuteNotConnectedError,
+  DataSource,
+  MigrationExecutor,
+  type Migration,
+  type QueryRunner,
+} from 'typeorm'
 
 const LOCK_NAME = 'boxlite:typeorm:migrations'
 const LOCK_POLL_MS = 250
@@ -11,6 +17,7 @@ const LOCK_WAIT_MS = 5 * 60_000
 const LOCK_QUERY_MS = 5_000
 
 type MigrationOptions = Parameters<DataSource['runMigrations']>[0]
+type MigrationGuard = (runner: QueryRunner, journal: Migration[]) => Promise<void>
 type MigrationSession = Pick<Client, 'query' | 'end'>
 
 function lockQueryBudget(deadline: number) {
@@ -65,8 +72,9 @@ async function discardMigrationSession(session: MigrationSession, error: unknown
 }
 
 export class MigrationDataSource extends DataSource {
-  override runMigrations(options?: MigrationOptions) {
-    return this.withMigrationLock((executor) => {
+  override runMigrations(options?: NonNullable<MigrationOptions> & { guard?: MigrationGuard }) {
+    return this.withMigrationLock(async (executor, runner) => {
+      if (options?.guard) await options.guard(runner, await executor.getExecutedMigrations())
       executor.transaction = options?.transaction ?? this.options.migrationsTransactionMode ?? 'all'
       executor.fake = options?.fake ?? false
       return executor.executePendingMigrations()
@@ -86,7 +94,13 @@ export class MigrationDataSource extends DataSource {
     return this.withMigrationLock((executor) => executor.showMigrations())
   }
 
-  private async withMigrationLock<T>(execute: (executor: MigrationExecutor) => Promise<T>): Promise<T> {
+  readMigrationJournal() {
+    return this.withMigrationLock((executor) => executor.getExecutedMigrations())
+  }
+
+  private async withMigrationLock<T>(
+    execute: (executor: MigrationExecutor, runner: QueryRunner) => Promise<T>,
+  ): Promise<T> {
     if (!this.isInitialized) throw new CannotExecuteNotConnectedError(this.name)
 
     const runner = this.createQueryRunner('master')
@@ -106,7 +120,7 @@ export class MigrationDataSource extends DataSource {
       }
 
       try {
-        return await execute(new MigrationExecutor(this, runner))
+        return await execute(new MigrationExecutor(this, runner), runner)
       } finally {
         try {
           await withLockQueryTimeout(session, performance.now() + LOCK_QUERY_MS, async (query) => {

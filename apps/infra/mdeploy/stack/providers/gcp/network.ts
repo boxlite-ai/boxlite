@@ -232,6 +232,10 @@ const STAGE_ACCOUNT_ARTIFACTS: Readonly<Record<string, string>> = {
   'registry-proxy': 'registry',
 }
 
+export function gcpWorkloadArtifact(stage: string, role: WorkloadRole) {
+  return stage === 'stage' ? (STAGE_ACCOUNT_ARTIFACTS[role] ?? role) : role
+}
+
 export const gcpNetworkProvider =
   ({ project, region, appShort }: { project: string; region: string; appShort: string }): NetworkProvider =>
   (request: NetworkRequest): Network => {
@@ -403,7 +407,7 @@ export const gcpNetworkProvider =
 
     const accounts = Object.fromEntries(
       Object.entries(ACCOUNTS).map(([role, resource]) => {
-        const artifact = $app.stage === 'stage' ? (STAGE_ACCOUNT_ARTIFACTS[role] ?? role) : role
+        const artifact = gcpWorkloadArtifact($app.stage, role as WorkloadRole)
         return [
           role,
           new gcp.serviceaccount.Account(resource, {

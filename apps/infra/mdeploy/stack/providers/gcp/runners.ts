@@ -231,6 +231,7 @@ export const gcpRunnerProvider =
       )
     }
     const platform: BootPlatform = {
+      installsCloudGuard: true,
       // Google's metadata server. `Metadata-Flavor` is what distinguishes a
       // real request from a browser that wandered onto the address.
       hostAddress: `HOST_IP=$(curl -s -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)`,

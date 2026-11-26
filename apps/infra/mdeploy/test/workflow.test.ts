@@ -18,7 +18,10 @@ import { load } from 'js-yaml'
 import { parseBase } from 'mstage/config'
 import { variableNameFor } from 'mstage/config-variable'
 
-const workflow = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)), 'utf8')
+const workflow = readFileSync(
+  fileURLToPath(new URL('../../../../.github/workflows/mdeploy-all.yml', import.meta.url)),
+  'utf8',
+)
 const ENV_CONFIG = fileURLToPath(new URL('../../mstage.env.json', import.meta.url))
 
 /** What the workflow runs, with the commentary that discusses it removed. */
@@ -79,7 +82,10 @@ const GCP_FEDERATING_WORKFLOWS = ['mdeploy-all.yml', 'mbuild.yml']
 
 test('a GCP identity is federated by the action that also gives gcloud its own credential', () => {
   for (const name of GCP_FEDERATING_WORKFLOWS) {
-    const source = readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
+    const source = readFileSync(
+      fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)),
+      'utf8',
+    )
     const runs = source
       .split('\n')
       .filter((line) => !/^\s*#/.test(line))
@@ -119,7 +125,8 @@ test('a GCP identity is federated by the action that also gives gcloud its own c
  * Both new workflows are checked here so the two cannot drift apart.
  */
 test('the AWS role is composed from the account id, as every other workflow does', () => {
-  const read = (name: string) => readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
+  const read = (name: string) =>
+    readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${name}`, import.meta.url)), 'utf8')
   for (const [name, source] of [
     ['mdeploy-all.yml', workflow],
     ['mbuild.yml', read('mbuild.yml')],
@@ -133,7 +140,11 @@ test('the AWS role is composed from the account id, as every other workflow does
       /role-to-assume: arn:aws:iam::\$\{\{ vars\.AWS_ACCOUNT_ID \}\}:role\/boxlite-(?:\$\{\{ [^}]+ \}\}|[a-z0-9-]+)-github-deploy/,
       `${name} does not compose the role ARN`,
     )
-    assert.doesNotMatch(source, /vars\.AWS_DEPLOY_ROLE_ARN|vars\.AWS_ECR_PUSH_ROLE_ARN/, `${name} reads an undefined variable`)
+    assert.doesNotMatch(
+      source,
+      /vars\.AWS_DEPLOY_ROLE_ARN|vars\.AWS_ECR_PUSH_ROLE_ARN/,
+      `${name} reads an undefined variable`,
+    )
   }
 })
 
@@ -169,7 +180,10 @@ test('a read is retried and the apply is not', () => {
 })
 
 test('the digest and the image check are not retried, because their answer is not transient', () => {
-  const between = commands.slice(commands.indexOf('Verify the stage configuration'), commands.indexOf('- name: Confirm'))
+  const between = commands.slice(
+    commands.indexOf('Verify the stage configuration'),
+    commands.indexOf('- name: Confirm'),
+  )
   assert.doesNotMatch(between, /for attempt in/)
 })
 
@@ -189,8 +203,107 @@ test('a protected stage is confirmed, and the confirmation reaches mdeploy', () 
   assert.match(commands, /inputs\.confirm && '--confirm'/)
 })
 
+test('complete outbound preflight excludes publisher and apply and rejects unreviewed dispatches', (t) => {
+  type Step = { name?: string; if?: string; id?: string; run?: string; env?: Record<string, string> }
+  const { jobs } = load(workflow) as { jobs: Record<string, { if?: string; needs?: string[]; steps?: Step[] }> }
+  const classify = jobs.resolve?.steps?.find((step) => step.id === 'classify')?.run
+  assert.ok(classify)
+  assert.match(jobs.plan?.if ?? '', /!inputs\.check_complete_outbound/)
+  assert.ok(jobs['build-images']?.needs?.includes('plan'))
+  assert.ok(jobs['build-runner']?.needs?.includes('plan'))
+  const deploy = jobs.deploy?.steps ?? []
+  assert.match(deploy.find((step) => step.name === 'Apply')?.if ?? '', /!inputs\.check_complete_outbound/)
+  const preflight = deploy.find((step) => step.name === 'Check complete outbound release inputs')
+  assert.match(
+    preflight?.if ?? '',
+    /inputs\.check_complete_outbound \|\| \(inputs\.apply && steps\.config\.outputs\.complete_outbound == 'true'\)/,
+  )
+  assert.match(preflight?.env?.GCP_DEPLOYER ?? '', /vars\.GCP_DEPLOYER/)
+  assert.match(preflight?.run ?? '', /docker run --rm --network none[\s\S]*migrate\.js check-bundle/)
+
+  const directory = mkdtempSync(join(tmpdir(), 'complete-outbound-dispatch-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const env = {
+    PATH: process.env.PATH ?? '',
+    GITHUB_OUTPUT: join(directory, 'output'),
+    GITHUB_REF: 'refs/heads/main',
+    GITHUB_REF_PROTECTED: 'true',
+    REF: '',
+    FALLBACK: 'a'.repeat(40),
+    STAGE: 'stage',
+    CHECK_COMPLETE_OUTBOUND: 'true',
+    COMPONENTS: 'api+runner',
+    APPLY: 'false',
+    CONFIRMED: 'true',
+  }
+  const run = (override: Record<string, string>) =>
+    spawnSync('bash', ['-c', classify], { encoding: 'utf8', env: { ...env, ...override } })
+  assert.equal(run({}).status, 0)
+  const rejected: Record<string, string>[] = [
+    { GITHUB_REF: 'refs/heads/feature' },
+    { GITHUB_REF_PROTECTED: 'false' },
+    { REF: '#123' },
+    { COMPONENTS: 'runner' },
+    { APPLY: 'true' },
+    { CONFIRMED: 'false' },
+  ]
+  for (const override of rejected) {
+    const result = run(override)
+    assert.equal(result.status, 1)
+    assert.match(result.stdout, /release preflight/)
+  }
+  assert.equal(run({ CHECK_COMPLETE_OUTBOUND: 'false', REF: '#123', APPLY: 'true' }).status, 0)
+})
+
+test('complete outbound planning reads pinned artifacts without scheduling a publish', (t) => {
+  const { jobs } = load(workflow) as { jobs: Record<string, { steps?: Array<{ id?: string; run?: string }> }> }
+  const decide = jobs.plan?.steps?.find((step) => step.id === 'plan')?.run
+  assert.ok(decide)
+  const directory = mkdtempSync(join(tmpdir(), 'complete-outbound-plan-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const command = `npm() {
+    if [[ "$*" == *' --ghcr '* ]]; then return 91; fi
+    if [[ "$*" == *'mbuild verify'* ]]; then return "$IMAGE_STATUS"; fi
+    if [[ "$*" == *'runner:build '* && "$*" == *' --check '* ]]; then printf 'staged=%s\\n' "$RUNNER_STATUS"; return; fi
+    return 92
+  }\n${decide}`
+  const output = join(directory, 'output')
+  const env = {
+    PATH: process.env.PATH ?? '',
+    GITHUB_OUTPUT: output,
+    GITHUB_STEP_SUMMARY: join(directory, 'summary'),
+    SHA: 'a'.repeat(40),
+    IMAGE_TAG: 'pinned',
+    VERSION: 'v1.2.3',
+    LINE: 'release',
+    STAGE: 'dev',
+    COMPONENTS: 'api+runner',
+    GHCR_REPOSITORY: 'boxlite-ai/boxlite',
+    COMPLETE_OUTBOUND_STAGE: 'true',
+    IMAGE_STATUS: '0',
+    RUNNER_STATUS: 'complete',
+  }
+  const run = (override: Record<string, string> = {}) =>
+    spawnSync('bash', ['-c', command], {
+      encoding: 'utf8',
+      env: { ...env, ...override },
+    })
+  const complete = run()
+  assert.equal(complete.status, 0, complete.stderr)
+  assert.equal(readFileSync(output, 'utf8'), 'api=skip\nrunner=skip\n')
+  for (const override of [{ IMAGE_STATUS: '66' }, { VERSION: '', RUNNER_STATUS: 'missing' }] as Array<
+    Record<string, string>
+  >) {
+    const rejected = run(override)
+    assert.equal(rejected.status, 1)
+    assert.match(rejected.stdout, /publish the pinned/)
+  }
+  assert.equal(readFileSync(output, 'utf8'), 'api=skip\nrunner=skip\n')
+})
+
 test('every job that reads a declaration is given one first', () => {
-  const read = (file: string) => readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${file}`, import.meta.url)), 'utf8')
+  const read = (file: string) =>
+    readFileSync(fileURLToPath(new URL(`../../../../.github/workflows/${file}`, import.meta.url)), 'utf8')
   const name = variableNameFor(parseBase('mstage.env.json', readFileSync(ENV_CONFIG, 'utf8')).app)
   for (const [file, source] of [
     ['mdeploy-all.yml', workflow],
@@ -229,6 +342,10 @@ test('one rollout per stage at a time, which the state requires', () => {
   // is one dispatch left to serialise, so the group is this workflow's own.
   assert.match(workflow, /group: mdeploy-all-\$\{\{ inputs\.stage \}\}/)
   assert.match(workflow, /cancel-in-progress: false/)
+  assert.match(
+    workflow,
+    /\n {2}deploy:\n[^\n]*\n {4}concurrency:\n {6}group: mdeploy-stage-write-\$\{\{ inputs\.stage \}\}\n {6}cancel-in-progress: false/,
+  )
 })
 
 test('the apply can ask the project what it holds, which needs a CLI installed', () => {
@@ -305,7 +422,10 @@ test('a callee trusts no ref it was handed, and resolves none of its own', () =>
    * where the value enters, which is what `build-apps-api-image.yml` does with
    * the same guarantee from the same caller.
    */
-  const mbuild = readFileSync(fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)), 'utf8')
+  const mbuild = readFileSync(
+    fileURLToPath(new URL('../../../../.github/workflows/mbuild.yml', import.meta.url)),
+    'utf8',
+  )
   assert.doesNotMatch(mbuild, /^ {2}workflow_dispatch:$/m, 'a dispatcher could hand it an unproved ref')
   assert.match(mbuild, /^ {2}workflow_call:$/m, 'nothing can reach it at all')
   assert.doesNotMatch(mbuild, /actions\/resolve-ref/, 'it resolves a ref its caller already resolved')
@@ -410,7 +530,13 @@ test('the failure summary renders for a run that failed before it addressed anyt
     const summary = join(directory, 'summary.md')
     const ran = spawnSync('bash', ['-c', report.replace(/\$\{\{[^}]*\}\}/g, 'x')], {
       encoding: 'utf8',
-      env: { PATH: process.env.PATH ?? '', GITHUB_STEP_SUMMARY: summary, LINE: 'commit', SHA: 'a'.repeat(40) },
+      env: {
+        PATH: process.env.PATH ?? '',
+        GITHUB_STEP_SUMMARY: summary,
+        INTENT: 'preview',
+        LINE: 'commit',
+        SHA: 'a'.repeat(40),
+      },
     })
     assert.equal(ran.status, 0, `the report aborted rather than reporting: ${ran.stderr}`)
 

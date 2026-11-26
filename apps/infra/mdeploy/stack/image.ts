@@ -20,6 +20,7 @@ import { loadBuildConfig, type BuildConfig } from 'mbuild/config'
 export type ImagesRequest = {
   /** The commit being deployed. mbuild refuses anything but a full SHA. */
   tag: string
+  apiImage?: string
 }
 
 /** Artifact name to the address its runtime pulls from. */
@@ -62,9 +63,24 @@ export const gcpImages =
     project: string
     config?: BuildConfig
   }) =>
-  (request: ImagesRequest): Images =>
-    Object.fromEntries(
-      Object.entries(
-        addressesFor({ config, registry: resolveRegistry({ config, stage, region, project }), tag: request.tag }),
-      ).map(([artifact, address]) => [artifact, $util.output(address)]),
-    )
+  (request: ImagesRequest): Images => {
+    const addresses = addressesFor({
+      config,
+      registry: resolveRegistry({ config, stage, region, project }),
+      tag: request.tag,
+    })
+    if (request.apiImage) {
+      const suffix = `:${request.tag}`
+      const tagged = addresses.api
+      const prefix = tagged?.endsWith(suffix) ? `${tagged.slice(0, -suffix.length)}@sha256:` : null
+      if (
+        !prefix ||
+        !request.apiImage.startsWith(prefix) ||
+        !/^[a-f0-9]{64}$/.test(request.apiImage.slice(prefix.length))
+      ) {
+        throw new Error('The selected API image digest must belong to the stage API repository')
+      }
+      addresses.api = request.apiImage
+    }
+    return Object.fromEntries(Object.entries(addresses).map(([artifact, address]) => [artifact, $util.output(address)]))
+  }

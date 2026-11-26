@@ -11,6 +11,7 @@ import { AddOutboundControl1794888000000 } from '../../migrations/pre-deploy/179
 import { AddCompleteOutboundControl1795096800000 } from '../../migrations/pre-deploy/1795096800000-add-complete-outbound-control-migration'
 import { AddPendingCompleteV0CreateIndex1795096801000 } from '../../migrations/pre-deploy/1795096801000-add-pending-complete-v0-create-index-migration'
 import { AddCompleteOutboundAdmission1795096802000 } from '../../migrations/pre-deploy/1795096802000-add-complete-outbound-admission-migration'
+import { AddCompleteOutboundAcceptanceWindow1795096809000 } from '../../migrations/pre-deploy/1795096809000-add-complete-outbound-acceptance-window-migration'
 import { AddCompleteOutboundEnrollmentAndClaims1795096803000 } from '../../migrations/pre-deploy/1795096803000-add-complete-outbound-enrollment-and-claims-migration'
 import { Job } from '../entities/job.entity'
 import {
@@ -104,6 +105,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       await migration.query('ALTER TABLE "job" DROP "completeOutboundReconciling"')
       await new AddCompleteOutboundEnrollmentAndClaims1795096803000().up(migration)
       await new AddCompleteOutboundAdmission1795096802000().up(migration)
+      await new AddCompleteOutboundAcceptanceWindow1795096809000().up(migration)
     } finally {
       await migration.release()
     }
@@ -129,7 +131,8 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
 
   beforeEach(async () => {
     await primary.query(
-      "UPDATE complete_outbound_admission SET phase = 'closed', minimum_release = NULL, api_principal = NULL WHERE id = 1",
+      `UPDATE complete_outbound_admission SET phase = 'closed', minimum_release = NULL, api_principal = NULL,
+       acceptance_organization_id = NULL, acceptance_expires_at = NULL WHERE id = 1`,
     )
     proxy.rejectConnections = false
     proxy.rejectAfterCut = false
@@ -238,6 +241,22 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       [runner.id, runnerLeaseId, hash, release],
     )
   }
+
+  it('isolates complete policy update reservations to the release acceptance organization', async () => {
+    await primary.query(
+      `UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'test-release',
+       api_principal = current_user, deployment_receipt = 'fixture', acceptance_organization_id = $1,
+       acceptance_expires_at = clock_timestamp() + interval '1 hour'`,
+      [randomUUID()],
+    )
+    const reserveUpdate = jest.fn(async () => undefined)
+    await expect(store.lockedComplete(box.id, org, true, reserveUpdate)).rejects.toMatchObject({ status: 503 })
+    expect(reserveUpdate).not.toHaveBeenCalled()
+
+    await primary.query('UPDATE complete_outbound_admission SET acceptance_organization_id = $1', [org])
+    await expect(store.lockedComplete(box.id, org, true, reserveUpdate)).resolves.toBeUndefined()
+    expect(reserveUpdate).toHaveBeenCalledTimes(1)
+  })
 
   it('expands and reverts the actual schema without rewriting existing policy', async () => {
     const runner = primary.createQueryRunner()

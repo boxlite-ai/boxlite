@@ -4,7 +4,7 @@
 #
 # This is deliberately separate from apps/runner/Dockerfile. That image consumes a prebuilt
 # libboxlite.a and produces a runtime container; this target builds the embedded runtime from the
-# current checkout and exports only the two files the EC2 updater accepts.
+# current checkout and exports the archive and its checksum.
 FROM ubuntu:24.04 AS build
 
 ENV CI=true
@@ -12,7 +12,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH=/root/.cargo/bin:/usr/local/go/bin:${PATH}
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git make libx11-dev libxtst-dev libxinerama-dev \
+  && apt-get install -y --no-install-recommends ca-certificates clang curl git make libx11-dev libxtst-dev libxinerama-dev \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
@@ -64,9 +64,12 @@ RUN test -n "${BUILD_REF}" \
     -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION_IDENTITY}'" \
     -o /tmp/boxlite-runner \
     ./runner/cmd/runner/ \
+  && make build:platform-guard \
   && mkdir -p /out \
   && archive="boxlite-runner-v${VERSION}-${BUILD_REF}-linux-amd64.tar.gz" \
   && tar czf "/out/${archive}" -C /tmp boxlite-runner \
+    -C /work/target/platform-guard boxlite-platform-guard deadline.bpf.o \
+    -C /work/apps/runner/platform-guard boxlite-platform-guard.service \
   && cd /out \
   && sha256sum "${archive}" > "${archive}.sha256"
 

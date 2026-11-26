@@ -37,6 +37,7 @@ import { GetRunnerParams, RunnerService } from './runner.service'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxCreatedEvent } from '../events/box-create.event'
+import { requireCompleteOutboundAdmission } from '../stores/outbound-policy.store'
 import { CheckpointJobOwner, requireProtectedCheckpointOwner } from '../stores/protected-checkpoint.store'
 import {
   CompleteOutboundSnapshot,
@@ -69,6 +70,7 @@ export class CheckpointRecoverService {
     if (name !== undefined && (!name || name.length > 128 || name.includes('\0')))
       throw new BadRequestException('Invalid box name')
     const selected = await this.admit(organization, checkpointKey)
+    if (selected.captureOutbound) await this.boxes.assertCompleteOutboundAdmission(organization.id)
     const box = new Box(selected.environment.region, name)
     const params: GetRunnerParams = {
       regions: [selected.environment.region],
@@ -97,7 +99,10 @@ export class CheckpointRecoverService {
         maxCreatedBoxes,
         undefined,
         async (manager) => {
-          if (selected.captureOutbound) owner = await requireProtectedCheckpointOwner(manager, runner.id)
+          if (selected.captureOutbound) {
+            await requireCompleteOutboundAdmission(manager, true, organization.id)
+            owner = await requireProtectedCheckpointOwner(manager, runner.id)
+          }
           const currentCheckpoint = await manager.findOne(Checkpoint, {
             where: { id: selected.id, organizationId: organization.id },
             lock: { mode: 'pessimistic_write' },

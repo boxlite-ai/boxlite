@@ -292,7 +292,10 @@ export const parseDeployConfig = (path: string, contents: string): DeployConfig 
     throw new DeployConfigError(`${path} is not valid JSON: ${(error as Error).message}`)
   }
   const root = assertObject(raw, path)
-  assertKeys(root, [...SECTIONS], path, { partial: true })
+  assertKeys(root, [...SECTIONS, 'completeOutboundRelease'], path, { partial: true })
+  if (Object.hasOwn(root, 'completeOutboundRelease')) {
+    assertBoolean(root.completeOutboundRelease, `${path}: completeOutboundRelease`)
+  }
   const defaults = Object.fromEntries(
     SECTIONS.map((section) => [section, PARSERS[section](root[section], `${path}: "${section}"`, { partial: false })]),
   ) as Pick<DeployConfig, (typeof SECTIONS)[number]>

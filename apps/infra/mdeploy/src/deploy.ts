@@ -48,6 +48,8 @@ export type DeployRequest = {
   intent?: Intent
   /** The stage's configuration, handed to the engine rather than written anywhere. */
   stageEnvironment?: Record<string, string>
+  /** Verified immutable API address for a qualified GCP release. */
+  apiImage?: string
   log: (line: string) => void
 }
 

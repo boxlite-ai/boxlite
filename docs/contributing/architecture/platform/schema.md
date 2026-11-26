@@ -50,6 +50,21 @@ Only the enrolled API principal can update protected job transitions. Active
 writers and cleanup holds protect the original lease, and protected archives
 and outstanding work block downgrade.
 
+## Complete outbound release coordination
+
+The [release attempts migration](../../../../apps/api/src/migrations/pre-deploy/1795096810000-add-complete-outbound-release-attempts-migration.ts)
+binds an admission change to the deployment, serving role, and enrolled Runner cohort.
+
+| Stored field | Meaning |
+| --- | --- |
+| `complete_outbound_admission.acceptance_organization_id` | Organization allowed to reserve new rehearsal work. |
+| `complete_outbound_admission.acceptance_expires_at` | Database deadline for rehearsal reservations. |
+| `complete_outbound_admission.deployment_receipt` | Identifies the attempt that owns the current admission. |
+| `complete_outbound_release_attempt.state` | Progress through pending, provisional, accepted, aborted, or expired states. |
+| `complete_outbound_release_attempt.predecessor_receipt` | Prior admission bound to the attempt at creation. |
+| `complete_outbound_release_attempt.manifest_sha256` | Digest of the target release manifest. |
+| `complete_outbound_release_attempt.evidence_sha256` | Single-use evidence digest consumed by target activation. |
+
 ## Experimental CI authorization state
 
 The SQL-owned tables below are created by

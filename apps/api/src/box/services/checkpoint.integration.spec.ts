@@ -56,6 +56,8 @@ import { AddCompleteOutboundEnrollmentAndClaims1795096803000 } from '../../migra
 import { AddCompleteOutboundReleaseControl1795096806000 } from '../../migrations/pre-deploy/1795096806000-add-complete-outbound-release-control-migration'
 import { AddProtectedCheckpointControl1795096807000 } from '../../migrations/pre-deploy/1795096807000-add-protected-checkpoint-control-migration'
 import { AddProtectedCheckpointQueueIndexes1795096808000 } from '../../migrations/pre-deploy/1795096808000-add-protected-checkpoint-queue-indexes-migration'
+import { AddCompleteOutboundAcceptanceWindow1795096809000 } from '../../migrations/pre-deploy/1795096809000-add-complete-outbound-acceptance-window-migration'
+import { AddCompleteOutboundReleaseAttempts1795096810000 } from '../../migrations/pre-deploy/1795096810000-add-complete-outbound-release-attempts-migration'
 import { ProtectedCheckpointJobService } from './protected-checkpoint-job.service'
 import { GetRunnerParams, RunnerService } from './runner.service'
 import { requireProtectedCheckpointOwner } from '../stores/protected-checkpoint.store'
@@ -135,6 +137,8 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       await new AddCompleteOutboundReleaseControl1795096806000().up(migration)
       await new AddProtectedCheckpointControl1795096807000().up(migration)
       await new AddProtectedCheckpointQueueIndexes1795096808000().up(migration)
+      await new AddCompleteOutboundAcceptanceWindow1795096809000().up(migration)
+      await new AddCompleteOutboundReleaseAttempts1795096810000().up(migration)
     } finally {
       await migration.release()
     }
@@ -186,7 +190,8 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       `TRUNCATE TABLE "${schema}"."checkpoint_operation", "${schema}"."checkpoint", "${schema}"."job", "${schema}"."box", "${schema}"."runner", "${schema}"."image", "${schema}"."registry_credential" CASCADE`,
     )
     await dataSource.query(
-      "UPDATE complete_outbound_admission SET phase = 'closed', minimum_release = NULL, api_principal = NULL, deployment_receipt = NULL",
+      `UPDATE complete_outbound_admission SET phase = 'closed', minimum_release = NULL, api_principal = NULL,
+       deployment_receipt = NULL, acceptance_organization_id = NULL, acceptance_expires_at = NULL`,
     )
     settings = { archivePrefix: 'gs://checkpoint-tests/checkpoints/', maxPerOrganization: 10, enabled: true }
     runner = new Runner({
@@ -786,6 +791,37 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await expect(protectedJobs.accept(worker, leaseToken, job!.id, receipt)).rejects.toMatchObject({ status: 409 })
   })
 
+  it('lets the same writer reconnect and clear its cleanup hold after the rehearsal closes', async () => {
+    const worker = await enrollProtectedRunner()
+    const original = await protectedSource()
+    const checkpoint = await service.create(organizationId, original.id)
+    const uploading = await exportProtectedCheckpoint(worker, checkpoint)
+    await dataSource.query('SELECT complete_outbound_close()')
+    await dataSource.query(
+      'UPDATE complete_outbound_runner_enrollment SET expires_at = clock_timestamp() WHERE runner_id = $1',
+      [runner.id],
+    )
+
+    await protectedJobs.reconcile()
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({
+      state: 'failed',
+      activeJobId: uploading.activeJobId,
+    })
+    expect(archiveStore.remove).not.toHaveBeenCalled()
+
+    const cleanup = await protectedJobs.claim(worker, leaseToken)
+    expect(cleanup).toMatchObject({ id: uploading.activeJobId, cleanup: true })
+    await protectedJobs.authorize(worker, leaseToken, cleanup!.id, true)
+    await protectedJobs.accept(worker, leaseToken, cleanup!.id, { kind: cleanup!.type, outcome: 'cleaned' })
+    expect(await jobs.findOneByOrFail({ id: cleanup!.id })).toMatchObject({ checkpointCleanupRequired: false })
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({ state: 'failed', activeJobId: null })
+    const [enrollment] = await dataSource.query(
+      'SELECT protected_checkpoint_retirement FROM complete_outbound_runner_enrollment WHERE runner_id = $1',
+      [runner.id],
+    )
+    expect(enrollment.protected_checkpoint_retirement).toBeNull()
+  })
+
   it('keeps an expired upload owned until the disconnected writer and volume are retired', async () => {
     const worker = await enrollProtectedRunner()
     const original = await protectedSource()
@@ -863,6 +899,87 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     expect(archiveStore.remove).toHaveBeenCalledWith(expect.objectContaining({ id: checkpoint.id }), true)
     expect(await service.get(organizationId, checkpoint.id)).toMatchObject({ state: 'failed', activeJobId: null })
   })
+
+  it('preserves the retained Runner enrollment when the new floor fails to activate', async () => {
+    const application = `${schema}_next`
+    const retired = `${schema}_prev`
+    const attempt = randomUUID()
+    const nextLease = randomUUID()
+    await enrollProtectedRunner()
+    const [before] = await dataSource.query('SELECT * FROM complete_outbound_runner_enrollment')
+    const cohort = JSON.stringify([
+      {
+        runner_id: runner.id,
+        lease_id: nextLease,
+        token_sha256: createHash('sha256').update('staged-token').digest('hex'),
+        runner_key_sha256: before.runner_key_sha256,
+        expires_at: before.expires_at,
+        protected_checkpoint_identity: writer,
+      },
+    ])
+    try {
+      await dataSource.query(`CREATE ROLE "${application}" LOGIN`)
+      await dataSource.query(`CREATE ROLE "${retired}" LOGIN`)
+      await dataSource.query('SELECT complete_outbound_close()')
+      await dataSource.query('UPDATE complete_outbound_admission SET api_principal = $1', [application])
+      await dataSource.query(
+        `SELECT complete_outbound_begin_attempt($1, 'dev', 'next-floor', $2, $3, 'fixture', $4,
+          clock_timestamp() + interval '1 hour')`,
+        [attempt, application, organizationId, 'a'.repeat(64)],
+      )
+      const activate = () =>
+        dataSource.query('SELECT complete_outbound_activate_attempt($1, $2, $3::jsonb)', [attempt, [retired], cohort])
+      await expect(activate()).rejects.toThrow('old application principal')
+      const [retained] = await dataSource.query('SELECT * FROM complete_outbound_runner_enrollment')
+      expect(retained).toEqual(before)
+      const [closed] = await dataSource.query('SELECT phase, minimum_release FROM complete_outbound_admission')
+      expect(closed).toEqual({ phase: 'closed', minimum_release: before.verified_floor })
+
+      await dataSource.query(`ALTER ROLE "${retired}" NOLOGIN`)
+      await activate()
+      const [after] = await dataSource.query(
+        `SELECT a.phase, a.minimum_release, e.lease_id, e.protected_checkpoint_identity
+         FROM complete_outbound_admission a JOIN complete_outbound_runner_enrollment e
+         ON e.verified_floor = a.minimum_release`,
+      )
+      expect(after).toEqual({
+        phase: 'open',
+        minimum_release: 'next-floor',
+        lease_id: nextLease,
+        protected_checkpoint_identity: writer,
+      })
+    } finally {
+      await dataSource.query('TRUNCATE complete_outbound_release_attempt')
+      await dataSource.query(`DROP OWNED BY "${application}"`).catch(() => undefined)
+      await dataSource.query(`DROP ROLE IF EXISTS "${application}", "${retired}"`)
+    }
+  })
+
+  it.each(['capture', 'restore'] as const)(
+    'isolates protected checkpoint %s reservations to the release acceptance organization',
+    async (operation) => {
+      const worker = await enrollProtectedRunner()
+      const original = await protectedSource()
+      const checkpoint = operation === 'restore' ? await service.create(organizationId, original.id) : undefined
+      if (checkpoint) await readyProtectedCheckpoint(worker, checkpoint)
+      const reserve = () =>
+        checkpoint
+          ? recovery.createBox(organization, checkpoint.id, 'scoped-copy', undefined)
+          : service.create(organizationId, original.id)
+      await dataSource.query(
+        `UPDATE complete_outbound_admission SET acceptance_organization_id = $1,
+         acceptance_expires_at = clock_timestamp() + interval '1 hour'`,
+        [randomUUID()],
+      )
+      const jobCount = await jobs.count()
+      await expect(reserve()).rejects.toMatchObject({ status: 503 })
+      expect(await jobs.count()).toBe(jobCount)
+
+      await dataSource.query('UPDATE complete_outbound_admission SET acceptance_organization_id = $1', [organizationId])
+      await expect(reserve()).resolves.toBeDefined()
+      expect(await jobs.count()).toBe(jobCount + 1)
+    },
+  )
 
   it.each([false, true])('closes restore admission with a previously claimed import of %s', async (claimed) => {
     const worker = await enrollProtectedRunner()

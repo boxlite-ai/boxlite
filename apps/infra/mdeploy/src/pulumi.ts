@@ -158,6 +158,7 @@ export type PulumiDeployInput = {
   state: { bucket: string }
   /** The stage's configuration, handed to the program rather than exported. */
   stageEnvironment?: Record<string, string>
+  apiImage?: string
   log: (line: string) => void
   createStackWith?: StackFactory
   /**
@@ -180,6 +181,7 @@ export const pulumiDeploy = async ({
   identity,
   state,
   stageEnvironment = {},
+  apiImage,
   log,
   createStackWith = createStack,
   lookupAuthorizations,
@@ -251,7 +253,16 @@ export const pulumiDeploy = async ({
   const stack = await createStackWith({
     projectName: app,
     stackName: stage,
-    program: gcpProgram({ app, stage, region: scope.region, project, zone: scope.zone, environment, cwd: config.root }),
+    program: gcpProgram({
+      app,
+      stage,
+      region: scope.region,
+      project,
+      zone: scope.zone,
+      environment,
+      apiImage,
+      cwd: config.root,
+    }),
     /*
      * The whole stage environment, not only the credentials and the passphrase.
      * The engine spawns a provider plugin per provider, and those are the
@@ -329,7 +340,7 @@ export const gcpTarget = ({
     PULUMI_GROUP,
   ],
 
-  async run({ intent, stageEnvironment, log }: DeployRequest): Promise<number> {
+  async run({ intent, stageEnvironment, apiImage, log }: DeployRequest): Promise<number> {
     return pulumiDeploy({
       intent,
       config,
@@ -337,6 +348,7 @@ export const gcpTarget = ({
       identity,
       state: { bucket: await stateBucket() },
       stageEnvironment,
+      apiImage,
       log,
       ...(createStackWith ? { createStackWith } : {}),
     })

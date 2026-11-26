@@ -11,6 +11,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import test from 'node:test'
 import {
   RUNNER_ENV_FILE,
@@ -56,6 +57,27 @@ test('cloud boot installs the standalone kernel before starting the runner', () 
   assert.ok(install >= 0, 'cloud boot did not install a kernel')
   assert.ok(install < script.indexOf('systemctl start boxlite-runner'))
   assert.match(script, /libkrunfw-kernel-dind-x86_64\.bin/)
+})
+
+test('guarded GCP boot verifies and installs the guard before starting Runner', () => {
+  const guarded = render({
+    platform: platform({ installsCloudGuard: true }),
+    environment: {
+      BOXLITE_RUNNER_ENV: JSON.stringify({
+        BOXLITE_PLATFORM_GUARD_PROFILE: 'cloud',
+        BOXLITE_REQUIRE_CLOUD_GUARD: '1',
+      }),
+    },
+  })
+  const verification = guarded.indexOf('runner checksum mismatch')
+  const install = guarded.indexOf('install -m 0755 "$guard_work/boxlite-platform-guard"')
+  const start = guarded.indexOf('systemctl enable --now boxlite-platform-guard')
+  assert.ok(verification >= 0 && install > verification && start > install)
+  assert.ok(start < guarded.indexOf('systemctl start boxlite-runner'))
+  assert.match(guarded, /Requires=boxlite-platform-guard\.service/)
+  assert.match(guarded, /deadline\.bpf\.o boxlite-platform-guard\.service/)
+  execFileSync('bash', ['-n'], { input: guarded })
+  assert.doesNotMatch(render({ platform: platform({ installsCloudGuard: true }) }), /bpftool version/)
 })
 
 test('cloud boot installs the NFS client filestore volumes mount with', () => {

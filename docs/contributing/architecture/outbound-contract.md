@@ -1024,8 +1024,12 @@ sequenceDiagram
     participant A as API
     participant R as Runner
     O->>O: Verify ingress, Runtime access and retired credentials
-    O->>P: Register enrolled Runners and verified rollout receipt
-    O->>P: Activate with the dedicated API principal
+    O->>P: Record the release attempt and stage the Runner cohort
+    alt Dev rehearsal
+        O->>P: Open the timed test-organization window
+    else Target with verified evidence
+        O->>P: Commit global admission and consume evidence
+    end
     A->>P: Lock admission and verify Runner enrollment
     A->>R: Dispatch with the enrolled credential
     O->>P: Close admission and retain the release floor
@@ -1039,12 +1043,44 @@ ingress and excludes old Runner processes from Runtime state.
 Before activation, the controller rotates Runner credentials and records each verified release
 and lease.
 
-The database owner calls `complete_outbound_activate` with the verified rollout receipt,
-release floor, dedicated API role and retired API roles.
-The transaction requires the retired roles to have login disabled and their sessions drained.
+The database owner begins a release attempt for the verified floor and the dedicated API role.
+`complete_outbound_activate_attempt` requires retired roles to have login disabled and their
+sessions drained, or requires trusted evidence that the stage is new.
 
 It also checks the enrolled Runner cohort against the floor and current credentials.
 The API role can lock the admission row and read enrollment.
+
+Dev rehearsal admission has a time-limited acceptance organization. Complete create,
+policy replacement, and protected checkpoint capture and restore check the authenticated
+organization when reserving new work. The primary's clock is checked after taking the
+admission lock, so a request waiting across expiry cannot reserve work.
+
+Provisional expiry blocks new reservations. Existing work can still reconcile under
+its recorded floor and lease. Open admission without an acceptance organization
+applies to all eligible organizations.
+
+The release attempt binds the candidate manifest, database role, floor and
+deadline to one receipt. Target activation checks the manifest and consumes a
+unique evidence digest while committing global admission and the Runner cohort.
+Expiry can close only the dev window owned by the expired attempt.
+
+The owner job uses the image's `migrate.js release` command with a structured
+`BOXLITE_RELEASE_REQUEST`. Use `begin` with an organization for dev and `null` for the target.
+Use `activate` for the dev window or `activate-target` with the verified manifest and evidence digests.
+
+A rejected activation preserves the prior enrollment for recovery.
+
+Read `status` after a lost handoff reply to verify the retained application role
+and the recorded predecessor's login state. Activation checks that the supplied
+retired roles include that predecessor and that its database sessions have drained.
+
+After an uncertain activation reply, read `status` to reconcile the receipt.
+For a confirmed mismatch, use `close-target` with that receipt and evidence digest.
+It closes only the matching current admission and preserves its floor and enrollment.
+
+Use `abort` on a pending or provisional attempt after its provider operations settle.
+An independent owner job can call `reconcile` for expired attempts.
+Both operations preserve accepted receipts and the floor needed for owned work.
 
 `complete_outbound_close` disables new reservations and preserves the floor for recovery.
 `complete_outbound_begin_downgrade` requires drained work and expired enrollment. The migrations
