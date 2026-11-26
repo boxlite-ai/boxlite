@@ -1,0 +1,93 @@
+---
+name: BoxLite C SDK host bootstrap and package
+'on':
+  push:
+    branches:
+    - ci/boxlite-runner-trials-2833
+    paths:
+    - ".github/workflows/runner-c-build-tools.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  archive:
+    name: C SDK x64 archive with worker setup before checkout
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: ubuntu-latest
+          target: linux-x64-gnu
+          rust_target: x86_64-unknown-linux-gnu
+    steps:
+    - name: Install BoxLite worker build tools
+      if: matrix.os == 'ubuntu-latest' && runner.environment == 'self-hosted'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends make ripgrep xz-utils zstd \
+          build-essential pkg-config libssl-dev patchelf python3
+    - uses: actions/checkout@v4
+      with:
+        ref: 4422612e6eeeb7814e66326354c33ca84beeef83
+        submodules: recursive
+        persist-credentials: false
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+        cache: "${{ runner.os != 'Linux' }}"
+    - uses: "./.github/actions/sccache"
+    - uses: "./.github/actions/build-guest"
+      if: runner.os == 'Linux'
+    - name: Build C SDK (Linux)
+      if: runner.os == 'Linux'
+      uses: "./.github/actions/run-in-manylinux"
+      with:
+        target: "${{ matrix.target }}"
+        script: |
+          # Build the C FFI library (static + shared)
+          cargo build --release -p boxlite-c
+
+          # Fix Go runtime symbol conflicts in the static library
+          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+    - name: Build C SDK (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        make setup:build runtime
+
+        # Build the C FFI library (static + shared)
+        cargo build --release -p boxlite-c
+
+        # Fix Go runtime symbol conflicts in the static library
+        bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+
+        command -v sccache &>/dev/null && sccache --show-stats || true
+    - name: Package C SDK archive
+      run: |
+        VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        ARCHIVE_DIR="boxlite-c-v${VERSION}-${{ matrix.target }}"
+
+        mkdir -p "${ARCHIVE_DIR}/lib" "${ARCHIVE_DIR}/include"
+        cp target/release/libboxlite.a "${ARCHIVE_DIR}/lib/"
+        cp sdks/c/include/boxlite.h "${ARCHIVE_DIR}/include/"
+
+        # Copy shared library (platform-specific extension)
+        if [ -f target/release/libboxlite.dylib ]; then
+          cp target/release/libboxlite.dylib "${ARCHIVE_DIR}/lib/"
+        elif [ -f target/release/libboxlite.so ]; then
+          cp target/release/libboxlite.so "${ARCHIVE_DIR}/lib/"
+        fi
+
+        tar czf "${ARCHIVE_DIR}.tar.gz" "${ARCHIVE_DIR}/"
+        rm -rf "${ARCHIVE_DIR}"
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: c-sdk-${{ matrix.target }}
+        path: boxlite-c-v*-${{ matrix.target }}.tar.gz
+        if-no-files-found: error
+        retention-days: 1
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
