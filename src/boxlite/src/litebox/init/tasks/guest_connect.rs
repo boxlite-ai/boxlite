@@ -31,6 +31,7 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
             transport,
             ready_transport,
             skip_guest_wait,
+            is_checkpoint_restore,
             shim_pid,
             exit_file,
             console_log,
@@ -62,6 +63,7 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
                 ctx.config.transport(),
                 ctx.config.ready_transport(),
                 ctx.skip_guest_wait,
+                ctx.checkpoint_restore,
                 ctx.guard.handler_pid(),
                 exit_file,
                 console_log,
@@ -69,10 +71,27 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
             )
         };
 
-        // Wait for guest to be ready before creating session
-        // Skip for reattach (Running status) - guest already signaled ready at boot
-        if skip_guest_wait {
+        let guest_session = if skip_guest_wait {
+            // Skip for reattach (Running status) - guest already signaled ready at boot
             tracing::debug!(box_id = %box_id, "Skipping guest ready wait (reattach)");
+            GuestSession::new(transport)
+        } else if is_checkpoint_restore {
+            // Restored guests do not emit a cold-boot ready signal on ready.sock.
+            // Poll Guest.Ping over box.sock instead, racing against shim exit.
+            tracing::debug!(box_id = %box_id, "Waiting for restored guest via ping");
+            let session = GuestSession::new(transport);
+            wait_for_restored_guest_ready(
+                &session,
+                shim_pid,
+                &exit_file,
+                &console_log,
+                &stderr_file,
+                box_id.as_str(),
+                GUEST_READY_TIMEOUT,
+            )
+            .await
+            .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+            session
         } else {
             tracing::debug!(box_id = %box_id, "Waiting for guest to be ready");
             wait_for_guest_ready(
@@ -86,10 +105,10 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
             )
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
-        }
+            GuestSession::new(transport)
+        };
 
         tracing::debug!(box_id = %box_id, "Guest is ready, creating session");
-        let guest_session = GuestSession::new(transport);
 
         let mut ctx = ctx.lock().await;
         ctx.guest_session = Some(guest_session);
@@ -163,91 +182,177 @@ async fn wait_for_guest_ready(
                 Ok(Err(e)) => Err(BoxliteError::Engine(format!(
                     "Ready socket accept failed: {}", e
                 ))),
-                Err(_) => {
-                    // Collect cheap diagnostics so the user/operator can tell
-                    // *which* failure class hit (vs. the previous generic
-                    // "Common causes:" list). Order: do not change semantics,
-                    // just enrich the error body.
-                    let shim_alive = shim_pid
-                        .map(crate::util::is_process_alive)
-                        .unwrap_or(false);
-                    let console_bytes = std::fs::metadata(console_log)
-                        .map(|m| m.len())
-                        .unwrap_or(0);
-                    let ready_socket_present = ready_socket_path.exists();
-                    let console_tail = if console_bytes > 0 {
-                        // Read the last ~1024 bytes of console.log. If the
-                        // file is shorter, read the whole thing.
-                        read_tail(console_log, 1024).unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
-                    // Likely-cause heuristic. The pattern we hit in production
-                    // (shim alive, console empty, ready socket present) maps
-                    // to "guest agent failed to connect over vsock".
-                    let likely_cause = match (shim_alive, console_bytes > 0) {
-                        (true, false) => "guest agent never wrote to console (init or vsock plumbing broken)",
-                        (true, true) => "guest booted but agent did not connect to vsock READY port",
-                        (false, _) => "shim died silently (see stderr / exit file)",
-                    };
-                    let diagnostic = HostDiagnostic::new(
-                        format!(
-                            "The VM failed to start: timed out after {}s waiting for it to become ready.",
-                            timeout.as_secs()
-                        ),
-                        format!(
-                        "Box {box_id} failed to start: timeout after {}s\n\n\
-                         Evidence at T+{}s:\n\
-                         • shim_alive          = {}\n\
-                         • console_bytes       = {}\n\
-                         • ready_socket_exists = {}\n\
-                         • likely_cause        = {}\n\n\
-                         Common causes:\n\
-                         • Slow disk I/O during rootfs setup\n\
-                         • Network configuration issues\n\
-                         • Guest agent failed to start\n\n\
-                         Debug files:\n\
-                         • Console: {}\n\
-                         {}\n\
-                         Tip: Run with RUST_LOG=debug for more details",
-                        timeout.as_secs(),
-                        timeout.as_secs(),
-                        shim_alive,
-                        console_bytes,
-                        ready_socket_present,
-                        likely_cause,
-                        console_log.display(),
-                        if console_tail.is_empty() {
-                            String::new()
-                        } else {
-                            format!("\nConsole tail (last {} bytes):\n{}\n", console_tail.len(), console_tail)
-                        }
-                        ),
-                    );
-                    tracing::error!("{}", diagnostic.operator());
-                    Err(BoxliteError::Engine(diagnostic.into_client()))
-                }
+                Err(_) => Err(timeout_error(
+                    shim_pid,
+                    Some(ready_socket_path),
+                    console_log,
+                    box_id,
+                    timeout,
+                )),
             }
         }
         exit_code = wait_for_process_exit(shim_pid) => {
-            // Parse exit file and present user-friendly message
-            let report = CrashReport::from_exit_file(
+            Err(shim_exit_error(
                 exit_file,
                 console_log,
                 stderr_file,
                 box_id,
                 exit_code,
-            );
-
-            // The full report — paths, shim stderr, exit code — goes to the
-            // host log. Only the terse sentence reaches the caller.
-            tracing::error!("Box crash details:\n{}", report.operator_report);
-
-            Err(match report.error_kind {
-                ExitErrorKind::Unsupported => BoxliteError::Unsupported(report.client_message),
-                ExitErrorKind::Engine => BoxliteError::Engine(report.client_message),
-            })
+            ))
         }
+    }
+}
+
+/// Wait for a checkpoint-restored guest to answer `Guest.Ping` over `box.sock`,
+/// racing against shim process exit.
+async fn wait_for_restored_guest_ready(
+    guest_session: &GuestSession,
+    shim_pid: Option<u32>,
+    exit_file: &Path,
+    console_log: &Path,
+    stderr_file: &Path,
+    box_id: &str,
+    timeout: Duration,
+) -> BoxliteResult<()> {
+    const PING_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
+    const INITIAL_BACKOFF: Duration = Duration::from_millis(10);
+    const MAX_BACKOFF: Duration = Duration::from_millis(200);
+
+    let poll_ping = async {
+        let mut backoff = INITIAL_BACKOFF;
+        loop {
+            let attempt = tokio::time::timeout(PING_ATTEMPT_TIMEOUT, async {
+                let mut guest = guest_session.guest().await?;
+                guest.ping().await
+            })
+            .await;
+
+            match attempt {
+                Ok(Ok(())) => {
+                    tracing::debug!(box_id = %box_id, "Restored guest responded to ping");
+                    return;
+                }
+                Ok(Err(error)) => {
+                    tracing::debug!(
+                        box_id = %box_id,
+                        error = %error,
+                        "Restored guest ping failed, resetting session and retrying"
+                    );
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        box_id = %box_id,
+                        "Restored guest ping timed out, resetting session and retrying"
+                    );
+                }
+            }
+            guest_session.reset().await;
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(MAX_BACKOFF);
+        }
+    };
+
+    tokio::select! {
+        result = tokio::time::timeout(timeout, poll_ping) => {
+            match result {
+                Ok(()) => Ok(()),
+                Err(_) => Err(timeout_error(
+                    shim_pid,
+                    None,
+                    console_log,
+                    box_id,
+                    timeout,
+                )),
+            }
+        }
+        exit_code = wait_for_process_exit(shim_pid) => {
+            Err(shim_exit_error(
+                exit_file,
+                console_log,
+                stderr_file,
+                box_id,
+                exit_code,
+            ))
+        }
+    }
+}
+
+fn timeout_error(
+    shim_pid: Option<u32>,
+    ready_socket_path: Option<&Path>,
+    console_log: &Path,
+    box_id: &str,
+    timeout: Duration,
+) -> BoxliteError {
+    let shim_alive = shim_pid.map(crate::util::is_process_alive).unwrap_or(false);
+    let console_bytes = std::fs::metadata(console_log).map(|m| m.len()).unwrap_or(0);
+    let ready_socket_present = ready_socket_path.is_some_and(|p| p.exists());
+    let console_tail = if console_bytes > 0 {
+        read_tail(console_log, 1024).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let likely_cause = match (shim_alive, console_bytes > 0, ready_socket_path.is_some()) {
+        (false, _, _) => "shim died silently (see stderr / exit file)",
+        (true, false, true) => "guest agent never wrote to console (init or vsock plumbing broken)",
+        (true, true, true) => "guest booted but agent did not connect to vsock READY port",
+        (true, _, false) => "restored guest agent did not answer ping over vsock",
+    };
+    let diagnostic = HostDiagnostic::new(
+        format!(
+            "The VM failed to start: timed out after {}s waiting for it to become ready.",
+            timeout.as_secs()
+        ),
+        format!(
+            "Box {box_id} failed to start: timeout after {}s\n\n\
+             Evidence at T+{}s:\n\
+             • shim_alive          = {}\n\
+             • console_bytes       = {}\n\
+             • ready_socket_exists = {}\n\
+             • likely_cause        = {}\n\n\
+             Common causes:\n\
+             • Slow disk I/O during rootfs setup\n\
+             • Network configuration issues\n\
+             • Guest agent failed to start\n\n\
+             Debug files:\n\
+             • Console: {}\n\
+             {}\n\
+             Tip: Run with RUST_LOG=debug for more details",
+            timeout.as_secs(),
+            timeout.as_secs(),
+            shim_alive,
+            console_bytes,
+            ready_socket_present,
+            likely_cause,
+            console_log.display(),
+            if console_tail.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\nConsole tail (last {} bytes):\n{}\n",
+                    console_tail.len(),
+                    console_tail
+                )
+            }
+        ),
+    );
+    tracing::error!("{}", diagnostic.operator());
+    BoxliteError::Engine(diagnostic.into_client())
+}
+
+fn shim_exit_error(
+    exit_file: &Path,
+    console_log: &Path,
+    stderr_file: &Path,
+    box_id: &str,
+    exit_code: Option<i32>,
+) -> BoxliteError {
+    let report =
+        CrashReport::from_exit_file(exit_file, console_log, stderr_file, box_id, exit_code);
+    tracing::error!("Box crash details:\n{}", report.operator_report);
+    match report.error_kind {
+        ExitErrorKind::Unsupported => BoxliteError::Unsupported(report.client_message),
+        ExitErrorKind::Engine => BoxliteError::Engine(report.client_message),
     }
 }
 

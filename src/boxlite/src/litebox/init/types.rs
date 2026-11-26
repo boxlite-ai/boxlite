@@ -278,6 +278,8 @@ pub struct CleanupGuard {
     layout: Option<BoxFilesystemLayout>,
     handler: Option<Box<dyn VmmHandler>>,
     armed: bool,
+    /// True once `VmmSpawnTask` spawns a checkpoint-restore VM (RW disk access).
+    checkpoint_restore_spawned: bool,
     /// Captured cause for the eventual `Failed` state. Populated by the init
     /// pipeline caller via `set_last_error()` before the error propagates.
     /// `None` if Drop fires without an explicit cause — falls back to a
@@ -293,6 +295,7 @@ impl CleanupGuard {
             layout: None,
             handler: None,
             armed: true,
+            checkpoint_restore_spawned: false,
             last_error: None,
         }
     }
@@ -314,6 +317,11 @@ impl CleanupGuard {
     /// Register handler for cleanup on failure.
     pub fn set_handler(&mut self, handler: Box<dyn VmmHandler>) {
         self.handler = Some(handler);
+    }
+
+    /// Record that a checkpoint-restore VM process has been spawned.
+    pub fn mark_checkpoint_restore_spawned(&mut self) {
+        self.checkpoint_restore_spawned = true;
     }
 
     /// Take ownership of handler (for success path).
@@ -354,6 +362,26 @@ impl Drop for CleanupGuard {
             tracing::warn!("Failed to stop handler during cleanup: {}", e);
         }
 
+        // Once a restore VM has started, its disk may have diverged from vmstate.krun.
+        // Remove the staged checkpoint directory so retries cold-boot the updated disk.
+        if self.checkpoint_restore_spawned
+            && let Some(ref layout) = self.layout
+        {
+            let checkpoint_dir = layout
+                .root()
+                .join(crate::litebox::archive::CHECKPOINT_DIRNAME);
+            if checkpoint_dir.exists()
+                && let Err(e) = std::fs::remove_dir_all(&checkpoint_dir)
+            {
+                tracing::warn!(
+                    box_id = %self.box_id,
+                    path = %checkpoint_dir.display(),
+                    error = %e,
+                    "Failed to remove checkpoint directory after restore failure"
+                );
+            }
+        }
+
         // DON'T cleanup filesystem - preserve diagnostic files for debugging
         if let Some(ref layout) = self.layout {
             tracing::error!(
@@ -371,6 +399,9 @@ impl Drop for CleanupGuard {
         // orphaned on-disk state and lost the user's sandbox.
         match self.runtime.box_manager.update_box(&self.box_id) {
             Ok(mut state) => {
+                if self.checkpoint_restore_spawned {
+                    state.pending_memory_restore = false;
+                }
                 state.mark_failed(reason);
                 if let Err(e) = self.runtime.box_manager.save_box(&self.box_id, &state) {
                     tracing::warn!(
@@ -407,6 +438,8 @@ pub struct InitPipelineContext {
     pub reuse_rootfs: bool,
     /// Skip waiting for guest ready signal (for reattach to running box).
     pub skip_guest_wait: bool,
+    /// Restore from box-staged memory checkpoint artifacts instead of cold booting.
+    pub checkpoint_restore: bool,
 
     pub layout: Option<BoxFilesystemLayout>,
     pub boot_assets: Option<PreparedBootAssets>,
@@ -456,6 +489,7 @@ impl InitPipelineContext {
             guard,
             reuse_rootfs,
             skip_guest_wait,
+            checkpoint_restore: false,
             layout: None,
             boot_assets: None,
             container_image_config: None,

@@ -525,6 +525,13 @@ Host                              Guest (Box)
   │                                 │
 ```
 
+The checkpoint restore plan skips boot asset preparation, rootfs creation, and `GuestInit`.
+Once `VmmSpawnTask` successfully spawns the restore VM, it consumes `pending_memory_restore`
+so a retry cannot replay the checkpoint against a modified disk. Instead of waiting for a boot
+notification, `GuestConnectTask` polls `Guest.Ping`, calling `GuestSession::reset()` before each
+retry. The shim currently rejects checkpoint restore before spawning a VM, so that rejection
+leaves `pending_memory_restore` intact.
+
 ## SDK architecture
 
 BoxLite provides language-specific SDKs built on the core Rust library.
