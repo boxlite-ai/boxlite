@@ -1,0 +1,55 @@
+name: BoxLite Rust read-only mount comparison
+on:
+  push:
+    branches: [ci/boxlite-runner-trials-2833]
+    paths: [.github/workflows/runner-rust-mount-check.yml]
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ${{ matrix.worker }}
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [boxlite-4vcpu-16gbmem-64gbdisk, ubuntu-latest]
+    steps:
+      - name: Configure hosted Ubuntu namespaces as in the Rust job
+        if: matrix.worker == 'ubuntu-latest'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Compare read-only bind mounts in a private test namespace
+        shell: bash
+        run: |
+          set -eu
+          id
+          uname -r
+          unshare --user --map-root-user --mount --propagation private -- python3 - <<'PY'
+          import ctypes
+          import errno
+          import os
+          from pathlib import Path
+          import subprocess
+          import tempfile
+
+          libc = ctypes.CDLL(None, use_errno=True)
+          libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
+          extra = {'nosuid': 2, 'nodev': 4, 'noexec': 8, 'noatime': 1024, 'nodiratime': 2048, 'relatime': 1 << 21}
+          def mount(source, path, flags):
+              rc = libc.mount(os.fsencode(source) if source else None, os.fsencode(path), None, flags, None)
+              return 0 if rc == 0 else ctypes.get_errno()
+
+          for base in ['/tmp', os.environ['RUNNER_TEMP']]:
+              fstype, opts = subprocess.check_output(['findmnt','-n','-T',base,'-o','FSTYPE,VFS-OPTIONS'],text=True).split()
+              flags = sum(extra.get(flag, 0) for flag in opts.split(','))
+              with tempfile.TemporaryDirectory(dir=base) as tmp:
+                  root=Path(tmp)
+                  (root/'source').mkdir()
+                  (root/'target').mkdir()
+                  for title, more in [('job flags', 0), ('retain mount restrictions', flags)]:
+                      err = mount(root/'source',root/'target',4096)
+                      if err: raise OSError(err,os.strerror(err))
+                      try:
+                          err = mount(None,root/'target',4096|32|1|more)
+                          print(f'{base} {fstype} {opts} | {title} | {errno.errorcode.get(err, "OK")}',flush=True)
+                      finally:
+                          subprocess.run(['umount',str(root/'target')],check=True)
+          PY
