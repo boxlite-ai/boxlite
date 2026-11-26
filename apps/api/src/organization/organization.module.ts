@@ -8,6 +8,7 @@ import { OnboardingController } from './controllers/onboarding.controller'
 import { CancellationFeedbackController } from './controllers/cancellation-feedback.controller'
 import { CancellationFeedbackService } from './services/cancellation-feedback.service'
 import { CouponClaimsController } from './controllers/coupon-claims.controller'
+import { ExperimentalFeatureRequestsController } from './controllers/experimental-feature-requests.controller'
 import { CouponClaimsService } from './services/coupon-claims.service'
 import { OnboardingService } from './services/onboarding.service'
 import { QuickstartPromptDraft, QuickstartPromptHandoff } from './entities/quickstart-prompt.entity'
@@ -60,6 +61,7 @@ import { UsageController } from '../usage/controllers/usage.controller'
   controllers: [
     CancellationFeedbackController,
     CouponClaimsController,
+    ExperimentalFeatureRequestsController,
     OnboardingController,
     OrganizationController,
     OrganizationRoleController,

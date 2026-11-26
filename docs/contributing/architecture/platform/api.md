@@ -177,10 +177,23 @@ Existing Apps, deployments and stored key grants survive. Restoring a grant rest
 to the same App. Signed-in site visitors follow the site's access policy. An organization
 key presented to the site needs effective `read:apps`.
 
-The Dashboard reads the invitation from `appHostingPermissions` on the organization.
+Every organization can open **APPs** in the Dashboard. The Dashboard reads the
+invitation from `appHostingPermissions`. When the organization lacks `read:apps`,
+the list and detail URLs show the request page. An invited organization's members
+need effective `read:apps` to open App data.
 The organization member list marks the authenticated administrator's own entry with
 `isSystemAdmin: true`, so the Dashboard applies the same ceiling to an administrator
 who holds an ordinary member role in that organization.
+
+The Dashboard submits `POST /api/organizations/{organizationId}/experimental-feature-requests`
+with its user JWT and a JSON body such as `{"feature":"App Hosting"}`. Any user
+with access to the organization can submit a single-line feature name of 1–80
+characters. The API resolves the organization and contact email from the authenticated
+request. It returns `400` for an invalid body and `422` for a missing account email.
+Each accepted request emits one WARN and returns `204 No Content`. Search logs by
+`event.name=experimental_feature.requested`. The attributes include `organization.id`,
+`user.id`, `user.email`, `feature.name` and the server's UTC `event.timestamp`.
+Backoffice grants App scopes through the existing Admin API.
 
 Ordinary Open app and SQL in read mode require `read:apps`. Writing SQL, connecting to
 the DB with `?write=1`, opening as a test user, reading the resolved runtime environment,

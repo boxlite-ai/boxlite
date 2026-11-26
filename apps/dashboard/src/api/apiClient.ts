@@ -137,6 +137,15 @@ export class ApiClient {
     if (response.status !== 204) throw new BoxliteError('Feedback save was not confirmed')
   }
 
+  public async requestExperimentalFeature(organizationId: string, feature: string): Promise<void> {
+    const response = await this.http.post(
+      `/organizations/${encodeURIComponent(organizationId)}/experimental-feature-requests`,
+      { feature },
+      { ...this.v1Config(), timeout: 10_000 },
+    )
+    if (response.status !== 204) throw new BoxliteError('Feature request was not confirmed')
+  }
+
   public async register(turnstileToken: string): Promise<User> {
     return (await this.http.post<User>('/auth/register', { turnstileToken }, { ...this.v1Config(), timeout: 30_000 }))
       .data

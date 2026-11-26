@@ -5,7 +5,6 @@
  */
 
 import { NavigationIcon, type NavigationIconName } from '@/components/NavigationIcon'
-import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { SidebarBalance } from '@/components/billing/SidebarBalance'
 import { AccountAvatar } from '@/components/AccountAvatar'
 import { LogoText } from '@/assets/Logo'
@@ -126,7 +125,7 @@ const APPLICATION_NAV_ITEMS: NavItem[] = [
     icon: 'ci',
     path: RoutePath.CI,
   },
-  { label: 'App hosting', icon: 'app', path: RoutePath.APPS },
+  { label: 'APPs', icon: 'app', path: RoutePath.APPS },
 ]
 const NAV_SECTIONS = [
   { label: 'Infrastructure', items: PRIMARY_NAV_ITEMS },
@@ -270,12 +269,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
     if ([RoutePath.BILLING, RoutePath.SETTINGS].some((path) => pathname === path || pathname.startsWith(`${path}/`)))
       setManagementOpen(true)
   }, [pathname])
-  const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
-  const canReadApps = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.READ_APPS)
-  const navSections = NAV_SECTIONS.map((section) => ({
-    ...section,
-    items: section.items.filter((item) => item.path !== RoutePath.APPS || canReadApps),
-  }))
+  const { selectedOrganization } = useSelectedOrganization()
 
   const openOnboardingGuide = useCallback(() => {
     const event = new Event(ONBOARDING_OPEN_EVENT, { cancelable: true })
@@ -437,7 +431,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
             aria-label="Primary"
             className="hidden min-h-0 w-full flex-1 flex-col items-center gap-3 overflow-y-auto overflow-x-hidden px-2 py-4 md:flex"
           >
-            {navSections.map((section, index) => (
+            {NAV_SECTIONS.map((section, index) => (
               <div
                 key={section.label}
                 role="group"
@@ -737,7 +731,7 @@ export function Sidebar({ isBannerVisible, children }: SidebarProps) {
               collisionPadding={8}
               className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-[14rem] overflow-y-auto"
             >
-              {navSections.map((section) => (
+              {NAV_SECTIONS.map((section) => (
                 <div key={section.label}>
                   <DropdownMenuLabel>{section.label}</DropdownMenuLabel>
                   {section.items.map((item) => (
