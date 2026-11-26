@@ -47,6 +47,7 @@ test('AWS rejects V2 protected enrollment before applying an unreachable listene
       certFile: '/etc/boxlite/server.pem',
       keyFile: '/etc/boxlite/server.key',
       clientCaFile: '/etc/boxlite/client-ca.pem',
+      clientCaSha256: 'd'.repeat(64),
       clientDnsName: 'api.example.com',
       dohUrl: 'https://resolver.example.com/dns-query',
       dohAddress: '1.1.1.1:443',

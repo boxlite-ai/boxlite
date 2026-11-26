@@ -275,14 +275,16 @@ const channels = ({
   region,
   stage,
   home,
+  protectedV2,
 }: {
   environment: NodeJS.ProcessEnv
   declaration: GroupDeclaration
   region: string
   stage: string
   home: Cloud
+  protectedV2: boolean
 }) => {
-  const api = apiEnvironmentFrom({ environment, declaration, region, stage, home })
+  const api = apiEnvironmentFrom({ environment, declaration, region, stage, home, protectedV2 })
   // Invocation metadata bypasses stored stage groups, like the image tag.
   const generationKey = environment.CI_SCHEDULER_GENERATION === undefined ? 'GITHUB_RUN_ID' : 'CI_SCHEDULER_GENERATION'
   const generation = environment[generationKey]
@@ -367,7 +369,8 @@ export const readStackEnvironment = ({
     fleetFrom({ environment, app, stage }),
     optional(environment, 'STACK_RUNNER_PROTECTED_PROXY_SLOTS'),
   )
-  if (home !== 'gcp' && runnerFleet.some(({ protectedProxy }) => protectedProxy?.apiVersion === 2)) {
+  const protectedV2 = runnerFleet.some(({ protectedProxy }) => protectedProxy?.apiVersion === 2)
+  if (home !== 'gcp' && protectedV2) {
     throw new StackEnvError('Protected V2 Runner enrollment requires a GCP stage')
   }
   const protectedRunnerTokens = Object.fromEntries(
@@ -407,6 +410,6 @@ export const readStackEnvironment = ({
     clickStackConsumer: clickStackConsumerFrom(environment),
     dnsZoneId: required(environment, 'CLOUDFLARE_ZONE_ID', 'every public record this stage writes goes into it'),
     mailRelayHost: optional(environment, 'MAIL_RELAY_HOST'),
-    ...channels({ environment, declaration, region, stage, home }),
+    ...channels({ environment, declaration, region, stage, home, protectedV2 }),
   }
 }

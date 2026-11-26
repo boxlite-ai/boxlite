@@ -793,6 +793,19 @@ stale receipt or unconfirmed cleanup fails the case.
 make test:rest:e2e PYTEST_FILTER='-k managed_proxy_deployment --managed-outbound-config /absolute/path/managed-outbound.json'
 ```
 
+#### Protected V2 release acceptance
+
+Use the existing dev test organization and two enrolled V2 Runners. Run the dedicated acceptance job on the Linux fixture machine registered with the Actions label `boxlite-protected-dev`. The ordinary cloud suite uses its regular worker.
+
+Set `BOXLITE_DEV_PROTECTED_OUTBOUND_CONFIG` to the fixture configuration. The test worker needs the configured executable controller, its read-only PostgreSQL service, and the Python SDK build tools. The job checks controller and database access before injecting a fault.
+
+| Action | Deployment controller behavior and evidence |
+| --- | --- |
+| `prepare-protected-v2-release` | Scope placement for the test name to the primary V2 Runner and start the live observers. The test creates and starts the bound Box through the public API. |
+| `interrupt-protected-v2-release` | End the exact unsealed protected workload with SIGKILL and withhold its termination evidence. Echo the Box, epoch and attempt, and return `runner_id` and the observed `process_exit_signal`. |
+| `settle-protected-v2-release` | Resume exact termination evidence and let Cloud reconcile the same epoch. The `protected-v2-release` evidence barrier includes the delivered `retire-terminated` event and its forwarded reply. |
+| `verify-protected-v2-final-restart` | Restart the V2 Runner and scope placement for the next test name to it. Return `runner_id`, `previous_process_id` and the live `process_id`. The test creates the next bound Box through the public API and verifies its actual assignment. |
+
 ### HTTPS V0 credential cutover
 
 Run this check on the deployed revision during the dev rollout. Local fixtures

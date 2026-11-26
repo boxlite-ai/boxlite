@@ -30,6 +30,7 @@ import { gcpCollectorProvider } from './collector.ts'
 import { gcpDatabaseProvider } from './database.ts'
 import { gcpEdgeProvider } from './edge.ts'
 import { gcpMailProvider } from './mail.ts'
+import type { GcpProtectedRelease } from './protected-release.ts'
 import { CLOUDRUN_EGRESS_CIDR, gcpNetworkProvider } from './network.ts'
 import { gcpRegistryCredentialStoreProvider } from './registry-credentials.ts'
 import { gcpRegistryProxyProvider } from './registry-proxy.ts'
@@ -83,6 +84,7 @@ export const gcpStackProviders = ({
   otelOpenapiEnabled = false,
   clickStackConsumer = null,
   notificationChannels = [],
+  protectedRelease,
 }: {
   stage: string
   region: string
@@ -115,6 +117,7 @@ export const gcpStackProviders = ({
   /** Who may read the ClickHouse reader password; see `clickstack.ts`. */
   clickStackConsumer?: string | null
   notificationChannels?: string[]
+  protectedRelease?: GcpProtectedRelease
 }): StackProviders => {
   const zone = zoneIn(region, declaredZone)
 
@@ -192,6 +195,7 @@ export const gcpStackProviders = ({
         // placement carries neither; see `api.ts`.
         network: binding(network).network,
         runnerAccount: placement(network, 'runner').serviceAccount,
+        protectedRelease,
       }),
     // Not a Cloud Run service: the proxy is a GKE workload behind a standalone
     // NEG attached to the existing global SSL proxy load balancer.
@@ -240,6 +244,9 @@ export const gcpStackProviders = ({
         adminApiKey,
         regionId,
         dependsOn,
+        protectedDatabase: Boolean(protectedRelease),
+        cutoverTestKey: protectedRelease?.cutoverTestKey,
+        devAcceptance: protectedRelease?.acceptance,
       }),
     alarms: ({ subjects }) => gcpAlarmProvider({ subjects, project, notificationChannels }),
   }

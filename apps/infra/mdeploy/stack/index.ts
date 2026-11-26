@@ -583,6 +583,9 @@ export const deployStack = ({
    * none of this and must not be failed for it.
    */
   const adminApiKey = inputs.apiEnvironment.ADMIN_API_KEY
+  if (inputs.runnerFleet.some(({ protectedProxy }) => protectedProxy?.apiVersion === 2) && adminApiKey === undefined) {
+    throw new Error('Protected V2 Runner releases require the existing ADMIN_API_KEY')
+  }
   if (inputs.runnerFleet.length > 1 && adminApiKey === undefined) {
     throw new Error(
       `this stage runs ${inputs.runnerFleet.length} runners, and the API seeds only the first — ` +

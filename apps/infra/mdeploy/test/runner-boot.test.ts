@@ -27,7 +27,7 @@ import {
 import { renderUnitEnvironmentPolicyScripts, unitEnvironmentBlock } from '../stack/runner-upgrade.ts'
 import { runnerHealthProbe } from '../stack/runner-health-probe.ts'
 import { extraRunnersOf } from '../stack/runner-registration.ts'
-import { enrollProtectedRunnerSlots } from '../stack/runner-protected-proxy.ts'
+import { enrollProtectedRunnerSlots, protectedRunnerCloudEnvironment } from '../stack/runner-protected-proxy.ts'
 
 const platform = (overrides: Partial<BootPlatform> = {}): BootPlatform => ({
   hostAddress: 'HOST_IP=$(curl -s http://metadata/ip)',
@@ -85,7 +85,7 @@ test('the enrolled slot boots V0 and is excluded from automatic V2 registration'
   assert.match(render(), /^API_VERSION=2$/m)
 })
 
-test('V2 enrollment configures the default slot and preserves numbered slot registration', () => {
+test('V2 enrollment preserves existing slot identities and registers only ordinary extras', () => {
   const defaultSlot = { resourceName: 'Runner', nameTag: 'runner', controlPlaneRunnerName: 'default' }
   const v2 = {
     ...protectedProxy,
@@ -93,21 +93,32 @@ test('V2 enrollment configures the default slot and preserves numbered slot regi
     url: 'https://runner.example.com:3004/',
     caPem: rootCertificates[0]!,
     clientCaFile: '/etc/boxlite/cloud-ca.pem',
+    clientCaSha256: 'd'.repeat(64),
     clientDnsName: 'api.example.com',
   }
   const numberedSlot = { resourceName: 'Runner-runner-2', nameTag: 'runner-2', controlPlaneRunnerName: 'runner-2' }
-  const fleet = enrollProtectedRunnerSlots([defaultSlot, numberedSlot], JSON.stringify({
+  const ordinarySlot = { resourceName: 'Runner-runner-3', nameTag: 'runner-3', controlPlaneRunnerName: 'runner-3' }
+  const fleet = enrollProtectedRunnerSlots([defaultSlot, numberedSlot, ordinarySlot], JSON.stringify({
     Runner: v2,
     'Runner-runner-2': { ...v2, runnerId: '8137cc0d-5d3f-43b8-aa32-b9304740269f', url: 'https://runner-2.example.com:3004/' },
   }))
   const assignments = fleet.map((slot) => ({ slot, token: 'fixture-token' }))
-  assert.deepEqual(extraRunnersOf(assignments), [assignments[1]])
+  assert.deepEqual(extraRunnersOf(assignments), [assignments[2]])
   const [slot] = fleet
   const script = render({ protectedProxy: slot!.protectedProxy })
   assert.match(script, /^API_VERSION=2$/m)
   assert.match(script, /^BOXLITE_PROTECTED_PROXY_LISTEN_ADDRESS=:3004$/m)
   assert.match(script, /^BOXLITE_PROTECTED_PROXY_CLIENT_DNS_NAME=api\.example\.com$/m)
   assert.doesNotMatch(script, /^ENABLE_TLS=true$/m)
+  const cloudPins = JSON.parse(protectedRunnerCloudEnvironment(fleet).BOXLITE_PROTECTED_PROXY_ENROLLMENTS!)
+  assert.deepEqual(cloudPins[0], {
+    runnerId: v2.runnerId,
+    url: v2.url,
+    caPem: v2.caPem,
+    apiVersion: 2,
+    clientCaSha256: v2.clientCaSha256,
+    clientDnsName: v2.clientDnsName,
+  })
   assert.throws(
     () => enrollProtectedRunnerSlots([defaultSlot], JSON.stringify({ Runner: { ...v2, url: protectedProxy.url } })),
     /Invalid protected Runner enrollment/,
@@ -138,6 +149,7 @@ test('GCP convergence writes only the serving host enrollment', () => {
     url: `https://runner-${index}.example.com:3004/`,
     certFile: `/etc/boxlite/slot-${index}.pem`,
     clientCaFile: '/etc/boxlite/cloud-ca.pem',
+    clientCaSha256: 'd'.repeat(64),
     clientDnsName: 'api.example.com',
   }))
   const inputs = {

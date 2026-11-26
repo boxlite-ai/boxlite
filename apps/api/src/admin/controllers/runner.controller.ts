@@ -147,8 +147,11 @@ export class AdminRunnerController {
   @HttpCode(204)
   async claimStandaloneRunnerUpdate(
     @Body('claimId', new ParseUUIDPipe({ version: '4' })) claimId: string,
+    @Body('resume') resume?: unknown,
   ): Promise<void> {
-    if (!(await this.runnerService.claimStandaloneRunnerUpdate(claimId))) {
+    if (resume !== undefined && typeof resume !== 'boolean')
+      throw new BadRequestException('Expected a boolean resume flag')
+    if (!(await this.runnerService.claimStandaloneRunnerUpdate(claimId, resume === true))) {
       throw new ConflictException('Stage does not allow a standalone Runner update')
     }
   }

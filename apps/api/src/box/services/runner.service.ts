@@ -257,13 +257,14 @@ export class RunnerService {
     return job ?? null
   }
 
-  async claimStandaloneRunnerUpdate(claimId: string): Promise<boolean> {
+  async claimStandaloneRunnerUpdate(claimId: string, resume = false): Promise<boolean> {
     const [claim] = await this.dataSource.query(
       `WITH claimed AS (
         UPDATE outbound_proxy_admission SET standalone_update = $1
-        WHERE singleton AND NOT controlled AND standalone_update IS NULL AND restore_permit IS NULL RETURNING 1
+        WHERE singleton AND NOT controlled AND restore_permit IS NULL
+          AND standalone_update IS NOT DISTINCT FROM $2::uuid RETURNING 1
       ) SELECT 1 FROM claimed`,
-      [claimId],
+      [claimId, resume ? claimId : null],
     )
     return !!claim
   }

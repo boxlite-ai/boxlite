@@ -4,7 +4,13 @@ import test from 'node:test'
 import { parseBase } from 'mstage/config'
 import { valuesOfGroup } from 'mstage/select-group'
 import { EnvError } from 'mstage/env'
-import { ApiEnvironmentError, BILLING_KEYS, STATUS_SYNC_KEYS, apiEnvironmentFrom } from '../src/api-environment.ts'
+import {
+  ApiEnvironmentError,
+  BILLING_KEYS,
+  PROTECTED_V2_CLIENT_SECRETS,
+  STATUS_SYNC_KEYS,
+  apiEnvironmentFrom,
+} from '../src/api-environment.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
 const groups = (api: string[], secret?: string[]): GroupDeclaration => ({
@@ -46,6 +52,34 @@ test('managed outbound key rings reach the API only as a pinned Secret Manager v
   for (const keyRing of [undefined, '{"address":"projects/project/secrets/proxy-keys/versions/latest"}']) {
     assert.throws(() => assemble(keyRing), /requires a pinned Secret Manager version/)
   }
+})
+
+test('enrolled V2 requires both pinned mTLS credentials in the API secret channel', () => {
+  const [certificate, key] = PROTECTED_V2_CLIENT_SECRETS
+  const names = [certificate, key]
+  const declaration = { ...groups(names, names), optional: { api: names, secret: names } }
+  const configure = (certAddress?: string, keyAddress?: string) =>
+    apiEnvironmentFrom({
+      environment: {
+        ...base,
+        [certificate]: certAddress && JSON.stringify({ address: certAddress }),
+        [key]: keyAddress && JSON.stringify({ address: keyAddress }),
+      },
+      declaration,
+      region: 'us-east1',
+      stage: 'dev',
+      home: 'gcp',
+      protectedV2: true,
+    })
+  const certAddress = 'projects/project/secrets/api-client-cert/versions/7'
+  const keyAddress = 'projects/project/secrets/api-client-key/versions/9'
+  const { environment, secrets } = configure(certAddress, keyAddress)
+  assert.equal(secrets[certificate], certAddress)
+  assert.equal(secrets[key], keyAddress)
+  assert.equal(environment[certificate], undefined)
+  assert.equal(environment[key], undefined)
+  assert.throws(() => configure(certAddress), /CLIENT_KEY_PEM requires a pinned Secret Manager version/)
+  assert.throws(() => configure(certAddress, keyAddress.replace(/9$/, 'latest')), /requires a pinned Secret Manager version/)
 })
 
 for (const home of ['aws', 'gcp'] as const) {

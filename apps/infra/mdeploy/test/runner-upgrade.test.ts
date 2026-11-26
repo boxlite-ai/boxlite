@@ -88,6 +88,33 @@ test('a host already serving the target is not restarted', () => {
   assert.ok(converges < downloads, 'a converged host must not even fetch')
 })
 
+test('an existing enrollment marker permits the exact CI artifact after removing the pin', () => {
+  const directory = mkdtempSync('/tmp/boxlite-former-enrollment-')
+  const evaluate = (input: UpgradeTarget) => {
+    const script = renderPolicyScripts(input).validate
+    const start = script.indexOf("RELEASE_DIGEST=''")
+    const end = script.indexOf('runner_executable_digest()')
+    assert.ok(start >= 0 && end > start)
+    const policy = script.slice(start, end).replace(/^RELEASE_STATE=.*$/m, 'RELEASE_STATE="$1"')
+    return spawnSync('bash', ['-c', `hostname() { echo dev-runner; }\n${policy}\nprintf '%s' "$RELEASE_DIGEST"`,
+      'former-enrollment-test', directory], { encoding: 'utf8' })
+  }
+  try {
+    const digest = 'a'.repeat(64)
+    const ci = target({ protectedRelease: { expectedDigest: digest, hosts: [], formerlyEnrolledHosts: ['dev-runner'] } })
+    assert.equal(evaluate(ci).stdout, '')
+    writeFileSync(`${directory}/enrolled`, '')
+    const approved = evaluate(ci)
+    assert.equal(approved.status, 0, approved.stderr)
+    assert.equal(approved.stdout, digest)
+    const standalone = evaluate(target())
+    assert.equal(standalone.status, 1)
+    assert.match(standalone.stderr, /controlled Runner requires the protected CI release/)
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test('a failed swap rolls back to the binary that was serving', () => {
   const payload = renderUpgradePayload(target())
   assert.match(payload, /cp -a \/usr\/local\/bin\/boxlite-runner \/usr\/local\/bin\/boxlite-runner\.bak/)

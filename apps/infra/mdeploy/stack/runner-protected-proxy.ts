@@ -3,11 +3,13 @@ import { isIP } from 'node:net'
 import { RUNNER_PORT, type RunnerSlot } from './runners.ts'
 
 export const PROTECTED_V2_PORT = 3004
+export const PROTECTED_RUNNER_STATE_DIR = '/var/lib/boxlite/protected-runner'
 export const PROTECTED_V2_LISTENER_ENV = {
   address: 'BOXLITE_PROTECTED_PROXY_LISTEN_ADDRESS',
   certFile: 'BOXLITE_PROTECTED_PROXY_CERT_FILE',
   keyFile: 'BOXLITE_PROTECTED_PROXY_KEY_FILE',
   clientCaFile: 'BOXLITE_PROTECTED_PROXY_CLIENT_CA_FILE',
+  clientCaSha256: 'BOXLITE_PROTECTED_PROXY_CLIENT_CA_SHA256',
   clientDnsName: 'BOXLITE_PROTECTED_PROXY_CLIENT_DNS_NAME',
 } as const
 
@@ -20,7 +22,7 @@ export type RunnerProtectedProxy = {
   keyFile: string
   dohUrl: string
   dohAddress: string
-} & ({ apiVersion?: 0 } | { apiVersion: 2; clientCaFile: string; clientDnsName: string })
+} & ({ apiVersion?: 0 } | { apiVersion: 2; clientCaFile: string; clientCaSha256: string; clientDnsName: string })
 
 export function enrollProtectedRunnerSlots(fleet: RunnerSlot[], raw: string | null): RunnerSlot[] {
   if (raw === null) return fleet
@@ -55,6 +57,7 @@ export function enrollProtectedRunnerSlots(fleet: RunnerSlot[], raw: string | nu
       !new X509Certificate(enrollment.caPem).ca ||
       !files.every((file) => typeof file === 'string' && /^\/[a-zA-Z0-9/_.-]+$/.test(file)) ||
       (v2 && (typeof enrollment.clientDnsName !== 'string' || !/^[a-z0-9.-]+$/.test(enrollment.clientDnsName))) ||
+      (v2 && (typeof enrollment.clientCaSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(enrollment.clientCaSha256))) ||
       !/^https:\/\/[a-zA-Z0-9.-]+(:[0-9]+)?\/[a-zA-Z0-9/_.-]+$/.test(enrollment.dohUrl) ||
       !/^[0-9.]+:[0-9]+$/.test(enrollment.dohAddress)
     ) {
@@ -87,6 +90,7 @@ export function protectedRunnerServiceEnvironment(
       [PROTECTED_V2_LISTENER_ENV.certFile]: enrollment.certFile,
       [PROTECTED_V2_LISTENER_ENV.keyFile]: enrollment.keyFile,
       [PROTECTED_V2_LISTENER_ENV.clientCaFile]: enrollment.clientCaFile,
+      [PROTECTED_V2_LISTENER_ENV.clientCaSha256]: enrollment.clientCaSha256,
       [PROTECTED_V2_LISTENER_ENV.clientDnsName]: enrollment.clientDnsName,
     }
   }
@@ -100,10 +104,20 @@ export function protectedRunnerServiceEnvironment(
 }
 
 export function protectedRunnerCloudEnvironment(fleet: readonly RunnerSlot[]): Record<string, string> {
-  const pins = fleet.flatMap(({ protectedProxy }) =>
-    protectedProxy && protectedProxy.apiVersion !== 2
-      ? [{ runnerId: protectedProxy.runnerId, url: protectedProxy.url, caPem: protectedProxy.caPem }]
-      : [],
-  )
-  return pins.length ? { BOXLITE_PROTECTED_PROXY_ENROLLMENTS: JSON.stringify(pins) } : {}
+  const pins = fleet.flatMap(({ protectedProxy }) => {
+    if (!protectedProxy) return []
+    const { runnerId, url, caPem, apiVersion } = protectedProxy
+    return [{
+      runnerId, url, caPem,
+      ...(apiVersion === 2 ? {
+        apiVersion, clientCaSha256: protectedProxy.clientCaSha256, clientDnsName: protectedProxy.clientDnsName,
+      } : {}),
+    }]
+  })
+  return pins.length
+    ? {
+        BOXLITE_PROTECTED_PROXY_ENROLLMENTS: JSON.stringify(pins),
+        ...(pins.some(({ apiVersion }) => apiVersion === 2) ? { BOXLITE_PROTECTED_PROXY_ADMISSION_CONTROLLED: 'true' } : {}),
+      }
+    : {}
 }

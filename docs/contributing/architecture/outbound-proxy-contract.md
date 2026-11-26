@@ -344,6 +344,51 @@ flowchart LR
 
 Cloud prepares the selected Box with ordinary startup skipped and no network interface configured. The enrolled Runner checks TLS, bearer authorization, and the assigned UUID before decoding the host-only request. Runtime stores the attempt and its epoch, then sends the route and effective policy to the shim on a versioned, single-use stdin record.
 
+### Protected V2 release on GCP
+
+Set `apiVersion` to `2` in `STACK_RUNNER_PROTECTED_PROXY_SLOTS` for each existing V2 slot, including the default slot when enrolled. The private endpoint uses port 3004 and requires `clientCaFile`, `clientCaSha256`, and `clientDnsName` in addition to the Runner certificate settings. Keep the existing Runner UUID and token.
+
+`mdeploy-all` reads each existing slot token from Pulumi state and verifies it against the admin inventory and Runner API before the apply. The Runner keeps its ordinary V2 queue and health reporter. Cloud Run presents the client certificate and key from the pinned `BOXLITE_PROTECTED_PROXY_CLIENT_CERT_PEM` and `BOXLITE_PROTECTED_PROXY_CLIENT_KEY_PEM` references.
+
+The private Cloud Run database job uses the existing `GCP_DEPLOYER` service account. Configure `OUTBOUND_PROXY_RELEASE_DB_ADMIN_PASSWORD` as a numeric Secret Manager reference to the existing Cloud SQL `postgres` credential in the stage project. The serving API receives the separate runtime login, whose sessions use the existing schema owner for migrations.
+
+Before revoking the former login, CI verifies that the serving revision uses the new login. It records an authenticated V2 create completion for a fresh ordinary Box in the existing test organization. Both revisions remain usable if the switch is unresolved within 120 seconds.
+
+Registry writes wait for reconnect denial and zero old sessions. Accepted V0 transitions can read retained routes and keys.
+
+CI waits for each host to report compliance for the deployed OS Config assignment revision. After the final restart, it reads each Runner's PID, process start ticks, executable SHA-256 and process UUID through IAP.
+
+CI compares the executable with the verified archive bytes. It asks the serving API revision to check the UUID through pinned mTLS and authenticated health. A second IAP sample must match.
+
+Set `OUTBOUND_PROXY_DEV_ACCEPTANCE_ORGANIZATION` to the existing dev test organization UUID. Once every dev Runner is verified, the private release job grants that organization 30 minutes to create test bindings on the exact deployed commit. A new rollout, restore, or public activation clears the test authorization.
+
+Run the protected V2 lane in `e2e-cloud` during that window. It checks rollback and real scheduling after restart using the [dev test fixture](../../../apps/e2e/README.md#protected-v2-release-acceptance). Supply the successful run ID as `protected_dev_acceptance` in `mdeploy-all` so CI can open public admission after verifying the current fleet.
+
+```mermaid
+sequenceDiagram
+    participant CI as mdeploy-all
+    participant SQL as PostgreSQL
+    participant API as Cloud Run API
+    participant Host as Runner over IAP
+    CI->>SQL: Close protected admission
+    CI->>API: Verify compatible revision serves traffic
+    CI->>SQL: Fence former login
+    CI->>Host: Sample final process and verified executable
+    CI->>API: Verify the same process over mTLS and health
+    CI->>Host: Sample the process again
+    Note over CI,SQL: dev release acceptance gates admission
+```
+
+A controlled stage retains its mode when its last V2 pin is removed. Changing or removing a pin requires all references, managed Boxes and unresolved attempts for that Runner to be settled first. CI can still update a previously enrolled host using the verified artifact, while its local enrollment marker continues to fence standalone upgrades.
+
+Standalone GCP `runner:update` prints an operation token before requesting the stage claim. After an interruption, repeat the same command with `--resume-claim <token>` while the claim is active. The claim binds the stage, assignments and verified upgrade scripts.
+
+Each batch uses a stable OS Config request ID and the assignment's ETag as a write condition. A retry observes the exact policy if OS Config already accepted it. The stage claim clears after those exact revisions finish and every target host reports compliance.
+
+For an incompatible restore, pass the enrolled Runner UUID as `restore_runner` and the desired artifact as `ref` to an applying `mdeploy-all` run. CI closes admission and checks for protected dependencies before issuing the exact permit. A retry for the same host and executable resumes the permit after interruption, and CI clears it after reading the restored live executable.
+
+### Runtime lifecycle and recovery
+
 On Linux, the Runner needs a cgroup v2 that can contain the shim and its namespace descendants. Runtime checks membership before sending credentials and keeps the attempt unresolved until it can establish that the exact child and its process tree have exited. A delayed request for a retired attempt is refused even after the Runner reopens the Box.
 
 Protected bootstrap requires automatic removal to be disabled. Runtime retains protected attempt and retirement records during restart recovery, including when the Box directory is missing.
@@ -455,9 +500,16 @@ Keep the slot's existing UUID under `runnerId`.
 GCP convergence applies the matching settings and preserves the slot token.
 Removing enrollment clears the private listener settings from that slot.
 
-The HTTPS probe returns the serving process UUID and binary identity. An
-empty operations list means the process offers the capability probe only.
-Ordinary V2 health and the job poller use the existing service configuration.
+Put `BOXLITE_PROTECTED_PROXY_CLIENT_CERT_PEM` and
+`BOXLITE_PROTECTED_PROXY_CLIENT_KEY_PEM` in the stage's `api` and `secret`
+groups as pinned Secret Manager versions. The API connects to the private
+enrollment URL and verifies its CA, hostname and Runner identity.
+
+The HTTPS capability includes the serving process UUID, executable digest and
+available operations. Cloud compares it with the process in the latest ordinary
+heartbeat and with the approved executable digest. The listener reuses the V0
+allocation and closure contracts and serves exact stop and terminated-epoch
+retirement for V2.
 
 ## Acceptance and ownership
 

@@ -33,6 +33,7 @@ import { OrganizationResourcePermission } from '../../organization/enums/organiz
 import { OrganizationService } from '../../organization/services/organization.service'
 import { OrganizationUserService } from '../../organization/services/organization-user.service'
 import { SystemRole } from '../../user/enums/system-role.enum'
+import { RunnerService } from '../services/runner.service'
 import { ProxyCredentialCipher } from './proxy-credential-cipher'
 import { proxyCreate, proxyPatch } from './proxy-registration.input'
 import { ProxyRegistryStore } from './proxy-registry.store'
@@ -196,10 +197,30 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
     const connection = db.createQueryRunner()
     const sql: Client = await connection.connect()
     try {
-      await db.query('UPDATE outbound_proxy_admission SET standalone_update = $1', [randomUUID()])
+      const runners = new RunnerService(
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        { getOrThrow: () => 1 } as never,
+        {} as never,
+        {} as never,
+        db,
+        {} as never,
+      )
+      const operation = randomUUID()
+      expect(await runners.claimStandaloneRunnerUpdate(operation, true)).toBe(false)
+      expect(await runners.claimStandaloneRunnerUpdate(operation)).toBe(true)
+      expect(await runners.claimStandaloneRunnerUpdate(operation)).toBe(false)
+      expect(await runners.claimStandaloneRunnerUpdate(operation, true)).toBe(true)
+      expect(await runners.claimStandaloneRunnerUpdate(randomUUID())).toBe(false)
+      expect(await runners.claimStandaloneRunnerUpdate(randomUUID(), true)).toBe(false)
       await expect(beginProtectedRelease(sql, release)).rejects.toThrow('active update')
-      await db.query('UPDATE outbound_proxy_admission SET standalone_update = NULL')
+      expect(await runners.finishStandaloneRunnerUpdate(randomUUID())).toBe(false)
+      expect(await runners.finishStandaloneRunnerUpdate(operation)).toBe(true)
+      expect(await runners.claimStandaloneRunnerUpdate(operation, true)).toBe(false)
       await beginProtectedRelease(sql, release)
+      expect(await runners.claimStandaloneRunnerUpdate(operation)).toBe(false)
       await db.query('UPDATE box SET "outboundControl" = $2 WHERE id = $1', [
         owner.boxId,
         JSON.stringify({ managed: { runnerId: id, binding: null } }),

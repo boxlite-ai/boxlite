@@ -59,6 +59,10 @@ const flag = (environment: Environment, key: string): boolean => {
 const held = (delivered: Record<string, string>, key: string): boolean => (delivered[key]?.trim() ?? '') !== ''
 
 const CI_SECRET_KEYS = ['CI_GITHUB_APP_PRIVATE_KEY', 'CI_GITHUB_WEBHOOK_SECRET', 'CI_SECRET_ENCRYPTION_KEY']
+export const PROTECTED_V2_CLIENT_SECRETS = [
+  'BOXLITE_PROTECTED_PROXY_CLIENT_CERT_PEM',
+  'BOXLITE_PROTECTED_PROXY_CLIENT_KEY_PEM',
+] as const
 
 /** CI is optional; once selected, every credential must use the workload secret channel. */
 const validateCiChannels = (values: Record<string, string>, addresses: Record<string, string>): void => {
@@ -335,12 +339,14 @@ export const apiEnvironmentFrom = ({
   region,
   stage,
   home,
+  protectedV2 = false,
 }: {
   environment: Environment
   declaration: GroupDeclaration
   region: string
   stage: string
   home: Cloud
+  protectedV2?: boolean
 }): { environment: Record<string, string>; secrets: Record<string, string> } => {
   const domain = optional(environment, 'STACK_DOMAIN')
   if (!domain) throw new ApiEnvironmentError('STACK_DOMAIN is required — every URL the API composes starts with it')
@@ -370,6 +376,13 @@ export const apiEnvironmentFrom = ({
     (home !== 'gcp' || !/\/versions\/[1-9][0-9]*$/.test(addresses[keyRing] ?? ''))
   ) {
     throw new ApiEnvironmentError(`${keyRing} requires a pinned Secret Manager version`)
+  }
+  if (protectedV2 || PROTECTED_V2_CLIENT_SECRETS.some((key) => key in delivered)) {
+    for (const key of PROTECTED_V2_CLIENT_SECRETS) {
+      if (home !== 'gcp' || !/\/versions\/[1-9][0-9]*$/.test(addresses[key] ?? '')) {
+        throw new ApiEnvironmentError(`${key} requires a pinned Secret Manager version`)
+      }
+    }
   }
   validateCiChannels(values, addresses)
 

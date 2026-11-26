@@ -177,6 +177,11 @@ on:
         required: false
   workflow_dispatch:
     inputs:
+      protected_v2_acceptance:
+        description: Verify protected V2 abnormal exit recovery and final-restart placement on dev
+        required: false
+        type: boolean
+        default: false
       tag:
         description: 'Release client tag, e.g. v0.13.1 (blank = build from source)'
         required: false
@@ -252,7 +257,7 @@ jobs:
   # Both call and dispatch remain deliberate runs by repository writers.
   e2e:
     name: E2E suite (${{ inputs.stage || 'dev' }})
-    if: ${{ contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
+    if: ${{ !inputs.protected_v2_acceptance && contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -539,3 +544,82 @@ jobs:
             pytest-identities.xml
             pytest-catalog.xml
           if-no-files-found: ignore
+
+  protected-v2-dev:
+    name: Verify protected V2 dev release
+    if: ${{ inputs.protected_v2_acceptance && inputs.stage == 'dev' }}
+    runs-on: [self-hosted, linux, boxlite-protected-dev]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build acceptance Python SDK
+        run: |
+          set -euo pipefail
+          umask 077
+          run_dir="$RUNNER_TEMP/protected-v2-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf 'PROTECTED_RUN_DIR=%s\n' "$run_dir" >> "$GITHUB_ENV"
+          mkdir -p "$run_dir"
+          make test:e2e:deps test:e2e:build:python E2E_PYTHON="$run_dir/venv/bin/python"
+
+      - name: Inject dev faults and verify exact recovery
+        env:
+          CONFIG: ${{ secrets.BOXLITE_DEV_PROTECTED_OUTBOUND_CONFIG }}
+          BOXLITE_E2E_API_URL: ${{ vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai' }}
+          BOXLITE_E2E_API_KEY: ${{ secrets.BOXLITE_DEV_P2_API_KEY }}
+          BOXLITE_E2E_MANAGED_INVENTORY_TOKEN: ${{ secrets.BOXLITE_E2E_MANAGED_INVENTORY_TOKEN }}
+          BOXLITE_E2E_MANAGED_RUNNER_KEY: ${{ secrets.BOXLITE_E2E_MANAGED_RUNNER_KEY }}
+          BOXLITE_E2E_REPLACEMENT_INVENTORY_TOKEN: ${{ secrets.BOXLITE_E2E_REPLACEMENT_INVENTORY_TOKEN }}
+          BOXLITE_E2E_REPLACEMENT_RUNNER_KEY: ${{ secrets.BOXLITE_E2E_REPLACEMENT_RUNNER_KEY }}
+          API_OVERRIDE: ${{ inputs.api_url }}
+        run: |
+          set -euo pipefail
+          test "$STAGE" = dev && test -z "$API_OVERRIDE" && test -z "$RELEASE_TAG"
+          test -n "$CONFIG" && test -n "$BOXLITE_E2E_API_KEY"
+          umask 077
+          config="$PROTECTED_RUN_DIR/lab.json"
+          printf '%s' "$CONFIG" > "$config"
+          trap 'rm -f "$config"' EXIT
+          unset BOXLITE_E2E_PREFIX CONFIG
+          export PATH="$PROTECTED_RUN_DIR/venv/bin:$PATH"
+          export BOXLITE_E2E_DISCOVER_PREFIX=1
+          service="$(python3 - "$config" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          setting = json.loads(Path(sys.argv[1]).read_text())
+          controller = Path(setting['deployment']['controller'])
+          if not controller.is_absolute() or not controller.is_file() or not os.access(controller, os.X_OK):
+              sys.exit('The dev acceptance runner needs an executable deployment controller')
+          print(setting['postgres_service'])
+          PY
+          )"
+          if ! PGSERVICE="$service" PGCONNECT_TIMEOUT=5 PGOPTIONS='-c default_transaction_read_only=on' \
+            psql -XAtqw -c 'SELECT 1' >/dev/null 2>&1; then
+            echo 'The dev acceptance runner needs its read-only PostgreSQL service'
+            exit 1
+          fi
+          export BOXLITE_PROTECTED_V2_ACCEPTANCE_COMMIT="$(git rev-parse HEAD)"
+          export BOXLITE_PROTECTED_V2_ACCEPTANCE_OUTPUT="$PROTECTED_RUN_DIR/protected-v2-dev-acceptance.json"
+          rm -f "$BOXLITE_PROTECTED_V2_ACCEPTANCE_OUTPUT"
+          make test:rest:e2e AUTH=api-key PYTEST_FILTER="-k protected_v2_release_acceptance --managed-outbound-config=\"$config\""
+          test -s "$BOXLITE_PROTECTED_V2_ACCEPTANCE_OUTPUT"
+
+      - name: Publish protected V2 dev evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: protected-v2-dev-acceptance
+          path: ${{ env.PROTECTED_RUN_DIR }}/protected-v2-dev-acceptance.json
+          if-no-files-found: error
+
+      - name: Clean the acceptance workspace
+        if: always()
+        run: |
+          if [ -n "${PROTECTED_RUN_DIR:-}" ]; then rm -rf -- "$PROTECTED_RUN_DIR"; fi
