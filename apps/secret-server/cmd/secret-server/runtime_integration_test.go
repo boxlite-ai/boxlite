@@ -147,6 +147,7 @@ func TestFetchRuntimeRequiresGCPRunnerRegistry(t *testing.T) {
 
 			for _, tc := range []struct{ name, registry string }{
 				{"unset", ""}, {"empty", ""}, {"whitespace", " \t\n"},
+				{"null registry", `null`}, {"null mode registry", `{"gcp_iit":null}`},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					t.Setenv("SECRET_SERVER_RUNNER_REGISTRY", tc.registry)
