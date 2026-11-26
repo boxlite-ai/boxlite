@@ -92,8 +92,7 @@ describe('CommerceBoxLimitService', () => {
     const { service, redis } = makeService()
     const resolving = service.resolveMaxCreatedBoxes('org/with space')
 
-    await Promise.resolve()
-    await Promise.resolve()
+    await new Promise(setImmediate)
     expect(get).toHaveBeenCalledTimes(2)
     expect(get).toHaveBeenNthCalledWith(
       1,

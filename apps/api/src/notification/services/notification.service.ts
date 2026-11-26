@@ -29,6 +29,7 @@ import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { OrganizationUserRemovedEvent } from '../../organization/events/organization-user-removed.event'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 @Injectable()
 export class NotificationService {
@@ -48,10 +49,21 @@ export class NotificationService {
   }
 
   @OnEvent(BoxEvents.STATE_UPDATED)
+  @WithInstrumentation('box.state_notification')
   async handleBoxStateUpdated(event: BoxStateUpdatedEvent) {
-    const dto = await this.boxService.toBoxDto(event.box)
+    const dto = await this.toBoxDto(event.box)
     this.notificationEmitter.emitBoxStateUpdated(dto, event.oldState, event.newState)
-    this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
+    this.publishBoxStateUpdated(event)
+  }
+
+  @WithInstrumentation('box.state_notification_dto')
+  private async toBoxDto(box: BoxStateUpdatedEvent['box']) {
+    return this.boxService.toBoxDto(box)
+  }
+
+  @WithInstrumentation('box.state_notification_publish')
+  private async publishBoxStateUpdated(event: BoxStateUpdatedEvent): Promise<number> {
+    return this.redis.publish(BOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
   @OnEvent(BoxEvents.DESIRED_STATE_UPDATED)

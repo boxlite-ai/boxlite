@@ -5,6 +5,7 @@ import type { FilestoreInstanceConfig } from '../../config/filestore-instances'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { ServiceUnavailableException } from '@nestjs/common'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 export interface ResolvedFilestoreInstance {
   server: string
@@ -83,6 +84,7 @@ export class FilestoreInstanceResolver {
     return value
   }
 
+  @WithInstrumentation('filestore.lookup')
   private async lookup(
     resourceName: string,
     source: FilestoreLookupSource,

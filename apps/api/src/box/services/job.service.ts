@@ -18,6 +18,7 @@ import { JobStateHandlerService } from './job-state-handler.service'
 import { propagation, context as otelContext } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import { runnerJobQueueKey } from '../constants/runner-job-queue'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
@@ -40,6 +41,7 @@ export class JobService {
    * With null, insertion commits before this method notifies the runner.
    * @template T The JobType enum value - ensures compile-time type safety for resourceType and payload
    */
+  @WithInstrumentation('box.job_create')
   async createJob<T extends JobType>(
     manager: EntityManager | null,
     type: T,
@@ -107,6 +109,7 @@ export class JobService {
   }
 
   /** Best-effort wake-up for a committed job; polling recovers missed notifications. */
+  @WithInstrumentation('box.job_notify')
   async notifyRunner(runnerId: string, jobId: string): Promise<void> {
     try {
       await this.redis.lpush(runnerJobQueueKey(runnerId), jobId)
@@ -235,6 +238,7 @@ export class JobService {
     return claimedJobs
   }
 
+  @WithInstrumentation('box.job_status_update')
   async updateJobStatus(
     jobId: string,
     status: JobStatus,

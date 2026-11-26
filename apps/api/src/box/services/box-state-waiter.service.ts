@@ -13,6 +13,8 @@ import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-tim
 import { BoxState } from '../enums/box-state.enum'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxService } from './box.service'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
+import { context } from '@opentelemetry/api'
 
 @Injectable()
 export class BoxStateWaiterService implements OnModuleDestroy {
@@ -30,6 +32,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     if (this.redisSubscriber) await this.redisSubscriber.quit()
   }
 
+  @WithInstrumentation('box.state_subscription')
   private ensureSubscribed(): Promise<void> {
     if (this.subscription) return this.subscription
     this.redisSubscriber = this.redis.duplicate()
@@ -60,6 +63,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     return this.waitForState(boxId, organizationId, BoxState.STOPPED, timeoutSeconds)
   }
 
+  @WithInstrumentation('box.state_wait')
   private async waitForState(
     boxId: string,
     organizationId: string,
@@ -67,10 +71,11 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     timeoutSeconds: number,
   ): Promise<BoxDto> {
     const current = await this.boxService.findOneByIdOrName(boxId, organizationId)
-    if (current.state === targetState) return this.boxService.toBoxDto(current)
+    if (current.state === targetState) return this.toBoxDto(current)
     await this.ensureSubscribed()
     this.assertNotFailed(current.id, current.state, current.errorReason)
 
+    const waitContext = context.active()
     return new Promise<BoxDto>((resolve, reject) => {
       let finished = false
       let timeout: NodeJS.Timeout
@@ -86,7 +91,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
         finished = true
         cleanup()
         try {
-          resolve(await this.boxService.toBoxDto(eventBox))
+          resolve(await context.with(waitContext, () => this.toBoxDto(eventBox)))
         } catch (error) {
           reject(error)
         }
@@ -127,9 +132,17 @@ export class BoxStateWaiterService implements OnModuleDestroy {
         // `.catch` as well as `.then`: this is the last thing that can settle
         // the wait, so anything that escapes here leaves the caller's request
         // hanging until it gives up rather than failing it.
-        void this.timedOut(boxId, organizationId, targetState).then(fail).catch(fail)
+        void context
+          .with(waitContext, () => this.timedOut(boxId, organizationId, targetState))
+          .then(fail)
+          .catch(fail)
       }, timeoutSeconds * 1000)
     })
+  }
+
+  @WithInstrumentation('box.state_wait_dto')
+  private async toBoxDto(box: BoxStateUpdatedEvent['box']): Promise<BoxDto> {
+    return this.boxService.toBoxDto(box)
   }
 
   /**
@@ -153,7 +166,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
     const message = `Timed out waiting for box ${boxId} to reach ${targetState}`
     try {
       const box = await this.boxService.findOneByIdOrName(boxId, organizationId)
-      const { progress } = await this.boxService.toBoxDto(box)
+      const { progress } = await this.toBoxDto(box)
       if (progress) {
         return new BoxPreparingImageTimeoutError(message, progress, boxId)
       }

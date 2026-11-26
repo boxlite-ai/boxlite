@@ -21,6 +21,7 @@ import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constant
 import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
 import { CheckpointJobReceiver, isCheckpointJobType } from './checkpoint-job-receiver.service'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 /**
  * Service for handling entity state updates based on job completion (v2 runners only).
@@ -95,6 +96,7 @@ export class JobStateHandlerService {
     }
   }
 
+  @WithInstrumentation('box.create_job_completion')
   private async handleCreateBoxJobCompletion(job: Job): Promise<void> {
     const boxId = job.resourceId
     if (!boxId) return
@@ -133,7 +135,7 @@ export class JobStateHandlerService {
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.updateCreateBoxJob(boxId, updateData, box)
       // Warm-pool top-up creates stock no one requested; the claim records
       // that box's box.create pair instead (BoxService.assignWarmPoolBox).
       if (box.organizationId !== BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
@@ -142,6 +144,11 @@ export class JobStateHandlerService {
     } catch (error) {
       this.logger.error(`Error handling CREATE_BOX job completion for box ${boxId}:`, error)
     }
+  }
+
+  @WithInstrumentation('box.create_job_completion_update')
+  private async updateCreateBoxJob(boxId: string, updateData: Partial<Box>, box: Box): Promise<void> {
+    await this.boxRepository.update(boxId, { updateData, entity: box })
   }
 
   private async handleStartBoxJobCompletion(job: Job): Promise<void> {

@@ -34,6 +34,7 @@ import { setTimeout as sleep } from 'timers/promises'
 import { isVolumeStorageConfigured } from '../stores/volume-bucket.store'
 import { Context } from '../../common/context/context'
 import { mutationFailureType, recordOutcomes } from '../../common/utils/business-event.util'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 // Shape Postgres accepts for a `uuid` column. Used to keep plain names out of
 // an id predicate, not to validate ids - the database is the authority.
@@ -261,6 +262,7 @@ export class VolumeService {
    * need only the id derive it from the entity; the entity also carries the
    * filestore instance a box's mount dispatch must hand the runner.
    */
+  @WithInstrumentation('volume.validate')
   async validateVolumes(organizationId: string, volumeIdOrNames: string[]): Promise<Map<string, Volume>> {
     if (!volumeIdOrNames.length) {
       return new Map()

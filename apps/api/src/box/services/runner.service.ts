@@ -49,6 +49,14 @@ import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 /** Disk usage at or above this percentage is logged as critical pressure. */
 const RUNNER_DISK_CRITICAL_THRESHOLD = 90
 
+export class GetRunnerParams {
+  regions?: string[]
+  boxClass?: BoxClass
+  excludedRunnerIds?: string[]
+  availabilityScoreThreshold?: number
+  requiresPrivileged?: boolean
+}
+
 @Injectable()
 export class RunnerService {
   private readonly logger = new Logger(RunnerService.name)
@@ -196,6 +204,7 @@ export class RunnerService {
     })
   }
 
+  @WithInstrumentation('box.runner_lookup')
   async findOne(id: string): Promise<Runner | null> {
     return this.runnerRepository.findOne({
       where: { id },
@@ -839,6 +848,7 @@ export class RunnerService {
     return runner
   }
 
+  @WithInstrumentation('box.runner_select')
   async getRandomAvailableRunner(params: GetRunnerParams): Promise<Runner> {
     const availableRunners = await this.findAvailableRunners(params)
 
@@ -1041,14 +1051,6 @@ export class RunnerService {
  * condition, and must not re-spell the string to recognise it.
  */
 export const NO_AVAILABLE_RUNNERS = 'No available runners'
-
-export class GetRunnerParams {
-  regions?: string[]
-  boxClass?: BoxClass
-  excludedRunnerIds?: string[]
-  availabilityScoreThreshold?: number
-  requiresPrivileged?: boolean
-}
 
 interface AvailabilityScoreParams {
   cpuLoadAverage: number

@@ -53,6 +53,7 @@ import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
 import { BoxPageQuery } from './dto/box-page-query.dto'
+import { WithInstrumentation } from '../common/decorators/otel.decorator'
 
 const CHECKPOINT_BOX_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
@@ -127,6 +128,7 @@ export class BoxliteBoxController {
       }),
     },
   })
+  @WithInstrumentation('box.create_http')
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto: CreateBoxDto,

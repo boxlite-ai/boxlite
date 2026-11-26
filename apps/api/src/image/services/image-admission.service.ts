@@ -22,6 +22,7 @@ import {
   parseImageRef,
 } from '../utils/image-ref.util'
 import { ResolvedImage } from './image-resolver.service'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 /** Cold pulls one organization may start per window, unless an operator sets another. */
 const COLD_PULL_LIMIT_ENV = 'BOXLITE_IMAGE_COLD_PULL_LIMIT'
@@ -96,6 +97,7 @@ export class ImageAdmissionService {
     }
   }
 
+  @WithInstrumentation('image.admission')
   async assert(organization: Organization, image: string | undefined): Promise<void> {
     if (isCuratedSelector(image)) {
       return
