@@ -1,0 +1,686 @@
+---
+name: BoxLite Linux x64 workload qualification
+'on':
+  push:
+    branches:
+    - ci/boxlite-runner-trials-2833
+    paths:
+    - ".github/workflows/runner-x64-workloads.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  rust:
+    name: rust (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+        - os: ubuntu-latest
+          target: linux-x64-gnu
+          rust_target: x86_64-unknown-linux-gnu
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+        persist-credentials: false
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+    - uses: "./.github/actions/setup-python"
+    - name: Install system dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y jq libseccomp-dev protobuf-compiler
+        util-linux
+    - name: Verify unprivileged user namespaces (Linux)
+      if: runner.os == 'Linux'
+      run: if [ "$(id -u)" -eq 0 ]; then sudo -u nobody unshare --user --map-root-user
+        --mount --propagation private true; else unshare --user --map-root-user --mount
+        --propagation private true; fi
+    - name: Install system dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install protobuf
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+    - name: Check out vendored libkrun
+      run: git submodule update --init --depth 1 -- src/deps/libkrun-sys/vendor/libkrun
+    - name: Run Rust unit tests with coverage
+      env:
+        BOXLITE_DEPS_STUB: '1'
+      run: make coverage:lcov NEXTEST_PROFILE=ci
+    - name: Restore the VMM boot kernel
+      id: vmm-kernel
+      if: matrix.platform.target == 'linux-x64-gnu'
+      uses: actions/cache@v4
+      with:
+        path: target/vmm/boot/x86_64
+        key: vmm-kernel-${{ hashFiles('src/vmm/boot/kernel.lock', 'src/vmm/boot/kernel.config',
+          'scripts/build/build-vmm-boot.sh') }}
+    - name: Build the VMM boot kernel
+      if: matrix.platform.target == 'linux-x64-gnu' && steps.vmm-kernel.outputs.cache-hit
+        != 'true'
+      timeout-minutes: 20
+      run: |
+        sudo apt-get install -y build-essential bc bison flex curl xz-utils libelf-dev \
+          gcc-x86-64-linux-gnu binutils-x86-64-linux-gnu
+        make vmm:boot:host
+    - name: Enable KVM access for native hypervisor tests
+      if: matrix.platform.target == 'linux-x64-gnu'
+      run: sudo chmod a+rw /dev/kvm
+    - name: Run KVM hardware tests with coverage
+      if: matrix.platform.target == 'linux-x64-gnu'
+      timeout-minutes: 5
+      run: make coverage:vmm:kvm
+    - name: Prepare real-guest test toolchain
+      if: matrix.platform.target == 'linux-x64-gnu'
+      run: |
+        sudo apt-get install -y musl-tools gperf
+        rustup target add x86_64-unknown-linux-musl
+    - name: Run real-kernel boot tests with coverage
+      if: matrix.platform.target == 'linux-x64-gnu'
+      timeout-minutes: 5
+      env:
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: x86_64-linux-musl-gcc
+        CC_x86_64_unknown_linux_musl: x86_64-linux-musl-gcc
+      run: make coverage:vmm:boot
+    - uses: actions/setup-node@v4
+      if: matrix.platform.target == 'linux-x64-gnu'
+      with:
+        node-version: '22'
+    - uses: "./.github/actions/setup-go"
+      if: matrix.platform.target == 'linux-x64-gnu'
+    - name: Measure native bindings through SDK callers
+      if: matrix.platform.target == 'linux-x64-gnu'
+      env:
+        BOXLITE_DEPS_STUB: '1'
+      run: make coverage:bindings:external
+    - name: Measure file-copy workflows with a real guest
+      if: matrix.platform.target == 'linux-x64-gnu'
+      timeout-minutes: 20
+      run: |
+        make setup:submodules
+        make setup:build
+        make coverage:copy:vm
+    - name: Run OpenAPI reference-server unit tests
+      run: make test:unit:openapi
+    - name: Run guest mount tests
+      if: runner.os == 'Linux'
+      run: make test:guest-perms
+    - name: Verify coverage files for Upload coverage to Codecov
+      working-directory: "."
+      shell: bash
+      run: test -s target/coverage/lcov.info
+    - name: Verify coverage files for Upload external native binding coverage
+      if: matrix.platform.target == 'linux-x64-gnu'
+      working-directory: "."
+      shell: bash
+      run: |-
+        test -s target/coverage/native-sdk/lcov.info
+        test -s target/coverage/native-sdk/go-lcov.info
+        test -s target/coverage/python/coverage.xml
+        test -s target/coverage/go-checkpoint-native.out
+    timeout-minutes: 100
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+  dashboard:
+    name: dashboard (linux-x64-gnu)
+    runs-on: boxlite-2vcpu-8gbmem-30gbdisk
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        persist-credentials: false
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native Node build dependencies
+      run: sudo apt-get install -y --no-install-recommends build-essential python3
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Enable Corepack
+      run: corepack enable
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: yarn
+        cache-dependency-path: apps/yarn.lock
+    - name: Install app dependencies
+      run: yarn install --immutable
+    - name: Run dashboard unit tests
+      run: yarn nx run dashboard:test --coverage --skip-nx-cache
+    - name: Verify coverage files for Upload dashboard coverage to Codecov
+      working-directory: "."
+      shell: bash
+      run: test -s target/coverage/dashboard/lcov.info
+    timeout-minutes: 100
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+  api:
+    name: api (linux-x64-gnu)
+    runs-on: boxlite-2vcpu-8gbmem-30gbdisk
+    services:
+      redis:
+        image: redis:7
+        ports:
+        - 6379:6379
+        options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s
+          --health-retries=5
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: boxlite
+        ports:
+        - 5432:5432
+        options: --health-cmd "pg_isready -U postgres" --health-interval 10s --health-timeout
+          5s --health-retries 5
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+      REDIS_HOST: localhost
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: boxlite
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+        persist-credentials: false
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: "./.github/actions/setup-go"
+      with:
+        cache: 'false'
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Enable Corepack
+      run: corepack enable
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: yarn
+        cache-dependency-path: apps/yarn.lock
+    - name: Install app dependencies
+      run: yarn install --immutable
+    - name: Run API unit tests
+      run: yarn nx run api:test --coverage --skip-nx-cache
+    - name: Run shared and standalone CI Listener tests
+      working-directory: "."
+      run: make coverage:ci-listener coverage:github-ci-runner
+    - name: Verify coverage files for Upload API coverage to Codecov
+      working-directory: "."
+      shell: bash
+      run: |-
+        test -s target/coverage/api/lcov.info
+        test -s target/coverage/ci-listener/lcov.info
+        test -s target/coverage/github-ci-runner/lcov.info
+    needs: dashboard
+    if: "${{ !cancelled() }}"
+    timeout-minutes: 100
+  go:
+    name: go (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+        - os: ubuntu-latest
+          target: linux-x64-gnu
+          rust_target: x86_64-unknown-linux-gnu
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+        persist-credentials: false
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: "./.github/actions/setup-go"
+    - name: Check out native dependency workspaces
+      run: make setup:submodules
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+        cache-workspaces: |
+          . -> target
+          src/deps/libkrun-sys/vendor/libkrun -> target
+        cache-workspace-crates: 'true'
+    - name: Install build dependencies
+      run: make setup:build
+    - uses: "./.github/actions/sccache"
+    - name: Run Go SDK, networking and app tests with coverage
+      run: make coverage:go
+    - name: Qualify nested runtime metadata with KVM coverage
+      id: nested-runtime-coverage
+      if: matrix.platform.target == 'linux-x64-gnu'
+      timeout-minutes: 5
+      env:
+        BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS: '1'
+      run: |
+        mkdir -p target/coverage/full-go
+        for module in go-sdk gvproxy runner image-service secret-server; do
+          cp "target/coverage/$module.out" "target/coverage/full-go/$module.out"
+        done
+        sudo chmod a+rw /dev/kvm
+        make _ensure-kvm
+        make coverage:go GOTEST_FILTER='-count=1 -run NestedVirtualization'
+        # Both passes instrument this checkout with the same atomic mode.
+        # Keep the complete suite's blocks as well as the hardware pass.
+        for module in go-sdk gvproxy runner image-service secret-server; do
+          report="target/coverage/$module.out"
+          full="target/coverage/full-go/$module.out"
+          if [[ "$(head -n 1 "$report")" != 'mode: atomic' || "$(head -n 1 "$full")" != 'mode: atomic' ]]; then
+            echo "Expected atomic coverage profiles for $module" >&2
+            exit 1
+          fi
+          tail -n +2 "$full" >> "$report"
+        done
+    - name: Run Go vet
+      if: matrix.platform.target == 'linux-x64-gnu'
+      run: make lint:go
+    - name: golangci-lint
+      if: matrix.platform.target == 'linux-x64-gnu'
+      uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84
+      with:
+        working-directory: sdks/go
+        args: "--timeout=5m --build-tags boxlite_dev"
+    - name: Verify coverage files for Upload Go coverage to Codecov
+      working-directory: "."
+      shell: bash
+      run: |-
+        test -s target/coverage/go-sdk.out
+        test -s target/coverage/gvproxy.out
+        test -s target/coverage/runner.out
+        test -s target/coverage/image-service.out
+        test -s target/coverage/secret-server.out
+    needs: rust
+    if: "${{ !cancelled() }}"
+    timeout-minutes: 100
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+  rest:
+    name: rest (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 45
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+        persist-credentials: false
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: "./.github/actions/setup-go"
+      with:
+        cache: 'false'
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
+    - name: Verify unprivileged user namespaces
+      run: if [ "$(id -u)" -eq 0 ]; then sudo -u nobody unshare --user --map-root-user
+        --mount --propagation private true; else unshare --user --map-root-user --mount
+        --propagation private true; fi
+    - name: Enable KVM access for the runtime warm-up
+      run: sudo chmod a+rw /dev/kvm
+    - name: Prepare runtime dependencies
+      run: |
+        make setup:submodules
+        make setup:build
+    - name: Run volume REST lifecycle E2E
+      timeout-minutes: 20
+      run: make test:e2e:serve:volume
+    needs: go
+    if: "${{ !cancelled() }}"
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+  nix:
+    name: nix (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    timeout-minutes: 90
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        submodules: recursive
+        persist-credentials: false
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702
+    - uses: "./.github/actions/sccache"
+    - name: Check the flake
+      run: nix flake check
+    - name: Build the CLI in the dev shell
+      run: |
+        export CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_HOME="$RUNNER_TEMP/rustup"
+        if [ -n "${RUSTC_WRAPPER:-}" ]; then
+          RUSTC_WRAPPER="$(command -v "$RUSTC_WRAPPER")"
+          export RUSTC_WRAPPER
+        fi
+        nix develop --ignore-environment --keep HOME --keep USER \
+          --keep CARGO_HOME --keep RUSTUP_HOME --keep RUSTC_WRAPPER \
+          --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
+          -c make cli
+    - name: Enable KVM and unprivileged user namespaces
+      run: |
+        sudo chmod a+rw /dev/kvm
+        if [ "$(id -u)" -eq 0 ]; then sudo -u nobody unshare --user --map-root-user --mount --propagation private true; else unshare --user --map-root-user --mount --propagation private true; fi
+    - name: Boot a box
+      timeout-minutes: 10
+      run: "./target/debug/boxlite run --rm alpine:latest echo ok"
+    needs: rest
+    if: "${{ !cancelled() }}"
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+  c-archive:
+    name: c-archive (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: ubuntu-latest
+          target: linux-x64-gnu
+          rust_target: x86_64-unknown-linux-gnu
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+        submodules: recursive
+        persist-credentials: false
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+        cache: "${{ runner.os != 'Linux' }}"
+    - uses: "./.github/actions/sccache"
+    - uses: "./.github/actions/build-guest"
+      if: runner.os == 'Linux'
+    - name: Build C SDK (Linux)
+      if: runner.os == 'Linux'
+      uses: "./.github/actions/run-in-manylinux"
+      with:
+        target: "${{ matrix.target }}"
+        script: |
+          # Build the C FFI library (static + shared)
+          cargo build --release -p boxlite-c
+
+          # Fix Go runtime symbol conflicts in the static library
+          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+    - name: Build C SDK (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        make setup:build runtime
+
+        # Build the C FFI library (static + shared)
+        cargo build --release -p boxlite-c
+
+        # Fix Go runtime symbol conflicts in the static library
+        bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+
+        command -v sccache &>/dev/null && sccache --show-stats || true
+    - name: Package C SDK archive
+      run: |
+        VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        ARCHIVE_DIR="boxlite-c-v${VERSION}-${{ matrix.target }}"
+
+        mkdir -p "${ARCHIVE_DIR}/lib" "${ARCHIVE_DIR}/include"
+        cp target/release/libboxlite.a "${ARCHIVE_DIR}/lib/"
+        cp sdks/c/include/boxlite.h "${ARCHIVE_DIR}/include/"
+
+        # Copy shared library (platform-specific extension)
+        if [ -f target/release/libboxlite.dylib ]; then
+          cp target/release/libboxlite.dylib "${ARCHIVE_DIR}/lib/"
+        elif [ -f target/release/libboxlite.so ]; then
+          cp target/release/libboxlite.so "${ARCHIVE_DIR}/lib/"
+        fi
+
+        tar czf "${ARCHIVE_DIR}.tar.gz" "${ARCHIVE_DIR}/"
+        rm -rf "${ARCHIVE_DIR}"
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: c-sdk-${{ matrix.target }}
+        path: boxlite-c-v*-${{ matrix.target }}.tar.gz
+        if-no-files-found: error
+        retention-days: 1
+    needs: api
+    if: "${{ !cancelled() }}"
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+  node-package:
+    name: node-package (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: ubuntu-latest
+          target: linux-x64-gnu
+          rust_target: x86_64-unknown-linux-gnu
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+        persist-credentials: false
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+        cache: "${{ runner.os != 'Linux' }}"
+    - uses: "./.github/actions/sccache"
+    - uses: "./.github/actions/build-guest"
+      if: runner.os == 'Linux'
+    - name: Build Node.js package (Linux)
+      if: runner.os == 'Linux'
+      uses: "./.github/actions/run-in-manylinux"
+      with:
+        target: "${{ matrix.target }}"
+        script: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cd sdks/node
+          npm install --silent
+          npm run build:native -- --release
+          npm run artifacts
+    - name: Build Node.js package (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        make setup:build runtime
+
+        # Build Node.js artifacts (no pack - CI uploads raw artifacts)
+        cd sdks/node
+        npm install --silent
+        npm run build:native -- --release
+        npm run artifacts
+
+        command -v sccache &>/dev/null && sccache --show-stats || true
+    - name: Create artifact tarball
+      run: tar -cvf sdks/node/artifacts-${{ matrix.target }}.tar -C sdks/node native/boxlite.js
+        npm/
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: artifacts-${{ matrix.target }}
+        path: sdks/node/artifacts-${{ matrix.target }}.tar
+        if-no-files-found: error
+        retention-days: 1
+    needs: c-archive
+    if: "${{ !cancelled() }}"
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+  runtime-archive:
+    name: runtime-archive (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: ubuntu-latest
+          target: linux-x64-gnu
+          rust_target: x86_64-unknown-linux-gnu
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+        persist-credentials: false
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+        cache: "${{ runner.os != 'Linux' }}"
+    - uses: "./.github/actions/sccache"
+      with:
+        tolerate-failure: "${{ github.event_name != 'schedule' }}"
+    - uses: "./.github/actions/build-guest"
+      if: runner.os == 'Linux'
+      with:
+        show-sccache-stats: "${{ github.event_name == 'schedule' }}"
+    - name: Build and package runtime (Linux)
+      if: runner.os == 'Linux'
+      uses: "./.github/actions/run-in-manylinux"
+      with:
+        target: "${{ matrix.target }}"
+        script: 'bash scripts/build/package-runtime.sh "$BOXLITE_CI_TARGET"
+
+'
+    - name: Build and package runtime (macOS)
+      if: runner.os == 'macOS'
+      env:
+        BOXLITE_CI_TARGET: "${{ matrix.target }}"
+      run: |
+        make setup:build runtime
+        bash scripts/build/package-runtime.sh "$BOXLITE_CI_TARGET"
+        command -v sccache &>/dev/null && sccache --show-stats || true
+    - name: Upload runtime artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: runtime-${{ matrix.target }}
+        path: boxlite-runtime-v*-${{ matrix.target }}.tar.gz
+        retention-days: 1
+        if-no-files-found: error
+    - name: Package CLI binary
+      run: |
+        VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+        CLI_BIN="target/release/boxlite"
+        [ -f "$CLI_BIN" ] || { echo "ERROR: CLI binary not found at $CLI_BIN"; exit 1; }
+        tar czf "boxlite-cli-v${VERSION}-${{ matrix.rust_target }}.tar.gz" -C target/release boxlite
+    - name: Upload CLI artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: cli-${{ matrix.target }}
+        path: boxlite-cli-v*-${{ matrix.rust_target }}.tar.gz
+        retention-days: 1
+        if-no-files-found: error
+    needs: node-package
+    if: "${{ !cancelled() }}"
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+      SKIP_INSTALL_NODEJS: '1'
+  wheels:
+    name: wheels (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: ubuntu-latest
+          target: linux-x64-gnu
+          rust_target: x86_64-unknown-linux-gnu
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        submodules: recursive
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+        persist-credentials: false
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+        cache: "${{ runner.os != 'Linux' }}"
+    - uses: "./.github/actions/sccache"
+    - uses: "./.github/actions/build-guest"
+      if: runner.os == 'Linux'
+    - name: Build wheels
+      uses: pypa/cibuildwheel@v3.2.0
+      env:
+        CIBW_BUILD_VERBOSITY: 0
+        BOXLITE_HOST_SCCACHE_DIR: "${{ env.SCCACHE_DIR }}"
+        BOXLITE_HOST_SCCACHE_BIN: "${{ env.SCCACHE_PATH }}"
+      with:
+        package-dir: sdks/python
+    - name: Return container cache to the runner
+      if: always() && runner.os == 'Linux'
+      run: |
+        if [ -d "$SCCACHE_DIR" ]; then
+          sudo chown -R "$(id -u):$(id -g)" "$SCCACHE_DIR"
+        fi
+    - name: Upload wheels as artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-${{ matrix.os }}
+        path: "./wheelhouse/*.whl"
+        retention-days: 1
+        if-no-files-found: error
+    needs: runtime-archive
+    if: "${{ !cancelled() }}"
+    timeout-minutes: 120
+    env:
+      SKIP_INSTALL_NODEJS: '1'
+      CARGO_INCREMENTAL: '0'
