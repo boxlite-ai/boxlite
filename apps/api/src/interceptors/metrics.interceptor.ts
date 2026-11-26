@@ -38,7 +38,6 @@ type CommonCaptureProps = {
   error?: string
   source: string
   sdkVersion?: string
-  environment?: string
 }
 
 @Injectable()
@@ -98,7 +97,6 @@ export class MetricsInterceptor implements NestInterceptor {
       error,
       source: Array.isArray(source) ? source[0] : source,
       sdkVersion,
-      environment: this.configService.get('posthog.environment'),
     }
 
     switch (request.method) {
@@ -471,7 +469,6 @@ export class MetricsInterceptor implements NestInterceptor {
       user_agent: props.userAgent,
       source: props.source,
       sdk_version: props.sdkVersion,
-      environment: props.environment,
       boxlite_version: this.version,
     }
   }

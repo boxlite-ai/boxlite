@@ -209,24 +209,60 @@ it('can retry after a failed preference read and keeps a saved refusal off', asy
   expect(http.post).not.toHaveBeenCalled()
 })
 
-it('drops excess clicks while requests are outstanding and resumes after transport failure', async () => {
+it('queues the destination pageview during a navigation burst and preserves its occurrence time', async () => {
   allowed = true
   await mount()
   http.post.mockClear()
-  let finish!: () => void
-  const pending = new Promise<void>((_, reject) => {
-    finish = () => reject(new Error('transport unavailable'))
-  })
-  http.post.mockReturnValue(pending)
+  const slow = Promise.withResolvers<void>()
+  http.post.mockReturnValueOnce(slow.promise).mockReturnValueOnce(slow.promise)
   await click('Private project name')
-  await click('Private project name')
-  await click('Private project name')
+  await click('Open private box', 'link')
   expect(http.post).toHaveBeenCalledTimes(2)
+  const beforeDrain = Date.now()
   await act(async () => {
-    finish()
+    slow.reject(new Error('transport unavailable'))
     await pause()
   })
-  http.post.mockResolvedValue({})
-  await click('Private project name')
   expect(http.post).toHaveBeenCalledTimes(3)
+  const pageview = http.post.mock.calls[2][1]
+  expect(pageview).toMatchObject({ event: '$pageview', page: '/dashboard/boxes/:boxId' })
+  expect(Date.parse(pageview.occurredAt)).toBeLessThanOrEqual(beforeDrain)
+})
+
+it('bounds the waiting queue during a stalled transport', async () => {
+  allowed = true
+  await mount()
+  http.post.mockClear()
+  const slow = Promise.withResolvers<void>()
+  http.post.mockReturnValue(slow.promise)
+  const button = getByRole(host, 'button', { name: 'Private project name' })
+  for (let i = 0; i < 30; i++) button.click()
+  expect(http.post).toHaveBeenCalledTimes(2)
+  await act(async () => {
+    slow.resolve()
+    await pause()
+  })
+  expect(http.post).toHaveBeenCalledTimes(18)
+})
+
+it.each(['withdrawal', 'organization switch'])('discards queued interactions on %s', async (change) => {
+  allowed = true
+  await mount()
+  http.post.mockClear()
+  const slow = Promise.withResolvers<void>()
+  http.post.mockReturnValue(slow.promise)
+  await click('Private project name')
+  await click('Open private box', 'link')
+  if (change === 'withdrawal') {
+    await click('Product analytics', 'switch')
+  } else {
+    organizationId = 'other-org'
+    await mount()
+  }
+  const beforeDrain = http.post.mock.calls.length
+  await act(async () => {
+    slow.resolve()
+    await pause()
+  })
+  expect(http.post).toHaveBeenCalledTimes(beforeDrain)
 })

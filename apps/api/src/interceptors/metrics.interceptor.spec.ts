@@ -164,6 +164,7 @@ describe('MetricsInterceptor', () => {
       expect(mockCapture).toHaveBeenCalledTimes(1)
       expect(mockCapture.mock.calls[0][0].properties).toEqual({
         'api.operation': 'image.alias.delete',
+        environment: 'test',
         'client.source': 'sdk',
         'http.status_class': '2xx',
       })
@@ -191,6 +192,7 @@ describe('MetricsInterceptor', () => {
     expect(events.map((event) => event.properties)).toEqual([
       {
         'api.operation': 'volume.create',
+        environment: 'test',
         'client.source': 'unattributed',
         'http.status_class': status < 400 ? '2xx' : '4xx',
         ...(backend && { 'volume.storage_backend': backend }),

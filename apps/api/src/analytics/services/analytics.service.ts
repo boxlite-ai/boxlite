@@ -78,7 +78,6 @@ export class AnalyticsService implements OnApplicationShutdown {
             ...(attributes['event.name'].startsWith('cloud.')
               ? { cloud_metrics_schema: '1' }
               : { activity_schema: '1' }),
-            environment: this.configService.get('posthog.environment'),
             $process_person_profile: !!userId,
           },
         },
@@ -102,7 +101,13 @@ export class AnalyticsService implements OnApplicationShutdown {
     const occurredAt = event.timestamp ?? new Date()
     this.queue.push(() =>
       this.consent
-        .dispatch(subjects, occurredAt, () => client.deliver({ ...event, timestamp: occurredAt }))
+        .dispatch(subjects, occurredAt, () =>
+          client.deliver({
+            ...event,
+            timestamp: occurredAt,
+            properties: { ...event.properties, environment: this.configService.get('posthog.environment') },
+          }),
+        )
         .catch(() => this.logger.warn('PostHog analytics capture failed')),
     )
     this.dispatchNext()

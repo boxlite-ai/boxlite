@@ -1009,6 +1009,8 @@ A timeout stays a timeout; a missing terminal remains unobserved.
 
 ### Cloud API product operations
 
+Filter on `properties.environment` to select the deployment for Cloud API operations, Console pageviews and clicks, and lifecycle events. Events ingested before these producers carried the field can have an unknown environment.
+
 Use `cloud.api.operation` for finished Cloud API requests. Select `properties['api.operation']` for the action, `properties['http.status_class']` for `2xx`, `4xx` or `5xx`, and `properties['client.source']` for attribution. For example, filter on `image.alias.create` and `2xx` to count successful alias requests across the supported clients. Each completed HTTP attempt counts separately, including client retries.
 
 | Product | Actions measured |

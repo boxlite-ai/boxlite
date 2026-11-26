@@ -117,6 +117,8 @@ Registration offers Terms of Service and Privacy Policy links. On first entering
 
 Open **Org → Management → Settings → Privacy Preferences** at `/dashboard/settings?tab=settings` to change **Product analytics**. Each choice covers the signed-in account and organizations it created. A member’s interaction also requires the organization creator’s grant. The Console submits route templates and recognized control actions to the Cloud API. Raw URLs, referral parameters, terminal contents and control text are excluded. Functional feature flags remain available for every choice.
 
+Console analytics sends up to two requests at once and holds up to 16 additional events in memory during rapid interaction. Each queued event keeps its original page and occurrence time. A full queue drops new events. A consent change, an account or organization switch, or leaving the Console clears unsent events.
+
 The Dashboard uses the last confirmed consent while a preference is saving. If the save fails, Settings shows an error and offers a retry. Once the API confirms a withdrawal, collection stops across the account’s organizations in the Console.
 
 See the [first-visit card](review-assets/product-analytics/first-console-visit.png) and [Settings switch](review-assets/product-analytics/settings.png).
