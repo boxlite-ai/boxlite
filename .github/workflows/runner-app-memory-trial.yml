@@ -1,0 +1,101 @@
+---
+name: BoxLite application memory qualification
+'on':
+  push:
+    branches:
+    - ci/boxlite-runner-trials-2833
+    paths:
+    - ".github/workflows/runner-app-memory-trial.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  check-generated-clients:
+    runs-on: boxlite-2vcpu-4gbmem-30gbdisk
+    services:
+      redis:
+        image: redis:7
+        ports:
+        - 6379:6379
+    env:
+      REDIS_HOST: localhost
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+    - name: Check worker resources
+      shell: bash
+      run: |
+        set -eu
+        test "$(nproc)" -eq 2
+        awk -v gib="$EXPECTED_GIB" '/^MemTotal:/ {actual=$2/1048576; print "Guest RAM (GiB):", actual; exit !(actual >= gib*0.9 && actual <= gib*1.05)}' /proc/meminfo
+        df -h /
+      env:
+        EXPECTED_GIB: '4'
+      working-directory: "."
+    - uses: actions/checkout@v5
+      with:
+        ref: 6a96c6a7be1a8af2113ac7acc5154c7e18314b03
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native Node build dependencies
+      run: sudo apt-get install -y --no-install-recommends build-essential python3
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - uses: "./.github/actions/setup-go"
+      with:
+        cache: 'false'
+    - name: Enable corepack (yarn 4)
+      run: corepack enable
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: yarn
+        cache-dependency-path: apps/yarn.lock
+    - uses: actions/setup-java@v4
+      with:
+        java-version: 21
+        distribution: temurin
+    - name: Install dependencies
+      run: yarn install --immutable
+    - name: Prepare offline app env
+      run: |
+        printf 'DEFAULT_PACKAGE_VERSION=0.0.0-dev\n' > .env
+        cp api/.env.example api/.env
+    - name: Pin openapi-generator version
+      run: |
+        openapi_version="$(node -e "console.log(require('./openapitools.json')['generator-cli'].version)")"
+        yarn openapi-generator-cli version-manager set "$openapi_version"
+    - name: Regenerate API clients
+      run: |
+        yarn nx run api-client:generate:api-client
+        yarn nx run api-client-go:generate:api-client
+        yarn nx run analytics-api-client:generate:api-client
+    - name: Contract boundary guard (single-owner contracts)
+      run: |
+        # The exported cloud spec must not re-grow box-operation endpoints —
+        # those belong to openapi/box.openapi.yaml (served by boxlite-rest).
+        spec=dist/apps/api/openapi.json
+        if [ ! -f "$spec" ]; then
+          echo "::error::$spec not found; the openapi export step must run before this guard."
+          exit 1
+        fi
+        if jq -r '.paths | keys[]' "$spec" | grep -E '/toolbox/|/exec|/files|/workspace'; then
+          echo "::error::Cloud API spec contains box-operation paths. Box operations belong to the Box API contract (openapi/box.openapi.yaml), served by apps/api/src/boxlite-rest."
+          exit 1
+        fi
+        # The Box API dialect must stay tenancy-free so one SDK dialect works
+        # against local, self-hosted, and cloud servers.
+        if grep -nE 'organizationId|/organizations|billing' ../openapi/box.openapi.yaml; then
+          echo "::error::Box API spec contains cloud/tenancy concepts. Those belong to the cloud API (apps/api controllers outside boxlite-rest)."
+          exit 1
+        fi
+    - name: Fail on drift
+      run: |
+        if [ -n "$(git status --porcelain -- libs/api-client libs/api-client-go libs/analytics-api-client)" ]; then
+          git status --porcelain -- libs/api-client libs/api-client-go libs/analytics-api-client
+          git diff -- libs/api-client libs/api-client-go libs/analytics-api-client | head -200
+          echo "::error::Generated API clients are stale. Run 'yarn nx run api-client:generate:api-client && yarn nx run api-client-go:generate:api-client && yarn nx run analytics-api-client:generate:api-client' in apps/ and commit the result."
+          exit 1
+        fi
+    timeout-minutes: 30
