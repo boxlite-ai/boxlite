@@ -118,6 +118,8 @@ for (const home of ['aws', 'gcp'] as const) {
   for (const [key, value] of [
     ['DB_POOL_MAX', undefined],
     ['DB_POOL_MAX', '25'],
+    ['POSTHOG_CONSENT_BACKLOG_LIMIT', undefined],
+    ['POSTHOG_CONSENT_BACKLOG_LIMIT', '250'],
     ...[undefined, '1', '3', '63'].map((minimum) => ['PLATFORM_SUBDOMAIN_MIN_LENGTH', minimum] as const),
   ] as const) {
     test(`${home} delivers ${key} ${value ?? '(unset)'} from the stage group`, () => {

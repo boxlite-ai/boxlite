@@ -157,6 +157,17 @@ The exact key list lives in the manifest; avoid maintaining a second list in a r
 Set `DB_POOL_MAX` in the stage store to limit the number of PostgreSQL connections per API instance.
 Redeploy the API to deliver the value, for example `25`, through the optional API environment group.
 
+## PostHog consent backlog
+
+`POSTHOG_CONSENT_BACKLOG_LIMIT` is an optional API setting for AWS and GCP. It defaults to 1,000 messages per API instance and accepts positive whole numbers.
+Only events waiting on an analytics consent cache miss use a slot. Cache hits can send immediately. Each excess cold event increments `posthog_consent_backlog_dropped_total`.
+
+For example, run this from `apps/infra` to store a limit of 250 for dev. The API reads the value on its next deployment.
+
+```bash
+npm run mstage env set -- POSTHOG_CONSENT_BACKLOG_LIMIT=250 --stage dev
+```
+
 ## Invitation link lifetime
 
 Set `ORGANIZATION_INVITATION_TTL_SECONDS` in the stage store to change the default

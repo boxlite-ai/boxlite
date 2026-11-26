@@ -656,6 +656,11 @@ const configuration = {
     apiKey: process.env.POSTHOG_API_KEY,
     host: process.env.POSTHOG_HOST,
     environment: process.env.POSTHOG_ENVIRONMENT,
+    consentBacklogLimit: requiredCount(
+      process.env.POSTHOG_CONSENT_BACKLOG_LIMIT,
+      1000,
+      'POSTHOG_CONSENT_BACKLOG_LIMIT',
+    ),
   },
   oidc: {
     clientId: process.env.OIDC_CLIENT_ID || process.env.OID_CLIENT_ID,
