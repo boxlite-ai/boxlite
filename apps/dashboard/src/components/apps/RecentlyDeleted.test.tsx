@@ -14,7 +14,6 @@ import { MemoryRouter } from 'react-router-dom'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OrganizationScope } from './OrganizationScope'
-import { setAppHostingIntroSeen } from '@/lib/apps/intro'
 import { RecentlyDeleted } from './RecentlyDeleted'
 
 const state = vi.hoisted(() => ({
@@ -96,7 +95,6 @@ describe('Recently deleted Apps permanent deletion', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     vi.clearAllMocks()
-    setAppHostingIntroSeen(true)
     state.organization = { id: 'org-a' }
     state.canDelete = true
     state.canWrite = true
@@ -121,7 +119,6 @@ describe('Recently deleted Apps permanent deletion', () => {
   afterEach(() => {
     act(() => root.unmount())
     cache.clear()
-    sessionStorage.clear()
     axios.defaults.adapter = adapter
     document.body.innerHTML = ''
   })

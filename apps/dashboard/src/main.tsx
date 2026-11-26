@@ -25,8 +25,6 @@ async function enableMocking() {
     return
   }
 
-  const { configureAppHostingFixture } = await import('./mocks/app-hosting-access')
-  configureAppHostingFixture()
   const { worker } = await import('./mocks/browser')
   return worker.start()
 }

@@ -66,20 +66,19 @@ draft without storing environment variables or triggering payment or creation.
 See the [UI walkthrough and screenshots](app-hosting-ui.md) for the current mock experience.
 
 Every organization sees **Applications → APPs**. If the organization lacks
-`read:apps`, both the menu and direct App links open the experimental access
-request page. Select **Request access** to ask the BoxLite team to contact you
-at your account email. Backoffice grants access separately.
+`read:apps`, both the menu and direct App links open the early access page.
+Select **Get early access** to ask the BoxLite team to contact you at your
+account email. Backoffice grants access separately.
 
-In an invited organization, members need App read permission to open the list or
-details. Members who lack it see a prompt to contact their organization administrator.
-Readers can select **Get early access** on their first visit to continue to the
-list or the App they opened. The Dashboard remembers that choice for the browser tab.
+Members with effective `read:apps` go directly to the App list or the linked App
+and environment. In an invited organization, members who lack App read permission
+see a prompt to contact their organization administrator.
 Creating and editing Apps requires effective `write:apps`. Deleting an entire
 App requires effective `delete:apps`. API key creation offers the App scopes
 enabled for the organization that the current member can grant.
 
 In mock mode, `/dashboard/apps?appHosting=enabled` opens the sample Apps list
-directly. Use `?appHosting=restricted` to show the introduction again. With
+directly. Use `?appHosting=restricted` to try the early access request. With
 `VITE_MOCK_MULTIPLE_ORGANIZATIONS=true`, select **Research Collective** to try
 the request flow for an uninvited organization.
 
@@ -98,7 +97,7 @@ filled cloud-app illustration used when a deployed app has no screenshot.
 Card illustrations occupy the central 64% of the preview area, leaving a quiet
 margin around the artwork; actual screenshots fill the preview area.
 Card placeholders stay static;
-reduced-motion preferences disable the sequence. The introduction reuses the
+reduced-motion preferences disable the sequence. The early access page reuses the
 agent handoff logos to show compatible coding agents below the product description.
 
 **APPs** appears immediately after CI in Applications. It uses the same OIDC session,

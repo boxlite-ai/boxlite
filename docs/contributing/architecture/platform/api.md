@@ -179,8 +179,9 @@ key presented to the site needs effective `read:apps`.
 
 Every organization can open **APPs** in the Dashboard. The Dashboard reads the
 invitation from `appHostingPermissions`. When the organization lacks `read:apps`,
-the list and detail URLs show the request page. An invited organization's members
-need effective `read:apps` to open App data.
+the list and detail URLs show the App hosting introduction. **Get early access**
+submits the organization's request. Members with effective `read:apps` open the
+list or the linked App directly.
 The organization member list marks the authenticated administrator's own entry with
 `isSystemAdmin: true`, so the Dashboard applies the same ceiling to an administrator
 who holds an ordinary member role in that organization.
