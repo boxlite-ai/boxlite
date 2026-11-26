@@ -175,19 +175,24 @@ impl BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         if options.include_memory {
-            if self.state.read().status != BoxStatus::Running {
-                return Err(BoxliteError::InvalidState(
-                    "full checkpoint export requires a running box".into(),
-                ));
-            }
             return self
                 .with_disk_admission(self.with_operation(async {
+                    if self.shutdown_token.is_cancelled() {
+                        return Err(BoxliteError::Stopped(
+                            "Handle invalidated after stop(). Use runtime.get() to get a new handle."
+                                .into(),
+                        ));
+                    }
                     if self.state.read().status != BoxStatus::Running {
                         return Err(BoxliteError::InvalidState(
                             "full checkpoint export requires a running box".into(),
                         ));
                     }
-                    self.capture_memory_checkpoint(dest)?;
+                    let temp_dir = tempfile::tempdir_in(self.runtime.layout.temp_dir())
+                        .map_err(|e| {
+                            BoxliteError::Storage(format!("Failed to create temp directory: {}", e))
+                        })?;
+                    self.capture_memory_checkpoint(temp_dir.path())?;
                     // A successful capture still cannot be packaged by this placeholder.
                     Err(BoxliteError::Unsupported(
                         "full memory checkpoint archive creation is not supported".into(),

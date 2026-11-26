@@ -2046,7 +2046,27 @@ mod tests {
             if message == "full memory checkpoint capture is not supported by this VMM backend"));
     }
 
-    struct CheckpointTestHandler(std::path::PathBuf);
+    struct CheckpointTestHandler {
+        expected_temp_root: std::path::PathBuf,
+        captured_dir: Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
+        succeeds: bool,
+    }
+
+    impl CheckpointTestHandler {
+        fn install(
+            fixture: &mut StartFixture,
+            succeeds: bool,
+        ) -> Arc<std::sync::Mutex<Option<std::path::PathBuf>>> {
+            let box_impl = Arc::get_mut(&mut fixture.box_impl).unwrap();
+            let captured_dir = Arc::new(std::sync::Mutex::new(None));
+            *box_impl.live.get_mut().unwrap().handler.get_mut().unwrap() = Box::new(Self {
+                expected_temp_root: box_impl.runtime.layout.temp_dir(),
+                captured_dir: Arc::clone(&captured_dir),
+                succeeds,
+            });
+            captured_dir
+        }
+    }
 
     impl VmmHandler for CheckpointTestHandler {
         fn stop(&mut self) -> BoxliteResult<()> {
@@ -2066,15 +2086,29 @@ mod tests {
         }
 
         fn capture_memory_checkpoint(&self, dest_dir: &std::path::Path) -> BoxliteResult<()> {
-            assert_eq!(dest_dir, self.0.as_path());
-            Err(BoxliteError::Unsupported("checkpoint test handler".into()))
+            assert!(dest_dir.is_dir());
+            assert!(dest_dir.starts_with(&self.expected_temp_root));
+            *self.captured_dir.lock().unwrap() = Some(dest_dir.to_path_buf());
+            if self.succeeds {
+                std::fs::write(dest_dir.join("memory"), b"checkpoint").unwrap();
+                Ok(())
+            } else {
+                Err(BoxliteError::Unsupported("checkpoint test handler".into()))
+            }
         }
     }
 
     #[tokio::test]
     async fn full_checkpoint_export_requires_running_box() {
         let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
-        fixture.box_impl.state.write().status = BoxStatus::Stopped;
+        let mut state = fixture.box_impl.state.read().clone();
+        state.status = BoxStatus::Stopped;
+        fixture
+            .box_impl
+            .runtime
+            .box_manager
+            .save_box(fixture.box_impl.id(), &state)
+            .unwrap();
         let error = fixture
             .box_impl
             .export_box(ExportOptions::full(), fixture._temp_dir.path())
@@ -2086,20 +2120,66 @@ mod tests {
 
     #[tokio::test]
     async fn full_checkpoint_export_routes_to_vmm_handler() {
-        let dest = std::path::Path::new("unused-checkpoint-dest");
-        let fixture =
-            running_box_for_start_test_with_live(Arc::new(StartGate::default()), |live| {
-                *live.handler.get_mut().unwrap() =
-                    Box::new(CheckpointTestHandler(dest.to_path_buf()));
-            })
-            .await;
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        CheckpointTestHandler::install(&mut fixture, false);
+        let dest = fixture._temp_dir.path().join("checkpoint.boxlite");
         let error = fixture
             .box_impl
-            .export_box(ExportOptions::full(), dest)
+            .export_box(ExportOptions::full(), &dest)
             .await
             .unwrap_err();
         assert!(matches!(error, BoxliteError::Unsupported(message)
             if message == "checkpoint test handler"));
+    }
+
+    #[tokio::test]
+    async fn full_checkpoint_export_rejects_cancelled_shutdown_token() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let captured_dir = CheckpointTestHandler::install(&mut fixture, false);
+        fixture.box_impl.shutdown_token.cancel();
+        let dest = fixture.box_impl.runtime.layout.temp_dir();
+        let error = fixture
+            .box_impl
+            .export_box(ExportOptions::full(), &dest)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, BoxliteError::Stopped(message)
+                if message == "Handle invalidated after stop(). Use runtime.get() to get a new handle."),
+            "unexpected error: {error:?}"
+        );
+        assert!(captured_dir.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn full_checkpoint_export_requires_live_vm_state() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let box_impl = Arc::get_mut(&mut fixture.box_impl).unwrap();
+        assert!(box_impl.live.take().is_some());
+        let dest = fixture._temp_dir.path().join("checkpoint.boxlite");
+        let error = box_impl
+            .export_box(ExportOptions::full(), &dest)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::InvalidState(message)
+            if message == "full checkpoint export requires live VM state"));
+        assert!(box_impl.live.get().is_none());
+    }
+
+    #[tokio::test]
+    async fn full_checkpoint_export_fails_closed_when_handler_succeeds() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let captured_dir = CheckpointTestHandler::install(&mut fixture, true);
+        let dest = fixture._temp_dir.path().join("checkpoint.boxlite");
+        let error = fixture
+            .box_impl
+            .export_box(ExportOptions::full(), &dest)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Unsupported(message)
+            if message == "full memory checkpoint archive creation is not supported"));
+        let captured_dir = captured_dir.lock().unwrap().take().expect("handler called");
+        assert!(!captured_dir.exists());
     }
 
     struct StartGate {
