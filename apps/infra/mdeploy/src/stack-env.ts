@@ -299,11 +299,21 @@ const channels = ({
   const proxy = split(PROXY_GROUP)
   const collector = split(OTEL_GROUP)
   const runner = split(RUNNER_GROUP)
-  renderRunnerEnvironment(runner.values.BOXLITE_RUNNER_ENV, [
+  const ownedNames = [
     ...Object.keys(runner.values),
     ...Object.keys(runner.addresses),
     ...Object.keys(runner.addresses).map((name) => `${name}_ARN`),
-  ])
+  ]
+  renderRunnerEnvironment(runner.values.BOXLITE_RUNNER_ENV, ownedNames)
+  if (stage === 'stage') {
+    const existing = runner.values.BOXLITE_RUNNER_ENV
+      ? (JSON.parse(runner.values.BOXLITE_RUNNER_ENV) as Record<string, string>)
+      : {}
+    if (!Object.hasOwn(existing, 'KRUN_USE_THP')) {
+      runner.values.BOXLITE_RUNNER_ENV = JSON.stringify({ KRUN_USE_THP: '1', ...existing })
+      renderRunnerEnvironment(runner.values.BOXLITE_RUNNER_ENV, ownedNames)
+    }
+  }
   return {
     apiEnvironment: api.environment,
     filestoreProjects: api.filestoreProjects,
