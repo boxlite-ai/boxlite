@@ -32,7 +32,10 @@ import {
   ProtectedBootCapability,
   ProtectedBootControl,
   ProtectedBootKey,
+  ProtectedBootReceipt,
   ProtectedBootRoute,
+  ProtectedEpochControl,
+  ProtectedRunnerEndpoint,
 } from './protected-runner'
 import {
   checkedManagedReceipt,
@@ -145,6 +148,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   private runnerApiClient: DefaultApi
   private runner: Runner
   private bootstrapApi?: AxiosInstance
+  private bootstrapVersion = 1
 
   private convertBoxState(state: EnumsBoxState): BoxState {
     switch (state) {
@@ -171,30 +175,24 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
-  public async init(runner: Runner): Promise<void> {
-    if (!runner.apiUrl) {
+  public async init(runner: Runner, protectedEndpoint?: ProtectedRunnerEndpoint): Promise<void> {
+    if (!runner.apiUrl && !protectedEndpoint) {
       throw new Error('Runner API URL is required')
     }
     this.runner = runner
+    this.bootstrapVersion = protectedEndpoint ? 2 : 1
 
-    const httpsAgent = enrolledRunnerAgent(runner)
+    const httpsAgent = protectedEndpoint?.agent ?? enrolledRunnerAgent(runner)
     const enrolledTransport = httpsAgent && { httpsAgent, maxRedirects: 0, proxy: false as const }
     const headers = { Authorization: `Bearer ${runner.apiKey}` }
     this.bootstrapApi = enrolledTransport
       ? axios.create({
           ...enrolledTransport,
-          baseURL: runner.apiUrl,
+          baseURL: protectedEndpoint?.url ?? runner.apiUrl,
           headers: { ...headers, 'X-BoxLite-Runner-Id': runner.id },
           timeout: PROTECTED_RUNNER_REQUEST_TIMEOUT_MS,
         })
       : undefined
-
-    const axiosInstance = axios.create({
-      baseURL: runner.apiUrl,
-      headers,
-      ...enrolledTransport,
-      timeout: 1 * 60 * 60 * 1000, // 1 hour
-    })
 
     const retryErrorMap = new WeakMap<AxiosError, string>()
 
@@ -222,7 +220,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         )
       },
     }
-    axiosRetry(axiosInstance, retryOptions)
     if (this.bootstrapApi) {
       axiosRetry(this.bootstrapApi, {
         ...retryOptions,
@@ -232,6 +229,15 @@ export class RunnerAdapterV0 implements RunnerAdapter {
           !!retryOptions.retryCondition?.(error),
       })
     }
+
+    if (protectedEndpoint) return
+    const axiosInstance = axios.create({
+      baseURL: runner.apiUrl,
+      headers,
+      ...enrolledTransport,
+      timeout: 1 * 60 * 60 * 1000, // 1 hour
+    })
+    axiosRetry(axiosInstance, retryOptions)
 
     axiosInstance.interceptors.response.use(
       (response) => {
@@ -302,14 +308,27 @@ export class RunnerAdapterV0 implements RunnerAdapter {
           ]
         : ['start', 'receipt', 'retire']
       if (volumeRestart) required.push('restart-volumes')
-      if (allocation) required.push('allocate-attempt', 'close-allocation')
+      if (allocation || this.bootstrapVersion === 2) required.push('allocate-attempt', 'close-allocation')
       if (
         data.runner_id !== this.runner.id ||
-        data.version !== 1 ||
+        data.version !== this.bootstrapVersion ||
         !Array.isArray(data.operations) ||
         !data.operations.every((operation: unknown) => typeof operation === 'string')
       ) {
         return 'unverified'
+      }
+      if (this.bootstrapVersion === 2) {
+        const age = Date.now() - (this.runner.lastChecked?.getTime() ?? NaN)
+        if (
+          !(age >= 0 && age <= 60_000) ||
+          !this.runner.protectedProcessId ||
+          data.process_id !== this.runner.protectedProcessId ||
+          !this.runner.protectedExecutableDigest ||
+          data.executable_digest !== this.runner.protectedExecutableDigest
+        ) {
+          return 'unverified'
+        }
+        required.push('managed-ownership-fence', 'stop-protected', 'retire-terminated', 'ready-protected')
       }
       return required.every((operation) => data.operations.includes(operation)) ? 'supported' : 'unsupported'
     } catch {
@@ -319,6 +338,10 @@ export class RunnerAdapterV0 implements RunnerAdapter {
 
   get protectedBootstrap(): ProtectedBootControl | undefined {
     return this.bootstrapApi ? this : undefined
+  }
+
+  get protectedEpoch(): ProtectedEpochControl | undefined {
+    return this.bootstrapVersion === 2 && this.bootstrapApi ? this : undefined
   }
 
   async prepareProtectedBox(
@@ -397,8 +420,46 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     return this.protectedBootOperation(boxId, '/receipt', key, key, expectedEpoch)
   }
 
+  async readReleasedEpoch(boxId: string, key: ProtectedBootKey, epoch: string): Promise<ProtectedBootReceipt> {
+    const response = await this.postProtectedOutbound(boxId, '/bootstrap/ready', key.runner_id, key)
+    const receipt = checkedBootReceipt(response, boxId, key, epoch)
+    if (receipt.outcome !== 'confirmed') throw new Error('Runner did not prove released protected readiness')
+    return receipt
+  }
+
   async retireProtectedBoot(boxId: string, key: ProtectedBootKey, expectedEpoch?: string) {
     return this.protectedBootOperation(boxId, '/retire', key, key, expectedEpoch)
+  }
+
+  async stopProtectedEpoch(boxId: string, key: ProtectedBootKey, epoch: string, generation: string): Promise<void> {
+    await this.readEpochReceipt(boxId, key, epoch, generation, 'stop')
+  }
+
+  async retireTerminatedProtectedEpoch(boxId: string, key: ProtectedBootKey, epoch: string, generation: string) {
+    const receipt = await this.readEpochReceipt(boxId, key, epoch, generation, 'retire-terminated')
+    const evidence = checkedSealedEvidence(receipt.evidence, epoch)
+    if (evidence.installed !== null) throw new Error('Runner did not prove protected epoch termination')
+    return evidence
+  }
+
+  private async readEpochReceipt(
+    boxId: string,
+    key: ProtectedBootKey,
+    epoch: string,
+    generation: string,
+    action: 'stop' | 'retire-terminated',
+  ) {
+    const response = (await this.postProtectedOutbound(boxId, `/bootstrap/${action}`, key.runner_id, {
+      key,
+      epoch,
+      generation,
+    })) as { box_id?: unknown; receipt?: { boot?: unknown; generation?: unknown; evidence?: unknown } } | null
+    const receipt = response?.receipt
+    const boot = checkedBootReceipt({ box_id: response?.box_id, receipt: receipt?.boot }, boxId, key, epoch)
+    if (receipt?.generation !== generation || boot.outcome !== (action === 'stop' ? 'confirmed' : 'retired')) {
+      throw new Error('Runner did not return exact protected epoch evidence')
+    }
+    return receipt
   }
 
   async removeRetiredEpoch(boxId: string, key: ProtectedBootKey, epoch: string | null) {
@@ -493,7 +554,10 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     suffix:
       | '/bootstrap'
       | '/bootstrap/receipt'
+      | '/bootstrap/ready'
       | '/bootstrap/retire'
+      | '/bootstrap/stop'
+      | '/bootstrap/retire-terminated'
       | '/bootstrap/release-gate'
       | '/bootstrap/seal-gate'
       | '/bootstrap/remove-retired'

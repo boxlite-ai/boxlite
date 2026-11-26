@@ -28,6 +28,7 @@ type HealthcheckServiceConfig struct {
 	ProxyPort  int
 	TlsEnabled bool
 	Boxlite    *blclient.Client
+	ProcessID  string
 	// Data disk identity from the infra-injected env keys (hyperdisk LLD §4.2).
 	// Any part missing leaves the healthcheck without a dataDiskRef: only a
 	// complete ref is useful to the API's disk-expansion controller.
@@ -60,6 +61,9 @@ func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
 	apiClient, err := runnerapiclient.GetApiClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
+	}
+	if cfg.ProcessID != "" {
+		apiClient.GetConfig().AddDefaultHeader("X-BoxLite-Runner-Process", cfg.ProcessID)
 	}
 
 	if cfg.Boxlite == nil {

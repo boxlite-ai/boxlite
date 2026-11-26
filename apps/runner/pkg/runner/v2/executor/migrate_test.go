@@ -8,6 +8,7 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,9 +19,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/backend"
+	"github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/checkpoint"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/storage"
 )
@@ -65,10 +70,23 @@ type fakeBackend struct {
 	// at the moment the import ran — the import is worthless without it.
 	archivePresentOnImport bool
 
-	destroyErr error
+	destroyErr      error
+	archiveGuardErr error
 }
 
-func (f *fakeBackend) ExportBox(_ context.Context, boxId, destDir string) (string, error) {
+func (f *fakeBackend) WithOrdinaryTarget(_ context.Context, _ string, effect func() error) error {
+	if f.archiveGuardErr != nil {
+		return f.archiveGuardErr
+	}
+	return effect()
+}
+
+func (f *fakeBackend) ExportBox(_ context.Context, boxId, destDir string, authorize ...func() error) (string, error) {
+	if len(authorize) != 0 {
+		if err := authorize[0](); err != nil {
+			return "", err
+		}
+	}
 	f.calls.record("export:%s", boxId)
 	if f.exportErr != nil {
 		return "", f.exportErr
@@ -81,7 +99,10 @@ func (f *fakeBackend) ExportBox(_ context.Context, boxId, destDir string) (strin
 	return archivePath, nil
 }
 
-func (f *fakeBackend) ImportBox(_ context.Context, boxId, archivePath string) error {
+func (f *fakeBackend) ImportMigrationBox(_ context.Context, boxId, archivePath, _ string, authorize func() error) error {
+	if err := authorize(); err != nil {
+		return err
+	}
 	f.calls.record("import:%s", boxId)
 	_, statErr := os.Stat(archivePath)
 	f.archivePresentOnImport = statErr == nil
@@ -103,6 +124,13 @@ func (f *fakeBackend) Stop(context.Context, string, bool) error {
 func (f *fakeBackend) Destroy(_ context.Context, boxId string) error {
 	f.calls.record("destroy:%s", boxId)
 	return f.destroyErr
+}
+
+func (f *fakeBackend) DestroyMigrationCopy(ctx context.Context, boxId, _ string, authorize func() error) error {
+	if err := authorize(); err != nil {
+		return err
+	}
+	return f.Destroy(ctx, boxId)
 }
 
 func (f *fakeBackend) RecoverBox(context.Context, string, dto.RecoverBoxDTO) error {
@@ -132,6 +160,7 @@ type fakeArchiveStore struct {
 	uploadedKey   string
 	uploadedBytes []byte
 	downloadedKey string
+	downloadPath  string
 	removedKeys   []string
 }
 
@@ -157,6 +186,7 @@ func (f *fakeArchiveStore) Download(_ context.Context, key, localPath string) er
 	}
 
 	f.downloadedKey = key
+	f.downloadPath = localPath
 	return os.WriteFile(localPath, []byte("archive"), 0600)
 }
 
@@ -180,11 +210,12 @@ type reportedStatus struct {
 }
 
 type harness struct {
-	executor *Executor
-	backend  *fakeBackend
-	store    *fakeArchiveStore
-	calls    *callLog
-	workDir  string
+	executor                 *Executor
+	backend                  *fakeBackend
+	store                    *fakeArchiveStore
+	calls                    *callLog
+	workDir                  string
+	refuseMigrationAuthority bool
 
 	mu       sync.Mutex
 	reported []reportedStatus
@@ -205,6 +236,14 @@ func newHarness(t *testing.T, configure func(*harness)) *harness {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/jobs/"+testJobId {
+			w.Header().Set("Content-Type", "application/json")
+			if !h.refuseMigrationAuthority {
+				w.Header().Set("X-BoxLite-Migration-Authority", testJobId)
+			}
+			_, _ = fmt.Fprintf(w, `{"id":%q,"type":"EXPORT_BOX","status":"IN_PROGRESS","resourceType":"BACKUP","resourceId":%q,"createdAt":"2026-01-01T00:00:00Z"}`, testJobId, testBoxId)
+			return
+		}
 		var body apiclient.UpdateJobStatus
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("status callback body is not UpdateJobStatus JSON: %v", err)
@@ -421,6 +460,37 @@ func TestImportBoxDoesNotImportWhenDownloadFails(t *testing.T) {
 	}
 }
 
+func TestMigrationImportUsesOnePrivateArchivePathPerExecution(t *testing.T) {
+	h := newHarness(t, nil)
+	job := migrateJob(apiclient.JOBTYPE_IMPORT_BOX, arcPathPayload())
+	if _, err := h.executor.importBox(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	first := h.store.downloadPath
+	if _, err := h.executor.importBox(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if first == h.store.downloadPath {
+		t.Fatalf("import executions reused %s", first)
+	}
+	assertWorkDirEmpty(t, h.workDir)
+}
+
+func TestStaleMigrationJobCannotRemoveArchiveOrLocalBox(t *testing.T) {
+	h := newHarness(t, func(h *harness) { h.refuseMigrationAuthority = true })
+	archive := migrateJob(apiclient.JOBTYPE_DISCARD_EXPORTED_BOX, arcPathPayload())
+	if _, err := h.executor.discardExportedBox(t.Context(), archive); err == nil || !strings.Contains(err.Error(), "no longer owns") {
+		t.Fatalf("expected stale archive rejection, got %v", err)
+	}
+	copy := migrateJob(apiclient.JOBTYPE_ROLLBACK_IMPORT_BOX, "")
+	if _, err := h.executor.rollbackImportBox(t.Context(), copy); err == nil || !strings.Contains(err.Error(), "no longer owns") {
+		t.Fatalf("expected stale local copy rejection, got %v", err)
+	}
+	if calls := h.calls.snapshot(); len(calls) > 0 {
+		t.Fatalf("stale jobs modified migration state: %v", calls)
+	}
+}
+
 func TestImportBoxRemovesLocalArchiveWhenImportFails(t *testing.T) {
 	h := newHarness(t, func(h *harness) {
 		h.backend.importErr = fmt.Errorf("import rejected")
@@ -442,6 +512,40 @@ func TestRollbackExportBoxRemovesTheArchive(t *testing.T) {
 	assertCompleted(t, h.lastReport(t))
 	if want := []string{testArcPath}; !equalCalls(h.store.removedKeys, want) {
 		t.Fatalf("removed keys = %v, want %v", h.store.removedKeys, want)
+	}
+}
+
+func TestMigrationArchiveDeletionUsesProductionTargetLease(t *testing.T) {
+	h := newHarness(t, nil)
+	home := t.TempDir()
+	client, err := boxlite.NewClient(t.Context(), boxlite.ClientConfig{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	h.executor.backend = backend.NewBoxliteAdapter(client)
+	targets := checkpoint.Operations{Root: filepath.Join(home, "work", "checkpoint-operations")}
+	lease, err := targets.Lock(t.Context(), testBoxId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	job := migrateJob(apiclient.JOBTYPE_ROLLBACK_EXPORT_BOX, arcPathPayload())
+	_, err = h.executor.rollbackExportBox(ctx, job)
+	if !errors.Is(err, context.DeadlineExceeded) || len(h.store.removedKeys) != 0 {
+		t.Fatalf("archive mutation bypassed the held production target lease: %v, keys %v", err, h.store.removedKeys)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.executor.rollbackExportBox(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if !equalCalls(h.store.removedKeys, []string{testArcPath}) {
+		t.Fatalf("archive was not removed after releasing the target lease: %v", h.store.removedKeys)
 	}
 }
 
@@ -483,6 +587,24 @@ func TestDiscardExportedBoxKeepsBoxWhenArchiveRemovalFails(t *testing.T) {
 	// control plane with a key it can no longer tie to a live box.
 	if want := []string{"remove:" + testArcPath}; !equalCalls(h.calls.snapshot(), want) {
 		t.Fatalf("call order = %v, want %v", h.calls.snapshot(), want)
+	}
+}
+
+func TestProtectedOwnerStopsMigrationArchiveDeletion(t *testing.T) {
+	for _, kind := range []apiclient.JobType{
+		apiclient.JOBTYPE_ROLLBACK_EXPORT_BOX,
+		apiclient.JOBTYPE_DISCARD_EXPORTED_BOX,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			h := newHarness(t, func(h *harness) {
+				h.backend.archiveGuardErr = fmt.Errorf("Box has protected ownership")
+			})
+			h.executor.Execute(context.Background(), migrateJob(kind, arcPathPayload()))
+			assertFailedWith(t, h.lastReport(t), "protected ownership")
+			if calls := h.calls.snapshot(); len(calls) != 0 {
+				t.Fatalf("migration touched protected state: %v", calls)
+			}
+		})
 	}
 }
 

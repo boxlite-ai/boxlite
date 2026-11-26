@@ -308,7 +308,11 @@ export class BoxController {
   })
   @UseGuards(RunnerAuthGuard)
   @UseGuards(BoxAccessGuard)
-  async updateBoxState(@Param('boxId') boxId: string, @Body() updateStateDto: UpdateBoxStateDto): Promise<void> {
+  async updateBoxState(
+    @Param('boxId') boxId: string,
+    @Body() updateStateDto: UpdateBoxStateDto,
+    @RunnerContextDecorator() runnerContext: RunnerContext,
+  ): Promise<void> {
     await this.boxService.updateState(
       boxId,
       updateStateDto.state,
@@ -320,6 +324,7 @@ export class BoxController {
       updateStateDto.imageDigest !== undefined
         ? { digest: updateStateDto.imageDigest, sizeBytes: updateStateDto.imageSizeBytes ?? 0 }
         : undefined,
+      runnerContext.runner.apiVersion === '2' ? runnerContext.runnerId : undefined,
     )
   }
 

@@ -30,6 +30,7 @@ import {
 import { BoxPublicStatus, publicBoxStatus } from '../utils/box-public-status'
 import { reportedBoxState } from '../utils/box-state.util'
 import { Box } from '../entities/box.entity'
+import { lockOrdinaryBox } from '../stores/outbound-policy.store'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
 import { CreateBoxDto } from '../dto/create-box.dto'
@@ -143,6 +144,7 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  runnerApiVersion?: '2'
   outboundProxy?: string | null
   /** Internal transactional admission/ownership; never accepted from a public DTO. */
   onPersist?: (manager: EntityManager, box: Box) => Promise<void>
@@ -395,6 +397,7 @@ export class BoxService {
       const image = resolvedImage.ref
       const needsFreshBox =
         (proxyEnabled && explicitProxy) ||
+        options.runnerApiVersion !== undefined ||
         !!options.onPersist ||
         requiresFreshBox(createBoxDto, organization, resolvedImage)
 
@@ -508,11 +511,20 @@ export class BoxService {
       // and a name collision, which the insert itself settles, come after it.
       const runnerOptions =
         proxyName === null
-          ? { regions: [region.id], boxClass }
+          ? {
+              regions: [region.id],
+              boxClass,
+              ...(options.runnerApiVersion ? { apiVersion: options.runnerApiVersion } : {}),
+            }
           : { regions: [region.id], boxClass, requiresProtectedProxyBootstrap: true }
       const insertedBox = await this.persistOnAvailableRunner(box, runnerOptions, async (runner) => {
         let managed = proxyName !== null
-        if (!managed && proxyEnabled && this.outboundBootstrap && runner.apiVersion === '0') {
+        if (
+          !managed &&
+          proxyEnabled &&
+          this.outboundBootstrap?.admitsImplicitV0Ownership &&
+          runner.apiVersion === '0'
+        ) {
           managed = await this.runnerAdapterFactory
             .create(runner)
             .then((adapter) => adapter.supportsProtectedBootstrap?.(true, false, true))
@@ -1147,7 +1159,12 @@ export class BoxService {
       desiredState: BoxDesiredState.STARTED,
       authToken: nanoid(32).toLocaleLowerCase(),
     }
-    if (this.outboundBootstrap && box.runnerId && process.env.OUTBOUND_PROXY_REGISTRY_ENABLED === 'true') {
+    let prepareUpdate: ((manager: EntityManager, box: Box) => Promise<Partial<Box>>) | undefined
+    if (
+      this.outboundBootstrap?.admitsImplicitV0Ownership &&
+      box.runnerId &&
+      process.env.OUTBOUND_PROXY_REGISTRY_ENABLED === 'true'
+    ) {
       const runner = await this.runnerService.findOne(box.runnerId)
       if (runner?.apiVersion === '0') {
         const ready = await this.runnerAdapterFactory
@@ -1158,8 +1175,11 @@ export class BoxService {
             () => false,
           )
         if (ready) {
-          const intent = await this.outboundBootstrap.legacyRestartIntent(box)
-          if (intent) updateData.outboundControl = intent
+          prepareUpdate = async (manager, current) => {
+            if (current.runnerId !== runner.id) return {}
+            const intent = await this.outboundBootstrap.legacyRestartIntent(manager, current)
+            return intent ? { outboundControl: intent } : {}
+          }
         }
       }
     }
@@ -1167,6 +1187,7 @@ export class BoxService {
     const updatedBox = await this.boxRepository.updateWhere(box.id, {
       updateData,
       whereCondition: { pending: false, state: box.state },
+      ...(prepareUpdate && { prepareUpdate }),
     })
 
     recordBoxRequested('box.start', updatedBox, ctx)
@@ -1612,12 +1633,14 @@ export class BoxService {
     recoverable = false,
     errorReason?: string,
     reportedImage?: ReportedImage,
+    reportingRunnerId?: string,
   ): Promise<void> {
-    const box = await this.boxRepository.findOne({
-      where: { id: boxId },
-    })
+    const box = reportingRunnerId
+      ? await this.boxRepository.findOrdinaryRunnerReportBox(boxId, reportingRunnerId)
+      : await this.boxRepository.findOne({ where: { id: boxId } })
 
     if (!box) {
+      if (reportingRunnerId) return
       throw new NotFoundException(`Box with ID ${boxId} not found`)
     }
 
@@ -1633,11 +1656,14 @@ export class BoxService {
     // and started it did so either way.
     if (reportedImage && newState === BoxState.STARTED && box.image) {
       try {
-        await this.imageRegistrarService.onBoxStarted(
-          box.organizationId,
-          { ref: box.image, isOrgOwned: boxImageIsOrgOwned(box), runnerId: box.runnerId },
-          reportedImage,
-        )
+        const image = { ref: box.image, isOrgOwned: boxImageIsOrgOwned(box), runnerId: box.runnerId }
+        if (reportingRunnerId) {
+          await this.imageRegistrarService.onBoxStarted(box.organizationId, image, reportedImage, (manager) =>
+            lockOrdinaryBox(manager, boxId, reportingRunnerId),
+          )
+        } else {
+          await this.imageRegistrarService.onBoxStarted(box.organizationId, image, reportedImage)
+        }
       } catch (error) {
         // A lost registration costs the next create one re-resolution, which
         // is the documented trade; one refused for the image limit leaves the
@@ -1679,7 +1705,14 @@ export class BoxService {
       this.logger.warn(
         `Completing stalled startup job ${stalledStartupJob.id} for box ${boxId} from runner-reported state`,
       )
-      await this.jobService.updateJobStatus(stalledStartupJob.id, JobStatus.COMPLETED)
+      if (reportingRunnerId) {
+        await this.jobService.updateJobStatus(stalledStartupJob.id, JobStatus.COMPLETED, undefined, undefined, {
+          boxId,
+          runnerId: reportingRunnerId,
+        })
+      } else {
+        await this.jobService.updateJobStatus(stalledStartupJob.id, JobStatus.COMPLETED)
+      }
       return
     }
 
@@ -1714,6 +1747,7 @@ export class BoxService {
     await this.boxRepository.updateWhere(box.id, {
       updateData,
       whereCondition: { pending: false, state: oldState, desiredState: oldDesiredState },
+      ...(reportingRunnerId ? { reportingRunnerId } : {}),
     })
   }
 

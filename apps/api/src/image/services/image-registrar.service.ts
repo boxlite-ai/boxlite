@@ -77,7 +77,12 @@ export class ImageRegistrarService {
    * would otherwise have every box still running the old one file an image into
    * its organization's catalog, against that organization's limit.
    */
-  async onBoxStarted(organizationId: string, image: BootedImage, reported: ReportedImage): Promise<void> {
+  async onBoxStarted(
+    organizationId: string,
+    image: BootedImage,
+    reported: ReportedImage,
+    authorize?: (manager: EntityManager) => Promise<void>,
+  ): Promise<void> {
     // Refused here rather than by the column, which would take a short bad
     // digest without complaint. The reason is downstream: this value becomes a
     // `storageRef` or a pinned ref a runner is expected to pull, and a key the
@@ -90,7 +95,16 @@ export class ImageRegistrarService {
 
     if (!image.isOrgOwned) {
       if (image.runnerId) {
-        await this.curatedImagePins.remember(image.runnerId, image.ref, reported.digest)
+        const runnerId = image.runnerId
+        const remember = () => this.curatedImagePins.remember(runnerId, image.ref, reported.digest)
+        if (authorize) {
+          await this.dataSource.transaction(async (manager) => {
+            await authorize(manager)
+            await remember()
+          })
+        } else {
+          await remember()
+        }
       }
       return
     }
@@ -103,6 +117,7 @@ export class ImageRegistrarService {
     const name = `${host}/${repository}`
 
     await this.dataSource.transaction(async (manager) => {
+      await authorize?.(manager)
       await this.assertRoomForImage(manager, organizationId, name)
 
       // `lastUsedAt` is what eviction and the usage view read, so the update

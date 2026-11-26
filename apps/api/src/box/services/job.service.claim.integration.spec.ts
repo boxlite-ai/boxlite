@@ -6,12 +6,19 @@
 import { randomUUID } from 'node:crypto'
 import { DataSource, Repository } from 'typeorm'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
+import { AddOutboundProxyAdmission1795663861000 } from '../../migrations/pre-deploy/1795663861000-add-outbound-proxy-admission-migration'
 import { LockCode } from '../common/redis-lock.provider'
+import type { RunnerContext } from '../../common/interfaces/runner-context.interface'
+import { JobController } from '../controllers/job.controller'
 import { Box } from '../entities/box.entity'
+import { BoxMigration } from '../entities/box-migration.entity'
+import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { Runner } from '../entities/runner.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxStartAction } from '../managers/box-actions/box-start.action'
+import { ProxyCredentialCipher } from '../outbound-proxy/proxy-credential-cipher'
+import { ProxyRegistryStore } from '../outbound-proxy/proxy-registry.store'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerAdapterV2 } from '../runner-adapter/runnerAdapter.v2'
 import { JobStateHandlerService } from './job-state-handler.service'
@@ -62,7 +69,7 @@ describeIfDatabase('JobService.claimPendingJobs (integration, real Postgres)', (
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Job, Box, BoxLastActivity, Runner],
+      entities: [Job, Box, BoxLastActivity, BoxMigration, Runner],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
@@ -76,6 +83,7 @@ describeIfDatabase('JobService.claimPendingJobs (integration, real Postgres)', (
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     ownsSchema = true
     await dataSource.synchronize()
+    await dataSource.transaction((manager) => new AddOutboundProxyAdmission1795663861000().up(manager.queryRunner))
     await dataSource.query(
       'CREATE TABLE outbound_proxy_reference (organization_id uuid, box_id varchar, runner_id uuid)',
     )
@@ -122,7 +130,8 @@ describeIfDatabase('JobService.claimPendingJobs (integration, real Postgres)', (
   }
 
   async function seedProtectedIntent(box: Box): Promise<void> {
-    const bootstrap = new ManagedOutboundBootstrap(dataSource, {} as never)
+    const registry = new ProxyRegistryStore(dataSource, new ProxyCredentialCipher(undefined), true)
+    const bootstrap = new ManagedOutboundBootstrap(dataSource, registry)
     await dataSource.transaction((manager) => bootstrap.seed(manager, box, null))
   }
 
@@ -181,6 +190,32 @@ describeIfDatabase('JobService.claimPendingJobs (integration, real Postgres)', (
     })
   })
 
+  it('refuses state reports and stalled-job confirmations once a Box has a protected owner', async () => {
+    const box = await lifecycleBox()
+    const job = await service.createJob(null, JobType.START_BOX, runnerId, ResourceType.BOX, box.id)
+    await claimPendingJobs(service, runnerId, 1)
+    expect(await boxes.findOrdinaryRunnerReportBox(box.id, runnerId)).toMatchObject({ id: box.id })
+    expect((await boxes.findOrdinaryRunnerReportBox(box.id, randomUUID()))?.id).toBeUndefined()
+
+    await seedProtectedIntent(box)
+
+    expect((await boxes.findOrdinaryRunnerReportBox(box.id, runnerId))?.id).toBeUndefined()
+    await expect(
+      boxes.updateWhere(box.id, {
+        updateData: { state: BoxState.STARTED },
+        whereCondition: { id: box.id },
+        reportingRunnerId: runnerId,
+      }),
+    ).rejects.toMatchObject({ status: 409 })
+    await expect(
+      service.updateJobStatus(job.id, JobStatus.COMPLETED, undefined, undefined, { boxId: box.id, runnerId }),
+    ).rejects.toMatchObject({ status: 409 })
+    expect(await repository.findOneByOrFail({ id: job.id })).toMatchObject({ status: JobStatus.IN_PROGRESS })
+    expect(await dataSource.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      state: BoxState.UNKNOWN,
+    })
+  })
+
   it('publishes a start result for a Box still assigned to the ordinary job', async () => {
     const box = await lifecycleBox()
     const job = await service.createJob(null, JobType.START_BOX, runnerId, ResourceType.BOX, box.id)
@@ -191,6 +226,84 @@ describeIfDatabase('JobService.claimPendingJobs (integration, real Postgres)', (
     expect(await dataSource.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
       state: BoxState.STARTED,
     })
+  })
+
+  it('rejects the Runner status endpoint for an ordinary job after protected ownership commits', async () => {
+    const box = await lifecycleBox()
+    const job = await service.createJob(null, JobType.START_BOX, runnerId, ResourceType.BOX, box.id)
+    await claimPendingJobs(service, runnerId, 1)
+    await seedProtectedIntent(box)
+
+    const controller = new JobController(new JobService(repository, {} as any, completions))
+    const runner = { runnerId } as RunnerContext
+    await expect(controller.updateJobStatus(runner, job.id, { status: JobStatus.COMPLETED })).rejects.toMatchObject({
+      status: 409,
+    })
+    expect(await repository.findOneByOrFail({ id: job.id })).toMatchObject({ status: JobStatus.IN_PROGRESS })
+  })
+
+  it('persists the receiving API revision on the exact normal Runner create completion', async () => {
+    const box = await lifecycleBox()
+    const job = await service.createJob(null, JobType.CREATE_BOX, runnerId, ResourceType.BOX, box.id)
+    const reporting = new JobService(repository, {} as any, completions)
+    await claimPendingJobs(service, runnerId, 1)
+    await expect(
+      reporting.updateRunnerJobStatus(
+        randomUUID(),
+        job.id,
+        JobStatus.COMPLETED,
+        undefined,
+        undefined,
+        'candidate-revision',
+      ),
+    ).rejects.toMatchObject({ status: 404 })
+    expect((await repository.findOneByOrFail({ id: job.id })).completionRevision).toBeNull()
+    await reporting.updateRunnerJobStatus(
+      runnerId,
+      job.id,
+      JobStatus.COMPLETED,
+      undefined,
+      undefined,
+      'candidate-revision',
+    )
+    expect(await repository.findOneByOrFail({ id: job.id })).toMatchObject({
+      status: JobStatus.COMPLETED,
+      completionRevision: 'candidate-revision',
+      resourceId: box.id,
+    })
+  })
+
+  it('exposes migration mutation authority only for the current claimed job and exact archive', async () => {
+    const box = await lifecycleBox()
+    const attemptId = randomUUID()
+    const arcPath = `s3://fixture/migrate/${box.id}/${attemptId}.boxlite`
+    const migrations = dataSource.getRepository(BoxMigration)
+    await migrations.insert({
+      boxId: box.id,
+      attemptId,
+      arcPath,
+      state: BoxMigrationState.PENDING_ROLLBACK,
+      updatedAt: new Date(),
+    })
+    const job = await service.createJob(null, JobType.ROLLBACK_EXPORT_BOX, runnerId, ResourceType.BACKUP, box.id, {
+      attemptId,
+      arcPath,
+    })
+    await claimPendingJobs(service, runnerId, 1)
+    const controller = new JobController(service)
+    const principal = { runnerId } as RunnerContext
+    const setHeader = jest.fn()
+    const response = { setHeader } as never
+    await controller.getJob(principal, job.id, response)
+    expect(setHeader).toHaveBeenCalledWith('X-BoxLite-Migration-Authority', job.id)
+    setHeader.mockClear()
+
+    await migrations.update({ boxId: box.id }, { attemptId: randomUUID() })
+    await controller.getJob(principal, job.id, response)
+    expect(setHeader).not.toHaveBeenCalled()
+    await migrations.update({ boxId: box.id }, { attemptId, arcPath: 's3://fixture/migrate/different-attempt.boxlite' })
+    await controller.getJob(principal, job.id, response)
+    expect(setHeader).not.toHaveBeenCalled()
   })
 
   it('queues previous V2 Runner cleanup with one database connection', async () => {

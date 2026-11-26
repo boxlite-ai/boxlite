@@ -8,14 +8,18 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,16 +32,29 @@ func TestProtectedListenerAuthenticatesV2(t *testing.T) {
 	root, rootKey := issueListenerCertificate(t, "", 0, nil, nil)
 	server, serverKey := issueListenerCertificate(t, runnerName, x509.ExtKeyUsageServerAuth, root, rootKey)
 	config := ProtectedListenerConfig{
-		Address:       "127.0.0.1:0",
-		CertFile:      writeListenerPEM(t, "CERTIFICATE", server.Raw),
-		KeyFile:       writeListenerPEM(t, "PRIVATE KEY", listenerPrivateKey(t, serverKey)),
-		ClientCAFile:  writeListenerPEM(t, "CERTIFICATE", root.Raw),
-		ClientDNSName: apiName,
+		Address:          "127.0.0.1:0",
+		CertFile:         writeListenerPEM(t, "CERTIFICATE", server.Raw),
+		KeyFile:          writeListenerPEM(t, "PRIVATE KEY", listenerPrivateKey(t, serverKey)),
+		ClientCAFile:     writeListenerPEM(t, "CERTIFICATE", root.Raw),
+		ClientDNSName:    apiName,
+		ProcessID:        uuid.NewString(),
+		ExecutableDigest: strings.Repeat("af", 32),
 	}
 	boot := ProtectedBootConfig{
 		RunnerID: "8137cc0d-5d3f-43b8-aa32-b9304740269e",
 		DoHURL:   "https://resolver.example.test/dns-query", DoHAddress: "1.1.1.1:443",
 	}
+	ca, err := os.ReadFile(config.ClientCAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCA := config
+	wrongCA.ClientCASHA256 = strings.Repeat("00", 32)
+	if _, _, err := StartProtectedListener(t.Context(), slog.Default(), wrongCA, boot, token); err == nil ||
+		!strings.Contains(err.Error(), "client CA does not match the enrolled digest") {
+		t.Fatalf("listener accepted enrollment with changed client CA bytes: %v", err)
+	}
+	config.ClientCASHA256 = fmt.Sprintf("%x", sha256.Sum256(ca))
 	address, stop, err := StartProtectedListener(t.Context(), slog.Default(), config, boot, token)
 	if err != nil {
 		t.Fatal(err)
@@ -93,17 +110,21 @@ func TestProtectedListenerAuthenticatesV2(t *testing.T) {
 			}
 			if tc.status == http.StatusOK {
 				var capability struct {
-					RunnerID       string   `json:"runner_id"`
-					Version        int      `json:"version"`
-					ProcessID      string   `json:"process_id"`
-					BinaryIdentity string   `json:"binary_identity"`
-					Operations     []string `json:"operations"`
+					RunnerID         string   `json:"runner_id"`
+					Version          int      `json:"version"`
+					ProcessID        string   `json:"process_id"`
+					BinaryIdentity   string   `json:"binary_identity"`
+					ExecutableDigest string   `json:"executable_digest"`
+					Operations       []string `json:"operations"`
 				}
 				if err := json.NewDecoder(response.Body).Decode(&capability); err != nil {
 					t.Fatal(err)
 				}
-				if capability.RunnerID != boot.RunnerID || capability.Version != 2 || uuid.Validate(capability.ProcessID) != nil ||
-					capability.BinaryIdentity != internal.Version || capability.Operations == nil || len(capability.Operations) != 0 {
+				if capability.RunnerID != boot.RunnerID || capability.Version != 2 || capability.ProcessID != config.ProcessID ||
+					capability.ExecutableDigest != config.ExecutableDigest ||
+					capability.BinaryIdentity != internal.Version ||
+					!slices.Contains(capability.Operations, "allocate-attempt") ||
+					!slices.Contains(capability.Operations, "close-allocation") {
 					t.Fatalf("unexpected capability: %+v", capability)
 				}
 			}

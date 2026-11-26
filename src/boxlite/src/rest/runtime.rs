@@ -662,6 +662,11 @@ impl RuntimeBackend for RestRuntime {
         archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        if archive.runner_migration().is_some() {
+            return Err(BoxliteError::Unsupported(
+                "Runner migrations require a local runtime".into(),
+            ));
+        }
         self.client.require_import_enabled().await?;
 
         let archive_bytes = std::fs::read(archive.path()).map_err(|e| {

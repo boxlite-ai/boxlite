@@ -19,6 +19,12 @@ import type { ManagedBinding, ManagedUpdate } from '../runner-adapter/protected-
 
 type RegistryVersion = CredentialIdentity & { name: string; envelope: CredentialEnvelope | null }
 type RegistryTransaction = Pick<QueryRunner, 'query'>
+type ProxyAdmission = {
+  controlled: boolean
+  enabled: boolean
+  registry_writes: boolean
+  acceptance_organization: string | null
+}
 type PublicProxy = { name: string; url: string; revision: number; credential_configured: boolean }
 type ReferenceOwner<Epoch extends string | null = string> = {
   organizationId: string
@@ -60,7 +66,33 @@ export class ProxyRegistryStore implements OnModuleInit {
     private readonly cipher: ProxyCredentialCipher,
     private readonly enabled: boolean,
     private readonly firstKeyId?: string,
+    readonly admissionControlled = false,
   ) {}
+
+  private async lockAdmission(tx: RegistryTransaction): Promise<ProxyAdmission> {
+    const [gate]: ProxyAdmission[] = await tx.query(
+      `SELECT controlled, enabled, registry_writes,
+         CASE WHEN dev_acceptance_until > clock_timestamp() THEN dev_acceptance_organization END AS acceptance_organization
+       FROM outbound_proxy_admission WHERE singleton FOR SHARE`,
+    )
+    if (!gate) throw unavailable()
+    return { ...gate, controlled: gate.controlled || this.admissionControlled }
+  }
+
+  async allowsImplicitV0Ownership(tx: RegistryTransaction): Promise<boolean> {
+    return !(await this.lockAdmission(tx)).controlled
+  }
+
+  private requireBindingAdmission(gate: ProxyAdmission, organizationId: string): void {
+    if (gate.controlled && !gate.enabled && gate.acceptance_organization !== organizationId) {
+      throw new ServiceUnavailableException('Protected proxy admission is closed')
+    }
+  }
+
+  private async requireRegistryWrites(tx: RegistryTransaction): Promise<void> {
+    const gate = await this.lockAdmission(tx)
+    if (gate.controlled && !gate.registry_writes) throw unavailable()
+  }
 
   async onModuleInit(): Promise<void> {
     if (!this.enabled) return
@@ -73,6 +105,8 @@ export class ProxyRegistryStore implements OnModuleInit {
       if (this.firstKeyId === undefined) return
 
       this.cipher.requireKey(this.firstKeyId)
+      const gate = await this.lockAdmission(tx)
+      if (gate.controlled && !gate.registry_writes) return
       const [selected] = await tx.query('SELECT key_id FROM outbound_proxy_key_selector FOR UPDATE')
       if (!selected || (selected.key_id !== null && selected.key_id !== this.firstKeyId)) throw conflict()
       if (selected.key_id === null) await this.selectKey(tx, this.firstKeyId)
@@ -106,6 +140,7 @@ export class ProxyRegistryStore implements OnModuleInit {
     validateProxyCredential(input.url, credential)
     const keyId = credential ? await this.reserveSeal() : null
     return this.transaction(async (tx) => {
+      await this.requireRegistryWrites(tx)
       const version: RegistryVersion = {
         organizationId,
         id: randomUUID(),
@@ -128,6 +163,7 @@ export class ProxyRegistryStore implements OnModuleInit {
     if (patch.url === undefined && patch.credential === undefined) return this.get(organizationId, name)
     const keyId = patch.credential !== null ? await this.reserveSeal() : null
     return this.transaction(async (tx) => {
+      await this.requireRegistryWrites(tx)
       const previous = await this.lockRegistration(tx, organizationId, name)
       const url = patch.url ?? previous.url
       let credential = patch.credential ?? null
@@ -152,6 +188,7 @@ export class ProxyRegistryStore implements OnModuleInit {
 
   async remove(organizationId: string, name: string): Promise<void> {
     await this.transaction(async (tx) => {
+      await this.requireRegistryWrites(tx)
       const { id } = await this.lockRegistration(tx, organizationId, name)
       await tx.query('DELETE FROM outbound_proxy_registration WHERE organization_id = $1 AND id = $2', [
         organizationId,
@@ -162,6 +199,7 @@ export class ProxyRegistryStore implements OnModuleInit {
 
   async retireRevision(organizationId: string, name: string, revision: number): Promise<void> {
     await this.transaction(async (tx) => {
+      await this.requireRegistryWrites(tx)
       const current = await this.lockRegistration(tx, organizationId, name)
       if (revision === current.revision) throw conflict()
       const [removed] = await tx.query(
@@ -397,6 +435,10 @@ export class ProxyRegistryStore implements OnModuleInit {
     name: string | null,
   ): Promise<ManagedBinding | null> {
     if (!this.enabled) throw unavailable()
+    if (name !== null) {
+      const gate = await this.lockAdmission(tx)
+      this.requireBindingAdmission(gate, owner.organizationId)
+    }
     let id: string | undefined
     if (name !== null) {
       const [registration] = await tx.query(
@@ -584,6 +626,7 @@ export class ProxyRegistryStore implements OnModuleInit {
     purpose: 'legacy' | 'bootstrap' | 'update',
   ): Promise<ProxyReservation<Epoch>> {
     if (!this.enabled) throw unavailable()
+    const gate = await this.lockAdmission(tx)
     const version = await this.lockRegistration(tx, owner.organizationId, name, 'SHARE')
     const pending = await this.pending(tx, owner)
     if (pending) {
@@ -591,6 +634,7 @@ export class ProxyRegistryStore implements OnModuleInit {
         throw conflict()
       return { ...owner, registrationId: pending.registrationId, revision: pending.revision }
     }
+    this.requireBindingAdmission(gate, owner.organizationId)
     await tx.query(
       `INSERT INTO outbound_proxy_reference
         (organization_id, box_id, kind, registration_id, revision, runner_id, runtime_epoch, attempt_id, purpose)
@@ -612,6 +656,7 @@ export class ProxyRegistryStore implements OnModuleInit {
   async activateKey(keyId: string): Promise<void> {
     this.cipher.requireKey(keyId)
     await this.transaction(async (tx) => {
+      await this.requireRegistryWrites(tx)
       await tx.query('SELECT key_id FROM outbound_proxy_key_selector FOR UPDATE')
       await this.selectKey(tx, keyId)
     })
@@ -626,6 +671,7 @@ export class ProxyRegistryStore implements OnModuleInit {
 
   async retireKey(keyId: string): Promise<void> {
     await this.transaction(async (tx) => {
+      await this.requireRegistryWrites(tx)
       const [selected] = await tx.query('SELECT key_id FROM outbound_proxy_key_selector FOR UPDATE')
       const [used] = await tx.query('SELECT 1 FROM outbound_proxy_revision WHERE key_id = $1 LIMIT 1', [keyId])
       if (selected.key_id === keyId || used) throw conflict()
@@ -636,6 +682,7 @@ export class ProxyRegistryStore implements OnModuleInit {
   async resealRevision(organizationId: string, name: string, revision: number): Promise<void> {
     const keyId = await this.reserveSeal()
     await this.transaction(async (tx) => {
+      await this.requireRegistryWrites(tx)
       const { id } = await this.lockRegistration(tx, organizationId, name)
       const [row] = await tx.query(
         `SELECT url, envelope FROM outbound_proxy_revision
@@ -728,6 +775,14 @@ export class ProxyRegistryStore implements OnModuleInit {
   private async reserveSeal(): Promise<string | null> {
     return this.transaction(async (tx) => {
       await tx.query('SET LOCAL synchronous_commit = on')
+      await this.requireRegistryWrites(tx)
+      if (this.firstKeyId !== undefined) {
+        const [selected] = await tx.query('SELECT key_id FROM outbound_proxy_key_selector')
+        if (selected?.key_id === null) {
+          const [locked] = await tx.query('SELECT key_id FROM outbound_proxy_key_selector FOR UPDATE')
+          if (locked?.key_id === null) await this.selectKey(tx, this.firstKeyId)
+        }
+      }
       const [row] = await tx.query(`WITH reserved AS (
         UPDATE outbound_proxy_key SET uses = uses + 1
         WHERE id = (SELECT key_id FROM outbound_proxy_key_selector) AND uses < 4294967296 AND NOT retired

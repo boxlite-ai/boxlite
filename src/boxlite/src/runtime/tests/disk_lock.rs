@@ -47,6 +47,7 @@ async fn disk_lock_create_provision_stop_shutdown_and_restart_pair_lifetimes() {
             },
             BoxStatus::Stopped,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -105,7 +106,8 @@ async fn disk_lock_db_insert_failure_rolls_back_create_and_provision() {
                 None,
                 BoxOptions::default(),
                 BoxStatus::Stopped,
-                None
+                None,
+                None,
             )
             .await
             .is_err()
@@ -145,6 +147,7 @@ async fn disk_lock_b2_failed_allocation_preserves_file_and_reserves_id() {
             None,
             BoxOptions::default(),
             BoxStatus::Stopped,
+            None,
             None,
         )
         .await

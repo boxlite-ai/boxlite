@@ -9,7 +9,8 @@ import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, EntityManager, FindOptionsWhere, IsNull, Not } from 'typeorm'
 import { setTimeout } from 'timers/promises'
 
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { randomUUID } from 'node:crypto'
+import { LockCode, RedisLockProvider } from '../common/redis-lock.provider'
 import { Box } from '../entities/box.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
@@ -42,7 +43,8 @@ const MIGRATIONS_PER_TICK = 100
 
 /** Mirrors the runner's MigrateArchivePayload (executor/types.go). */
 interface MigrateArchivePayload {
-  arcPath: string
+  arcPath?: string
+  attemptId?: string
 }
 
 interface MigrateJobTarget {
@@ -188,17 +190,15 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
   }
 
   /**
-   * The object store key this migration moves the box through. Derived from the
-   * box so a retried export overwrites its own archive instead of stranding one:
-   * a box has at most one migration in flight — one `box_migration` row — and the
-   * key is dropped once that migration commits or rolls back.
+   * A retry overwrites its own attempt's archive. Separate attempts have separate keys.
    *
    * Only the export leg derives a key; every leg after it acts on the one the
    * export reported, so the configured prefix may change under a migration
    * already in flight without stranding its archive.
    */
-  private migrateArcPath(boxId: string): string {
-    return `${this.archivePrefix}${boxId}.boxlite`
+  private migrateArcPath(migration: BoxMigration): string {
+    const name = migration.attemptId ? `${migration.boxId}/${migration.attemptId}` : migration.boxId
+    return `${this.archivePrefix}${name}.boxlite`
   }
 
   /**
@@ -210,9 +210,8 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
    * tick in between calls this again, and what happens then is the job lock's
    * doing — a held lock means the runner is still working on the job this already
    * submitted, while a submission that threw is retried by the tick after it.
-   * Two outcomes end the migration instead of retrying it: a failed ValidCheck
-   * turns it around, and an EXPORT_BOX the runner reports as failed drops the
-   * row, leaving the box for the Marker to claim again.
+   * Failed validation turns the migration around. A failed versioned export
+   * retains its assigned key until rollback reclaims any uploaded archive.
    *
    * The job goes to the runner still holding the box, which is the draining one:
    * the archive can only be made where the box is.
@@ -224,9 +223,9 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
       return
     }
 
-    await this.submitValidated(migration, JobType.EXPORT_BOX, async (box) => ({
+    await this.submitValidated(migration, JobType.EXPORT_BOX, async (box, attempt) => ({
       runnerId: box.runnerId,
-      payload: { arcPath: this.migrateArcPath(box.id) },
+      payload: { arcPath: this.migrateArcPath(attempt) },
     }))
   }
 
@@ -250,12 +249,14 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
     }
 
     await this.submitValidated(migration, JobType.IMPORT_BOX, async (box, validated) => {
-      const target = await this.runnerService.getRandomAvailableRunner({
-        regions: [box.region],
-        boxClass: box.class,
-        excludedRunnerIds: [box.runnerId],
-        ...(box.privileged ? { requiresPrivileged: true } : {}),
-      })
+      const target = validated.runnerId
+        ? { id: validated.runnerId }
+        : await this.runnerService.getRandomAvailableRunner({
+            regions: [box.region],
+            boxClass: box.class,
+            excludedRunnerIds: [box.runnerId],
+            ...(box.privileged ? { requiresPrivileged: true } : {}),
+          })
       return {
         runnerId: target.id,
         payload: { arcPath: validated.arcPath },
@@ -282,7 +283,8 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
     resolveTarget: (box: Box, migration: BoxMigration) => Promise<MigrateJobTarget>,
   ): Promise<void> {
     const lockKey = getMigrateJobLockKey(migration.boxId, jobType)
-    if (!(await this.redisLockProvider.lock(lockKey, MIGRATE_JOB_LOCK_TTL_SECONDS))) {
+    const lockOwner = new LockCode(randomUUID())
+    if (!(await this.redisLockProvider.lock(lockKey, MIGRATE_JOB_LOCK_TTL_SECONDS, lockOwner))) {
       return
     }
 
@@ -314,7 +316,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
           loadEagerRelations: false,
         })
 
-        if (!box || !current || current.state !== migration.state) {
+        if (!box || !current || current.state !== migration.state || current.attemptId !== migration.attemptId) {
           return false
         }
 
@@ -324,23 +326,33 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
           return false
         }
 
+        let runnerId = target.runnerId
+        if (jobType === JobType.IMPORT_BOX && current.attemptId) {
+          // A lost import reply may have left a local copy on the first destination.
+          if (current.runnerId) {
+            runnerId = current.runnerId
+          } else {
+            await entityManager.update(BoxMigration, current.boxId, { runnerId })
+          }
+        }
         await this.jobService.createJob(
           entityManager,
           jobType,
-          target.runnerId,
+          runnerId,
           ResourceType.BACKUP,
           box.id,
-          target.payload,
+          current.attemptId ? { ...target.payload, attemptId: current.attemptId } : target.payload,
+          lockOwner,
         )
 
-        this.logger.log(`Submitted ${jobType} for box ${box.id} to runner ${target.runnerId}`)
+        this.logger.log(`Submitted ${jobType} for box ${box.id} to runner ${runnerId}`)
         return true
       })
     } catch (error) {
       this.logger.error(`Error submitting ${jobType} for box ${migration.boxId}:`, error)
     } finally {
       if (!submitted) {
-        await this.redisLockProvider.unlock(lockKey)
+        await this.redisLockProvider.releaseLease(lockKey, lockOwner)
       }
     }
   }
@@ -414,16 +426,25 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
     }
 
     const lockKey = getMigrateJobLockKey(migration.boxId, jobType)
-    if (!(await this.redisLockProvider.lock(lockKey, MIGRATE_JOB_LOCK_TTL_SECONDS))) {
+    const lockOwner = new LockCode(randomUUID())
+    if (!(await this.redisLockProvider.lock(lockKey, MIGRATE_JOB_LOCK_TTL_SECONDS, lockOwner))) {
       return
     }
 
     try {
-      await this.jobService.createJob(null, jobType, runnerId, ResourceType.BACKUP, migration.boxId, payload)
+      await this.jobService.createJob(
+        null,
+        jobType,
+        runnerId,
+        ResourceType.BACKUP,
+        migration.boxId,
+        migration.attemptId ? { ...payload, attemptId: migration.attemptId } : payload,
+        lockOwner,
+      )
       this.logger.log(`Submitted ${jobType} for box ${migration.boxId} to runner ${runnerId}`)
     } catch (error) {
       this.logger.error(`Error submitting ${jobType} for box ${migration.boxId}:`, error)
-      await this.redisLockProvider.unlock(lockKey)
+      await this.redisLockProvider.releaseLease(lockKey, lockOwner)
     }
   }
 
@@ -435,6 +456,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
       .set({ state: BoxMigrationState.PENDING_ROLLBACK })
       .where('"boxId" = :boxId', { boxId: migration.boxId })
       .andWhere('"state" = :expected', { expected: migration.state })
+      .andWhere('"attemptId" IS NOT DISTINCT FROM :attemptId', { attemptId: migration.attemptId ?? null })
       .execute()
   }
 
@@ -450,6 +472,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
       .from(BoxMigration)
       .where('"boxId" = :boxId', { boxId: migration.boxId })
       .andWhere('"state" = :expected', { expected: migration.state })
+      .andWhere('"attemptId" IS NOT DISTINCT FROM :attemptId', { attemptId: migration.attemptId ?? null })
       .execute()
 
     this.logger.log(`Rollback complete for box ${migration.boxId}`)

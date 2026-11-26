@@ -30,8 +30,10 @@ type BoxBackend interface {
 
 	// Migration — move a box between runners through a portable archive.
 	// ExportBox returns the archive path the runtime wrote inside destDir.
-	ExportBox(ctx context.Context, boxId, destDir string) (string, error)
-	ImportBox(ctx context.Context, boxId, archivePath string) error
+	ExportBox(ctx context.Context, boxId, destDir string, authorize ...func() error) (string, error)
+	ImportMigrationBox(ctx context.Context, boxId, archivePath, attemptID string, authorize func() error) error
+	DestroyMigrationCopy(ctx context.Context, boxId, importedAttemptID string, authorize func() error) error
+	WithOrdinaryTarget(ctx context.Context, boxId string, effect func() error) error
 
 	// Health
 	Ping(ctx context.Context) error

@@ -146,6 +146,7 @@ impl BoxImpl {
                         copy_options.clone(),
                         BoxStatus::Stopped,
                         resolved_image.clone(),
+                        None,
                     )
                     .await?;
 

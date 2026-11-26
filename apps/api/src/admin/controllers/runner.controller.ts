@@ -5,7 +5,9 @@
  */
 
 import {
+  BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -16,9 +18,19 @@ import {
   Patch,
   Post,
   Query,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common'
-import { ApiBearerAuth, ApiOAuth2, ApiOperation, ApiParam, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger'
+import {
+  ApiBearerAuth,
+  ApiExcludeEndpoint,
+  ApiOAuth2,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger'
 import { AdminCreateRunnerDto } from '../dto/create-runner.dto'
 import { AdminRunnerDto } from '../dto/admin-runner.dto'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../../audit/decorators/audit.decorator'
@@ -111,6 +123,64 @@ export class AdminRunnerController {
   })
   async getRunnerById(@Param('id', ParseUUIDPipe) id: string): Promise<AdminRunnerDto> {
     return this.toAdminRunnerDto(await this.runnerService.findOneFullOrFail(id))
+  }
+
+  @Get(':id/protected-release')
+  @ApiExcludeEndpoint()
+  async verifyProtectedRelease(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('processId', new ParseUUIDPipe({ version: '4' })) processId: string,
+    @Query('executableDigest') executableDigest: string,
+  ): Promise<{ revision: string }> {
+    if (typeof executableDigest !== 'string' || !/^[a-f0-9]{64}$/.test(executableDigest)) {
+      throw new BadRequestException('Expected a Runner executable SHA-256')
+    }
+    const revision = process.env.K_REVISION
+    if (!revision || !(await this.runnerService.verifyProtectedRelease(id, processId, executableDigest))) {
+      throw new ServiceUnavailableException('Current Runner process has not passed protected release verification')
+    }
+    return { revision }
+  }
+
+  @Post('protected-release/standalone')
+  @ApiExcludeEndpoint()
+  @HttpCode(204)
+  async claimStandaloneRunnerUpdate(
+    @Body('claimId', new ParseUUIDPipe({ version: '4' })) claimId: string,
+  ): Promise<void> {
+    if (!(await this.runnerService.claimStandaloneRunnerUpdate(claimId))) {
+      throw new ConflictException('Stage does not allow a standalone Runner update')
+    }
+  }
+
+  @Get('protected-release/serving')
+  @ApiExcludeEndpoint()
+  async verifyServingProtectedRelease(): Promise<{ revision: string; databaseLogin: string }> {
+    const revision = process.env.K_REVISION
+    if (!revision) throw new ServiceUnavailableException('Cloud Run revision is unavailable')
+    return { revision, databaseLogin: await this.runnerService.releaseDatabaseLogin() }
+  }
+
+  @Get('protected-release/serving/:boxId')
+  @ApiExcludeEndpoint()
+  async verifyServingRunnerCompletion(@Param('boxId') boxId: string) {
+    const revision = process.env.K_REVISION
+    if (!revision || !/^[A-Za-z0-9]{12}$/.test(boxId)) throw new BadRequestException('Invalid release Box or revision')
+    const receipt = await this.runnerService.releaseOrdinaryCreateReceipt(boxId, revision)
+    if (!receipt)
+      throw new ServiceUnavailableException('The exact ordinary V2 create has no completion on this revision')
+    return { revision, boxId, ...receipt }
+  }
+
+  @Delete('protected-release/standalone/:claimId')
+  @ApiExcludeEndpoint()
+  @HttpCode(204)
+  async finishStandaloneRunnerUpdate(
+    @Param('claimId', new ParseUUIDPipe({ version: '4' })) claimId: string,
+  ): Promise<void> {
+    if (!(await this.runnerService.finishStandaloneRunnerUpdate(claimId))) {
+      throw new ConflictException('Standalone Runner update claim changed')
+    }
   }
 
   @Get()

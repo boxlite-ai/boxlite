@@ -6,11 +6,15 @@
 package api
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	commonerrors "github.com/boxlite-ai/common-go/pkg/errors"
 	"github.com/boxlite-ai/runner/cmd/runner/config"
@@ -53,23 +57,23 @@ func TestProtectedAllocationHTTPRequiresEnrolledTLSAndBearer(t *testing.T) {
 	engine := gin.New()
 	engine.Use(commonerrors.NewErrorMiddleware(common.HandlePossibleDockerError))
 	registerProtectedBoot(engine.Group("/", middlewares.AuthMiddleware(token)), cfg, 0, true)
-	tls, plain := httptest.NewTLSServer(engine), httptest.NewServer(engine)
-	t.Cleanup(tls.Close)
+	secure, plain := httptest.NewTLSServer(engine), httptest.NewServer(engine)
+	t.Cleanup(secure.Close)
 	t.Cleanup(plain.Close)
 
 	boxID, attempt := uuid.NewString(), uuid.NewString()
-	path := "/v1/boxes/" + boxID + "/network/outbound/bootstrap/allocation/" + attempt
-	payload := `{"id":"` + boxID + `","osUser":"root","image":"alpine:latest","memoryQuota":1,"storageQuota":1,"outboundEnabled":false}`
-	send := func(server *httptest.Server, method, bearer, runnerID string, status int, state string) {
+	send := func(httpClient *http.Client, baseURL, method, bearer, runnerID string, status int, state string) {
 		t.Helper()
-		request, err := http.NewRequestWithContext(t.Context(), method, server.URL+path, strings.NewReader(payload))
+		path := "/v1/boxes/" + boxID + "/network/outbound/bootstrap/allocation/" + attempt
+		payload := `{"id":"` + boxID + `","osUser":"root","image":"alpine:latest","memoryQuota":1,"storageQuota":1,"outboundEnabled":false}`
+		request, err := http.NewRequestWithContext(t.Context(), method, baseURL+path, strings.NewReader(payload))
 		if err != nil {
 			t.Fatal(err)
 		}
 		request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Authorization", "Bearer "+bearer)
 		request.Header.Set("X-BoxLite-Runner-Id", runnerID)
-		response, err := server.Client().Do(request)
+		response, err := httpClient.Do(request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,20 +90,56 @@ func TestProtectedAllocationHTTPRequiresEnrolledTLSAndBearer(t *testing.T) {
 		}
 	}
 	for _, method := range []string{http.MethodPost, http.MethodDelete} {
-		send(plain, method, token, cfg.RunnerID, http.StatusForbidden, "")
-		send(tls, method, "wrong", cfg.RunnerID, http.StatusUnauthorized, "")
-		send(tls, method, token, uuid.NewString(), http.StatusForbidden, "")
+		send(plain.Client(), plain.URL, method, token, cfg.RunnerID, http.StatusForbidden, "")
+		send(secure.Client(), secure.URL, method, "wrong", cfg.RunnerID, http.StatusUnauthorized, "")
+		send(secure.Client(), secure.URL, method, token, uuid.NewString(), http.StatusForbidden, "")
 	}
 	info, err := client.GetBoxInfo(t.Context(), boxID)
 	if err != nil || info.BoxState != enums.BoxStateUnknown {
 		t.Fatalf("rejected allocation must leave the Runner without a Box: %v (%v)", info.BoxState, err)
 	}
-	send(tls, http.MethodPost, token, cfg.RunnerID, http.StatusCreated, "allocated")
-	send(tls, http.MethodDelete, "wrong", cfg.RunnerID, http.StatusUnauthorized, "")
+	send(secure.Client(), secure.URL, http.MethodPost, token, cfg.RunnerID, http.StatusCreated, "allocated")
+	send(secure.Client(), secure.URL, http.MethodDelete, "wrong", cfg.RunnerID, http.StatusUnauthorized, "")
 	info, err = client.GetBoxInfo(t.Context(), boxID)
 	if err != nil || info.BoxState != enums.BoxStateCreating {
 		t.Fatalf("rejected closure must retain the same configured Box: %v (%v)", info.BoxState, err)
 	}
-	send(tls, http.MethodDelete, token, cfg.RunnerID, http.StatusOK, "closed")
-	send(tls, http.MethodPost, token, cfg.RunnerID, http.StatusConflict, "")
+	send(secure.Client(), secure.URL, http.MethodDelete, token, cfg.RunnerID, http.StatusOK, "closed")
+	send(secure.Client(), secure.URL, http.MethodPost, token, cfg.RunnerID, http.StatusConflict, "")
+
+	const runnerName, apiName = "runner.example.test", "api.example.test"
+	root, rootKey := issueListenerCertificate(t, "", 0, nil, nil)
+	serverCertificate, serverKey := issueListenerCertificate(t, runnerName, x509.ExtKeyUsageServerAuth, root, rootKey)
+	apiCertificate, apiKey := issueListenerCertificate(t, apiName, x509.ExtKeyUsageClientAuth, root, rootKey)
+	address, stop, err := StartProtectedListener(t.Context(), slog.Default(), ProtectedListenerConfig{
+		Address:          "127.0.0.1:0",
+		CertFile:         writeListenerPEM(t, "CERTIFICATE", serverCertificate.Raw),
+		KeyFile:          writeListenerPEM(t, "PRIVATE KEY", listenerPrivateKey(t, serverKey)),
+		ClientCAFile:     writeListenerPEM(t, "CERTIFICATE", root.Raw),
+		ClientDNSName:    apiName,
+		ProcessID:        uuid.NewString(),
+		ExecutableDigest: strings.Repeat("af", 32),
+	}, cfg, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	roots := x509.NewCertPool()
+	roots.AddCert(root)
+	transport := &http.Transport{TLSClientConfig: &tls.Config{
+		ServerName: runnerName,
+		RootCAs:    roots,
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{apiCertificate.Raw},
+			PrivateKey:  apiKey,
+		}},
+	}}
+	t.Cleanup(transport.CloseIdleConnections)
+	v2 := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	baseURL := "https://" + address.String()
+	boxID, attempt = uuid.NewString(), uuid.NewString()
+	send(v2, baseURL, http.MethodPost, token, uuid.NewString(), http.StatusForbidden, "")
+	send(v2, baseURL, http.MethodPost, token, cfg.RunnerID, http.StatusCreated, "allocated")
+	send(v2, baseURL, http.MethodDelete, token, cfg.RunnerID, http.StatusOK, "closed")
+	send(v2, baseURL, http.MethodPost, token, cfg.RunnerID, http.StatusConflict, "")
 }

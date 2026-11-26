@@ -27,6 +27,7 @@ import { useApiBodyParsers } from '../../mcp/mcp-body'
 import { IndexBoxOrganizationForProxy1795000000000 } from '../../migrations/pre-deploy/1795000000000-index-box-organization-for-proxy-migration'
 import { AddOutboundProxyRegistry1795000001000 } from '../../migrations/pre-deploy/1795000001000-add-outbound-proxy-registry-migration'
 import { ExtendOutboundProxyRuntimeState1795153000000 } from '../../migrations/pre-deploy/1795153000000-extend-outbound-proxy-runtime-state-migration'
+import { AddOutboundProxyAdmission1795663861000 } from '../../migrations/pre-deploy/1795663861000-add-outbound-proxy-admission-migration'
 import { OrganizationMemberRole } from '../../organization/enums/organization-member-role.enum'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationService } from '../../organization/services/organization.service'
@@ -35,6 +36,16 @@ import { SystemRole } from '../../user/enums/system-role.enum'
 import { ProxyCredentialCipher } from './proxy-credential-cipher'
 import { proxyCreate, proxyPatch } from './proxy-registration.input'
 import { ProxyRegistryStore } from './proxy-registry.store'
+import {
+  recordProtectedProcessProof,
+  beginProtectedRelease,
+  enableProtectedRegistryWrites,
+  finishProtectedRestore,
+  releaseContext,
+  reserveProtectedRestore,
+  verifyProtectedRestore,
+} from './protected-release-state'
+import type { Client } from 'pg'
 
 // Jest bypasses the module loader hook that installs PinoInstrumentation in the API process.
 jest.mock('pino', () => {
@@ -78,7 +89,11 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
     await db.query('CREATE TABLE organization (id uuid PRIMARY KEY)')
     await db.query(`CREATE TABLE box (
       id varchar PRIMARY KEY, "organizationId" uuid NOT NULL, "runnerId" varchar,
-      "prevRunnerId" varchar, state varchar, "updatedAt" timestamptz, "outboundControl" jsonb
+      "prevRunnerId" varchar, state varchar, "updatedAt" timestamptz, "outboundControl" jsonb, "errorReason" varchar
+    )`)
+    await db.query(`CREATE TABLE runner (
+      id uuid PRIMARY KEY, "apiVersion" varchar NOT NULL,
+      "protectedProcessId" uuid, "protectedExecutableDigest" varchar, "lastChecked" timestamptz
     )`)
     await db.query('INSERT INTO organization VALUES ($1), ($2)', [org, otherOrg])
     await db.query('INSERT INTO box (id, "organizationId", "runnerId") VALUES ($1, $2, $3)', [
@@ -91,6 +106,7 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
       await new IndexBoxOrganizationForProxy1795000000000().up(migration)
       await new AddOutboundProxyRegistry1795000001000().up(migration)
       await new ExtendOutboundProxyRuntimeState1795153000000().up(migration)
+      await new AddOutboundProxyAdmission1795663861000().up(migration)
     } finally {
       await migration.release()
     }
@@ -103,10 +119,15 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
   })
 
   beforeEach(async () => {
+    await db.query(`UPDATE outbound_proxy_admission SET
+      controlled = false, registry_writes = false, enabled = false, standalone_update = NULL,
+      dev_acceptance_organization = NULL, dev_acceptance_until = NULL, dev_acceptance_commit = NULL,
+      release_key = NULL, pins = '{}', restore_permit = NULL, restore_runner = NULL, restore_digest = NULL`)
+    await db.query('TRUNCATE runner')
     await db.query('TRUNCATE outbound_proxy_registration, outbound_proxy_key CASCADE')
     await db.query('INSERT INTO outbound_proxy_key_selector DEFAULT VALUES')
     await db.query(
-      'UPDATE box SET "runnerId" = $2, "prevRunnerId" = NULL, "outboundControlDueAt" = NULL WHERE id = $1',
+      'UPDATE box SET "runnerId" = $2, "prevRunnerId" = NULL, "outboundControlDueAt" = NULL, "outboundControl" = NULL WHERE id = $1',
       [owner.boxId, owner.runnerId],
     )
     cipher = new ProxyCredentialCipher(JSON.stringify({ a: keyA, b: keyB }))
@@ -117,6 +138,236 @@ describeWithDb('outbound proxy registry (PostgreSQL)', () => {
   async function create() {
     return store.create(org, proxyCreate(registration))
   }
+
+  it('starts Box binding admission closed and preserves exact retries admitted before closure', async () => {
+    await create()
+    const controlled = new ProxyRegistryStore(db, cipher, true, undefined, true)
+    await expect(controlled.reserveReference(owner, registration.name)).rejects.toMatchObject({ status: 503 })
+
+    await db.query('UPDATE outbound_proxy_admission SET controlled = true, registry_writes = true, enabled = true')
+    try {
+      const reference = await controlled.reserveReference(owner, registration.name)
+      await db.query('UPDATE outbound_proxy_admission SET enabled = false')
+      await expect(controlled.reserveReference(owner, registration.name)).resolves.toEqual(reference)
+    } finally {
+      await db.query('UPDATE outbound_proxy_admission SET enabled = false')
+    }
+  })
+
+  it('keeps admission closed across pin removal and serves retained V0 routes during the writer fence', async () => {
+    await create()
+    const reference = await store.reserveReference(owner, registration.name)
+    await db.query('UPDATE outbound_proxy_key_selector SET key_id = NULL')
+    await db.query('UPDATE outbound_proxy_admission SET controlled = true')
+
+    const replacement = new ProxyRegistryStore(db, cipher, true, 'a')
+    await replacement.onModuleInit()
+    expect(await db.query('SELECT key_id FROM outbound_proxy_key_selector')).toEqual([{ key_id: null }])
+    await expect(replacement.update(org, registration.name, { credential: null })).rejects.toMatchObject({
+      status: 503,
+    })
+    await expect(replacement.activateKey('b')).rejects.toMatchObject({ status: 503 })
+    await expect(
+      db.transaction((tx) => replacement.loadPinnedRoute(tx, org, reference.registrationId, reference.revision)),
+    ).resolves.toMatchObject({ credential })
+    await expect(replacement.reserveReference(owner, registration.name)).resolves.toEqual(reference)
+    await expect(db.transaction((tx) => replacement.allowsImplicitV0Ownership(tx))).resolves.toBe(false)
+
+    await db.query('UPDATE outbound_proxy_admission SET registry_writes = true')
+    await expect(replacement.create(org, { ...proxyCreate(registration), name: 'after-fence' })).resolves.toMatchObject(
+      {
+        credential_configured: true,
+      },
+    )
+    expect(await db.query('SELECT key_id FROM outbound_proxy_key_selector')).toEqual([{ key_id: 'a' }])
+  })
+
+  it('waits for the exact standalone update and any unbound managed Boxes before changing protected pins', async () => {
+    const id = randomUUID()
+    const pin = {
+      runnerId: id,
+      url: 'https://runner.example.test:3004/',
+      caPem: 'fixture-ca',
+      apiVersion: 2,
+      clientCaSha256: 'a'.repeat(64),
+      clientDnsName: 'api.example.test',
+    }
+    const release = releaseContext('run.1', JSON.stringify([pin]), 'client-version-1')
+    const connection = db.createQueryRunner()
+    const sql: Client = await connection.connect()
+    try {
+      await db.query('UPDATE outbound_proxy_admission SET standalone_update = $1', [randomUUID()])
+      await expect(beginProtectedRelease(sql, release)).rejects.toThrow('active update')
+      await db.query('UPDATE outbound_proxy_admission SET standalone_update = NULL')
+      await beginProtectedRelease(sql, release)
+      await db.query('UPDATE box SET "outboundControl" = $2 WHERE id = $1', [
+        owner.boxId,
+        JSON.stringify({ managed: { runnerId: id, binding: null } }),
+      ])
+      expect(await db.query('SELECT * FROM outbound_proxy_reference')).toHaveLength(0)
+      await expect(
+        beginProtectedRelease(
+          sql,
+          releaseContext('run.2', JSON.stringify([{ ...pin, clientCaSha256: 'b'.repeat(64) }]), 'client-version-1'),
+        ),
+      ).rejects.toThrow('protected dependencies')
+      await expect(
+        beginProtectedRelease(sql, releaseContext('run.2', JSON.stringify([pin]), 'client-version-2')),
+      ).rejects.toThrow('protected dependencies')
+      await expect(beginProtectedRelease(sql, releaseContext('run.2', '[]'))).rejects.toThrow('protected dependencies')
+      await db.query('UPDATE box SET "outboundControl" = NULL WHERE id = $1', [owner.boxId])
+      await beginProtectedRelease(sql, releaseContext('run.2', '[]'))
+      expect(await db.query('SELECT controlled, enabled, pins FROM outbound_proxy_admission')).toEqual([
+        { controlled: true, enabled: false, pins: {} },
+      ])
+      await enableProtectedRegistryWrites(sql, 'run.2')
+      expect(await db.query('SELECT registry_writes, enabled FROM outbound_proxy_admission')).toEqual([
+        { registry_writes: true, enabled: false },
+      ])
+    } finally {
+      await connection.release()
+    }
+  })
+
+  it('commits admission only with fresh process evidence from every enrolled Runner', async () => {
+    const ids = [randomUUID(), randomUUID()]
+    const release = releaseContext(
+      'run.1',
+      JSON.stringify(
+        ids.map((runnerId, index) => ({
+          runnerId,
+          url: `https://runner-${index}.example.test:3004/`,
+          caPem: 'fixture-ca',
+          apiVersion: 2,
+        })),
+      ),
+    )
+    const witnesses = ids.map((runnerId) => ({
+      runnerId,
+      process_id: randomUUID(),
+      executable_digest: 'e'.repeat(64),
+    }))
+    const connection = db.createQueryRunner()
+    const sql: Client = await connection.connect()
+    try {
+      for (const { runnerId, process_id } of witnesses) {
+        await db.query(`INSERT INTO runner VALUES ($1, '2', $2, NULL, now())`, [runnerId, process_id])
+      }
+      await beginProtectedRelease(sql, release)
+      await expect(recordProtectedProcessProof(sql, release.key, witnesses)).rejects.toThrow('fenced release')
+      await enableProtectedRegistryWrites(sql, release.key)
+      await expect(recordProtectedProcessProof(sql, release.key, witnesses.slice(0, 1))).rejects.toThrow(
+        'exact enrolled fleet',
+      )
+      const restarted = randomUUID()
+      await db.query('UPDATE runner SET "protectedProcessId" = $2 WHERE id = $1', [ids[1], restarted])
+      await expect(recordProtectedProcessProof(sql, release.key, witnesses)).rejects.toThrow('process changed')
+      expect(await db.query('SELECT enabled FROM outbound_proxy_admission')).toEqual([{ enabled: false }])
+      expect(
+        await db.query('SELECT count(*)::int AS approved FROM runner WHERE "protectedExecutableDigest" IS NOT NULL'),
+      ).toEqual([{ approved: 0 }])
+      const final = [witnesses[0], { ...witnesses[1], process_id: restarted }]
+      await recordProtectedProcessProof(sql, release.key, final)
+      expect(await db.query('SELECT enabled FROM outbound_proxy_admission')).toEqual([{ enabled: false }])
+      await recordProtectedProcessProof(sql, release.key, final, { openAdmission: true })
+      expect(await db.query('SELECT enabled FROM outbound_proxy_admission')).toEqual([{ enabled: true }])
+    } finally {
+      await connection.release()
+    }
+  })
+
+  it('permits only the isolated dev test organization while public admission remains closed', async () => {
+    const runnerId = randomUUID()
+    const processId = randomUUID()
+    const release = releaseContext(
+      'dev.1',
+      JSON.stringify([{ runnerId, url: 'https://dev-runner.example.test:3004/', caPem: 'fixture-ca', apiVersion: 2 }]),
+    )
+    const witnesses = [{ runnerId, process_id: processId, executable_digest: 'e'.repeat(64) }]
+    const connection = db.createQueryRunner()
+    const sql: Client = await connection.connect()
+    const otherBox = { ...owner, organizationId: otherOrg, boxId: 'other-box' }
+    const expiredBox = { ...owner, boxId: 'expired-box' }
+    try {
+      await create()
+      await store.create(otherOrg, proxyCreate(registration))
+      await db.query('INSERT INTO box (id, "organizationId", "runnerId") VALUES ($1, $2, $3), ($4, $5, $3)', [
+        otherBox.boxId,
+        otherOrg,
+        owner.runnerId,
+        expiredBox.boxId,
+        org,
+      ])
+      await db.query(`INSERT INTO runner VALUES ($1, '2', $2, NULL, now())`, [runnerId, processId])
+      await beginProtectedRelease(sql, release)
+      await enableProtectedRegistryWrites(sql, release.key)
+      await recordProtectedProcessProof(sql, release.key, witnesses, {
+        devAcceptance: { organization: org, commit: 'a'.repeat(40) },
+      })
+      expect(await db.query('SELECT enabled FROM outbound_proxy_admission')).toEqual([{ enabled: false }])
+      await expect(store.reserveReference(otherBox, registration.name)).rejects.toMatchObject({ status: 503 })
+      await expect(
+        db.transaction((tx) => store.reserveUpdateInTransaction(tx, owner, null, registration.name)),
+      ).resolves.toMatchObject({ registration_id: expect.any(String) })
+      await db.query('UPDATE outbound_proxy_admission SET dev_acceptance_until = now()')
+      await expect(store.reserveReference(expiredBox, registration.name)).rejects.toMatchObject({ status: 503 })
+      await beginProtectedRelease(sql, release)
+      expect(await db.query('SELECT dev_acceptance_organization FROM outbound_proxy_admission')).toEqual([
+        { dev_acceptance_organization: null },
+      ])
+    } finally {
+      await db.query('DELETE FROM box WHERE id IN ($1, $2)', [otherBox.boxId, expiredBox.boxId])
+      await connection.release()
+    }
+  })
+
+  it('retains a closed and exact restore permit across connections until the matching restore finishes', async () => {
+    const runnerId = randomUUID()
+    const release = releaseContext(
+      'run.1',
+      JSON.stringify([{ runnerId, url: 'https://runner.example.test:3004/', caPem: 'fixture-ca', apiVersion: 2 }]),
+    )
+    const restore = { permit: randomUUID(), runnerId, digest: 'a'.repeat(64), releaseKey: release.key }
+    const first = db.createQueryRunner()
+    try {
+      const sql: Client = await first.connect()
+      await beginProtectedRelease(sql, release)
+      await db.query('UPDATE box SET "outboundControl" = $2 WHERE id = $1', [
+        owner.boxId,
+        JSON.stringify({ managed: { runnerId, binding: null } }),
+      ])
+      await expect(reserveProtectedRestore(sql, restore)).rejects.toThrow('live dependencies')
+      await db.query('UPDATE box SET "outboundControl" = NULL WHERE id = $1', [owner.boxId])
+      await reserveProtectedRestore(sql, restore)
+    } finally {
+      await first.release()
+    }
+    const retry = db.createQueryRunner()
+    try {
+      const sql: Client = await retry.connect()
+      await expect(beginProtectedRelease(sql, release)).rejects.toThrow('active update or restore')
+      await expect(verifyProtectedRestore(sql, { ...restore, digest: 'b'.repeat(64) })).rejects.toThrow(
+        'does not match',
+      )
+      await expect(verifyProtectedRestore(sql, { ...restore, releaseKey: 'other-run.1' })).rejects.toThrow(
+        'does not match',
+      )
+      await db.query('UPDATE outbound_proxy_admission SET generation = generation + 1')
+      try {
+        await expect(verifyProtectedRestore(sql, restore)).rejects.toThrow('does not match')
+      } finally {
+        await db.query('UPDATE outbound_proxy_admission SET generation = generation - 1')
+      }
+      await reserveProtectedRestore(sql, restore)
+      await verifyProtectedRestore(sql, restore)
+      await finishProtectedRestore(sql, restore)
+      expect(await db.query('SELECT enabled, restore_permit FROM outbound_proxy_admission')).toEqual([
+        { enabled: false, restore_permit: null },
+      ])
+    } finally {
+      await retry.release()
+    }
+  })
 
   it('converges concurrent provisioning of the first key and accepts a credential write', async () => {
     await db.query('UPDATE outbound_proxy_key_selector SET key_id = NULL')

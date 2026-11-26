@@ -479,8 +479,11 @@ paths:
         Initializes the VM and starts its main command. A running VM can have
         an unstarted container; this call starts it. It is not a read-only check.
         Transitions: configured → running, stopped → running.
-        A stopped proxy-bound Box assigned to a V2 Runner returns 503 with
-        `runner_proxy_unsupported` in `diagnostic.code` before scheduling start.
+        For a stopped proxy-bound Cloud Box on V2, the API checks the
+        Runner's recorded executable approval, process ID, and heartbeat
+        before recording a start request. It returns 503 with
+        `runner_proxy_unsupported` in `diagnostic.code` if the approval or
+        process ID is missing, or the heartbeat is missing or stale.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"

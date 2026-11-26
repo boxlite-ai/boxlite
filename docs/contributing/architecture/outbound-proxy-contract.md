@@ -292,9 +292,13 @@ with `code: outbound_create_rejected` and no Box ID. Its `diagnostic.code` is
 `runner_proxy_unsupported` otherwise. Inconclusive capability checks retain the
 generic capacity response.
 
-A stopped bound Box on V2 returns the unsupported diagnostic before writing
-start intent. Proxy-triggered auto-resume uses the same guard before writing
-the intent. Guest applications receive native network failures.
+Explicit start and proxy auto-resume check the recorded V2 Runner executable
+approval, process ID, and heartbeat before saving a start request. Missing
+approval, process ID, or recent health returns HTTP 503 with
+`runner_proxy_unsupported` for explicit start.
+
+When a restart needs native dispatch, the protected bootstrap verifies the live
+process ID and executable digest over the private Runner connection.
 
 ## Protected Runner bootstrap
 

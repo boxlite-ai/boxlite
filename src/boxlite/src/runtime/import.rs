@@ -59,7 +59,7 @@ pub(crate) async fn import_box(
     let litebox = runtime
         // An archive carries the box's options but not what its image resolved
         // to, so an imported box has no record until one is rebuilt.
-        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None)
+        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None, archive.runner_migration())
         .await?;
 
     tracing::info!(
@@ -693,6 +693,53 @@ mod tests {
 mod required_import_safety_tests {
     use super::*;
     use crate::runtime::options::BoxliteOptions;
+
+    #[tokio::test]
+    async fn runner_migration_attempt_is_durable_before_reporting_import() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().join("runtime"),
+            ..Default::default()
+        })
+        .unwrap();
+        let disk = home.path().join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk, None);
+        let manifest = ArchiveManifest {
+            version: 3,
+            box_name: None,
+            image: "alpine:latest".into(),
+            box_options: Some(BoxOptions::default()),
+            guest_disk_checksum: String::new(),
+            container_disk_checksum: sha256_file(&disk).unwrap(),
+            exported_at: "2026-11-10T00:00:00Z".into(),
+        };
+        let manifest_path = home.path().join("manifest.json");
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let path = home.path().join("saved.boxlite");
+        crate::litebox::archive::build_zstd_tar_archive(&path, &manifest_path, &disk, 1).unwrap();
+
+        let attempt = crate::net::OutboundRevision::fresh();
+        let archive = BoxArchive::new(&path)
+            .for_runner_migration(attempt.clone())
+            .unwrap();
+        let imported = import_box(&runtime, archive, Some("runner-migration".to_string()))
+            .await
+            .unwrap();
+        let id = imported.id().clone();
+        drop(imported);
+        let (_, persisted) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+        assert_eq!(persisted.runner_migration, Some(attempt));
+
+        let ordinary = import_box(&runtime, BoxArchive::new(&path), None)
+            .await
+            .unwrap();
+        let (_, persisted) = runtime
+            .box_manager
+            .box_by_id(ordinary.id())
+            .unwrap()
+            .unwrap();
+        assert!(persisted.runner_migration.is_none());
+    }
 
     #[tokio::test]
     async fn required_headers_import_preserves_archive_and_store() {

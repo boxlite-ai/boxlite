@@ -1,8 +1,8 @@
 import { NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { DataSource, EntityManager } from 'typeorm'
 import { Box } from '../entities/box.entity'
-import { UNCONFIRMED_PROTECTED_PLACEHOLDER } from '../errors/protected-placeholder.error'
 import { BoxConflictError } from '../errors/box-conflict.error'
+import { UNCONFIRMED_PROTECTED_PLACEHOLDER } from '../errors/protected-placeholder.error'
 import { OutboundControlRecord } from '../entities/outbound-control-record'
 import { OutboundSnapshot, validOutboundRevision, validOutboundSnapshot } from '../runner-adapter/outbound-control'
 import { validManagedControl } from '../runner-adapter/protected-outbound'
@@ -87,6 +87,14 @@ export async function lockOrdinaryBox(
   if (await hasProtectedBoxAuthority(manager, box)) throw new BoxConflictError()
 }
 
+export type ProtectedStartProof = {
+  runnerId: string
+  attemptId: string
+  epoch: string
+  generation: string
+  revision: string
+}
+
 export type LockedOutboundBox = {
   box: Box
   manager: EntityManager
@@ -121,7 +129,8 @@ export class OutboundPolicyStore {
     }
   }
 
-  async read(id: string, organizationId: string): Promise<Box> {
+  async read(id: string, organizationId: string, manager?: EntityManager): Promise<Box> {
+    if (manager) return this.find(manager, id, organizationId)
     const runner = this.dataSource.createQueryRunner('master')
     try {
       return await this.find(runner.manager, id, organizationId)

@@ -21,6 +21,8 @@ import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerState } from '../enums/runner-state.enum'
 import type { LockCode } from '../common/redis-lock.provider'
+import { enrolledV2RunnerEndpoint, type ProtectedBootCapability } from './protected-runner'
+import { RunnerAdapterV0 } from './runnerAdapter.v0'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -31,6 +33,7 @@ import type { LockCode } from '../common/redis-lock.provider'
 export class RunnerAdapterV2 implements RunnerAdapter {
   private readonly logger = new Logger(RunnerAdapterV2.name)
   private runner: Runner
+  private protectedControl?: RunnerAdapterV0
 
   @InjectRepository(Runner)
   private readonly runnerRepository: Repository<Runner>
@@ -44,6 +47,39 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
   async init(runner: Runner): Promise<void> {
     this.runner = runner
+    this.protectedControl = undefined
+    try {
+      const endpoint = enrolledV2RunnerEndpoint(runner.id)
+      if (endpoint) {
+        const adapter = new RunnerAdapterV0()
+        await adapter.init(runner, endpoint)
+        this.protectedControl = adapter
+      }
+    } catch {
+      this.logger.warn(`Protected endpoint is unavailable for Runner ${runner.id}`)
+    }
+  }
+
+  get protectedBootstrap() {
+    return this.protectedControl?.protectedBootstrap
+  }
+
+  get managedOutbound() {
+    return this.protectedControl?.managedOutbound.bind(this.protectedControl)
+  }
+
+  async protectedBootstrapCapability(
+    recovery = false,
+    volumeRestart = false,
+    allocation = false,
+  ): Promise<ProtectedBootCapability> {
+    return (
+      (await this.protectedControl?.protectedBootstrapCapability(recovery, volumeRestart, allocation)) ?? 'unverified'
+    )
+  }
+
+  async supportsProtectedBootstrap(recovery = false, volumeRestart = false, allocation = false): Promise<boolean> {
+    return (await this.protectedBootstrapCapability(recovery, volumeRestart, allocation)) === 'supported'
   }
 
   async healthCheck(_signal?: AbortSignal): Promise<void> {

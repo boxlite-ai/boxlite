@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -57,6 +58,12 @@ type protectedBootGate struct {
 	Outbound   json.RawMessage  `json:"outbound,omitempty"`
 }
 
+type protectedBootEpoch struct {
+	Key        protectedBootKey `json:"key"`
+	Epoch      string           `json:"epoch"`
+	Generation string           `json:"generation"`
+}
+
 type protectedOutboundControl struct {
 	RunnerID string          `json:"runner_id"`
 	Epoch    string          `json:"epoch"`
@@ -90,9 +97,15 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 		return
 	}
 	protected := protectedBootGroup(group, c)
-	registerProtectedBootCapability(protected, c, 1, "", []string{
-		"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired", "restart-volumes", "allocate-attempt", "close-allocation",
-	})
+	registerProtectedBootCapability(protected, c, 1, "", "")
+	registerProtectedBootRoutes(protected, c, false)
+}
+
+var protectedBootOperations = []string{
+	"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired", "restart-volumes", "allocate-attempt", "close-allocation",
+}
+
+func registerProtectedBootRoutes(protected *gin.RouterGroup, c ProtectedBootConfig, v2 bool) {
 	path := "/boxes/:boxId/network/outbound/bootstrap"
 	protected.POST(path, c.handleBoot(boxlite.ProtectedBootStart))
 	protected.POST(path+"/receipt", c.handleBoot(boxlite.ProtectedBootRead))
@@ -103,6 +116,11 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 	protected.POST(path+"/allocation/:attemptId", allocateProtectedPlaceholder)
 	protected.DELETE(path+"/allocation/:attemptId", closeProtectedPlaceholder)
 	protected.POST("/boxes/:boxId/network/outbound/managed-route", c.handleBoot(boxlite.ProtectedOutboundControl))
+	if v2 {
+		protected.POST(path+"/stop", c.handleBoot(boxlite.ProtectedBootStop))
+		protected.POST(path+"/retire-terminated", c.handleBoot(boxlite.ProtectedBootRetireTerminated))
+		protected.POST(path+"/ready", c.handleBoot(boxlite.ProtectedBootReady))
+	}
 }
 
 func protectedBootGroup(group *gin.RouterGroup, c ProtectedBootConfig) *gin.RouterGroup {
@@ -117,7 +135,11 @@ func protectedBootGroup(group *gin.RouterGroup, c ProtectedBootConfig) *gin.Rout
 	return protected
 }
 
-func registerProtectedBootCapability(protected *gin.RouterGroup, c ProtectedBootConfig, version int, processID string, operations []string) {
+func registerProtectedBootCapability(protected *gin.RouterGroup, c ProtectedBootConfig, version int, processID, executableDigest string) {
+	operations := protectedBootOperations
+	if version == 2 {
+		operations = slices.Concat(operations, []string{"managed-ownership-fence", "stop-protected", "retire-terminated", "ready-protected"})
+	}
 	protected.GET("/outbound-proxy/bootstrap", func(ctx *gin.Context) {
 		capability := gin.H{
 			"runner_id": c.RunnerID, "version": version,
@@ -125,6 +147,7 @@ func registerProtectedBootCapability(protected *gin.RouterGroup, c ProtectedBoot
 		}
 		if processID != "" {
 			capability["process_id"] = processID
+			capability["executable_digest"] = executableDigest
 			capability["binary_identity"] = internal.Version
 		}
 		ctx.JSON(http.StatusOK, capability)
@@ -176,6 +199,17 @@ func (c ProtectedBootConfig) handleBoot(operation boxlite.ProtectedBootOperation
 			}
 			key = gate.Key
 			payload = gate
+		case boxlite.ProtectedBootStop, boxlite.ProtectedBootRetireTerminated:
+			var epoch protectedBootEpoch
+			if decode.Decode(&epoch) != nil || epoch.Epoch == "" || epoch.Generation == "" {
+				ctx.Status(http.StatusBadRequest)
+				return
+			}
+			if epoch.Key.Policy.Policy.AllowNet == nil {
+				epoch.Key.Policy.Policy.AllowNet = []string{}
+			}
+			key = epoch.Key
+			payload = epoch
 		case boxlite.ProtectedOutboundControl:
 			var control protectedOutboundControl
 			if decode.Decode(&control) != nil || control.Epoch == "" || len(control.Command) == 0 {

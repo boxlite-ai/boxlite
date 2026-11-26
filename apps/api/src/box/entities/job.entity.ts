@@ -101,6 +101,9 @@ export class Job {
   })
   completedAt: Date | null
 
+  @Column({ type: 'varchar', nullable: true })
+  completionRevision: string | null
+
   @CreateDateColumn({
     type: 'timestamp with time zone',
   })

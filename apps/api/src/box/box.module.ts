@@ -132,6 +132,7 @@ import { ManagedOutboundCoordinator } from './services/managed-outbound.coordina
           new ProxyCredentialCipher(enabled ? process.env.OUTBOUND_PROXY_REGISTRY_KEYS : undefined),
           enabled,
           process.env.OUTBOUND_PROXY_REGISTRY_FIRST_KEY_ID,
+          process.env.BOXLITE_PROTECTED_PROXY_ADMISSION_CONTROLLED === 'true',
         )
       },
     },

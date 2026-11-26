@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -37,6 +38,32 @@ import (
 // migrateArchiveSuffix is the extension boxlite gives a portable box archive.
 const migrateArchiveSuffix = ".boxlite"
 
+func (e *Executor) migrationAuthorization(ctx context.Context, job *apiclient.Job) func() error {
+	return func() error {
+		probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		current, response, err := e.client.JobsAPI.GetJob(probe, job.Id).Execute()
+		if err != nil {
+			return fmt.Errorf("verify current migration job: %w", err)
+		}
+		if current == nil || response == nil || current.Id != job.Id ||
+			current.Status != apiclient.JOBSTATUS_IN_PROGRESS ||
+			response.Header.Get("X-BoxLite-Migration-Authority") != job.Id {
+			return fmt.Errorf("job %s no longer owns its migration", job.Id)
+		}
+		return nil
+	}
+}
+
+func (e *Executor) withMigrationArchive(ctx context.Context, job *apiclient.Job, effect func() error) error {
+	return e.backend.WithOrdinaryTarget(ctx, job.ResourceId, func() error {
+		if err := e.migrationAuthorization(ctx, job)(); err != nil {
+			return err
+		}
+		return effect()
+	})
+}
+
 func (e *Executor) exportBox(ctx context.Context, job *apiclient.Job) (any, error) {
 	payload, err := e.migrateArchivePayload(job)
 	if err != nil {
@@ -47,13 +74,19 @@ func (e *Executor) exportBox(ctx context.Context, job *apiclient.Job) (any, erro
 		return nil, err
 	}
 
-	archivePath, err := e.backend.ExportBox(ctx, job.ResourceId, e.migrateWorkDir)
+	archiveDir, cleanup, err := e.migrationWorkspace(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer e.removeLocalArchive(ctx, archivePath)
+	defer cleanup()
+	archivePath, err := e.backend.ExportBox(ctx, job.ResourceId, archiveDir, e.migrationAuthorization(ctx, job))
+	if err != nil {
+		return nil, err
+	}
 
-	if err := store.Upload(ctx, payload.ArcPath, archivePath); err != nil {
+	if err := e.withMigrationArchive(ctx, job, func() error {
+		return store.Upload(ctx, payload.ArcPath, archivePath)
+	}); err != nil {
 		return nil, err
 	}
 
@@ -72,17 +105,19 @@ func (e *Executor) importBox(ctx context.Context, job *apiclient.Job) (any, erro
 		return nil, err
 	}
 
-	if err := os.MkdirAll(e.migrateWorkDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create migration directory %s: %w", e.migrateWorkDir, err)
-	}
-
-	archivePath := filepath.Join(e.migrateWorkDir, job.ResourceId+migrateArchiveSuffix)
-	if err := store.Download(ctx, payload.ArcPath, archivePath); err != nil {
+	archiveDir, cleanup, err := e.migrationWorkspace(ctx)
+	if err != nil {
 		return nil, err
 	}
-	defer e.removeLocalArchive(ctx, archivePath)
+	defer cleanup()
+	archivePath := filepath.Join(archiveDir, "box"+migrateArchiveSuffix)
+	if err := e.withMigrationArchive(ctx, job, func() error {
+		return store.Download(ctx, payload.ArcPath, archivePath)
+	}); err != nil {
+		return nil, err
+	}
 
-	if err := e.backend.ImportBox(ctx, job.ResourceId, archivePath); err != nil {
+	if err := e.backend.ImportMigrationBox(ctx, job.ResourceId, archivePath, payload.AttemptID, e.migrationAuthorization(ctx, job)); err != nil {
 		return nil, err
 	}
 
@@ -101,7 +136,9 @@ func (e *Executor) rollbackExportBox(ctx context.Context, job *apiclient.Job) (a
 		return nil, err
 	}
 
-	return nil, store.Remove(ctx, payload.ArcPath)
+	return nil, e.withMigrationArchive(ctx, job, func() error {
+		return store.Remove(ctx, payload.ArcPath)
+	})
 }
 
 func (e *Executor) destroyIfPresent(ctx context.Context, boxId string) error {
@@ -113,7 +150,21 @@ func (e *Executor) destroyIfPresent(ctx context.Context, boxId string) error {
 }
 
 func (e *Executor) rollbackImportBox(ctx context.Context, job *apiclient.Job) (any, error) {
-	return nil, e.destroyIfPresent(ctx, job.ResourceId)
+	var payload MigrateArchivePayload
+	if job.Payload != nil {
+		if err := e.parsePayload(job.Payload, &payload); err != nil {
+			return nil, err
+		}
+	}
+	return nil, e.destroyMigrationCopy(ctx, job, payload.AttemptID)
+}
+
+func (e *Executor) destroyMigrationCopy(ctx context.Context, job *apiclient.Job, importedAttemptID string) error {
+	err := e.backend.DestroyMigrationCopy(ctx, job.ResourceId, importedAttemptID, e.migrationAuthorization(ctx, job))
+	if boxlite.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 // discardExportedBox commits the migration on the runner that gave the box up:
@@ -130,11 +181,13 @@ func (e *Executor) discardExportedBox(ctx context.Context, job *apiclient.Job) (
 		return nil, err
 	}
 
-	if err := store.Remove(ctx, payload.ArcPath); err != nil {
+	if err := e.withMigrationArchive(ctx, job, func() error {
+		return store.Remove(ctx, payload.ArcPath)
+	}); err != nil {
 		return nil, err
 	}
 
-	return nil, e.destroyIfPresent(ctx, job.ResourceId)
+	return nil, e.destroyMigrationCopy(ctx, job, "")
 }
 
 // migrateArchivePayload parses the archive key the control plane assigned to
@@ -168,11 +221,17 @@ func (e *Executor) requireMigrationSetup(arcPath string) (storage.ArchiveStore, 
 	return e.archiveStore, nil
 }
 
-// removeLocalArchive drops the runner's copy once the object store holds it (or
-// the box does). A leftover archive is disk the runner never reclaims, but its
-// removal failing does not undo the work the job just did, so it only logs.
-func (e *Executor) removeLocalArchive(ctx context.Context, archivePath string) {
-	if err := os.Remove(archivePath); err != nil && !os.IsNotExist(err) {
-		e.log.WarnContext(ctx, "failed to remove local migration archive", "path", archivePath, "error", err)
+func (e *Executor) migrationWorkspace(ctx context.Context) (string, func(), error) {
+	if err := os.MkdirAll(e.migrateWorkDir, 0700); err != nil {
+		return "", nil, fmt.Errorf("create migration workspace: %w", err)
 	}
+	dir, err := os.MkdirTemp(e.migrateWorkDir, "migration-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create private migration workspace: %w", err)
+	}
+	return dir, func() {
+		if err := os.RemoveAll(dir); err != nil {
+			e.log.WarnContext(ctx, "failed to remove private migration workspace", "path", dir, "error", err)
+		}
+	}, nil
 }

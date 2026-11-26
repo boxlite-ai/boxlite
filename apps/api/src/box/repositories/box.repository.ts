@@ -17,6 +17,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { BoxConflictError } from '../errors/box-conflict.error'
+import { UNCONFIRMED_PROTECTED_PLACEHOLDER } from '../errors/protected-placeholder.error'
 import { ProxyPlacementError } from '../errors/proxy-placement.error'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
@@ -35,7 +36,13 @@ import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
 import { OutboundPolicy } from '../runner-adapter/network-policy'
 import { OutboundControl } from '../runner-adapter/outbound-control'
 import { OutboundPolicyCoordinator, OutboundPrecondition } from '../services/outbound-policy.coordinator'
-import { lockOrdinaryBox, OutboundPolicyStore, persistedOutbound } from '../stores/outbound-policy.store'
+import {
+  lockOrdinaryBox,
+  OutboundPolicyStore,
+  outboundRecord,
+  persistedOutbound,
+  type ProtectedStartProof,
+} from '../stores/outbound-policy.store'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
@@ -83,6 +90,14 @@ type ParkedBox = { id: string; updatedAt: Date }
 // The fields of a Box before a write that decide its organization's activity.
 type OrganizationActivitySource = Pick<Box, 'organizationId' | 'state' | 'desiredState' | 'createdAt'>
 type OrganizationActivity = { createdAt: Date | null; modifiedAt: Date | null }
+
+type BoxUpdateOptions = {
+  updateData: Partial<Box>
+  entity?: Box
+  maxCreatedBoxes?: number
+  ordinaryJobRunnerId?: string
+  protectedStart?: ProtectedStartProof
+}
 
 @Injectable()
 export class BoxRepository extends BaseRepository<Box> {
@@ -262,17 +277,9 @@ export class BoxRepository extends BaseRepository<Box> {
    *
    * @returns The updated box.
    */
-  async update(
-    id: string,
-    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number; ordinaryJobRunnerId?: string },
-    raw?: false,
-  ): Promise<Box>
-  async update(
-    id: string,
-    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number; ordinaryJobRunnerId?: string },
-    raw = false,
-  ): Promise<Box | void> {
-    const { updateData, entity, maxCreatedBoxes, ordinaryJobRunnerId } = params
+  async update(id: string, params: BoxUpdateOptions, raw?: false): Promise<Box>
+  async update(id: string, params: BoxUpdateOptions, raw = false): Promise<Box | void> {
+    const { updateData, entity, maxCreatedBoxes, ordinaryJobRunnerId, protectedStart } = params
 
     if (raw) {
       await this.repository.update(id, updateData)
@@ -292,6 +299,7 @@ export class BoxRepository extends BaseRepository<Box> {
 
     await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
       if (ordinaryJobRunnerId !== undefined) await lockOrdinaryBox(entityManager, id, ordinaryJobRunnerId)
+      if (protectedStart) await this.assertCurrentProtectedStart(entityManager, id, protectedStart)
       const result = await entityManager.update(
         Box,
         {
@@ -449,6 +457,18 @@ export class BoxRepository extends BaseRepository<Box> {
     }
   }
 
+  async findOrdinaryRunnerReportBox(id: string, runnerId: string): Promise<Box | null> {
+    return this.manager.transaction(async (manager) => {
+      try {
+        await lockOrdinaryBox(manager, id, runnerId)
+      } catch (error) {
+        if (error instanceof BoxConflictError) return null
+        throw error
+      }
+      return manager.findOne(Box, { where: { id }, loadEagerRelations: false })
+    })
+  }
+
   /**
    * Partially updates a box in the database and optionally emits a corresponding event based on the changes.
    *
@@ -466,9 +486,11 @@ export class BoxRepository extends BaseRepository<Box> {
       updateData: Partial<Box>
       whereCondition: FindOptionsWhere<Box>
       lockTimeoutMs?: number
+      reportingRunnerId?: string
+      prepareUpdate?: (manager: EntityManager, box: Box) => Promise<Partial<Box>>
     },
   ): Promise<Box> {
-    const { updateData, whereCondition, lockTimeoutMs } = params
+    const { whereCondition, lockTimeoutMs, reportingRunnerId, prepareUpdate } = params
 
     const [updatedBox, previousBox] = await this.manager.transaction(async (entityManager) => {
       if (lockTimeoutMs !== undefined) {
@@ -489,6 +511,8 @@ export class BoxRepository extends BaseRepository<Box> {
       if (!box) {
         throw new BoxConflictError()
       }
+      if (reportingRunnerId) await lockOrdinaryBox(entityManager, box.id, reportingRunnerId)
+      const updateData = { ...params.updateData, ...(await prepareUpdate?.(entityManager, box)) }
 
       if (box.state === BoxState.STOPPED && updateData.desiredState === BoxDesiredState.STARTED && box.runnerId) {
         await this.assertManagedStartSupported(entityManager, box.id)
@@ -524,11 +548,43 @@ export class BoxRepository extends BaseRepository<Box> {
       .innerJoin(Runner, 'runner', 'runner.id = box.runnerId')
       .where('box.id = :id AND runner.apiVersion = :version', { id, version: '2' })
       .andWhere(
+        `(runner."protectedExecutableDigest" IS NULL OR runner."protectedProcessId" IS NULL
+        OR runner."lastChecked" IS NULL OR runner."lastChecked" < now() - interval '60 seconds')`,
+      )
+      .andWhere(
         `(box."outboundControl" #>> '{managed,binding,registration_id}' IS NOT NULL
           OR box."outboundControl" #>> '{bootstrap,key,registration_id}' IS NOT NULL)`,
       )
       .getExists()
     if (boundToV2) throw new ProxyPlacementError('runner_proxy_unsupported', 'start')
+  }
+
+  private async assertCurrentProtectedStart(
+    manager: EntityManager,
+    id: string,
+    proof: ProtectedStartProof,
+  ): Promise<void> {
+    const box = await manager
+      .createQueryBuilder(Box, 'box')
+      .addSelect('box.outboundControl')
+      .where('box.id = :id', { id })
+      .setLock('pessimistic_write')
+      .getOne()
+    if (!box || !box.pending || box.desiredState !== BoxDesiredState.STARTED || box.prevRunnerId) {
+      throw new BoxConflictError()
+    }
+    const { bootstrap, managed } = outboundRecord(box)
+    if (
+      bootstrap ||
+      managed?.retirement ||
+      box.runnerId !== proof.runnerId ||
+      managed?.runnerId !== proof.runnerId ||
+      managed.epoch !== proof.epoch ||
+      managed.launch?.key.attempt_id !== proof.attemptId ||
+      managed.launch.generation !== proof.generation ||
+      persistedOutbound(box).revision !== proof.revision
+    )
+      throw new BoxConflictError()
   }
 
   /**
@@ -666,7 +722,12 @@ export class BoxRepository extends BaseRepository<Box> {
       .andWhere('box.state = :state', { state: BoxState.STOPPED })
       .andWhere('box.desiredState = :desiredState', { desiredState: BoxDesiredState.STOPPED })
       .andWhere('box.pending = false')
-      .andWhere("NOT (COALESCE(box.outboundControl, '{}'::jsonb) ?| ARRAY['bootstrap', 'managed'])")
+      .andWhere(
+        "NOT (COALESCE(box.outboundControl, '{}'::jsonb) ?| ARRAY['bootstrap', 'managed', 'placeholderClosed'])",
+      )
+      .andWhere('box.errorReason IS DISTINCT FROM :unconfirmedPlaceholder', {
+        unconfirmedPlaceholder: UNCONFIRMED_PROTECTED_PLACEHOLDER,
+      })
       .andWhere(`NOT EXISTS ${migrationInFlight.getQuery()}`)
       .setParameter('claimable', BoxMigrationState.COMPLETED)
       .setLock('pessimistic_write')
@@ -704,6 +765,11 @@ export class BoxRepository extends BaseRepository<Box> {
     // entity's table path — under a non-default schema that is quoted whole,
     // as "schema.box_migration", a table no clause of the statement has.
     const conflictTarget = entityManager.connection.getMetadata(BoxMigration).tableName
+    // The former writer submits legacy jobs. Allocate versioned attempts only after it is fenced.
+    const [admission] = await entityManager.query(
+      'SELECT controlled, registry_writes FROM outbound_proxy_admission WHERE singleton FOR SHARE',
+    )
+    const versioned = admission?.controlled && admission.registry_writes
 
     const claimed = await entityManager
       .createQueryBuilder()
@@ -713,10 +779,11 @@ export class BoxRepository extends BaseRepository<Box> {
         parked.map(({ id, updatedAt }) => ({
           boxId: id,
           state: BoxMigrationState.PENDING_EXPORT,
+          attemptId: versioned ? () => 'gen_random_uuid()' : null,
           updatedAt,
         })),
       )
-      .orUpdate(['state', 'updatedAt'], ['boxId'], {
+      .orUpdate(['state', 'updatedAt', 'attemptId'], ['boxId'], {
         overwriteCondition: {
           where: `"${conflictTarget}"."state" = :claimable`,
           parameters: { claimable: BoxMigrationState.COMPLETED },

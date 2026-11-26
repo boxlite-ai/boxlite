@@ -187,18 +187,20 @@ tears down the Rust runtime.
 
 ### Protected outbound on V2
 
-An enrolled V2 Runner serves its protected capability probe on a separate HTTPS
-listener. The response identifies the serving process and binary.
+An enrolled V2 Runner serves protected lifecycle operations on a separate HTTPS
+listener. It uses the same durable allocation and closure handlers as HTTPS V0.
 
 The caller verifies the server certificate. The listener requires a trusted API
 client certificate with the configured DNS SAN, the Runner token, and the enrolled UUID.
 
-V2 health reports and ordinary jobs continue through the existing control plane.
+V2 reports the same process UUID in its ordinary health and protected capability.
+The capability also includes the SHA-256 of the serving executable. The Runner
+stops the protected listener before starting its standard Guest shutdown.
 
 ```mermaid
 flowchart LR
     runner[V2 Runner] -->|Health and ordinary jobs| queue[Cloud control plane]
-    api[Cloud API] -->|Mutual TLS, Runner token and UUID| probe[Protected capability listener]
+    api[Cloud API] -->|Mutual TLS, Runner token and UUID| probe[Protected lifecycle listener]
 ```
 
 ---

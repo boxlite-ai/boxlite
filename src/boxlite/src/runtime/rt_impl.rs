@@ -1464,6 +1464,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         initial_status: BoxStatus,
         resolved_image: Option<crate::images::ResolvedImage>,
+        runner_migration: Option<crate::net::OutboundRevision>,
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
@@ -1497,6 +1498,7 @@ impl RuntimeImpl {
         let mut state = BoxState::new();
         state.set_status(initial_status);
         state.resolved_image = resolved_image;
+        state.runner_migration = runner_migration;
 
         if let Err(e) = self.persist_box_with_locks(&config, &mut state) {
             let _ = std::fs::remove_dir_all(&config.box_home);

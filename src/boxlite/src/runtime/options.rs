@@ -1643,6 +1643,7 @@ pub(crate) enum ArchiveImportPolicy {
 pub struct BoxArchive {
     path: PathBuf,
     import_policy: ArchiveImportPolicy,
+    runner_migration: Option<crate::net::OutboundRevision>,
 }
 
 impl BoxArchive {
@@ -1655,6 +1656,7 @@ impl BoxArchive {
         Self {
             path: path.into(),
             import_policy: ArchiveImportPolicy::Trusted,
+            runner_migration: None,
         }
     }
 
@@ -1669,6 +1671,7 @@ impl BoxArchive {
         Self {
             path: path.into(),
             import_policy: ArchiveImportPolicy::UntrustedRemote,
+            runner_migration: None,
         }
     }
 
@@ -1679,6 +1682,25 @@ impl BoxArchive {
 
     pub(crate) fn import_policy(&self) -> ArchiveImportPolicy {
         self.import_policy
+    }
+
+    /// A local Runner attaches the current migration authority separately from the archive bytes.
+    #[doc(hidden)]
+    pub fn for_runner_migration(
+        mut self,
+        attempt: crate::net::OutboundRevision,
+    ) -> BoxliteResult<Self> {
+        if self.import_policy != ArchiveImportPolicy::Trusted {
+            return Err(BoxliteError::InvalidArgument(
+                "Runner migrations require a trusted local import".into(),
+            ));
+        }
+        self.runner_migration = Some(attempt);
+        Ok(self)
+    }
+
+    pub(crate) fn runner_migration(&self) -> Option<crate::net::OutboundRevision> {
+        self.runner_migration.clone()
     }
 }
 

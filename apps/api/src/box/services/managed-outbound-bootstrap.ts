@@ -12,12 +12,14 @@ import {
   PROTECTED_RUNNER_REQUEST_TIMEOUT_MS,
   ProtectedBootControl,
   ProtectedBootReceipt,
+  ProtectedEpochControl,
 } from '../runner-adapter/protected-runner'
 import {
   hasProtectedBoxAuthority,
   LockedOutboundBox,
   OutboundCommitUnknown,
   OutboundPolicyStore,
+  ProtectedStartProof,
   outboundRecord,
   persistedOutbound,
 } from '../stores/outbound-policy.store'
@@ -66,11 +68,16 @@ export class ManagedOutboundBootstrap {
   }
 
   async seed(manager: EntityManager, box: Box, proxyName: string | null) {
+    if (proxyName === null && !(await this.registry.allowsImplicitV0Ownership(manager))) return
     const record = outboundRecord(box)
     const bootstrap = await this.makeIntent(manager, box, proxyName)
     const control = { ...record, bootstrap }
     await manager.update(Box, box.id, { outboundControl: control })
     box.outboundControl = control
+  }
+
+  get admitsImplicitV0Ownership(): boolean {
+    return !this.registry.admissionControlled
   }
 
   async blocksExternalStart(box: Box): Promise<boolean> {
@@ -83,8 +90,36 @@ export class ManagedOutboundBootstrap {
     )
   }
 
-  async legacyRestartIntent(box: Box) {
+  async readV2StartProof(box: Box, adapter: RunnerAdapter): Promise<ProtectedStartProof | undefined> {
+    const operation = adapter.protectedBootstrap?.protectedEpoch
+    if (!operation) return undefined
     const current = await this.store.read(box.id, box.organizationId)
+    const { bootstrap, managed } = outboundRecord(current)
+    if (
+      bootstrap ||
+      !managed?.launch ||
+      managed.retirement ||
+      managed.runnerId !== current.runnerId ||
+      current.prevRunnerId ||
+      !current.pending ||
+      current.desiredState !== BoxDesiredState.STARTED
+    )
+      return undefined
+
+    const { key, generation } = managed.launch
+    await operation.readReleasedEpoch(current.id, key, managed.epoch)
+    return {
+      runnerId: managed.runnerId,
+      attemptId: key.attempt_id,
+      epoch: managed.epoch,
+      generation,
+      revision: persistedOutbound(current).revision,
+    }
+  }
+
+  async legacyRestartIntent(manager: EntityManager, box: Box) {
+    if (!(await this.registry.allowsImplicitV0Ownership(manager))) return undefined
+    const current = await this.store.read(box.id, box.organizationId, manager)
     const record = outboundRecord(current)
     if (
       record.bootstrap ||
@@ -502,6 +537,9 @@ export class ManagedOutboundBootstrap {
           return false
         if (purpose === 'destroy' && removed === undefined) await this.abandonUnconfirmed(box, control)
       }
+      if (control.protectedEpoch && !(await this.retireV2Epoch(box, control, control.protectedEpoch, purpose))) {
+        return false
+      }
       const sealed = await this.store.locked(box.id, box.organizationId, async (locked) => {
         const record = outboundRecord(locked.box)
         const managed = record.managed
@@ -587,6 +625,54 @@ export class ManagedOutboundBootstrap {
     } finally {
       this.activeProtectedTransitions--
     }
+  }
+
+  private async retireV2Epoch(
+    box: Box,
+    control: ProtectedBootControl,
+    operation: ProtectedEpochControl,
+    purpose: Retirement,
+  ): Promise<boolean> {
+    const readOwner = (locked: LockedOutboundBox) => {
+      const managed = outboundRecord(locked.box).managed
+      if (managed?.launch && this.ownsRetirement(locked.box, managed.runnerId, purpose)) {
+        return { managed, launch: managed.launch }
+      }
+    }
+    const owner = await this.store.locked(box.id, box.organizationId, async (locked) => readOwner(locked))
+    if (!owner) return false
+    if (owner.managed.retirement?.terminated) return true
+
+    const { epoch } = owner.managed
+    const { key, generation } = owner.launch
+    const retire = () => operation.retireTerminatedProtectedEpoch(box.id, key, epoch, generation).catch(() => undefined)
+    let terminated = await retire()
+    let sealed = owner.managed.retirement?.evidence
+    if (!terminated) {
+      sealed ??= await control.sealProtectedEpoch(box.id, key, epoch, generation).catch(() => undefined)
+      if (sealed) await operation.stopProtectedEpoch(box.id, key, epoch, generation).catch(() => undefined)
+      terminated = await retire()
+    }
+    const evidence = sealed ?? terminated
+    if (!terminated || !evidence) return false
+
+    return this.store.locked(box.id, box.organizationId, async (locked) => {
+      const current = readOwner(locked)
+      if (
+        !current ||
+        current.managed.epoch !== epoch ||
+        current.launch.key.attempt_id !== key.attempt_id ||
+        current.launch.generation !== generation
+      )
+        return false
+      if (current.managed.retirement?.terminated) return true
+      await locked.write({
+        ...outboundRecord(locked.box),
+        bootstrap: undefined,
+        managed: { ...current.managed, retirement: { evidence, terminated: true } },
+      })
+      return true
+    })
   }
 
   private async closeAllocation(

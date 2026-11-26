@@ -208,6 +208,9 @@ impl std::fmt::Display for BoxStatus {
 /// State transitions are validated before applying.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxState {
+    /// Assigned by the local Runner when its import publishes this native Box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) runner_migration: Option<crate::net::OutboundRevision>,
     /// Last applied runtime outbound policy. Creation options still determine
     /// whether the VM has a NIC; an override never adds or removes the device.
     #[serde(default)]
@@ -364,6 +367,7 @@ impl BoxState {
         Self {
             status: BoxStatus::Configured,
             outbound_policy: None,
+            runner_migration: None,
             pid: None,
             container_id: None,
             last_updated: Utc::now(),

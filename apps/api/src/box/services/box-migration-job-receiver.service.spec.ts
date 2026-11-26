@@ -15,6 +15,7 @@ import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getMigrateJobLockKey } from '../utils/lock-key.util'
+import { LockCode } from '../common/redis-lock.provider'
 
 const BOX_ID = 'box-1'
 const ORG_ID = 'org-1'
@@ -64,6 +65,7 @@ function makeJob(type: JobType, overrides: Partial<ConstructorParameters<typeof 
     runnerId: TARGET_RUNNER,
     resourceType: ResourceType.BACKUP,
     resourceId: BOX_ID,
+    stateChangeLockOwner: 'migration-owner',
     ...overrides,
   })
 }
@@ -140,7 +142,7 @@ function makeHarness(row?: { box?: Box | null; migration?: BoxMigration | null; 
     manager: entityManager,
   } as any
   const redisLockProvider = {
-    unlock: jest.fn().mockResolvedValue(undefined),
+    releaseLease: jest.fn().mockResolvedValue(undefined),
   } as any
   const boxLookupCacheInvalidationService = {
     invalidate: jest.fn(),
@@ -176,10 +178,13 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
       {
         table: 'migrate',
         values: { state: BoxMigrationState.PENDING_IMPORT, arcPath: ARC_PATH },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT, attemptId: null },
       },
     ])
-    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX))
+    expect(h.redisLockProvider.releaseLease).toHaveBeenCalledWith(
+      getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX),
+      new LockCode('migration-owner'),
+    )
   })
 
   // The archive is on the object store whether or not the migration stayed
@@ -198,7 +203,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
       {
         table: 'migrate',
         values: { state: BoxMigrationState.PENDING_ROLLBACK, arcPath: ARC_PATH },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT, attemptId: null },
       },
     ])
   })
@@ -217,7 +222,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
       {
         table: 'migrate',
         values: { state: BoxMigrationState.PENDING_ROLLBACK, arcPath: ARC_PATH },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT, attemptId: null },
       },
     ])
   })
@@ -244,11 +249,7 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     expect(h.writes[0].values).toEqual({ state: BoxMigrationState.PENDING_IMPORT, arcPath: '' })
   })
 
-  // A migration still in PENDING_EXPORT owns no artifact, so there is nothing to
-  // reclaim and nothing to keep the row for. Dropping it hands the box back to
-  // the marker, which re-opens a migration only if the box is still parked on a
-  // runner still draining — a retry in place would keep exporting regardless.
-  it('drops the migration when the export failed, so the marker decides afresh', async () => {
+  it('drops a legacy migration when the export failed, so the marker decides afresh', async () => {
     const h = makeHarness()
     const job = makeExportJob({ status: JobStatus.FAILED, errorMessage: 'upload timed out' })
 
@@ -256,9 +257,12 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
 
     expect(h.writes).toHaveLength(0)
     expect(h.deletes).toEqual([
-      { table: 'migrate', params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT } },
+      { table: 'migrate', params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT, attemptId: null } },
     ])
-    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX))
+    expect(h.redisLockProvider.releaseLease).toHaveBeenCalledWith(
+      getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX),
+      new LockCode('migration-owner'),
+    )
   })
 
   // A status redelivered after a restart finds the migration already moved on.
@@ -270,6 +274,12 @@ describe('BoxMigrationJobReceiver EXPORT_BOX', () => {
     await h.receiver.handleJobCompletion(job)
 
     expect(h.writes).toHaveLength(0)
+  })
+
+  it('leaves the current Redis claim intact when an older completion carries no owner', async () => {
+    const h = makeHarness({ migration: makeMigration(BoxMigrationState.PENDING_IMPORT) })
+    await h.receiver.handleJobCompletion(makeExportJob({ stateChangeLockOwner: null }))
+    expect(h.redisLockProvider.releaseLease).not.toHaveBeenCalled()
   })
 })
 
@@ -288,10 +298,13 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
       {
         table: 'migrate',
         values: { state: BoxMigrationState.PENDING_DISCARD_EXPORTED, runnerId: SOURCE_RUNNER },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT, attemptId: null },
       },
     ])
-    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.IMPORT_BOX))
+    expect(h.redisLockProvider.releaseLease).toHaveBeenCalledWith(
+      getMigrateJobLockKey(BOX_ID, JobType.IMPORT_BOX),
+      new LockCode('migration-owner'),
+    )
   })
 
   it('invalidates the cached box, which still names the runner that gave it up', async () => {
@@ -317,7 +330,10 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
 
     expect(h.writes).toHaveLength(0)
     expect(h.deletes).toHaveLength(0)
-    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.IMPORT_BOX))
+    expect(h.redisLockProvider.releaseLease).toHaveBeenCalledWith(
+      getMigrateJobLockKey(BOX_ID, JobType.IMPORT_BOX),
+      new LockCode('migration-owner'),
+    )
   })
 
   it('records the copy on the target runner and rolls back when the box was touched', async () => {
@@ -333,7 +349,7 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
       {
         table: 'migrate',
         values: { state: BoxMigrationState.PENDING_ROLLBACK, runnerId: TARGET_RUNNER },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT, attemptId: null },
       },
     ])
     expect(h.boxLookupCacheInvalidationService.invalidate).not.toHaveBeenCalled()
@@ -359,7 +375,7 @@ describe('BoxMigrationJobReceiver IMPORT_BOX', () => {
       {
         table: 'migrate',
         values: { state: BoxMigrationState.PENDING_DISCARD_EXPORTED, runnerId: SOURCE_RUNNER },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT, attemptId: null },
       },
     ])
     expect(h.boxLookupCacheInvalidationService.invalidate).toHaveBeenCalled()
@@ -376,10 +392,13 @@ describe('BoxMigrationJobReceiver reclaim jobs', () => {
       {
         table: 'migrate',
         values: { arcPath: '' },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_ROLLBACK },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_ROLLBACK, attemptId: null },
       },
     ])
-    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.ROLLBACK_EXPORT_BOX))
+    expect(h.redisLockProvider.releaseLease).toHaveBeenCalledWith(
+      getMigrateJobLockKey(BOX_ID, JobType.ROLLBACK_EXPORT_BOX),
+      new LockCode('migration-owner'),
+    )
   })
 
   it('clears the second runner once the rollback destroyed the copy on it', async () => {
@@ -391,7 +410,7 @@ describe('BoxMigrationJobReceiver reclaim jobs', () => {
       {
         table: 'migrate',
         values: { runnerId: null },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_ROLLBACK },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_ROLLBACK, attemptId: null },
       },
     ])
   })
@@ -409,10 +428,13 @@ describe('BoxMigrationJobReceiver reclaim jobs', () => {
     expect(h.writes).toEqual([
       {
         table: 'migrate',
-        values: { state: BoxMigrationState.COMPLETED, arcPath: '', runnerId: null },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_DISCARD_EXPORTED },
+        values: { state: BoxMigrationState.COMPLETED, attemptId: null, arcPath: '', runnerId: null },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_DISCARD_EXPORTED, attemptId: null },
       },
     ])
-    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.DISCARD_EXPORTED_BOX))
+    expect(h.redisLockProvider.releaseLease).toHaveBeenCalledWith(
+      getMigrateJobLockKey(BOX_ID, JobType.DISCARD_EXPORTED_BOX),
+      new LockCode('migration-owner'),
+    )
   })
 })

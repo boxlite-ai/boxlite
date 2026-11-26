@@ -12,6 +12,13 @@ func (c *Client) SetOutboundNetwork(ctx context.Context, boxID string, policy bo
 	if err := (dto.OutboundNetworkPolicy{Mode: policy.Mode, AllowNet: policy.AllowNet}).Validate(); err != nil {
 		return err
 	}
+	if c.protectedV2 {
+		lease, err := c.lockCheckpointTarget(ctx, boxID)
+		if err != nil {
+			return err
+		}
+		defer lease.Close()
+	}
 	info, err := c.nativeBoxInfo(ctx, boxID)
 	if err != nil {
 		return err
@@ -58,6 +65,13 @@ func (c *Client) ReplaceOutboundSnapshot(ctx context.Context, boxID, expected st
 	}
 	if err := (dto.OutboundNetworkPolicy{Mode: candidate.Policy.Mode, AllowNet: candidate.Policy.AllowNet}).Validate(); err != nil {
 		return "", err
+	}
+	if c.protectedV2 {
+		lease, err := c.lockCheckpointTarget(ctx, boxID)
+		if err != nil {
+			return "", err
+		}
+		defer lease.Close()
 	}
 	info, err := c.nativeBoxInfo(ctx, boxID)
 	if err != nil {

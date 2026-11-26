@@ -27,6 +27,10 @@ const (
 	ProtectedOutboundControl
 	ProtectedBootRemove
 	protectedAllocationRead
+	ProtectedBootStop
+	ProtectedBootRetireTerminated
+	ProtectedBootReady
+	protectedRunnerMigrationRead
 )
 
 // RunnerProtectedBoot invokes the local bootstrap ABI. Transport authority and
@@ -106,6 +110,17 @@ func (b *Box) HasRunnerProtection(ctx context.Context) (bool, error) {
 // RunnerAllocation reads the immutable attempt claimed by the local Runner.
 func (b *Box) RunnerAllocation(ctx context.Context) (string, error) {
 	result, err := b.RunnerProtectedBoot(ctx, protectedAllocationRead, nil)
+	if err != nil {
+		return "", err
+	}
+	var attempt string
+	err = json.Unmarshal(result, &attempt)
+	return attempt, err
+}
+
+// RunnerMigration reads the attempt recorded when this native Box was imported.
+func (b *Box) RunnerMigration(ctx context.Context) (string, error) {
+	result, err := b.RunnerProtectedBoot(ctx, protectedRunnerMigrationRead, nil)
 	if err != nil {
 		return "", err
 	}

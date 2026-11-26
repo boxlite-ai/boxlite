@@ -1126,6 +1126,15 @@ enum BoxliteErrorCode boxlite_runtime_import(CBoxliteRuntime *runtime,
                                              void *user_data,
                                              CBoxliteError *out_error);
 
+// Submit a local Runner import with a migration identity persisted atomically with the Box.
+enum BoxliteErrorCode boxlite_runtime_import_runner_migration(CBoxliteRuntime *runtime,
+                                                              const char *archive_path,
+                                                              const char *name_or_null,
+                                                              const char *attempt,
+                                                              CRuntimeImportCb cb,
+                                                              void *user_data,
+                                                              CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          CBoxliteOptions *opts,
                                          CBoxCreateBoxCb cb,
@@ -1179,7 +1188,8 @@ void boxlite_box_free(CBoxHandle *handle);
 // Internal Runner ABI. Protected credential input is borrowed for this call.
 // Release the output JSON with boxlite_free_string. Operations are 0 (start),
 // 1 (receipt), 2 (retire), 3 (check protection), 4 (release gate), 5 (seal gate),
-// 6 (managed route control) and 8 (exact allocation identity).
+// 6 (managed route control), 8 (exact allocation identity), 9 (protected stop),
+// 10 (terminated epoch retirement), and 11 (released readiness).
 enum BoxliteErrorCode boxlite_runner_protected_boot(CBoxHandle *handle,
                                                     uint8_t operation,
                                                     const char *input_json,

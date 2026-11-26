@@ -77,10 +77,44 @@ pub unsafe extern "C" fn boxlite_runtime_import(
             runtime,
             archive_path,
             name_or_null,
+            None,
             cb,
             user_data,
             out_error,
         )
+    }
+}
+
+/// Submit a local Runner import with a migration identity persisted atomically with the Box.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_import_runner_migration(
+    runtime: *mut CBoxliteRuntime,
+    archive_path: *const c_char,
+    name_or_null: *const c_char,
+    attempt: *const c_char,
+    cb: CRuntimeImportCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        let attempt = parse_required_string(attempt, "attempt")
+            .and_then(boxlite::net::OutboundRevision::parse);
+        match attempt {
+            Ok(attempt) => import_box(
+                runtime,
+                archive_path,
+                name_or_null,
+                Some(attempt),
+                cb,
+                user_data,
+                out_error,
+            ),
+            Err(error) => {
+                let code = error_to_code(&error);
+                write_error(out_error, error);
+                code
+            }
+        }
     }
 }
 
@@ -135,6 +169,7 @@ unsafe fn import_box(
     runtime: *mut RuntimeHandle,
     archive_path: *const c_char,
     name_or_null: *const c_char,
+    migration: Option<boxlite::net::OutboundRevision>,
     cb: CRuntimeImportCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -177,7 +212,15 @@ unsafe fn import_box(
             // Local runtimes intentionally trust caller-managed archives. A
             // REST server applies its own untrusted-upload policy server-side.
             let archive = BoxArchive::new(archive_path);
-            let result = runtime.import_box(archive, name).await.map(|handle| {
+            let archive = match migration {
+                Some(attempt) => archive.for_runner_migration(attempt),
+                None => Ok(archive),
+            };
+            let result = match archive {
+                Ok(archive) => runtime.import_box(archive, name).await,
+                Err(error) => Err(error),
+            }
+            .map(|handle| {
                 let box_id = handle.id().clone();
                 OwnedFfiPtr::new(Box::new(BoxHandle {
                     handle: Arc::new(handle),

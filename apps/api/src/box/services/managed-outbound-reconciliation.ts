@@ -160,6 +160,7 @@ export async function settleTerminatedOutbound(locked: LockedOutboundBox): Promi
         managed.runnerId,
         managed.epoch,
         restore,
+        true,
       )
       if (!rolledBack) return false
     }
@@ -193,6 +194,7 @@ export async function settleTerminatedOutbound(locked: LockedOutboundBox): Promi
     managed.runnerId,
     managed.epoch,
     pending,
+    true,
   )
   if (!restored) return false
   await settlePinChange(locked, restored, false)

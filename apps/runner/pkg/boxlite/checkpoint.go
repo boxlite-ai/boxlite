@@ -29,7 +29,33 @@ func (c *Client) lockCheckpointTarget(ctx context.Context, target string) (*chec
 		lease.Close()
 		return nil, err
 	}
+	if err := c.requireOrdinaryTarget(ctx, target); err != nil {
+		lease.Close()
+		return nil, err
+	}
 	return lease, nil
+}
+
+// WithOrdinaryTarget serializes external archive effects with protected ownership changes.
+func (c *Client) WithOrdinaryTarget(ctx context.Context, target string, effect func() error) error {
+	lease, err := c.lockCheckpointTarget(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer lease.Close()
+	return effect()
+}
+
+// Require the logical target lease to be held through the ordinary operation.
+func (c *Client) requireOrdinaryTarget(ctx context.Context, target string) error {
+	if !c.protectedV2 {
+		return nil
+	}
+	id, err := c.nativeBoxID(target)
+	if err != nil {
+		return err
+	}
+	return c.refuseProtectedRemoval(ctx, []string{id})
 }
 
 func (c *Client) RestoreCheckpoint(ctx context.Context, request checkpoint.RestoreRequest, attemptID string, artifacts checkpoint.Artifacts, store storage.ArchiveStore) (checkpoint.RestoreResult, error) {
@@ -59,6 +85,9 @@ type nativeCheckpointRecovery struct {
 }
 
 func (n nativeCheckpointRecovery) Lookup(ctx context.Context, target string) (*checkpoint.NativeBox, error) {
+	if err := n.client.requireOrdinaryTarget(ctx, target); err != nil {
+		return nil, err
+	}
 	info, err := n.client.nativeBoxInfo(ctx, target)
 	if boxlite.IsNotFound(err) {
 		return nil, nil

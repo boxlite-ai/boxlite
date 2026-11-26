@@ -4,8 +4,20 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Controller, Get, Post, Body, Param, Query, UseGuards, Logger, Req, NotFoundException } from '@nestjs/common'
-import { Request } from 'express'
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  Logger,
+  Req,
+  Res,
+  NotFoundException,
+} from '@nestjs/common'
+import { Request, Response } from 'express'
 import { ApiOAuth2, ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { RunnerAuthGuard } from '../../auth/runner-auth.guard'
@@ -150,12 +162,19 @@ export class JobController {
     type: JobDto,
   })
   @UseGuards(JobAccessGuard)
-  async getJob(@RunnerContextDecorator() runnerContext: RunnerContext, @Param('jobId') jobId: string): Promise<JobDto> {
+  async getJob(
+    @RunnerContextDecorator() runnerContext: RunnerContext,
+    @Param('jobId') jobId: string,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<JobDto> {
     this.logger.log(`Runner ${runnerContext.runnerId} fetching job ${jobId}`)
 
     const job = await this.jobService.findOne(jobId)
     if (!job) {
       throw new NotFoundException(`Job ${jobId} not found`)
+    }
+    if (await this.jobService.hasMigrationAuthority(job, runnerContext.runnerId)) {
+      response.setHeader('X-BoxLite-Migration-Authority', job.id)
     }
 
     return new JobDto(job)
@@ -184,11 +203,13 @@ export class JobController {
   ): Promise<JobDto> {
     this.logger.debug(`Runner ${runnerContext.runnerId} updating job ${jobId} status to ${updateJobStatusDto.status}`)
 
-    const job = await this.jobService.updateJobStatus(
+    const job = await this.jobService.updateRunnerJobStatus(
+      runnerContext.runnerId,
       jobId,
       updateJobStatusDto.status,
       updateJobStatusDto.errorMessage,
       updateJobStatusDto.resultMetadata,
+      process.env.K_REVISION,
     )
 
     return new JobDto(job)

@@ -5,8 +5,10 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -27,11 +29,14 @@ import (
 )
 
 type ProtectedListenerConfig struct {
-	Address       string
-	CertFile      string
-	KeyFile       string
-	ClientCAFile  string
-	ClientDNSName string
+	Address          string
+	CertFile         string
+	KeyFile          string
+	ClientCAFile     string
+	ClientCASHA256   string
+	ClientDNSName    string
+	ProcessID        string
+	ExecutableDigest string
 }
 
 // StartProtectedListener binds the optional V2 endpoint independently of the
@@ -39,6 +44,10 @@ type ProtectedListenerConfig struct {
 func StartProtectedListener(ctx context.Context, logger *slog.Logger, config ProtectedListenerConfig, boot ProtectedBootConfig, token string) (net.Addr, func(), error) {
 	if !boot.validPin() || strings.TrimSpace(token) == "" {
 		return nil, nil, errors.New("protected listener requires a valid Runner pin and token")
+	}
+	digest, err := hex.DecodeString(config.ExecutableDigest)
+	if uuid.Validate(config.ProcessID) != nil || err != nil || len(digest) != sha256.Size {
+		return nil, nil, errors.New("protected listener requires a process ID and executable digest")
 	}
 	credentials, err := config.tlsConfig()
 	if err != nil {
@@ -52,7 +61,8 @@ func StartProtectedListener(ctx context.Context, logger *slog.Logger, config Pro
 	router := gin.New()
 	router.Use(common_errors.Recovery(), common_errors.NewErrorMiddleware(common.HandlePossibleDockerError))
 	protected := protectedBootGroup(router.Group("/", middlewares.AuthMiddleware(token)), boot)
-	registerProtectedBootCapability(protected, boot, 2, uuid.NewString(), []string{})
+	registerProtectedBootCapability(protected, boot, 2, config.ProcessID, config.ExecutableDigest)
+	registerProtectedBootRoutes(protected, boot, true)
 	requestCtx, cancel := context.WithCancel(ctx)
 	server := &http.Server{
 		Handler:           router,
@@ -95,6 +105,9 @@ func (c ProtectedListenerConfig) tlsConfig() (*tls.Config, error) {
 	ca, err := os.ReadFile(c.ClientCAFile)
 	if err != nil {
 		return nil, fmt.Errorf("read protected listener client CA: %w", err)
+	}
+	if c.ClientCASHA256 != "" && fmt.Sprintf("%x", sha256.Sum256(ca)) != c.ClientCASHA256 {
+		return nil, errors.New("protected listener client CA does not match the enrolled digest")
 	}
 	roots := x509.NewCertPool()
 	hasClientCA := false

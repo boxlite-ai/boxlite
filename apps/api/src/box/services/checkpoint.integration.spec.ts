@@ -101,6 +101,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     }).initialize()
     await dataSource.query(`CREATE SCHEMA "${schema}"`)
     await dataSource.synchronize()
+    await dataSource.query('CREATE TABLE outbound_proxy_reference (organization_id uuid, box_id varchar)')
     checkpoints = dataSource.getRepository(Checkpoint)
     boxes = dataSource.getRepository(Box)
     states = dataSource.getRepository(BoxCheckpointState)
@@ -138,6 +139,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
 
   beforeEach(async () => {
     uploadNotifications.lpush.mockReset().mockResolvedValue(1)
+    await dataSource.query('TRUNCATE outbound_proxy_reference')
     await dataSource.query(
       `TRUNCATE TABLE "${schema}"."checkpoint_operation", "${schema}"."checkpoint", "${schema}"."job", "${schema}"."box", "${schema}"."runner", "${schema}"."image", "${schema}"."registry_credential" CASCADE`,
     )
@@ -220,6 +222,24 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await receiver.handleJobCompletion(job)
     return job
   }
+
+  it('rejects new checkpoint export on a protected Box without setting pending or creating a job', async () => {
+    const box = await source()
+    await dataSource.query('INSERT INTO outbound_proxy_reference VALUES ($1, $2)', [organizationId, box.id])
+    await expect(service.create(organizationId, box.id)).rejects.toMatchObject({ status: 409 })
+    expect(await jobs.count()).toBe(0)
+    expect(await boxes.findOneByOrFail({ id: box.id })).toMatchObject({ pending: false, state: BoxState.STOPPED })
+  })
+
+  it('leaves the Box and skips upload when a late checkpoint export loses authority', async () => {
+    const box = await source()
+    const checkpoint = await service.create(organizationId, box.id)
+    await dataSource.query('INSERT INTO outbound_proxy_reference VALUES ($1, $2)', [organizationId, box.id])
+    await finish(checkpoint.exportJobId!, archive(checkpoint))
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({ state: 'failed' })
+    expect(await jobs.countBy({ type: JobType.UPLOAD_CHECKPOINT })).toBe(0)
+    expect(await boxes.findOneByOrFail({ id: box.id })).toMatchObject({ pending: true, state: BoxState.STOPPED })
+  })
 
   async function readyCheckpoint(image?: string, suffix = ''): Promise<Checkpoint> {
     const captured = await source(`captured${suffix}`)

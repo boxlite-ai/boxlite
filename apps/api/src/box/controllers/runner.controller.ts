@@ -8,6 +8,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Post,
   Param,
   Patch,
@@ -18,6 +19,7 @@ import {
   ForbiddenException,
   ParseUUIDPipe,
 } from '@nestjs/common'
+import { isUUID } from 'class-validator'
 import { CreateRunnerDto } from '../dto/create-runner.dto'
 import { RunnerService } from '../services/runner.service'
 import { ApiOAuth2, ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiParam, ApiHeader } from '@nestjs/swagger'
@@ -328,6 +330,7 @@ export class RunnerController {
   async runnerHealthcheck(
     @RunnerContextDecorator() runnerContext: RunnerContext,
     @Body() healthcheck: RunnerHealthcheckDto,
+    @Headers('x-boxlite-runner-process') protectedProcessId?: string,
   ): Promise<void> {
     await this.runnerService.updateRunnerHealth(
       runnerContext.runnerId,
@@ -340,6 +343,7 @@ export class RunnerController {
       healthcheck.supportsPrivileged,
       {
         nestedVirtualizationEnabled: healthcheck.nestedVirtualizationEnabled,
+        protectedProcessId: isUUID(protectedProcessId, '4') ? protectedProcessId : null,
       },
       healthcheck.dataDiskRef,
     )

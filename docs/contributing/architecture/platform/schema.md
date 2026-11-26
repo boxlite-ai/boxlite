@@ -653,6 +653,8 @@ a derived availability score.
 | `draining`                     | `boolean`           | default `false`                                                                                                   |
 | `appVersion`                   | `character varying` | default `v0.0.0-dev`                                                                                              |
 | `apiVersion`                   | `character varying` | default `0`                                                                                                       |
+| `protectedProcessId`           | `uuid`              | nullable; live protected V2 process reported by Runner health                                                     |
+| `protectedExecutableDigest`    | `varchar(64)`       | nullable; executable SHA-256 independently approved by release CI                                                 |
 | `serviceHealth`                | `jsonb`             | nullable                                                                                                          |
 | `lastChecked`                  | `timestamptz`       | nullable                                                                                                          |
 | `createdAt` / `updatedAt`      | `timestamptz`       |                                                                                                                   |
@@ -949,6 +951,20 @@ The [Registry index repair](../../../../apps/api/src/migrations/pre-deploy/17950
 restores missing or invalid matching indexes even when the original migration is recorded.
 See [migration and rollback behavior](../../../../apps/api/src/migrations/README.md#reverting-migrations).
 
+### `outbound_proxy_admission`
+
+One row coordinates new proxy bindings and registry writes across API revisions. `controlled` persists after the final V2 pin is removed, and `enabled` starts false. New binding transactions take a shared row lock through admission, so deployment can close admission with an exclusive update.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `singleton` | `boolean` | Primary key fixed to `true` |
+| `controlled`, `registry_writes`, `enabled` | `boolean` | Separate controlled-stage, registry-write and public binding authorization |
+| `generation`, `release_key` | `bigint`, `text` | Bind changes to the CI rollout generation |
+| `pins` | `jsonb` | Runner identities, endpoints and fingerprints of the configured trust |
+| `standalone_update` | `uuid` | Nullable claim that serializes an ordinary OS Config update with enrollment |
+| `dev_acceptance_organization`, `dev_acceptance_until`, `dev_acceptance_commit` | `uuid`, `timestamptz`, `varchar(40)` | Temporary dev test organization and exact source commit while public admission is closed |
+| `restore_permit`, `restore_runner`, `restore_digest`, `restore_generation` | `uuid`, `uuid`, `varchar(64)`, `bigint` | Exact downgrade approval for one controlled Runner, executable, and closed release generation |
+
 ### `job`
 
 A unit of work handed to exactly one runner. Optimistic-locked through
@@ -965,6 +981,8 @@ A unit of work handed to exactly one runner. Optimistic-locked through
 | `resourceId`              | `character varying` |                                                       |
 | `payload`                 | `character varying` | nullable; JSON text                                   |
 | `resultMetadata`          | `character varying` | nullable; JSON text                                   |
+| `stateChangeLockOwner`    | `uuid`              | nullable; exact owner of the Box state change lock     |
+| `completionRevision`     | `character varying` | nullable; API revision that accepted the authenticated ordinary V2 completion |
 | `traceContext`            | `jsonb`             | nullable                                              |
 | `errorMessage`            | `text`              | nullable                                              |
 | `startedAt`               | `timestamptz`       | nullable                                              |
@@ -995,7 +1013,8 @@ fleet.
 | `boxId`     | `character varying` | primary key, FK → `box.id`                                                                              |
 | `state`     | `enum`              | `pending_export` \| `pending_import` \| `pending_discard_exported` \| `pending_rollback` \| `completed` |
 | `arcPath`   | `character varying` | default `''`; object key of the archive, empty means none to reclaim                                    |
-| `runnerId`  | `uuid`              | nullable; the migration's second runner                                                                 |
+| `attemptId` | `uuid`              | nullable for older rows; unique identifier for this export/import attempt                              |
+| `runnerId`  | `uuid`              | nullable; the chosen import destination before commit, or the source awaiting discard afterward          |
 | `updatedAt` | `timestamptz`       | a copy of `box.updatedAt`                                                                               |
 
 `updatedAt` is the interlock. Every migration step copies `box.updatedAt`
@@ -1004,6 +1023,14 @@ has touched this box". A write from anywhere else moves `box.updatedAt` past
 the copy and breaks the equality, which is the signal to roll back. The column
 type deliberately matches `box.updatedAt`: narrower precision would round the
 copy and fail the comparison it exists for.
+
+The migration marker allocates attempt IDs after CI fences the earlier API
+writer. Each versioned attempt has its own archive key and reuses its destination
+on retry. The Runner verifies the job, attempt, and role before archive or local
+Box changes, and records import ownership atomically with the native Box.
+
+After an ambiguous export failure, the attempt retains its archive key until
+rollback confirms removal.
 
 **Index:** `(state)`.
 

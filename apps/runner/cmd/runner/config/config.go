@@ -29,6 +29,7 @@ type Config struct {
 	ProtectedProxyCertFile             string        `envconfig:"BOXLITE_PROTECTED_PROXY_CERT_FILE"`
 	ProtectedProxyKeyFile              string        `envconfig:"BOXLITE_PROTECTED_PROXY_KEY_FILE"`
 	ProtectedProxyClientCAFile         string        `envconfig:"BOXLITE_PROTECTED_PROXY_CLIENT_CA_FILE"`
+	ProtectedProxyClientCASHA256       string        `envconfig:"BOXLITE_PROTECTED_PROXY_CLIENT_CA_SHA256"`
 	ProtectedProxyClientDNSName        string        `envconfig:"BOXLITE_PROTECTED_PROXY_CLIENT_DNS_NAME"`
 	OtelLoggingEnabled                 bool          `envconfig:"OTEL_LOGGING_ENABLED"`
 	OtelTracingEnabled                 bool          `envconfig:"OTEL_TRACING_ENABLED"`

@@ -159,6 +159,12 @@ export class Runner {
   })
   lastChecked: Date
 
+  @Column({ type: 'uuid', nullable: true })
+  protectedProcessId: string | null
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  protectedExecutableDigest: string | null
+
   @Column({
     default: false,
   })

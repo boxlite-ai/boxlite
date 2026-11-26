@@ -45,6 +45,7 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
   let boxRepository: BoxRepository
   let redis: Redis
   let service: BoxService
+  let runnerService: RunnerService
   let ownsDatabase = false
 
   function readyRunner(): Runner {
@@ -130,7 +131,7 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
     // Real candidate selection: findAvailableRunners / getRandomAvailableRunner /
     // findOneUncachedOrFail all read through this repository, so the score gate
     // and the `excludedRunnerIds` filter are the production ones.
-    const runnerService = Object.create(RunnerService.prototype) as RunnerService
+    runnerService = Object.create(RunnerService.prototype) as RunnerService
     Object.assign(runnerService as any, {
       runnerRepository: runners,
       configService: { getOrThrow: jest.fn().mockReturnValue(10) },
@@ -203,6 +204,16 @@ describeIfDatabase('BoxService runner assignment under concurrency (integration,
       settled.filter((r) => r.status === 'rejected').map((r) => (r as PromiseRejectedResult).reason?.message),
     ).toEqual([])
     expect(await boxes.countBy({ runnerId: runner.id })).toBe(BURST)
+  })
+
+  it('filters a V0 Runner before choosing an ordinary V2 release probe candidate', async () => {
+    const v0 = Object.assign(readyRunner(), { apiVersion: '0', availabilityScore: 200 })
+    const v2 = readyRunner()
+    await runners.insert([v0, v2])
+
+    const options = { regions: [region], boxClass: BoxClass.SMALL, apiVersion: '2' as const }
+    const result = await runnerService.findAvailableRunners(options)
+    expect(result.map(({ id }) => id)).toEqual([v2.id])
   })
 
   it('assigns onto a runner a drain is mid-commit instead of waiting for it', async () => {

@@ -60,12 +60,20 @@ func (a *BoxliteAdapter) Ping(ctx context.Context) error {
 	return a.client.Ping(ctx)
 }
 
-func (a *BoxliteAdapter) ExportBox(ctx context.Context, boxId, destDir string) (string, error) {
-	return a.client.ExportBox(ctx, boxId, destDir)
+func (a *BoxliteAdapter) ExportBox(ctx context.Context, boxId, destDir string, authorize ...func() error) (string, error) {
+	return a.client.ExportBox(ctx, boxId, destDir, authorize...)
 }
 
-func (a *BoxliteAdapter) ImportBox(ctx context.Context, boxId, archivePath string) error {
-	return a.client.ImportBox(ctx, boxId, archivePath)
+func (a *BoxliteAdapter) ImportMigrationBox(ctx context.Context, boxId, archivePath, attemptID string, authorize func() error) error {
+	return a.client.ImportMigrationBox(ctx, boxId, archivePath, attemptID, authorize)
+}
+
+func (a *BoxliteAdapter) DestroyMigrationCopy(ctx context.Context, boxId, importedAttemptID string, authorize func() error) error {
+	return a.client.DestroyMigrationCopy(ctx, boxId, importedAttemptID, authorize)
+}
+
+func (a *BoxliteAdapter) WithOrdinaryTarget(ctx context.Context, boxId string, effect func() error) error {
+	return a.client.WithOrdinaryTarget(ctx, boxId, effect)
 }
 
 func (a *BoxliteAdapter) ExportCheckpoint(ctx context.Context, boxId, destDir string) (string, string, error) {
