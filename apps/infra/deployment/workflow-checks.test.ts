@@ -56,6 +56,7 @@ for (const [name, job, runner] of [
   ['api-client-drift.yml', 'check-generated-clients', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['test.yml', 'dashboard', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['test.yml', 'secret-server-postgres', 'boxlite-2vcpu-4gbmem-30gbdisk'],
+  ['test.yml', 'serve-rest-e2e', 'boxlite-4vcpu-16gbmem-64gbdisk'],
   ['build-box-images.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
 ] as const) {
   test(`${name}/${job} requests its qualified BoxLite runner`, () => {

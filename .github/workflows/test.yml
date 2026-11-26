@@ -524,13 +524,24 @@ jobs:
     name: REST Server E2E (Linux)
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.rust == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
     timeout-minutes: 45
     permissions:
       contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-boxlite-runner
+
+      - name: Install native build prerequisites
+        run: sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev patchelf python3
+
+      - uses: ./.github/actions/setup-go
+        with:
+          cache: 'false'
 
       - uses: ./.github/actions/setup-rust
         with:
@@ -539,8 +550,13 @@ jobs:
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
-      - name: Enable unprivileged user namespaces
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Verify unprivileged user and mount namespaces
+        run: |
+          if [ "$(id -u)" -eq 0 ]; then
+            sudo -u nobody unshare --user --map-root-user --mount --propagation private true
+          else
+            unshare --user --map-root-user --mount --propagation private true
+          fi
 
       - name: Enable KVM access for the runtime warm-up
         run: sudo chmod a+rw /dev/kvm
