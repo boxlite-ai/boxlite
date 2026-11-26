@@ -1,0 +1,64 @@
+---
+name: BoxLite Dashboard cold dependency qualification
+'on':
+  push:
+    branches:
+    - ci/boxlite-runner-trials-2833
+    paths:
+    - ".github/workflows/runner-dashboard-cold.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  dashboard:
+    name: Dashboard cold install (${{ matrix.memory }} GiB)
+    runs-on: "${{ matrix.runner }}"
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        persist-credentials: false
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native Node build dependencies
+      run: sudo apt-get install -y --no-install-recommends build-essential python3
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Enable Corepack
+      run: corepack enable
+    - name: Use an empty Yarn package cache
+      shell: bash
+      run: |
+        set -eu
+        export YARN_GLOBAL_FOLDER="$RUNNER_TEMP/cold-yarn"
+        printf 'YARN_GLOBAL_FOLDER=%s\n' "$YARN_GLOBAL_FOLDER" >> "$GITHUB_ENV"
+        folder="$(yarn config get cacheFolder)"
+        test ! -d "$folder" || test -z "$(ls -A "$folder")"
+        echo "Cold cache verified at $folder"
+    - name: Limit concurrent fetches on the smaller worker
+      if: matrix.memory == 4
+      run: echo 'YARN_NETWORK_CONCURRENCY=8' >> "$GITHUB_ENV"
+    - name: Install app dependencies
+      run: yarn install --immutable
+    - name: Run dashboard unit tests
+      run: yarn nx run dashboard:test --coverage --skip-nx-cache
+    - name: Verify coverage files for Upload dashboard coverage to Codecov
+      working-directory: "."
+      shell: bash
+      run: test -s target/coverage/dashboard/lcov.info
+    timeout-minutes: 100
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include:
+        - runner: boxlite-2vcpu-4gbmem-30gbdisk
+          memory: 4
+        - runner: boxlite-2vcpu-8gbmem-30gbdisk
+          memory: 8
