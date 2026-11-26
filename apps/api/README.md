@@ -948,7 +948,10 @@ Source evidence does not identify customer versus internal/probe traffic; use an
 Customer credentials are refused. The API resolves organization from the stored Box and checks Runner ownership;
 producers cannot choose a tenant. Only SSH evidence is accepted from Runners, and only tunnel evidence from Proxies.
 Unknown/deleted Boxes, warm stock, incompatible producers and timestamps outside seven days old/five minutes future are excluded.
-The response's `accepted` count measures local capture calls, not delivery to either analytics sink.
+The response's `accepted` count measures local capture calls. The shared PostHog sender holds up to 100 events per API process,
+including at most two active deliveries. An idle sender can admit one full feature-usage batch.
+When all slots are occupied, each dropped event increments the OpenTelemetry counter `posthog_queue_overflow_total`.
+The API returns without waiting for delivery, and the sender checks consent before each transfer.
 
 ```mermaid
 flowchart LR

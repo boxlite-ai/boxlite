@@ -6,7 +6,13 @@
 import { INestApplication, Logger } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import { getRepositoryToken } from '@nestjs/typeorm'
+import { randomUUID } from 'node:crypto'
+import { createServer } from 'node:http'
 import { AddressInfo } from 'node:net'
+import { metrics } from '@opentelemetry/api'
+import { AnalyticsService } from '../../analytics/services/analytics.service'
+import { AnalyticsConsentService } from '../../analytics/services/analytics-consent.service'
+import { TypedConfigService } from '../../config/typed-config.service'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { subscribeBusinessEvents } from '../../common/utils/business-event.util'
 import { FeatureUsageController } from './feature-usage.controller'
@@ -78,6 +84,56 @@ describe('authenticated Cloud feature usage ingestion', () => {
         'feature.source': 'runner',
       }),
     ])
+  })
+
+  it('delivers one full SSH batch and counts only overflow while delivery is busy', async () => {
+    const received: string[] = []
+    const sink = createServer(async (request, response) => {
+      const chunks: Buffer[] = []
+      for await (const chunk of request) chunks.push(chunk)
+      const { batch } = JSON.parse(Buffer.concat(chunks).toString())
+      received.push(...batch.map((entry: { uuid: string }) => entry.uuid))
+      response.writeHead(200).end('{"status":1}')
+    })
+    const counter = { add: jest.fn() }
+    const meter = metrics.getMeter('')
+    const createCounter = jest.spyOn(meter, 'createCounter').mockReturnValue(counter)
+    jest.spyOn(metrics, 'getMeter').mockReturnValue(meter)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let analytics: AnalyticsService | undefined
+    const observations = Array.from({ length: 100 }, () => event(occurredAt, { id: randomUUID() }))
+    try {
+      await new Promise<void>((resolve) => sink.listen(0, '127.0.0.1', resolve))
+      const config = {
+        'posthog.apiKey': 'phc_test',
+        'posthog.host': 'http://127.0.0.1:' + (sink.address() as AddressInfo).port,
+      }
+      analytics = new AnalyticsService(
+        { get: (key: string) => config[key] } as TypedConfigService,
+        {
+          dispatch: async (_subjects, _at, deliver) => {
+            await gate
+            await deliver()
+            return true
+          },
+        } as AnalyticsConsentService,
+      )
+      expect(await (await send(observations)).json()).toEqual({ accepted: 100 })
+      expect(
+        await (await send([event(occurredAt, { id: randomUUID() }), event(occurredAt, { id: randomUUID() })])).json(),
+      ).toEqual({ accepted: 2 })
+    } finally {
+      release()
+      await analytics?.onApplicationShutdown()
+      await new Promise<void>((resolve) => sink.close(() => resolve()))
+    }
+    expect(received).toHaveLength(100)
+    expect(new Set(received)).toEqual(new Set(observations.map((entry) => entry.id)))
+    expect(createCounter).toHaveBeenCalledWith('posthog_queue_overflow_total', expect.anything())
+    expect(counter.add.mock.calls).toEqual([[1], [1]])
   })
 
   it.each(['tunnel_connection', 'tunnel_request'])('accepts Proxy evidence for %s', async (kind) => {

@@ -6,6 +6,7 @@
 
 import { AnalyticsConsentService, AnalyticsSubjects } from './analytics-consent.service'
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
+import { metrics } from '@opentelemetry/api'
 import { OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../../box/constants/box-events.constants'
 import { BoxCreatedEvent } from '../../box/events/box-create.event'
@@ -21,6 +22,7 @@ import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { Organization } from '../../organization/entities/organization.entity'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { TypedConfigService } from '../../config/typed-config.service'
+import { MAX_FEATURE_USAGE_BATCH_SIZE } from '../../common/constants/constants'
 import { subscribeBusinessEvents } from '../../common/utils/business-event.util'
 
 @Injectable()
@@ -32,6 +34,9 @@ export class AnalyticsService implements OnApplicationShutdown {
 
   private readonly pending = new Set<Promise<unknown>>()
   private readonly queue: (() => Promise<unknown>)[] = []
+  private readonly overflow = metrics.getMeter('').createCounter('posthog_queue_overflow_total', {
+    description: 'PostHog events dropped because the local sender is full',
+  })
   private closing = false
 
   get enabled(): boolean {
@@ -92,13 +97,11 @@ export class AnalyticsService implements OnApplicationShutdown {
 
   capture(event: Parameters<PostHog['capture']>[0], subjects: AnalyticsSubjects, consentSince?: Date): void {
     const client = this.posthog
-    if (
-      !client ||
-      this.closing ||
-      this.queue.length >= 32 ||
-      (!subjects.users.length && !subjects.organizations.length)
-    )
+    if (!client || this.closing || (!subjects.users.length && !subjects.organizations.length)) return
+    if (this.pending.size + this.queue.length >= MAX_FEATURE_USAGE_BATCH_SIZE) {
+      this.overflow.add(1)
       return
+    }
     const occurredAt = event.timestamp ?? new Date()
     this.queue.push(() =>
       this.consent
