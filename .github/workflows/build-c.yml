@@ -93,7 +93,8 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     needs: [ config, resolve-ref ]
-    runs-on: ${{ matrix.os }}
+    # Selected commits and runner recovery must build independently of the BoxLite fleet.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && !inputs.ref && !inputs.linux_x64_only && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -110,6 +111,11 @@ jobs:
         with:
           ref: ${{ needs.resolve-ref.outputs.sha }}
           submodules: recursive
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: matrix.os == 'ubuntu-latest' && runner.environment == 'self-hosted'
+        with:
+          native-build: 'true'
 
       - uses: ./.github/actions/setup-rust
         with:

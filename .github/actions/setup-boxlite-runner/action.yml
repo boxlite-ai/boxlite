@@ -1,6 +1,11 @@
 name: Set up BoxLite runner tools
 description: Install Make, ripgrep and archive tools on the minimal Linux runner image.
 
+inputs:
+  native-build:
+    description: Install the host toolchain used by native Linux builds.
+    default: 'false'
+
 runs:
   using: composite
   steps:
@@ -9,3 +14,8 @@ runs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends make ripgrep xz-utils zstd
+
+    - name: Install native build prerequisites
+      if: inputs.native-build == 'true'
+      shell: bash
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev patchelf python3

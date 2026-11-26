@@ -185,6 +185,7 @@ jobs:
               - '.cargo/**/!(*.md)'
               - '.config/nextest.toml'
               - 'codecov.yml'
+              - '.github/actions/setup-boxlite-runner/**/!(*.md)'
               - '.github/actions/setup-rust/**/!(*.md)'
               - '.github/actions/setup-python/**/!(*.md)'
               - '.github/ci-config.json'
@@ -208,6 +209,7 @@ jobs:
               - 'rust-toolchain.toml'
               - '.cargo/**/!(*.md)'
               - '.github/actions/sccache/**/!(*.md)'
+              - '.github/actions/setup-boxlite-runner/**/!(*.md)'
               - '.github/workflows/test.yml'
             # vmm selects the kernel build and the real-kernel boot tests inside
             # the rust job, so rust must match every path listed here.
@@ -535,9 +537,8 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-boxlite-runner
-
-      - name: Install native build prerequisites
-        run: sudo apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev patchelf python3
+        with:
+          native-build: 'true'
 
       - uses: ./.github/actions/setup-go
         with:
@@ -870,7 +871,7 @@ jobs:
     name: Nix flake build
     needs: changes
     if: needs.changes.outputs.nix == 'true'
-    runs-on: ubuntu-latest
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
     # A cold build took 27 minutes on 12 local cores; the runner has 4.
     timeout-minutes: 90
     permissions:
@@ -881,6 +882,10 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        with:
+          native-build: 'true'
 
       # No /nix/store cache: it comes from the cache.nixos.org CDN, and
       # restoring 3 GB from the Actions cache would save little.
@@ -908,12 +913,14 @@ jobs:
             --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
             -c make cli
 
-      # The jailer runs bwrap, which Ubuntu 24.04's AppArmor blocks without the
-      # bwrap profile (docs/guides/troubleshooting.md); the runner is discarded.
-      - name: Enable KVM and unprivileged user namespaces
+      - name: Enable KVM and verify unprivileged user namespaces
         run: |
           sudo chmod a+rw /dev/kvm
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          if [ "$(id -u)" -eq 0 ]; then
+            sudo -u nobody unshare --user --map-root-user --mount --propagation private true
+          else
+            unshare --user --map-root-user --mount --propagation private true
+          fi
 
       - name: Boot a box
         timeout-minutes: 10

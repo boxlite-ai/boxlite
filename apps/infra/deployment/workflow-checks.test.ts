@@ -20,13 +20,14 @@ const picomatch = createRequire(import.meta.url)('picomatch') as (pattern: strin
 const workflow = (name: string): any => loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows', name), 'utf8'))
 const matches = (pattern: string, path: string) => picomatch(pattern, { dot: true })(path)
 
-function matrixRunner(selection: string, os: string) {
+function matrixRunner(selection: string, os: string, inputs = new data.Dictionary()) {
   const osEntry = { key: 'os', value: new data.StringData(os) }
   const context = new data.Dictionary(
     { key: 'matrix', value: new data.Dictionary(osEntry, { key: 'platform', value: new data.Dictionary(osEntry) }) },
+    { key: 'inputs', value: inputs },
   )
   const expression = selection.replace(/^\$\{\{\s*|\s*\}\}$/g, '')
-  const ast = new Parser(new Lexer(expression).lex().tokens, ['matrix'], []).parse()
+  const ast = new Parser(new Lexer(expression).lex().tokens, ['matrix', 'inputs'], []).parse()
   return new Evaluator(ast, context).evaluate().coerceString()
 }
 
@@ -37,6 +38,7 @@ test('Ubuntu x64 matrix jobs request their qualified BoxLite workers and preserv
     ['test.yml', 'guest_artifacts', 'boxlite-4vcpu-16gbmem-64gbdisk'],
     ['test.yml', 'python', 'boxlite'],
     ['test.yml', 'node', 'boxlite'],
+    ['build-c.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
     ['build-go.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
     ['build-node.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
   ] as const
@@ -56,6 +58,7 @@ for (const [name, job, runner] of [
   ['api-client-drift.yml', 'check-generated-clients', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['test.yml', 'dashboard', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['test.yml', 'secret-server-postgres', 'boxlite-2vcpu-4gbmem-30gbdisk'],
+  ['test.yml', 'nix', 'boxlite-4vcpu-16gbmem-64gbdisk'],
   ['test.yml', 'serve-rest-e2e', 'boxlite-4vcpu-16gbmem-64gbdisk'],
   ['build-box-images.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
 ] as const) {
@@ -71,12 +74,10 @@ test('Dashboard limits parallel Yarn downloads on its 4 GiB worker', () => {
 
 for (const [name, job, matrix] of [
   ['release-box-images.yml', 'release', false],
-  ['build-c.yml', 'build', true],
   ['build-node.yml', 'build', true],
   ['build-runtime.yml', 'build', true],
   ['build-wheels.yml', 'build_wheels', true],
   ['test.yml', 'api', false],
-  ['test.yml', 'nix', false],
   ['test.yml', 'rust', true],
   ['test.yml', 'go', true],
 ] as const) {
@@ -85,6 +86,16 @@ for (const [name, job, matrix] of [
     assert.equal(matrix ? matrixRunner(selection, 'ubuntu-latest') : selection, 'ubuntu-latest')
   })
 }
+
+test('selected-commit and recovery C SDK builds can run independently of BoxLite', () => {
+  const selection = workflow('build-c.yml').jobs.build['runs-on']
+  for (const input of [
+    { key: 'ref', value: new data.StringData('a'.repeat(40)) },
+    { key: 'linux_x64_only', value: new data.BooleanData(true) },
+  ]) {
+    assert.equal(matrixRunner(selection, 'ubuntu-latest', new data.Dictionary(input)), 'ubuntu-latest')
+  }
+})
 
 test('CodeQL places every language on its qualified runner and retains its build mode', () => {
   const job = workflow('codeql.yml').jobs.analyze
@@ -183,7 +194,7 @@ for (const path of ['scripts/test/coverage-bindings.sh', 'tests/scripts/test_nat
 // input of `make cli` there, including on push to main, and nothing else.
 for (const path of ['flake.nix', 'flake.lock', 'src/deps/libkrun-sys/build.rs', 'src/shared/build.rs',
   'scripts/build/build-shim.sh', 'scripts/common.sh', 'scripts/setup/setup-common.sh', 'make/build.mk',
-  'Cargo.lock', 'rust-toolchain.toml', '.github/actions/sccache/action.yml']) {
+  'Cargo.lock', 'rust-toolchain.toml', '.github/actions/sccache/action.yml', '.github/actions/setup-boxlite-runner/action.yml']) {
   test(`a change to a dev shell build input runs the nix job: ${path}`, () => {
     assert.ok(testSuites([path]).includes('nix'))
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
