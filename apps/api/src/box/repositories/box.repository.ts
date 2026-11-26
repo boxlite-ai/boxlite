@@ -434,6 +434,7 @@ export class BoxRepository extends BaseRepository<Box> {
       box.enforceInvariants()
       await manager.save(Box, box)
       await manager.query('DELETE FROM secret_credential WHERE box_id = $1', [box.id])
+      await this.closeOpenUsagePeriod(manager, box.id)
       return { box, previous }
     })
     this.emitUpdateEvents(changed.box, changed.previous)
@@ -529,6 +530,7 @@ export class BoxRepository extends BaseRepository<Box> {
       await entityManager.update(Box, id, { ...updateData, ...invariantChanges })
       if (box.desiredState === BoxDesiredState.DESTROYED) {
         await entityManager.query('DELETE FROM secret_credential WHERE box_id = $1', [id])
+        await this.closeOpenUsagePeriod(entityManager, id)
       }
       box.updatedAt = new Date()
 
@@ -716,6 +718,16 @@ export class BoxRepository extends BaseRepository<Box> {
       .execute()
 
     return (claimed.raw as Array<{ boxId: string }>).length
+  }
+
+  /**
+   * Billing ends with the deletion request. Closing the period in the request's
+   * transaction keeps that true when the usage event handler runs late or never.
+   */
+  private async closeOpenUsagePeriod(entityManager: EntityManager, boxId: string): Promise<void> {
+    await entityManager.query('UPDATE box_usage_periods SET "endAt" = now() WHERE "boxId" = $1 AND "endAt" IS NULL', [
+      boxId,
+    ])
   }
 
   /**
