@@ -1,4 +1,4 @@
-name: BoxLite local cleanup diagnostic
+name: Verify startup cleanup on BoxLite
 on:
   push:
     branches: [ci/boxlite-runner-trials-2833]
@@ -8,14 +8,36 @@ permissions:
 jobs:
   cleanup:
     runs-on: boxlite
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - name: Check out the test fix
+        uses: actions/checkout@v5
         with:
-          ref: 6a96c6a7be1a8af2113ac7acc5154c7e18314b03
+          ref: 29c1aea3fc84c5f75589e88906525c5c858c959f
           persist-credentials: false
-      - name: Diagnose cleanup of test-owned processes
+      - name: Install CI script tools
         run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends make ripgrep xz-utils zstd gcc libc6-dev patchelf python3-venv
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: 'false'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/infra/package-lock.json
+      - name: Type-check and test infrastructure with coverage
+        run: |
+          make coverage:infra
+          test -s target/coverage/infra/lcov.info
+      - name: Test CI and coverage scripts against fake tools
+        run: make test:unit:scripts
+      - name: Compare the original fixture and the fix on this worker
+        run: |
+          set -eu
+          git fetch -q --no-tags --depth 1 https://github.com/boxlite-ai/boxlite.git 4e684349887005594b7f09cdbe20bb18418f0a66
+          git show FETCH_HEAD:tests/scripts/test_e2e_local.py > "$RUNNER_TEMP/base_e2e_fixture.py"
           python3 - <<'PY'
           import contextlib
           import io
@@ -24,40 +46,24 @@ jobs:
           import sys
           import unittest
 
-          sys.path.insert(0, 'tests/scripts')
-          from test_e2e_local import LocalE2ETest, local
+          fixture = Path("tests/scripts/test_e2e_local.py").resolve()
+          sys.path.insert(0, str(fixture.parent))
+          from test_e2e_local import LocalE2ETest
 
-          original_argv = local._argv
-          original_adopt = local.adoptable_box
-          original_pids = local.stop_orphaned_boxes
-          events = []
-          def argv(pid):
-              args = original_argv(pid)
-              if not args or '/boxes/' not in args[0]:
-                  events.append(('argv', pid, args[:1]))
-              return args
-          def adopt(path):
-              result = original_adopt(path)
-              events.append(('adopt', path.name, result))
-              if path.name == 'stale' and result:
-                  pid = int((path / 'shim.pid').read_text().splitlines()[0])
-                  events.append(('stale expected / observed', '0', local.process_starttime(pid)))
-              return result
-          def stop(*args, **kwargs):
-              events.append(('cleaning', kwargs.get('pids')))
-              return original_pids(*args, **kwargs)
-          local._argv, local.adoptable_box, local.stop_orphaned_boxes = argv, adopt, stop
-          failures = 0
-          for attempt in range(80):
-              events.clear()
-              result = unittest.TestResult()
-              with contextlib.redirect_stdout(io.StringIO()):
-                  LocalE2ETest('test_start_reaps_only_unrecoverable_box_processes').run(result)
-              if not result.wasSuccessful():
-                  failures += 1
-                  print('attempt', attempt + 1, 'observations', events, flush=True)
-                  print((result.failures + result.errors)[0][1], flush=True)
-                  if failures >= 3: break
-          print('failures', failures, 'in', attempt + 1, 'attempts', flush=True)
-          sys.exit(bool(failures))
+          base = Path(os.environ["RUNNER_TEMP"]) / "base_e2e_fixture.py"
+          namespace = {"__file__": str(fixture), "__name__": "base_fixture"}
+          exec(compile(base.read_text(), str(fixture), "exec"), namespace)
+          variants = [("base", namespace["LocalE2ETest"]), ("fix", LocalE2ETest)]
+          outcomes = {name: {} for name, _ in variants}
+          for i in range(120):
+              for name, case in (variants if i % 2 == 0 else reversed(variants)):
+                  result = unittest.TestResult()
+                  with contextlib.redirect_stdout(io.StringIO()):
+                      case("test_start_reaps_only_unrecoverable_box_processes").run(result)
+                  tracebacks = result.failures + result.errors
+                  outcome = tracebacks[0][1].splitlines()[-1] if tracebacks else "passed"
+                  outcomes[name][outcome] = outcomes[name].get(outcome, 0) + 1
+          print(outcomes, flush=True)
+          if outcomes["fix"] != {"passed": 120}:
+              raise SystemExit(1)
           PY
