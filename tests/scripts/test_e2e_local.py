@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import shutil
 import subprocess
@@ -238,26 +239,31 @@ class LocalE2ETest(unittest.TestCase):
         home = self.state / "runtime"
         boxes = home / "boxes"
         processes = {}
-        for name in ("lost", "recoverable", "legacy", "padded", "stale", "garbled"):
-            box = boxes / name
-            (box / "bin").mkdir(parents=True)
-            binary = box / "bin/boxlite-shim"
-            binary.symlink_to(sys.executable)
-            process = subprocess.Popen(
-                [str(binary), "-c", "import time; time.sleep(30)"],
-                start_new_session=True)
-            processes[name] = process
-            starttime = local.process_starttime(process.pid)
-            records = {
-                "recoverable": f"{process.pid}\n{starttime}\n",
-                "legacy": f"{process.pid}\n",
-                "padded": f"{process.pid}\n000{starttime}\n",
-                "stale": f"{process.pid}\n0\n",
-                "garbled": f"{process.pid}\n1_2\n",
-            }
-            if name in records:
-                (box / "shim.pid").write_text(records[name])
         try:
+            for name in ("lost", "recoverable", "legacy", "padded", "stale", "garbled"):
+                box = boxes / name
+                (box / "bin").mkdir(parents=True)
+                binary = box / "bin/boxlite-shim"
+                binary.symlink_to(sys.executable)
+                process = subprocess.Popen(
+                    [str(binary), "-c", "import os, time; os.write(1, b'R'); time.sleep(30)"],
+                    stdout=subprocess.PIPE, start_new_session=True)
+                processes[name] = process
+                with process.stdout as ready:
+                    self.assertTrue(select.select([ready], [], [], 5)[0],
+                                    f"{name} shim timed out before reporting readiness")
+                    self.assertEqual(ready.read(1), b"R", f"{name} shim failed to report readiness")
+                starttime = local.process_starttime(process.pid)
+                records = {
+                    "recoverable": f"{process.pid}\n{starttime}\n",
+                    "legacy": f"{process.pid}\n",
+                    "padded": f"{process.pid}\n000{starttime}\n",
+                    "stale": f"{process.pid}\n0\n",
+                    "garbled": f"{process.pid}\n1_2\n",
+                }
+                if name in records:
+                    (box / "shim.pid").write_text(records[name])
+
             def check_before_start(*args, **kwargs):
                 for name, process in processes.items():
                     if name in ("lost", "stale"):
