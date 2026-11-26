@@ -47,8 +47,12 @@ export interface StartBoxResponse {
 export interface RunnerAdapter {
   init(runner: Runner): Promise<void>
 
-  supportsProtectedBootstrap?(recovery?: boolean, volumeRestart?: boolean): Promise<boolean>
-  protectedBootstrapCapability?(recovery?: boolean, volumeRestart?: boolean): Promise<ProtectedBootCapability>
+  supportsProtectedBootstrap?(recovery?: boolean, volumeRestart?: boolean, allocation?: boolean): Promise<boolean>
+  protectedBootstrapCapability?(
+    recovery?: boolean,
+    volumeRestart?: boolean,
+    allocation?: boolean,
+  ): Promise<ProtectedBootCapability>
   readonly protectedBootstrap?: ProtectedBootControl
   managedOutbound?(boxId: string, epoch: string, command: ManagedCommand): Promise<ManagedReceipt>
 

@@ -28,12 +28,13 @@ func TestCreateAppliesSecrets(t *testing.T) {
 	}
 
 	create := findMethod(parsed, "Client", "Create")
-	if create == nil {
-		t.Fatal("Client.Create not found in client.go")
+	if create == nil || findCall(create.Body, "c", "createBox") == nil {
+		t.Fatal("Client.Create must use the shared Box creation path")
 	}
 
-	if findCall(create.Body, "boxlite", "WithSecret") == nil {
-		t.Fatal("Client.Create no longer calls boxlite.WithSecret; secrets would be dropped")
+	createBox := findMethod(parsed, "Client", "createBox")
+	if createBox == nil || findCall(createBox.Body, "boxlite", "WithSecret") == nil {
+		t.Fatal("shared Box creation must apply secrets through boxlite.WithSecret")
 	}
 }
 

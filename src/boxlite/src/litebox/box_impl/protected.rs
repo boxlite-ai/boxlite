@@ -30,6 +30,12 @@ impl BoxImpl {
         request: ProtectedBootRequest,
     ) -> BoxliteResult<ProtectedBootReceipt> {
         request.key.validate()?;
+        if let Some(allocation) = self.config.options.advanced.runner_allocation() {
+            let is_allocation_attempt = allocation == &request.key.attempt_id;
+            if request.restart == is_allocation_attempt {
+                return Err(conflict("Protected boot does not match the allocation"));
+            }
+        }
         self.with_operation(async {
             let manager = &self.runtime.box_manager;
             let mut record = manager.protected_boot(self.id())?.unwrap_or_default();
@@ -59,7 +65,9 @@ impl BoxImpl {
                     && state.status == BoxStatus::Stopped
                     && !self.config.options.removes_on_stop()
                     && (record.retired.iter().any(|retired| retired.epoch.is_some())
-                        || (key.registration_id.is_none() && record.retired.is_empty()));
+                        || (self.config.options.advanced.runner_allocation().is_none()
+                            && key.registration_id.is_none()
+                            && record.retired.is_empty()));
                 if !(restart || self.can_admit_protected_boot(state.status, !record.retired.is_empty()))
                     || record.outbound.pending.is_some()
                     || record.outbound.unbind_settlement.is_some()
@@ -94,6 +102,10 @@ impl BoxImpl {
             self.confirm_protected_boot(&key).await
         })
         .await
+    }
+
+    pub(crate) fn runner_allocation(&self) -> Option<crate::net::OutboundRevision> {
+        self.config.options.advanced.runner_allocation().cloned()
     }
 
     pub(crate) async fn change_protected_gate(

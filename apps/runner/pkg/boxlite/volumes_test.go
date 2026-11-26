@@ -9,11 +9,70 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/boxlite-ai/runner/cmd/runner/config"
+	"github.com/google/uuid"
 )
+
+func useDevelopmentVolumeDirectory(t *testing.T) {
+	t.Helper()
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("BOXLITE_API_URL", "https://example.invalid")
+	t.Setenv("BOXLITE_RUNNER_TOKEN", "local-test")
+	t.Setenv("RUNNER_DOMAIN", "runner.example.invalid")
+	cfg, err := config.GetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalEnvironment := cfg.Environment
+	cfg.Environment = "development"
+	t.Cleanup(func() { cfg.Environment = originalEnvironment })
+}
+
+func TestOrdinaryStartPublishesVolumeReferenceUnderCleanupGuard(t *testing.T) {
+	useDevelopmentVolumeDirectory(t)
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	if err := os.WriteFile(filepath.Join(dir, "mountpoint"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	c := testClient(t)
+	c.volumeMutexes = make(map[string]*sync.Mutex)
+	boxID := uuid.NewString()
+	volumeID := uuid.NewString()
+	t.Cleanup(func() { _ = c.removeBoxVolumeMountRecord(context.Background(), boxID) })
+	metadata := map[string]string{
+		"volumes": "[{\"volumeId\":\"" + volumeID + "\",\"mountPath\":\"/work\"}]",
+	}
+	c.volumeCleanupMutex.Lock()
+	started := make(chan struct{})
+	prepared := make(chan error, 1)
+	go func() {
+		close(started)
+		prepared <- c.ensureVolumeMountsFromMetadata(t.Context(), boxID, metadata)
+	}()
+	<-started
+	select {
+	case err := <-prepared:
+		c.volumeCleanupMutex.Unlock()
+		t.Fatalf("ordinary start published its reference while cleanup held the guard: %v", err)
+	case <-time.After(250 * time.Millisecond):
+		c.volumeCleanupMutex.Unlock()
+	}
+	if err := <-prepared; err != nil {
+		t.Fatal(err)
+	}
+	mounts, err := c.getRecordedVolumeMounts()
+	if err != nil || !mounts[filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+volumeID)] {
+		t.Fatalf("ordinary start did not publish its mount after releasing the guard: %v", err)
+	}
+}
 
 // mountArgv returns the mount binary and its arguments, unwrapping the
 // transient-scope wrapper when getMountCmd took the systemd branch. Tests

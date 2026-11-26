@@ -8,6 +8,7 @@ import { Agent } from 'node:https'
 import { isIP } from 'node:net'
 import type { Runner } from '../entities/runner.entity'
 import type { Box } from '../entities/box.entity'
+import type { BootstrapIntent } from '../entities/outbound-control-record'
 import type { BoxVolume } from '../dto/box.dto'
 import type { ManagedSnapshot, SealedEvidence } from './protected-outbound'
 import { validOutboundRevision, validOutboundSnapshot } from './outbound-control'
@@ -59,13 +60,18 @@ export type ProtectedBootReceipt = { key: ProtectedBootKey; epoch: string | null
 
 export type ProtectedBootCapability = 'supported' | 'unsupported' | 'unverified'
 
+export const PROTECTED_RUNNER_REQUEST_TIMEOUT_MS = 120_000
+export const PROTECTED_RUNNER_CONTROL_TIMEOUT_MS = 10_000
+
 export interface ProtectedBootControl {
-  supportsProtectedBootstrap(recovery?: boolean, volumeRestart?: boolean): Promise<boolean>
+  supportsProtectedBootstrap(recovery?: boolean, volumeRestart?: boolean, allocation?: boolean): Promise<boolean>
+  destroyProtectedPlaceholder(boxId: string, attemptId: string): Promise<void>
   prepareProtectedBox(
     box: Box,
     image: string,
     metadata: Record<string, string>,
     nestedVirtualization: boolean,
+    attemptId: string,
   ): Promise<unknown>
   startProtectedBox(
     boxId: string,
@@ -93,12 +99,22 @@ export function validBootstrapIntent(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false
   const input = value as Record<string, unknown>
   const key = input.key as ProtectedBootKey | undefined
+  const allocation = input.placeholderAllocation as BootstrapIntent['placeholderAllocation']
   if (
     !key ||
     !validOutboundRevision(key.runner_id) ||
     !validOutboundRevision(key.attempt_id) ||
     !validOutboundRevision(input.generation) ||
     !validOutboundSnapshot(key.policy) ||
+    (allocation !== undefined &&
+      (!allocation ||
+        !Number.isSafeInteger(allocation.deadline) ||
+        allocation.deadline <= 0 ||
+        (allocation.dispatchOwner !== undefined && !validOutboundRevision(allocation.dispatchOwner)) ||
+        (allocation.allocated !== undefined && allocation.allocated !== true) ||
+        (allocation.handoffDeadline !== undefined &&
+          (!Number.isSafeInteger(allocation.handoffDeadline) || allocation.handoffDeadline <= 0)) ||
+        (allocation.unconfirmed !== undefined && allocation.unconfirmed !== true))) ||
     (input.claim !== undefined && !validOutboundRevision(input.claim)) ||
     (input.epoch !== undefined && !validOutboundRevision(input.epoch)) ||
     (input.retiredEpoch !== undefined && input.retiredEpoch !== null && !validOutboundRevision(input.retiredEpoch)) ||

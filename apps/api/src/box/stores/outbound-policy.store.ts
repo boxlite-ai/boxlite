@@ -1,6 +1,7 @@
 import { NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { DataSource, EntityManager } from 'typeorm'
 import { Box } from '../entities/box.entity'
+import { UNCONFIRMED_PROTECTED_PLACEHOLDER } from '../errors/protected-placeholder.error'
 import { BoxConflictError } from '../errors/box-conflict.error'
 import { OutboundControlRecord } from '../entities/outbound-control-record'
 import { OutboundSnapshot, validOutboundRevision, validOutboundSnapshot } from '../runner-adapter/outbound-control'
@@ -22,6 +23,9 @@ export function outboundRecord(box: Box): OutboundControlRecord {
     control.version !== 1 ||
     !validOutboundRevision(control.revision) ||
     (control.bootstrap !== undefined && !validBootstrapIntent(control.bootstrap)) ||
+    (control.placeholderClosed !== undefined &&
+      (!validOutboundRevision(control.placeholderClosed?.runnerId) ||
+        !validOutboundRevision(control.placeholderClosed?.attemptId))) ||
     (control.managed !== undefined && !validManagedControl(control.managed)) ||
     (pending !== undefined &&
       (!pending ||
@@ -48,8 +52,8 @@ export function persistedOutbound(box: Box): OutboundSnapshot {
 
 /** Call with the Box row locked on the primary so intent and references describe one owner. */
 export async function hasProtectedBoxAuthority(manager: EntityManager, box: Box): Promise<boolean> {
-  const { bootstrap, managed } = outboundRecord(box)
-  if (bootstrap || managed) return true
+  const { bootstrap, managed, placeholderClosed } = outboundRecord(box)
+  if (bootstrap || managed || placeholderClosed || box.errorReason === UNCONFIRMED_PROTECTED_PLACEHOLDER) return true
   const [reference] = await manager.query(
     'SELECT 1 FROM outbound_proxy_reference WHERE organization_id = $1 AND box_id = $2 LIMIT 1',
     [box.organizationId, box.id],
@@ -66,7 +70,14 @@ export async function lockOrdinaryBox(
 ): Promise<void> {
   const box = await manager
     .createQueryBuilder(Box, 'box')
-    .select(['box.id', 'box.organizationId', 'box.runnerId', 'box.prevRunnerId', 'box.outboundControl'])
+    .select([
+      'box.id',
+      'box.organizationId',
+      'box.runnerId',
+      'box.prevRunnerId',
+      'box.errorReason',
+      'box.outboundControl',
+    ])
     .where('box.id = :id', { id })
     .setLock('pessimistic_write')
     .getOne()
@@ -94,7 +105,8 @@ export class OutboundPolicyStore {
         `
         WITH due AS (
           SELECT id FROM box WHERE "outboundControlDueAt" <= now()
-            AND ("outboundControl" -> 'managed' ?| ARRAY['pending', 'unbindRelease']
+            AND ("outboundControl" -> 'bootstrap' ? 'placeholderAllocation'
+              OR "outboundControl" -> 'managed' ?| ARRAY['pending', 'unbindRelease']
               OR ("prevRunnerId" IS NOT NULL AND "outboundControl" -> 'managed' IS NOT NULL))
           ORDER BY "outboundControlDueAt", id LIMIT $1 FOR UPDATE SKIP LOCKED
         ), leased AS (

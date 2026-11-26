@@ -27,6 +27,8 @@ import { RunnerApiError } from '../errors/runner-api-error'
 import {
   checkedBootReceipt,
   enrolledRunnerAgent,
+  PROTECTED_RUNNER_CONTROL_TIMEOUT_MS,
+  PROTECTED_RUNNER_REQUEST_TIMEOUT_MS,
   ProtectedBootCapability,
   ProtectedBootControl,
   ProtectedBootKey,
@@ -183,7 +185,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
           ...enrolledTransport,
           baseURL: runner.apiUrl,
           headers: { ...headers, 'X-BoxLite-Runner-Id': runner.id },
-          timeout: 120_000,
+          timeout: PROTECTED_RUNNER_REQUEST_TIMEOUT_MS,
         })
       : undefined
 
@@ -197,7 +199,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     const retryErrorMap = new WeakMap<AxiosError, string>()
 
     // Configure axios-retry to handle network errors
-    axiosRetry(axiosInstance, {
+    const retryOptions: Parameters<typeof axiosRetry>[1] = {
       retries: 3,
       retryDelay: axiosRetry.exponentialDelay,
       retryCondition: (error) => {
@@ -219,7 +221,17 @@ export class RunnerAdapterV0 implements RunnerAdapter {
           `Retrying request due to ${retryErrorMap.get(error)} (attempt ${retryCount}): ${requestConfig.method?.toUpperCase()} ${requestConfig.url}`,
         )
       },
-    })
+    }
+    axiosRetry(axiosInstance, retryOptions)
+    if (this.bootstrapApi) {
+      axiosRetry(this.bootstrapApi, {
+        ...retryOptions,
+        retryCondition: (error) =>
+          error.config?.method === 'post' &&
+          !!error.config.url?.includes('/bootstrap/allocation/') &&
+          !!retryOptions.retryCondition?.(error),
+      })
+    }
 
     axiosInstance.interceptors.response.use(
       (response) => {
@@ -265,11 +277,15 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
-  async supportsProtectedBootstrap(recovery = false, volumeRestart = false): Promise<boolean> {
-    return (await this.protectedBootstrapCapability(recovery, volumeRestart)) === 'supported'
+  async supportsProtectedBootstrap(recovery = false, volumeRestart = false, allocation = false): Promise<boolean> {
+    return (await this.protectedBootstrapCapability(recovery, volumeRestart, allocation)) === 'supported'
   }
 
-  async protectedBootstrapCapability(recovery = false, volumeRestart = false): Promise<ProtectedBootCapability> {
+  async protectedBootstrapCapability(
+    recovery = false,
+    volumeRestart = false,
+    allocation = false,
+  ): Promise<ProtectedBootCapability> {
     if (!this.bootstrapApi) return 'unverified'
     try {
       const { data } = await this.bootstrapApi.get('/v1/outbound-proxy/bootstrap', { timeout: 3000 })
@@ -286,6 +302,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
           ]
         : ['start', 'receipt', 'retire']
       if (volumeRestart) required.push('restart-volumes')
+      if (allocation) required.push('allocate-attempt', 'close-allocation')
       if (
         data.runner_id !== this.runner.id ||
         data.version !== 1 ||
@@ -304,9 +321,41 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     return this.bootstrapApi ? this : undefined
   }
 
-  async prepareProtectedBox(box: Box, image: string, metadata: Record<string, string>, nestedVirtualization: boolean) {
+  async prepareProtectedBox(
+    box: Box,
+    image: string,
+    metadata: Record<string, string>,
+    nestedVirtualization: boolean,
+    attemptId: string,
+  ): Promise<void> {
     if (!this.bootstrapApi || box.runnerId !== this.runner.id) throw new Error('Protected Runner enrollment is missing')
-    return this.createBox(box, image, metadata, nestedVirtualization, true)
+    const request = this.createBoxRequest(box, image, metadata, nestedVirtualization, true)
+    try {
+      const { data } = await this.bootstrapApi.post(this.allocationPath(box.id, attemptId), request)
+      if (data.box_id !== box.id || data.attempt_id !== attemptId || data.state !== 'allocated') {
+        throw new Error('Protected allocation receipt does not match the request')
+      }
+    } catch {
+      throw new Error('Protected Runner allocation outcome is unconfirmed')
+    }
+  }
+
+  private allocationPath(boxId: string, attemptId: string): string {
+    return `/v1/boxes/${encodeURIComponent(boxId)}/network/outbound/bootstrap/allocation/${encodeURIComponent(attemptId)}`
+  }
+
+  async destroyProtectedPlaceholder(boxId: string, attemptId: string): Promise<void> {
+    if (!this.bootstrapApi) throw new Error('Protected Runner enrollment is missing')
+    try {
+      const { data } = await this.bootstrapApi.delete(this.allocationPath(boxId, attemptId), {
+        timeout: PROTECTED_RUNNER_CONTROL_TIMEOUT_MS,
+      })
+      if (data.box_id !== boxId || data.attempt_id !== attemptId || data.state !== 'closed') {
+        throw new Error('Protected allocation closure does not match the request')
+      }
+    } catch {
+      throw new Error('Protected Runner allocation closure is unconfirmed')
+    }
   }
 
   async startProtectedBox(
@@ -336,11 +385,11 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     if (
       box.runnerId !== this.runner.id ||
       key.runner_id !== this.runner.id ||
-      !(await this.supportsProtectedBootstrap(recoveryGeneration !== undefined))
+      !(await this.supportsProtectedBootstrap(recoveryGeneration !== undefined, false, true))
     ) {
       throw new Error('Runner does not qualify for protected bootstrap')
     }
-    await this.prepareProtectedBox(box, image, {}, false)
+    await this.prepareProtectedBox(box, image, {}, false, key.attempt_id)
     return this.startProtectedBox(box.id, key, await loadRoute(), recoveryGeneration)
   }
 
@@ -455,7 +504,13 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     if (!this.bootstrapApi || runnerId !== this.runner.id) throw new Error('Protected Runner enrollment is missing')
     try {
       const path = `/v1/boxes/${encodeURIComponent(boxId)}/network/outbound${suffix}`
-      return (await this.bootstrapApi.post(path, body, suffix === '/bootstrap' ? undefined : { timeout: 10_000 })).data
+      return (
+        await this.bootstrapApi.post(
+          path,
+          body,
+          suffix === '/bootstrap' ? undefined : { timeout: PROTECTED_RUNNER_CONTROL_TIMEOUT_MS },
+        )
+      ).data
     } catch {
       // Axios errors retain the request body, including the proxy credential.
       throw new Error('Protected Runner outbound outcome is unconfirmed')
@@ -486,12 +541,23 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     image: string,
     metadata?: { [key: string]: string },
     nestedVirtualization = false,
-    protectedPlaceholder = false,
   ): Promise<StartBoxResponse | undefined> {
+    const response = await this.boxApiClient.create(this.createBoxRequest(box, image, metadata, nestedVirtualization))
+    if (!response?.data?.daemonVersion) return undefined
+    return { daemonVersion: response.data.daemonVersion }
+  }
+
+  private createBoxRequest(
+    box: Box,
+    image: string,
+    metadata?: Record<string, string>,
+    nestedVirtualization = false,
+    protectedPlaceholder = false,
+  ) {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
-    const response = await this.boxApiClient.create({
+    return {
       id: box.id,
       ...(nestedVirtualization ? { nestedVirtualization: true } : {}),
       image,
@@ -514,20 +580,12 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         headers: secret.headers,
       })),
       ...(protectedPlaceholder
-        ? { outboundEnabled: false, skipStart: true }
+        ? { outboundEnabled: false, skipStart: true, volumes: box.volumes }
         : { outboundEnabled: box.outboundEnabled, outboundAllowNet: box.outboundAllowNet ?? undefined }),
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
-    })
-
-    if (!response?.data?.daemonVersion) {
-      return undefined
-    }
-
-    return {
-      daemonVersion: response.data.daemonVersion,
     }
   }
 

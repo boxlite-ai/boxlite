@@ -29,7 +29,7 @@ func TestPulledImageIsReadAfterTheBoxStarts(t *testing.T) {
 		t.Fatalf("parse client.go: %v", err)
 	}
 
-	for _, method := range []string{"Create", "Start"} {
+	for _, method := range []string{"createBox", "Start"} {
 		fn := findMethod(parsed, "Client", method)
 		if fn == nil {
 			t.Fatalf("Client.%s not found in client.go; update this guard if it was renamed", method)

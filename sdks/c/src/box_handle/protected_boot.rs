@@ -7,7 +7,7 @@ use boxlite::litebox::protected_outbound::ProtectedRouteRequest;
 /// Internal Runner ABI. Protected credential input is borrowed for this call.
 /// Release the output JSON with boxlite_free_string. Operations are 0 (start),
 /// 1 (receipt), 2 (retire), 3 (check protection), 4 (release gate), 5 (seal gate),
-/// and 6 (managed route control).
+/// 6 (managed route control) and 8 (exact allocation identity).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runner_protected_boot(
     handle: *mut CBoxHandle,
@@ -55,6 +55,7 @@ pub unsafe extern "C" fn boxlite_runner_protected_boot(
                     6 => encode(handle.tokio_rt.block_on(handle.handle.protected_outbound(
                         unsafe { parse::<ProtectedRouteRequest>(input_json) }?,
                     ))?),
+                    8 => encode(handle.handle.runner_allocation()),
                     _ => Err(BoxliteError::InvalidArgument(
                         "Invalid protected boot operation".into(),
                     )),

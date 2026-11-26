@@ -554,6 +554,49 @@ The managed record also tracks bootstrap claims, the attested Runner epoch,
 and pending updates, rollback, unbind, and retirement evidence for that epoch.
 Cloud updates reconciliation deadlines within the same transaction as the record.
 
+`bootstrap.placeholderAllocation` records the dispatch owner, allocation deadline,
+and separate boot handoff deadline. Cloud commits these with the reconcile due
+time before contacting the Runner and releases its SQL connection before the call.
+
+The Runner accepts retries for the same attempt and persists closure before
+removing the stopped instance. Cloud keeps the pending reference and any prior
+retired binding until it confirms an exact close with no native instance or
+volume references left. `placeholderClosed` lets deletion resume from that
+evidence if the worker exits before the lifecycle update.
+
+An expired handoff can leave a Runtime record even when no Guest started.
+Cloud asks the Runner to retire and remove that exact boot before retrying
+allocation closure. An unconfirmed retirement keeps the allocation and pins.
+
+Removal uses the current native Box ID and the Runtime's exact retirement
+receipt, including when a failed restart has never confirmed a new boot.
+Historical receipts can be replayed by logical Box name independently of an
+allocation that has since replaced the removed instance.
+
+Runner startup and cleanup check the native allocation marker. Older ordinary
+Boxes with a matching name prefix retain normal listing and lifecycle behavior.
+
+```mermaid
+sequenceDiagram
+    participant Cloud
+    participant DB as PostgreSQL
+    participant Runner
+    Cloud->>DB: Commit dispatch owner, attempt and due time
+    Cloud->>Runner: Allocate stopped Box without holding SQL
+    alt Allocation accepted before deadline
+        Runner-->>Cloud: Confirm exact attempt
+        Cloud->>DB: Commit boot claim and handoff deadline
+    else Allocation unresolved or cancelled
+        Cloud->>Runner: Close exact attempt without holding SQL
+        opt Runtime has recorded a boot
+            Cloud->>Runner: Retire and remove exact failed boot
+            Cloud->>Runner: Retry closure for the same allocation
+        end
+        Runner-->>Cloud: Prove native and volume-reference absence
+        Cloud->>DB: Record closure and release pins
+    end
+```
+
 `outbound_proxy_reference` pins a registration revision for each Box by kind
 (`committed`, `pending`, or `retained`). Each reference carries its Runner,
 attempt, epoch, and purpose (`legacy`, `bootstrap`, or `update`). Only a pending

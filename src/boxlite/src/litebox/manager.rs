@@ -100,9 +100,10 @@ impl BoxManager {
         &self,
         selector: &BoxID,
         runner_box_name: Option<&str>,
+        exact_native_id: bool,
     ) -> BoxliteResult<Vec<super::protected_boot::ProtectedBootReceipt>> {
         self.store
-            .protected_retirements(selector.as_str(), runner_box_name)
+            .protected_retirements(selector.as_str(), runner_box_name, exact_native_id)
     }
 
     pub(crate) fn remove_protected_box(

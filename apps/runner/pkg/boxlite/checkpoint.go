@@ -25,6 +25,10 @@ func (c *Client) lockCheckpointTarget(ctx context.Context, target string) (*chec
 		lease.Close()
 		return nil, err
 	}
+	if err := c.ordinaryAllocationAllowed(target); err != nil {
+		lease.Close()
+		return nil, err
+	}
 	return lease, nil
 }
 
@@ -61,6 +65,13 @@ func (n nativeCheckpointRecovery) Lookup(ctx context.Context, target string) (*c
 	}
 	if err != nil {
 		return nil, err
+	}
+	attempt, err := n.client.nativeRunnerAllocation(ctx, info.ID)
+	if err != nil {
+		return nil, err
+	}
+	if attempt != "" {
+		return nil, errProtectedBox
 	}
 	return &checkpoint.NativeBox{ID: info.ID, State: string(info.State), PID: info.PID}, nil
 }

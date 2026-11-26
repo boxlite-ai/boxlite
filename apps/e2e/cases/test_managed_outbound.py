@@ -197,6 +197,8 @@ import time
 
 address, port, name, marker, timeout = sys.argv[1:]
 authority = name if port == '443' else f'{name}:{port}'
+# Start the exec stream before the deliberately silent network probe.
+print('network probe started', file=sys.stderr, flush=True)
 started = time.monotonic()
 received = None
 try:
@@ -208,7 +210,7 @@ try:
             if response.status != 200:
                 raise ValueError('unexpected HTTPS status')
             received = response.read(33).decode('ascii')
-except (ConnectionError, TimeoutError, ssl.SSLEOFError, http.client.RemoteDisconnected):
+except (ConnectionError, TimeoutError, ssl.SSLEOFError, ssl.SSLZeroReturnError, http.client.RemoteDisconnected):
     pass
 print(json.dumps({'marker': received, 'elapsed': time.monotonic() - started}))
 '''
@@ -554,6 +556,7 @@ async def test_managed_proxy_unbind_discards_delayed_udp_and_preserves_allowlist
     registry = rt.outbound_proxies()
     name = e2e_box_name()
     policy = {"mode": "enabled", "allow_net": [f"{lab.target_udp_ip}/32"]}
+    unbound_policy = {**policy, "proxy": None}
     network = boxlite.NetworkSpec(outbound=boxlite.OutboundNetworkSpec(**policy))
     ctx = isolated_org
     held, late, fresh, blocked = (uuid4().hex for _ in range(4))
@@ -566,7 +569,7 @@ async def test_managed_proxy_unbind_discards_delayed_udp_and_preserves_allowlist
         initial = await lab.readback(switching, None)
         policy_url = ctx.url_for(ctx.v1(f"boxes/{switching.id}/network/outbound"))
         original_policy = await http(policy_url, headers=ctx.auth_headers())
-        require(original_policy.status == 200 and json.loads(original_policy.body) == policy
+        require(original_policy.status == 200 and json.loads(original_policy.body) == unbound_policy
                 and original_policy.headers.get("etag") == f'"{initial[1]}"', "initial Box omitted its installed UDP allowlist")
         before = await udp_echo_window(control, unlisted)
 
@@ -598,7 +601,7 @@ async def test_managed_proxy_unbind_discards_delayed_udp_and_preserves_allowlist
                 require(released[0] == bound[0] and released[1] != bound[1] and released[1] == result.get("revision"),
                         "managed unbind did not install the acknowledged revision in the original epoch")
                 snapshot = await http(policy_url, headers=ctx.auth_headers())
-                require(snapshot.status == 200 and json.loads(snapshot.body) == policy
+                require(snapshot.status == 200 and json.loads(snapshot.body) == unbound_policy
                         and snapshot.headers.get("etag") == f'"{released[1]}"', "unbind changed the installed UDP allowlist")
                 require(not lab.observations(late), "fixture released the delayed reply before confirmed unbind")
 
@@ -929,8 +932,9 @@ async def test_managed_proxy_rejects_legacy_write_and_preserves_allowlist_on_unb
         box = await managed_box(cleanup, rt, image, name, network=network)
         installed = await lab.readback(box, binding)
         policy_url = ctx.url_for(ctx.v1(f"boxes/{box.id}/network/outbound"))
+        bound_policy = {"mode": "enabled", "allow_net": allowlist, "proxy": name}
         before = await http(policy_url, headers=ctx.auth_headers())
-        require(before.status == 200 and json.loads(before.body) == {"mode": "enabled", "allow_net": allowlist}
+        require(before.status == 200 and json.loads(before.body) == bound_policy
                 and before.headers.get("etag") == f'"{installed[1]}"', "bound Box omitted its installed allowlist")
 
         reply = await http(policy_url, "PUT", {**ctx.auth_headers(content_type=True), "If-Match": f'"{installed[1]}"'},
@@ -976,7 +980,7 @@ async def test_managed_proxy_rejects_legacy_write_and_preserves_allowlist_on_unb
         require(unbound[0] == installed[0] and unbound[1] != installed[1] and unbound[1] == result.get("revision"),
                 "unbind did not settle the acknowledged revision in the original epoch")
         final = await http(policy_url, headers=ctx.auth_headers())
-        require(final.status == 200 and json.loads(final.body) == json.loads(before.body)
+        require(final.status == 200 and json.loads(final.body) == {**bound_policy, "proxy": None}
                 and final.headers.get("etag") == f'"{unbound[1]}"', "SDK unbind changed the public allowlist")
         await literal_https_probe(box, lab)
         require(await lab.readback(box, None) == unbound, "unbound policy changed during observation")
@@ -1064,7 +1068,8 @@ async def test_managed_proxy_refuses_owned_private_literal_before_connect(
         bound_state = await lab.readback(bound, expected)
         policy_url = ctx.url_for(ctx.v1(f"boxes/{bound.id}/network/outbound"))
         policy = await http(policy_url, headers=ctx.auth_headers())
-        require(policy.status == 200 and json.loads(policy.body) == {"mode": "enabled", "allow_net": allowlist}
+        require(policy.status == 200
+                and json.loads(policy.body) == {"mode": "enabled", "allow_net": allowlist, "proxy": name}
                 and policy.headers.get("etag") == f'"{bound_state[1]}"', "bound Box did not install the explicit private rule")
         trace, _ = await cleanup.enter_async_context(controlled_run(lab, deployment_runners))
         await calibrate_connect_trace(trace, control, lab)

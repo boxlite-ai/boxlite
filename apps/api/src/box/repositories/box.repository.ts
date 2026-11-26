@@ -129,7 +129,8 @@ export class BoxRepository extends BaseRepository<Box> {
     await this.manager.transaction(async (manager) => {
       await manager.query("SET LOCAL lock_timeout = '5s'")
       const [current] = await manager.query(
-        `SELECT "outboundControl" -> 'managed' AS managed FROM box
+        `SELECT "outboundControl" -> 'managed' AS managed,
+          "outboundControl" #>> '{bootstrap,key,runner_id}' AS bootstrap_runner_id FROM box
         WHERE id = $1 AND "organizationId" = $2 AND "runnerId" = $3 AND "prevRunnerId" = $4 AND state = $5
         FOR UPDATE`,
         [id, organizationId, runnerId, prevRunnerId, BoxState.STARTED],
@@ -141,7 +142,7 @@ export class BoxRepository extends BaseRepository<Box> {
         WHERE organization_id = $1 AND box_id = $2 AND runner_id = $3 LIMIT 1`,
         [organizationId, id, prevRunnerId],
       )
-      if (reference || current.managed) {
+      if (reference || current.managed || current.bootstrap_runner_id === prevRunnerId) {
         await manager.query(
           `UPDATE box SET "outboundControlDueAt" = LEAST("outboundControlDueAt", now()) WHERE id = $1`,
           [id],

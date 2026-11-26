@@ -515,7 +515,7 @@ export class BoxService {
         if (!managed && proxyEnabled && this.outboundBootstrap && runner.apiVersion === '0') {
           managed = await this.runnerAdapterFactory
             .create(runner)
-            .then((adapter) => adapter.supportsProtectedBootstrap?.(true))
+            .then((adapter) => adapter.supportsProtectedBootstrap?.(true, false, true))
             .then(
               (eligible) => eligible === true,
               () => false,
@@ -1534,6 +1534,12 @@ export class BoxService {
         if (!previous || previous.state !== RunnerState.READY) return
         const adapter = await this.runnerAdapterFactory.create(previous)
         await this.outboundBootstrap?.retire(box, adapter, 'previous')
+      },
+      async (box) => {
+        const runner = await this.runnerService.findOne(box.runnerId)
+        if (!runner || runner.state !== RunnerState.READY) return
+        const adapter = await this.runnerAdapterFactory.create(runner)
+        await this.outboundBootstrap?.reconcileAllocation(box, adapter)
       },
     )
     if (errors) this.logger.warn(`Managed outbound reconciliation deferred for ${errors} Boxes`)
