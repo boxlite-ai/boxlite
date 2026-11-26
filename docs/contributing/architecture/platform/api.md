@@ -279,14 +279,15 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api-keys/{name}`          | Deletes the caller's API key by name.                          |
 | `DELETE` | `/api-keys/{userId}/{name}` | Deletes a named API key belonging to a specified user.         |
 
-Key creation defaults to all supported organization resource permissions when `permissions` is
-omitted. Explicit arrays, including `[]`, are preserved. Existing keys retain their grants.
-When authenticated with an API key,
-the requested permissions must be a subset of that key's permissions, including for
-owners and system admins; broader grants return 403 before a key is created. Omitting permissions
-with a restricted credential therefore returns 403; supply its permitted subset instead.
-The user's existing grantability checks still apply. An owner using a user JWT
-can create a key with any supported permission.
+Omitting `permissions` requests all supported non-App scopes and the App scopes enabled for the
+organization. Explicit arrays retain their meaning, including `[]` for a key with no permissions.
+The Go constructor `NewCreateApiKey(name, permissions)` omits the field for a nil slice and sends
+`[]` for an empty slice.
+
+The issuer must be allowed to grant every requested scope, including when requesting the default
+set. An API key may delegate only scopes it holds. Owners and system administrators are also
+subject to the organization's App grants. A request exceeding either limit returns 403 before
+the key is created. Existing keys retain their stored grants.
 
 Both DELETE routes require `write:members` when authenticated with an API key,
 including owner/admin keys and revocation of the calling key itself. A
