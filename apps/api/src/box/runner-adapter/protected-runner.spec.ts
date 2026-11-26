@@ -14,6 +14,7 @@ import { BoxStateWaiterService } from '../services/box-state-waiter.service'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxliteBoxController } from '../../boxlite-rest/boxlite-box.controller'
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
+import { RunnerAdapterV2 } from './runnerAdapter.v2'
 import { ProtectedBootKey } from './protected-runner'
 
 const runnerId = '8137cc0d-5d3f-43b8-aa32-b9304740269e'
@@ -255,6 +256,85 @@ describe('Protected Runner TLS and placement', () => {
     await expect(bad.healthCheck()).rejects.toThrow()
     await expect(bad.supportsProtectedBootstrap()).resolves.toBe(false)
     expect(healthCalls).toBe(1)
+  })
+
+  it('matches the live V2 process and digest over a separately pinned mTLS connection', async () => {
+    const certName = 'BOXLITE_PROTECTED_PROXY_CLIENT_CERT_PEM'
+    const keyName = 'BOXLITE_PROTECTED_PROXY_CLIENT_KEY_PEM'
+    const originalCert = process.env[certName]
+    const originalKey = process.env[keyName]
+    const client = createCert('api-client.test')
+    const processId = 'fa6b7e3a-405c-45ca-b57e-7cb256e7bc58'
+    const digest = 'a'.repeat(64)
+    const listener = createServer(
+      { cert: trusted, key: trustedKey, ca: client.cert, requestCert: true, rejectUnauthorized: true },
+      (request, response) => {
+        if (
+          request.headers.authorization !== 'Bearer test-bearer' ||
+          request.headers['x-boxlite-runner-id'] !== runnerId
+        ) {
+          response.writeHead(403).end()
+          return
+        }
+        response.setHeader('Content-Type', 'application/json')
+        response.end(
+          JSON.stringify({
+            runner_id: runnerId,
+            version: 2,
+            process_id: processId,
+            executable_digest: digest,
+            operations: [
+              'start',
+              'receipt',
+              'retire',
+              'allocate-attempt',
+              'close-allocation',
+              'managed-ownership-fence',
+              'stop-protected',
+              'retire-terminated',
+              'ready-protected',
+            ],
+          }),
+        )
+      },
+    )
+    await new Promise<void>((resolve) => listener.listen(0, resolve))
+    try {
+      process.env[certName] = client.cert.toString()
+      process.env[keyName] = client.key.toString()
+      const url = `https://localhost:${(listener.address() as AddressInfo).port}`
+      process.env.BOXLITE_PROTECTED_PROXY_ENROLLMENTS = JSON.stringify([
+        { runnerId, url, caPem: trusted.toString(), apiVersion: 2 },
+      ])
+      const runner = record({
+        apiVersion: '2',
+        apiUrl: 'http://unused-runner.test:3000',
+        protectedExecutableDigest: digest,
+        protectedProcessId: processId,
+        lastChecked: new Date(),
+      })
+      const v2 = new RunnerAdapterV2({} as any, {} as any, {} as any)
+
+      await v2.init(runner)
+      await expect(v2.protectedBootstrapCapability()).resolves.toBe('supported')
+
+      await v2.init({ ...runner, protectedProcessId: '0142a154-29e4-421e-8da5-0c61567ba40d' })
+      await expect(v2.protectedBootstrapCapability()).resolves.toBe('unverified')
+
+      await v2.init({ ...runner, protectedExecutableDigest: 'b'.repeat(64) })
+      await expect(v2.protectedBootstrapCapability()).resolves.toBe('unverified')
+
+      delete process.env[keyName]
+      await v2.init(runner)
+      expect(v2.protectedBootstrap).toBeUndefined()
+    } finally {
+      listener.closeAllConnections()
+      await new Promise<void>((resolve) => listener.close(() => resolve()))
+      if (originalCert === undefined) delete process.env[certName]
+      else process.env[certName] = originalCert
+      if (originalKey === undefined) delete process.env[keyName]
+      else process.env[keyName] = originalKey
+    }
   })
 
   it('rejects a trusted certificate whose SAN does not match the enrolled name', async () => {

@@ -82,6 +82,51 @@ Enum-backed varchar columns need an explicit SQL type: `Checkpoint.sourceState`
 uses `@Column('varchar')` because production compilation can emit `Object` metadata
 for the imported `BoxState` enum even when source-level Jest tests pass.
 
+### V2 lifecycle job locks
+
+When Cloud queues a V2 lifecycle action under a Box state-change lock, it
+records the owner in the job row. Redis compares the owner before deleting the lock.
+Legacy completions with no owner leave the state-change lock in place.
+
+For example, a stop job may finish after a new start has acquired the lock.
+The old stop completion can release only its own lock, so the start keeps its lease.
+
+```mermaid
+sequenceDiagram
+  participant Cloud
+  participant PG as PostgreSQL
+  participant Redis
+  participant Runner
+  Cloud->>Redis: Acquire stop lease A
+  Cloud->>PG: Insert stop job with owner A
+  Note over Redis: Lease A ends
+  Cloud->>Redis: Acquire start lease B
+  Runner->>Cloud: Report stop completion
+  Cloud->>Redis: Release only if owner is A
+  Redis-->>Cloud: Lease B stays held
+```
+
+Cloud locks the Box row before inserting an ordinary V2 lifecycle job or
+applying its result. A protected bootstrap intent, managed owner, or retained
+proxy reference blocks both writes and excludes the Box from ordinary drain. If
+an import already made a copy before Cloud recorded protected ownership, Cloud
+keeps the source assignment and schedules rollback for the destination copy.
+
+```mermaid
+sequenceDiagram
+  participant Cloud
+  participant PG as PostgreSQL
+  participant Target as Import target Runner
+  Cloud->>Target: Queue ordinary import
+  Cloud->>PG: Record protected authority under the Box lock
+  Target-->>Cloud: Report completed import
+  Cloud->>PG: Lock the Box and keep its source assignment
+  Cloud->>PG: Record the imported copy for rollback
+```
+
+Previous Runner cleanup inserts its V2 destroy job and clears the previous
+assignment in the transaction that holds the Box row lock.
+
 ## Organization role authorization
 
 The organization-role routes require OWNER membership, including listing roles.

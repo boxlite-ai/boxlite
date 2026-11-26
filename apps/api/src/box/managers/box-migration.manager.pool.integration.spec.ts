@@ -14,6 +14,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { JobType } from '../enums/job-type.enum'
+import { JobStatus } from '../enums/job-status.enum'
 import { BoxMigrationManager } from './box-migration.manager'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
@@ -105,6 +106,7 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
     const stored = await boxes.findOneByOrFail({ id: box.id })
     const migration = new BoxMigration()
     migration.boxId = stored.id
+    migration.attemptId = randomUUID()
     migration.state = BoxMigrationState.PENDING_IMPORT
     migration.arcPath = `box-migrations/${stored.id}.boxlite`
     // The marker's invariant: the migration carries a copy of the box's stamp,
@@ -120,11 +122,12 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
    * `RunnerService.getRandomAvailableRunner` does), and the job stub writes
    * through the entity manager it is handed (as `JobService.createJob` does).
    */
-  function makeManager(): BoxMigrationManager {
+  function makeManager(targets = [targetRunnerId]): BoxMigrationManager {
+    let selections = 0
     const runnerService = {
       getRandomAvailableRunner: async () => {
         await dataSource.getRepository(Box).count()
-        return { id: targetRunnerId }
+        return { id: targets[Math.min(selections++, targets.length - 1)] }
       },
     } as any
     const jobService = {
@@ -136,6 +139,7 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
     } as any
     const redisLockProvider = {
       lock: async () => true,
+      releaseLease: async () => undefined,
       unlock: async () => undefined,
     } as any
     const configService = { getOrThrow: () => 'box-migrations/' } as any
@@ -164,4 +168,19 @@ describeIfDatabase('BoxMigrationManager import submission (integration, single-c
     },
     SUBMIT_BUDGET_MS + 10_000,
   )
+
+  it('retries an ambiguous import on its original destination', async () => {
+    const box = await pendingImport()
+    const alternative = randomUUID()
+    const manager = makeManager([targetRunnerId, alternative])
+    await manager.submitMigrationJobs()
+    const first = await jobs.findOneByOrFail({ resourceId: box.id })
+    await jobs.update(first.id, { status: JobStatus.FAILED, completedAt: new Date() })
+
+    await manager.submitMigrationJobs()
+
+    const second = await jobs.findOneByOrFail({ resourceId: box.id, status: JobStatus.PENDING })
+    expect(second.runnerId).toBe(first.runnerId)
+    expect(await migrations.findOneByOrFail({ boxId: box.id })).toMatchObject({ runnerId: first.runnerId })
+  })
 })

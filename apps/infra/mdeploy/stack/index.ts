@@ -379,7 +379,9 @@ export const deployStack = ({
    * invalidating every row already registered.
    */
   const fleet: RunnerAssignment[] = inputs.runnerFleet.map((slot) => {
-    if (!slot.protectedProxy) return { slot, token: providers.mintRunnerToken(`RunnerToken-${slot.controlPlaneRunnerName}`) }
+    if (!slot.protectedProxy || slot.protectedProxy.apiVersion === 2) {
+      return { slot, token: providers.mintRunnerToken(`RunnerToken-${slot.controlPlaneRunnerName}`) }
+    }
     const token = inputs.protectedRunnerTokens?.[slot.resourceName]
     if (!token) throw new Error('Protected Runner enrollment requires its pre-registered token')
     return { slot, token: $util.secret(token) }
@@ -581,6 +583,9 @@ export const deployStack = ({
    * none of this and must not be failed for it.
    */
   const adminApiKey = inputs.apiEnvironment.ADMIN_API_KEY
+  if (inputs.runnerFleet.some(({ protectedProxy }) => protectedProxy?.apiVersion === 2) && adminApiKey === undefined) {
+    throw new Error('Protected V2 Runner releases require the existing ADMIN_API_KEY')
+  }
   if (inputs.runnerFleet.length > 1 && adminApiKey === undefined) {
     throw new Error(
       `this stage runs ${inputs.runnerFleet.length} runners, and the API seeds only the first — ` +

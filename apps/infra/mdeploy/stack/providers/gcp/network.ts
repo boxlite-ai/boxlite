@@ -40,6 +40,7 @@ import { API_PORT } from '../../api.ts'
 import { OTLP_HTTP_PORT } from '../../collector.ts'
 import { PROXY_PORT } from '../../edge.ts'
 import type { Network, NetworkProvider, NetworkRequest, Placement, WorkloadRole } from '../../network.ts'
+import { PROTECTED_V2_PORT } from '../../runner-protected-proxy.ts'
 import { RUNNER_PORT } from '../../runners.ts'
 import { identityFor, instanceFor } from 'naming'
 
@@ -470,7 +471,7 @@ export const gcpNetworkProvider =
       network: network.id,
       direction: 'INGRESS',
       priority: 1000,
-      allows: [{ protocol: 'tcp', ports: [String(RUNNER_PORT)] }],
+      allows: [{ protocol: 'tcp', ports: [String(RUNNER_PORT), String(PROTECTED_V2_PORT)] }],
       sourceRanges: [CLOUDRUN_EGRESS_CIDR],
       targetServiceAccounts: [accounts.runner.email],
     })

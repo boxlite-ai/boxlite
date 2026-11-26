@@ -12,6 +12,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getMigrateJobLockKey } from '../utils/lock-key.util'
+import { LockCode } from '../common/redis-lock.provider'
 
 const BOX_ID = 'box-1'
 const SOURCE_RUNNER = 'runner-a'
@@ -121,6 +122,7 @@ function makeHarness(
   } as any
   const redisLockProvider = {
     lock: jest.fn().mockResolvedValue(true),
+    releaseLease: jest.fn().mockResolvedValue(undefined),
     unlock: jest.fn().mockResolvedValue(undefined),
   } as any
   const configService = {
@@ -153,8 +155,13 @@ describe('BoxMigrationManager submitter loop', () => {
       ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 'box-migrations/box-1.boxlite' },
+      expect.any(LockCode),
     )
-    expect(h.redisLockProvider.unlock).not.toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX))
+    const claimed = h.redisLockProvider.lock.mock.calls.find(
+      ([key]) => key === getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX),
+    )
+    expect(h.jobService.createJob.mock.calls[0][6]).toBe(claimed?.[2])
+    expect(h.redisLockProvider.releaseLease).not.toHaveBeenCalled()
     expect(h.writes).toHaveLength(0)
   })
 
@@ -174,6 +181,7 @@ describe('BoxMigrationManager submitter loop', () => {
       ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 's3://archives/tenant-a/box-1.boxlite' },
+      expect.any(LockCode),
     )
   })
 
@@ -194,10 +202,13 @@ describe('BoxMigrationManager submitter loop', () => {
       {
         kind: 'update',
         values: { state: BoxMigrationState.PENDING_ROLLBACK },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_EXPORT, attemptId: null },
       },
     ])
-    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX))
+    expect(h.redisLockProvider.releaseLease).toHaveBeenCalledWith(
+      getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX),
+      expect.any(LockCode),
+    )
   })
 
   it('skips a box whose job lock is already held', async () => {
@@ -250,6 +261,7 @@ describe('BoxMigrationManager submitter loop', () => {
       ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 'box-migrations/box-1.boxlite' },
+      expect.any(LockCode),
     )
   })
 
@@ -284,6 +296,7 @@ describe('BoxMigrationManager submitter loop', () => {
       ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 'box-migrations/box-1.boxlite' },
+      expect.any(LockCode),
     )
   })
 
@@ -295,7 +308,10 @@ describe('BoxMigrationManager submitter loop', () => {
     await h.manager.submitMigrationJobs()
 
     expect(h.writes).toHaveLength(0)
-    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX))
+    expect(h.redisLockProvider.releaseLease).toHaveBeenCalledWith(
+      getMigrateJobLockKey(BOX_ID, JobType.EXPORT_BOX),
+      expect.any(LockCode),
+    )
   })
 
   // box_migration.updatedAt is the copy of box.updatedAt the migration took, so
@@ -320,7 +336,7 @@ describe('BoxMigrationManager submitter loop', () => {
       {
         kind: 'update',
         values: { state: BoxMigrationState.PENDING_ROLLBACK },
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT, attemptId: null },
       },
     ])
   })
@@ -343,6 +359,7 @@ describe('BoxMigrationManager rollback submitter loop', () => {
       ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 'box-migrations/box-1.boxlite' },
+      expect.any(LockCode),
     )
     expect(h.jobService.createJob).toHaveBeenCalledWith(
       null,
@@ -351,6 +368,7 @@ describe('BoxMigrationManager rollback submitter loop', () => {
       ResourceType.BACKUP,
       BOX_ID,
       undefined,
+      expect.any(LockCode),
     )
     expect(h.writes).toHaveLength(0)
   })
@@ -367,7 +385,7 @@ describe('BoxMigrationManager rollback submitter loop', () => {
     expect(h.writes).toEqual([
       {
         kind: 'delete',
-        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_ROLLBACK },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_ROLLBACK, attemptId: null },
       },
     ])
   })
@@ -389,6 +407,7 @@ describe('BoxMigrationManager rollback submitter loop', () => {
       ResourceType.BACKUP,
       BOX_ID,
       { arcPath: 'box-migrations/box-1.boxlite' },
+      expect.any(LockCode),
     )
   })
 })

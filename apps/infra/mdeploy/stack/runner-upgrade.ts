@@ -35,7 +35,12 @@ import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
 import { CLOUD_RUNNER_KERNEL, kernelDeployment } from './runner-kernel.ts'
 import { runnerHealthProbe } from './runner-health-probe.ts'
 import { renderRunnerEnvironment, RUNNER_ENV_BEGIN, RUNNER_ENV_END } from './runner-environment.ts'
-import { protectedRunnerServiceEnvironment, type RunnerProtectedProxy } from './runner-protected-proxy.ts'
+import {
+  PROTECTED_RUNNER_STATE_DIR,
+  PROTECTED_V2_LISTENER_ENV,
+  protectedRunnerServiceEnvironment,
+  type RunnerProtectedProxy,
+} from './runner-protected-proxy.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
@@ -135,6 +140,8 @@ export const upgradeResourceName = (slot: RunnerSlot): string =>
  * would skip every dev deploy after the first.
  */
 export type UpgradeTarget = {
+  protectedRelease?: { expectedDigest: string; hosts: readonly string[]; formerlyEnrolledHosts?: readonly string[] }
+  expectedExecutableDigest?: string
   kernel?: typeof CLOUD_RUNNER_KERNEL
   identity: string
   /** The same pair the boot script installs from. See `runner-binary.ts`. */
@@ -276,6 +283,16 @@ const assertUpgradeTarget = (target: UpgradeTarget): void => {
   if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65_535) {
     throw new RunnerUpgradeError(`the health port must be a whole number from 1 to 65535; got ${target.port}`)
   }
+  if (target.protectedRelease) {
+    const { expectedDigest, hosts, formerlyEnrolledHosts = [] } = target.protectedRelease
+    const allowed = [...hosts, ...formerlyEnrolledHosts]
+    if (!/^[0-9a-f]{64}$/.test(expectedDigest) || !allowed.length || !allowed.every((host) => GCE_NAME.test(host))) {
+      throw new RunnerUpgradeError('Protected Runner upgrades require a SHA-256 digest and exact GCE host names')
+    }
+  }
+  if (target.expectedExecutableDigest !== undefined && !/^[0-9a-f]{64}$/.test(target.expectedExecutableDigest)) {
+    throw new RunnerUpgradeError('Runner upgrades require a valid executable SHA-256 digest')
+  }
   assertUnitEnvironment(target)
 }
 
@@ -378,12 +395,44 @@ const assertDataDiskIdentity = ({ project, zone, hosts }: RunnerDataDiskIdentity
   }
 }
 
+const protectedReleaseSetup = ({ protectedRelease, expectedExecutableDigest }: UpgradeTarget): string => `
+RELEASE_DIGEST=''
+RELEASE_STATE='${PROTECTED_RUNNER_STATE_DIR}'
+${protectedRelease?.hosts.length ? `case "$(hostname -s)" in
+  ${protectedRelease.hosts.join('|')}) RELEASE_DIGEST='${protectedRelease.expectedDigest}' ;;
+esac` : ''}
+${protectedRelease?.formerlyEnrolledHosts?.length ? `if [ -f "$RELEASE_STATE/enrolled" ]; then
+  case "$(hostname -s)" in
+    ${protectedRelease.formerlyEnrolledHosts.join('|')}) RELEASE_DIGEST='${protectedRelease.expectedDigest}' ;;
+  esac
+fi` : ''}
+
+if [ -z "$RELEASE_DIGEST" ] && [ -f "$RELEASE_STATE/enrolled" ]; then
+  echo 'controlled Runner requires the protected CI release' >&2
+  exit 1
+fi
+EXPECTED_EXECUTABLE_DIGEST='${expectedExecutableDigest ?? ''}'
+EXPECTED_EXECUTABLE_DIGEST="\${RELEASE_DIGEST:-$EXPECTED_EXECUTABLE_DIGEST}"
+
+runner_executable_digest() {
+  local main_pid
+  main_pid=$(systemctl show --property=MainPID --value boxlite-runner) || return 1
+  [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  sha256sum "/proc/$main_pid/exe" | cut -d ' ' -f 1
+}
+
+runner_executable_matches_release() {
+  [ -z "$EXPECTED_EXECUTABLE_DIGEST" ] || [ "$(runner_executable_digest)" = "$EXPECTED_EXECUTABLE_DIGEST" ]
+}
+`
+
 /** What the host is and how to ask what it is serving. Both scripts open with it. */
 const preamble = (target: UpgradeTarget): string => `set -euo pipefail
 echo "${ON_HOST}"
 
 TARGET="${target.identity}"
 ALLOW_DOWNGRADE="${target.allowDowngrade ? '1' : ''}"
+${protectedReleaseSetup(target)}
 ${runnerHealthProbe}
 
 # The binary parses no CLI arguments, so there is no --version to ask. Of the
@@ -417,7 +466,7 @@ fi
 
 CURRENT=$(probe_identity || true)
 echo "current identity: \${CURRENT:-<not serving>}"
-if [ "$CURRENT" = "$TARGET" ]${kernelCheck}; then
+if [ "$CURRENT" = "$TARGET" ] && runner_executable_matches_release${kernelCheck}; then
   echo "already serving $TARGET; leaving the unit untouched"
   ${satisfied}
 fi
@@ -438,9 +487,23 @@ ${verifyAgainstManifest({ tarballName: target.binary.tarballName, tarball: '$WOR
 tar -xzf "$WORK/runner.tar.gz" -C "$WORK"
 test -x "$WORK/boxlite-runner" || { echo "FATAL: the tarball has no boxlite-runner binary" >&2; exit 1; }
 
-# Back up the live binary so a failed swap or start can roll back.
 HAD_PREVIOUS=false
-if [ -x /usr/local/bin/boxlite-runner ]; then
+if [ -n "$EXPECTED_EXECUTABLE_DIGEST" ]; then
+  printf '%s  %s\\n' "$EXPECTED_EXECUTABLE_DIGEST" "$WORK/boxlite-runner" | sha256sum -c - >/dev/null
+fi
+if [ -n "$RELEASE_DIGEST" ]; then
+  install -d -m 0700 "$RELEASE_STATE"
+  touch "$RELEASE_STATE/enrolled"
+  COMPATIBLE=$(cat "$RELEASE_STATE/compatible.sha256" 2>/dev/null || true)
+  if [[ "$COMPATIBLE" =~ ^[0-9a-f]{64}$ ]]; then
+    if printf '%s  %s\\n' "$COMPATIBLE" /usr/local/bin/boxlite-runner | sha256sum -c - >/dev/null 2>&1; then
+      cp -a /usr/local/bin/boxlite-runner /usr/local/bin/boxlite-runner.bak
+    fi
+    if printf '%s  %s\\n' "$COMPATIBLE" /usr/local/bin/boxlite-runner.bak | sha256sum -c - >/dev/null 2>&1; then
+      HAD_PREVIOUS=true
+    fi
+  fi
+elif [ -x /usr/local/bin/boxlite-runner ]; then
   cp -a /usr/local/bin/boxlite-runner /usr/local/bin/boxlite-runner.bak
   HAD_PREVIOUS=true
 fi
@@ -448,7 +511,7 @@ systemctl stop boxlite-runner || true
 
 wait_for_target() {
   for _ in $(seq 1 30); do
-    [ "$(probe_identity || true)" = "$TARGET" ] && return 0
+    [ "$(probe_identity || true)" = "$TARGET" ] && runner_executable_matches_release && return 0
     sleep 2
   done
   return 1
@@ -459,14 +522,26 @@ if install -m 0755 "$WORK/boxlite-runner" /usr/local/bin/boxlite-runner \\
   && systemctl start boxlite-runner \\
   && systemctl is-active --quiet boxlite-runner \\
   && wait_for_target; then
-  if [ "$HAD_PREVIOUS" = true ]; then rm -f /usr/local/bin/boxlite-runner.bak; fi
+  if [ "$HAD_PREVIOUS" = true ] && [ -z "$RELEASE_DIGEST" ]; then rm -f /usr/local/bin/boxlite-runner.bak; fi
   echo "systemd unit: active"
   echo "new identity: $(probe_identity)"
 else
   echo "upgrade failed; rolling back" >&2
   if [ "$HAD_PREVIOUS" = true ]; then
-    mv -f /usr/local/bin/boxlite-runner.bak /usr/local/bin/boxlite-runner
-    systemctl restart boxlite-runner || true
+    if [ -z "$RELEASE_DIGEST" ]; then
+      mv -f /usr/local/bin/boxlite-runner.bak /usr/local/bin/boxlite-runner
+      systemctl restart boxlite-runner || true
+    elif printf '%s  %s\\n' "$COMPATIBLE" /usr/local/bin/boxlite-runner.bak | sha256sum -c - >/dev/null; then
+      install -m 0755 /usr/local/bin/boxlite-runner.bak /usr/local/bin/boxlite-runner
+      systemctl restart boxlite-runner
+      for _ in $(seq 1 30); do
+        if [ "$(runner_executable_digest || true)" = "$COMPATIBLE" ] && [ -n "$(probe_identity || true)" ]; then
+          echo 'restored verified compatible Runner; release admission remains closed'
+          break
+        fi
+        sleep 2
+      done
+    fi
   fi
   journalctl -u boxlite-runner --no-pager -n 50 || true
   exit 1
@@ -557,6 +632,7 @@ type UnitEnvironmentInput = Pick<
   'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv' | 'protectedProxy'
 > & {
   apiUrl: string
+  protectedProxyByHost?: ReadonlyMap<string, RunnerProtectedProxy>
   /**
    * The fleet's data-disk identity, or null where the cloud's runners keep box
    * state on the root disk and have no disk to name. Only the GCP policy names
@@ -566,6 +642,13 @@ type UnitEnvironmentInput = Pick<
   dataDiskIdentity?: RunnerDataDiskIdentity | null
 }
 
+const protectedV2Settings = (enrollment: RunnerProtectedProxy | undefined): string[] =>
+  enrollment?.apiVersion === 2
+    ? Object.entries(protectedRunnerServiceEnvironment(enrollment)).map(
+        ([key, value]) => `'${key}=${value.replaceAll("'", "'\\''")}'`,
+      )
+    : []
+
 export const unitEnvironmentBlock = ({
   apiUrl,
   otlpUrl,
@@ -573,11 +656,13 @@ export const unitEnvironmentBlock = ({
   registryProxyHost,
   runnerEnv,
   protectedProxy,
+  protectedProxyByHost,
   dataDiskIdentity = null,
 }: UnitEnvironmentInput): string => {
   assertUnitEnvironment({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })
   if (dataDiskIdentity) assertDataDiskIdentity(dataDiskIdentity)
-  const custom = renderRunnerEnvironment(runnerEnv, Object.keys(protectedRunnerServiceEnvironment(protectedProxy)))
+  const enrollment = protectedRunnerServiceEnvironment(protectedProxy)
+  const custom = renderRunnerEnvironment(runnerEnv, Object.keys(enrollment))
   // An array, so an optional key is absent rather than empty: an AWS host's
   // boot script writes no backend, a caller that supplied no collector has no
   // endpoint to enforce, and a stage without a registry proxy has no host to
@@ -590,6 +675,7 @@ export const unitEnvironmentBlock = ({
     ...(volumeBackend ? [`'VOLUME_STORAGE_BACKEND=${volumeBackend}'`] : []),
     ...(registryProxyHost ? [`'REGISTRY_PROXY_HOST=${registryProxyHost}'`] : []),
     ...(dataDiskIdentity ? [`'GCP_PROJECT_ID=${dataDiskIdentity.project}'`, `'GCP_ZONE=${dataDiskIdentity.zone}'`] : []),
+    ...protectedV2Settings(protectedProxy),
   ].join(' ')
   /*
    * Prefixed names, because this block is concatenated after the binary half,
@@ -618,10 +704,11 @@ export const unitEnvironmentBlock = ({
 UNIT_HOST_NAME="\${BOXLITE_RUNNER_HOST_NAME:-$(curl -fsS -H "Metadata-Flavor: Google" --max-time 5 http://metadata.google.internal/computeMetadata/v1/instance/name)}"
 case "$UNIT_HOST_NAME" in
 ${dataDiskIdentity.hosts
-  .map(
-    (host) =>
-      `  ${host}) runner_data_disk='${runnerDataDiskNameFor({ app: dataDiskIdentity.app, stage: dataDiskIdentity.stage, host })}' ;;`,
-  )
+  .map((host) => {
+    const lines = protectedV2Settings(protectedProxyByHost?.get(host)).join(' ')
+    return `  ${host}) runner_data_disk='${runnerDataDiskNameFor({ app: dataDiskIdentity.app, stage: dataDiskIdentity.stage, host })}'
+    ${lines ? `UNIT_ENV_EXPECTED+=(${lines}); UNIT_ENV_UNSET=''` : ':'} ;;`
+  })
   .join('\n')}
   *)
     echo "FATAL: $UNIT_HOST_NAME is not one of this stage's runner hosts; refusing to name a data disk" >&2
@@ -633,9 +720,10 @@ UNIT_ENV_EXPECTED+=("RUNNER_DATA_DISK_NAME=$runner_data_disk")
     : ''
   return `UNIT_ENV_FILE="\${BOXLITE_RUNNER_ENV_FILE:-${RUNNER_ENV_FILE}}"
 UNIT_ENV_EXPECTED=(${expected})
+UNIT_ENV_UNSET='${protectedProxy?.apiVersion === 2 ? '' : Object.values(PROTECTED_V2_LISTENER_ENV).join(' ')}'
 ${dataDisk}
 UNIT_ENV_CUSTOM="$(printf '%s' '${Buffer.from(custom.block).toString('base64')}' | base64 -d)"
-UNIT_ENV_KEYS='${custom.keys.join(' ')}'
+UNIT_ENV_KEYS="${custom.keys.join(' ')} $UNIT_ENV_UNSET"
 
 # Extract the managed block or its complement. Invalid boundaries fail closed;
 # newly managed names outside the block are migrated, never left to resurface.
@@ -654,11 +742,13 @@ custom_unit_environment() {
   ' "$UNIT_ENV_FILE"
 }
 
-${dataDisk}
 unit_environment_matches() {
-  local line current
+  local line current key
   for line in "\${UNIT_ENV_EXPECTED[@]}"; do
     grep -qxF "$line" "$UNIT_ENV_FILE" || return 1
+  done
+  for key in $UNIT_ENV_UNSET; do
+    if grep -q "^$key=" "$UNIT_ENV_FILE"; then return 1; fi
   done
   current="$(custom_unit_environment block)" || return 1
   [ "$current" = "$UNIT_ENV_CUSTOM" ]

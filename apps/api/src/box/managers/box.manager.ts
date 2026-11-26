@@ -427,7 +427,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         }
       }
     } finally {
-      await this.redisLockProvider.unlock(lockKey)
+      await this.redisLockProvider.releaseLease(lockKey, lockCode)
     }
   }
 

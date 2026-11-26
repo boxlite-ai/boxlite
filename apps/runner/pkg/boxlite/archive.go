@@ -41,12 +41,17 @@ func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir string) (s
 // ExportBox packs a box into a portable .boxlite archive inside destDir and
 // returns the archive path the runtime chose. The caller owns the file — the
 // runtime never deletes it.
-func (c *Client) ExportBox(ctx context.Context, boxId, destDir string) (string, error) {
+func (c *Client) ExportBox(ctx context.Context, boxId, destDir string, authorize ...func() error) (string, error) {
 	operation, err := c.lockCheckpointTarget(ctx, boxId)
 	if err != nil {
 		return "", err
 	}
 	defer operation.Close()
+	if len(authorize) != 0 {
+		if err := authorize[0](); err != nil {
+			return "", err
+		}
+	}
 	return c.exportBox(context.WithoutCancel(ctx), boxId, destDir)
 }
 
@@ -78,22 +83,45 @@ func (c *Client) exportBox(ctx context.Context, boxId, destDir string) (string, 
 // would leave a second box holding the same disk. A box that is already present
 // therefore satisfies the job.
 func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error {
+	return c.importBox(ctx, boxId, archivePath, "", nil)
+}
+
+func (c *Client) ImportMigrationBox(ctx context.Context, boxId, archivePath, attemptID string, authorize func() error) error {
+	return c.importBox(ctx, boxId, archivePath, attemptID, authorize)
+}
+
+func (c *Client) importBox(ctx context.Context, boxId, archivePath, attemptID string, authorize func() error) error {
 	operation, err := c.lockCheckpointTarget(ctx, boxId)
 	if err != nil {
 		return err
 	}
 	defer operation.Close()
+	if authorize != nil {
+		if err := authorize(); err != nil {
+			return err
+		}
+	}
 	ctx = context.WithoutCancel(ctx)
-	present, err := c.boxPresent(ctx, boxId)
-	if err != nil {
+	info, err := c.nativeBoxInfo(ctx, boxId)
+	if err != nil && !boxlite.IsNotFound(err) {
 		return err
 	}
-	if present {
+	if info != nil {
+		if attemptID != "" {
+			if err := c.requireMigrationCopy(ctx, attemptID, info.ID); err != nil {
+				return err
+			}
+		}
 		c.logger.InfoContext(ctx, "import skipped, box already present", "box", boxId)
 		return nil
 	}
 
-	bx, err := c.runtime.Import(ctx, archivePath, boxId)
+	var bx *boxlite.Box
+	if attemptID != "" {
+		bx, err = c.runtime.ImportRunnerMigration(ctx, archivePath, boxId, attemptID)
+	} else {
+		bx, err = c.runtime.Import(ctx, archivePath, boxId)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to import box %s from %s: %w", boxId, archivePath, err)
 	}
@@ -107,15 +135,18 @@ func (c *Client) ImportBox(ctx context.Context, boxId, archivePath string) error
 	return nil
 }
 
-// boxPresent reports whether the runtime still holds a record for the box. It
-// reads through the runtime rather than the handle cache so it sees boxes this
-// process never created — an imported box after a runner restart, for one.
-func (c *Client) boxPresent(ctx context.Context, boxId string) (bool, error) {
-	if _, err := c.nativeBoxInfo(ctx, boxId); err != nil {
-		if boxlite.IsNotFound(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to look up box %s: %w", boxId, err)
+func (c *Client) requireMigrationCopy(ctx context.Context, attemptID, nativeID string) error {
+	native, err := c.runtime.Get(ctx, nativeID)
+	if err != nil {
+		return err
 	}
-	return true, nil
+	defer native.Close()
+	owner, err := native.RunnerMigration(ctx)
+	if err != nil {
+		return err
+	}
+	if owner != attemptID {
+		return fmt.Errorf("existing Box does not belong to migration attempt %s", attemptID)
+	}
+	return nil
 }

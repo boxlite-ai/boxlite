@@ -15,7 +15,8 @@ type StartBoxPayload struct {
 // addresses the object the first delivery used, and the key the control plane
 // recorded in box.migrate.arcPath is the key the runner acted on.
 type MigrateArchivePayload struct {
-	ArcPath string `json:"arcPath"`
+	ArcPath   string `json:"arcPath"`
+	AttemptID string `json:"attemptId"`
 }
 
 // MigrateArchiveResult reports the archive the job left in the object store.

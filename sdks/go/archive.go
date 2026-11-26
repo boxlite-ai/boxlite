@@ -130,6 +130,18 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 // Import never consumes or deletes archivePath. The caller owns the archive
 // and is responsible for retaining, moving, or deleting it.
 func (r *Runtime) Import(ctx context.Context, archivePath, name string) (*Box, error) {
+	return r.importArchive(ctx, archivePath, name, "")
+}
+
+// ImportRunnerMigration persists the attempt with the native Box before reporting success.
+func (r *Runtime) ImportRunnerMigration(ctx context.Context, archivePath, name, attempt string) (*Box, error) {
+	if err := validateArchiveArgument(attempt, "migration attempt", false); err != nil {
+		return nil, err
+	}
+	return r.importArchive(ctx, archivePath, name, attempt)
+}
+
+func (r *Runtime) importArchive(ctx context.Context, archivePath, name, attempt string) (*Box, error) {
 	if err := validateArchiveArgument(archivePath, "archive path", false); err != nil {
 		return nil, err
 	}
@@ -156,14 +168,16 @@ func (r *Runtime) Import(ctx context.Context, archivePath, name string) (*Box, e
 	}
 
 	var cError C.CBoxliteError
-	code := C.boxlite_runtime_import(
-		r.handle,
-		cArchivePath,
-		cName,
-		C.cbRuntimeImport(),
-		handleToPtr(handle),
-		&cError,
-	)
+	var code uint32
+	if attempt == "" {
+		code = C.boxlite_runtime_import(r.handle, cArchivePath, cName, C.cbRuntimeImport(), handleToPtr(handle), &cError)
+	} else {
+		cAttempt := toCString(attempt)
+		defer C.free(unsafe.Pointer(cAttempt))
+		code = C.boxlite_runtime_import_runner_migration(
+			r.handle, cArchivePath, cName, cAttempt, C.cbRuntimeImport(), handleToPtr(handle), &cError,
+		)
+	}
 	if code != C.Ok {
 		deleteHandleForDispatch(handle)
 		return nil, freeError(&cError)

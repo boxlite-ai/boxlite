@@ -14,7 +14,7 @@ import { sanitizeBoxError } from '../utils/sanitize-error.util'
 import { recordBoxJobOutcome } from '../utils/box-business-event.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { LockCode, RedisLockProvider } from '../common/redis-lock.provider'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
@@ -79,19 +79,13 @@ export class JobStateHandlerService {
         await this.handleDestroyBoxJobCompletion(job)
         break
       default:
-        break
+        return
     }
 
-    switch (job.resourceType) {
-      case ResourceType.BOX: {
-        const lockKey = getStateChangeLockKey(job.resourceId)
-        this.redisLockProvider
-          .unlock(lockKey)
-          .catch((error) => this.logger.error(`Error unlocking Redis lock for box ${job.resourceId}:`, error)) // Clean up lock after job completion
-        break
-      }
-      default:
-        break
+    if (job.resourceType === ResourceType.BOX && job.stateChangeLockOwner) {
+      await this.redisLockProvider
+        .releaseLease(getStateChangeLockKey(job.resourceId), new LockCode(job.stateChangeLockOwner))
+        .catch((error) => this.logger.error(`Failed to release the state-change lock for box ${job.resourceId}`, error))
     }
   }
 
@@ -133,7 +127,7 @@ export class JobStateHandlerService {
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.boxRepository.update(boxId, { updateData, entity: box, ordinaryJobRunnerId: job.runnerId })
       // Warm-pool top-up creates stock no one requested; the claim records
       // that box's box.create pair instead (BoxService.assignWarmPoolBox).
       if (box.organizationId !== BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
@@ -182,7 +176,7 @@ export class JobStateHandlerService {
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.boxRepository.update(boxId, { updateData, entity: box, ordinaryJobRunnerId: job.runnerId })
       recordBoxJobOutcome('box.start', job.status, box)
     } catch (error) {
       this.logger.error(`Error handling START_BOX job completion for box ${boxId}:`, error)
@@ -221,7 +215,7 @@ export class JobStateHandlerService {
         updateData.recoverable = recoverable
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.boxRepository.update(boxId, { updateData, entity: box, ordinaryJobRunnerId: job.runnerId })
       recordBoxJobOutcome('box.stop', job.status, box)
     } catch (error) {
       this.logger.error(`Error handling STOP_BOX job completion for box ${boxId}:`, error)
@@ -256,7 +250,7 @@ export class JobStateHandlerService {
         return
       }
 
-      await this.boxRepository.update(boxId, { updateData, entity: box })
+      await this.boxRepository.update(boxId, { updateData, entity: box, ordinaryJobRunnerId: job.runnerId })
       recordBoxJobOutcome('box.delete', job.status, box)
     } catch (error) {
       this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)

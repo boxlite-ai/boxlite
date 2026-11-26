@@ -27,7 +27,7 @@ function makeManager(startFailure: Error) {
     boxRepository as never,
     {} as never,
     {} as never,
-    { lock: jest.fn().mockResolvedValue(true), unlock: jest.fn().mockResolvedValue(undefined) } as never,
+    { lock: jest.fn().mockResolvedValue(true), releaseLease: jest.fn().mockResolvedValue(undefined) } as never,
     start as never,
     {} as never,
     {} as never,

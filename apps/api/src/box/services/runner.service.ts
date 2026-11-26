@@ -223,6 +223,63 @@ export class RunnerService {
     return runner
   }
 
+  async verifyProtectedRelease(id: string, processId: string, executableDigest: string): Promise<boolean> {
+    const runner = await this.findOneUncachedOrFail(id)
+    if (runner.apiVersion !== '2' || runner.state !== RunnerState.READY || runner.protectedProcessId !== processId) {
+      return false
+    }
+
+    // Check the intended digest against the live listener before storing any approval.
+    runner.protectedExecutableDigest = executableDigest
+    if ((await this.proxyBootstrapCapability(runner)) !== 'supported') return false
+
+    const latest = await this.findOneUncachedOrFail(id)
+    const age = Date.now() - (latest.lastChecked?.getTime() ?? NaN)
+    return latest.state === RunnerState.READY && latest.protectedProcessId === processId && age >= 0 && age <= 60_000
+  }
+
+  async releaseDatabaseLogin(): Promise<string> {
+    const [role] = await this.dataSource.query('SELECT session_user AS login')
+    return role.login
+  }
+
+  async releaseOrdinaryCreateReceipt(
+    boxId: string,
+    revision: string,
+  ): Promise<{ jobId: string; runnerId: string } | null> {
+    const [job] = await this.dataSource.query(
+      `SELECT j.id AS "jobId", j."runnerId" FROM job j JOIN runner r ON r.id::text = j."runnerId"
+       WHERE j."resourceId" = $1 AND j."completionRevision" = $2 AND r."apiVersion" = '2'
+         AND j."resourceType" = 'BOX' AND j.type = 'CREATE_BOX' AND j.status = 'COMPLETED'
+       ORDER BY j."completedAt" DESC LIMIT 1`,
+      [boxId, revision],
+    )
+    return job ?? null
+  }
+
+  async claimStandaloneRunnerUpdate(claimId: string, resume = false): Promise<boolean> {
+    const [claim] = await this.dataSource.query(
+      `WITH claimed AS (
+        UPDATE outbound_proxy_admission SET standalone_update = $1
+        WHERE singleton AND NOT controlled AND restore_permit IS NULL
+          AND standalone_update IS NOT DISTINCT FROM $2::uuid RETURNING 1
+      ) SELECT 1 FROM claimed`,
+      [claimId, resume ? claimId : null],
+    )
+    return !!claim
+  }
+
+  async finishStandaloneRunnerUpdate(claimId: string): Promise<boolean> {
+    const [claim] = await this.dataSource.query(
+      `WITH released AS (
+        UPDATE outbound_proxy_admission SET standalone_update = NULL
+        WHERE singleton AND standalone_update = $1 RETURNING 1
+      ) SELECT 1 FROM released`,
+      [claimId],
+    )
+    return !!claim
+  }
+
   async findOneFullOrFail(id: string): Promise<RunnerFullDto> {
     const runner = await this.findOneOrFail(id)
     const region = await this.regionService.findOne(runner.region)
@@ -305,6 +362,8 @@ export class RunnerService {
       runnerFilter.class = params.boxClass
     }
 
+    if (params.apiVersion !== undefined) runnerFilter.apiVersion = params.apiVersion
+
     if (params.requiresPrivileged) {
       runnerFilter.supportsPrivileged = true
     }
@@ -332,12 +391,15 @@ export class RunnerService {
   private async proxyBootstrapCapability(
     runner: Runner,
   ): Promise<'supported' | 'unverified' | ProxyPlacementDiagnostic> {
-    if (runner.apiVersion === '2') return 'runner_proxy_unsupported'
-    if (runner.apiVersion !== '0' || !runner.apiUrl) return 'unverified'
     try {
-      const protocol = new URL(runner.apiUrl).protocol
-      if (protocol === 'http:') return 'runner_proxy_tls_unsupported'
-      if (protocol !== 'https:') return 'unverified'
+      if (runner.apiVersion === '2') {
+        if (!runner.protectedExecutableDigest) return 'runner_proxy_unsupported'
+      } else {
+        if (runner.apiVersion !== '0' || !runner.apiUrl) return 'unverified'
+        const protocol = new URL(runner.apiUrl).protocol
+        if (protocol === 'http:') return 'runner_proxy_tls_unsupported'
+        if (protocol !== 'https:') return 'unverified'
+      }
       const adapter = await this.runnerAdapterFactory.create(runner)
       const capability = await adapter.protectedBootstrapCapability?.(true, false, true)
       return capability === 'unsupported' ? 'runner_proxy_unsupported' : (capability ?? 'unverified')
@@ -406,6 +468,7 @@ export class RunnerService {
       signal?: AbortSignal
       infoFailed?: boolean
       nestedVirtualizationEnabled?: boolean
+      protectedProcessId?: string | null
     },
     dataDiskRef?: RunnerDataDiskRef,
   ): Promise<void> {
@@ -425,6 +488,10 @@ export class RunnerService {
     const updateData: Partial<Runner> = {
       state: RunnerState.READY,
       lastChecked: new Date(),
+    }
+
+    if (context?.protectedProcessId !== undefined) {
+      updateData.protectedProcessId = context.protectedProcessId
     }
 
     if (!context?.infoFailed) {
@@ -1061,6 +1128,7 @@ export const NO_AVAILABLE_RUNNERS = 'No available runners'
 export class GetRunnerParams {
   regions?: string[]
   boxClass?: BoxClass
+  apiVersion?: '2'
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
   requiresPrivileged?: boolean

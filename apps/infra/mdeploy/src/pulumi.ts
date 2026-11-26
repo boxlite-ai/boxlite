@@ -26,6 +26,13 @@ import {
   type LookupAuthorizations,
 } from './dns-authorization.ts'
 import { spawnWith } from './upgrade-runners.ts'
+import { existingProtectedRunnerToken, restoreProtectedRunner, verifyRunnerEnrollment } from './protected-runner-release.ts'
+import { zoneIn } from '../stack/providers/gcp/index.ts'
+import { protectedReleaseJobName } from '../stack/providers/gcp/protected-release.ts'
+import { gcpRunnerArtifactsBucket, resolveRunnerBinary } from '../stack/runner-binary.ts'
+import { loadDeployConfig } from './config.ts'
+import { loadConfig as loadStageConfig } from 'mstage/config'
+import { readStackEnvironment } from './stack-env.ts'
 import type { Identity } from 'mstage/identity'
 import type { MstageConfig } from 'mstage/config'
 import type { StoreBackend } from 'mstage/env'
@@ -98,6 +105,7 @@ const AUTOMATION = '@pulumi/pulumi/automation'
 
 /** The part of the Automation API this uses, in the shape it already has. */
 export type PulumiStack = {
+  exportStack?: () => Promise<unknown>
   setAllConfig: (config: Record<string, { value: string; secret?: boolean }>) => Promise<void>
   up: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
   preview: (options: { onOutput?: (output: string) => void }) => Promise<unknown>
@@ -205,7 +213,13 @@ export const pulumiDeploy = async ({
   const { env: credentials } = await identity.childEnvironment()
   // The store last, so a stale export in this shell cannot shadow it: the point
   // of keeping configuration in one place is that it wins.
-  const environment = definedOnly({ ...credentials, ...stageEnvironment })
+  const environment = definedOnly({
+    ...credentials,
+    ...stageEnvironment,
+    BOXLITE_GCP_DEPLOYER: process.env.BOXLITE_GCP_DEPLOYER,
+    BOXLITE_CI_RELEASE_KEY: process.env.BOXLITE_CI_RELEASE_KEY,
+    BOXLITE_CI_RELEASE_TEST_KEY: process.env.BOXLITE_CI_RELEASE_TEST_KEY,
+  })
   if (!environment[PASSPHRASE_KEY]?.trim()) {
     throw new PulumiDeployError(
       `${PASSPHRASE_KEY} is required — Pulumi seals the state's secrets with it. Generate 32 random bytes ` +
@@ -218,6 +232,43 @@ export const pulumiDeploy = async ({
 
   const app = scope.app as string
   const stage = scope.stage as string
+  const readStageInputs = () => {
+    const declaration = loadStageConfig({ cwd: config.root })
+    return readStackEnvironment({
+      environment,
+      declaration: {
+        groups: declaration.envSelectGroup,
+        optional: declaration.envOptional,
+        where: declaration.path,
+      },
+      app, stage, region: scope.region, home: 'gcp',
+    })
+  }
+  const restoreRunner = process.env.BOXLITE_CI_RESTORE_RUNNER
+  if (restoreRunner) {
+    if (intent !== 'deploy' || !environment.BOXLITE_CI_RELEASE_KEY || !environment.BOXLITE_GCP_DEPLOYER) {
+      throw new PulumiDeployError('A protected Runner restore requires an applying GCP mdeploy-all run')
+    }
+    const inputs = readStageInputs()
+    const slot = inputs.runnerFleet.find(({ protectedProxy }) =>
+      protectedProxy?.apiVersion === 2 && protectedProxy.runnerId === restoreRunner)
+    if (!slot) throw new PulumiDeployError('Restore Runner UUID does not identify an enrolled V2 slot')
+    await restoreProtectedRunner({
+      host: { target: slot.nameTag, project, zone: zoneIn(scope.region, scope.zone) },
+      region: scope.region,
+      job: protectedReleaseJobName({ app, stage }),
+      runnerId: restoreRunner,
+      binary: resolveRunnerBinary({
+        environment,
+        configRoot: loadDeployConfig({ cwd: config.root, stage }).root,
+        staging: { cloud: 'gcp', bucket: gcpRunnerArtifactsBucket({ app, stage, project }) },
+      }),
+      runHost: spawnWith({ ...process.env, ...credentials }, 600_000),
+      runDatabase: spawnWith({ ...process.env, ...credentials }, 150_000),
+      log,
+    })
+    return 0
+  }
   log(
     `${NARRATION[intent]} every component of ${app} stage ${stage} ` +
       `${intent === 'remove' ? 'from' : 'into'} ${project} (${scope.region}) with pulumi`,
@@ -261,6 +312,24 @@ export const pulumiDeploy = async ({
     envVars: environment,
     backendUrl: `gs://${state.bucket}`,
   })
+
+  if (intent === 'deploy' && environment.STACK_RUNNER_PROTECTED_PROXY_SLOTS) {
+    const inputs = readStageInputs()
+    const enrolled = inputs.runnerFleet.flatMap(({ controlPlaneRunnerName, protectedProxy }) =>
+      protectedProxy?.apiVersion === 2 ? [{ runnerId: protectedProxy.runnerId, name: controlPlaneRunnerName }] : [],
+    )
+    if (enrolled.length) {
+      const adminKey = inputs.apiEnvironment.ADMIN_API_KEY
+      if (!adminKey || !stack.exportStack) throw new PulumiDeployError('Existing V2 Runner enrollment must be verifiable before apply')
+      const deployed = await stack.exportStack().catch(() => {
+        throw new PulumiDeployError('Could not read existing Runner credentials from the selected stage state')
+      })
+      const api = publicHostsFor({ domain: inputs.domain, dashboardDomain: inputs.dashboardDomain }).api
+      await verifyRunnerEnrollment(`https://${api}`, adminKey, enrolled.map((slot) => ({
+        ...slot, apiKey: existingProtectedRunnerToken(deployed, slot.name),
+      })))
+    }
+  }
 
   // The provider's coordinates as stack configuration rather than as
   // environment: an inline program is not a subprocess, so what the engine is

@@ -7,21 +7,22 @@ import { randomUUID } from 'node:crypto'
 import { DataSource, IsNull, Repository } from 'typeorm'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { JobType, ResourceType } from '../dto/job.dto'
+import { Box } from '../entities/box.entity'
+import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { Job } from '../entities/job.entity'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { JobService } from './job.service'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schemaName = `job_namespace_${process.pid}_${randomUUID().replaceAll('-', '')}`
-const boxId = 'box-migration-namespace'
-const runnerId = 'runner-migration-namespace'
+const runnerId = '00000000-0000-4000-8000-000000000021'
 const lifecycleJobId = '00000000-0000-4000-8000-000000000011'
 
 /**
  * The job a user's start leaves incomplete on the runner still holding the box
  * — the row a migration job for the same box has to fit alongside.
  */
-function incompleteLifecycleJob(): Job {
+function incompleteLifecycleJob(boxId: string): Job {
   return new Job({
     id: lifecycleJobId,
     type: JobType.START_BOX,
@@ -35,6 +36,7 @@ describeIfDatabase('JobService.createJob resource namespaces (integration, real 
   let dataSource: DataSource
   let repository: Repository<Job>
   let service: JobService
+  let boxId: string
 
   beforeAll(async () => {
     dataSource = await new DataSource({
@@ -45,14 +47,24 @@ describeIfDatabase('JobService.createJob resource namespaces (integration, real 
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Job],
+      entities: [Box, BoxLastActivity, Job],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
+      extra: { options: `-c search_path=${schemaName},public` },
     }).initialize()
 
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     await dataSource.synchronize()
+    await dataSource.query(
+      `CREATE TABLE "${schemaName}".outbound_proxy_reference (organization_id uuid, box_id varchar)`,
+    )
+    const box = new Box('us', 'migration-namespace')
+    box.organizationId = randomUUID()
+    box.runnerId = runnerId
+    box.osUser = 'boxlite'
+    await dataSource.getRepository(Box).insert(box)
+    boxId = box.id
     repository = dataSource.getRepository(Job)
     // Redis only carries the "new job" nudge, and createJob already treats a
     // failed nudge as harmless: the runner polls for what it missed.
@@ -73,7 +85,7 @@ describeIfDatabase('JobService.createJob resource namespaces (integration, real 
 
   beforeEach(async () => {
     await repository.clear()
-    await repository.insert(incompleteLifecycleJob())
+    await repository.insert(incompleteLifecycleJob(boxId))
   })
 
   it('accepts a migration job for a box whose runner already has an incomplete lifecycle job', async () => {

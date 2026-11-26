@@ -48,7 +48,7 @@ export class BoxStopAction extends BoxAction {
 
     if (box.state === BoxState.STARTED) {
       // stop box
-      await runnerAdapter.stopBox(box.id, force)
+      await runnerAdapter.stopBox(box.id, force, lockCode)
       await this.updateBoxState(box, BoxState.STOPPING, lockCode)
 
       //  sync states again immediately for box

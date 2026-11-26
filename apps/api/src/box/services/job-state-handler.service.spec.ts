@@ -9,6 +9,7 @@ import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
+import { LockCode } from '../common/redis-lock.provider'
 
 describe('JobStateHandlerService migration job routing', () => {
   function makeService() {
@@ -18,6 +19,7 @@ describe('JobStateHandlerService migration job routing', () => {
     } as any
     const redisLockProvider = {
       unlock: jest.fn().mockResolvedValue(undefined),
+      releaseLease: jest.fn().mockResolvedValue(undefined),
     } as any
     const boxMigrationJobReceiver = {
       handleJobCompletion: jest.fn().mockResolvedValue(undefined),
@@ -83,7 +85,7 @@ describe('JobStateHandlerService migration job routing', () => {
     expect(h.redisLockProvider.unlock).not.toHaveBeenCalledWith(getStateChangeLockKey('box-1'))
   })
 
-  it('still releases the state-change lock for a box lifecycle job', async () => {
+  it('leaves the state-change lock alone when a legacy box lifecycle job has no owner', async () => {
     const h = makeService()
     const job = new Job({
       id: 'job-2',
@@ -97,7 +99,26 @@ describe('JobStateHandlerService migration job routing', () => {
     await h.service.handleJobCompletion(job)
 
     expect(h.boxMigrationJobReceiver.handleJobCompletion).not.toHaveBeenCalled()
-    expect(h.redisLockProvider.unlock).toHaveBeenCalledWith(getStateChangeLockKey('box-1'))
+    expect(h.redisLockProvider.unlock).not.toHaveBeenCalled()
+    expect(h.redisLockProvider.releaseLease).not.toHaveBeenCalled()
+  })
+
+  it('passes the originating owner to the atomic release for a box lifecycle job', async () => {
+    const h = makeService()
+    const owner = '8137cc0d-5d3f-43b8-aa32-b9304740269e'
+    const job = new Job({
+      type: JobType.STOP_BOX,
+      status: JobStatus.COMPLETED,
+      runnerId: 'runner-1',
+      resourceType: ResourceType.BOX,
+      resourceId: 'box-1',
+      stateChangeLockOwner: owner,
+    })
+
+    await h.service.handleJobCompletion(job)
+
+    expect(h.redisLockProvider.releaseLease).toHaveBeenCalledWith(getStateChangeLockKey('box-1'), new LockCode(owner))
+    expect(h.redisLockProvider.unlock).not.toHaveBeenCalled()
   })
 })
 

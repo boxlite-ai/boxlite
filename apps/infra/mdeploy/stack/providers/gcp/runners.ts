@@ -31,6 +31,7 @@
  * one with it would take every box running on it.
  */
 
+import { instanceFor } from 'naming'
 import type { Placement } from '../../network.ts'
 import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
 import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE, runnerDataDiskNameFor, runnerPolicyBatches } from '../../runners.ts'
@@ -45,6 +46,7 @@ import { renderPolicyScripts, renderUnitEnvironmentPolicyScripts } from '../../r
 import { REGISTRY_PROXY_HOST_VARIABLE } from '../../registry-proxy.ts'
 import { splitSecretRef } from './secret-env.ts'
 import { volumeConditionFor } from './storage.ts'
+import { protectedReleaseJobName } from './protected-release.ts'
 
 /**
  * What each requested size answers to.
@@ -208,6 +210,8 @@ export const gcpRunnerProvider =
     adminApiKey,
     regionId,
     dependsOn,
+    protectedDatabase = false,
+    cutoverTestKey,
   }: {
     project: string
     /** A zone. An instance is zonal even where its subnet is not. */
@@ -222,6 +226,8 @@ export const gcpRunnerProvider =
     /** The region those rows go in — the same one the API seeded its own into. */
     regionId: string
     dependsOn: any[]
+    protectedDatabase?: boolean
+    cutoverTestKey?: string
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
     const labels = request.fleet.map(({ slot }) => runnerLabelValue(slot.controlPlaneRunnerName))
@@ -414,6 +420,45 @@ udevadm trigger --name-match=kvm || true`,
     }
 
     const assignments = request.fleet
+    const protectedSlots = assignments.flatMap(({ slot, token }) =>
+      slot.protectedProxy?.apiVersion === 2
+        ? [{ host: slot.nameTag, runnerId: slot.protectedProxy.runnerId, name: slot.controlPlaneRunnerName, token }]
+        : [],
+    )
+    const releaseCommand = 'node scripts/protected-runner-release.mjs'
+    const releaseTriggers = [
+      request.binary.identity,
+      protectedSlots.map(({ host, runnerId }) => `${host}:${runnerId}`).join(','),
+      process.env.GITHUB_RUN_ID ?? '',
+      process.env.GITHUB_RUN_ATTEMPT ?? '',
+    ]
+    const releaseEnvironment = protectedDatabase
+      ? {
+          API_URL: request.apiUrl,
+          ADMIN_API_KEY: $util.secret(adminApiKey),
+          RELEASE_ARTIFACT: JSON.stringify(request.binary),
+          RELEASE_PROJECT: project,
+          RELEASE_ZONE: zone,
+          RELEASE_DB_JOB: protectedReleaseJobName({ app: $app.name, stage: $app.stage }),
+          ...(cutoverTestKey ? { RELEASE_TEST_KEY: $util.secret(cutoverTestKey) } : {}),
+          RELEASE_API_SERVICE: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
+          RELEASE_SLOTS: $util.secret($resolve(protectedSlots.map(({ token }) => token)).apply((tokens) =>
+            JSON.stringify(protectedSlots.map(({ host, runnerId, name }, index) => ({
+              host, runnerId, name, apiKey: tokens[index],
+            }))),
+          )),
+        }
+      : undefined
+    const enrollment = releaseEnvironment
+      ? new command.local.Command('VerifyProtectedRunnerEnrollment', {
+          dir: registrationDir(),
+          create: `${releaseCommand} enrollment`,
+          update: `${releaseCommand} enrollment`,
+          environment: releaseEnvironment,
+          triggers: releaseTriggers,
+        }, { dependsOn })
+      : undefined
+    const runnerDependencies = [...dependsOn, ...(enrollment ? [enrollment] : [])]
 
     const instances = assignments.map(({ slot, token }) => {
       const userData = $resolve([
@@ -575,7 +620,7 @@ udevadm trigger --name-match=kvm || true`,
           // The read grant among them: a host whose boot script fetches the
           // staged object before the binding exists downloads nothing, and
           // nothing retries that boot until the host restarts.
-          dependsOn: [...dependsOn, ...staged],
+          dependsOn: [...runnerDependencies, ...staged],
         },
       )
     })
@@ -601,7 +646,9 @@ udevadm trigger --name-match=kvm || true`,
     // slot. Resolved together and not cast, for the reason the boot script above
     // records: an unresolved Output renders as Pulumi's `[toString]` refusal
     // text, and this one would converge the whole fleet onto it.
-    const protectedProxy = assignments.find(({ slot }) => slot.protectedProxy)?.slot.protectedProxy
+    const protectedProxyByHost = new Map(
+      assignments.flatMap(({ slot }) => (slot.protectedProxy ? [[slot.nameTag, slot.protectedProxy] as const] : [])),
+    )
     const unitEnvPolicy = $resolve([
       request.apiUrl,
       request.otlpUrl,
@@ -614,7 +661,7 @@ udevadm trigger --name-match=kvm || true`,
         volumeBackend: VOLUME_BACKEND,
         registryProxyHost: (proxyHost as string) || null,
         runnerEnv: runnerEnv as string,
-        protectedProxy,
+        protectedProxyByHost,
         // The disks the control plane grows online are named here and
         // nowhere else: the policy derives each host's from the same
         // function the disk resource below creates under, so a grant or a
@@ -632,12 +679,32 @@ udevadm trigger --name-match=kvm || true`,
       validate: unitEnvPolicy.apply((rendered: { validate: string }) => rendered.validate),
       enforce: unitEnvPolicy.apply((rendered: { enforce: string }) => rendered.enforce),
     }
-    const scripts = renderPolicyScripts({
+    const binaryTarget = {
       identity: request.binary.identity,
       binary: request.binary,
       port: RUNNER_PORT,
-    })
+    }
+    const exactScripts = enrollment?.stdout.apply((digest: string) => renderPolicyScripts({
+      ...binaryTarget,
+      protectedRelease: {
+        expectedDigest: digest.trim(),
+        hosts: protectedSlots.map(({ host }) => host),
+        formerlyEnrolledHosts: assignments.map(({ slot }) => slot.nameTag),
+      },
+    }))
+    const scripts = exactScripts
+      ? {
+          validate: exactScripts.apply((value: { validate: string }) => value.validate),
+          enforce: exactScripts.apply((value: { enforce: string }) => value.enforce),
+        }
+      : renderPolicyScripts(binaryTarget)
     let previousBatch: any
+    const compliance: {
+      assignment: string
+      targets: string[]
+      revision: $util.Input<string>
+      policies: $util.Input<string[]>
+    }[] = []
     for (const batch of runnerPolicyBatches({ app: $app.name, stage: $app.stage }, assignments)) {
       previousBatch = new gcp.osconfig.OsPolicyAssignment(
         batch.resourceName,
@@ -710,10 +777,30 @@ udevadm trigger --name-match=kvm || true`,
           skipAwaitRollout: false,
         },
         {
-          dependsOn: [...instances, ...dependsOn, ...(previousBatch ? [previousBatch] : [])],
+          dependsOn: [...instances, ...runnerDependencies, ...(previousBatch ? [previousBatch] : [])],
           customTimeouts: { create: '40m', update: '40m' },
         },
       )
+      compliance.push({
+        assignment: batch.name,
+        targets: batch.hosts.map(({ slot }) => slot.nameTag),
+        revision: previousBatch.revisionId,
+        policies: $resolve(previousBatch.osPolicies).apply((policies: { id: string }[]) => policies.map(({ id }) => id)),
+      })
+    }
+
+    if (releaseEnvironment && enrollment && protectedSlots.length) {
+      new command.local.Command('VerifyProtectedRunnerRelease', {
+        dir: registrationDir(),
+        create: `${releaseCommand} proof`,
+        update: `${releaseCommand} proof`,
+        environment: {
+          ...releaseEnvironment,
+          RELEASE_DIGEST: enrollment.stdout,
+          RELEASE_COMPLIANCE: $resolve(compliance).apply((batches) => JSON.stringify(batches)),
+        },
+        triggers: releaseTriggers,
+      }, { dependsOn: [...runnerDependencies, ...instances, ...(previousBatch ? [previousBatch] : [])] })
     }
 
     /*

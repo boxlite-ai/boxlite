@@ -61,6 +61,10 @@ on:
         required: true
         type: boolean
         default: false
+      restore_runner:
+        description: Existing protected V2 Runner UUID to restore to the selected artifact
+        required: false
+        type: string
 
 concurrency:
   # One of these per stage. The image workflows it calls hold their own groups —
@@ -573,6 +577,7 @@ jobs:
   deploy:
     name: ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }}
     permissions:
+      actions: read
       contents: read
       id-token: write
       packages: read
@@ -771,6 +776,14 @@ jobs:
       # `npm run mstage state unlock -- --stage <stage>`.
       - name: Apply
         working-directory: apps/infra
+        env:
+          BOXLITE_GCP_DEPLOYER: ${{ vars.GCP_DEPLOYER }}
+          BOXLITE_CI_RELEASE_KEY: ${{ github.run_id }}.${{ github.run_attempt }}
+          BOXLITE_CI_RESTORE_RUNNER: ${{ inputs.restore_runner }}
+          BOXLITE_CI_RELEASE_TEST_KEY: >-
+            ${{ (inputs.stage == 'dev' && secrets.BOXLITE_DEV_P2_API_KEY)
+                || (inputs.stage == 'stage' && secrets.BOXLITE_STAGE_P2_API_KEY)
+                || (inputs.stage == 'prod' && secrets.BOXLITE_PROD_API_KEY) || '' }}
         run: |
           set -Eeuo pipefail
           if [ "${{ inputs.apply }}" = "true" ]; then

@@ -29,24 +29,26 @@
  * names a published version.
  */
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { parseInvocation, type Options } from 'mstage/cli'
 import { loadConfig } from 'mstage/config'
 import { resolveHome } from 'mstage/home'
 import { run as mstage } from 'mstage/run'
 import { resolveScope } from 'mstage/scope'
+import { publicHostsFor } from '../stack/api.ts'
 import { deployRoot } from './config.ts'
+import { API_GROUP, DEPLOY_GROUP, fetchStageEnvironment } from './env.ts'
+import { claimStandaloneRunnerUpdate, protectedRunnerArtifactDigest, standaloneUpdateClaimId } from './protected-runner-release.ts'
 import {
   sleepSeconds,
   spawnWith,
   upgradeFleetOverPolicy,
   upgradeOne,
   type RunCommand,
+  type RunnerPolicyAssignment,
   type UpgradeOneRequest,
 } from './upgrade-runners.ts'
-import { encodeUpgradePayload, renderPolicyScripts } from '../stack/runner-upgrade.ts'
+import { encodeUpgradePayload, renderPolicyScripts, type UpgradePolicyScripts } from '../stack/runner-upgrade.ts'
 import { RUNNER_PORT, runnerNamePrefix, runnerPolicyBatches } from '../stack/runners.ts'
 import { resolveRunnerBinary } from '../stack/runner-binary.ts'
 import { zoneIn } from '../stack/providers/gcp/index.ts'
@@ -65,6 +67,7 @@ const USAGE = [
   '  --version          a published release. Defaults to the checkout’s own version.',
   '  --host             only these hosts, by the name the console shows. Default: every one.',
   '  --allow-downgrade  replace a host serving something NEWER. This is the rollback.',
+  '  --resume-claim    resume the printed GCP operation with the same release and options.',
   '  --confirm          required for a stage mstage.config.json marks protected.',
 ].join('\n')
 
@@ -75,7 +78,7 @@ const USAGE = [
  * which is worth having rather than shadowing: its own guard catches the
  * `npm run … --version 0.9.5` that npm swallows before this ever runs.
  */
-const OWN_OPTIONS = { flags: ['allow-downgrade'], values: ['host'] }
+const OWN_OPTIONS = { flags: ['allow-downgrade'], values: ['host', 'resume-claim'] }
 
 /**
  * How each cloud names a runner, which is also how each is found.
@@ -182,20 +185,6 @@ const gcpHosts = ({
 }
 
 /** The subset an operator named, or all of them. Naming one that is not there is a mistake, not a filter. */
-/**
- * Where the rewritten policy is handed to gcloud.
- *
- * A file rather than stdin: `os-policy-assignments update` takes `--file`, and
- * the scripts inside carry newlines and shell metacharacters that no command
- * line survives. Written under the OS temp directory, which is this process's
- * own and goes away with it.
- */
-const writePolicyFile = (contents: string): string => {
-  const path = join(mkdtempSync(join(tmpdir(), 'boxlite-runner-policy-')), 'policy.json')
-  writeFileSync(path, contents, { mode: 0o600 })
-  return path
-}
-
 const selected = (hosts: Host[], named: string[]): Host[] => {
   if (named.length === 0) return hosts
   const missing = named.filter((name) => !hosts.some((host) => host.label === name || host.target === name))
@@ -207,15 +196,43 @@ const selected = (hosts: Host[], named: string[]): Host[] => {
   return hosts.filter((host) => named.includes(host.label) || named.includes(host.target))
 }
 
+const claimStageRunnerUpdate = async ({
+  config, scope, backend, log, binary, assignments, allowDowngrade, operation, resume,
+}: Pick<Parameters<typeof fetchStageEnvironment>[0], 'config' | 'scope' | 'backend'> & {
+  log: (line: string) => void
+  binary: ReturnType<typeof resolveRunnerBinary>
+  assignments: { name: string; hosts: string[] }[]
+  allowDowngrade: boolean
+  operation: string
+  resume: boolean
+}): Promise<{ claimId: string; scripts: UpgradePolicyScripts; finish(): Promise<void> }> => {
+  const { values } = await fetchStageEnvironment({ config, scope, backend, groups: [DEPLOY_GROUP, API_GROUP] })
+  const domain = values.STACK_DOMAIN
+  if (!domain) throw new RunnerUpdateError('Standalone Runner updates require the stage API domain')
+  const { api } = publicHostsFor({ domain, dashboardDomain: values.DASHBOARD_DOMAIN ?? null })
+  const expectedDigest = await protectedRunnerArtifactDigest(binary)
+  const scripts = renderPolicyScripts({
+    identity: binary.identity, binary, port: RUNNER_PORT, allowDowngrade, expectedExecutableDigest: expectedDigest,
+  })
+  const claimId = standaloneUpdateClaimId(operation, [
+    scope.project, scope.stage, scope.region, scope.zone, scripts, assignments,
+  ])
+  log(`==> standalone Runner update ${claimId}; resume with --resume-claim ${operation} and the same choices`)
+  const finish = await claimStandaloneRunnerUpdate(`https://${api}`, values.ADMIN_API_KEY ?? '', claimId, resume)
+  return { claimId, scripts, finish }
+}
+
 export type UpdateInput = {
   argv: string[]
   environment?: NodeJS.ProcessEnv
   cwd?: string
   log?: (line: string) => void
+  claimGcpUpdate?: typeof claimStageRunnerUpdate
   checkLogin?: typeof mstage
   resolveHomeWith?: typeof resolveHome
   /** Injected so a roll is provable without an account, a project or a host. */
   run?: RunCommand
+  requestOsConfig?: typeof fetch
   sleep?: (seconds: number) => void
 }
 
@@ -227,7 +244,9 @@ export const updateRunners = async ({
   checkLogin = mstage,
   resolveHomeWith = resolveHome,
   run: injectedRun,
+  requestOsConfig = fetch,
   sleep = sleepSeconds,
+  claimGcpUpdate = claimStageRunnerUpdate,
 }: UpdateInput): Promise<number> => {
   if (argv[0] === 'help' || argv[0] === '--help') {
     log(USAGE)
@@ -282,6 +301,8 @@ export const updateRunners = async ({
   })
 
   const home = await resolveHomeWith({ scope })
+  const resume = options['resume-claim'] as string | undefined
+  if (resume && home.identity.home !== 'gcp') throw new RunnerUpdateError('--resume-claim is only available on GCP')
   const { env: credentials } = await home.identity.childEnvironment()
   const run = injectedRun ?? spawnWith({ ...environment, ...credentials })
 
@@ -339,7 +360,7 @@ export const updateRunners = async ({
     const batches = runnerPolicyBatches({ app: config.app, stage: scope.stage as string }, hosts)
     // Preflight every batch before the first write, including migration from
     // the original assignment that selected the entire fleet.
-    const deployed = batches.map((batch) => {
+    const readAssignment = (batch: (typeof batches)[number]): RunnerPolicyAssignment => {
       const result = run('gcloud', [
         'compute',
         'os-config',
@@ -374,29 +395,37 @@ export const updateRunners = async ({
       if (!Array.isArray(policy.osPolicies) || !policy.osPolicies.some((item: any) => item.id === 'runner-binary')) {
         throw new RunnerUpdateError(`${batch.name} has no runner-binary policy; run mdeploy before runner:update`)
       }
-      return policy.osPolicies
+      if (typeof policy.etag !== 'string' || !policy.etag || typeof policy.revisionId !== 'string' || !policy.revisionId) {
+        throw new RunnerUpdateError(`${batch.name} has no OS Config ETag or revision`)
+      }
+      return policy
+    }
+    const deployed = batches.map(readAssignment)
+    const { claimId, scripts, finish } = await claimGcpUpdate({
+      config, scope, backend: home.backend, log, binary, allowDowngrade,
+      operation: resume ?? randomUUID(),
+      resume: resume !== undefined,
+      assignments: batches.map((batch) => ({ name: batch.name, hosts: batch.hosts.map(({ target }) => target) })),
     })
     log('==> this rewrites the deployed policy; the next mdeploy restores the checkout’s identity')
     for (const [index, batch] of batches.entries()) {
-      upgradeFleetOverPolicy({
+      await upgradeFleetOverPolicy({
         targets: batch.hosts.map((host) => host.target),
         identity: binary.identity,
-        scripts: renderPolicyScripts({
-          identity: binary.identity,
-          binary,
-          port: RUNNER_PORT,
-          allowDowngrade,
-        }),
+        scripts,
         project: scope.project as string,
         zone,
         assignment: batch.name,
-        existingPolicies: deployed[index],
+        snapshot: deployed[index]!,
+        readAssignment: () => readAssignment(batch),
+        requestId: standaloneUpdateClaimId(claimId, [batch.name]),
         run,
         sleep,
         log,
-        writeFile: writePolicyFile,
+        request: requestOsConfig,
       })
     }
+    await finish()
     log(`==> done (${hosts.length} host(s))`)
     return 0
   }

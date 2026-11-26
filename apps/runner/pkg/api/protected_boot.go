@@ -8,10 +8,12 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/internal"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -21,7 +23,7 @@ import (
 // Match Runtime's opaque Box IDs, including both Cloud IDs and local UUIDs.
 var protectedBoxID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
-// ProtectedBootConfig is fixed by deployment for one enrolled HTTPS V0 Runner.
+// ProtectedBootConfig pins the Runner identity and resolver for protected operations.
 type ProtectedBootConfig struct {
 	RunnerID   string
 	DoHURL     string
@@ -56,6 +58,12 @@ type protectedBootGate struct {
 	Outbound   json.RawMessage  `json:"outbound,omitempty"`
 }
 
+type protectedBootEpoch struct {
+	Key        protectedBootKey `json:"key"`
+	Epoch      string           `json:"epoch"`
+	Generation string           `json:"generation"`
+}
+
 type protectedOutboundControl struct {
 	RunnerID string          `json:"runner_id"`
 	Epoch    string          `json:"epoch"`
@@ -88,20 +96,16 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 	if version != 0 || !serveTLS || !c.validPin() {
 		return
 	}
-	protected := group.Group("/v1")
-	protected.Use(func(ctx *gin.Context) {
-		if ctx.Request.TLS == nil || ctx.GetHeader("X-BoxLite-Runner-Id") != c.RunnerID {
-			ctx.AbortWithStatus(http.StatusForbidden)
-			return
-		}
-		ctx.Next()
-	})
-	protected.GET("/outbound-proxy/bootstrap", func(ctx *gin.Context) {
-		ctx.JSON(http.StatusOK, gin.H{
-			"runner_id": c.RunnerID, "version": 1,
-			"operations": []string{"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired", "restart-volumes", "allocate-attempt", "close-allocation"},
-		})
-	})
+	protected := protectedBootGroup(group, c)
+	registerProtectedBootCapability(protected, c, 1, "", "")
+	registerProtectedBootRoutes(protected, c, false)
+}
+
+var protectedBootOperations = []string{
+	"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired", "restart-volumes", "allocate-attempt", "close-allocation",
+}
+
+func registerProtectedBootRoutes(protected *gin.RouterGroup, c ProtectedBootConfig, v2 bool) {
 	path := "/boxes/:boxId/network/outbound/bootstrap"
 	protected.POST(path, c.handleBoot(boxlite.ProtectedBootStart))
 	protected.POST(path+"/receipt", c.handleBoot(boxlite.ProtectedBootRead))
@@ -112,6 +116,42 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 	protected.POST(path+"/allocation/:attemptId", allocateProtectedPlaceholder)
 	protected.DELETE(path+"/allocation/:attemptId", closeProtectedPlaceholder)
 	protected.POST("/boxes/:boxId/network/outbound/managed-route", c.handleBoot(boxlite.ProtectedOutboundControl))
+	if v2 {
+		protected.POST(path+"/stop", c.handleBoot(boxlite.ProtectedBootStop))
+		protected.POST(path+"/retire-terminated", c.handleBoot(boxlite.ProtectedBootRetireTerminated))
+		protected.POST(path+"/ready", c.handleBoot(boxlite.ProtectedBootReady))
+	}
+}
+
+func protectedBootGroup(group *gin.RouterGroup, c ProtectedBootConfig) *gin.RouterGroup {
+	protected := group.Group("/v1")
+	protected.Use(func(ctx *gin.Context) {
+		if ctx.Request.TLS == nil || ctx.GetHeader("X-BoxLite-Runner-Id") != c.RunnerID {
+			ctx.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		ctx.Next()
+	})
+	return protected
+}
+
+func registerProtectedBootCapability(protected *gin.RouterGroup, c ProtectedBootConfig, version int, processID, executableDigest string) {
+	operations := protectedBootOperations
+	if version == 2 {
+		operations = slices.Concat(operations, []string{"managed-ownership-fence", "stop-protected", "retire-terminated", "ready-protected"})
+	}
+	protected.GET("/outbound-proxy/bootstrap", func(ctx *gin.Context) {
+		capability := gin.H{
+			"runner_id": c.RunnerID, "version": version,
+			"operations": operations,
+		}
+		if processID != "" {
+			capability["process_id"] = processID
+			capability["executable_digest"] = executableDigest
+			capability["binary_identity"] = internal.Version
+		}
+		ctx.JSON(http.StatusOK, capability)
+	})
 }
 
 func (c ProtectedBootConfig) handleBoot(operation boxlite.ProtectedBootOperation) gin.HandlerFunc {
@@ -159,6 +199,17 @@ func (c ProtectedBootConfig) handleBoot(operation boxlite.ProtectedBootOperation
 			}
 			key = gate.Key
 			payload = gate
+		case boxlite.ProtectedBootStop, boxlite.ProtectedBootRetireTerminated:
+			var epoch protectedBootEpoch
+			if decode.Decode(&epoch) != nil || epoch.Epoch == "" || epoch.Generation == "" {
+				ctx.Status(http.StatusBadRequest)
+				return
+			}
+			if epoch.Key.Policy.Policy.AllowNet == nil {
+				epoch.Key.Policy.Policy.AllowNet = []string{}
+			}
+			key = epoch.Key
+			payload = epoch
 		case boxlite.ProtectedOutboundControl:
 			var control protectedOutboundControl
 			if decode.Decode(&control) != nil || control.Epoch == "" || len(control.Command) == 0 {

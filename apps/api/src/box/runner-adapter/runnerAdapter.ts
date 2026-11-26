@@ -7,6 +7,7 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { Runner } from '../entities/runner.entity'
 import { ModuleRef } from '@nestjs/core'
+import type { EntityManager } from 'typeorm'
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
 import { RunnerAdapterV2 } from './runnerAdapter.v2'
 import { Box } from '../entities/box.entity'
@@ -14,6 +15,7 @@ import { BoxState } from '../enums/box-state.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 import type { ManagedCommand, ManagedReceipt } from './protected-outbound'
 import type { ProtectedBootCapability, ProtectedBootControl } from './protected-runner'
+import type { LockCode } from '../common/redis-lock.provider'
 
 export interface RunnerBoxInfo {
   state: BoxState
@@ -65,15 +67,18 @@ export interface RunnerAdapter {
     image: string,
     metadata?: { [key: string]: string },
     nestedVirtualization?: boolean,
+    protectedPlaceholder?: boolean,
+    lockOwner?: LockCode,
   ): Promise<StartBoxResponse | undefined>
   startBox(
     boxId: string,
     authToken: string,
     metadata?: { [key: string]: string },
     skipStart?: boolean,
+    lockOwner?: LockCode,
   ): Promise<StartBoxResponse | undefined>
-  stopBox(boxId: string, force?: boolean): Promise<void>
-  destroyBox(boxId: string): Promise<void>
+  stopBox(boxId: string, force?: boolean, lockOwner?: LockCode): Promise<void>
+  destroyBox(boxId: string, lockOwner?: LockCode, manager?: EntityManager): Promise<void>
 
   updateNetworkSettings(
     boxId: string,

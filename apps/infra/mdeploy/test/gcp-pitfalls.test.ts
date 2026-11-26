@@ -31,6 +31,7 @@ import {
 } from '../stack/providers/gcp/clickhouse.ts'
 import { MACHINE as DATABASE_MACHINE } from '../stack/providers/gcp/database.ts'
 import { gcpStackProviders } from '../stack/providers/gcp/index.ts'
+import { createProtectedDatabaseRelease } from '../stack/providers/gcp/protected-release.ts'
 import {
   GKE_POD_CIDR,
   GKE_SERVICE_CIDR,
@@ -932,7 +933,8 @@ test('the hosts may read the staged binary, and only while one is being installe
   assert.match(source, /resource\.name\.startsWith\("projects\/_\/buckets\/\$\{artifactsBucket\}\/objects\/runner\/"\)/)
   // And the host waits for it: a boot script that fetched before the binding
   // existed would download nothing, and nothing retries it until the host restarts.
-  assert.match(source, /dependsOn: \[\.\.\.dependsOn, \.\.\.staged\]/)
+  assert.match(source, /const runnerDependencies = \[\.\.\.dependsOn,/)
+  assert.match(source, /dependsOn: \[\.\.\.runnerDependencies, \.\.\.staged\]/)
 })
 
 test('the upgrade policy selects hosts by the label those hosts actually carry', () => {
@@ -1033,6 +1035,27 @@ test('a Pod outlives the window its endpoint is drained for', () => {
 })
 
 // ── the database's machine ──────────────────────────────────────────────────
+
+test('protected release never echoes a malformed database admin reference', () => {
+  const rawPassword = 'fixture-password-that-must-not-appear'
+  type Inputs = Parameters<typeof createProtectedDatabaseRelease>[0]
+  const inputs: Inputs = {
+    release: { adminRef: rawPassword, deployer: 'release@fixture-project.iam.gserviceaccount.com', key: 'release.1' },
+    project: 'fixture-project',
+    region: 'us-central1',
+    placement: {} as Inputs['placement'],
+    image: 'fixture-image',
+    database: { binding: { cloud: 'gcp' } } as Inputs['database'],
+    pins: '[]',
+    clientCredentials: 'fixture-credentials',
+  }
+  assert.throws(() => createProtectedDatabaseRelease(inputs), (error: unknown) => {
+    assert.ok(error instanceof Error)
+    assert.equal(error.message.includes(rawPassword), false, 'the stage admin credential appeared in the failure')
+    assert.match(error.message, /is not a Secret Manager reference/)
+    return true
+  })
+})
 
 test('every Cloud SQL size names its edition beside its tier', () => {
   /*

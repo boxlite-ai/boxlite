@@ -1,13 +1,15 @@
 use super::*;
 use boxlite::litebox::protected_boot::{
-    ProtectedBootKey, ProtectedBootRequest, ProtectedGateRequest, ProtectedRemoveRequest,
+    ProtectedBootKey, ProtectedBootRequest, ProtectedEpochRequest, ProtectedGateRequest,
+    ProtectedRemoveRequest,
 };
 use boxlite::litebox::protected_outbound::ProtectedRouteRequest;
 
 /// Internal Runner ABI. Protected credential input is borrowed for this call.
 /// Release the output JSON with boxlite_free_string. Operations are 0 (start),
 /// 1 (receipt), 2 (retire), 3 (check protection), 4 (release gate), 5 (seal gate),
-/// 6 (managed route control) and 8 (exact allocation identity).
+/// 6 (managed route control), 8 (exact allocation identity), 9 (protected stop),
+/// 10 (terminated epoch retirement), and 11 (released readiness).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runner_protected_boot(
     handle: *mut CBoxHandle,
@@ -56,6 +58,26 @@ pub unsafe extern "C" fn boxlite_runner_protected_boot(
                         unsafe { parse::<ProtectedRouteRequest>(input_json) }?,
                     ))?),
                     8 => encode(handle.handle.runner_allocation()),
+                    9 => encode(
+                        handle
+                            .tokio_rt
+                            .block_on(handle.handle.stop_protected_epoch(unsafe {
+                                parse::<ProtectedEpochRequest>(input_json)
+                            }?))?,
+                    ),
+                    10 => encode(handle.tokio_rt.block_on(
+                        handle.handle.retire_terminated_protected_epoch(unsafe {
+                            parse::<ProtectedEpochRequest>(input_json)
+                        }?),
+                    )?),
+                    11 => encode(
+                        handle
+                            .tokio_rt
+                            .block_on(handle.handle.protected_boot_ready(&unsafe {
+                                parse::<ProtectedBootKey>(input_json)
+                            }?))?,
+                    ),
+                    12 => encode(handle.handle.runner_migration()),
                     _ => Err(BoxliteError::InvalidArgument(
                         "Invalid protected boot operation".into(),
                     )),

@@ -2,6 +2,17 @@ import { X509Certificate } from 'node:crypto'
 import { isIP } from 'node:net'
 import { RUNNER_PORT, type RunnerSlot } from './runners.ts'
 
+export const PROTECTED_V2_PORT = 3004
+export const PROTECTED_RUNNER_STATE_DIR = '/var/lib/boxlite/protected-runner'
+export const PROTECTED_V2_LISTENER_ENV = {
+  address: 'BOXLITE_PROTECTED_PROXY_LISTEN_ADDRESS',
+  certFile: 'BOXLITE_PROTECTED_PROXY_CERT_FILE',
+  keyFile: 'BOXLITE_PROTECTED_PROXY_KEY_FILE',
+  clientCaFile: 'BOXLITE_PROTECTED_PROXY_CLIENT_CA_FILE',
+  clientCaSha256: 'BOXLITE_PROTECTED_PROXY_CLIENT_CA_SHA256',
+  clientDnsName: 'BOXLITE_PROTECTED_PROXY_CLIENT_DNS_NAME',
+} as const
+
 export type RunnerProtectedProxy = {
   runnerId: string
   url: string
@@ -11,7 +22,7 @@ export type RunnerProtectedProxy = {
   keyFile: string
   dohUrl: string
   dohAddress: string
-}
+} & ({ apiVersion?: 0 } | { apiVersion: 2; clientCaFile: string; clientCaSha256: string; clientDnsName: string })
 
 export function enrollProtectedRunnerSlots(fleet: RunnerSlot[], raw: string | null): RunnerSlot[] {
   if (raw === null) return fleet
@@ -20,14 +31,19 @@ export function enrollProtectedRunnerSlots(fleet: RunnerSlot[], raw: string | nu
     throw new Error('Protected Runner enrollment must be keyed by slot resource name')
   }
   const identities = new Set<string>()
+  const endpoints = new Set<string>()
   for (const [name, enrollment] of Object.entries(enrollments)) {
-    if (!fleet.slice(1).some((slot) => slot.resourceName === name)) {
-      throw new Error('Protected Runner enrollment must reference a non-default stage slot')
+    const v2 = enrollment.apiVersion === 2
+    if (!(v2 ? fleet : fleet.slice(1)).some((slot) => slot.resourceName === name)) {
+      throw new Error('Protected Runner enrollment must reference a stage slot eligible for its API version')
     }
     const url = new URL(enrollment.url)
+    const files = [enrollment.caFile, enrollment.certFile, enrollment.keyFile]
+    if (v2) files.push(enrollment.clientCaFile)
     if (
+      (enrollment.apiVersion !== undefined && enrollment.apiVersion !== 0 && !v2) ||
       url.protocol !== 'https:' ||
-      url.port !== String(RUNNER_PORT) ||
+      url.port !== String(v2 ? PROTECTED_V2_PORT : RUNNER_PORT) ||
       isIP(url.hostname) ||
       !/^[a-z0-9.-]+$/.test(url.hostname) ||
       url.pathname !== '/' ||
@@ -35,18 +51,20 @@ export function enrollProtectedRunnerSlots(fleet: RunnerSlot[], raw: string | nu
       url.password ||
       url.hash ||
       url.search ||
+      endpoints.has(url.href) ||
       !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(enrollment.runnerId) ||
       identities.has(enrollment.runnerId) ||
       !new X509Certificate(enrollment.caPem).ca ||
-      ![enrollment.caFile, enrollment.certFile, enrollment.keyFile].every((file) =>
-        /^\/[a-zA-Z0-9/_.-]+$/.test(file),
-      ) ||
+      !files.every((file) => typeof file === 'string' && /^\/[a-zA-Z0-9/_.-]+$/.test(file)) ||
+      (v2 && (typeof enrollment.clientDnsName !== 'string' || !/^[a-z0-9.-]+$/.test(enrollment.clientDnsName))) ||
+      (v2 && (typeof enrollment.clientCaSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(enrollment.clientCaSha256))) ||
       !/^https:\/\/[a-zA-Z0-9.-]+(:[0-9]+)?\/[a-zA-Z0-9/_.-]+$/.test(enrollment.dohUrl) ||
       !/^[0-9.]+:[0-9]+$/.test(enrollment.dohAddress)
     ) {
       throw new Error('Invalid protected Runner enrollment')
     }
     identities.add(enrollment.runnerId)
+    endpoints.add(url.href)
   }
   return fleet.map((slot) =>
     Object.hasOwn(enrollments, slot.resourceName) ? { ...slot, protectedProxy: enrollments[slot.resourceName] } : slot,
@@ -57,22 +75,49 @@ export function protectedRunnerServiceEnvironment(
   enrollment: RunnerProtectedProxy | undefined,
 ): Record<string, string> {
   if (!enrollment) return {}
-  return {
-    API_VERSION: '0',
-    ENABLE_TLS: 'true',
-    TLS_CERT_FILE: enrollment.certFile,
-    TLS_KEY_FILE: enrollment.keyFile,
+  const identity = {
     BOXLITE_PROTECTED_PROXY_RUNNER_ID: enrollment.runnerId,
     BOXLITE_PROTECTED_PROXY_DNS_NAME: new URL(enrollment.url).hostname,
     BOXLITE_PROTECTED_PROXY_CA_FILE: enrollment.caFile,
     BOXLITE_PROTECTED_PROXY_DOH_URL: enrollment.dohUrl,
     BOXLITE_PROTECTED_PROXY_DOH_ADDRESS: enrollment.dohAddress,
   }
+  if (enrollment.apiVersion === 2) {
+    return {
+      ...identity,
+      API_VERSION: '2',
+      [PROTECTED_V2_LISTENER_ENV.address]: `:${PROTECTED_V2_PORT}`,
+      [PROTECTED_V2_LISTENER_ENV.certFile]: enrollment.certFile,
+      [PROTECTED_V2_LISTENER_ENV.keyFile]: enrollment.keyFile,
+      [PROTECTED_V2_LISTENER_ENV.clientCaFile]: enrollment.clientCaFile,
+      [PROTECTED_V2_LISTENER_ENV.clientCaSha256]: enrollment.clientCaSha256,
+      [PROTECTED_V2_LISTENER_ENV.clientDnsName]: enrollment.clientDnsName,
+    }
+  }
+  return {
+    ...identity,
+    API_VERSION: '0',
+    ENABLE_TLS: 'true',
+    TLS_CERT_FILE: enrollment.certFile,
+    TLS_KEY_FILE: enrollment.keyFile,
+  }
 }
 
 export function protectedRunnerCloudEnvironment(fleet: readonly RunnerSlot[]): Record<string, string> {
-  const pins = fleet.flatMap(({ protectedProxy }) =>
-    protectedProxy ? [{ runnerId: protectedProxy.runnerId, url: protectedProxy.url, caPem: protectedProxy.caPem }] : [],
-  )
-  return pins.length ? { BOXLITE_PROTECTED_PROXY_ENROLLMENTS: JSON.stringify(pins) } : {}
+  const pins = fleet.flatMap(({ protectedProxy }) => {
+    if (!protectedProxy) return []
+    const { runnerId, url, caPem, apiVersion } = protectedProxy
+    return [{
+      runnerId, url, caPem,
+      ...(apiVersion === 2 ? {
+        apiVersion, clientCaSha256: protectedProxy.clientCaSha256, clientDnsName: protectedProxy.clientDnsName,
+      } : {}),
+    }]
+  })
+  return pins.length
+    ? {
+        BOXLITE_PROTECTED_PROXY_ENROLLMENTS: JSON.stringify(pins),
+        ...(pins.some(({ apiVersion }) => apiVersion === 2) ? { BOXLITE_PROTECTED_PROXY_ADMISSION_CONTROLLED: 'true' } : {}),
+      }
+    : {}
 }

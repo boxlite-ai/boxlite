@@ -63,6 +63,7 @@ type Client struct {
 	protectedAllocationStopping bool
 
 	nestedVirtualizationAllowed bool
+	protectedV2                 bool
 
 	// afterGuestStateCheck runs right after DialGuestPort's persisted-state
 	// check, before it fetches a handle. Tests use it to land a stop in that
@@ -86,6 +87,7 @@ type ClientConfig struct {
 	VolumeCleanupInterval        time.Duration
 	VolumeCleanupDryRun          bool
 	VolumeCleanupExclusionPeriod time.Duration
+	ProtectedV2                  bool
 }
 
 // errMissingOutboundPolicy rejects a create or recover request that carries no
@@ -363,6 +365,7 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 
 	return &Client{
 		nestedVirtualizationAllowed: slices.Contains(features, "nested-virtualization"),
+		protectedV2:                 config.ProtectedV2,
 
 		runtime:             rt,
 		logger:              logger,
@@ -499,6 +502,11 @@ func (c *Client) createBox(ctx context.Context, boxDto dto.CreateBoxDTO, allocat
 		return "", "", err
 	} else if existing != nil {
 		return "", "", errProtectedBox
+	}
+	if allocationAttempt == "" {
+		if err := c.requireOrdinaryTarget(ctx, boxDto.Id); err != nil {
+			return "", "", err
+		}
 	}
 	if reservedName {
 		nativeID, err := c.nativeBoxID(boxDto.Id)
@@ -808,6 +816,43 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 		return err
 	}
 	defer operation.Close()
+	return c.destroyWithTarget(ctx, boxId, operation)
+}
+
+func (c *Client) DestroyMigrationCopy(ctx context.Context, boxId, importedAttemptID string, authorize func() error) error {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer operation.Close()
+	if err := authorize(); err != nil {
+		return err
+	}
+	if importedAttemptID != "" {
+		info, err := c.nativeBoxInfo(ctx, boxId)
+		if boxlite.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := c.requireMigrationCopy(ctx, importedAttemptID, info.ID); err != nil {
+			return err
+		}
+		if err := c.refuseProtectedRemoval(ctx, []string{info.ID}); err != nil {
+			return err
+		}
+		c.forgetBox(boxId)
+		err = c.runtime.ForceRemove(context.WithoutCancel(ctx), info.ID)
+		if boxlite.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return c.destroyWithTarget(ctx, boxId, operation)
+}
+
+func (c *Client) destroyWithTarget(ctx context.Context, boxId string, operation *checkpoint.TargetLease) error {
 	if err := c.ordinaryAllocationAllowed(boxId); err != nil {
 		return err
 	}

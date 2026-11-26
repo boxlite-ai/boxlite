@@ -12,6 +12,7 @@ import { BoxRepository } from '../../repositories/box.repository'
 import { BoxState } from '../../enums/box-state.enum'
 import { getStateChangeLockKey } from '../../utils/lock-key.util'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
+import type { ProtectedStartProof } from '../../stores/outbound-policy.store'
 
 export const SYNC_AGAIN = 'sync-again'
 export const DONT_SYNC_AGAIN = 'dont-sync-again'
@@ -38,6 +39,7 @@ export abstract class BoxAction {
     errorReason?: string,
     daemonVersion?: string,
     recoverable?: boolean,
+    protectedStart?: ProtectedStartProof,
   ) {
     //  check if the lock code is still valid
     const lockKey = getStateChangeLockKey(box.id)
@@ -91,6 +93,10 @@ export abstract class BoxAction {
       updateData.recoverable = recoverable
     }
 
-    await this.boxRepository.update(box.id, { updateData, entity: box })
+    await this.boxRepository.update(box.id, {
+      updateData,
+      entity: box,
+      ...(protectedStart ? { protectedStart } : {}),
+    })
   }
 }

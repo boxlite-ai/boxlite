@@ -29,6 +29,7 @@ import { BoxMigration } from '../entities/box-migration.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
 import { CheckpointArchiveStore } from '../stores/checkpoint-archive.store'
+import { lockOrdinaryBox } from '../stores/outbound-policy.store'
 
 @Injectable()
 export class CheckpointService {
@@ -100,6 +101,7 @@ export class CheckpointService {
             })
           : null
         if (!runner) throw new ConflictException('Source runner is not ready for checkpoint jobs')
+        await lockOrdinaryBox(manager, box.id, runner.id)
         if (
           await manager.exists(Job, {
             where: {

@@ -7,7 +7,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, EntityManager } from 'typeorm'
 
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { LockCode, RedisLockProvider } from '../common/redis-lock.provider'
 import { Box } from '../entities/box.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Job } from '../entities/job.entity'
@@ -15,6 +15,7 @@ import { Runner } from '../entities/runner.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
+import { hasProtectedBoxAuthority } from '../stores/outbound-policy.store'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { getMigrateJobLockKey } from '../utils/lock-key.util'
 
@@ -42,14 +43,13 @@ interface MigrateArchive {
  * `runnerId` is cleared with a real NULL rather than dropped from the write,
  * which is how the loops read "no such box exists".
  */
-type MigrationWrite = Partial<Pick<BoxMigration, 'state' | 'arcPath'>> & { runnerId?: string | null }
+type MigrationWrite = Partial<Pick<BoxMigration, 'state' | 'arcPath' | 'attemptId' | 'runnerId'>>
 
 /** What the two validated legs need to decide, read under the box's row lock. */
 interface ValidatedMigration {
   entityManager: EntityManager
   box: Box
-  //  ValidCheck: nothing outside the migration has touched the box since it was
-  //  claimed, so the migration may still move it.
+  // The Box is still parked at the claimed revision and has ordinary ownership.
   undisturbed: boolean
 }
 
@@ -113,20 +113,14 @@ export class BoxMigrationJobReceiver {
    * reads the state to decide what to retry and the job's own artifacts are
    * unchanged — with one exception.
    *
-   * A failed EXPORT_BOX drops the migration instead. A row still in
-   * PENDING_EXPORT names no artifact — the archive key is recorded by the same
-   * write that leaves PENDING_EXPORT — so there is nothing to reclaim and
-   * nothing to keep the row for. Deleting it puts the box back among the
-   * unclaimed, and the marker re-opens a migration on its next tick only if the
-   * box is still parked on a runner still draining. Retrying in place would keep
-   * re-exporting a box whose drain may since have been called off, and would do
-   * so with the stamp of the claim that failed.
+   * A failed versioned export may have uploaded its archive before reporting.
+   * Preserve the assigned key so the exact attempt's rollback can reclaim it.
    */
   private async applyFailure(job: Job): Promise<void> {
     this.logger.error(`${job.type} failed for box ${job.resourceId}: ${job.errorMessage ?? 'no error reported'}`)
 
     if (job.type === JobType.EXPORT_BOX) {
-      await this.dropFailedExport(job.resourceId)
+      await this.recoverFailedExport(job)
     }
   }
 
@@ -162,14 +156,14 @@ export class BoxMigrationJobReceiver {
     await this.withMigration(job, BoxMigrationState.PENDING_EXPORT, async ({ entityManager, box, undisturbed }) => {
       const sourceDraining = await this.isDraining(entityManager, box.runnerId)
       if (!undisturbed) {
-        this.logger.log(`Box ${box.id} was touched while it was exported; rolling back instead of importing`)
+        this.logger.log(`Box ${box.id} is ineligible for ordinary migration; rolling back its export`)
       } else if (!sourceDraining) {
         this.logger.log(
           `Runner ${box.runnerId} stopped draining while box ${box.id} was exported; rolling back instead of importing`,
         )
       }
 
-      await this.updateMigration(entityManager, box.id, BoxMigrationState.PENDING_EXPORT, {
+      await this.updateMigration(entityManager, job, BoxMigrationState.PENDING_EXPORT, {
         state: undisturbed && sourceDraining ? BoxMigrationState.PENDING_IMPORT : BoxMigrationState.PENDING_ROLLBACK,
         arcPath,
       })
@@ -204,12 +198,14 @@ export class BoxMigrationJobReceiver {
         if (!sourceRunnerId) {
           this.logger.error(`Box ${box.id} was imported onto runner ${targetRunnerId} but has no runner of its own`)
         } else if (!undisturbed) {
-          this.logger.log(`Box ${box.id} was touched while it was imported; rolling back the copy on ${targetRunnerId}`)
+          this.logger.log(
+            `Box ${box.id} is ineligible for ordinary migration; rolling back its copy on ${targetRunnerId}`,
+          )
         }
 
         if (!sourceRunnerId || !undisturbed) {
           //  The copy on the target runner is what rollback reclaims.
-          await this.updateMigration(entityManager, box.id, BoxMigrationState.PENDING_IMPORT, {
+          await this.updateMigration(entityManager, job, BoxMigrationState.PENDING_IMPORT, {
             state: BoxMigrationState.PENDING_ROLLBACK,
             runnerId: targetRunnerId,
           })
@@ -227,7 +223,7 @@ export class BoxMigrationJobReceiver {
           .where('id = :id', { id: box.id })
           .execute()
 
-        await this.updateMigration(entityManager, box.id, BoxMigrationState.PENDING_IMPORT, {
+        await this.updateMigration(entityManager, job, BoxMigrationState.PENDING_IMPORT, {
           state: BoxMigrationState.PENDING_DISCARD_EXPORTED,
           runnerId: sourceRunnerId,
         })
@@ -249,14 +245,14 @@ export class BoxMigrationJobReceiver {
 
   /** The archive a turned-around migration left on the object store is gone. */
   private async receiveRollbackExport(job: Job): Promise<void> {
-    await this.updateMigration(this.dataSource.manager, job.resourceId, BoxMigrationState.PENDING_ROLLBACK, {
+    await this.updateMigration(this.dataSource.manager, job, BoxMigrationState.PENDING_ROLLBACK, {
       arcPath: '',
     })
   }
 
   /** The copy a turned-around migration left on the target runner is gone. */
   private async receiveRollbackImport(job: Job): Promise<void> {
-    await this.updateMigration(this.dataSource.manager, job.resourceId, BoxMigrationState.PENDING_ROLLBACK, {
+    await this.updateMigration(this.dataSource.manager, job, BoxMigrationState.PENDING_ROLLBACK, {
       runnerId: null,
     })
   }
@@ -268,10 +264,11 @@ export class BoxMigrationJobReceiver {
   private async receiveDiscardExported(job: Job): Promise<void> {
     const applied = await this.updateMigration(
       this.dataSource.manager,
-      job.resourceId,
+      job,
       BoxMigrationState.PENDING_DISCARD_EXPORTED,
       {
         state: BoxMigrationState.COMPLETED,
+        attemptId: null,
         arcPath: '',
         runnerId: null,
       },
@@ -300,6 +297,17 @@ export class BoxMigrationJobReceiver {
     return this.dataSource.transaction(async (entityManager) => {
       const box = await entityManager.findOne(Box, {
         where: { id: job.resourceId },
+        select: [
+          'id',
+          'organizationId',
+          'name',
+          'runnerId',
+          'state',
+          'desiredState',
+          'updatedAt',
+          'errorReason',
+          'outboundControl',
+        ],
         lock: { mode: 'pessimistic_write' },
         loadEagerRelations: false,
       })
@@ -314,6 +322,9 @@ export class BoxMigrationJobReceiver {
         return null
       }
 
+      const attemptId = job.getPayload<{ attemptId?: string }>()?.attemptId ?? null
+      if ((migration.attemptId ?? null) !== attemptId) return null
+      if (attemptId && job.type === JobType.IMPORT_BOX && migration.runnerId !== job.runnerId) return null
       if (migration.state !== expected) {
         //  Either this status was redelivered after the migration moved on, or
         //  the migration was turned around while the runner was working.
@@ -323,7 +334,8 @@ export class BoxMigrationJobReceiver {
         return null
       }
 
-      return apply({ entityManager, box, undisturbed: migration.isUndisturbedBy(box) })
+      const undisturbed = migration.isUndisturbedBy(box) && !(await hasProtectedBoxAuthority(entityManager, box))
+      return apply({ entityManager, box, undisturbed })
     })
   }
 
@@ -358,21 +370,27 @@ export class BoxMigrationJobReceiver {
   }
 
   /**
-   * Delete a migration whose export failed, conditional on PENDING_EXPORT the
-   * same way every other write here is conditional: a status redelivered after
-   * the migration moved on matches nothing and takes no row with it.
-   *
-   * The archive key a later migration derives is the same one this attempt used
-   * — both come from the box id — so whatever a half-finished export left on the
-   * object store is overwritten rather than stranded behind the deleted row.
+   * Retain the versioned key until the exact attempt reports archive removal.
+   * Legacy jobs share a per-Box archive key, which a later export can overwrite.
    */
-  private async dropFailedExport(boxId: string): Promise<void> {
+  private async recoverFailedExport(job: Job): Promise<void> {
+    const boxId = job.resourceId
+    const attemptId = job.getPayload<{ attemptId?: string }>()?.attemptId ?? null
+    const arcPath = job.getPayload<MigrateArchive>()?.arcPath
+    if (attemptId && arcPath) {
+      await this.updateMigration(this.dataSource.manager, job, BoxMigrationState.PENDING_EXPORT, {
+        state: BoxMigrationState.PENDING_ROLLBACK,
+        arcPath,
+      })
+      return
+    }
     const result = await this.dataSource.manager
       .createQueryBuilder()
       .delete()
       .from(BoxMigration)
       .where('"boxId" = :boxId', { boxId })
       .andWhere('"state" = :expected', { expected: BoxMigrationState.PENDING_EXPORT })
+      .andWhere('"attemptId" IS NOT DISTINCT FROM :attemptId', { attemptId })
       .execute()
 
     if (result.affected > 0) {
@@ -381,21 +399,23 @@ export class BoxMigrationJobReceiver {
   }
 
   /**
-   * The only way this receiver writes a migration: conditional on the state the
-   * job was submitted from, so applying the same status twice is a no-op.
+   * A report may update only the attempt and state from which its job was submitted.
    */
   private async updateMigration(
     entityManager: EntityManager,
-    boxId: string,
+    job: Job,
     expected: BoxMigrationState,
     values: MigrationWrite,
   ): Promise<boolean> {
+    const boxId = job.resourceId
+    const attemptId = job.getPayload<{ attemptId?: string }>()?.attemptId ?? null
     const result = await entityManager
       .createQueryBuilder()
       .update(BoxMigration)
       .set(values)
       .where('"boxId" = :boxId', { boxId })
       .andWhere('"state" = :expected', { expected })
+      .andWhere('"attemptId" IS NOT DISTINCT FROM :attemptId', { attemptId })
       .execute()
 
     const applied = result.affected > 0
@@ -425,9 +445,10 @@ export class BoxMigrationJobReceiver {
   }
 
   private async releaseJobLock(job: Job): Promise<void> {
+    if (!job.stateChangeLockOwner) return
     const lockKey = getMigrateJobLockKey(job.resourceId, job.type)
     try {
-      await this.redisLockProvider.unlock(lockKey)
+      await this.redisLockProvider.releaseLease(lockKey, new LockCode(job.stateChangeLockOwner))
     } catch (error) {
       //  The lock's TTL outlasts the job table's stale sweep, so a lock left
       //  behind here delays the next attempt rather than losing the migration.

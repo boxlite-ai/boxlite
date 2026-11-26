@@ -8,6 +8,8 @@ import 'reflect-metadata'
 import { BadRequestException, CallHandler, ExecutionContext, ValidationPipe } from '@nestjs/common'
 import { PIPES_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
+import { SystemActionGuard } from '../auth/system-action.guard'
+import { SystemRole } from '../user/enums/system-role.enum'
 import { firstValueFrom, of } from 'rxjs'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
@@ -187,6 +189,18 @@ describe('BoxliteBoxController permissions', () => {
     )
 
     expect(required).toEqual([OrganizationResourcePermission.WRITE_BOXES])
+  })
+
+  it.each([
+    [SystemRole.ADMIN, true],
+    [SystemRole.USER, false],
+  ])('checks %s on the internal ordinary V2 release probe through the standard system guard', async (role, allowed) => {
+    const context = {
+      getHandler: () => BoxliteBoxController.prototype.createProtectedReleaseProbe,
+      getClass: () => BoxliteBoxController,
+      switchToHttp: () => ({ getRequest: () => ({ user: { role } }) }),
+    } as unknown as ExecutionContext
+    await expect(new SystemActionGuard(new Reflector()).canActivate(context)).resolves.toBe(allowed)
   })
 })
 

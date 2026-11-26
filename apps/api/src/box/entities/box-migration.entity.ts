@@ -23,6 +23,9 @@ export class BoxMigration {
   @PrimaryColumn({ name: 'boxId' })
   boxId: string
 
+  @Column({ type: 'uuid', nullable: true })
+  attemptId?: string | null
+
   //  Which migration job this box is waiting on, never what the migration has
   //  produced — that is what `arcPath` and `runnerId` record.
   @Column({
@@ -38,9 +41,9 @@ export class BoxMigration {
   @Column({ type: 'character varying', default: '' })
   arcPath = ''
 
-  //  The second runner a migration involves: before the commit point the runner
-  //  the box was imported onto, after it the runner still holding the original
-  //  box to discard. Null means no such box exists.
+  //  The chosen import destination before commit, including a copy whose result
+  //  is still unknown. After commit this is the source that still holds the
+  //  original. Null means no second runner needs work.
   @Column({
     type: 'uuid',
     nullable: true,

@@ -266,6 +266,11 @@ fi
 
   const binary = `set -euo pipefail
 
+if [ -f /var/lib/boxlite/protected-runner/enrolled ]; then
+  echo 'controlled Runner requires the protected CI release' >&2
+  exit 1
+fi
+
 TARGET="${expectedVersion}"
 HEALTH="http://127.0.0.1:${runnerPort}/"
 ALLOW_DOWNGRADE="${allowDowngrade ? '1' : ''}"

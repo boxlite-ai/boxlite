@@ -24,6 +24,7 @@
 
 import { readStackEnvironment } from '../src/stack-env.ts'
 import { gcpRunnerArtifactsBucket, resolveRunnerBinary } from '../stack/runner-binary.ts'
+import { PROTECTED_RELEASE_ADMIN_REF } from '../stack/providers/gcp/protected-release.ts'
 import type { deployStack } from '../stack/index.ts'
 
 export class PulumiProgramError extends Error {
@@ -247,6 +248,19 @@ export const gcpProgram =
       staging: { cloud: 'gcp', bucket: artifactsBucket },
     })
 
+    const adminRef = environment[PROTECTED_RELEASE_ADMIN_REF]
+    const deployer = environment.BOXLITE_GCP_DEPLOYER
+    const releaseKey = environment.BOXLITE_CI_RELEASE_KEY
+    const requiresProtectedRelease = stackEnvironment.runnerFleet.some(({ protectedProxy }) => protectedProxy?.apiVersion === 2)
+    if ((requiresProtectedRelease || adminRef) && (!adminRef || !deployer || !releaseKey)) {
+      throw new PulumiProgramError('Protected V2 releases require mdeploy-all, its GCP deployer and the pinned database admin secret')
+    }
+    if (requiresProtectedRelease && stackEnvironment.apiEnvironment.OUTBOUND_PROXY_REGISTRY_ENABLED !== 'true') {
+      throw new PulumiProgramError('Protected V2 release requires the registry and retained keys for recovery')
+    }
+    if (requiresProtectedRelease && !environment.BOXLITE_CI_RELEASE_TEST_KEY) {
+      throw new PulumiProgramError('Protected V2 release requires the stage CI test key for the ordinary cutover probe')
+    }
     const outputs = deployStack({
       providers: gcpStackProviders({
         stage,
@@ -267,6 +281,9 @@ export const gcpProgram =
         managedClickHouse: stackEnvironment.managedClickHouse,
         otelOpenapiEnabled: stackEnvironment.otelOpenapiEnabled,
         clickStackConsumer: stackEnvironment.clickStackConsumer,
+        protectedRelease: adminRef && deployer && releaseKey
+          ? { adminRef, deployer, key: releaseKey, cutoverTestKey: environment.BOXLITE_CI_RELEASE_TEST_KEY }
+          : undefined,
       }),
       config,
       inputs: {

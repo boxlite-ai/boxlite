@@ -29,6 +29,7 @@ import { RunnerService } from './runner.service'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxCreatedEvent } from '../events/box-create.event'
+import { lockOrdinaryBox } from '../stores/outbound-policy.store'
 
 @Injectable()
 export class CheckpointRecoverService {
@@ -149,6 +150,7 @@ export class CheckpointRecoverService {
     box: Box,
     checkpointState: BoxCheckpointState,
   ): Promise<void> {
+    await lockOrdinaryBox(manager, box.id, box.runnerId!)
     const operation = manager.create(CheckpointOperation, {
       id: randomUUID(),
       organizationId: box.organizationId,

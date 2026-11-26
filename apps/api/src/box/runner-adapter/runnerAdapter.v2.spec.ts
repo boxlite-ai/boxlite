@@ -6,6 +6,26 @@
 import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { RunnerAdapterV2 } from './runnerAdapter.v2'
+import { LockCode } from '../common/redis-lock.provider'
+
+it('associates a queued start with the originating Cloud lock owner', async () => {
+  const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+  const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+  await adapter.init({ id: 'runner-1' } as any)
+  const owner = new LockCode('8137cc0d-5d3f-43b8-aa32-b9304740269e')
+
+  await adapter.startBox('box-1', 'box-token', undefined, undefined, owner)
+
+  expect(jobService.createJob).toHaveBeenCalledWith(
+    null,
+    JobType.START_BOX,
+    'runner-1',
+    ResourceType.BOX,
+    'box-1',
+    { authToken: 'box-token' },
+    owner,
+  )
+})
 
 describe('RunnerAdapterV2 createBox', () => {
   it.each([0.125, 0.126, 1.001, 1.5, 16])('preserves %s CPUs in the create job', async (cpu) => {
@@ -22,6 +42,7 @@ describe('RunnerAdapterV2 createBox', () => {
       ResourceType.BOX,
       'box-cpu',
       expect.objectContaining({ cpuQuota: cpu }),
+      undefined,
     )
   })
   it.each([false, true])('forwards persisted guest privilege %s to the create job', async (privileged) => {
@@ -38,6 +59,7 @@ describe('RunnerAdapterV2 createBox', () => {
       ResourceType.BOX,
       'box-1',
       expect.objectContaining({ privileged }),
+      undefined,
     )
   })
 
@@ -101,6 +123,7 @@ describe('RunnerAdapterV2 createBox', () => {
           },
         ],
       }),
+      undefined,
     )
   })
 
@@ -120,6 +143,7 @@ describe('RunnerAdapterV2 createBox', () => {
       ResourceType.BOX,
       'box-1',
       expect.objectContaining({ image: pinned }),
+      undefined,
     )
   })
 
@@ -146,6 +170,7 @@ describe('RunnerAdapterV2 createBox', () => {
       ResourceType.BOX,
       'box-1',
       expect.objectContaining({ outboundEnabled: true, outboundAllowNet: ['api.openai.com'] }),
+      undefined,
     )
     expect(jobService.createJob.mock.calls[0][5]).not.toHaveProperty('networkBlockAll')
   })

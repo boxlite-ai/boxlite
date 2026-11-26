@@ -43,6 +43,7 @@ import { useApiBodyParsers } from './mcp/mcp-body'
 import { McpTools } from './mcp/mcp-tools'
 import { servedOperations } from './mcp/mcp-routes'
 import { CiListenerService } from './ci/ci-listener.service'
+import { runProtectedReleaseDatabase } from './box/outbound-proxy/protected-release-database'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -52,6 +53,16 @@ const httpsOptions: HttpsOptions = {
 }
 
 async function bootstrap() {
+  if (process.argv[2] === '--protected-release-db') {
+    try {
+      await runProtectedReleaseDatabase(process.argv[3])
+    } catch (error) {
+      const failure = error as { code?: string; message?: string }
+      Logger.error(failure.code ? `Protected release database failed with ${failure.code}` : failure.message)
+      process.exitCode = 1
+    }
+    return
+  }
   if (process.env.OTEL_ENABLED === 'true') {
     await otelSdk.start()
   }

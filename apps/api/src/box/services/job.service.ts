@@ -9,6 +9,7 @@ import { JobConflictError } from '../errors/job-conflict.error'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, LessThan, In, EntityManager } from 'typeorm'
 import { Job } from '../entities/job.entity'
+import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { JobDto, JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { ResourceTypeForJobType } from '../dto/job-type-map.dto'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -18,10 +19,20 @@ import { JobStateHandlerService } from './job-state-handler.service'
 import { propagation, context as otelContext } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import { runnerJobQueueKey } from '../constants/runner-job-queue'
+import type { LockCode } from '../common/redis-lock.provider'
+import { lockOrdinaryBox } from '../stores/outbound-policy.store'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
 const DEFAULT_STALE_TIMEOUT_MINUTES = 10
+const ORDINARY_LIFECYCLE_JOBS = new Set([JobType.CREATE_BOX, JobType.START_BOX, JobType.STOP_BOX, JobType.DESTROY_BOX])
+const MIGRATION_JOB_STATES: Partial<Record<JobType, BoxMigrationState>> = {
+  [JobType.EXPORT_BOX]: BoxMigrationState.PENDING_EXPORT,
+  [JobType.IMPORT_BOX]: BoxMigrationState.PENDING_IMPORT,
+  [JobType.ROLLBACK_EXPORT_BOX]: BoxMigrationState.PENDING_ROLLBACK,
+  [JobType.ROLLBACK_IMPORT_BOX]: BoxMigrationState.PENDING_ROLLBACK,
+  [JobType.DISCARD_EXPORTED_BOX]: BoxMigrationState.PENDING_DISCARD_EXPORTED,
+}
 
 @Injectable()
 export class JobService {
@@ -46,6 +57,7 @@ export class JobService {
     resourceType: ResourceTypeForJobType<T>,
     resourceId: string,
     payload?: string | Record<string, any>,
+    stateChangeLockOwner?: LockCode,
   ): Promise<Job> {
     // Use provided manager if available, otherwise use default repository
     const repo = manager ? manager.getRepository(Job) : this.jobRepository
@@ -63,10 +75,20 @@ export class JobService {
         resourceId,
         status: JobStatus.PENDING,
         payload: encodedPayload,
+        stateChangeLockOwner: stateChangeLockOwner?.getCode(),
         traceContext,
       })
 
-      await repo.insert(job)
+      if (resourceType === ResourceType.BOX && ORDINARY_LIFECYCLE_JOBS.has(type)) {
+        const insert = async (transaction: EntityManager) => {
+          await lockOrdinaryBox(transaction, resourceId, runnerId, type === JobType.DESTROY_BOX)
+          await transaction.insert(Job, job)
+        }
+        if (manager) await insert(manager)
+        else await this.jobRepository.manager.transaction(insert)
+      } else {
+        await repo.insert(job)
+      }
 
       // Log with context-specific info
       const contextInfo = resourceId ? `${resourceType} ${resourceId}` : 'N/A'
@@ -221,19 +243,57 @@ export class JobService {
     return claimedJobs
   }
 
+  async updateRunnerJobStatus(
+    runnerId: string,
+    jobId: string,
+    status: JobStatus,
+    errorMessage?: string,
+    resultMetadata?: string,
+    completionRevision?: string,
+  ): Promise<Job> {
+    const job = await this.jobRepository.findOneBy({ id: jobId, runnerId })
+    if (!job) throw new NotFoundException('Job not found')
+    return this.updateJobStatus(
+      jobId,
+      status,
+      errorMessage,
+      resultMetadata,
+      job.resourceType === ResourceType.BOX && ORDINARY_LIFECYCLE_JOBS.has(job.type)
+        ? { boxId: job.resourceId, runnerId, allowPreviousRunner: job.type === JobType.DESTROY_BOX, completionRevision }
+        : undefined,
+    )
+  }
+
   async updateJobStatus(
     jobId: string,
     status: JobStatus,
     errorMessage?: string,
     resultMetadata?: string,
+    ordinaryReport?: { boxId: string; runnerId: string; allowPreviousRunner?: boolean; completionRevision?: string },
   ): Promise<Job> {
     const updatedJob = await this.jobRepository.manager.transaction(async (manager) => {
+      if (ordinaryReport) {
+        await lockOrdinaryBox(
+          manager,
+          ordinaryReport.boxId,
+          ordinaryReport.runnerId,
+          ordinaryReport.allowPreviousRunner,
+        )
+      }
       const job = await manager.findOne(Job, {
         where: { id: jobId },
         lock: { mode: 'pessimistic_write' },
       })
       if (!job) {
         throw new NotFoundException(`Job with ID ${jobId} not found`)
+      }
+      if (
+        ordinaryReport &&
+        (job.runnerId !== ordinaryReport.runnerId ||
+          job.resourceId !== ordinaryReport.boxId ||
+          job.resourceType !== ResourceType.BOX)
+      ) {
+        throw new ConflictException('Runner report no longer owns this job')
       }
 
       if (!this.isValidStatusTransition(job.status, status)) {
@@ -251,6 +311,9 @@ export class JobService {
 
       if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
         job.completedAt = new Date()
+      }
+      if (status === JobStatus.COMPLETED && ordinaryReport?.completionRevision) {
+        job.completionRevision = ordinaryReport.completionRevision
       }
 
       if (resultMetadata) {
@@ -270,6 +333,30 @@ export class JobService {
     }
 
     return updatedJob
+  }
+
+  async hasMigrationAuthority(job: Job, runnerId: string): Promise<boolean> {
+    const state = MIGRATION_JOB_STATES[job.type]
+    if (!state || job.resourceType !== ResourceType.BACKUP || job.status !== JobStatus.IN_PROGRESS) return false
+    const { attemptId = null, arcPath = '' } = job.getPayload<{ attemptId?: string; arcPath?: string }>() ?? {}
+    if (attemptId !== null && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(attemptId)) return false
+    const [current] = await this.jobRepository.manager.query(
+      `SELECT 1 FROM job j
+       JOIN box_migration m ON m."boxId" = j."resourceId"
+       JOIN box b ON b.id = m."boxId"
+       WHERE j.id = $1 AND j."runnerId" = $2 AND j.status = 'IN_PROGRESS'
+         AND m.state = $3 AND m."attemptId" IS NOT DISTINCT FROM $4::uuid
+         AND CASE j.type
+           WHEN 'EXPORT_BOX' THEN b."runnerId"::text = j."runnerId"
+           WHEN 'IMPORT_BOX' THEN b."runnerId"::text <> j."runnerId" AND m."arcPath" = $5
+             AND (m."attemptId" IS NULL OR m."runnerId"::text = j."runnerId")
+           WHEN 'ROLLBACK_EXPORT_BOX' THEN b."runnerId"::text = j."runnerId" AND m."arcPath" = $5
+           WHEN 'ROLLBACK_IMPORT_BOX' THEN m."runnerId"::text = j."runnerId"
+           WHEN 'DISCARD_EXPORTED_BOX' THEN m."runnerId"::text = j."runnerId" AND m."arcPath" = $5
+           ELSE false END`,
+      [job.id, runnerId, state, attemptId, arcPath],
+    )
+    return !!current
   }
 
   async findPendingJobsForRunner(runnerId: string, limit = 10): Promise<Job[]> {

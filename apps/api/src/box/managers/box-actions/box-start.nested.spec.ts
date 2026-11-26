@@ -40,7 +40,7 @@ describe('Cloud create-only nesting', () => {
     f.box.state = BoxState.UNKNOWN
     f.box.image = 'alpine'
     await f.action.run(f.box, f.lock)
-    expect(f.createBox).toHaveBeenCalledWith(f.box, 'alpine', {}, supported === true)
+    expect(f.createBox).toHaveBeenCalledWith(f.box, 'alpine', {}, supported === true, undefined, f.lock)
     expect(f.box.state).toBe(BoxState.CREATING)
     expect(f.box).not.toHaveProperty('nestedVirtualization')
   })
@@ -48,7 +48,7 @@ describe('Cloud create-only nesting', () => {
   it.each([true, false])('keeps start independent of current organization policy %p', async (allowed) => {
     const f = fixture(allowed, true)
     await f.action.run(f.box, f.lock)
-    expect(f.startBox).toHaveBeenCalledWith('box', f.box.authToken, {})
+    expect(f.startBox).toHaveBeenCalledWith('box', f.box.authToken, {}, undefined, f.lock)
     expect(f.policy).not.toHaveBeenCalled()
     expect(f.runnerInfo).not.toHaveBeenCalled()
     expect(f.box.state).toBe(BoxState.STARTING)
@@ -61,6 +61,6 @@ describe('Cloud create-only nesting', () => {
     if (mode === 'error') f.runnerInfo.mockRejectedValue(new Error('unavailable'))
     else f.runnerInfo.mockImplementation(() => new Promise(() => {}))
     await f.action.run(f.box, f.lock)
-    expect(f.createBox).toHaveBeenCalledWith(f.box, 'alpine', {}, false)
+    expect(f.createBox).toHaveBeenCalledWith(f.box, 'alpine', {}, false, undefined, f.lock)
   })
 })

@@ -36,7 +36,7 @@ const parseSecretRef = (reference: string): ParsedSecretRef => {
   const match = /^projects\/([^/]+)\/secrets\/([^/]+)(?:\/versions\/([^/]+))?$/.exec(reference)
   if (!match) {
     throw new Error(
-      `${JSON.stringify(reference)} is not a Secret Manager reference; a GCP stage delivers a secret as ` +
+      'The supplied value is not a Secret Manager reference; a GCP stage delivers a secret as ' +
         'projects/<project>/secrets/<secret>, optionally with /versions/<version>',
     )
   }

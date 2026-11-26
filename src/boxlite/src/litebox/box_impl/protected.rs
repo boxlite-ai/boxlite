@@ -3,8 +3,9 @@
 use super::{BoxImpl, BoxStatus};
 use crate::litebox::protected_boot::{
     BootRecoveryGate, ProtectedBootAttempt, ProtectedBootKey, ProtectedBootOutcome,
-    ProtectedBootReceipt, ProtectedBootRequest, ProtectedGateReceipt, ProtectedGateRequest,
-    ProtectedSealedEvidence,
+    ProtectedBootReceipt, ProtectedBootRequest, ProtectedEpochRequest, ProtectedGateReceipt,
+    ProtectedGateRequest, ProtectedSealedEvidence, ProtectedStoppedEpoch,
+    ProtectedTerminationReceipt,
 };
 use crate::litebox::protected_outbound::ProtectedRouteSnapshot;
 use crate::net::gvproxy::{GvproxyBackend, RecoveryGateAction};
@@ -106,6 +107,10 @@ impl BoxImpl {
 
     pub(crate) fn runner_allocation(&self) -> Option<crate::net::OutboundRevision> {
         self.config.options.advanced.runner_allocation().cloned()
+    }
+
+    pub(crate) fn runner_migration(&self) -> Option<crate::net::OutboundRevision> {
+        self.state.read().runner_migration.clone()
     }
 
     pub(crate) async fn change_protected_gate(
@@ -321,13 +326,30 @@ impl BoxImpl {
         &self,
         key: &ProtectedBootKey,
     ) -> BoxliteResult<ProtectedBootReceipt> {
+        self.inspect_protected_boot(key, false).await
+    }
+
+    pub(crate) async fn protected_boot_ready(
+        &self,
+        key: &ProtectedBootKey,
+    ) -> BoxliteResult<ProtectedBootReceipt> {
+        self.inspect_protected_boot(key, true).await
+    }
+
+    async fn inspect_protected_boot(
+        &self,
+        key: &ProtectedBootKey,
+        require_released: bool,
+    ) -> BoxliteResult<ProtectedBootReceipt> {
         self.with_operation(async {
             let record = self
                 .runtime
                 .box_manager
                 .protected_boot(self.id())?
                 .unwrap_or_default();
-            if let Some(receipt) = record.retired.iter().find(|receipt| &receipt.key == key) {
+            if !require_released
+                && let Some(receipt) = record.retired.iter().find(|receipt| &receipt.key == key)
+            {
                 return Ok(receipt.clone());
             }
             let active = record
@@ -336,8 +358,125 @@ impl BoxImpl {
                 .filter(|active| &active.key == key && active.confirmed)
                 .ok_or_else(|| conflict("Protected startup is unconfirmed"))?;
             let expected = self.protected_outbound_durable(&record, active)?;
-            self.verify_protected_boot(active, &expected).await?;
+            let observed = self.verify_protected_boot(active, &expected).await?;
+            if require_released
+                && (!active.recovery_gate.as_ref().is_some_and(|gate| {
+                    gate.released && !gate.seal_requested && !gate.seal_confirmed
+                }) || !observed
+                    .recovery_gate
+                    .as_ref()
+                    .is_some_and(|gate| !gate.closed && !gate.sealed))
+            {
+                return Err(conflict("Protected boot gate is not released"));
+            }
             Ok(active.receipt(ProtectedBootOutcome::Confirmed))
+        })
+        .await
+    }
+
+    pub(crate) async fn stop_protected_epoch(
+        &self,
+        request: ProtectedEpochRequest,
+    ) -> BoxliteResult<ProtectedStoppedEpoch> {
+        request.key.validate()?;
+        self.with_operation(async {
+            let record = self.runtime.box_manager.protected_boot(self.id())?;
+            let attempt = record
+                .as_ref()
+                .and_then(|record| record.active.as_ref())
+                .filter(|attempt| {
+                    attempt.confirmed
+                        && attempt.key == request.key
+                        && attempt.epoch == request.epoch
+                        && attempt.recovery_gate.as_ref().is_some_and(|gate| {
+                            gate.generation == request.generation && gate.seal_confirmed
+                        })
+                })
+                .ok_or_else(|| conflict("Protected stop requires the exact sealed epoch"))?;
+            if !self.protected_process_stopped(attempt) {
+                self.verify_protected_owner(attempt)?;
+                self.stop_inner().await?;
+            }
+            if !self.protected_process_stopped(attempt) {
+                return Err(conflict("Protected stop is unconfirmed"));
+            }
+            Ok(ProtectedStoppedEpoch {
+                boot: attempt.receipt(ProtectedBootOutcome::Confirmed),
+                generation: request.generation,
+            })
+        })
+        .await
+    }
+
+    fn protected_process_stopped(&self, attempt: &ProtectedBootAttempt) -> bool {
+        let state = self.state.read();
+        state.status == BoxStatus::Stopped
+            && state.pid.is_none()
+            && attempt
+                .owner
+                .is_some_and(|owner| owner.start_time.is_some())
+            && !has_shim(&self.layout.pid_file_path())
+            && termination_confirmed(self.id(), attempt)
+    }
+
+    pub(crate) async fn retire_terminated_protected_epoch(
+        &self,
+        request: ProtectedEpochRequest,
+    ) -> BoxliteResult<ProtectedTerminationReceipt> {
+        request.key.validate()?;
+        self.with_operation(async {
+            let manager = &self.runtime.box_manager;
+            let mut record = manager.protected_boot(self.id())?.unwrap_or_default();
+            if let Some(receipt) = &record.terminated_epoch
+                && receipt.boot.key == request.key
+                && receipt.boot.epoch.as_ref() == Some(&request.epoch)
+                && receipt.generation == request.generation
+            {
+                return Ok(receipt.clone());
+            }
+            let attempt = record
+                .active
+                .as_ref()
+                .filter(|attempt| {
+                    attempt.confirmed
+                        && attempt.key == request.key
+                        && attempt.epoch == request.epoch
+                        && attempt
+                            .recovery_gate
+                            .as_ref()
+                            .is_some_and(|gate| gate.generation == request.generation)
+                })
+                .ok_or_else(|| conflict("Protected retirement requires the exact epoch"))?;
+            if !self.protected_process_stopped(attempt) {
+                return Err(conflict("Protected retirement cannot prove termination"));
+            }
+            let durable = self.protected_outbound_durable(&record, attempt)?;
+            let evidence = ProtectedSealedEvidence {
+                durable,
+                installed: None,
+                pending: record
+                    .outbound
+                    .pending
+                    .as_ref()
+                    .map(|pending| pending.update.clone()),
+                rollback: record.outbound.rollback.clone(),
+                unbind_settlement: record.outbound.unbind_settlement.clone(),
+                ordinary_pending: manager
+                    .outbound_control(self.id())?
+                    .is_some_and(|control| control.pending.is_some()),
+            };
+            let receipt = ProtectedTerminationReceipt {
+                boot: attempt.receipt(ProtectedBootOutcome::Retired),
+                generation: request.generation,
+                evidence,
+            };
+            record.active = None;
+            record.outbound = Default::default();
+            record.removable_attempt = Some(receipt.boot.key.attempt_id.clone());
+            record.retired.push(receipt.boot.clone());
+            record.terminated_epoch = Some(receipt.clone());
+            manager.save_protected_boot(self.id(), &record)?;
+            Ok(receipt)
         })
         .await
     }
@@ -448,15 +587,14 @@ impl BoxImpl {
         &self,
         attempt: &ProtectedBootAttempt,
         expected: &ProtectedRouteSnapshot,
-    ) -> BoxliteResult<()> {
+    ) -> BoxliteResult<crate::net::gvproxy::ManagedProxyStatus> {
         Self::verify_protected_bridge(
             &self.protected_bridge(),
             attempt,
             self.verify_protected_owner(attempt)?,
             expected,
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     pub(super) fn verify_protected_owner(

@@ -4,7 +4,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { DataSource } from 'typeorm'
+import { DataSource, EntityManager } from 'typeorm'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { Checkpoint, CheckpointArchive } from '../entities/checkpoint.entity'
@@ -23,6 +23,18 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { runnerJobQueueKey } from '../constants/runner-job-queue'
 import { recordBoxJobOutcome } from '../utils/box-business-event.util'
+import { BoxConflictError } from '../errors/box-conflict.error'
+import { lockOrdinaryBox } from '../stores/outbound-policy.store'
+
+async function ownsOrdinaryCheckpoint(manager: EntityManager, box: Box, runnerId: string): Promise<boolean> {
+  try {
+    await lockOrdinaryBox(manager, box.id, runnerId)
+    return true
+  } catch (error) {
+    if (error instanceof BoxConflictError) return false
+    throw error
+  }
+}
 
 export function isCheckpointJobType(type: JobType): boolean {
   return type === JobType.EXPORT_CHECKPOINT || type === JobType.UPLOAD_CHECKPOINT || type === JobType.IMPORT_CHECKPOINT
@@ -70,6 +82,13 @@ export class CheckpointJobReceiver {
           lock: { mode: 'pessimistic_write' },
         })
         if (source) {
+          if (!(await ownsOrdinaryCheckpoint(manager, source, job.runnerId))) {
+            checkpoint.state = 'failed'
+            checkpoint.activeJobId = null
+            checkpoint.errorReason = 'Checkpoint lost authority over its source Box'
+            await manager.save(Checkpoint, checkpoint)
+            return
+          }
           const checkpointState = await manager.findOne(BoxCheckpointState, {
             where: { boxId: source.id },
             lock: { mode: 'pessimistic_write' },
@@ -167,7 +186,10 @@ export class CheckpointJobReceiver {
         job.resourceId !== box.id
       )
         return
-      if (box.desiredState === BoxDesiredState.DESTROYED) {
+      if (
+        box.desiredState === BoxDesiredState.DESTROYED ||
+        !(await ownsOrdinaryCheckpoint(manager, box, job.runnerId))
+      ) {
         operation.state = 'cancelled'
         await manager.save(CheckpointOperation, operation)
         return

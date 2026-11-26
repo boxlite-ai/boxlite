@@ -214,6 +214,7 @@ export function authenticatedRollback(
   runnerId: string,
   epoch: string,
   pending: ManagedUpdate,
+  epochTerminated = false,
 ): ManagedSnapshot | undefined {
   const proof = receipt.rollback
   if (
@@ -222,7 +223,7 @@ export function authenticatedRollback(
     receipt.pending_attempt !== null ||
     receipt.unbind_settlement !== null ||
     !proof ||
-    !receipt.installed ||
+    (!epochTerminated && !receipt.installed) ||
     proof.failed.attempt_id !== pending.attempt_id ||
     !sameManagedSnapshot(proof.failed.predecessor, pending.predecessor) ||
     !sameManagedSnapshot(proof.failed.candidate, pending.candidate) ||
@@ -230,7 +231,7 @@ export function authenticatedRollback(
     proof.restored.snapshot.revision === pending.predecessor.snapshot.revision ||
     proof.restored.snapshot.revision === pending.candidate.snapshot.revision ||
     !sameManagedSnapshot(proof.restored, receipt.durable) ||
-    !sameManagedSnapshot(proof.restored, receipt.installed) ||
+    (receipt.installed !== null && !sameManagedSnapshot(proof.restored, receipt.installed)) ||
     !sameManagedSnapshot(
       { ...proof.restored, snapshot: { ...proof.restored.snapshot, revision: pending.predecessor.snapshot.revision } },
       pending.predecessor,

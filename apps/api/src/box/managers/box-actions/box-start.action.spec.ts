@@ -82,7 +82,7 @@ describe('BoxStartAction.handleRunnerBoxStoppedStateOnDesiredStateStart', () => 
 
     // The action started the box on its OWN runner, not a different one.
     expect(runnerUsedForStart?.id).toBe(ownRunnerId)
-    expect(startBox).toHaveBeenCalledWith(box.id, box.authToken, expect.any(Object))
+    expect(startBox).toHaveBeenCalledWith(box.id, box.authToken, expect.any(Object), undefined, lockCode)
     // findOneOrFail was only ever asked about the box's own runner.
     for (const call of runnerService.findOneOrFail.mock.calls) {
       expect(call[0]).toBe(ownRunnerId)
@@ -178,7 +178,7 @@ describe('BoxStartAction.handleRunnerBoxUnknownStateOnDesiredStateStart', () => 
 
     const result = await (action as BoxAction).run(box, lockCode)
 
-    expect(createBox).toHaveBeenCalledWith(box, 'boxlite/base', expect.any(Object), false)
+    expect(createBox).toHaveBeenCalledWith(box, 'boxlite/base', expect.any(Object), false, undefined, lockCode)
     expect(result).toBe(SYNC_AGAIN)
     expect(updatedFields.some((u) => u.state === BoxState.CREATING)).toBe(true)
   })
@@ -260,7 +260,7 @@ describe('BoxStartAction image dispatch', () => {
     )
 
     await (action as BoxAction).run(box, lockCode)
-    return { box, createBox, curatedImagePins }
+    return { box, createBox, curatedImagePins, lockCode }
   }
 
   /**
@@ -268,18 +268,18 @@ describe('BoxStartAction image dispatch', () => {
    * already booted is what keeps a curated box on that runner's cache.
    */
   it('hands the runner the build it already booted for a curated tag', async () => {
-    const { box, createBox, curatedImagePins } = await dispatch(CURATED, false)
+    const { box, createBox, curatedImagePins, lockCode } = await dispatch(CURATED, false)
 
     expect(curatedImagePins.refFor).toHaveBeenCalledWith('runner-1', CURATED)
-    expect(createBox).toHaveBeenCalledWith(box, PINNED, expect.any(Object), false)
+    expect(createBox).toHaveBeenCalledWith(box, PINNED, expect.any(Object), false, undefined, lockCode)
     expect(box.image).toBe(CURATED)
   })
 
   it('hands a tenant image over as the resolver left it', async () => {
-    const { box, createBox, curatedImagePins } = await dispatch('quay.io/acme/app:v1', true)
+    const { box, createBox, curatedImagePins, lockCode } = await dispatch('quay.io/acme/app:v1', true)
 
     expect(curatedImagePins.refFor).not.toHaveBeenCalled()
-    expect(createBox).toHaveBeenCalledWith(box, 'quay.io/acme/app:v1', expect.any(Object), false)
+    expect(createBox).toHaveBeenCalledWith(box, 'quay.io/acme/app:v1', expect.any(Object), false, undefined, lockCode)
   })
 })
 

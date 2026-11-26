@@ -39,6 +39,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { isDeepStrictEqual } from 'node:util'
 import { ON_HOST } from '../stack/runner-upgrade.ts'
 
 /** ~5 min at 10s apart, which covers an agent registering on a fresh instance. */
@@ -90,9 +91,9 @@ export type RunCommand = (file: string, args: string[]) => CommandResult
  * handed the one mstage resolved.
  */
 export const spawnWith =
-  (environment: NodeJS.ProcessEnv = process.env): RunCommand =>
+  (environment: NodeJS.ProcessEnv = process.env, timeout?: number): RunCommand =>
   (file, args) => {
-    const result = spawnSync(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, env: environment })
+    const result = spawnSync(file, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, env: environment, timeout })
     if (result.error) {
       const code = (result.error as NodeJS.ErrnoException).code
       if (code === 'ENOENT') throw new Error(`the \`${file}\` CLI is required but was not found on PATH`)
@@ -271,19 +272,28 @@ const upgradeOverSsm = ({
  * The update waits for the rollout, including its observation window. Reports
  * then confirm every targeted host is compliant with that revision.
  */
-export const upgradeFleetOverPolicy = ({
+export type RunnerPolicyAssignment = {
+  etag: string
+  revisionId: string
+  rolloutState: string
+  osPolicies: { id: string; [key: string]: unknown }[]
+}
+
+export const upgradeFleetOverPolicy = async ({
   targets,
   identity,
   scripts,
   project,
   zone,
   assignment,
-  existingPolicies,
+  snapshot,
+  readAssignment,
+  requestId,
   deadlineSeconds = 900,
   run,
   sleep,
   log,
-  writeFile,
+  request,
 }: {
   /** Instance names, as the reports name them. */
   targets: string[]
@@ -293,54 +303,90 @@ export const upgradeFleetOverPolicy = ({
   zone: string
   /** The assignment the deploy owns, by name. */
   assignment: string
-  existingPolicies: { id: string; [key: string]: unknown }[]
+  snapshot: RunnerPolicyAssignment
+  readAssignment: () => RunnerPolicyAssignment
+  requestId: string
   deadlineSeconds?: number
   run: RunCommand
   sleep: (seconds: number) => void
   log: (line: string) => void
-  writeFile: (contents: string) => string
-}): number => {
-  const policy = {
-    osPolicies: [
+  request: typeof fetch
+}): Promise<number> => {
+  const binaryPolicy = {
+    id: 'runner-binary',
+    description: `BoxLite standalone Runner update ${requestId}`,
+    mode: 'ENFORCEMENT',
+    resourceGroups: [
       {
-        id: 'runner-binary',
-        mode: 'ENFORCEMENT',
-        resourceGroups: [
+        resources: [
           {
-            resources: [
-              {
-                id: 'swap-binary',
-                exec: {
-                  validate: { interpreter: 'NONE', script: scripts.validate },
-                  enforce: { interpreter: 'NONE', script: scripts.enforce },
-                },
-              },
-            ],
+            id: 'swap-binary',
+            exec: {
+              validate: { interpreter: 'NONE', script: scripts.validate },
+              enforce: { interpreter: 'NONE', script: scripts.enforce },
+            },
           },
         ],
       },
-      ...existingPolicies.filter((policy) => policy.id !== 'runner-binary'),
     ],
   }
-  const file = writeFile(JSON.stringify(policy, null, 2))
-  log(`==> declaring ${identity} on ${assignment}`)
-  const written = run('gcloud', [
-    'compute',
-    'os-config',
-    'os-policy-assignments',
-    'update',
-    assignment,
-    `--project=${project}`,
-    `--location=${zone}`,
-    `--file=${file}`,
-    '--quiet',
-    '--format=json',
-  ])
-  if (!written.ok) {
-    throw new Error(`could not rewrite ${assignment}: ${written.stderr || written.stdout || '(no output)'}`)
+  const matches = (current: RunnerPolicyAssignment) =>
+    isDeepStrictEqual(current.osPolicies.find(({ id }) => id === binaryPolicy.id), binaryPolicy)
+
+  if (!matches(snapshot)) {
+    const credentials = run('gcloud', ['auth', 'print-access-token', '--quiet'])
+    if (!credentials.ok || !credentials.stdout) throw new Error('Could not obtain the existing GCP access token')
+    const path = `projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(zone)}/osPolicyAssignments/${encodeURIComponent(assignment)}`
+    const url = new URL(`/v1/${path}`, 'https://osconfig.googleapis.com')
+    url.search = new URLSearchParams({ updateMask: 'osPolicies', requestId }).toString()
+    const osPolicies = [binaryPolicy, ...snapshot.osPolicies.filter(({ id }) => id !== binaryPolicy.id)]
+    log(`==> declaring ${identity} on ${assignment}`)
+    // A same-intent retry never writes with a fresh ETag after its batch is visible.
+    // A delayed request with the old ETag cannot overwrite that batch or a later release.
+    const written = await request(url, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${credentials.stdout}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ etag: snapshot.etag, osPolicies }),
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!written.ok) throw new Error(`could not rewrite ${assignment}: OS Config returned HTTP ${written.status}`)
   }
-  const revision = JSON.parse(written.stdout).revisionId
-  if (typeof revision !== 'string' || !revision) throw new Error(`${assignment}: update returned no revisionId`)
+
+  for (let waited = 0; waited < deadlineSeconds; waited += 30) {
+    const current = readAssignment()
+    if (matches(current) && current.rolloutState === 'SUCCEEDED') {
+      return waitForRunnerPolicyCompliance({
+        targets, identity, project, zone, assignment, revision: current.revisionId,
+        policies: current.osPolicies.map(({ id }) => id), deadlineSeconds, run, sleep, log,
+      })
+    }
+    if (matches(current) && current.rolloutState === 'CANCELLED') {
+      throw new Error(`${assignment}: OS Config cancelled the standalone update; the claim remains active`)
+    }
+    sleep(30)
+  }
+  throw new Error(`${assignment}: OS Config did not complete the exact standalone update`)
+}
+
+export function waitForRunnerPolicyCompliance({
+  targets, identity, project, zone, assignment, revision, policies, deadlineSeconds = 900, run, sleep, log,
+}: {
+  targets: string[]
+  identity: string
+  project: string
+  zone: string
+  assignment: string
+  revision: string
+  policies: string[]
+  deadlineSeconds?: number
+  run: RunCommand
+  sleep: (seconds: number) => void
+  log: (line: string) => void
+}): number {
+  if (!revision || targets.length === 0 || policies.length === 0) {
+    throw new Error('Runner policy compliance requires an exact revision, hosts and policy IDs')
+  }
 
   /*
    * Compliance per host, polled to a deadline.
@@ -367,9 +413,9 @@ export const upgradeFleetOverPolicy = ({
         const report = JSON.parse(reported.stdout)
         if (
           report.osPolicyAssignment?.endsWith(`/${assignment}@${revision}`) &&
-          policy.osPolicies.every((expected) =>
+          policies.every((id) =>
             report.osPolicyCompliances?.some(
-              (item: any) => item.osPolicyId === expected.id && item.complianceState === 'COMPLIANT',
+              (item: any) => item.osPolicyId === id && item.complianceState === 'COMPLIANT',
             ),
           )
         ) {
@@ -415,20 +461,7 @@ const upgradeOverIap = ({
   sleep: (seconds: number) => void
   log: (line: string) => void
 }): number => {
-  const args = [
-    'compute',
-    'ssh',
-    target,
-    `--project=${project}`,
-    `--zone=${zone}`,
-    '--tunnel-through-iap',
-    '--quiet',
-    '--ssh-flag=-oConnectTimeout=10',
-    '--ssh-flag=-oStrictHostKeyChecking=no',
-    '--ssh-flag=-oUserKnownHostsFile=/dev/null',
-    '--command',
-    `echo ${payload} | base64 -d | sudo bash`,
-  ]
+  const args = iapRunnerCommandArgs({ target, project, zone, payload })
   for (let attempt = 1; ; attempt++) {
     const session = run('gcloud', args)
     if (session.stdout) log(indent(session.stdout))
@@ -442,7 +475,6 @@ const upgradeOverIap = ({
      * the failure that made an exit code an unusable discriminant.
      */
     if (session.stdout.includes(ON_HOST)) {
-      // The payload's own refusal. Its stderr is the diagnosis.
       if (session.stderr) log(indent(session.stderr))
       throw new Error(`${target}: the upgrade payload exited ${session.status}`)
     }
@@ -465,6 +497,33 @@ const upgradeOverIap = ({
     log(`    ${target} not reachable over IAP yet (${attempt}/${CONNECT_ATTEMPTS}); retrying`)
     sleep(CONNECT_PAUSE_SECONDS)
   }
+}
+
+export function iapRunnerCommandArgs({
+  target,
+  project,
+  zone,
+  payload,
+}: {
+  target: string
+  project: string
+  zone: string
+  payload: string
+}): string[] {
+  return [
+    'compute',
+    'ssh',
+    target,
+    `--project=${project}`,
+    `--zone=${zone}`,
+    '--tunnel-through-iap',
+    '--quiet',
+    '--ssh-flag=-oConnectTimeout=10',
+    '--ssh-flag=-oStrictHostKeyChecking=no',
+    '--ssh-flag=-oUserKnownHostsFile=/dev/null',
+    '--command',
+    `echo ${assertEncoded(payload)} | base64 -d | sudo bash`,
+  ]
 }
 
 /** The payload reaches a shell verbatim, inside another command line. */

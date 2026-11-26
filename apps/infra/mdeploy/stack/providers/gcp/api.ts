@@ -46,6 +46,7 @@ import { containerEnvironment, secretIdOf } from './secret-env.ts'
 import { VOLUME_OBJECT_ACCESS_ROLE } from './storage.ts'
 import { instanceFor } from 'naming'
 import { certificateNameFor, internalAuthorizationNameFor } from './certificate-name.ts'
+import { createProtectedDatabaseRelease, PROTECTED_RELEASE_RUNTIME_USER, type GcpProtectedRelease } from './protected-release.ts'
 
 const onGcp = (storage: { binding: StorageBinding }): Extract<StorageBinding, { cloud: 'gcp' }> => {
   if (storage.binding.cloud !== 'gcp') throw new Error(`The GCP API was handed ${storage.binding.cloud} storage`)
@@ -308,6 +309,7 @@ export const gcpApiProvider =
     zoneId,
     network,
     runnerAccount,
+    protectedRelease,
   }: {
     dependencies: ApiDependencies
     project: string
@@ -331,9 +333,18 @@ export const gcpApiProvider =
     network: $util.Output<string>
     /** The runner's identity, which the egress rule below is keyed on. */
     runnerAccount: $util.Output<string>
+    protectedRelease?: GcpProtectedRelease
   }): ApiProvider =>
   (request: ApiRequest): Api => {
     const placement = dependencies.placement as Extract<Placement, { cloud: 'gcp' }>
+    const release = protectedRelease && createProtectedDatabaseRelease({
+      release: protectedRelease, project, region, placement, image: request.image, database: dependencies.database,
+      pins: request.environment.BOXLITE_PROTECTED_PROXY_ENROLLMENTS ?? '[]',
+      clientCredentials: JSON.stringify([
+        request.secrets.BOXLITE_PROTECTED_PROXY_CLIENT_CERT_PEM ?? null,
+        request.secrets.BOXLITE_PROTECTED_PROXY_CLIENT_KEY_PEM ?? null,
+      ]),
+    })
     const storage = onGcp(dependencies.storage)
     /*
      * The two names this balancer answers on, asked of the one function that
@@ -414,7 +425,7 @@ export const gcpApiProvider =
      */
     const addresses: Record<string, $util.Input<string>> = {
       ...request.secrets,
-      [DATABASE_PASSWORD_VARIABLE]: dependencies.database.binding.passwordRef,
+      [DATABASE_PASSWORD_VARIABLE]: release?.passwordRef ?? dependencies.database.binding.passwordRef,
       [CACHE_PASSWORD_VARIABLE]: dependencies.cache.binding.passwordRef,
       ...(dependencies.clickhouse.active
         ? { [CLICKHOUSE_PASSWORD_VARIABLE]: dependencies.clickhouse.reader.passwordRef }
@@ -534,6 +545,7 @@ export const gcpApiProvider =
               envs: containerEnvironment({
                 values: {
                   ...request.environment,
+                  ...(release ? { DB_USERNAME: PROTECTED_RELEASE_RUNTIME_USER } : {}),
                   CUSTOM_DOMAIN_GCP_PROJECT: project,
                   // The edge creates and attaches the map with this same resource name.
                   CUSTOM_DOMAIN_GCP_CERTIFICATE_MAP: certificateMap,
@@ -550,7 +562,7 @@ export const gcpApiProvider =
          * while creating the revision, so a binding that lands a moment later is
          * a binding that lands after the refusal.
          */
-        dependsOn: [...dependencies.waitFor, customDomainGrant, customDomainQueryGrant, ...readable],
+        dependsOn: [...dependencies.waitFor, customDomainGrant, customDomainQueryGrant, ...(release ? [release.ready] : []), ...readable],
       },
     )
 

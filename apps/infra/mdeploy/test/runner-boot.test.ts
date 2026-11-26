@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { rootCertificates } from 'node:tls'
 import {
   RUNNER_ENV_FILE,
   RUNNER_HOME,
@@ -23,9 +24,10 @@ import {
   runnerApiUrl,
   type BootPlatform,
 } from '../stack/runner-boot.ts'
-import { renderUnitEnvironmentPolicyScripts } from '../stack/runner-upgrade.ts'
+import { renderUnitEnvironmentPolicyScripts, unitEnvironmentBlock } from '../stack/runner-upgrade.ts'
 import { runnerHealthProbe } from '../stack/runner-health-probe.ts'
 import { extraRunnersOf } from '../stack/runner-registration.ts'
+import { enrollProtectedRunnerSlots, protectedRunnerCloudEnvironment } from '../stack/runner-protected-proxy.ts'
 
 const platform = (overrides: Partial<BootPlatform> = {}): BootPlatform => ({
   hostAddress: 'HOST_IP=$(curl -s http://metadata/ip)',
@@ -83,6 +85,46 @@ test('the enrolled slot boots V0 and is excluded from automatic V2 registration'
   assert.match(render(), /^API_VERSION=2$/m)
 })
 
+test('V2 enrollment preserves existing slot identities and registers only ordinary extras', () => {
+  const defaultSlot = { resourceName: 'Runner', nameTag: 'runner', controlPlaneRunnerName: 'default' }
+  const v2 = {
+    ...protectedProxy,
+    apiVersion: 2 as const,
+    url: 'https://runner.example.com:3004/',
+    caPem: rootCertificates[0]!,
+    clientCaFile: '/etc/boxlite/cloud-ca.pem',
+    clientCaSha256: 'd'.repeat(64),
+    clientDnsName: 'api.example.com',
+  }
+  const numberedSlot = { resourceName: 'Runner-runner-2', nameTag: 'runner-2', controlPlaneRunnerName: 'runner-2' }
+  const ordinarySlot = { resourceName: 'Runner-runner-3', nameTag: 'runner-3', controlPlaneRunnerName: 'runner-3' }
+  const fleet = enrollProtectedRunnerSlots([defaultSlot, numberedSlot, ordinarySlot], JSON.stringify({
+    Runner: v2,
+    'Runner-runner-2': { ...v2, runnerId: '8137cc0d-5d3f-43b8-aa32-b9304740269f', url: 'https://runner-2.example.com:3004/' },
+  }))
+  const assignments = fleet.map((slot) => ({ slot, token: 'fixture-token' }))
+  assert.deepEqual(extraRunnersOf(assignments), [assignments[2]])
+  const [slot] = fleet
+  const script = render({ protectedProxy: slot!.protectedProxy })
+  assert.match(script, /^API_VERSION=2$/m)
+  assert.match(script, /^BOXLITE_PROTECTED_PROXY_LISTEN_ADDRESS=:3004$/m)
+  assert.match(script, /^BOXLITE_PROTECTED_PROXY_CLIENT_DNS_NAME=api\.example\.com$/m)
+  assert.doesNotMatch(script, /^ENABLE_TLS=true$/m)
+  const cloudPins = JSON.parse(protectedRunnerCloudEnvironment(fleet).BOXLITE_PROTECTED_PROXY_ENROLLMENTS!)
+  assert.deepEqual(cloudPins[0], {
+    runnerId: v2.runnerId,
+    url: v2.url,
+    caPem: v2.caPem,
+    apiVersion: 2,
+    clientCaSha256: v2.clientCaSha256,
+    clientDnsName: v2.clientDnsName,
+  })
+  assert.throws(
+    () => enrollProtectedRunnerSlots([defaultSlot], JSON.stringify({ Runner: { ...v2, url: protectedProxy.url } })),
+    /Invalid protected Runner enrollment/,
+  )
+})
+
 test('managed environment convergence refuses enrollment overrides', () => {
   const apiUrl = 'https://api.example.test'
   for (const [key, value] of Object.entries({
@@ -96,6 +138,56 @@ test('managed environment convergence refuses enrollment overrides', () => {
   assert.doesNotThrow(() =>
     renderUnitEnvironmentPolicyScripts({ apiUrl, runnerEnv: '{"TLS_CERT_FILE":"/etc/boxlite/custom.pem"}' }),
   )
+})
+
+test('GCP convergence writes only the serving host enrollment', () => {
+  const hosts = ['boxlite-dev-runner', 'boxlite-dev-runner-2']
+  const enrollments = hosts.map((_, index) => ({
+    ...protectedProxy,
+    apiVersion: 2 as const,
+    runnerId: `8137cc0d-5d3f-43b8-aa32-b9304740269${index}`,
+    url: `https://runner-${index}.example.com:3004/`,
+    certFile: `/etc/boxlite/slot-${index}.pem`,
+    clientCaFile: '/etc/boxlite/cloud-ca.pem',
+    clientCaSha256: 'd'.repeat(64),
+    clientDnsName: 'api.example.com',
+  }))
+  const inputs = {
+    apiUrl: 'https://api.dev.boxlite.ai',
+    dataDiskIdentity: { app: 'boxlite', stage: 'dev', project: 'project', zone: 'us-east1-b', hosts },
+  }
+  const block = unitEnvironmentBlock({
+    ...inputs,
+    protectedProxyByHost: new Map(hosts.map((host, index) => [host, enrollments[index]!])),
+  })
+  const directory = mkdtempSync(join(tmpdir(), 'runner-enrollment-'))
+  try {
+    const envFile = join(directory, 'runner.env')
+    const converge = (host: string, settings: string) =>
+      execFileSync(
+        'bash',
+        ['-c', `set -euo pipefail\n${settings}\nif ! unit_environment_matches; then rewrite_unit_environment; fi\ncat "$UNIT_ENV_FILE"`],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, BOXLITE_RUNNER_HOST_NAME: host, BOXLITE_RUNNER_ENV_FILE: envFile },
+        },
+      )
+    for (const [index, host] of hosts.entries()) {
+      writeFileSync(envFile, 'API_VERSION=2\nBOXLITE_RUNNER_TOKEN=fixture-token\n')
+      const environment = converge(host, block)
+      assert.match(environment, /^API_VERSION=2$/m)
+      assert.match(environment, /^BOXLITE_RUNNER_TOKEN=fixture-token$/m)
+      assert.ok(environment.includes(`BOXLITE_PROTECTED_PROXY_RUNNER_ID=${enrollments[index]!.runnerId}\n`))
+      assert.ok(environment.includes(`BOXLITE_PROTECTED_PROXY_CERT_FILE=${enrollments[index]!.certFile}\n`))
+      assert.ok(!environment.includes(enrollments[1 - index]!.runnerId))
+    }
+    const removed = converge(hosts[1]!, unitEnvironmentBlock(inputs))
+    assert.doesNotMatch(removed, /^BOXLITE_PROTECTED_PROXY_(LISTEN_ADDRESS|CERT_FILE|KEY_FILE|CLIENT_CA_FILE|CLIENT_DNS_NAME)=/m)
+    assert.match(removed, /^API_VERSION=2$/m)
+    assert.match(removed, /^BOXLITE_RUNNER_TOKEN=fixture-token$/m)
+  } finally {
+    rmSync(directory, { recursive: true })
+  }
 })
 
 test('health probing uses the deployed name and CA for an enrolled Runner', () => {
@@ -128,6 +220,8 @@ test('health probing uses the deployed name and CA for an enrolled Runner', () =
       'runner-2.example.com:3003:127.0.0.1',
       'https://runner-2.example.com:3003/',
     ])
+    writeFileSync(envFile, 'API_VERSION=2\nBOXLITE_PROTECTED_PROXY_RUNNER_ID=test\n')
+    assert.deepEqual(probe(), ['-fsS', 'http://127.0.0.1:3003/'])
   } finally {
     rmSync(directory, { recursive: true })
   }

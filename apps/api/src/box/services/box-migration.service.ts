@@ -29,9 +29,9 @@ const MARKER_LOOP_LOCK_TTL_SECONDS = 120
  *
  * This is the entry point of a migration and the only one that decides a box
  * should move; every later step reacts to the state this leaves behind. The
- * marking is a single conditional UPDATE rather than a read-then-write, so
- * concurrent starts and stops either land before it and disqualify the box, or
- * land after it and break the timestamp equality a later validity check reads.
+ * marker locks each parked Box, checks ownership and copies its stamp into the
+ * migration row in the same transaction. The receiver checks eligibility again
+ * before applying a completed export or import.
  */
 @Injectable()
 export class BoxMigrationService {
@@ -48,8 +48,8 @@ export class BoxMigrationService {
   @LogExecution(MARKER_LOOP)
   @WithInstrumentation()
   private async markBoxesOnDrainingRunners(): Promise<void> {
-    // Two workers marking at once would be harmless — the UPDATE is idempotent
-    // and the second matches nothing — but it costs a full scan per worker.
+    // The database lock and insert guard handle concurrent markers. Keep one
+    // worker per tick to avoid scanning the fleet twice.
     if (!(await this.redisLockProvider.lock(MARKER_LOOP, MARKER_LOOP_LOCK_TTL_SECONDS))) {
       return
     }
@@ -65,8 +65,6 @@ export class BoxMigrationService {
         this.logger.log(`Marked ${marked} parked boxes on ${runnerIds.length} draining runners for migration`)
       }
     } catch (error) {
-      // Nothing here is half-done: the marking is one statement, so it either
-      // committed or it did not, and the next tick re-selects whatever is left.
       this.logger.error('Error marking boxes on draining runners for migration', error)
     } finally {
       await this.redisLockProvider.unlock(MARKER_LOOP)

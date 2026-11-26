@@ -13,17 +13,20 @@ import type { BoxVolume } from '../dto/box.dto'
 import type { ManagedSnapshot, SealedEvidence } from './protected-outbound'
 import { validOutboundRevision, validOutboundSnapshot } from './outbound-control'
 
-type Enrollment = { runnerId: string; url: string; caPem: string }
+type Enrollment = { runnerId: string; url: string; caPem: string; apiVersion?: 0 | 2 }
+export type ProtectedRunnerEndpoint = { url: string; agent: Agent }
 
-export function enrolledRunnerAgent(runner: Pick<Runner, 'id' | 'apiUrl'>): Agent | undefined {
+function runnerEnrollment(runnerId: string): Enrollment | undefined {
   const configured = process.env.BOXLITE_PROTECTED_PROXY_ENROLLMENTS
   if (!configured) return undefined
   const records: Enrollment[] = JSON.parse(configured)
   if (!Array.isArray(records)) throw new Error('Invalid protected Runner enrollment list')
-  const matches = records.filter((record) => record.runnerId === runner.id)
-  if (matches.length === 0) return undefined
-  if (matches.length !== 1 || !runner.apiUrl) throw new Error('Invalid protected Runner enrollment')
-  const enrollment = matches[0]
+  const matches = records.filter((record) => record.runnerId === runnerId)
+  if (matches.length > 1) throw new Error('Invalid protected Runner enrollment')
+  return matches[0]
+}
+
+function protectedRunnerUrl(enrollment: Enrollment): URL {
   const url = new URL(enrollment.url)
   if (
     url.protocol !== 'https:' ||
@@ -33,12 +36,34 @@ export function enrolledRunnerAgent(runner: Pick<Runner, 'id' | 'apiUrl'>): Agen
     url.search ||
     url.hash ||
     url.pathname !== '/' ||
-    url.href !== new URL(runner.apiUrl).href ||
     !new X509Certificate(enrollment.caPem).ca
+  ) {
+    throw new Error('Invalid protected Runner HTTPS enrollment')
+  }
+  return url
+}
+
+export function enrolledRunnerAgent(runner: Pick<Runner, 'id' | 'apiUrl'>): Agent | undefined {
+  const enrollment = runnerEnrollment(runner.id)
+  if (!enrollment || enrollment.apiVersion === 2) return undefined
+  if (
+    !runner.apiUrl ||
+    (enrollment.apiVersion !== undefined && enrollment.apiVersion !== 0) ||
+    protectedRunnerUrl(enrollment).href !== new URL(runner.apiUrl).href
   ) {
     throw new Error('Protected Runner endpoint does not match its HTTPS enrollment')
   }
   return new Agent({ ca: enrollment.caPem, rejectUnauthorized: true })
+}
+
+export function enrolledV2RunnerEndpoint(runnerId: string): ProtectedRunnerEndpoint | undefined {
+  const enrollment = runnerEnrollment(runnerId)
+  if (enrollment?.apiVersion !== 2) return undefined
+  const url = protectedRunnerUrl(enrollment)
+  const cert = process.env.BOXLITE_PROTECTED_PROXY_CLIENT_CERT_PEM
+  const key = process.env.BOXLITE_PROTECTED_PROXY_CLIENT_KEY_PEM
+  if (!cert || !key) throw new Error('Protected V2 client credentials are required')
+  return { url: url.href, agent: new Agent({ ca: enrollment.caPem, cert, key, rejectUnauthorized: true }) }
 }
 
 export type ProtectedBootKey = {
@@ -63,7 +88,19 @@ export type ProtectedBootCapability = 'supported' | 'unsupported' | 'unverified'
 export const PROTECTED_RUNNER_REQUEST_TIMEOUT_MS = 120_000
 export const PROTECTED_RUNNER_CONTROL_TIMEOUT_MS = 10_000
 
+export interface ProtectedEpochControl {
+  readReleasedEpoch(boxId: string, key: ProtectedBootKey, epoch: string): Promise<ProtectedBootReceipt>
+  stopProtectedEpoch(boxId: string, key: ProtectedBootKey, epoch: string, generation: string): Promise<void>
+  retireTerminatedProtectedEpoch(
+    boxId: string,
+    key: ProtectedBootKey,
+    epoch: string,
+    generation: string,
+  ): Promise<SealedEvidence>
+}
+
 export interface ProtectedBootControl {
+  readonly protectedEpoch?: ProtectedEpochControl
   supportsProtectedBootstrap(recovery?: boolean, volumeRestart?: boolean, allocation?: boolean): Promise<boolean>
   destroyProtectedPlaceholder(boxId: string, attemptId: string): Promise<void>
   prepareProtectedBox(

@@ -1,14 +1,124 @@
 use super::*;
 use crate::litebox::protected_boot::{
     BootRecoveryGate, ProtectedBootAttempt, ProtectedBootKey, ProtectedBootOutcome,
-    ProtectedBootReceipt, ProtectedBootRequest, ProtectedBootState, ProtectedGateRequest,
-    ProtectedRemoveRequest,
+    ProtectedBootReceipt, ProtectedBootRequest, ProtectedBootState, ProtectedEpochRequest,
+    ProtectedGateRequest, ProtectedRemoveRequest,
 };
 use crate::litebox::protected_outbound::{
     ProtectedRoutePending, ProtectedRouteSnapshot, ProtectedRouteUpdate,
 };
 use crate::net::{OutboundReplacement, OutboundRevision, OutboundSnapshot};
 use crate::runtime::options::{NetworkMode, NetworkSpec, OutboundNetworkConfig};
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn protected_v2_retirement_requires_exact_terminated_process() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let options = BoxliteOptions {
+        home_dir: home.path().to_path_buf(),
+        ..Default::default()
+    };
+    let runtime = RuntimeImpl::new_for_test(options.clone()).unwrap();
+    let bx = runtime
+        .create(
+            BoxOptions {
+                network: NetworkSpec::Disabled,
+                auto_remove: false,
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let id = bx.id().clone();
+    let key = ProtectedBootKey {
+        runner_id: OutboundRevision::fresh(),
+        attempt_id: OutboundRevision::fresh(),
+        registration_id: None,
+        registration_revision: None,
+        policy: bx.network().outbound_snapshot().await.unwrap(),
+    };
+    let epoch = OutboundRevision::fresh();
+    let generation = OutboundRevision::fresh();
+    let request = || ProtectedEpochRequest {
+        key: key.clone(),
+        epoch: epoch.clone(),
+        generation: generation.clone(),
+    };
+    let mut process = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let start_time = crate::util::process_start_time(process.id()).unwrap();
+    let mut state = runtime.box_manager.update_box(&id).unwrap();
+    state.set_status(BoxStatus::Stopped);
+    runtime.box_manager.save_box(&id, &state).unwrap();
+    runtime
+        .box_manager
+        .save_protected_boot(
+            &id,
+            &ProtectedBootState {
+                active: Some(ProtectedBootAttempt {
+                    key: key.clone(),
+                    epoch: epoch.clone(),
+                    spawning: false,
+                    owner: Some(crate::util::PidRecord {
+                        pid: process.id(),
+                        start_time: Some(start_time),
+                    }),
+                    confirmed: true,
+                    recovery_gate: Some(BootRecoveryGate {
+                        generation: generation.clone(),
+                        seal_requested: false,
+                        seal_confirmed: false,
+                        released: true,
+                        evidence: None,
+                    }),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let stop = bx.stop_protected_epoch(request()).await.unwrap_err();
+    let live_retire = bx
+        .retire_terminated_protected_epoch(request())
+        .await
+        .unwrap_err();
+    process.kill().unwrap();
+    process.wait().unwrap();
+    assert!(stop.to_string().contains("exact sealed epoch"));
+    assert!(live_retire.to_string().contains("cannot prove termination"));
+    let wrong_epoch = ProtectedEpochRequest {
+        epoch: OutboundRevision::fresh(),
+        ..request()
+    };
+    assert!(
+        bx.retire_terminated_protected_epoch(wrong_epoch)
+            .await
+            .is_err()
+    );
+
+    let retired = bx
+        .retire_terminated_protected_epoch(request())
+        .await
+        .unwrap();
+    assert_eq!(retired.boot.outcome, ProtectedBootOutcome::Retired);
+    assert_eq!(retired.boot.epoch.as_ref(), Some(&epoch));
+    assert!(retired.evidence.installed.is_none());
+
+    drop(bx);
+    runtime.shutdown_token.cancel();
+    drop(runtime);
+    let reopened = RuntimeImpl::new_for_test(options).unwrap();
+    let bx = reopened.get(id.as_str()).await.unwrap().unwrap();
+    let replay = bx
+        .retire_terminated_protected_epoch(request())
+        .await
+        .unwrap();
+    assert_eq!(replay.boot, retired.boot);
+    assert_eq!(replay.generation, generation);
+}
 
 #[tokio::test]
 async fn ordinary_box_name_does_not_require_protected_launch() {
@@ -216,6 +326,7 @@ async fn protected_boot_gate_retirement_requires_durable_seal() {
         retired: vec![],
         outbound: Default::default(),
         removable_attempt: None,
+        terminated_epoch: None,
     };
     runtime
         .box_manager

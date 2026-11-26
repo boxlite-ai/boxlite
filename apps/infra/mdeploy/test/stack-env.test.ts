@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
+import { rootCertificates } from 'node:tls'
 import { fileURLToPath } from 'node:url'
 import { StackEnvError, readStackEnvironment } from '../src/stack-env.ts'
 import type { GroupDeclaration } from '../src/env.ts'
@@ -34,6 +35,26 @@ const read = (environment: Record<string, string | undefined>) =>
     region: 'ap-southeast-1',
     home: 'aws',
   })
+
+test('AWS rejects V2 protected enrollment before applying an unreachable listener', () => {
+  const slots = JSON.stringify({
+    Runner: {
+      apiVersion: 2,
+      runnerId: '8137cc0d-5d3f-43b8-aa32-b9304740269e',
+      url: 'https://runner.example.com:3004/',
+      caPem: rootCertificates[0],
+      caFile: '/etc/boxlite/server-ca.pem',
+      certFile: '/etc/boxlite/server.pem',
+      keyFile: '/etc/boxlite/server.key',
+      clientCaFile: '/etc/boxlite/client-ca.pem',
+      clientCaSha256: 'd'.repeat(64),
+      clientDnsName: 'api.example.com',
+      dohUrl: 'https://resolver.example.com/dns-query',
+      dohAddress: '1.1.1.1:443',
+    },
+  })
+  assert.throws(() => read({ ...complete, STACK_RUNNER_PROTECTED_PROXY_SLOTS: slots }), /requires a GCP stage/)
+})
 
 for (const home of ['aws', 'gcp'] as const) {
   const deployment = (metadata: NodeJS.ProcessEnv) =>

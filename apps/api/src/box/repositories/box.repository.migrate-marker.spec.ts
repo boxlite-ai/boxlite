@@ -46,6 +46,7 @@ describe('BoxRepository.markParkedBoxesForExport', () => {
 
     const entityManager = {
       createQueryBuilder: () => queryBuilderStub(() => insertBuilders++),
+      query: async () => [],
       // The insert's conflict guard names the table it upserts into, which the
       // manager carries the entity metadata for. What that name produces is the
       // integration spec's to check; here it only has to be answerable.

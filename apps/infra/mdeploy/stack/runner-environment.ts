@@ -41,7 +41,7 @@ export const renderRunnerEnvironment = (
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== 'string' || /[\0\r\n]/.test(value)) {
       throw new Error('BOXLITE_RUNNER_ENV requires valid environment names and single-line string values')
     }
-    if (RESERVED.has(key) || ownedNames.includes(key)) {
+    if (RESERVED.has(key) || ownedNames.includes(key) || key.startsWith('BOXLITE_PROTECTED_PROXY_')) {
       throw new Error(`BOXLITE_RUNNER_ENV cannot override deployment-owned key ${key}`)
     }
   }

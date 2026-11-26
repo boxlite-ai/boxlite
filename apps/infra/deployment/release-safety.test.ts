@@ -1715,6 +1715,22 @@ test('the cloud E2E suite is reachable only from a deploy or a human', () => {
   assert.equal(checkout.with.ref, '${{ inputs.ref || github.sha }}')
 })
 
+test('protected V2 acceptance runs on the dev fixture worker', () => {
+  const workflow = load(readFileSync(E2E_CLOUD_WORKFLOW, 'utf8'))
+  const protectedJob = workflow.jobs['protected-v2-dev']
+  assert.ok(protectedJob, 'protected acceptance needs a separate fixture worker')
+  assert.deepEqual(protectedJob['runs-on'], ['self-hosted', 'linux', 'boxlite-protected-dev'])
+  assert.match(protectedJob.if, /inputs\.protected_v2_acceptance && inputs\.stage == 'dev'/)
+  assert.match(workflow.jobs.e2e.if, /!inputs\.protected_v2_acceptance/)
+  const testStep = protectedJob.steps.find((step: any) => step.name === 'Inject dev faults and verify exact recovery')
+  assert.ok(testStep)
+  assert.match(testStep.run, /os\.access\(controller, os\.X_OK\)/)
+  assert.match(testStep.run, /PGOPTIONS='-c default_transaction_read_only=on'/)
+  assert.match(testStep.run, /export BOXLITE_PROTECTED_V2_ACCEPTANCE=1/)
+  assert.match(testStep.run, /make test:rest:e2e.*protected_v2_release_acceptance/)
+  assert.equal(spawnSync('bash', ['-n'], { input: testStep.run }).status, 0)
+})
+
 test('cloud E2E requires the dev identity lane and forwards its scoped credentials', () => {
   const workflow = load(readFileSync(E2E_CLOUD_WORKFLOW, 'utf8'))
   const caller = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))

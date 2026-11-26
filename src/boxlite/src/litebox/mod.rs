@@ -135,6 +135,14 @@ impl LiteBox {
             .and_then(|backend| backend.runner_allocation())
     }
 
+    /// Read the local migration recorded when the native Box was imported.
+    #[doc(hidden)]
+    pub fn runner_migration(&self) -> Option<crate::net::OutboundRevision> {
+        self.protected_backend()
+            .ok()
+            .and_then(|backend| backend.runner_migration())
+    }
+
     /// Observe exact durable and live bootstrap evidence without starting a Guest.
     #[doc(hidden)]
     pub async fn protected_boot_receipt(
@@ -144,6 +152,15 @@ impl LiteBox {
         self.protected_backend()?.protected_boot_receipt(key).await
     }
 
+    /// Read live Runtime evidence that the exact epoch has released its gate.
+    #[doc(hidden)]
+    pub async fn protected_boot_ready(
+        &self,
+        key: &protected_boot::ProtectedBootKey,
+    ) -> BoxliteResult<protected_boot::ProtectedBootReceipt> {
+        self.protected_backend()?.protected_boot_ready(key).await
+    }
+
     /// Persist replay protection for an attempt whose child has terminated.
     #[doc(hidden)]
     pub async fn retire_protected_boot(
@@ -151,6 +168,28 @@ impl LiteBox {
         key: protected_boot::ProtectedBootKey,
     ) -> BoxliteResult<protected_boot::ProtectedBootReceipt> {
         self.protected_backend()?.retire_protected_boot(key).await
+    }
+
+    /// Stop only the live Guest owned by an exact sealed Runner epoch.
+    #[doc(hidden)]
+    pub async fn stop_protected_epoch(
+        &self,
+        request: protected_boot::ProtectedEpochRequest,
+    ) -> BoxliteResult<protected_boot::ProtectedStoppedEpoch> {
+        self.protected_backend()?
+            .stop_protected_epoch(request)
+            .await
+    }
+
+    /// Retire an exact terminated epoch even if its live gate could not be sealed.
+    #[doc(hidden)]
+    pub async fn retire_terminated_protected_epoch(
+        &self,
+        request: protected_boot::ProtectedEpochRequest,
+    ) -> BoxliteResult<protected_boot::ProtectedTerminationReceipt> {
+        self.protected_backend()?
+            .retire_terminated_protected_epoch(request)
+            .await
     }
 
     /// Check whether legacy destructive entry points must defer to the coordinator.

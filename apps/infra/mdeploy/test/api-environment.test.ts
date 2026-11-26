@@ -4,7 +4,13 @@ import test from 'node:test'
 import { parseBase } from 'mstage/config'
 import { valuesOfGroup } from 'mstage/select-group'
 import { EnvError } from 'mstage/env'
-import { ApiEnvironmentError, BILLING_KEYS, STATUS_SYNC_KEYS, apiEnvironmentFrom } from '../src/api-environment.ts'
+import {
+  ApiEnvironmentError,
+  BILLING_KEYS,
+  PROTECTED_V2_CLIENT_SECRETS,
+  STATUS_SYNC_KEYS,
+  apiEnvironmentFrom,
+} from '../src/api-environment.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
 const groups = (api: string[], secret?: string[]): GroupDeclaration => ({
@@ -16,6 +22,65 @@ const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://au
 
 const assemble = (environment: Record<string, string | undefined>, declaration = groups([])) =>
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
+
+test('managed outbound key rings reach the API only as a pinned Secret Manager version', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  const required = Object.fromEntries(
+    declared.envSelectGroup.api!.filter((name) => !declared.envOptional.api!.includes(name)).map((name) => [name, 'fixture']),
+  )
+  const assemble = (keyRing?: string) => apiEnvironmentFrom({
+    environment: {
+      ...base,
+      ...required,
+      OUTBOUND_PROXY_REGISTRY_ENABLED: 'true',
+      OUTBOUND_PROXY_REGISTRY_FIRST_KEY_ID: 'first',
+      OUTBOUND_PROXY_REGISTRY_KEYS: keyRing,
+    },
+    declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+    region: 'us-east1',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  const reference = 'projects/project/secrets/proxy-keys/versions/7'
+  const { environment, secrets } = assemble(JSON.stringify({ address: reference }))
+  assert.equal(environment.OUTBOUND_PROXY_REGISTRY_ENABLED, 'true')
+  assert.equal(environment.OUTBOUND_PROXY_REGISTRY_FIRST_KEY_ID, 'first')
+  assert.equal(environment.OUTBOUND_PROXY_REGISTRY_KEYS, undefined)
+  assert.equal(secrets.OUTBOUND_PROXY_REGISTRY_KEYS, reference)
+  assert.throws(() => assemble('plaintext'), /OUTBOUND_PROXY_REGISTRY_KEYS does not hold JSON/)
+  for (const keyRing of [undefined, '{"address":"projects/project/secrets/proxy-keys/versions/latest"}']) {
+    assert.throws(() => assemble(keyRing), /requires a pinned Secret Manager version/)
+  }
+})
+
+test('enrolled V2 requires both pinned mTLS credentials in the API secret channel', () => {
+  const [certificate, key] = PROTECTED_V2_CLIENT_SECRETS
+  const names = [certificate, key]
+  const declaration = { ...groups(names, names), optional: { api: names, secret: names } }
+  const configure = (certAddress?: string, keyAddress?: string) =>
+    apiEnvironmentFrom({
+      environment: {
+        ...base,
+        [certificate]: certAddress && JSON.stringify({ address: certAddress }),
+        [key]: keyAddress && JSON.stringify({ address: keyAddress }),
+      },
+      declaration,
+      region: 'us-east1',
+      stage: 'dev',
+      home: 'gcp',
+      protectedV2: true,
+    })
+  const certAddress = 'projects/project/secrets/api-client-cert/versions/7'
+  const keyAddress = 'projects/project/secrets/api-client-key/versions/9'
+  const { environment, secrets } = configure(certAddress, keyAddress)
+  assert.equal(secrets[certificate], certAddress)
+  assert.equal(secrets[key], keyAddress)
+  assert.equal(environment[certificate], undefined)
+  assert.equal(environment[key], undefined)
+  assert.throws(() => configure(certAddress), /CLIENT_KEY_PEM requires a pinned Secret Manager version/)
+  assert.throws(() => configure(certAddress, keyAddress.replace(/9$/, 'latest')), /requires a pinned Secret Manager version/)
+})
 
 for (const home of ['aws', 'gcp'] as const) {
   for (const enabled of [undefined, 'false', 'true']) {

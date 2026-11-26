@@ -122,6 +122,27 @@ pub struct ProtectedGateRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProtectedEpochRequest {
+    pub key: ProtectedBootKey,
+    pub epoch: OutboundRevision,
+    pub generation: OutboundRevision,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProtectedStoppedEpoch {
+    pub boot: ProtectedBootReceipt,
+    pub generation: OutboundRevision,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProtectedTerminationReceipt {
+    pub boot: ProtectedBootReceipt,
+    pub generation: OutboundRevision,
+    pub evidence: ProtectedSealedEvidence,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProtectedRemoveRequest {
     pub key: ProtectedBootKey,
     #[serde(deserialize_with = "Deserialize::deserialize")]
@@ -162,6 +183,8 @@ pub(crate) struct ProtectedBootState {
     pub(crate) outbound: ProtectedRouteControl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) removable_attempt: Option<OutboundRevision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) terminated_epoch: Option<ProtectedTerminationReceipt>,
 }
 
 impl ProtectedBootState {

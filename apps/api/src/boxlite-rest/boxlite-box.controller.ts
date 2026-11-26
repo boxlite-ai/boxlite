@@ -29,6 +29,9 @@ import {
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
 import { Request, Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
+import { SystemActionGuard } from '../auth/system-action.guard'
+import { RequiredApiRole } from '../common/decorators/required-role.decorator'
+import { SystemRole } from '../user/enums/system-role.enum'
 import {
   OrganizationResourceActionGuard,
   hasOrganizationResourcePermissions,
@@ -158,6 +161,7 @@ export class BoxliteBoxController {
     @Body() dto: CreateBoxDto,
     @UserContext() ctx: Context,
     @Req() request?: Request,
+    runnerApiVersion?: '2',
   ): Promise<BoxResponseDto> {
     if (dto.checkpoint_id !== undefined) {
       return this.createBoxFromCheckpoint(authContext, dto, ctx, request)
@@ -178,6 +182,7 @@ export class BoxliteBoxController {
 
     let box = await this.boxService.create(createBoxDto, organization, ctx, {
       maxCreatedBoxes,
+      ...(runnerApiVersion ? { runnerApiVersion } : {}),
       ...(outboundProxy !== undefined ? { outboundProxy } : {}),
     })
     if (request) request[AUDIT_TARGET_ID] = box.id
@@ -191,6 +196,41 @@ export class BoxliteBoxController {
       }
     }
     return boxToBoxResponse(box)
+  }
+
+  @Post('_protected-release')
+  @UseGuards(SystemActionGuard)
+  @RequiredApiRole([SystemRole.ADMIN])
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @HttpCode(201)
+  @Audit({
+    action: AuditAction.CREATE,
+    targetType: AuditTarget.BOX,
+    targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
+  })
+  async createProtectedReleaseProbe(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Body('name') name: string,
+    @Body('image') image: string,
+    @UserContext() ctx: Context,
+  ): Promise<BoxResponseDto> {
+    if (
+      !process.env.K_REVISION ||
+      !authContext.organization ||
+      typeof name !== 'string' ||
+      !/^e2e-v2-cutover-[a-f0-9-]{36}$/.test(name) ||
+      typeof image !== 'string' ||
+      !/^ghcr\.io\/boxlite-ai\/boxlite-agent-base:v[0-9]+\.[0-9]+\.[0-9]+$/.test(image)
+    ) {
+      throw new BadRequestException('Invalid managed V2 release probe')
+    }
+    return this.createBox(
+      authContext,
+      { name, image, working_dir: '/', auto_stop: 60, auto_delete: 300 },
+      ctx,
+      undefined,
+      '2',
+    )
   }
 
   /** Admit an inherited configuration, record its request, then wait without losing its identity. */

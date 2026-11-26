@@ -6,12 +6,21 @@
 import { randomUUID } from 'node:crypto'
 import { DataSource, Repository } from 'typeorm'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
+import { AddOutboundProxyAdmission1795663861000 } from '../../migrations/pre-deploy/1795663861000-add-outbound-proxy-admission-migration'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
+import { Job } from '../entities/job.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { BoxState } from '../enums/box-state.enum'
+import { JobStatus } from '../enums/job-status.enum'
+import { JobType } from '../enums/job-type.enum'
+import { ResourceType } from '../enums/resource-type.enum'
+import { ProxyCredentialCipher } from '../outbound-proxy/proxy-credential-cipher'
+import { ProxyRegistryStore } from '../outbound-proxy/proxy-registry.store'
+import { BoxMigrationJobReceiver } from '../services/box-migration-job-receiver.service'
+import { ManagedOutboundBootstrap } from '../services/managed-outbound-bootstrap'
 import { BoxRepository } from './box.repository'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
@@ -66,6 +75,8 @@ describeIfDatabase('BoxRepository.markParkedBoxesForExport (integration, real Po
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     ownsSchema = true
     await dataSource.synchronize()
+    await dataSource.transaction((manager) => new AddOutboundProxyAdmission1795663861000().up(manager.queryRunner))
+    await dataSource.query('CREATE TABLE outbound_proxy_reference (organization_id uuid, box_id varchar)')
     boxes = dataSource.getRepository(Box)
     migrations = dataSource.getRepository(BoxMigration)
     repository = new BoxRepository(
@@ -93,9 +104,97 @@ describeIfDatabase('BoxRepository.markParkedBoxesForExport (integration, real Po
   })
 
   beforeEach(async () => {
+    await dataSource.query('DELETE FROM outbound_proxy_reference')
     await dataSource.query(`DELETE FROM "${schemaName}"."box_migration"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."box_last_activity"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."box"`)
+  })
+
+  it('marks only the ordinary Box on a draining Runner', async () => {
+    const ordinary = parkedBox('ordinary')
+    const protectedBox = parkedBox('protected')
+    const retainedReference = parkedBox('retained-reference')
+    await boxes.insert([ordinary, protectedBox, retainedReference])
+    const registry = new ProxyRegistryStore(dataSource, new ProxyCredentialCipher(undefined), true)
+    const bootstrap = new ManagedOutboundBootstrap(dataSource, registry)
+    await dataSource.transaction((manager) => bootstrap.seed(manager, protectedBox, null))
+    await dataSource.query('INSERT INTO outbound_proxy_reference (organization_id, box_id) VALUES ($1, $2)', [
+      retainedReference.organizationId,
+      retainedReference.id,
+    ])
+
+    expect(await repository.markParkedBoxesForExport([drainingRunnerId])).toBe(1)
+    expect((await migrations.find()).map((migration) => migration.boxId)).toEqual([ordinary.id])
+  })
+
+  it('rolls back a completed ordinary import when the Box acquires a protected reference', async () => {
+    const box = parkedBox('protected-during-import')
+    await boxes.insert(box)
+    const stored = await boxes.findOneByOrFail({ id: box.id })
+    await migrations.insert({
+      boxId: box.id,
+      state: BoxMigrationState.PENDING_IMPORT,
+      attemptId: randomUUID(),
+      runnerId: healthyRunnerId,
+      updatedAt: stored.updatedAt,
+    })
+    await dataSource.query('INSERT INTO outbound_proxy_reference (organization_id, box_id) VALUES ($1, $2)', [
+      box.organizationId,
+      box.id,
+    ])
+    const cache = { invalidate: jest.fn() }
+    const receiver = new BoxMigrationJobReceiver(
+      dataSource,
+      { unlock: jest.fn().mockResolvedValue(undefined) } as never,
+      cache as never,
+    )
+
+    const migration = await migrations.findOneByOrFail({ boxId: box.id })
+    const report = (attemptId: string, runnerId = healthyRunnerId) =>
+      new Job({
+        id: randomUUID(),
+        type: JobType.IMPORT_BOX,
+        status: JobStatus.COMPLETED,
+        runnerId,
+        resourceType: ResourceType.BACKUP,
+        resourceId: box.id,
+        payload: JSON.stringify({ attemptId }),
+      })
+    await receiver.handleJobCompletion(report(randomUUID()))
+    await receiver.handleJobCompletion(report(migration.attemptId!, randomUUID()))
+    expect(await migrations.findOneByOrFail({ boxId: box.id })).toMatchObject({
+      state: BoxMigrationState.PENDING_IMPORT,
+    })
+    await receiver.handleJobCompletion(report(migration.attemptId!))
+
+    expect(await migrations.findOneByOrFail({ boxId: box.id })).toMatchObject({
+      state: BoxMigrationState.PENDING_ROLLBACK,
+      runnerId: healthyRunnerId,
+    })
+    expect(await boxes.findOneByOrFail({ id: box.id })).toMatchObject({ runnerId: drainingRunnerId })
+    expect(cache.invalidate).not.toHaveBeenCalled()
+  })
+
+  it('leaves old API migration inserts unversioned until the new marker claims the Box', async () => {
+    const box = parkedBox('mixed-api-migration')
+    await boxes.insert(box)
+    await dataSource.query('INSERT INTO box_migration ("boxId", state, "updatedAt") VALUES ($1, $2, now())', [
+      box.id,
+      BoxMigrationState.PENDING_EXPORT,
+    ])
+    expect(await migrations.findOneByOrFail({ boxId: box.id })).toMatchObject({ attemptId: null })
+    await migrations.delete({ boxId: box.id })
+    await dataSource.query('UPDATE outbound_proxy_admission SET controlled = true, registry_writes = false')
+    expect(await repository.markParkedBoxesForExport([drainingRunnerId])).toBe(1)
+    expect(await migrations.findOneByOrFail({ boxId: box.id })).toMatchObject({ attemptId: null })
+    await migrations.delete({ boxId: box.id })
+    await dataSource.query('UPDATE outbound_proxy_admission SET registry_writes = true')
+    try {
+      expect(await repository.markParkedBoxesForExport([drainingRunnerId])).toBe(1)
+      expect((await migrations.findOneByOrFail({ boxId: box.id })).attemptId).toBeTruthy()
+    } finally {
+      await dataSource.query('UPDATE outbound_proxy_admission SET controlled = false, registry_writes = false')
+    }
   })
 
   it('opens the migration on a copy of the box stamp, leaving the box alone', async () => {
@@ -114,8 +213,57 @@ describeIfDatabase('BoxRepository.markParkedBoxesForExport (integration, real Po
     expect(migration.updatedAt).toEqual(untouched.updatedAt)
   })
 
+  it('keeps the active archive and shadow copy after stale cleanup, and retains a failed export for rollback', async () => {
+    const box = parkedBox('exact-migration-cleanup')
+    await boxes.insert(box)
+    const attemptId = randomUUID()
+    const arcPath = `gcs://fixture/migrate/${box.id}/${attemptId}.boxlite`
+    await migrations.insert({
+      boxId: box.id,
+      attemptId,
+      state: BoxMigrationState.PENDING_EXPORT,
+      updatedAt: new Date(),
+    })
+    const receiver = new BoxMigrationJobReceiver(dataSource, {} as never, {} as never)
+    const report = (type: JobType, status: JobStatus, id: string) =>
+      new Job({
+        id: randomUUID(),
+        type,
+        status,
+        resourceId: box.id,
+        resourceType: ResourceType.BACKUP,
+        runnerId: type === JobType.ROLLBACK_IMPORT_BOX ? healthyRunnerId : drainingRunnerId,
+        payload: JSON.stringify({ attemptId: id, arcPath }),
+      })
+    await receiver.handleJobCompletion(report(JobType.EXPORT_BOX, JobStatus.FAILED, attemptId))
+    expect(await migrations.findOneByOrFail({ boxId: box.id })).toMatchObject({
+      state: BoxMigrationState.PENDING_ROLLBACK,
+      attemptId,
+      arcPath,
+    })
+    await migrations.update({ boxId: box.id }, { runnerId: healthyRunnerId })
+
+    const staleAttempt = randomUUID()
+    await receiver.handleJobCompletion(report(JobType.ROLLBACK_EXPORT_BOX, JobStatus.COMPLETED, staleAttempt))
+    await receiver.handleJobCompletion(report(JobType.ROLLBACK_IMPORT_BOX, JobStatus.COMPLETED, staleAttempt))
+    expect(await migrations.findOneByOrFail({ boxId: box.id })).toMatchObject({
+      state: BoxMigrationState.PENDING_ROLLBACK,
+      arcPath,
+      runnerId: healthyRunnerId,
+    })
+
+    await receiver.handleJobCompletion(report(JobType.ROLLBACK_EXPORT_BOX, JobStatus.COMPLETED, attemptId))
+    await receiver.handleJobCompletion(report(JobType.ROLLBACK_IMPORT_BOX, JobStatus.COMPLETED, attemptId))
+    expect(await migrations.findOneByOrFail({ boxId: box.id })).toMatchObject({
+      state: BoxMigrationState.PENDING_ROLLBACK,
+      arcPath: '',
+      runnerId: null,
+    })
+  })
+
   it('breaks the timestamp equality on the next write from outside the migration', async () => {
     const box = parkedBox('started-underneath')
+    box.updatedAt = new Date('2000-01-01T00:00:00Z')
     await boxes.insert(box)
     await repository.markParkedBoxesForExport([drainingRunnerId])
 
@@ -127,14 +275,13 @@ describeIfDatabase('BoxRepository.markParkedBoxesForExport (integration, real Po
     const migration = await migrations.findOneByOrFail({ boxId: box.id })
     expect(migration.state).toBe(BoxMigrationState.PENDING_EXPORT)
     expect(migration.updatedAt).not.toEqual(interfered.updatedAt)
-    // Both stamps come from the server — TypeORM's update builder writes
-    // updatedAt as CURRENT_TIMESTAMP too — so the later write is strictly newer
-    // and this ordering carries no dependence on the test machine's clock.
+    // Updating the Box replaces the fixture's older stamp with the database time.
     expect(migration.updatedAt.getTime()).toBeLessThan(interfered.updatedAt.getTime())
   })
 
   it('claims a box a previous drain already migrated', async () => {
     const box = parkedBox('re-drained')
+    box.updatedAt = new Date('2000-01-01T00:00:00Z')
     await boxes.insert(box)
     const finished = await boxes.findOneByOrFail({ id: box.id })
     await migrations.insert({ boxId: box.id, state: BoxMigrationState.COMPLETED, updatedAt: finished.updatedAt })

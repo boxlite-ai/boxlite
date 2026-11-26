@@ -5,13 +5,15 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common'
+import type { EntityManager } from 'typeorm'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
+import { Runner } from '../../entities/runner.entity'
 import { BoxState } from '../../enums/box-state.enum'
 import { DONT_SYNC_AGAIN, BoxAction, SYNC_AGAIN, SyncState } from './box.action'
 import { RunnerState } from '../../enums/runner-state.enum'
 import { RunnerService } from '../../services/runner.service'
-import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
+import { RunnerAdapter, RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { OrganizationService } from '../../../organization/services/organization.service'
 import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
@@ -109,7 +111,10 @@ export class BoxStartAction extends BoxAction {
       return DONT_SYNC_AGAIN
     }
     if (protectedStart === 'pending' || protectedStart === 'managed-stopped') return DONT_SYNC_AGAIN
-    if (protectedStart !== 'ready') await runnerAdapter.createBox(box, image, metadata, nested)
+    if (protectedStart === 'ready' && runner.apiVersion === '2') {
+      return this.finishProtectedV2Start(box, runnerAdapter, lockCode)
+    }
+    if (protectedStart !== 'ready') await runnerAdapter.createBox(box, image, metadata, nested, undefined, lockCode)
 
     await this.updateBoxState(box, BoxState.CREATING, lockCode)
     return SYNC_AGAIN
@@ -133,6 +138,9 @@ export class BoxStartAction extends BoxAction {
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
     const protectedStart = await this.outboundBootstrap?.start(box, runnerAdapter)
     if (protectedStart === 'pending' || protectedStart === 'managed-stopped') return DONT_SYNC_AGAIN
+    if (protectedStart === 'ready' && runner.apiVersion === '2') {
+      return this.finishProtectedV2Start(box, runnerAdapter, lockCode)
+    }
 
     const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
     if (box.volumes?.length) {
@@ -141,7 +149,7 @@ export class BoxStartAction extends BoxAction {
       )
     }
 
-    if (protectedStart !== 'ready') await runnerAdapter.startBox(box.id, box.authToken, metadata)
+    if (protectedStart !== 'ready') await runnerAdapter.startBox(box.id, box.authToken, metadata, undefined, lockCode)
 
     await this.updateBoxState(box, BoxState.STARTING, lockCode)
     return SYNC_AGAIN
@@ -158,7 +166,11 @@ export class BoxStartAction extends BoxAction {
     const runner = await this.runnerService.findOneOrFail(box.runnerId)
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    if ((await this.outboundBootstrap?.start(box, runnerAdapter)) === 'pending') return DONT_SYNC_AGAIN
+    const protectedStart = await this.outboundBootstrap?.start(box, runnerAdapter)
+    if (protectedStart === 'pending') return DONT_SYNC_AGAIN
+    if (runner.apiVersion === '2' && protectedStart !== undefined && protectedStart !== 'ordinary') {
+      return protectedStart === 'ready' ? this.finishProtectedV2Start(box, runnerAdapter, lockCode) : DONT_SYNC_AGAIN
+    }
     const boxInfo = await runnerAdapter.boxInfo(box.id)
 
     switch (boxInfo.state) {
@@ -166,8 +178,8 @@ export class BoxStartAction extends BoxAction {
         await this.updateBoxState(box, BoxState.STARTED, lockCode, undefined, undefined, boxInfo.daemonVersion)
 
         if (box.prevRunnerId) {
-          await this.boxRepository.cleanupPreviousRunner(box, (runnerId) =>
-            this.removeBoxFromPreviousRunner(box.id, runnerId),
+          await this.boxRepository.cleanupPreviousRunner(box, (runnerId, manager) =>
+            this.removeBoxFromPreviousRunner(box.id, runnerId, manager),
           )
         }
 
@@ -241,8 +253,16 @@ export class BoxStartAction extends BoxAction {
     return false
   }
 
-  private async removeBoxFromPreviousRunner(boxId: string, runnerId: string): Promise<void> {
-    const runner = await this.runnerService.findOne(runnerId)
+  private async finishProtectedV2Start(box: Box, runnerAdapter: RunnerAdapter, lockCode: LockCode): Promise<SyncState> {
+    const proof = await this.outboundBootstrap?.readV2StartProof(box, runnerAdapter).catch(() => undefined)
+    if (proof) {
+      await this.updateBoxState(box, BoxState.STARTED, lockCode, undefined, undefined, undefined, undefined, proof)
+    }
+    return DONT_SYNC_AGAIN
+  }
+
+  private async removeBoxFromPreviousRunner(boxId: string, runnerId: string, manager: EntityManager): Promise<void> {
+    const runner = await manager.findOneBy(Runner, { id: runnerId })
     if (!runner) {
       this.logger.warn(`Previously assigned runner ${runnerId} for box ${boxId} not found`)
       return
@@ -251,7 +271,7 @@ export class BoxStartAction extends BoxAction {
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
     try {
-      await runnerAdapter.destroyBox(boxId)
+      await runnerAdapter.destroyBox(boxId, undefined, manager)
     } catch (error) {
       if (error.response?.status !== 404 && error.statusCode !== 404) {
         this.logger.error(`Failed to cleanup box ${boxId} on previous runner ${runner.id}:`, error)
