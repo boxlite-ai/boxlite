@@ -6,7 +6,6 @@
 
 import { AnalyticsConsentService, AnalyticsSubjects } from './analytics-consent.service'
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
-import { metrics } from '@opentelemetry/api'
 import { OnEvent } from '@nestjs/event-emitter'
 import { BoxEvents } from '../../box/constants/box-events.constants'
 import { BoxCreatedEvent } from '../../box/events/box-create.event'
@@ -22,21 +21,15 @@ import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { Organization } from '../../organization/entities/organization.entity'
 import { OrganizationEvents } from '../../organization/constants/organization-events.constant'
 import { TypedConfigService } from '../../config/typed-config.service'
-import { MAX_FEATURE_USAGE_BATCH_SIZE } from '../../common/constants/constants'
 import { subscribeBusinessEvents } from '../../common/utils/business-event.util'
 
 @Injectable()
 export class AnalyticsService implements OnApplicationShutdown {
   private readonly logger = new Logger(AnalyticsService.name)
   private readonly posthog?: ConsentBoundPostHog
-  private readonly maxConcurrent: number
   private readonly unsubscribe?: () => void
 
   private readonly pending = new Set<Promise<unknown>>()
-  private readonly queue: (() => Promise<unknown>)[] = []
-  private readonly overflow = metrics.getMeter('').createCounter('posthog_queue_overflow_total', {
-    description: 'PostHog events dropped because the local sender is full',
-  })
   private closing = false
 
   get enabled(): boolean {
@@ -47,15 +40,7 @@ export class AnalyticsService implements OnApplicationShutdown {
     private readonly configService: TypedConfigService,
     private readonly consent: AnalyticsConsentService,
   ) {
-    const poolMax = this.configService.get('database.pool.max') ?? 10
-    this.maxConcurrent = Math.max(0, Math.min(2, poolMax - 1))
-    if (!this.maxConcurrent || !this.configService.get('posthog.apiKey')) {
-      return
-    }
-
-    if (!this.configService.get('posthog.host')) {
-      return
-    }
+    if (!this.configService.get('posthog.apiKey') || !this.configService.get('posthog.host')) return
 
     // Initialize PostHog client
     this.posthog = new ConsentBoundPostHog(this.configService.get('posthog.apiKey'), {
@@ -98,35 +83,18 @@ export class AnalyticsService implements OnApplicationShutdown {
   capture(event: Parameters<PostHog['capture']>[0], subjects: AnalyticsSubjects, consentSince?: Date): void {
     const client = this.posthog
     if (!client || this.closing || (!subjects.users.length && !subjects.organizations.length)) return
-    if (this.pending.size + this.queue.length >= MAX_FEATURE_USAGE_BATCH_SIZE) {
-      this.overflow.add(1)
-      return
-    }
     const occurredAt = event.timestamp ?? new Date()
-    this.queue.push(() =>
-      this.consent
-        .dispatch(subjects, consentSince ?? occurredAt, () =>
-          client.deliver({
-            ...event,
-            timestamp: occurredAt,
-            properties: { ...event.properties, environment: this.configService.get('posthog.environment') },
-          }),
-        )
-        .catch(() => this.logger.warn('PostHog analytics capture failed')),
-    )
-    this.dispatchNext()
-  }
-
-  private dispatchNext(): void {
-    if (this.pending.size >= this.maxConcurrent) return
-    const next = this.queue.shift()
-    if (!next) return
-    const delivery = next()
+    const delivery = this.consent
+      .dispatch(subjects, consentSince ?? occurredAt, () =>
+        client.deliver({
+          ...event,
+          timestamp: occurredAt,
+          properties: { ...event.properties, environment: this.configService.get('posthog.environment') },
+        }),
+      )
+      .catch(() => this.logger.warn('PostHog analytics capture failed'))
     this.pending.add(delivery)
-    void delivery.finally(() => {
-      this.pending.delete(delivery)
-      this.dispatchNext()
-    })
+    void delivery.finally(() => this.pending.delete(delivery))
   }
 
   groupIdentify(group: Parameters<PostHog['groupIdentify']>[0], users: string[] = []): void {
@@ -144,7 +112,7 @@ export class AnalyticsService implements OnApplicationShutdown {
   async onApplicationShutdown(): Promise<void> {
     this.closing = true
     this.unsubscribe?.()
-    while (this.pending.size) await Promise.allSettled(this.pending)
+    await Promise.allSettled(this.pending)
     try {
       await this.posthog?.shutdown(5000)
     } catch {

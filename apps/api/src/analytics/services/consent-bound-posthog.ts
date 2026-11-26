@@ -3,7 +3,7 @@ import { PostHog } from 'posthog-node'
 
 export class ConsentBoundPostHog extends PostHog {
   // The public captureImmediate in posthog-node 4.18 resolves before its HTTP request.
-  // Await the HTTP attempt so the background concurrency limit covers the whole transfer.
+  // Track the HTTP attempt through shutdown and report transport failures.
   deliver({
     distinctId,
     event,
