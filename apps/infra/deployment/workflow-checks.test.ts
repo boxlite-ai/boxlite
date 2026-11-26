@@ -39,6 +39,7 @@ for (const [name, job, linuxRunner] of [
   ['build-c.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
   ['build-node.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
   ['build-runtime.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
+  ['build-wheels.yml', 'build_wheels', 'boxlite-4vcpu-16gbmem-64gbdisk'],
   ['build-go.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
   ['build-node.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
 ] as const) {
@@ -79,7 +80,6 @@ for (const [name, job, downloads] of [
 
 for (const [name, job, matrix] of [
   ['release-box-images.yml', 'release', false],
-  ['build-wheels.yml', 'build_wheels', true],
   ['test.yml', 'api', false],
   ['test.yml', 'rust', true],
   ['test.yml', 'go', true],
@@ -106,6 +106,15 @@ test('the C SDK worker installs its host tools before checking out a selected co
   const checkout = steps.findIndex((step: any) => step.uses?.startsWith('actions/checkout@'))
   assert.ok(bootstrap >= 0 && bootstrap < checkout, 'worker setup must precede the selected source')
   assert.match(steps[bootstrap].run, /apt-get install/)
+})
+
+test('Linux x64 wheel packaging initializes the host Python used by cibuildwheel', () => {
+  const steps = workflow('build-wheels.yml').jobs.build_wheels.steps
+  const python = steps.findIndex((step: any) => step.uses?.startsWith('actions/setup-python@'))
+  const build = steps.findIndex((step: any) => step.uses?.startsWith('pypa/cibuildwheel@'))
+  assert.ok(python >= 0 && python < build, 'prepare the host interpreter before invoking cibuildwheel')
+  assert.equal(steps[python].if, "matrix.os == 'ubuntu-latest'")
+  assert.equal(steps[python].with['python-version'], '3.11 - 3.13')
 })
 
 test('CodeQL places every language on its qualified runner and retains its build mode', () => {

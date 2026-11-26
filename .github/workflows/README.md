@@ -24,8 +24,8 @@ The connection needs permission to register workers and quota for the requested
 | `boxlite-2vcpu-8gbmem-30gbdisk` | Dashboard tests |
 | `boxlite-4vcpu-8gbmem-30gbdisk` | Go CodeQL autobuild |
 | `boxlite-4vcpu-16gbmem-30gbdisk` | Go SDK release checks, Node SDK release tests and Node release packaging |
-| `boxlite-4vcpu-16gbmem-64gbdisk` | JavaScript/TypeScript and Rust CodeQL, Clippy, REST volume lifecycle E2E, Nix CLI build and boot, Linux x64 C SDK, Node addon and runtime/CLI archives, standalone guest artifacts and the non-publishing multiarch Box image build |
-| GitHub-hosted Ubuntu | API tests, Go SDK coverage, Python wheel packaging, Rust coverage, selected-ref C SDK builds, protected publishing and runner recovery |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | JavaScript/TypeScript and Rust CodeQL, Clippy, REST volume lifecycle E2E, Nix CLI build and boot, Linux x64 C SDK, Node addon, Python wheel and runtime/CLI builds, standalone guest artifacts and the non-publishing multiarch Box image build |
+| GitHub-hosted Ubuntu | API tests, Go SDK coverage, Rust coverage, selected-ref C SDK builds, protected publishing and runner recovery |
 
 The Node release upload builds and packs the npm packages before attaching them.
 Uploads of prepared C SDK archives, runtime archives and Python wheels use the default worker.
