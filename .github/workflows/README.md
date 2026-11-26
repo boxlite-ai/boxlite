@@ -20,7 +20,8 @@ The connection needs permission to register workers and quota for the requested
 | Runner label | Jobs |
 | --- | --- |
 | `boxlite` | Lightweight lint and setup, Python and Node SDK unit tests, Actions and Python CodeQL, plugin package validation, Go SDK release configuration, status and selected release artifact uploads |
-| `boxlite-2vcpu-4gbmem-30gbdisk` | C/C++ CodeQL, API client drift, Dashboard tests and Secret Server PostgreSQL integration |
+| `boxlite-2vcpu-4gbmem-30gbdisk` | C/C++ CodeQL, API client drift and Secret Server PostgreSQL integration |
+| `boxlite-2vcpu-8gbmem-30gbdisk` | Dashboard tests |
 | `boxlite-4vcpu-8gbmem-30gbdisk` | Go CodeQL autobuild |
 | `boxlite-4vcpu-16gbmem-30gbdisk` | Go SDK release checks, Node SDK release tests and Node release packaging |
 | `boxlite-4vcpu-16gbmem-64gbdisk` | JavaScript/TypeScript and Rust CodeQL, Clippy, REST volume lifecycle E2E, Nix CLI build and boot, standard Linux x64 C SDK archives, standalone guest artifacts and the non-publishing multiarch Box image build |
@@ -37,7 +38,8 @@ container image with Buildx exercises a different path from native ARM64 SDK tes
 GitHub starts PostgreSQL and Redis services before checkout. The runner must
 provide a working Docker daemon at registration time. Dashboard tests and
 API client drift install Node 22 before enabling Corepack for the Yarn cache.
-Dashboard caps concurrent Yarn downloads at eight so a cold install fits its 4 GiB worker.
+On cold installs, API client drift limits Yarn to four concurrent downloads on its 4 GiB worker.
+Dashboard allows eight concurrent downloads on its 8 GiB worker.
 [Docker startup contract](../../apps/libs/ci-listener/README.md#docker-startup).
 
 Rust coverage exercises unprivileged user namespaces on hosted Ubuntu.

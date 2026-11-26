@@ -56,7 +56,7 @@ for (const [name, job, runner] of [
   ['build-go.yml', 'config', 'boxlite'],
   ['build-plugins.yml', 'build', 'boxlite'],
   ['api-client-drift.yml', 'check-generated-clients', 'boxlite-2vcpu-4gbmem-30gbdisk'],
-  ['test.yml', 'dashboard', 'boxlite-2vcpu-4gbmem-30gbdisk'],
+  ['test.yml', 'dashboard', 'boxlite-2vcpu-8gbmem-30gbdisk'],
   ['test.yml', 'secret-server-postgres', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['test.yml', 'nix', 'boxlite-4vcpu-16gbmem-64gbdisk'],
   ['test.yml', 'serve-rest-e2e', 'boxlite-4vcpu-16gbmem-64gbdisk'],
@@ -67,10 +67,15 @@ for (const [name, job, runner] of [
   })
 }
 
-test('Dashboard limits parallel Yarn downloads on its 4 GiB worker', () => {
-  const install = workflow('test.yml').jobs.dashboard.steps.find((step: any) => step.run === 'yarn install --immutable')
-  assert.equal(install?.env?.YARN_NETWORK_CONCURRENCY, '8')
-})
+for (const [name, job, downloads] of [
+  ['test.yml', 'dashboard', '8'],
+  ['api-client-drift.yml', 'check-generated-clients', '4'],
+] as const) {
+  test(`${name}/${job} bounds cold Yarn downloads for its worker`, () => {
+    const install = workflow(name).jobs[job].steps.find((step: any) => step.run === 'yarn install --immutable')
+    assert.equal(install?.env?.YARN_NETWORK_CONCURRENCY, downloads)
+  })
+}
 
 for (const [name, job, matrix] of [
   ['release-box-images.yml', 'release', false],

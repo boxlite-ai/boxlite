@@ -81,6 +81,8 @@ jobs:
           distribution: temurin
 
       - name: Install dependencies
+        env:
+          YARN_NETWORK_CONCURRENCY: '4'
         run: yarn install --immutable
 
       - name: Prepare offline app env

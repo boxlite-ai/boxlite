@@ -1000,7 +1000,7 @@ jobs:
     name: Dashboard Tests
     needs: changes
     if: ${{ needs.changes.outputs.dashboard == 'true' }}
-    runs-on: boxlite-2vcpu-4gbmem-30gbdisk
+    runs-on: boxlite-2vcpu-8gbmem-30gbdisk
     permissions: # Read source; OIDC authenticates the coverage upload.
       contents: "read"
       id-token: write
