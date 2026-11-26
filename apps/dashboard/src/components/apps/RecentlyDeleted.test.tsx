@@ -26,7 +26,7 @@ const state = vi.hoisted(() => ({
 vi.mock('@/hooks/useApi', () => ({ useApi: () => state.api }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
-    selectedOrganization: state.organization,
+    selectedOrganization: { ...state.organization, appHostingPermissions: ['read:apps', 'write:apps', 'delete:apps'] },
     authenticatedUserHasPermission: (permission: OrganizationRolePermissionsEnum) =>
       (permission !== OrganizationRolePermissionsEnum.DELETE_APPS || state.canDelete) &&
       (permission !== OrganizationRolePermissionsEnum.WRITE_APPS || state.canWrite),

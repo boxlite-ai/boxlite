@@ -65,16 +65,23 @@ draft without storing environment variables or triggering payment or creation.
 
 See the [UI walkthrough and screenshots](app-hosting-ui.md) for the current mock experience.
 
-**Applications → App hosting** appears when the organization has enabled
-`read:apps` and the signed-in member can read Apps. The same check covers direct
-links and the introduction. Select **Get early access** to continue to the list
-or to the App you opened. The Dashboard remembers that choice for the browser tab.
+Every organization sees **Applications → APPs**. If the organization lacks
+`read:apps`, both the menu and direct App links open the experimental access
+request page. Select **Request access** to ask the BoxLite team to contact you
+at your account email. Backoffice grants access separately.
+
+In an invited organization, members need App read permission to open the list or
+details. Members who lack it see a prompt to contact their organization administrator.
+Readers can select **Get early access** on their first visit to continue to the
+list or the App they opened. The Dashboard remembers that choice for the browser tab.
 Creating and editing Apps requires effective `write:apps`. Deleting an entire
 App requires effective `delete:apps`. API key creation offers the App scopes
 enabled for the organization that the current member can grant.
 
 In mock mode, `/dashboard/apps?appHosting=enabled` opens the sample Apps list
-directly. Use `?appHosting=restricted` to show the introduction again.
+directly. Use `?appHosting=restricted` to show the introduction again. With
+`VITE_MOCK_MULTIPLE_ORGANIZATIONS=true`, select **Research Collective** to try
+the request flow for an uninvited organization.
 
 App hosting uses the Console's shared resource headings, buttons and type scale.
 UI text uses Inter; code, URLs, paths and technical values use Commit Mono.
@@ -94,7 +101,7 @@ Card placeholders stay static;
 reduced-motion preferences disable the sequence. The introduction reuses the
 agent handoff logos to show compatible coding agents below the product description.
 
-App hosting appears immediately after CI in Applications. It uses the same OIDC session,
+**APPs** appears immediately after CI in Applications. It uses the same OIDC session,
 organization switcher and resource permissions. Its management requests go to
 `/api/v1/{organizationId}/apps` through the shared `ApiClient`; the App detail
 projection is `GET /apps/{appId}/view` within that organization namespace.
@@ -1550,7 +1557,8 @@ The server remains responsible for authorizing every organization API request.
 Switching validates membership without changing the current permission context,
 saves the session, then performs a full document navigation. This discards in-memory
 query state and connections. Resource lists retain their section without query/hash;
-Box and Image details return to their lists. Settings and billing switches land on
+Box, Image and App details return to their lists. In APPs, the destination shows
+the selected organization's Apps or its access request page. Settings and billing switches land on
 Boxes, avoiding a destination that may require permissions the new member lacks.
 Non-list pages ask before discarding edits or terminal connections. Running Boxes
 continue running. This conservative route warning is not general form-dirty tracking;

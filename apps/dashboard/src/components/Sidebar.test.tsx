@@ -495,7 +495,7 @@ describe('Sidebar primary navigation', () => {
     expect(applications?.querySelector('[aria-label="Toggle CI navigation"]')).toBeNull()
   })
 
-  it('selects App hosting immediately after CI in Applications', () => {
+  it('selects APPs immediately after CI in Applications', () => {
     renderRoute('/dashboard/apps/demo')
     const infrastructure = document.querySelector('[role="group"][aria-label="Infrastructure"]')!
     const applications = document.querySelector('[role="group"][aria-label="Applications"]')!
@@ -505,16 +505,16 @@ describe('Sidebar primary navigation', () => {
       '/dashboard/ci',
       '/dashboard/apps',
     ])
-    expect(link.textContent).toBe('App hosting')
+    expect(link.textContent).toBe('APPs')
     expect(link.querySelector('[data-icon="app"]')?.getAttribute('data-selected')).toBe('true')
     expect(link.getAttribute('aria-current')).toBe('page')
     expect(document.querySelectorAll('a[href="/dashboard/apps"]')).toHaveLength(1)
   })
 
-  it('hides the App hosting link without effective read permission', () => {
+  it('shows the APPs link without effective read permission', () => {
     organizationState.canReadApps = false
     renderRoute('/dashboard/boxes')
-    expect(document.querySelector('a[href="/dashboard/apps"]')).toBeNull()
+    expect(document.querySelector('a[href="/dashboard/apps"]')?.textContent).toBe('APPs')
     expect(document.querySelector('a[href="/dashboard/ci"]')).not.toBeNull()
   })
 

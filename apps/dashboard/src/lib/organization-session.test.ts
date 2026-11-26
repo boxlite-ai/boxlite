@@ -13,6 +13,7 @@ describe('Organization switch routing', () => {
     '/dashboard/boxes',
     '/dashboard/images',
     '/dashboard/ci',
+    '/dashboard/apps',
     '/dashboard/volumes',
     '/dashboard/images/registries',
   ])('keeps list %s', (path) => {
@@ -22,6 +23,7 @@ describe('Organization switch routing', () => {
     ['/dashboard/boxes/old-box/terminal', '/dashboard/boxes'],
     ['/dashboard/images/old-image', '/dashboard/images'],
     ['/dashboard/ci/old-run', '/dashboard/ci'],
+    ['/dashboard/apps/old-app', '/dashboard/apps'],
     ['/dashboard/settings', '/dashboard/boxes'],
     ['/dashboard/billing', '/dashboard/boxes'],
   ])('removes organization-specific context from %s', (path, target) => {

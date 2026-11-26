@@ -11,7 +11,7 @@ import { useCreateApp } from '@/hooks/mutations/useAppMutations'
 import { useAppQuery, useAppsQuery } from '@/hooks/queries/useAppsQuery'
 import { queryKeys } from '@/hooks/queries/queryKeys'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import axios, { type AxiosResponse, type InternalAxiosRequestConfig } from 'axios'
+import axios, { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios'
 import { act, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, useLocation } from 'react-router-dom'
@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
   organization: { id: 'org-a' } as { id: string } | null,
+  organizationAppPermissions: ['read:apps'],
   permitted: true,
   refreshPermissions: vi.fn(async () => undefined),
   api: null as ApiClient | null,
@@ -26,7 +27,10 @@ const state = vi.hoisted(() => ({
 vi.mock('@/hooks/useApi', () => ({ useApi: () => state.api }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
-    selectedOrganization: state.organization,
+    selectedOrganization: state.organization && {
+      ...state.organization,
+      appHostingPermissions: state.organizationAppPermissions,
+    },
     authenticatedUserHasPermission: () => state.permitted,
     refreshOrganizationPermissions: state.refreshPermissions,
   }),
@@ -68,6 +72,7 @@ describe('cloud App organization isolation', () => {
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     state.organization = { id: 'org-a' }
+    state.organizationAppPermissions = ['read:apps']
     state.permitted = true
     setAppHostingIntroSeen(true)
     requests = []
@@ -311,7 +316,7 @@ describe('cloud App organization isolation', () => {
     expect(host.textContent).toBe('/dashboard/apps')
   })
 
-  it('requires App read permission before showing early access or loading App data', () => {
+  it('directs a member without read permission to their administrator in an invited organization', () => {
     setAppHostingIntroSeen(false)
     state.permitted = false
     function Management() {
@@ -327,6 +332,97 @@ describe('cloud App organization isolation', () => {
     expect(host.textContent).toContain('read permission')
     expect(host.textContent).not.toContain('New app')
     expect(requests).toEqual([])
+  })
+
+  it.each([
+    ['/dashboard/apps', []],
+    ['/dashboard/apps/app-one', ['write:apps']],
+  ] as const)(
+    'offers an application at %s without loading App data until the organization has a read grant',
+    async (path, grants) => {
+      state.organizationAppPermissions = [...grants]
+      state.permitted = false
+      let accept!: () => void
+      respond = (request) =>
+        new Promise((resolve) => {
+          accept = () => resolve({ ...response(request, ''), status: 204 })
+        })
+      function Management() {
+        useAppsQuery()
+        useAppQuery('app-one')
+        return <p>App management</p>
+      }
+      render(
+        <OrganizationScope>
+          <Management />
+        </OrganizationScope>,
+        path,
+      )
+      expect(host.textContent).toContain('experimental feature')
+      expect(host.textContent).toContain('the BoxLite team will contact you by email')
+      expect(host.textContent).not.toContain('App management')
+      expect(requests).toHaveLength(0)
+      const button = host.querySelector('button')!
+      expect(button.textContent).toBe('Request access')
+      await act(async () => button.click())
+      await settled()
+      expect(button.disabled).toBe(true)
+      act(() => button.click())
+      expect(requests).toHaveLength(1)
+      expect(requests[0].method).toBe('post')
+      expect(requests[0].url).toBe('/organizations/org-a/experimental-feature-requests')
+      expect(JSON.parse(requests[0].data)).toEqual({ feature: 'App Hosting' })
+      expect(requests[0].headers.Authorization).toBe('Bearer platform-token')
+      await act(async () => accept())
+      await settled()
+      expect(host.querySelector('[role="status"]')?.textContent).toContain('Request sent')
+      expect(host.querySelector('button')).toBeNull()
+      expect(host.textContent).not.toContain('App management')
+      expect(requests).toHaveLength(1)
+    },
+  )
+
+  it('allows retry after an unconfirmed response and isolates late results across organizations', async () => {
+    state.organizationAppPermissions = []
+    state.permitted = false
+    render(<OrganizationScope>App list</OrganizationScope>)
+    await act(async () => host.querySelector('button')!.click())
+    await settled()
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('try again')
+    let finish!: () => void
+    respond = (request) =>
+      new Promise((resolve) => {
+        finish = () => resolve({ ...response(request, ''), status: 204 })
+      })
+    await act(async () => host.querySelector('button')!.click())
+    state.organization = { id: 'org-b' }
+    render(<OrganizationScope>App list</OrganizationScope>)
+    await act(async () => finish())
+    await settled()
+    expect(host.querySelector('[role="status"]')).toBeNull()
+    expect(host.querySelector('button')?.textContent).toBe('Request access')
+    respond = async (request) => ({ ...response(request, ''), status: 204 })
+    await act(async () => host.querySelector('button')!.click())
+    await settled()
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('Request sent')
+    expect(requests.map((request) => request.url)).toEqual([
+      '/organizations/org-a/experimental-feature-requests',
+      '/organizations/org-a/experimental-feature-requests',
+      '/organizations/org-b/experimental-feature-requests',
+    ])
+  })
+
+  it('explains when the account has no contact email', async () => {
+    state.organizationAppPermissions = []
+    state.permitted = false
+    respond = async (request) => {
+      throw new AxiosError('Missing email', undefined, request, undefined, { ...response(request, {}), status: 422 })
+    }
+    render(<OrganizationScope>App list</OrganizationScope>)
+    await act(async () => host.querySelector('button')!.click())
+    await settled()
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Your account needs a contact email')
+    expect(host.querySelector('[role="status"]')).toBeNull()
   })
 
   it('shows the introduction for a mock fixture URL in a non-mock build', () => {

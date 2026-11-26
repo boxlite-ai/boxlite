@@ -60,6 +60,20 @@ const API_URL = import.meta.env.VITE_API_URL
 // Keep the selected billing fixture through client-side onboarding/navigation.
 const billingPreview = new URLSearchParams(window.location.search).get('preview')
 const newUserPreview = billingPreview === 'new-user' || billingPreview === 'new-user-unfunded'
+const mockOrganizations =
+  import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true'
+    ? [
+        { ...MOCK_ORGANIZATION, name: 'Personal organization' },
+        { ...MOCK_ORGANIZATION, id: 'demo-acme', name: 'Acme AI', isDefaultForAuthenticatedUser: false },
+        {
+          ...MOCK_ORGANIZATION,
+          id: 'demo-research',
+          name: 'Research Collective',
+          isDefaultForAuthenticatedUser: false,
+          appHostingPermissions: [],
+        },
+      ]
+    : [MOCK_ORGANIZATION]
 
 // Saved cards answer set-default and remove like the billing API: removing the
 // default card promotes the next saved card.
@@ -152,29 +166,11 @@ export const handlers = [
       createdAt: new Date(0).toISOString(),
     }),
   ),
-  http.get(`${API_URL}/organizations`, () =>
-    HttpResponse.json(
-      import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true'
-        ? [
-            { ...MOCK_ORGANIZATION, name: 'Personal organization' },
-            { ...MOCK_ORGANIZATION, id: 'demo-acme', name: 'Acme AI', isDefaultForAuthenticatedUser: false },
-            {
-              ...MOCK_ORGANIZATION,
-              id: 'demo-research',
-              name: 'Research Collective',
-              isDefaultForAuthenticatedUser: false,
-            },
-          ]
-        : [MOCK_ORGANIZATION],
-    ),
-  ),
-  http.get(`${API_URL}/organizations/:organizationId`, ({ params }) =>
-    params.organizationId === MOCK_ORGANIZATION.id ||
-    (import.meta.env.VITE_MOCK_MULTIPLE_ORGANIZATIONS === 'true' &&
-      ['demo-acme', 'demo-research'].includes(String(params.organizationId)))
-      ? HttpResponse.json({ ...MOCK_ORGANIZATION, id: params.organizationId })
-      : new HttpResponse(null, { status: 404 }),
-  ),
+  http.get(`${API_URL}/organizations`, () => HttpResponse.json(mockOrganizations)),
+  http.get(`${API_URL}/organizations/:organizationId`, ({ params }) => {
+    const organization = mockOrganizations.find(({ id }) => id === params.organizationId)
+    return organization ? HttpResponse.json(organization) : new HttpResponse(null, { status: 404 })
+  }),
   http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {
     const url = new URL(request.url)
     const to = new Date(url.searchParams.get('to') ?? Date.now())
@@ -648,6 +644,10 @@ export const handlers = [
       usageChargeMultiplier: '1.0000',
     })
   }),
+  http.post(
+    `${API_URL}/organizations/:organizationId/experimental-feature-requests`,
+    () => new HttpResponse(null, { status: 204 }),
+  ),
   http.post(`${API_URL}/organizations/:organizationId/coupon-claims`, async ({ request }) => {
     const { couponCode } = (await request.json()) as { couponCode: string }
     return couponCode === 'ACME50'

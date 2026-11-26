@@ -18,7 +18,7 @@ const state = vi.hoisted(() => ({ api: null as ApiClient | null }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => state.api }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
-    selectedOrganization: { id: 'org-a' },
+    selectedOrganization: { id: 'org-a', appHostingPermissions: ['read:apps'] },
     authenticatedUserHasPermission: () => true,
   }),
 }))

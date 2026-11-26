@@ -48,11 +48,13 @@ export function organizationSwitchPath(pathname: string, search = ''): string {
     RoutePath.DOMAINS,
     RoutePath.CI,
     RoutePath.CI_CONNECTS,
+    RoutePath.APPS,
     RoutePath.IMAGE_REGISTRIES,
     RoutePath.KEYS,
   ]
   if (lists.includes(pathname as RoutePath)) return pathname
   if (pathname.startsWith(RoutePath.IMAGES + '/')) return RoutePath.IMAGES
   if (pathname.startsWith(RoutePath.CI + '/')) return RoutePath.CI
+  if (pathname.startsWith(RoutePath.APPS + '/')) return RoutePath.APPS
   return RoutePath.BOXES
 }

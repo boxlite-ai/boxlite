@@ -4,9 +4,19 @@ These screenshots show the frontend in mock mode. App data, generated addresses,
 deployments and database responses are fixtures, not live hosted applications.
 See [App hosting](README.md#app-hosting) for access boundaries and fixture switches.
 
+## Request access
+
+Open **Applications → APPs** in an organization that lacks `read:apps`.
+Select **Request access** to send the BoxLite team your organization, account
+email and the name of the experimental feature. A successful submission shows a
+confirmation on the same page. An App detail link opens this same request page.
+
+![Experimental App hosting access request](review-assets/app-hosting/access-request.png)
+
 ## Early access
 
-Select **Get early access** to open the current organization's Apps. The same
+In an invited organization, members with App read permission can select
+**Get early access** to open the current organization's Apps. The same
 button on a direct App link opens that App's details. The introduction appears
 once per browser tab.
 
