@@ -711,10 +711,10 @@ BoxliteErrorCode code = boxlite_box_export_with_options(
 ```
 
 `NULL` options or `include_memory = 0` selects disk-only export. Any nonzero
-value requests a full checkpoint with guest memory and VM state. The runtime's
-full-checkpoint archive creation is currently a placeholder that returns
-`Unsupported` if reached. REST rejects the request with `Unsupported` without
-sending an HTTP request.
+value requests a full checkpoint with guest memory and VM state. Local full
+export requires a running box: a stopped box returns `InvalidState`, and a
+running box returns `Unsupported` because the VMM checkpoint hook is still a
+placeholder. REST returns `Unsupported` without sending an HTTP request.
 
 The SDK copies the options before returning. After a successful submission,
 completion (including runtime errors) is delivered through the callback. On

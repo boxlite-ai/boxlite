@@ -82,6 +82,14 @@ class TestExports:
             assert name in boxlite.__all__, f"{name} missing from __all__"
 
 
+class TestExportOptions:
+    def test_defaults_to_disk_only(self):
+        assert boxlite.ExportOptions().include_memory is False
+
+    def test_accepts_include_memory(self):
+        assert boxlite.ExportOptions(include_memory=True).include_memory is True
+
+
 class TestBoxInfoStructure:
     """Test BoxInfo has expected attributes and repr."""
 

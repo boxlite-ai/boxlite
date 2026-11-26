@@ -369,6 +369,14 @@ Handle to a running or stopped box.
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
 | `info()` | `async () -> BoxInfo` | Get box metadata |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
+| `export()` | `async (*, dest: str, options: ExportOptions \| None = None) -> str` | Export a `.boxlite` archive and return its path |
+
+`await box.export(dest="backup.boxlite", options=ExportOptions(include_memory=False))`
+exports disks only, as does omitting `options`. On a local runtime,
+`include_memory=True` requires a running box: a stopped box raises
+`InvalidStateError`, and a running box currently raises `UnsupportedError`
+because full archive creation is not implemented. The REST client raises
+`UnsupportedError` for `include_memory=True` without sending an export request.
 
 `executions().list()` returns the box's live sessions, so an execution whose
 handle was lost — a crashed client, a dropped connection — can be named again

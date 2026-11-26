@@ -340,6 +340,13 @@ Handle to a running or stopped box.
 | `executions()` | `() => JsExecutionsHandle` | Live session inventory and recovery; never starts a box |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `metrics()` | `() => Promise<JsBoxMetrics>` | Get resource metrics |
+| `export()` | `(dest: string, options?: JsExportOptions \| null) => Promise<string>` | Export a `.boxlite` archive and return its path |
+
+`JsExportOptions` has one optional field, `includeMemory?: boolean`. Exports
+are disk-only by default. On an embedded runtime, `{ includeMemory: true }`
+requires a running box with live VM state; otherwise `errorCode(err)` returns
+`invalid_state`. The current VMM placeholder rejects with `unsupported`.
+The REST client also rejects with `unsupported` without sending an export request.
 
 ---
 

@@ -14,14 +14,18 @@ impl From<JsSnapshotOptions> for SnapshotOptions {
     }
 }
 
-/// Options for exporting a box (forward-compatible placeholder).
+/// Options for exporting a box archive. The default exports disks only.
 #[napi(object)]
-#[derive(Clone, Debug)]
-pub struct JsExportOptions {}
+#[derive(Clone, Debug, Default)]
+pub struct JsExportOptions {
+    pub include_memory: Option<bool>,
+}
 
 impl From<JsExportOptions> for ExportOptions {
-    fn from(_js: JsExportOptions) -> Self {
-        ExportOptions::default()
+    fn from(js: JsExportOptions) -> Self {
+        Self {
+            include_memory: js.include_memory.unwrap_or(false),
+        }
     }
 }
 
@@ -48,8 +52,11 @@ mod tests {
 
     #[test]
     fn export_options_from_js() {
-        let js = JsExportOptions {};
-        let _opts: ExportOptions = js.into();
+        for (include_memory, expected) in [(None, false), (Some(false), false), (Some(true), true)]
+        {
+            let opts: ExportOptions = JsExportOptions { include_memory }.into();
+            assert_eq!(opts.include_memory, expected);
+        }
     }
 
     #[test]
