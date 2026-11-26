@@ -277,6 +277,7 @@ mod tests {
             guest_disk_checksum: String::new(),
             container_disk_checksum: String::new(),
             exported_at: "2026-07-26T00:00:00Z".to_string(),
+            memory_checkpoint: None,
         }
     }
 
@@ -546,6 +547,7 @@ mod tests {
             guest_disk_checksum: String::new(),
             container_disk_checksum: String::new(),
             exported_at: "2026-01-01T00:00:00Z".into(),
+            memory_checkpoint: None,
         };
 
         let error = options_from_manifest(&manifest, ArchiveImportPolicy::Trusted)
@@ -680,6 +682,7 @@ mod required_import_safety_tests {
                     guest_disk_checksum: String::new(),
                     container_disk_checksum: sha256_file(&disk).unwrap(),
                     exported_at: "2026-11-10T00:00:00Z".into(),
+                    memory_checkpoint: None,
                 };
                 let manifest_path = home.path().join("manifest.json");
                 std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
@@ -777,6 +780,7 @@ mod required_import_safety_tests {
             guest_disk_checksum: String::new(),
             container_disk_checksum: sha256_file(&disk).unwrap(),
             exported_at: "2026-11-15T00:00:00Z".into(),
+            memory_checkpoint: None,
         };
         let manifest_path = home.path().join("manifest.json");
         std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();

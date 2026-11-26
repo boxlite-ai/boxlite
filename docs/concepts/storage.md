@@ -69,6 +69,19 @@ be established. This prevents older runners from silently replacing files.
 REST copy-out currently extracts with overwrite enabled and does not enforce
 `CopyOptions::no_overwrite()`.
 
+## Box archive format
+
+A `.boxlite` export is a zstd-compressed tar archive. In version 8, the first member is
+`manifest.json`, so a streaming reader can validate the manifest before extracting any payload.
+Version 8 requires `memory_checkpoint` metadata; versions 1–7 must omit it.
+
+The metadata records the checkpoint `platform`, `container_id`, `vmstate_checksum`,
+`vmstate_size_bytes`, and `guest_rootfs_checksum`. The checksums are SHA-256. The optional
+`outbound_disabled` flag defaults to `false` and records whether outbound traffic was blocked
+without removing the saved network device. The payload includes `vmstate.krun` (VM memory and
+device state) and `guest-rootfs.ext4` (the guest root filesystem) alongside the container disk.
+Version 8 also requires the manifest's `container_disk_checksum`.
+
 ## Home directory
 
 BoxLite keeps boxes, images, and its database under `~/.boxlite` by default. The directory's
