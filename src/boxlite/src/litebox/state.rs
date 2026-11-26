@@ -290,6 +290,13 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub resolved_image: Option<crate::images::ResolvedImage>,
+    /// Whether the next start should restore staged VM state once supported.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending_memory_restore: bool,
+    /// Whether the container disk has been initialized. A failed cold start may
+    /// leave a disk without setting this flag.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rootfs_initialized: bool,
 }
 
 /// Health status of a box.
@@ -393,6 +400,8 @@ impl BoxState {
             exit_code: None,
             started_at: None,
             resolved_image: None,
+            pending_memory_restore: false,
+            rootfs_initialized: false,
         }
     }
 
@@ -412,6 +421,7 @@ impl BoxState {
     pub fn mark_started(&mut self) {
         let now = Utc::now();
         self.started_at = Some(now);
+        self.rootfs_initialized = true;
         self.last_updated = now;
     }
 
@@ -422,11 +432,12 @@ impl BoxState {
     /// shim writing its PID file and this row being saved. A `started_at` written
     /// for the PID we are replacing cannot describe the adopted one, so recovery
     /// clears it. This keeps the PID and timestamp safe to read together as one
-    /// snapshot.
+    /// snapshot. A live shim also clears any pending memory restore.
     pub fn adopt_recovered_shim(&mut self, pid: u32) {
         if self.pid != Some(pid) {
             self.started_at = None;
         }
+        self.pending_memory_restore = false;
         self.set_pid(Some(pid));
         self.set_status(BoxStatus::Running);
     }
@@ -1193,6 +1204,31 @@ mod tests {
             state.started_at.is_none(),
             "started_at for pid 4242 must not be read as evidence about pid 4243"
         );
+    }
+
+    #[test]
+    fn adopt_recovered_shim_clears_pending_memory_restore() {
+        let mut state = BoxState::new();
+        state.pending_memory_restore = true;
+        state.adopt_recovered_shim(5150);
+
+        assert_eq!(state.status, BoxStatus::Running);
+        assert_eq!(state.pid, Some(5150));
+        assert!(!state.pending_memory_restore);
+    }
+
+    #[test]
+    fn pending_memory_restore_omitted_when_false_and_roundtrips_when_true() {
+        let state = BoxState::new();
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains("pending_memory_restore"));
+
+        let mut restored = BoxState::new();
+        restored.pending_memory_restore = true;
+        let json = serde_json::to_string(&restored).unwrap();
+        assert!(json.contains("\"pending_memory_restore\":true"));
+        let decoded: BoxState = serde_json::from_str(&json).unwrap();
+        assert!(decoded.pending_memory_restore);
     }
 
     /// The three ways a lifecycle ends all keep the timestamp, like docker's

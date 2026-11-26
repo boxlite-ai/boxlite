@@ -301,6 +301,12 @@ impl ShimController {
 #[async_trait::async_trait]
 impl VmmController for ShimController {
     async fn start(&mut self, config: &InstanceSpec) -> BoxliteResult<Box<dyn VmmHandlerTrait>> {
+        if config.checkpoint_restore.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "checkpoint restore is not yet supported by the VMM backend".into(),
+            ));
+        }
+
         tracing::debug!(
             "Preparing config: entrypoint.executable={}, entrypoint.args={:?}",
             config.guest_entrypoint.executable,
@@ -343,6 +349,7 @@ impl VmmController for ShimController {
             console_output: config.console_output.clone(),
             exit_file: config.exit_file.clone(),
             detach: config.detach,
+            checkpoint_restore: None,
         };
 
         // Serialize the config for passing to subprocess
@@ -412,6 +419,69 @@ impl VmmController for ShimController {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn start_rejects_checkpoint_restore_before_spawn() {
+        use crate::rootfs::guest::{GuestRootfs, Strategy};
+        use crate::runtime::id::BoxIDMint;
+        use crate::vmm::Entrypoint;
+        use boxlite_shared::BoxTransport;
+
+        let home = tempfile::tempdir().unwrap();
+        let layout = BoxFilesystemLayout::new(home.path().to_path_buf(), Default::default(), false);
+        let socket = home.path().join("box.sock");
+        // The regular startup path would remove this stale socket before spawning.
+        std::fs::write(&socket, b"stale socket").unwrap();
+        let box_id = BoxIDMint::mint();
+        let spec = InstanceSpec {
+            engine: VmmKind::Libkrun,
+            box_id: box_id.to_string(),
+            security: Default::default(),
+            nested_virtualization: false,
+            cpus: None,
+            memory_mib: None,
+            kernel: None,
+            fs_shares: Default::default(),
+            volume_access: Vec::new(),
+            block_devices: Default::default(),
+            guest_entrypoint: Entrypoint {
+                executable: "/init".into(),
+                args: Vec::new(),
+                env: Vec::new(),
+            },
+            transport: BoxTransport::unix(socket.clone()),
+            ready_transport: BoxTransport::unix(layout.ready_socket_path()),
+            guest_rootfs: GuestRootfs {
+                path: PathBuf::new(),
+                strategy: Strategy::Disk {
+                    disk_path: PathBuf::new(),
+                    device_path: None,
+                },
+                kernel: None,
+                initrd: None,
+                env: Vec::new(),
+            },
+            network_backend_spec: None,
+            network_backend_endpoint: None,
+            disable_network: true,
+            home_dir: home.path().to_path_buf(),
+            console_output: None,
+            exit_file: layout.exit_file_path(),
+            detach: false,
+            checkpoint_restore: Some(home.path().join("checkpoint")),
+        };
+        let mut controller = ShimController {
+            binary_path: home.path().join("nonexistent-shim"),
+            engine_type: spec.engine,
+            box_id,
+            options: Default::default(),
+            layout,
+        };
+
+        let result = controller.start(&spec).await;
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        assert_eq!(std::fs::read(socket).unwrap(), b"stale socket");
+    }
 
     /// Captures `tracing` output into a shared byte buffer so a test can
     /// assert what was (and wasn't) written by an event emitted within

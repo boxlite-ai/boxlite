@@ -113,6 +113,7 @@ impl TestBox {
             console_output: Some(self.layout.console_output_path()),
             exit_file: self.layout.exit_file_path(),
             detach: false,
+            checkpoint_restore: None,
         }
     }
 

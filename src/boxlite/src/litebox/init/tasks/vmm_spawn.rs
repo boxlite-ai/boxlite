@@ -313,6 +313,7 @@ async fn build_config(
         console_output: Some(layout.console_output_path()),
         exit_file: layout.exit_file_path(),
         detach: options.detach,
+        checkpoint_restore: None,
     };
 
     Ok((

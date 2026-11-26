@@ -93,6 +93,14 @@ with the box and rechecked on every local start. The VMM exposes virtualization
 extensions to the guest, then the guest agent grants only its `/dev/kvm` device
 to the OCI workload.
 
+`ExportOptions::full()` requests VM memory and device state in addition to disk
+contents. `BoxState::pending_memory_restore` records whether the next start should
+restore staged VM state, and `BoxState::rootfs_initialized` tracks container disk
+initialization. `InstanceSpec::checkpoint_restore` carries an optional checkpoint
+path. Until VMM checkpoint backends are wired, local and REST export with
+`include_memory: true` and `ShimController::start` with a checkpoint path fail
+closed with `Unsupported`.
+
 ### Reader/writer locks
 
 `LockGuard::new_async` and `ReadLockGuard::new_async` first await a shared per-ID
