@@ -20,9 +20,10 @@ The connection needs permission to register workers and quota for the requested
 | Runner label | Jobs |
 | --- | --- |
 | `boxlite` | Lightweight lint and setup, Python and Node SDK unit tests, Actions and Python CodeQL, plugin package validation, Go SDK release configuration, status and selected release artifact uploads |
-| `boxlite-2vcpu-4gbmem-30gbdisk` | API client drift, Dashboard tests and Secret Server PostgreSQL integration |
-| `boxlite-4vcpu-16gbmem-30gbdisk` | Go CodeQL autobuild, Go SDK release checks, Node SDK release tests and Node release packaging |
-| `boxlite-4vcpu-16gbmem-64gbdisk` | C/C++, JavaScript/TypeScript and Rust CodeQL, Clippy, standalone guest artifacts and the non-publishing multiarch Box image build |
+| `boxlite-2vcpu-4gbmem-30gbdisk` | C/C++ CodeQL, API client drift, Dashboard tests and Secret Server PostgreSQL integration |
+| `boxlite-4vcpu-8gbmem-30gbdisk` | Go CodeQL autobuild |
+| `boxlite-4vcpu-16gbmem-30gbdisk` | Go SDK release checks, Node SDK release tests and Node release packaging |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | JavaScript/TypeScript and Rust CodeQL, Clippy, standalone guest artifacts and the non-publishing multiarch Box image build |
 | GitHub-hosted Ubuntu | API tests, Go SDK coverage, native SDK and runtime packaging, Rust coverage, Nix and REST E2E, protected publishing and runner recovery |
 
 The Node release upload builds and packs the npm packages before attaching them.

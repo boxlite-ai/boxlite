@@ -49,10 +49,10 @@ jobs:
             runner: boxlite
           - language: c-cpp
             build-mode: none
-            runner: boxlite-4vcpu-16gbmem-64gbdisk
+            runner: boxlite-2vcpu-4gbmem-30gbdisk
           - language: go
             build-mode: autobuild
-            runner: boxlite-4vcpu-16gbmem-30gbdisk
+            runner: boxlite-4vcpu-8gbmem-30gbdisk
           - language: javascript-typescript
             build-mode: none
             runner: boxlite-4vcpu-16gbmem-64gbdisk
