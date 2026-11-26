@@ -97,7 +97,7 @@ describe('JwtStrategy.validate — local account access', () => {
 
     expect(userService.create).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'user-1', email: 'new@boxlite.dev', defaultOrganizationDefaultRegionId: 'us' }),
-      Context.user({ userId: 'user-1', authMethod: 'jwt' }),
+      Context.user({ userId: 'user-1', authMethod: 'jwt', tokenIssuedAt: payload.iat }),
     )
     expect(loginEvents.recordFirstUse).toHaveBeenCalledWith('user-1', payload)
   })
