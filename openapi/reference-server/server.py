@@ -941,13 +941,14 @@ async def import_box(
 
 async def exec_with_transport_retry(box_handle, command: str, **kwargs):
     # Box startup and guest bridge establishment can be briefly racy.
-    for attempt in range(5):
+    for _ in range(4):
         try:
             return await box_handle.exec(command, **kwargs)
         except Exception as err:
-            if "transport error" not in str(err).lower() or attempt == 4:
+            if "transport error" not in str(err).lower():
                 raise
             await asyncio.sleep(0.2)
+    return await box_handle.exec(command, **kwargs)
 
 
 @app.post("/v1/{prefix}/boxes/{box_id}/exec", status_code=201)
