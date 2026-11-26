@@ -107,6 +107,12 @@ impl Guest for ResizeGuest {
     ) -> Result<Response<SyncClockResponse>, Status> {
         Err(Status::unimplemented("unused"))
     }
+    async fn set_online_cpus(
+        &self,
+        _: Request<SetOnlineCpusRequest>,
+    ) -> Result<Response<SetOnlineCpusResponse>, Status> {
+        Err(Status::unimplemented("unused"))
+    }
     async fn resize_filesystem(
         &self,
         request: Request<ResizeFilesystemRequest>,

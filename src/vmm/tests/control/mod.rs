@@ -22,6 +22,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 fn config(disks: Vec<DiskConfig>) -> VmConfig {
     VmConfig {
         vcpu_count: 1,
+        max_vcpus: 1,
         memory_mib: 2,
         kernel: "unused".into(),
         cmdline: String::new(),

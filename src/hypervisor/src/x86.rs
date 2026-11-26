@@ -60,6 +60,11 @@ pub struct X86BootRegisters {
 
 /// Boot configuration and paused platform-state transfer for an x86 VM.
 pub trait X86Vm: Vm<Vcpu: X86Vcpu> {
+    /// Whether this backend supports moving vCPUs between worker threads.
+    fn supports_vcpu_parking(&self) -> bool {
+        false
+    }
+
     /// Captures VM-global state and starts a snapshot round with all vCPUs and
     /// IRQ producers stopped. Complete pending userspace I/O first, then save
     /// the VM and call [`X86Vcpu::save_state`] once per vCPU in the round.
@@ -101,6 +106,22 @@ pub trait X86Vm: Vm<Vcpu: X86Vcpu> {
 
 /// Boot configuration and paused-state transfer for an x86 vCPU.
 pub trait X86Vcpu: Vcpu {
+    /// Releases the worker binding after the caller completes pending device I/O.
+    /// A rejection returns the still-bound vCPU to the caller.
+    fn detach(self) -> VcpuDetach<Self>
+    where
+        Self: Sized,
+    {
+        Err((
+            Box::new(self),
+            crate::Error::ConfigureVcpu {
+                id: 0,
+                operation: "detach CPU (unsupported backend)",
+                source: std::io::ErrorKind::Unsupported.into(),
+            },
+        ))
+    }
+
     /// Captures a stopped CPU without entering the guest. Complete I/O first.
     /// Start each snapshot round with [`X86Vm::save_state`]. KVM rejects saves
     /// before that call and permits one successful save per vCPU in the round.
@@ -705,3 +726,33 @@ mod tests {
 #[cfg(all(test, target_os = "linux"))]
 #[path = "../tests/snapshot/mod.rs"]
 mod codec_tests;
+
+/// A detach result returning the worker-bound vCPU on rejection.
+pub type VcpuDetach<V> =
+    std::result::Result<Box<dyn X86DetachedVcpu<Vcpu = V>>, (Box<V>, crate::Error)>;
+
+/// Whether a failed startup reset left the detached vCPU reusable.
+#[derive(Debug)]
+pub enum VcpuResetError {
+    /// No mutation was attempted and the detached vCPU may be retried.
+    Unchanged(crate::Error),
+    /// A write was attempted, so this CPU ID cannot be granted again.
+    Unavailable(crate::Error),
+}
+
+/// An x86 vCPU with no worker binding. The guest can still send it INIT and SIPI.
+/// A host grant uses [`reset`](Self::reset) to discard those startup events.
+pub trait X86DetachedVcpu: Send {
+    /// The thread-bound vCPU that [`bind`](Self::bind) returns.
+    type Vcpu;
+
+    /// Whether the guest left the vCPU halted, as an offlined CPU does.
+    fn is_halted(&self) -> Result<bool>;
+
+    /// Drops any INIT and SIPI received while parked; the vCPU then waits for
+    /// a fresh INIT, as a CPU that never ran does.
+    fn reset(&mut self) -> std::result::Result<(), VcpuResetError>;
+
+    /// Binds the vCPU to the calling thread.
+    fn bind(self: Box<Self>) -> Result<Self::Vcpu>;
+}

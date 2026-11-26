@@ -69,6 +69,107 @@ async fn boot(scenario: &str, memory_mib: u32) -> String {
 }
 
 #[tokio::test]
+#[ignore = "requires KVM, VMM_KERNEL and the real guest binaries"]
+async fn a_rust_caller_resizes_vcpus_with_the_real_guest_agent() {
+    use crate::portal::connection::Connection;
+    use boxlite_shared::{GuestClient, SetOnlineCpusRequest};
+
+    let test_box = TestBox::new();
+    let root_disk = guest_root(&test_box);
+    let kernel = fs::read(std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL")).unwrap();
+    let prepared = test_box.stage_kernel(&kernel, None);
+    let mut spec = test_box.spec(Some(prepared));
+    spec.block_devices.add(BlockDevice {
+        block_id: "vda".into(),
+        disk_path: root_disk.path().into(),
+        format: DiskFormat::Raw,
+        read_only: true,
+    });
+    spec.guest_rootfs.strategy = Strategy::Disk {
+        disk_path: root_disk.path().into(),
+        device_path: Some("/dev/vda".into()),
+    };
+    spec.guest_entrypoint.executable = "/boxlite-guest".into();
+    spec.guest_entrypoint.args = vec![
+        "--listen".into(),
+        format!("unix://{}", test_box.layout.socket_path().display()),
+    ];
+
+    let mut config = build_config(&spec).unwrap();
+    config.max_vcpus = 4;
+    let console = fs::File::create(test_box.layout.console_output_path()).unwrap();
+    let mut vm = boxlite_vmm::Vm::new(config, Box::new(console)).unwrap();
+    let control = vm.control();
+    let worker = std::thread::spawn(move || vm.run());
+    let result = tokio::time::timeout(SHIM_TIMEOUT, async {
+        let mut guest = loop {
+            let endpoint = Connection::new(spec.transport.clone()).channel().await?;
+            let mut guest = GuestClient::new(endpoint);
+            if let Ok(response) = guest
+                .set_online_cpus(SetOnlineCpusRequest { count: 1 })
+                .await
+            {
+                break (guest, response.into_inner().online);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let (client, boot) = (&mut guest.0, guest.1);
+        let boot_workers = vcpu_worker_count();
+        let grow = control.clone();
+        let granted = tokio::task::spawn_blocking(move || grow.set_online_vcpus(4)).await??;
+        let expanded = client
+            .set_online_cpus(SetOnlineCpusRequest { count: 4 })
+            .await?
+            .into_inner()
+            .online;
+        let grown_workers = vcpu_worker_count();
+        let shrunk = client
+            .set_online_cpus(SetOnlineCpusRequest { count: 2 })
+            .await?
+            .into_inner()
+            .online;
+        let shrink = control.clone();
+        let revoked = tokio::task::spawn_blocking(move || shrink.set_online_vcpus(2)).await??;
+        Ok::<_, Box<dyn std::error::Error>>((
+            boot,
+            expanded,
+            shrunk,
+            [granted, revoked],
+            [boot_workers, grown_workers, vcpu_worker_count()],
+        ))
+    })
+    .await;
+    control.stop();
+    let ended = worker.join().unwrap();
+    let console = test_box.console();
+    assert_eq!(
+        ended.unwrap(),
+        boxlite_vmm::VmExit::StopRequested,
+        "{console}"
+    );
+    let (boot, expanded, shrunk, grants, workers) = result
+        .expect("guest resize timed out")
+        .unwrap_or_else(|error| panic!("guest resize failed: {error}\n{console}"));
+    assert_eq!(boot, [0]);
+    assert_eq!(expanded, [0, 1, 2, 3]);
+    assert_eq!(shrunk, [0, 1]);
+    assert_eq!(grants, [4, 2]);
+    assert_eq!(workers, [1, 4, 2]);
+}
+
+fn vcpu_worker_count() -> usize {
+    fs::read_dir("/proc/self/task")
+        .unwrap()
+        .filter_map(|entry| fs::read_to_string(entry.ok()?.path().join("comm")).ok())
+        .filter(|name| {
+            name.trim()
+                .strip_prefix("vcpu")
+                .is_some_and(|id| id.parse::<u8>().is_ok())
+        })
+        .count()
+}
+
+#[tokio::test]
 #[ignore = "requires native shim, KVM, VMM_KERNEL, VMM_GUEST and VMM_GUEST_PROBE"]
 async fn init_bootstraps_the_real_guest_and_serves_unix_rpc() {
     let console = boot("fresh", DEFAULT_MEMORY_MIB).await;

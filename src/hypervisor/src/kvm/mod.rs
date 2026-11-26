@@ -25,6 +25,12 @@ mod vcpu;
 mod vm;
 
 #[cfg(target_arch = "x86_64")]
+mod detached;
+
+#[cfg(target_arch = "x86_64")]
+pub use detached::DetachedKvmVcpu;
+
+#[cfg(target_arch = "x86_64")]
 pub use vm::{KvmVm, PreparedKvm};
 
 #[cfg(target_arch = "x86_64")]

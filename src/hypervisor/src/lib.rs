@@ -26,7 +26,10 @@ pub use arm64::{Arm64BootRegisters, Arm64Vcpu, CpuOnResult};
 #[cfg(target_arch = "x86_64")]
 mod x86;
 #[cfg(target_arch = "x86_64")]
-pub use x86::{X86BootRegisters, X86CpuidEntry, X86Msr, X86Segment, X86Vcpu, X86Vm};
+pub use x86::{
+    VcpuDetach, VcpuResetError, X86BootRegisters, X86CpuidEntry, X86DetachedVcpu, X86Msr,
+    X86Segment, X86Vcpu, X86Vm,
+};
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub use x86::{X86IrqchipState, X86VcpuState, X86VmState};
 
@@ -56,7 +59,7 @@ pub use hvf::{HvfVcpu, HvfVcpuHandle, HvfVm};
 mod kvm;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use kvm::{KvmVcpu, KvmVcpuHandle, KvmVm, PreparedKvm};
+pub use kvm::{DetachedKvmVcpu, KvmVcpu, KvmVcpuHandle, KvmVm, PreparedKvm};
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod whp;

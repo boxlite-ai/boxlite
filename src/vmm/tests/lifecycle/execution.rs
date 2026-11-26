@@ -27,6 +27,7 @@ use crate::{
 pub(super) fn config(vcpu_count: u8) -> VmConfig {
     VmConfig {
         vcpu_count,
+        max_vcpus: vcpu_count,
         memory_mib: 1,
         kernel: "unused".into(),
         cmdline: String::new(),
@@ -48,6 +49,53 @@ fn bare(backend: MockVm, count: u8) -> Vm<MockVm> {
         |_, _| Ok(()),
     )
     .unwrap()
+}
+
+#[test]
+fn pause_uses_the_attached_worker_ids_after_resize_joins() {
+    use crate::mock_vm::{CpuOperation, CpuPause};
+
+    let (retirement, entered, release) = CpuPause::new(2, CpuOperation::ObservePark);
+    let backend = MockVm::new().with_cpu_pause(retirement);
+    let entries = backend.entries();
+    let mut vm = Vm::with_backend(
+        VmConfig {
+            max_vcpus: 4,
+            ..config(1)
+        },
+        || Ok(backend),
+        |_, _| Ok(X86BootRegisters::default()),
+        |_, _| Ok(()),
+    )
+    .unwrap();
+    let lifecycle = Arc::clone(vm.lifecycle());
+    let exit = run_with_control(&mut vm, move |control| {
+        wait_until(|| entries.lock().unwrap().contains(&0));
+        assert_eq!(control.set_online_vcpus(4).unwrap(), 4);
+        control.request_pause().unwrap();
+        control.wait_paused(WAIT).unwrap();
+        assert_eq!(lifecycle.state().acknowledgements, 0b1111);
+        assert!(matches!(
+            control.set_online_vcpus(2),
+            Err(Error::VmNotRunning)
+        ));
+        control.resume().unwrap();
+
+        thread::scope(|scope| {
+            let shrink = scope.spawn(|| control.set_online_vcpus(2));
+            entered.recv_timeout(WAIT).unwrap();
+            let pause = control.request_pause();
+            let pending = control.wait_paused(Duration::ZERO);
+            release.send(()).unwrap();
+            assert_eq!(shrink.join().unwrap().unwrap(), 2);
+            pause.unwrap();
+            assert_error(pending, "wait_paused", ControlReason::DeadlineTimeout);
+            control.wait_paused(WAIT).unwrap();
+            assert_eq!(lifecycle.state().acknowledgements, 0b0011);
+        });
+        control.resume().unwrap();
+    });
+    assert_eq!(exit.unwrap(), VmExit::StopRequested);
 }
 
 pub(super) fn wait_until(mut ready: impl FnMut() -> bool) {
@@ -262,6 +310,7 @@ impl KickAttempts {
 #[derive(Clone)]
 enum PauseFault {
     CompleteIo(mpsc::Sender<()>),
+    HandlePanic,
     SplitIo {
         gate: Arc<ExitGate>,
         end: CompletionEnd,
@@ -413,6 +462,7 @@ impl VcpuHandle for FaultyKick {
                 });
             }
             PauseFault::CompleteIo(_)
+            | PauseFault::HandlePanic
             | PauseFault::SplitIo { .. }
             | PauseFault::TerminalKick { .. }
             | PauseFault::GatedKickError { .. } => {}
@@ -484,6 +534,10 @@ impl Vcpu for FailingCpu {
     }
 
     fn handle(&self) -> Self::Handle {
+        assert!(
+            self.id != 1 || !matches!(self.fault, PauseFault::HandlePanic),
+            "injected startup handle failure"
+        );
         if self.id == 0
             && let PauseFault::Startup { handle_ready, .. } = &self.fault
         {
@@ -515,6 +569,27 @@ impl X86Vcpu for FailingCpu {
     fn set_boot_registers(&mut self, regs: &X86BootRegisters) -> boxlite_hypervisor::Result<()> {
         self.vcpu.set_boot_registers(regs)
     }
+}
+
+#[test]
+fn a_startup_handle_panic_stops_boot_without_guest_entry() {
+    let backend = MockVm::new();
+    let entries = backend.entries();
+    let mut vm = faulty_vm(backend, 2, PauseFault::HandlePanic);
+    let control = vm.control();
+    let (send_exit, finished) = mpsc::channel();
+    let runner = thread::spawn(move || send_exit.send(vm.run()));
+
+    let exit = finished.recv_timeout(WAIT);
+    if exit.is_err() {
+        control.stop();
+    }
+    let _ = runner.join();
+    assert!(
+        matches!(exit, Ok(Err(Error::VcpuPanicked { vcpu: 1 }))),
+        "{exit:?}"
+    );
+    assert!(entries.lock().unwrap().is_empty());
 }
 
 #[test]

@@ -69,6 +69,13 @@ service Guest {
 
   // Grow the container root filesystem after its block device has grown.
   rpc ResizeFilesystem(ResizeFilesystemRequest) returns (ResizeFilesystemResponse);
+
+  // Bring guest CPUs online or offline so the lowest `count` present CPUs
+  // are online. Grant host vCPUs before raising the count, and revoke them
+  // only after lowering it. A write still in flight after the 15-second
+  // deadline retains admission until it completes. A concurrent call returns
+  // UNAVAILABLE and can be retried.
+  rpc SetOnlineCpus(SetOnlineCpusRequest) returns (SetOnlineCpusResponse);
 }
 
 // Persistent SSH desired state and live listener control.
@@ -275,6 +282,16 @@ message ResizeFilesystemRequest {
 }
 
 message ResizeFilesystemResponse {}
+
+message SetOnlineCpusRequest {
+  // CPUs to keep online, from 1 to the number present
+  uint32 count = 1;
+}
+
+message SetOnlineCpusResponse {
+  // IDs of the online CPUs after the change
+  repeated uint32 online = 1;
+}
 
 // ============================================================================
 // SSH runtime configuration

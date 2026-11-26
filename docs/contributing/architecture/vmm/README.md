@@ -44,7 +44,7 @@ their project; their revisions are pinned under [References](#references).
 | --- | --- | --- | --- |
 | Minimum macOS | 15, using HVF's in-kernel GICv3 | `hv_gic_create` and `hv_gic_set_spi` exist from macOS 15.0 (`hv_gic.h`), so no HVF or KVM host needs an emulated interrupt controller, and libkrun already prefers the in-kernel GIC wherever the host has it | macOS 12 with a userspace GICv3, which libkrun falls back to below macOS 15 (`libkrun/src/vmm/src/builder.rs:892-894`), at about 3–4 engineer-weeks in M1 |
 | SHARED share | virtio-fs in two stages: a FUSE server core for the SHARED share in M2, full passthrough for user volumes in M3 | Every box mounts the SHARED share, and guest file copy stages through it, so the first box already needs virtio-fs | Moving container layout and file copy off the SHARED share first, which changes the guest agent before the first box boots |
-| Threads | One thread per vCPU, one virtio worker thread for every device, and a poller on the thread that calls `run()` | HVF binds a vCPU to the thread that created it. One worker thread runs every device, as Firecracker and libkrun do, and keeps the threads a per-thread seccomp profile must cover to a fixed few. A slow device, such as a blocking virtio-fs request, stalls the others; the `WorkerRuntime` seam lets per-device threads replace the shared one without changing the transport, the devices or `Vm` if M2 measurements show such stalls | Worker threads per device (Cloud Hypervisor, crosvm), kept behind that seam; an async runtime inside the jailed shim, which complicates per-thread seccomp |
+| Threads | One thread per granted vCPU after boot, one virtio worker thread for every device, and a poller on the thread that calls `run()` | HVF binds a vCPU to the thread that created it. One worker thread runs every device, as Firecracker and libkrun do, and keeps the threads a per-thread seccomp profile must cover to a fixed few. A slow device, such as a blocking virtio-fs request, stalls the others; the `WorkerRuntime` seam lets per-device threads replace the shared one without changing the transport, the devices or `Vm` if M2 measurements show such stalls | Worker threads per device (Cloud Hypervisor, crosvm), kept behind that seam; an async runtime inside the jailed shim, which complicates per-thread seccomp |
 | Guest firmware | None: the VMM writes the kernel and its boot data into guest RAM and starts the boot vCPU at the kernel's entry point, as libkrun, Firecracker and crosvm do | The kernel ships with BoxLite as a file, so firmware and a boot loader would only add a step before it and a second guest program to ship, pin and trust | Firmware boot with edk2 UEFI or Rust Hypervisor Firmware, which cloud-hypervisor offers for disk images that carry their own boot loader (`README.md:114-118`, `:134-137`) and which only user-supplied OS images or Secure Boot would need |
 
 macOS 12–14 keep running boxes on libkrun until M5. When M5 removes libkrun,
@@ -435,11 +435,14 @@ worker slot synchronously.
 ### Threads
 
 - **vCPU threads.**
-  - `run()` spawns one per vCPU, named `vcpuN`. Each creates and configures its
-    vCPU and waits at a start gate until every vCPU is configured; a thread
-    that fails to start aborts the gate.
-  - Before each guest entry, a vCPU checks the pause and stop state. It waits
-    on a condition variable while parked.
+  - `run()` starts one worker per possible x86 vCPU. After all vCPUs are
+    configured, surplus workers detach and join before the boot workers can
+    enter the guest.
+  - VM pause keeps the threads alive and waits for attached CPU IDs at their
+    guest-entry checkpoints, where every worker also checks for stop.
+    CPU shrink completes I/O, detaches the
+    affected vCPU, and reclaims its thread. Expansion binds that vCPU to a
+    new thread.
   - When the VM is running, idle vCPUs wait inside the host. KVM's in-kernel
     irqchip waits out `HLT`; with the in-kernel GIC, HVF waits out `WFI` inside
     `hv_vcpu_run` and wakes the vCPU for its vtimer and for SPIs set from any
@@ -476,14 +479,12 @@ worker slot synchronously.
   - The poller is `mio`, which uses epoll on Linux and kqueue on macOS and is
     already in `Cargo.lock` through tokio. rust-vmm's event-manager and crosvm's
     `WaitContext` are epoll-only.
-- **Stopping.** The first terminal event decides the outcome. Sending any
-  event sets the stop flag before it queues, so the vCPU that sent it, such as
-  the one that reset the i8042, never enters the guest again; every vCPU
-  checks the flag before each entry. The `run()` thread then:
-  1. kicks and unparks every vCPU;
-  2. joins the vCPU threads;
-  3. shuts down the virtio workers and joins the thread;
-  4. finishes the console and returns.
+- **Stopping** starts when the first terminal event decides the outcome. Sending it
+  sets the stop latch before enqueueing, and every worker checks the latch
+  before guest entry. The `run()` thread handles shutdown in this order.
+  1. Release waiting vCPU workers and kick attached workers.
+  2. Join the vCPU threads, then shut down and join the virtio workers.
+  3. Finish the console and return.
 
 ## VM lifecycle and errors
 
@@ -509,28 +510,27 @@ provides backend-independent runtime controls. External threads use
 `resize_disk()` without holding the VM itself. `StopHandle::stop` uses the
 same stop latch.
 
-`VmStatus` normally moves from `Created` to `Running`. A device-less VM
-can reserve its first pause in `Created`. It keeps that status until
-`run` claims the reservation and enters `Pausing` before releasing the
-vCPU start gate. Every vCPU parks before its first guest entry.
+A device-less VM can reserve its first pause in `Created`. The driver starts
+`Pausing` before releasing the boot workers to their checkpoints, after
+joining any surplus workers.
 
-During execution, `request_pause()` posts a command in a single-slot mailbox.
-The driver accepts it in `Running`, enters `Pausing`, and kicks the vCPUs.
-At `checkpoint`, each vCPU owner dispatches exits from `complete_pending_io`
-until it returns `Ok(IoCompletion::Done)`, then calls `notify_guest_stopped`. A
-terminal exit or error returns immediately without acknowledging the pause. The
-checkpoint also skips acknowledgement if a stop arrived during completion.
-The driver publishes `Paused` after one acknowledgement from each vCPU.
-`resume()` uses the same slot and epoch to reopen guest entry and return to
-`Running`. The mailbox lock serializes admission against concurrent clones. A
-pure poller wake prompts the driver to check the mailbox. Terminal events use
-the same poller and keep their queue priority.
+During execution, the driver finishes CPU changes already admitted when a
+pause is reserved. It then enters `Pausing` and kicks the attached workers
+in that epoch.
+
+At each checkpoint, the worker dispatches pending I/O and calls
+`notify_guest_stopped` before acknowledging. A terminal exit, error or stop
+during completion skips the acknowledgement. The driver reports `Paused`
+after all the participating CPU IDs acknowledge that epoch.
+
+`resume()` reopens guest entry for the same workers. A poller wake prompts
+the driver to check the mailbox, and terminal events keep their queue priority.
 
 `request_pause()` posts the request and wakes the driver without waiting.
 `wait_paused(timeout)` observes the reserved, queued, or active epoch and its
 timeout leaves the pause in place.
 
-A stop or terminal event moves the VM to `Stopping`, releases parked vCPUs,
+A stop or terminal event moves the VM to `Stopping`, releases paused workers,
 and wakes pending control calls with `TerminalOutcome`. A stop in `Created`
 lets the first `run` skip vCPU creation and take the usual cleanup path.
 The first terminal event determines the outcome of an active run.
@@ -778,8 +778,10 @@ The kernel then boots itself (Linux v6.12):
   - The jailed shim still needs access to the new host directory, for example
     as a descriptor passed from the runtime.
 - **M7, dynamic resources.**
-  - `vcpu_count` at boot is the maximum. The guest brings CPUs online and
-    offline: PSCI `CPU_ON` and `CPU_OFF` on arm64, INIT and SIPI on x86_64.
+  - `max_vcpus` defines possible CPUs at boot. Once startup settles, the host
+    keeps a thread for each granted vCPU ([#2885](https://github.com/boxlite-ai/boxlite/issues/2885)).
+    The guest brings CPUs online and offline: PSCI `CPU_ON` and `CPU_OFF` on
+    arm64, INIT and SIPI on x86_64.
   - A hotplug region directly above RAM is reserved at boot. virtio-mem adds
     and removes blocks in it with `map_memory` and `unmap_memory`.
 - **M8, memory snapshots.**

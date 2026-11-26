@@ -19,7 +19,7 @@ use crate::{
     control::ControlRegistry,
     events::{Event, EventLoop},
     mock_vm::{MockHandle, MockVm},
-    vcpu::{handle_exit, park_vcpu},
+    vcpu::{handle_exit, pause_vcpu},
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -154,7 +154,7 @@ fn checkpoint_dispatches_both_split_mmio_fragments_before_pausing() {
     let (mut events, lifecycle, control, chipset, mut cpu) = start_checkpoint(CompletionEnd::Done);
     thread::scope(|scope| {
         let _stop = StopOnDrop(&control);
-        let worker = scope.spawn(|| lifecycle.checkpoint(0, || park_vcpu(&chipset, &mut cpu, 0)));
+        let worker = scope.spawn(|| lifecycle.checkpoint(0, || pause_vcpu(&chipset, &mut cpu, 0)));
 
         assert!(events.wait(Some(WAIT)).unwrap().is_none());
         assert_eq!(lifecycle.state().acknowledgements, 1);
@@ -243,7 +243,7 @@ fn checkpoint_propagates_terminal_exit_or_error_without_acknowledging() {
         let outcome = thread::scope(|scope| {
             let _stop = StopOnDrop(&control);
             let worker = scope.spawn(|| {
-                let outcome = lifecycle.checkpoint(0, || park_vcpu(&chipset, &mut cpu, 0));
+                let outcome = lifecycle.checkpoint(0, || pause_vcpu(&chipset, &mut cpu, 0));
                 finished.send(outcome).unwrap();
             });
             let outcome = result
@@ -287,7 +287,7 @@ fn stop_during_fragment_completion_skips_the_pause_acknowledgement() {
         completing.send(()).unwrap();
         stop.recv_timeout(WAIT).unwrap();
     }));
-    let outcome = lifecycle.checkpoint(0, || park_vcpu(&chipset, &mut cpu, 0));
+    let outcome = lifecycle.checkpoint(0, || pause_vcpu(&chipset, &mut cpu, 0));
     operator.join().unwrap();
     assert!(outcome.unwrap().is_none());
     assert_eq!(cpu.completions, 2);
@@ -654,6 +654,7 @@ fn terminal_stop_rejects_queued_and_accepted_operations() {
 fn device_less_validation_rejects_each_userspace_device() {
     let empty = VmConfig {
         vcpu_count: 1,
+        max_vcpus: 1,
         memory_mib: 16,
         kernel: "vmlinux".into(),
         cmdline: String::new(),

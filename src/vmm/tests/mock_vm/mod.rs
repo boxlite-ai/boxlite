@@ -15,6 +15,55 @@ use boxlite_hypervisor::{
     Error, IoCompletion, MemoryRegion, Result, Vcpu, VcpuExit, VcpuHandle, Vm,
 };
 
+#[cfg(target_arch = "x86_64")]
+use std::sync::mpsc;
+
+#[cfg(target_arch = "x86_64")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CpuOperation {
+    CheckParkingSupport,
+    Reset,
+    Bind,
+    ObservePark,
+}
+
+#[cfg(target_arch = "x86_64")]
+#[derive(Debug)]
+pub(crate) struct CpuPause {
+    id: u32,
+    operation: CpuOperation,
+    entered: mpsc::SyncSender<()>,
+    resume: Mutex<mpsc::Receiver<()>>,
+}
+
+#[cfg(target_arch = "x86_64")]
+impl CpuPause {
+    pub(crate) fn new(
+        id: u32,
+        operation: CpuOperation,
+    ) -> (Arc<Self>, mpsc::Receiver<()>, mpsc::SyncSender<()>) {
+        let (entered, wait) = mpsc::sync_channel(1);
+        let (release, resume) = mpsc::sync_channel(1);
+        (
+            Arc::new(Self {
+                id,
+                operation,
+                entered,
+                resume: Mutex::new(resume),
+            }),
+            wait,
+            release,
+        )
+    }
+
+    fn pause(&self, id: u32, operation: CpuOperation) {
+        if (self.id, self.operation) == (id, operation) {
+            let _ = self.entered.send(());
+            let _ = self.resume.lock().unwrap().recv();
+        }
+    }
+}
+
 /// One recorded call attempt, with the host address as an integer because
 /// `MemoryRegion` is not `Send`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -40,6 +89,15 @@ pub(crate) enum Call {
         id: u32,
     },
     DropVcpu {
+        id: u32,
+    },
+    ParkVcpu {
+        id: u32,
+    },
+    ResetVcpu {
+        id: u32,
+    },
+    ResumeVcpu {
         id: u32,
     },
 }
@@ -130,6 +188,12 @@ pub(crate) struct MockVm {
     scripts: Vec<Vec<Step>>,
     /// The vCPU whose `set_cpu_features` fails.
     fail_setup: Option<u32>,
+    #[cfg(target_arch = "x86_64")]
+    fail_reset: Option<u32>,
+    #[cfg(target_arch = "x86_64")]
+    fail_reset_read_once: Option<u32>,
+    #[cfg(target_arch = "x86_64")]
+    pause: Option<Arc<CpuPause>>,
     /// The id of each vCPU entry into the guest, in order.
     entries: Arc<Mutex<Vec<u32>>>,
 }
@@ -170,6 +234,28 @@ impl MockVm {
             fail_setup: Some(id),
             ..Self::default()
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn failing_reset_of(id: u32) -> Self {
+        Self {
+            fail_reset: Some(id),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn failing_reset_read_once_of(id: u32) -> Self {
+        Self {
+            fail_reset_read_once: Some(id),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn with_cpu_pause(mut self, pause: Arc<CpuPause>) -> Self {
+        self.pause = Some(pause);
+        self
     }
 
     /// Also fails the setup of vCPU `id`, on top of the scripts.
@@ -238,7 +324,12 @@ impl MockVm {
                 source,
             },
             Call::SetIrqLine { line, .. } => Error::SetIrqLine { line, source },
-            Call::SetCpuFeatures { .. } | Call::SetBootRegisters { .. } | Call::DropVcpu { .. } => {
+            Call::SetCpuFeatures { .. }
+            | Call::SetBootRegisters { .. }
+            | Call::DropVcpu { .. }
+            | Call::ParkVcpu { .. }
+            | Call::ResetVcpu { .. }
+            | Call::ResumeVcpu { .. } => {
                 unreachable!("only memory and interrupt calls fail by index")
             }
         })
@@ -285,6 +376,12 @@ impl Vm for MockVm {
             steps: steps.into(),
             log: Arc::clone(&self.log),
             fail_setup: self.fail_setup == Some(id),
+            #[cfg(target_arch = "x86_64")]
+            fail_reset: self.fail_reset == Some(id),
+            #[cfg(target_arch = "x86_64")]
+            fail_reset_read_once: self.fail_reset_read_once == Some(id),
+            #[cfg(target_arch = "x86_64")]
+            pause: self.pause.clone(),
             entries: Arc::clone(&self.entries),
             kick: Arc::default(),
             data: [0; 4],
@@ -301,6 +398,12 @@ pub(crate) struct MockVcpu {
     steps: VecDeque<Step>,
     log: Arc<CallLog>,
     fail_setup: bool,
+    #[cfg(target_arch = "x86_64")]
+    fail_reset: bool,
+    #[cfg(target_arch = "x86_64")]
+    fail_reset_read_once: bool,
+    #[cfg(target_arch = "x86_64")]
+    pause: Option<Arc<CpuPause>>,
     entries: Arc<Mutex<Vec<u32>>>,
     kick: Arc<Kick>,
     data: [u8; 4],
@@ -388,6 +491,13 @@ impl Vcpu for MockVcpu {
 
 #[cfg(target_arch = "x86_64")]
 impl boxlite_hypervisor::X86Vm for MockVm {
+    fn supports_vcpu_parking(&self) -> bool {
+        if let Some(pause) = &self.pause {
+            pause.pause(0, CpuOperation::CheckParkingSupport);
+        }
+        true
+    }
+
     fn supported_cpuid(&self) -> &[boxlite_hypervisor::X86CpuidEntry] {
         &[]
     }
@@ -395,6 +505,11 @@ impl boxlite_hypervisor::X86Vm for MockVm {
 
 #[cfg(target_arch = "x86_64")]
 impl boxlite_hypervisor::X86Vcpu for MockVcpu {
+    fn detach(self) -> boxlite_hypervisor::VcpuDetach<Self> {
+        self.record(Call::ParkVcpu { id: self.id });
+        Ok(Box::new(ParkedMockVcpu(self)))
+    }
+
     fn set_cpu_features(
         &mut self,
         _cpuid: &[boxlite_hypervisor::X86CpuidEntry],
@@ -416,5 +531,55 @@ impl boxlite_hypervisor::X86Vcpu for MockVcpu {
     fn set_boot_registers(&mut self, _state: &boxlite_hypervisor::X86BootRegisters) -> Result<()> {
         self.record(Call::SetBootRegisters { id: self.id });
         Ok(())
+    }
+}
+
+/// A parked mock vCPU; it keeps its script and kick state for the next resume.
+#[cfg(target_arch = "x86_64")]
+pub(crate) struct ParkedMockVcpu(MockVcpu);
+
+#[cfg(target_arch = "x86_64")]
+impl boxlite_hypervisor::X86DetachedVcpu for ParkedMockVcpu {
+    type Vcpu = MockVcpu;
+
+    fn is_halted(&self) -> Result<bool> {
+        if let Some(pause) = &self.0.pause {
+            pause.pause(self.0.id, CpuOperation::ObservePark);
+        }
+        Ok(true)
+    }
+
+    fn reset(&mut self) -> std::result::Result<(), boxlite_hypervisor::VcpuResetError> {
+        self.0.record(Call::ResetVcpu { id: self.0.id });
+        if let Some(pause) = &self.0.pause {
+            pause.pause(self.0.id, CpuOperation::Reset);
+        }
+        if std::mem::take(&mut self.0.fail_reset_read_once) {
+            return Err(boxlite_hypervisor::VcpuResetError::Unchanged(
+                Error::ConfigureVcpu {
+                    id: self.0.id,
+                    operation: "read vCPU events",
+                    source: io::ErrorKind::Interrupted.into(),
+                },
+            ));
+        }
+        if self.0.fail_reset {
+            return Err(boxlite_hypervisor::VcpuResetError::Unavailable(
+                Error::ConfigureVcpu {
+                    id: self.0.id,
+                    operation: "reset",
+                    source: io::ErrorKind::InvalidInput.into(),
+                },
+            ));
+        }
+        Ok(())
+    }
+
+    fn bind(self: Box<Self>) -> Result<MockVcpu> {
+        self.0.record(Call::ResumeVcpu { id: self.0.id });
+        if let Some(pause) = &self.0.pause {
+            pause.pause(self.0.id, CpuOperation::Bind);
+        }
+        Ok(self.0)
     }
 }

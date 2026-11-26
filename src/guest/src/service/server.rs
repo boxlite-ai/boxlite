@@ -45,6 +45,9 @@ pub(crate) struct GuestServer {
     /// Mount points frozen by Quiesce RPC, thawed by Thaw RPC.
     pub frozen_mounts: Mutex<Vec<PathBuf>>,
 
+    /// Serializes guest CPU writes even when their RPC has timed out.
+    pub(super) cpu_resize: Arc<tokio::sync::Semaphore>,
+
     /// The listener verifies that clock-sync requests come from the host.
     pub(super) allow_clock_sync: bool,
 
@@ -78,6 +81,7 @@ impl GuestServer {
             registry: ExecutionRegistry::new(),
             ssh_manager: crate::service::ssh::SshManager::default(),
             frozen_mounts: Mutex::new(Vec::new()),
+            cpu_resize: Arc::new(tokio::sync::Semaphore::new(1)),
             allow_clock_sync: false,
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             init_exits: Arc::new(Mutex::new(HashMap::new())),

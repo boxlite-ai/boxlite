@@ -1,20 +1,21 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! vCPU workers. Each runs on its own thread: it creates and configures its
-//! vCPU, waits until every vCPU is configured, then runs the guest and
-//! dispatches its exits until the VM ends. Every way a worker ends sends one
-//! event, except a stop it observed, which some other sender already caused.
+//! vCPU workers and their guest-entry checkpoints.
 
 #[cfg(target_arch = "x86_64")]
 use std::{
     panic::{self, AssertUnwindSafe},
-    sync::{Condvar, Mutex, PoisonError},
+    sync::{
+        Condvar, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, SyncSender},
+    },
 };
 
 use boxlite_hypervisor::{IoCompletion, Vcpu, VcpuExit};
 #[cfg(target_arch = "x86_64")]
-use boxlite_hypervisor::{X86BootRegisters, X86Vcpu, X86Vm};
+use boxlite_hypervisor::{VcpuResetError, X86BootRegisters, X86DetachedVcpu, X86Vcpu, X86Vm};
 
 use crate::{
     chipset::Chipset,
@@ -28,113 +29,229 @@ use crate::{
     lifecycle::Lifecycle,
 };
 
-/// Holds the workers until every vCPU is configured, so no vCPU runs before
-/// all exist. Unlike `std::sync::Barrier`, [`abort`](Self::abort) releases
-/// them when a worker thread fails to start.
-#[derive(Default)]
+#[cfg(target_arch = "x86_64")]
+mod driver;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use driver::VcpuRun;
+
+#[cfg(target_arch = "x86_64")]
+type Detached<H> = Box<dyn X86DetachedVcpu<Vcpu = <H as boxlite_hypervisor::Vm>::Vcpu>>;
+#[cfg(target_arch = "x86_64")]
+type Kick<H> = <<H as boxlite_hypervisor::Vm>::Vcpu as Vcpu>::Handle;
+
+#[cfg(target_arch = "x86_64")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Startup {
+    Configuring,
+    Detaching,
+    Checkpoint,
+    Aborted,
+}
+
+/// The driver releases surplus workers to detach before permitting boot checkpoints.
 #[cfg(target_arch = "x86_64")]
 pub(crate) struct StartGate {
-    /// Workers that arrived, and whether the gate was aborted.
-    state: Mutex<(u8, bool)>,
+    phase: Mutex<Startup>,
     changed: Condvar,
 }
 
 #[cfg(target_arch = "x86_64")]
-impl StartGate {
-    fn arrive_and_wait(&self, count: u8) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.0 += 1;
-        self.changed.notify_all();
-        drop(
-            self.changed
-                .wait_while(state, |(arrived, aborted)| *arrived < count && !*aborted)
-                .unwrap_or_else(PoisonError::into_inner),
-        );
-    }
-
-    pub(crate) fn abort(&self) {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner).1 = true;
-        self.changed.notify_all();
+impl Default for StartGate {
+    fn default() -> Self {
+        Self {
+            phase: Mutex::new(Startup::Configuring),
+            changed: Condvar::new(),
+        }
     }
 }
 
-/// What every worker of one VM shares.
+#[cfg(target_arch = "x86_64")]
+impl StartGate {
+    fn phase(&self) -> Startup {
+        *self.phase.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn release(&self, phase: Startup) {
+        *self.phase.lock().unwrap_or_else(PoisonError::into_inner) = phase;
+        self.changed.notify_all();
+    }
+
+    fn wait(&self, surplus: bool) -> bool {
+        let phase = self.phase.lock().unwrap_or_else(PoisonError::into_inner);
+        let phase = self
+            .changed
+            .wait_while(phase, |phase| match phase {
+                Startup::Configuring => true,
+                Startup::Detaching => !surplus,
+                Startup::Checkpoint | Startup::Aborted => false,
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        *phase != Startup::Aborted
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+enum WorkerOutput<H: X86Vm> {
+    Stopped,
+    Detached(Detached<H>, Result<()>),
+    GrantFailed(Option<Detached<H>>, Error),
+}
+
+/// Resources borrowed by boot workers and later grants.
 #[cfg(target_arch = "x86_64")]
 pub(crate) struct Workers<'a, H: X86Vm> {
     pub(crate) host_vm: &'a H,
-    pub(crate) vcpu_count: u8,
+    pub(crate) boot_count: u8,
+    pub(crate) max_vcpus: u8,
     pub(crate) boot_regs: &'a X86BootRegisters,
     pub(crate) chipset: &'a Chipset,
     pub(crate) sender: &'a EventSender,
     pub(crate) lifecycle: &'a Lifecycle,
-    /// The configured vCPUs' kick handles, used for pause and stop.
-    pub(crate) kicks: &'a Mutex<Vec<<H::Vcpu as Vcpu>::Handle>>,
     pub(crate) gate: &'a StartGate,
 }
 
 #[cfg(target_arch = "x86_64")]
 impl<H: X86Vm> Workers<'_, H> {
-    /// The body of the thread of vCPU `id`. A panic in it, such as a device
-    /// whose lock an earlier panic poisoned, ends the VM with
-    /// [`Error::VcpuPanicked`] instead of leaving the thread.
-    pub(crate) fn run(&self, id: u8) {
+    fn boot(&self, id: u8, ready: SyncSender<Kick<H>>, retire: &AtomicBool) -> WorkerOutput<H> {
         let vcpu = match catch_panic(id, || self.configure(id)) {
-            Ok(vcpu) => Some(vcpu),
-            Err(error) => {
-                // Sent before arriving, so the latch is set before any vCPU
-                // leaves the gate and none enters the guest.
-                self.sender.send(Event::VcpuFailed(error));
-                None
-            }
+            Ok(vcpu) => vcpu,
+            Err(error) => return self.terminal(Event::VcpuFailed(error)),
         };
-        // A failed vCPU still arrives, so the others are never left waiting.
-        self.gate.arrive_and_wait(self.vcpu_count);
-        let Some(mut vcpu) = vcpu else {
-            return;
+        let surplus = id >= self.boot_count;
+        let registered = match self.publish_ready(id, &vcpu, ready) {
+            Ok(registered) => registered,
+            Err(error) => return self.terminal(Event::VcpuFailed(error)),
         };
-        match catch_panic(id, || self.run_guest(&mut vcpu, id)) {
-            Ok(Some(event)) => self.sender.send(event),
-            Ok(None) => {}
-            Err(error) => self.sender.send(Event::VcpuFailed(error)),
+        if !registered || !self.gate.wait(surplus) || self.sender.is_stopping() {
+            return WorkerOutput::Stopped;
         }
+        if surplus {
+            match catch_panic(id, || self.detach(vcpu, id, false)) {
+                Ok(output) => output,
+                Err(error) => self.terminal(Event::VcpuFailed(error)),
+            }
+        } else {
+            self.execute(vcpu, id, retire)
+        }
+    }
+
+    fn grant(
+        &self,
+        id: u8,
+        handoff: Receiver<Detached<H>>,
+        ready: SyncSender<Kick<H>>,
+        authorize: Receiver<()>,
+        retire: &AtomicBool,
+    ) -> WorkerOutput<H> {
+        let Ok(mut vcpu) = handoff.recv() else {
+            return WorkerOutput::Stopped;
+        };
+        if self.sender.is_stopping() {
+            return WorkerOutput::Detached(vcpu, Ok(()));
+        }
+        let prepared = catch_panic(id, || {
+            Ok(match vcpu.reset() {
+                Ok(()) => vcpu
+                    .bind()
+                    .map_err(|error| WorkerOutput::GrantFailed(None, error.into())),
+                Err(VcpuResetError::Unchanged(error)) => {
+                    Err(WorkerOutput::GrantFailed(Some(vcpu), error.into()))
+                }
+                Err(VcpuResetError::Unavailable(error)) => {
+                    Err(WorkerOutput::GrantFailed(None, error.into()))
+                }
+            })
+        });
+        let vcpu = match prepared {
+            Ok(Ok(vcpu)) => vcpu,
+            Ok(Err(output)) => return output,
+            Err(error) => return WorkerOutput::GrantFailed(None, error),
+        };
+        let registered = match self.publish_ready(id, &vcpu, ready) {
+            Ok(registered) => registered,
+            Err(error) => return WorkerOutput::GrantFailed(None, error),
+        };
+        if !registered || authorize.recv().is_err() || self.sender.is_stopping() {
+            return match catch_panic(id, || self.detach(vcpu, id, false)) {
+                Ok(output) => output,
+                Err(error) => WorkerOutput::GrantFailed(None, error),
+            };
+        }
+        self.execute(vcpu, id, retire)
+    }
+
+    fn publish_ready(&self, id: u8, vcpu: &H::Vcpu, ready: SyncSender<Kick<H>>) -> Result<bool> {
+        catch_panic(id, || {
+            let registered = ready.try_send(vcpu.handle()).is_ok();
+            self.sender.wake();
+            Ok(registered)
+        })
     }
 
     fn configure(&self, id: u8) -> Result<H::Vcpu> {
         let mut vcpu = self.host_vm.create_vcpu(id.into())?;
-        let cpuid = vcpu_cpuid(self.host_vm.supported_cpuid(), id, self.vcpu_count);
+        let cpuid = vcpu_cpuid(self.host_vm.supported_cpuid(), id, self.max_vcpus);
         vcpu.set_cpu_features(&cpuid, &BOOT_MSRS)?;
-        // The other vCPUs wait in their reset state for INIT and SIPI.
         if id == 0 {
             vcpu.set_boot_registers(self.boot_regs)?;
         }
-        self.kicks
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(vcpu.handle());
         Ok(vcpu)
     }
 
-    /// Runs the guest until it asks to end, which returns the event, or until
-    /// another sender ends the VM, which returns `None` after completing the
-    /// pending I/O.
-    fn run_guest(&self, vcpu: &mut H::Vcpu, id: u8) -> Result<Option<Event>> {
-        loop {
-            if let Some(event) = self
-                .lifecycle
-                .checkpoint(id, || park_vcpu(self.chipset, vcpu, id))?
-            {
-                return Ok(Some(event));
+    fn execute(&self, mut vcpu: H::Vcpu, id: u8, retire: &AtomicBool) -> WorkerOutput<H> {
+        let outcome = catch_panic(id, || {
+            loop {
+                if let Some(event) = self
+                    .lifecycle
+                    .checkpoint(id, || pause_vcpu(self.chipset, &mut vcpu, id))?
+                {
+                    return Ok(self.terminal(event));
+                }
+                let stopping = self.sender.is_stopping();
+                if stopping || retire.load(Ordering::SeqCst) {
+                    let event = complete_pending_io(self.chipset, &mut vcpu, id)?;
+                    if stopping || self.sender.is_stopping() {
+                        return Ok(WorkerOutput::Stopped);
+                    }
+                    if let Some(event) = event {
+                        return Ok(self.terminal(event));
+                    }
+                    return match self.detach(vcpu, id, true) {
+                        Ok(output) => Ok(output),
+                        Err(error) => Ok(WorkerOutput::GrantFailed(None, error)),
+                    };
+                }
+                if let Some(event) = handle_exit(self.chipset, id, vcpu.run()?)? {
+                    return Ok(self.terminal(event));
+                }
             }
-            // A stop may have released this worker from its checkpoint.
-            if self.sender.is_stopping() {
-                let _ = complete_pending_io(self.chipset, vcpu, id)?;
-                return Ok(None);
-            }
-            let exit = vcpu.run()?;
-            if let Some(event) = handle_exit(self.chipset, id, exit)? {
-                return Ok(Some(event));
-            }
+        });
+        match outcome {
+            Ok(output) => output,
+            Err(error) => self.terminal(Event::VcpuFailed(error)),
         }
+    }
+
+    fn detach(&self, vcpu: H::Vcpu, id: u8, check_offline: bool) -> Result<WorkerOutput<H>> {
+        let detached = vcpu.detach().map_err(|(_vcpu, error)| Error::from(error))?;
+        let result = if check_offline {
+            detached
+                .is_halted()
+                .map(|halted| {
+                    if !halted {
+                        tracing::warn!(vcpu = id, "retired a vCPU the guest had not offlined");
+                    }
+                })
+                .map_err(Error::from)
+        } else {
+            Ok(())
+        };
+        Ok(WorkerOutput::Detached(detached, result))
+    }
+
+    fn terminal(&self, event: Event) -> WorkerOutput<H> {
+        self.sender.send(event);
+        WorkerOutput::Stopped
     }
 }
 
@@ -169,7 +286,7 @@ pub(crate) fn complete_pending_io(
     Ok(None)
 }
 
-pub(crate) fn park_vcpu(chipset: &Chipset, vcpu: &mut impl Vcpu, id: u8) -> Result<Option<Event>> {
+pub(crate) fn pause_vcpu(chipset: &Chipset, vcpu: &mut impl Vcpu, id: u8) -> Result<Option<Event>> {
     if let Some(event) = complete_pending_io(chipset, vcpu, id)? {
         return Ok(Some(event));
     }

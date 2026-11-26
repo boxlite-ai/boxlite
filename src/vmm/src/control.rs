@@ -12,8 +12,32 @@ use crate::{
     virtio::blk::control::{self, Controls, DiskSender},
 };
 
+#[cfg(target_arch = "x86_64")]
+use crate::{ControlReason, Error};
+#[cfg(target_arch = "x86_64")]
+use std::sync::mpsc;
+
 mod memory;
 pub(crate) use memory::{MemoryRequest, MemoryRequests};
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) struct CpuRequest {
+    pub(crate) target: u8,
+    pub(crate) reply: mpsc::SyncSender<Result<u8>>,
+}
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) type CpuRequests = mpsc::Receiver<CpuRequest>;
+
+#[cfg(target_arch = "x86_64")]
+#[derive(Clone, Debug)]
+struct CpuSender {
+    requests: mpsc::SyncSender<CpuRequest>,
+    maximum: u8,
+}
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) const CPU_RESIZE: &str = "set_online_vcpus";
 
 /// Controls a VM from any thread without exposing its devices.
 /// Dropping a control handle has no effect on execution.
@@ -22,6 +46,8 @@ pub struct VmControl {
     disks: Arc<HashMap<String, DiskSender>>,
     memory: Option<memory::MemorySender>,
     lifecycle: Arc<Lifecycle>,
+    #[cfg(target_arch = "x86_64")]
+    cpu: Option<CpuSender>,
 }
 
 impl VmControl {
@@ -55,6 +81,48 @@ impl VmControl {
     /// [`Self::resume`] calls on cloned handles.
     pub fn wait_paused(&self, timeout: Duration) -> Result<()> {
         self.lifecycle.wait_paused(timeout)
+    }
+
+    /// Grants exactly the lowest `count` vCPUs of a running VM.
+    ///
+    /// Grant before the guest onlines CPUs, and revoke after it offlines them.
+    /// Startup and a reserved pause return a retryable busy error.
+    /// An unsettled result closes CPU resize admission for this VM.
+    #[cfg(target_arch = "x86_64")]
+    pub fn set_online_vcpus(&self, count: u8) -> Result<u8> {
+        self.enqueue_vcpu_resize(count)?
+            .recv()
+            .map_err(|_| self.lifecycle.cpu_channel_closed())?
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn enqueue_vcpu_resize(&self, count: u8) -> Result<mpsc::Receiver<Result<u8>>> {
+        let cpu = self.cpu.as_ref().ok_or(Error::Control {
+            operation: CPU_RESIZE,
+            reason: ControlReason::InvalidState,
+        })?;
+        if !(1..=cpu.maximum).contains(&count) {
+            return Err(Error::InvalidVcpuCount(count));
+        }
+
+        let (reply, answer) = mpsc::sync_channel(1);
+        self.lifecycle.submit_cpu(|events| {
+            cpu.requests
+                .try_send(CpuRequest {
+                    target: count,
+                    reply,
+                })
+                .map_err(|error| match error {
+                    mpsc::TrySendError::Full(_) => Error::VcpuResizeBusy,
+                    mpsc::TrySendError::Disconnected(_) => Error::Control {
+                        operation: CPU_RESIZE,
+                        reason: ControlReason::InvalidState,
+                    },
+                })?;
+            events.wake();
+            Ok(())
+        })?;
+        Ok(answer)
     }
 
     /// Grows the named writable disk to `bytes`, returning its capacity.
@@ -112,9 +180,18 @@ impl VmControl {
 pub(crate) struct ControlRegistry {
     disks: HashMap<String, DiskSender>,
     memory: Option<memory::MemorySender>,
+    #[cfg(target_arch = "x86_64")]
+    cpu: Option<CpuSender>,
 }
 
 impl ControlRegistry {
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn register_cpu(&mut self, maximum: u8) -> CpuRequests {
+        let (requests, receiver) = mpsc::sync_channel(16);
+        self.cpu = Some(CpuSender { requests, maximum });
+        receiver
+    }
+
     pub(crate) fn register_disk(&mut self, block_id: &str) -> io::Result<Controls> {
         use std::collections::hash_map::Entry;
 
@@ -134,6 +211,8 @@ impl ControlRegistry {
             disks: Arc::new(self.disks),
             memory: self.memory,
             lifecycle,
+            #[cfg(target_arch = "x86_64")]
+            cpu: self.cpu,
         }
     }
 

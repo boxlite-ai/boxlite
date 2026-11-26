@@ -138,6 +138,19 @@ nonzero architectural PMU version.
 
 ## Host execution
 
+`X86Vcpu::detach` releases the thread binding after the VMM completes
+pending I/O. Rejection returns the bound vCPU so its thread can finish I/O.
+The resulting `X86DetachedVcpu` can move between threads.
+
+- `reset` clears latched INIT and SIPI. A read failure before mutation
+  allows reuse. If a write was attempted, the caller treats the CPU ID as
+  unavailable for this VM.
+- `is_halted` reports KVM's MP state as a diagnostic.
+- `bind` installs a new kick reservation on the calling thread. A new
+  thread inherits its creator's signal mask, so its creator must hold no
+  kick reservation. The fd, XSAVE metadata and snapshot eligibility stay
+  with the vCPU across bindings.
+
 macOS arm64 exports `HvfVm` and thread-bound `HvfVcpu`, which implement `Vm`,
 `Vcpu` and `Arm64Vcpu` on Hypervisor.framework with the in-kernel GICv3 of
 macOS 15. Design and research: [#2103](https://github.com/boxlite-ai/boxlite/issues/2103).
