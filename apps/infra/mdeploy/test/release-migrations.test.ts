@@ -15,7 +15,11 @@ test('release migration identities come from the selected commit and validate pl
   const cwd = mkdtempSync(join(tmpdir(), 'release-migration-identities-'))
   t.after(() => rmSync(cwd, { recursive: true, force: true }))
 
-  const git = (...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
+  // The pre-push hook sets Git's repository context for the parent worktree.
+  const gitEnv = { ...process.env }
+  const localNames = execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' })
+  for (const name of localNames.trim().split('\n')) delete gitEnv[name]
+  const git = (...args: string[]) => execFileSync('git', args, { cwd, env: gitEnv, encoding: 'utf8' }).trim()
   const add = (file: string, content: string) => {
     const path = join(cwd, 'apps/api/src/migrations', file)
     mkdirSync(dirname(path), { recursive: true })
@@ -38,7 +42,12 @@ test('release migration identities come from the selected commit and validate pl
   }
   const identities = (revision: string) =>
     JSON.parse(
-      execFileSync(process.execPath, [script, revision], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+      execFileSync(process.execPath, [script, revision], {
+        cwd,
+        env: gitEnv,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
     )
 
   git('init', '-q')
