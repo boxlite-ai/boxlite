@@ -345,6 +345,7 @@ describe('BoxliteBoxController creation diagnostics', () => {
       boxStateWaiter as any,
       { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(10) } as any,
       {} as any,
+      {} as any,
     )
     const log = jest.spyOn((controller as any).logger, 'error').mockImplementation(() => undefined)
     const auth = { role: 'admin', organization: { id: 'org-1' }, organizationId: 'org-1' } as any
@@ -382,6 +383,7 @@ describe('BoxliteBoxController creation diagnostics', () => {
       { create: jest.fn().mockRejectedValue(failure) } as any,
       {} as any,
       { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(10) } as any,
+      {} as any,
       {} as any,
     )
     const log = jest.spyOn((controller as any).logger, 'error').mockImplementation(() => undefined)
