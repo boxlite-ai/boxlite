@@ -582,3 +582,74 @@ async fn two_mounts_at_one_destination_are_refused_before_the_workload_runs() {
     })
     .await;
 }
+
+#[tokio::test]
+#[ignore = "requires native runtime, KVM and VMM_KERNEL"]
+async fn directories_nested_at_runtime_come_back_in_order_after_a_restart() {
+    scenario(async |lab| {
+        let (above, below) = (source("above"), source("below"));
+        let bx = lab.create(options()).await;
+        let id = bx.id().to_string();
+        bx.start().await.unwrap();
+        bx.mount()
+            .add(request(above.path(), "/nest", false))
+            .await
+            .unwrap();
+        bx.mount()
+            .add(request(below.path(), "/nest/child", false))
+            .await
+            .unwrap();
+        assert_eq!(run(&bx, "cat /nest/child/probe").await, (0, "below".into()));
+        bx.stop().await.unwrap();
+
+        // Mounts apply in list order at start, so the parent comes first.
+        let bx = lab.handle(&id).await;
+        bx.start().await.unwrap();
+        assert_eq!(
+            run(&bx, "cat /nest/probe /nest/child/probe").await,
+            (0, "abovebelow".into())
+        );
+        bx.mount().remove("/nest/child").await.unwrap();
+        bx.mount().remove("/nest").await.unwrap();
+        assert!(bx.mount().list().await.unwrap().is_empty());
+        bx.stop().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires native runtime, KVM and VMM_KERNEL"]
+async fn a_directory_may_not_cover_a_mount_the_box_already_has() {
+    scenario(async |lab| {
+        let (cover, inner) = (source("cover"), source("inner"));
+        let mut opts = options();
+        opts.mounts.push(MountSpec::bind_mount(
+            inner.path().to_str().unwrap(),
+            "/work/inner",
+        ));
+        let bx = lab.create(opts).await;
+        let cover = request(cover.path(), "/work", false);
+
+        // A saved directory applies after the box's own mounts, so it would hide this one.
+        let error = bx.mount().add(cover.clone()).await.unwrap_err();
+        assert!(
+            matches!(error, BoxliteError::InvalidState(_))
+                && error.to_string().contains("/work/inner"),
+            "{error}"
+        );
+        assert_eq!(bx.mount().get("/work").await.unwrap(), None);
+
+        // The same holds while the box runs: either mount could then no longer leave alone.
+        bx.start().await.unwrap();
+        let error = bx.mount().add(cover).await.unwrap_err();
+        assert!(
+            matches!(error, BoxliteError::InvalidState(_))
+                && error.to_string().contains("/work/inner"),
+            "{error}"
+        );
+        assert_eq!(bx.mount().get("/work").await.unwrap(), None);
+        assert_eq!(run(&bx, "cat /work/inner/probe").await, (0, "inner".into()));
+        bx.stop().await.unwrap();
+    })
+    .await;
+}

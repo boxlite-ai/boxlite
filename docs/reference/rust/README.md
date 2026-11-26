@@ -546,16 +546,23 @@ and `read_only`. The target may omit intermediate directories and must exclude
 `..`. A directory added at runtime, and a saved one at its next start, lands
 on a target the guest creates when missing; a target with entries, or one
 reached through a symbolic link, is refused. Adding at an occupied target
-returns `InvalidState`.
+returns `InvalidState`, and so does a target with another mount below it: the
+new mount would cover that one. A target below an existing mount is allowed.
 
 On a stopped or newly created box, `add` returns `Configured` and leaves the
 box idle. The next start delivers each saved directory before the first user
 process runs. A delivery failure identifies the target, and so does a start
-that finds a saved directory overlapping another mount, below it, above it, or
-on it through an image link or two spellings of one target. You can remove its
-declaration even if the host directory has disappeared; the target is then free
-for good. Directory binds from either creation format, `BoxOptions.volumes` or
-`BoxOptions.mounts`, can also be queried and removed on a supported box.
+that finds a saved directory covering another mount or covered by a later
+one, or on it through an image link or two spellings of one target. You can
+remove its declaration even if the host directory has disappeared; the
+target is then free for good. Directory binds from either creation format,
+`BoxOptions.volumes` or `BoxOptions.mounts`, can also be queried and removed on
+a supported box.
+
+A guest agent or kernel that cannot record mounts still starts a box whose
+directories were all created with it: they stay plain binds, so `remove` asks
+for a stop. A box with a directory added at runtime does not start there
+until that declaration is removed while the box is stopped.
 
 On a running box, `add` returns `Mounted` after guest confirmation and the
 SQLite commit. `remove` returns `()` after the guest detaches the mount, the

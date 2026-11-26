@@ -399,11 +399,15 @@ fn map_container_init_status(status: tonic::Status) -> BoxliteError {
     status.into()
 }
 
+/// Keep the categories the guest refuses a mount or a detach with. Anything
+/// else is a transport or guest failure, whose outcome is unknown.
 fn map_mount_status(status: tonic::Status) -> BoxliteError {
-    if status.code() == tonic::Code::Unimplemented {
-        return BoxliteError::Unsupported(status.message().to_owned());
+    match status.code() {
+        tonic::Code::Unimplemented => BoxliteError::Unsupported(status.message().to_owned()),
+        tonic::Code::FailedPrecondition => BoxliteError::InvalidState(status.message().to_owned()),
+        tonic::Code::InvalidArgument => BoxliteError::InvalidArgument(status.message().to_owned()),
+        _ => status.into(),
     }
-    status.into()
 }
 
 #[cfg(test)]
@@ -420,11 +424,19 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     #[test]
-    fn unsupported_mounts_preserve_the_capability_error_category() {
+    fn guest_refusals_keep_their_error_category() {
         assert!(
             matches!(map_mount_status(tonic::Status::unimplemented("CAP_SYS_ADMIN")),
             BoxliteError::Unsupported(message) if message == "CAP_SYS_ADMIN")
         );
+        assert!(matches!(
+            map_mount_status(Status::failed_precondition("detach runtime descendants first")),
+            BoxliteError::InvalidState(message) if message == "detach runtime descendants first"
+        ));
+        assert!(matches!(
+            map_mount_status(Status::invalid_argument("destination mismatch")),
+            BoxliteError::InvalidArgument(_)
+        ));
         assert!(matches!(
             map_mount_status(tonic::Status::unavailable("guest disconnected")),
             BoxliteError::Rpc(_)

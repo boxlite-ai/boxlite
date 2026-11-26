@@ -51,7 +51,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (guest_session, volume_mgr, rootfs_init, container_mounts, bootstrap) = {
+        let (guest_session, volume_mgr, rootfs_init, mut container_mounts, bootstrap) = {
             let mut ctx = ctx.lock().await;
             let guest_session = ctx
                 .guest_session
@@ -122,11 +122,17 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             )
         };
 
-        run_guest_init(guest_session.clone(), bootstrap)
+        let records = run_guest_init(guest_session.clone(), bootstrap)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         let mut ctx = ctx.lock().await;
+        if !records {
+            // The guest got plain binds, so no directory of this run has an
+            // identity an online removal could select.
+            unrecord(&mut container_mounts);
+            ctx.confirmed.clear();
+        }
         ctx.guest_session = Some(guest_session);
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
@@ -149,11 +155,25 @@ fn requires_safe_volume_sub_path(mounts: &[crate::volumes::ContainerMount]) -> b
     })
 }
 
+/// Deliver each declared directory as the plain bind it was created as: the
+/// guest cannot record it, so an online removal cannot select it.
+fn unrecord(mounts: &mut [crate::volumes::ContainerMount]) {
+    for mount in mounts {
+        if matches!(
+            mount.payload,
+            crate::volumes::ContainerMountPayload::RecordedDirectory { .. }
+        ) {
+            mount.payload = crate::volumes::ContainerMountPayload::WholeDirectory;
+        }
+    }
+}
+
 /// Initialize the guest and create the container (init is *not* run here).
+/// Returns whether the guest records the mounts of declared directories.
 async fn run_guest_init(
     guest_session: GuestSession,
-    bootstrap: GuestBootstrapConfig,
-) -> BoxliteResult<()> {
+    mut bootstrap: GuestBootstrapConfig,
+) -> BoxliteResult<bool> {
     // Step 1: Guest Init (volumes + network)
     tracing::info!("Sending guest initialization request");
     let mut guest_interface = guest_session.guest().await?;
@@ -182,15 +202,33 @@ async fn run_guest_init(
         guest_interface.require_safe_volume_sub_path().await?;
     }
     // The guest records the mounts of declared directories while it creates
-    // the container. Fail before initialization if it cannot.
-    if bootstrap.container.mounts.iter().any(|mount| {
+    // the container, which is what lets an online removal select them.
+    let recorded = |mount: &crate::volumes::ContainerMount| {
         matches!(
             mount.payload,
             crate::volumes::ContainerMountPayload::RecordedDirectory { .. }
         )
-    }) {
-        guest_interface.require_boot_mount_records().await?;
-    }
+    };
+    let records = if !bootstrap.container.mounts.iter().any(recorded) {
+        true
+    } else if let Err(error) = guest_interface.require_boot_mount_records().await {
+        // A directory added at runtime needs its record.
+        let added = |mount: &crate::volumes::ContainerMount| {
+            matches!(
+                mount.payload,
+                crate::volumes::ContainerMountPayload::RecordedDirectory { added: true, .. }
+            )
+        };
+        if bootstrap.container.mounts.iter().any(added) {
+            return Err(error);
+        }
+        // One created with the box keeps its plain delivery instead: it then
+        // leaves only with the box.
+        unrecord(&mut bootstrap.container.mounts);
+        false
+    } else {
+        true
+    };
     guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");
 
@@ -205,7 +243,7 @@ async fn run_guest_init(
     // left standing at the gate; the host runs it with `Container.Start` after a
     // client has attached, so nothing it prints can be missed however fast it is.
 
-    Ok(())
+    Ok(records)
 }
 
 /// The box limits the container reads in its cgroup, from the values the VM
@@ -314,8 +352,10 @@ mod tests {
     struct VersionedGuest {
         version: &'static str,
         safe_managed_volume_sub_path: bool,
+        records_boot_mounts: bool,
         guest_init_calls: Arc<std::sync::Mutex<usize>>,
         container_init_calls: Arc<std::sync::Mutex<usize>>,
+        container_mounts: Arc<std::sync::Mutex<Vec<boxlite_shared::BindMount>>>,
     }
 
     #[tonic::async_trait]
@@ -339,7 +379,7 @@ mod tests {
             Ok(tonic::Response::new(boxlite_shared::PingResponse {
                 version: self.version.to_string(),
                 safe_managed_volume_sub_path: self.safe_managed_volume_sub_path,
-                records_boot_mounts: true,
+                records_boot_mounts: self.records_boot_mounts,
             }))
         }
 
@@ -391,7 +431,9 @@ mod tests {
             request: tonic::Request<boxlite_shared::ContainerInitRequest>,
         ) -> Result<tonic::Response<boxlite_shared::ContainerInitResponse>, tonic::Status> {
             *self.container_init_calls.lock().unwrap() += 1;
-            let container_id = request.into_inner().container_id;
+            let request = request.into_inner();
+            *self.container_mounts.lock().unwrap() = request.mounts;
+            let container_id = request.container_id;
             Ok(tonic::Response::new(
                 boxlite_shared::ContainerInitResponse {
                     result: Some(boxlite_shared::container_init_response::Result::Success(
@@ -455,18 +497,22 @@ mod tests {
         }
     }
 
-    async fn run_with_guest_version(
-        version: &'static str,
-        safe_managed_volume_sub_path: bool,
-    ) -> (BoxliteResult<()>, usize, usize) {
-        let guest_init_calls = Arc::new(std::sync::Mutex::new(0));
-        let container_init_calls = Arc::new(std::sync::Mutex::new(0));
-        let guest = VersionedGuest {
+    fn guest_that(version: &'static str, safe_managed_volume_sub_path: bool) -> VersionedGuest {
+        VersionedGuest {
             version,
             safe_managed_volume_sub_path,
-            guest_init_calls: Arc::clone(&guest_init_calls),
-            container_init_calls: Arc::clone(&container_init_calls),
-        };
+            records_boot_mounts: true,
+            guest_init_calls: Arc::new(std::sync::Mutex::new(0)),
+            container_init_calls: Arc::new(std::sync::Mutex::new(0)),
+            container_mounts: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    async fn run_with_guest(
+        guest: VersionedGuest,
+        bootstrap: GuestBootstrapConfig,
+    ) -> (BoxliteResult<bool>, VersionedGuest) {
+        let served = guest.clone();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
@@ -487,12 +533,23 @@ mod tests {
 
         let result = run_guest_init(
             crate::portal::GuestSession::new(boxlite_shared::BoxTransport::tcp(addr.port())),
-            bootstrap_for_version_gate(),
+            bootstrap,
         )
         .await;
-        let guest_calls = *guest_init_calls.lock().unwrap();
-        let container_calls = *container_init_calls.lock().unwrap();
-        (result, guest_calls, container_calls)
+        (result, served)
+    }
+
+    async fn run_with_guest_version(
+        version: &'static str,
+        safe_managed_volume_sub_path: bool,
+    ) -> (BoxliteResult<bool>, usize, usize) {
+        let guest = guest_that(version, safe_managed_volume_sub_path);
+        let (result, guest) = run_with_guest(guest, bootstrap_for_version_gate()).await;
+        let calls = (
+            *guest.guest_init_calls.lock().unwrap(),
+            *guest.container_init_calls.lock().unwrap(),
+        );
+        (result, calls.0, calls.1)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -504,5 +561,60 @@ mod tests {
         let (result, guest_calls, container_calls) = run_with_guest_version("0.14.0", true).await;
         result.unwrap();
         assert_eq!((guest_calls, container_calls), (1, 1));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn only_a_directory_added_at_runtime_needs_a_guest_that_records_mounts() {
+        let recorded = |added| crate::volumes::ContainerMount {
+            volume_name: "uservol0".to_string(),
+            destination: "/data".to_string(),
+            read_only: true,
+            owner_uid: 0,
+            owner_gid: 0,
+            payload: crate::volumes::ContainerMountPayload::RecordedDirectory {
+                key: "delivery-1".to_string(),
+                added,
+            },
+        };
+        let mut creation = bootstrap_for_version_gate();
+        creation.container.mounts = vec![recorded(false)];
+        let mut added = bootstrap_for_version_gate();
+        added.container.mounts = vec![recorded(true)];
+
+        // A directory created with the box is delivered as the plain bind it is.
+        let silent = || {
+            let mut guest = guest_that("0.15.0", false);
+            guest.records_boot_mounts = false;
+            guest
+        };
+        let (result, served) = run_with_guest(silent(), creation).await;
+        assert!(!result.unwrap());
+        assert_eq!(
+            (
+                *served.guest_init_calls.lock().unwrap(),
+                *served.container_init_calls.lock().unwrap()
+            ),
+            (1, 1)
+        );
+        assert!(
+            served
+                .container_mounts
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|mount| mount.record_key.is_empty()),
+            "a directory created with the box reached the guest as a recorded mount"
+        );
+
+        // One added at runtime has no identity without its record.
+        let (result, served) = run_with_guest(silent(), added).await;
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        assert_eq!(
+            (
+                *served.guest_init_calls.lock().unwrap(),
+                *served.container_init_calls.lock().unwrap()
+            ),
+            (0, 0)
+        );
     }
 }

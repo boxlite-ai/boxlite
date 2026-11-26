@@ -79,8 +79,8 @@ impl Running {
             .await
     }
 
-    /// Have the guest bind the export at `target`. `Unsupported` means the
-    /// guest refused before touching the container.
+    /// Have the guest bind the export at `target`. A refusal, see [`refusal`],
+    /// means the guest refused before touching the container.
     async fn mount(&mut self, export: &str, target: &str, read_only: bool) -> BoxliteResult<()> {
         guest_step(
             "mount",
@@ -133,6 +133,37 @@ impl Running {
         })
     }
 
+    /// Report a refusal to detach this request's mount: the mount is still in
+    /// place, so its entry is `Mounted` again. An outcome the guest did not
+    /// report leaves the entry `Detaching` for a retry.
+    fn refused(
+        &self,
+        target: &str,
+        request_id: MountRequestId,
+        error: BoxliteError,
+    ) -> BoxliteError {
+        if !refusal(&error) {
+            return error;
+        }
+        let restored = self.update(|mounts| {
+            let entry = mounts
+                .progress
+                .get_mut(target)
+                .filter(|entry| entry.request_id == request_id);
+            match entry {
+                Some(entry) => {
+                    entry.state = MountState::Mounted;
+                    Ok(())
+                }
+                None => Ok(()),
+            }
+        });
+        match restored {
+            Err(stopped @ BoxliteError::Stopped(_)) => stopped,
+            _ => error,
+        }
+    }
+
     /// End a failed change that left nothing behind: release its reservation
     /// and report why it failed.
     fn settle(self, target: &str, request_id: MountRequestId, error: BoxliteError) -> BoxliteError {
@@ -164,7 +195,7 @@ impl Running {
 }
 
 /// One guest step under its deadline. An outcome the guest does not report in
-/// time is unknown: the guest may have acted.
+/// time is unknown, the guest may have acted, so it is no refusal.
 async fn guest_step<T>(
     step: &'static str,
     target: &str,
@@ -173,7 +204,7 @@ async fn guest_step<T>(
     tokio::time::timeout(GUEST_STEP_TIMEOUT, call)
         .await
         .unwrap_or_else(|_| {
-            Err(BoxliteError::InvalidState(format!(
+            Err(BoxliteError::Rpc(format!(
                 "guest {step} of {target} did not finish within {GUEST_STEP_TIMEOUT:?}"
             )))
         })
@@ -278,6 +309,25 @@ fn occupied(target: &str) -> BoxliteError {
 /// A target that has no mount to remove.
 fn missing(target: &str) -> BoxliteError {
     BoxliteError::NotFound(format!("no mount at {target}"))
+}
+
+/// A mount below `target`: one applied there would cover it.
+fn covering(target: &str, below: &str) -> BoxliteError {
+    BoxliteError::InvalidState(format!(
+        "a mount at {below} sits below {target} and would be covered"
+    ))
+}
+
+/// Whether the guest refused a step before it touched the container. The guest
+/// reports each such refusal with its own code; anything else, a deadline
+/// included, leaves the outcome unknown.
+fn refusal(error: &BoxliteError) -> bool {
+    matches!(
+        error,
+        BoxliteError::InvalidState(_)
+            | BoxliteError::InvalidArgument(_)
+            | BoxliteError::Unsupported(_)
+    )
 }
 
 /// A failed shim exchange. Refusals keep their category; everything else is a
@@ -513,6 +563,11 @@ impl BoxImpl {
                 if mounts.occupied(&request.target) {
                     return Err(occupied(&request.target));
                 }
+                // A saved directory applies after the box's own mounts, so it
+                // must not have one of them below it.
+                if let Some(below) = mounts.below(&request.target) {
+                    return Err(covering(&request.target, below));
+                }
                 mounts.declare(request.request());
                 Ok(())
             })?;
@@ -574,6 +629,10 @@ impl BoxImpl {
             if mounts.occupied(&target) {
                 return Err(occupied(&target));
             }
+            // Nothing may sit below a mount applied last: it would be covered.
+            if let Some(below) = mounts.below(&target) {
+                return Err(covering(&target, below));
+            }
             mounts.progress.insert(
                 target.clone(),
                 MountProgress {
@@ -626,10 +685,10 @@ impl BoxImpl {
         };
 
         if let Err(error) = run.mount(&export, &target, request.read_only).await {
-            // `Unsupported` means the guest refused before touching the
-            // container, so nothing needs detaching. Any other outcome is
-            // unknown: the guest may have mounted without reporting it.
-            let detach = !matches!(error, BoxliteError::Unsupported(_));
+            // A refusal means the guest refused before touching the container,
+            // so nothing needs detaching. Any other outcome is unknown: the
+            // guest may have mounted without reporting it.
+            let detach = !refusal(&error);
             return Err(run.undo(&target, request_id, &export, error, detach).await);
         }
         let committed = run.update(|mounts| {
@@ -664,13 +723,7 @@ impl BoxImpl {
         // before anything changes in the guest.
         let (request_id, named, delivered) = run.update(|mounts| {
             // A mount below the target would leave the container with it.
-            let below = format!("{target}/");
-            let mounted_below = mounts
-                .unmanaged
-                .iter()
-                .chain(mounts.declarations.keys())
-                .chain(mounts.progress.keys())
-                .find(|other| other.starts_with(below.as_str()));
+            let mounted_below = mounts.below(&target).map(str::to_owned);
             if let Some(below) = mounted_below {
                 return Err(BoxliteError::InvalidState(format!(
                     "remove the mount at {below} first; one the box was created with needs a stop"
@@ -706,7 +759,9 @@ impl BoxImpl {
                 }
             }
         };
-        run.detach(&key, &target).await?;
+        if let Err(error) = run.detach(&key, &target).await {
+            return Err(run.refused(&target, request_id, error));
+        }
         if exported {
             run.retire(&key).await?;
         }

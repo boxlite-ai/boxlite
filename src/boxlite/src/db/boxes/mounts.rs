@@ -223,6 +223,18 @@ impl Mounts {
             || self.progress.contains_key(target)
     }
 
+    /// A mount on record below `target`. A mount applied at `target` after it
+    /// would cover it, and a lazy detach of `target` would take it along.
+    pub(crate) fn below(&self, target: &str) -> Option<&str> {
+        let below = format!("{target}/");
+        self.declarations
+            .keys()
+            .chain(self.unmanaged.iter())
+            .chain(self.progress.keys())
+            .find(|other| other.starts_with(below.as_str()))
+            .map(String::as_str)
+    }
+
     /// Whether `target` was added through `mount()`, not created with the box.
     pub(crate) fn is_added(&self, target: &str) -> bool {
         self.changes.get(target).is_some_and(Option::is_some)

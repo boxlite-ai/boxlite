@@ -87,9 +87,12 @@ fn require_empty_target(rootfs: &Path, destination: &Path) -> BoxliteResult<()> 
     }
 }
 
-/// Whether two mount destinations are the same path or one lies below the other.
-fn overlaps(first: &Path, second: &Path) -> bool {
-    first.starts_with(second) || second.starts_with(first)
+/// Whether the mount at `target`, applied at `position`, and the mount at
+/// `other`, applied at `index`, would hide one another. Mounts apply in list
+/// order, so where they overlap the later one covers the earlier.
+fn hides(index: usize, position: usize, target: &Path, other: &Path) -> bool {
+    (index < position && other.starts_with(target))
+        || (index > position && target.starts_with(other))
 }
 
 /// Record each mount the runtime made for a declared directory, under the
@@ -498,7 +501,7 @@ impl ContainerService for GuestServer {
         let mut recorded = Vec::new();
         let mut unrecorded = Vec::new();
         let mut user_mounts = Vec::with_capacity(init_req.mounts.len());
-        for m in &init_req.mounts {
+        for (position, m) in init_req.mounts.iter().enumerate() {
             let volume_dir = container_layout.volume_dir(&m.volume_name);
             let selected = match bind_mount_source(m) {
                 Ok(selected) => selected,
@@ -548,21 +551,43 @@ impl ContainerService for GuestServer {
             } else {
                 unrecorded.push(PathBuf::from(&m.destination));
             }
-            // A saved directory may not overlap another mount: the runtime
-            // applies mounts in order, so a target above or below one is
-            // neither known to be empty nor known to land where it was checked.
+            // Mounts apply in list order, as on Linux. A saved directory may
+            // sit below an earlier mount and have later ones below it, but it
+            // must not cover an earlier mount, and a later one must not cover
+            // it: one of the two would hide the other.
             if m.added {
-                if let Some(other) = init_req.mounts.iter().find(|other| {
-                    other.destination != m.destination
-                        && overlaps(Path::new(&m.destination), Path::new(&other.destination))
-                }) {
+                let saved = Path::new(&m.destination);
+                let hidden = init_req
+                    .mounts
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, other)| {
+                        if other.destination == m.destination {
+                            return None;
+                        }
+                        let other = Path::new(&other.destination);
+                        if !hides(index, position, saved, other) {
+                            return None;
+                        }
+                        Some(if index < position {
+                            format!(
+                                "{} would cover the earlier mount at {}",
+                                m.destination,
+                                other.display()
+                            )
+                        } else {
+                            format!(
+                                "the later mount at {} would cover {}",
+                                other.display(),
+                                m.destination
+                            )
+                        })
+                    });
+                if let Some(problem) = hidden {
                     return Ok(Response::new(ContainerInitResponse {
                         result: Some(container_init_response::Result::Error(init_error(
                             "check the target of a saved directory",
-                            &BoxliteError::InvalidState(format!(
-                                "{} overlaps the mount at {}",
-                                m.destination, other.destination
-                            )),
+                            &BoxliteError::InvalidState(problem),
                         ))),
                     }));
                 }
@@ -1348,5 +1373,17 @@ mod tests {
         for (error, code) in cases {
             assert_eq!(mount_status(error).code(), code);
         }
+    }
+
+    #[test]
+    fn mounts_in_list_order_hide_one_another_only_when_out_of_order() {
+        let (parent, child) = (Path::new("/work"), Path::new("/work/nested"));
+        // A saved directory below an earlier mount, or above a later one, hides nothing.
+        assert!(!hides(0, 1, child, parent));
+        assert!(!hides(1, 0, parent, child));
+        // An earlier mount below it, or a later one above it, would be covered.
+        assert!(hides(0, 1, parent, child));
+        assert!(hides(1, 0, child, parent));
+        assert!(!hides(0, 1, Path::new("/work"), Path::new("/workday")));
     }
 }

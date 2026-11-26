@@ -207,6 +207,18 @@ impl Target {
     }
 }
 
+/// Whether this kernel identifies a mount namespace, which recording a
+/// mount needs. The guest advertises it per ping: one `ioctl` on its own
+/// namespace says whether the container's can be read.
+pub(crate) fn identifies_namespaces() -> bool {
+    File::open("/proc/self/ns/mnt").is_ok_and(|namespace| {
+        let mut id = 0u64;
+        // SAFETY: the descriptor is owned and the ioctl writes one u64.
+        let read = unsafe { libc::ioctl(namespace.as_raw_fd(), libc::NS_GET_MNTNS_ID, &mut id) };
+        read == 0
+    })
+}
+
 /// Resolve an OCI destination against the created container's held root.
 /// Detach needs its absolute in-container path even when the image uses links.
 fn resolve_in_root(root: &File, destination: &Path) -> BoxliteResult<PathBuf> {
@@ -325,7 +337,9 @@ impl Attacher {
         if self
             .runtime
             .values()
-            .any(|record| record.tree.is_some() && record.destination == destination)
+            // A mount sits where its destination resolves, so that is what a
+            // new destination is compared with.
+            .any(|record| record.tree.is_some() && record.mount_point == destination)
         {
             return Err(BoxliteError::InvalidState(
                 "destination already has a runtime mount".into(),
@@ -516,10 +530,15 @@ impl Attacher {
         runtime_namespace: Option<NonZeroU64>,
     ) -> BoxliteResult<(MountedTree, BoxliteResult<()>)> {
         validate_destination(destination)?;
+        // A mount applied here comes last, so where it overlaps an existing
+        // one it covers it: the runtime's recorded directories and its other
+        // mounts alike. Either could then no longer leave on its own.
+        let covers = |mount_point: &Path| mount_point.starts_with(destination);
         if self
             .runtime
             .values()
-            .any(|record| record.tree.is_some() && record.destination.starts_with(destination))
+            .any(|record| record.tree.is_some() && covers(&record.mount_point))
+            || self.unrecorded.iter().any(|path| covers(path))
         {
             return Err(BoxliteError::InvalidState(
                 "destination would cover a runtime mount".into(),
