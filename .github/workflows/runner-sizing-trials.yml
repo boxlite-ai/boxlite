@@ -1,5 +1,5 @@
 ---
-name: BoxLite right-sized CI qualification
+name: BoxLite CodeQL qualification
 'on':
   push:
     branches:
@@ -10,218 +10,55 @@ permissions:
   contents: read
   actions: read
 jobs:
-  python:
-    runs-on: boxlite
-    steps:
-    - name: Check worker resources
-      shell: bash
-      run: |
-        set -eu
-        nproc
-        awk '/^MemTotal:/ {print}' /proc/meminfo
-        df -Pk /
-      working-directory: "."
-    - name: Checkout code
-      uses: actions/checkout@v5
-      with:
-        ref: 62328382819183db169dc4f1b845e5fc9b6d7c22
-    - uses: "./.github/actions/setup-boxlite-runner"
-      if: runner.environment == 'self-hosted'
-    - uses: "./.github/actions/setup-python"
-      with:
-        python-version: "${{ matrix.python-version }}"
-    - name: Run Python unit tests with coverage
-      run: make coverage:python
+  scan:
+    runs-on: "${{ matrix.runner }}"
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      max-parallel: 2
       matrix:
-        python-version:
-        - '3.10'
-        - '3.11'
-        - '3.12'
-        - '3.13'
-  node:
-    runs-on: boxlite
+        include:
+        - language: c-cpp
+          build-mode: none
+          runner: boxlite-4vcpu-16gbmem-64gbdisk
+        - language: go
+          build-mode: autobuild
+          runner: boxlite-4vcpu-16gbmem-30gbdisk
+        - language: javascript-typescript
+          build-mode: none
+          runner: boxlite-4vcpu-16gbmem-64gbdisk
+        - language: rust
+          build-mode: none
+          runner: boxlite-4vcpu-16gbmem-64gbdisk
     steps:
-    - name: Check worker resources
-      shell: bash
-      run: |
-        set -eu
-        nproc
-        awk '/^MemTotal:/ {print}' /proc/meminfo
-        df -Pk /
-      working-directory: "."
-    - name: Checkout code
-      uses: actions/checkout@v5
+    - name: Checkout
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       with:
-        ref: 62328382819183db169dc4f1b845e5fc9b6d7c22
+        persist-credentials: false
+        ref: 6a96c6a7be1a8af2113ac7acc5154c7e18314b03
     - uses: "./.github/actions/setup-boxlite-runner"
-      if: runner.environment == 'self-hosted'
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: "${{ matrix.node-version }}"
-        cache: npm
-        cache-dependency-path: sdks/node/package-lock.json
-    - name: Install dependencies
-      working-directory: sdks/node
-      run: npm ci
-    - name: Run Node.js unit tests
-      if: matrix.node-version == '18'
-      working-directory: sdks/node
-      run: npm run test
-    - name: Run Node.js unit tests with coverage
-      if: matrix.node-version != '18'
-      run: make coverage:node
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        node-version:
-        - '18'
-        - '20'
-        - '22'
-  check-generated-clients:
-    runs-on: boxlite
-    services:
-      redis:
-        image: redis:7
-        ports:
-        - 6379:6379
-    env:
-      REDIS_HOST: localhost
-    defaults:
-      run:
-        working-directory: apps
-    steps:
-    - name: Check worker resources
-      shell: bash
-      run: |
-        set -eu
-        nproc
-        awk '/^MemTotal:/ {print}' /proc/meminfo
-        df -Pk /
-      working-directory: "."
-    - uses: actions/checkout@v5
-      with:
-        ref: 62328382819183db169dc4f1b845e5fc9b6d7c22
-    - uses: "./.github/actions/setup-boxlite-runner"
-    - name: Install native Node build dependencies
-      run: sudo apt-get install -y --no-install-recommends build-essential python3
-    - uses: actions/setup-node@v4
-      with:
-        node-version: '22'
+      if: matrix.language == 'go'
+    - name: Install Go autobuild dependencies
+      if: matrix.language == 'go'
+      run: sudo apt-get install -y --no-install-recommends gcc libc6-dev
     - uses: "./.github/actions/setup-go"
+      if: matrix.language == 'go'
       with:
         cache: 'false'
-    - name: Enable corepack (yarn 4)
-      run: corepack enable
     - uses: actions/setup-node@v4
+      if: matrix.language == 'javascript-typescript'
       with:
-        node-version: 22
-        cache: yarn
-        cache-dependency-path: apps/yarn.lock
-    - uses: actions/setup-java@v4
+        node-version: '22'
+    - uses: "./.github/actions/setup-rust"
+      if: matrix.language == 'rust'
       with:
-        java-version: 21
-        distribution: temurin
-    - name: Install dependencies
-      run: yarn install --immutable
-    - name: Prepare offline app env
-      run: |
-        printf 'DEFAULT_PACKAGE_VERSION=0.0.0-dev\n' > .env
-        cp api/.env.example api/.env
-    - name: Pin openapi-generator version
-      run: |
-        openapi_version="$(node -e "console.log(require('./openapitools.json')['generator-cli'].version)")"
-        yarn openapi-generator-cli version-manager set "$openapi_version"
-    - name: Regenerate API clients
-      run: |
-        yarn nx run api-client:generate:api-client
-        yarn nx run api-client-go:generate:api-client
-        yarn nx run analytics-api-client:generate:api-client
-    - name: Contract boundary guard (single-owner contracts)
-      run: |
-        # The exported cloud spec must not re-grow box-operation endpoints —
-        # those belong to openapi/box.openapi.yaml (served by boxlite-rest).
-        spec=dist/apps/api/openapi.json
-        if [ ! -f "$spec" ]; then
-          echo "::error::$spec not found; the openapi export step must run before this guard."
-          exit 1
-        fi
-        if jq -r '.paths | keys[]' "$spec" | grep -E '/toolbox/|/exec|/files|/workspace'; then
-          echo "::error::Cloud API spec contains box-operation paths. Box operations belong to the Box API contract (openapi/box.openapi.yaml), served by apps/api/src/boxlite-rest."
-          exit 1
-        fi
-        # The Box API dialect must stay tenancy-free so one SDK dialect works
-        # against local, self-hosted, and cloud servers.
-        if grep -nE 'organizationId|/organizations|billing' ../openapi/box.openapi.yaml; then
-          echo "::error::Box API spec contains cloud/tenancy concepts. Those belong to the cloud API (apps/api controllers outside boxlite-rest)."
-          exit 1
-        fi
-    - name: Fail on drift
-      run: |
-        if [ -n "$(git status --porcelain -- libs/api-client libs/api-client-go libs/analytics-api-client)" ]; then
-          git status --porcelain -- libs/api-client libs/api-client-go libs/analytics-api-client
-          git diff -- libs/api-client libs/api-client-go libs/analytics-api-client | head -200
-          echo "::error::Generated API clients are stale. Run 'yarn nx run api-client:generate:api-client && yarn nx run api-client-go:generate:api-client && yarn nx run analytics-api-client:generate:api-client' in apps/ and commit the result."
-          exit 1
-        fi
-    timeout-minutes: 30
-  actions-scan:
-    runs-on: boxlite
-    steps:
-    - name: Check worker resources
-      shell: bash
-      run: |
-        set -eu
-        nproc
-        awk '/^MemTotal:/ {print}' /proc/meminfo
-        df -Pk /
-      working-directory: "."
-    - name: Checkout
-      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      with:
-        persist-credentials: false
-        ref: 62328382819183db169dc4f1b845e5fc9b6d7c22
+        cache: 'false'
     - name: Initialize CodeQL
       uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
       with:
-        languages: actions
-        build-mode: none
+        languages: "${{ matrix.language }}"
+        build-mode: "${{ matrix.build-mode }}"
     - name: Perform CodeQL analysis
       uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
       with:
         upload: never
-        category: "/language:actions"
-    timeout-minutes: 30
-  python-scan:
-    runs-on: boxlite
-    steps:
-    - name: Check worker resources
-      shell: bash
-      run: |
-        set -eu
-        nproc
-        awk '/^MemTotal:/ {print}' /proc/meminfo
-        df -Pk /
-      working-directory: "."
-    - name: Checkout
-      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      with:
-        persist-credentials: false
-        ref: 62328382819183db169dc4f1b845e5fc9b6d7c22
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
-      with:
-        languages: python
-        build-mode: none
-    - name: Perform CodeQL analysis
-      uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
-      with:
-        upload: never
-        category: "/language:python"
-    timeout-minutes: 30
+        category: "/language:${{ matrix.language }}"
