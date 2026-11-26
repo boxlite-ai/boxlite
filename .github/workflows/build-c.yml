@@ -93,13 +93,21 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     needs: [ config, resolve-ref ]
-    runs-on: ${{ matrix.os }}
+    # Selected commits and runner recovery must build independently of the BoxLite fleet.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && !inputs.ref && !inputs.linux_x64_only && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' || needs.config.outputs.platforms) }}
 
     steps:
+      - name: Install BoxLite worker build tools
+        if: matrix.os == 'ubuntu-latest' && runner.environment == 'self-hosted'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends make ripgrep xz-utils zstd \
+            build-essential pkg-config libssl-dev patchelf python3
+
       # This job builds a caller-selected commit, and a `uses: ./...` action is resolved from the
       # checked-out tree rather than from this workflow's own ref. So the steps below need
       # .github/actions/ to exist in the SELECTED commit, not just in the one defining this file.

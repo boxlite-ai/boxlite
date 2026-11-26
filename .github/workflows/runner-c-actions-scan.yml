@@ -1,0 +1,54 @@
+---
+name: Check C workflow worker setup with CodeQL
+'on':
+  push:
+    branches:
+    - ci/boxlite-runner-trials-2833
+    paths:
+    - ".github/workflows/runner-c-actions-scan.yml"
+    - ".github/workflows/build-c.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  check:
+    runs-on: boxlite
+    timeout-minutes: 20
+    steps:
+    - name: Checkout
+      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      with:
+        persist-credentials: false
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
+      with:
+        languages: actions
+        build-mode: none
+    - name: Perform CodeQL analysis
+      uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
+      with:
+        category: "/language:actions"
+        upload: never
+        output: results
+    - name: Check the C workflow findings
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+        workflow = Path('.github/workflows/build-c.yml')
+        lines = workflow.read_text().splitlines()
+        setup = next(i for i, line in enumerate(lines, 1) if 'name: Install BoxLite worker build tools' in line)
+        checkout = next(i for i, line in enumerate(lines, 1) if i > setup and 'uses: actions/checkout@' in line)
+        reports = list(Path('results').glob('*.sarif'))
+        assert reports, 'Actions analysis did not write SARIF'
+        for report in reports:
+            for run in json.loads(report.read_text())['runs']:
+                for result in run.get('results', []):
+                    for location in result.get('locations', []):
+                        loc = location.get('physicalLocation', {})
+                        if loc.get('artifactLocation', {}).get('uri', '').endswith(str(workflow)):
+                            line = loc['region']['startLine']
+                            print(result['ruleId'], line)
+                            assert not setup <= line < checkout, 'finding in the new runner bootstrap'
+        PY
