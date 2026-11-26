@@ -267,7 +267,7 @@ state inline.
 | Column | Type | Notes |
 | ------ | ---- | ----- |
 | `id` | `uuid` | primary key |
-| `referralCode` | `character varying(10)` | nullable; unique organization invitation code |
+| `referralCode` | `character varying(10)` | nullable, unique (`organization_referral_code_uq`), retained for older API instances through the rollback window |
 | `name` | `character varying` | |
 | `createdBy` | `character varying` | |
 | `telemetryEnabled` | `boolean` | default `true` |
