@@ -10,9 +10,43 @@
 //! 4. `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux) - User-specified runtime location
 //! 5. dladdr-based detection - For packaged/installed scenarios
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+
+#[cfg(target_os = "macos")]
+const LIBRARY_PATH_VARS: &[&str] = &["DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"];
+#[cfg(target_os = "linux")]
+const LIBRARY_PATH_VARS: &[&str] = &["LD_LIBRARY_PATH"];
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+const LIBRARY_PATH_VARS: &[&str] = &[];
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct BinarySearchEnv {
+    runtime_dir: Option<String>,
+    library_paths: Vec<Option<String>>,
+}
+
+impl BinarySearchEnv {
+    fn capture() -> Self {
+        Self {
+            runtime_dir: std::env::var("BOXLITE_RUNTIME_DIR").ok(),
+            library_paths: LIBRARY_PATH_VARS
+                .iter()
+                .map(|name| std::env::var(name).ok())
+                .collect(),
+        }
+    }
+
+    fn runtime_dirs(&self) -> Vec<PathBuf> {
+        runtime_dirs_from(
+            self.runtime_dir.as_deref(),
+            option_env!("BOXLITE_DEFAULT_RUNTIME_DIR"),
+        )
+    }
+}
 
 /// Builder for configuring [`RuntimeBinaryFinder`] with custom search paths.
 ///
@@ -78,9 +112,13 @@ impl RuntimeBinaryFinder {
     /// 4. `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` (user-specified runtime location)
     /// 5. dladdr-based detection (for packaged scenarios)
     pub fn from_env() -> Self {
+        Self::from_search_env(&BinarySearchEnv::capture())
+    }
+
+    fn from_search_env(env: &BinarySearchEnv) -> Self {
         let mut builder = Self::builder();
 
-        for path in configured_runtime_dirs() {
+        for path in env.runtime_dirs() {
             builder = builder.with_path(path);
         }
 
@@ -91,26 +129,9 @@ impl RuntimeBinaryFinder {
         }
 
         // 3. Library path environment variables
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(dyld_path) = std::env::var("DYLD_LIBRARY_PATH") {
-                for path in dyld_path.split(':').filter(|s| !s.is_empty()) {
-                    builder = builder.with_path(path);
-                }
-            }
-            if let Ok(dyld_fallback) = std::env::var("DYLD_FALLBACK_LIBRARY_PATH") {
-                for path in dyld_fallback.split(':').filter(|s| !s.is_empty()) {
-                    builder = builder.with_path(path);
-                }
-            }
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(ld_path) = std::env::var("LD_LIBRARY_PATH") {
-                for path in ld_path.split(':').filter(|s| !s.is_empty()) {
-                    builder = builder.with_path(path);
-                }
+        for paths in env.library_paths.iter().flatten() {
+            for path in paths.split(':').filter(|s| !s.is_empty()) {
+                builder = builder.with_path(path);
             }
         }
 
@@ -152,9 +173,46 @@ impl RuntimeBinaryFinder {
     }
 }
 
+#[derive(Default)]
+struct BinaryPathCache {
+    paths: Mutex<HashMap<BinarySearchEnv, HashMap<String, PathBuf>>>,
+}
+
+impl BinaryPathCache {
+    fn find(&self, binary_name: &str, env: BinarySearchEnv) -> BoxliteResult<PathBuf> {
+        if let Some(path) = self
+            .paths
+            .lock()
+            .unwrap()
+            .get(&env)
+            .and_then(|paths| paths.get(binary_name))
+            .cloned()
+        {
+            return Ok(path);
+        }
+
+        // Search using the same environment snapshot as the key, without
+        // holding the mutex during filesystem probes or embedded extraction.
+        let finder = RuntimeBinaryFinder::from_search_env(&env);
+        let path = finder.find(binary_name)?;
+        // Relative search directories (even ones that didn't match) make the
+        // result sensitive to the current working directory. Don't cache them.
+        if finder.search_paths.iter().all(|dir| dir.is_absolute()) && path.is_absolute() {
+            self.paths
+                .lock()
+                .unwrap()
+                .entry(env)
+                .or_default()
+                .insert(binary_name.to_owned(), path.clone());
+        }
+        Ok(path)
+    }
+}
+
 /// Find a runtime binary by name using the default search configuration.
 ///
-/// This is a convenience wrapper around [`RuntimeBinaryFinder::from_env`].
+/// Successful absolute lookups are cached for the life of the process, keyed
+/// by binary name and the search environment. Failed lookups are retried.
 ///
 /// # Example
 ///
@@ -162,7 +220,8 @@ impl RuntimeBinaryFinder {
 /// let shim_path = find_binary("boxlite-shim")?;
 /// ```
 pub fn find_binary(binary_name: &str) -> BoxliteResult<PathBuf> {
-    RuntimeBinaryFinder::from_env().find(binary_name)
+    static CACHE: LazyLock<BinaryPathCache> = LazyLock::new(BinaryPathCache::default);
+    CACHE.find(binary_name, BinarySearchEnv::capture())
 }
 
 /// Directories from `BOXLITE_RUNTIME_DIR`, else the debug non-embed compile-time path.
@@ -256,6 +315,55 @@ mod tests {
 
         let result = finder.find("test-binary").unwrap();
         assert_eq!(result, temp_dir1.path().join("test-binary"));
+    }
+
+    fn search_env(dir: &std::path::Path) -> BinarySearchEnv {
+        BinarySearchEnv {
+            runtime_dir: Some(dir.to_str().unwrap().to_owned()),
+            library_paths: vec![],
+        }
+    }
+
+    #[test]
+    fn caches_hits_per_binary_and_environment_snapshot() {
+        let cache = BinaryPathCache::default();
+        let first = TempDir::new().unwrap();
+        let second = TempDir::new().unwrap();
+        let binary = "test-binary-cache-hit";
+        let first_path = first.path().join(binary);
+        let second_path = second.path().join(binary);
+        fs::write(&first_path, []).unwrap();
+        fs::write(&second_path, []).unwrap();
+
+        assert_eq!(
+            cache.find(binary, search_env(first.path())).unwrap(),
+            first_path
+        );
+        fs::remove_file(&first_path).unwrap();
+        assert_eq!(
+            cache.find(binary, search_env(first.path())).unwrap(),
+            first_path
+        );
+        assert_eq!(
+            cache.find(binary, search_env(second.path())).unwrap(),
+            second_path
+        );
+        assert!(
+            cache
+                .find("test-binary-cache-other", search_env(first.path()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn retries_misses_after_binary_appears_in_same_environment() {
+        let cache = BinaryPathCache::default();
+        let dir = TempDir::new().unwrap();
+        let binary = "test-binary-cache-miss";
+        assert!(cache.find(binary, search_env(dir.path())).is_err());
+        let path = dir.path().join(binary);
+        fs::write(&path, []).unwrap();
+        assert_eq!(cache.find(binary, search_env(dir.path())).unwrap(), path);
     }
 
     #[test]

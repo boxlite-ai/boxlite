@@ -58,6 +58,12 @@ async fn connect_transport(transport: &BoxTransport) -> BoxliteResult<Channel> {
     }
 }
 
+fn unix_retry_delays() -> impl Iterator<Item = Duration> {
+    std::iter::successors(Some(Duration::from_millis(1)), |delay| {
+        Some((*delay * 2).min(Duration::from_millis(100)))
+    })
+}
+
 async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
     let socket_path = socket_path.to_path_buf();
 
@@ -69,7 +75,7 @@ async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
                 // Guest-ready can precede libkrun's host listener. Retry only
                 // connection establishment; tonic's connect_timeout bounds
                 // this entire future, including every asynchronous backoff.
-                let mut retry_delay = Duration::from_millis(10);
+                let mut retry_delays = unix_retry_delays();
                 loop {
                     match tokio::net::UnixStream::connect(&socket_path).await {
                         Ok(stream) => return Ok::<_, std::io::Error>(TokioIo::new(stream)),
@@ -80,8 +86,7 @@ async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
                                     | std::io::ErrorKind::ConnectionRefused
                             ) =>
                         {
-                            tokio::time::sleep(retry_delay).await;
-                            retry_delay = (retry_delay * 2).min(Duration::from_millis(100));
+                            tokio::time::sleep(retry_delays.next().unwrap()).await;
                         }
                         Err(error) => return Err(error),
                     }
@@ -107,3 +112,13 @@ async fn connect_tcp(port: u16) -> BoxliteResult<Channel> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn unix_retry_backoff_starts_at_one_millisecond_and_caps_at_100() {
+    let delays: Vec<_> = unix_retry_delays()
+        .take(10)
+        .map(|delay| delay.as_millis())
+        .collect();
+    assert_eq!(delays, [1, 2, 4, 8, 16, 32, 64, 100, 100, 100]);
+}
