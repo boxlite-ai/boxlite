@@ -639,7 +639,7 @@ const configuration = {
       rejectUnauthorized: process.env.DB_TLS_REJECT_UNAUTHORIZED !== 'false',
     },
     pool: {
-      max: process.env.DB_POOL_MAX && parseInt(process.env.DB_POOL_MAX, 10),
+      max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 25,
       min: process.env.DB_POOL_MIN && parseInt(process.env.DB_POOL_MIN, 10),
       idleTimeoutMillis: process.env.DB_POOL_IDLE_TIMEOUT_MS && parseInt(process.env.DB_POOL_IDLE_TIMEOUT_MS, 10),
       connectionTimeoutMillis: databaseAcquisitionTimeout(),
