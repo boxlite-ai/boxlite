@@ -31,26 +31,26 @@ function matrixRunner(selection: string, os: string, inputs = new data.Dictionar
   return new Evaluator(ast, context).evaluate().coerceString()
 }
 
-test('Ubuntu x64 matrix jobs request their qualified BoxLite workers and preserve native platform routing', () => {
-  const { platforms } = JSON.parse(readFileSync(join(REPO_ROOT, '.github/ci-config.json'), 'utf8'))
-  const jobs = [
-    ['lint.yml', 'clippy', 'boxlite-4vcpu-16gbmem-64gbdisk'],
-    ['test.yml', 'guest_artifacts', 'boxlite-4vcpu-16gbmem-64gbdisk'],
-    ['test.yml', 'python', 'boxlite'],
-    ['test.yml', 'node', 'boxlite'],
-    ['build-c.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
-    ['build-go.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
-    ['build-node.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
-  ] as const
-
-  for (const [name, job, linuxRunner] of jobs) {
+for (const [name, job, linuxRunner] of [
+  ['lint.yml', 'clippy', 'boxlite-4vcpu-16gbmem-64gbdisk'],
+  ['test.yml', 'guest_artifacts', 'boxlite-4vcpu-16gbmem-64gbdisk'],
+  ['test.yml', 'python', 'boxlite'],
+  ['test.yml', 'node', 'boxlite'],
+  ['build-c.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
+  ['build-node.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
+  ['build-runtime.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
+  ['build-go.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
+  ['build-node.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
+] as const) {
+  test(`${name}/${job} uses BoxLite for Linux x64 and native runners for other platforms`, () => {
+    const { platforms } = JSON.parse(readFileSync(join(REPO_ROOT, '.github/ci-config.json'), 'utf8'))
     const selection = workflow(name).jobs[job]['runs-on']
     for (const { os, target } of platforms) {
       const expected = target === 'linux-x64-gnu' ? linuxRunner : os
-      assert.equal(matrixRunner(selection, os), expected, `${name} ${job} on ${os}`)
+      assert.equal(matrixRunner(selection, os), expected, os)
     }
-  }
-})
+  })
+}
 
 for (const [name, job, runner] of [
   ['build-go.yml', 'config', 'boxlite'],
@@ -79,8 +79,6 @@ for (const [name, job, downloads] of [
 
 for (const [name, job, matrix] of [
   ['release-box-images.yml', 'release', false],
-  ['build-node.yml', 'build', true],
-  ['build-runtime.yml', 'build', true],
   ['build-wheels.yml', 'build_wheels', true],
   ['test.yml', 'api', false],
   ['test.yml', 'rust', true],

@@ -44,7 +44,7 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     needs: config
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-64gbdisk' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -54,6 +54,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - uses: ./.github/actions/setup-boxlite-runner
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          native-build: 'true'
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
