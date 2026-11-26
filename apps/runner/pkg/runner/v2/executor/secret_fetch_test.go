@@ -465,7 +465,7 @@ func TestSecretCredentialConnectionFailureSingleAttempt(t *testing.T) {
 }
 
 func TestSecretCredentialNeverRetriesNetworkUncertainty(t *testing.T) {
-	for _, failure := range []string{"lost response", "partial response", "cancel after dispatch", "timeout", "redirect"} {
+	for _, failure := range []string{"lost response", "partial response", "cancel after dispatch", "timeout", "redirect", "redirect to GET"} {
 		t.Run(failure, func(t *testing.T) {
 			budget := time.Second
 			if failure == "timeout" {
@@ -482,6 +482,10 @@ func TestSecretCredentialNeverRetriesNetworkUncertainty(t *testing.T) {
 						cancel()
 					}
 					<-r.Context().Done()
+					return
+				}
+				if failure == "redirect to GET" {
+					http.Redirect(w, r, "/repeated", http.StatusSeeOther)
 					return
 				}
 				if failure == "redirect" {

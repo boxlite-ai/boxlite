@@ -18,6 +18,13 @@ describe('JobAccessGuard', () => {
     await expect(guard.canActivate(context)).rejects.toBe(outage)
   })
 
+  it('allows the owning runner to recheck its job', async () => {
+    const guard = new JobAccessGuard({
+      findOne: jest.fn().mockResolvedValue({ runnerId: 'r1' }),
+    } as unknown as JobService)
+    await expect(guard.canActivate(context)).resolves.toBe(true)
+  })
+
   it.each([null, { runnerId: 'another runner' }])('conceals absent or unowned jobs', async (job) => {
     const guard = new JobAccessGuard({ findOne: jest.fn().mockResolvedValue(job) } as unknown as JobService)
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(NotFoundException)

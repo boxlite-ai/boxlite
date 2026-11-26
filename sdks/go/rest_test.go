@@ -716,3 +716,42 @@ func TestRestImagesCreateAliasPostsTheAliasAndReadsTheImage(t *testing.T) {
 		}
 	}
 }
+
+func TestRestAdoptUsesExplicitIDAndChecksPrivilege(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/boxes/saved" {
+			t.Errorf("unexpected adoption request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"box_id":"box1","name":"saved","status":"configured","privileged":true,
+			"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z",
+			"image":"alpine:latest","cpus":1,"memory_mib":256}`)
+	}))
+	defer server.Close()
+	rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	if _, err := rt.Adopt(t.Context(), "saved", "alpine:latest", WithName("ignored")); err == nil || !strings.Contains(err.Error(), "privileged") {
+		t.Fatalf("adopt with mismatched privileges: %v", err)
+	}
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer advanced.Close()
+	if err := advanced.SetPrivileged(true); err != nil {
+		t.Fatal(err)
+	}
+	box, err := rt.Adopt(t.Context(), "saved", "alpine:latest", WithAdvancedOptions(advanced))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer box.Close()
+	if got := box.ID(); got != "box1" {
+		t.Fatalf("adopt returned box %q", got)
+	}
+}

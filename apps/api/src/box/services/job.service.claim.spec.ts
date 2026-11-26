@@ -5,6 +5,8 @@
 
 import { In, MoreThan } from 'typeorm'
 import { Job } from '../entities/job.entity'
+import { JobController } from '../controllers/job.controller'
+import { RunnerContext } from '../../common/interfaces/runner-context.interface'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { JobService } from './job.service'
 
@@ -99,6 +101,13 @@ describe('JobService.findJobsForRunner', () => {
     const service = new JobService(repository as any, {} as any, {} as any)
     const status = JobStatus.IN_PROGRESS
     const runnerId = 'runner-1'
+    await service.findJobsForRunner(runnerId)
+    expect(repository.findAndCount).toHaveBeenLastCalledWith({
+      where: { runnerId },
+      order: { createdAt: 'DESC' },
+      skip: 0,
+      take: 100,
+    })
     await service.findJobsForRunner(runnerId, status, 2, 100)
     expect(repository.findAndCount).toHaveBeenLastCalledWith({
       where: { runnerId, status },
@@ -107,7 +116,13 @@ describe('JobService.findJobsForRunner', () => {
       take: 100,
     })
     const cursor = '00000000-0000-4000-8000-000000000099'
-    await service.findJobsForRunner(runnerId, status, 1, 100, cursor)
+    const controller = new JobController(service)
+    await controller.listJobs({ runnerId, role: 'runner' } as RunnerContext, {
+      afterId: cursor,
+      page: 1,
+      limit: 100,
+      status,
+    })
     expect(repository.findAndCount).toHaveBeenLastCalledWith({
       where: { runnerId, status, id: MoreThan(cursor) },
       order: { id: 'ASC' },
