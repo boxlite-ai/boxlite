@@ -786,14 +786,14 @@ async fn memory_resize_startup_rejects_a_kernel_without_automatic_onlining() {
 
 #[tokio::test]
 #[ignore = "requires Linux x86_64 KVM, the qualified VMM_KERNEL and current boxlite-guest"]
-async fn memory_resize_startup_rejects_an_inherited_address_space_limit() {
+async fn memory_resize_enforces_address_space_limit_during_growth() {
     const CHILD: &str = "BOXLITE_TEST_MEMORY_RESIZE_RLIMIT_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--ignored",
                 "--exact",
-                "memory_resize_startup_rejects_an_inherited_address_space_limit",
+                "memory_resize_enforces_address_space_limit_during_growth",
             ])
             .env(CHILD, "1")
             .status()
@@ -822,12 +822,42 @@ async fn memory_resize_startup_rejects_an_inherited_address_space_limit() {
     );
     native_vmm::configure(&mut options);
     let bx = runtime.create(options, None).await.unwrap();
-    let result = bx.start().await;
+    let scenario = std::panic::AssertUnwindSafe(async {
+        bx.start()
+            .await
+            .expect("boot RAM fits the inherited address-space limit");
+        let request = |target| ResizeOptions {
+            memory_mib: Some(target),
+            ..Default::default()
+        };
+        let grown = bx.resize(request(768)).await.unwrap().memory.unwrap();
+        assert_eq!(grown.completed_mib, 768);
+        assert_eq!(grown.pending_mib, None);
+
+        let error = bx.resize(request(4608)).await.unwrap_err();
+        assert!(
+            matches!(&error, BoxliteError::Engine(message) if message.contains("is incomplete")),
+            "unexpected resize error: {error}"
+        );
+        let progress = bx
+            .resize(ResizeOptions::default())
+            .await
+            .unwrap()
+            .memory
+            .unwrap();
+        assert_eq!(progress.requested_mib, 4608);
+        assert_eq!(progress.completed_mib, 768);
+        assert_eq!(progress.pending_mib, Some(4608));
+        assert!(progress.mapped_hotplug_mib < 4096);
+
+        bx.stop().await.unwrap();
+    })
+    .catch_unwind()
+    .await;
     runtime.remove(bx.id().as_str(), true).await.unwrap();
-    assert!(
-        matches!(&result, Err(BoxliteError::InvalidArgument(message)) if message.contains("RLIMIT_AS")),
-        "startup returned {result:?}"
-    );
+    if let Err(panic) = scenario {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 #[tokio::test]

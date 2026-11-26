@@ -541,9 +541,10 @@ assert_eq!(memory.workload_limit_mib, 2048);
 
 The workload's cgroup limit stays at the ceiling while VM capacity changes.
 Usable guest memory also depends on current VM capacity and kernel overhead.
-Host cgroup and address-space limits still apply, including the headroom needed to map the hotplug window.
 
-If the host uses cgroups to limit memory, the runtime needs access to the complete cgroup v2 hierarchy.
+Host address-space limits apply as the VMM maps memory for each grow.
+If a mapping fails, the grow can remain incomplete and the last completed target is retained.
+Host cgroup limits also apply when guest workloads touch the newly mapped memory.
 
 An empty request shows the requested target, guest managed memory and VMM mapping progress.
 A shrink can remain incomplete while the guest uses too much memory or KVM retains an empty mapping.

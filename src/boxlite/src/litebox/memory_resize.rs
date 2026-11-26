@@ -191,12 +191,10 @@ pub(super) async fn restore(
     let Some(resize) = MemoryResize::new(manager, config, layout, guest) else {
         return Ok(());
     };
-    let window_mib = config.options.hotplug_mib()?.expect("opted-in Box");
     let shim = verified_shim(&layout.pid_file_path())?;
     let old = manager.memory_resize(&config.id)?;
     let completed_mib = old.map_or(resize.boot_mib, |state| state.completed_mib);
     tokio::time::timeout(RESIZE_TIMEOUT, async {
-        super::memory_budget::check(&resize.socket, u64::from(window_mib) * MIB).await?;
         let baseline_bytes = guest.guest().await?.managed_memory_bytes(true).await?;
         let state = MemoryResizeState {
             shim,

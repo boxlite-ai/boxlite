@@ -15,8 +15,6 @@ mod init;
 pub(crate) mod local_snapshot;
 mod manager;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-mod memory_budget;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod memory_resize;
 mod network;
 pub(crate) mod ports;
