@@ -15,7 +15,7 @@ describe('RunnerController privilege heartbeat', () => {
       Object.assign(controller, { runnerService: { updateRunnerHealth } })
       const report = Object.assign(new RunnerHealthcheckDto(), { appVersion: 'dev', supportsPrivileged })
 
-      await controller.runnerHealthcheck({ runnerId: 'runner-1' } as any, report)
+      await controller.runnerHealthcheck({ runnerId: 'runner-1' } as any, report, { headers: {} })
 
       expect(updateRunnerHealth).toHaveBeenCalledWith(
         'runner-1',
@@ -40,7 +40,9 @@ describe('RunnerController privilege heartbeat', () => {
     const controller = Object.create(RunnerController.prototype) as RunnerController
     Object.assign(controller, { runnerService: { updateRunnerHealth } })
 
-    await controller.runnerHealthcheck({ runnerId: 'runner-1' } as any, new RunnerHealthcheckDto(), header)
+    await controller.runnerHealthcheck({ runnerId: 'runner-1' } as any, new RunnerHealthcheckDto(), {
+      headers: { 'x-boxlite-runner-process': header },
+    })
 
     expect(updateRunnerHealth.mock.calls[0][8]).toEqual({
       nestedVirtualizationEnabled: undefined,
