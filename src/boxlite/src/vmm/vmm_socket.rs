@@ -45,6 +45,12 @@ use super::controller::mount_control::{ControlMount, MountState};
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 mod transport;
 
+#[cfg(all(
+    any(test, feature = "native"),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+const MEMORY_PATH: &str = "/v1/memory";
 const RESIZE_PATH: &str = "/v1/resize-disk";
 const MAX_BODY: usize = 4096;
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
@@ -71,6 +77,25 @@ struct ResizeDiskRequest {
     bytes: u64,
 }
 
+#[cfg(all(
+    any(test, feature = "native"),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryRequest {
+    target_mib: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MemoryObservation {
+    pub requested_mib: u32,
+    pub plugged_mib: u32,
+    pub mapped_mib: u32,
+    pub retained_empty_mib: u32,
+}
+
 /// The operations a shim may serve.
 #[cfg(any(test, feature = "native"))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,6 +103,8 @@ struct ResizeDiskRequest {
 pub(crate) enum ControlOp {
     /// Grows the disk with the configured `block_id` to `bytes`.
     ResizeDisk { block_id: String, bytes: u64 },
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    Memory { target_mib: Option<u32> },
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     RegisterMount {
         source: String,
@@ -101,6 +128,8 @@ pub(crate) type ControlResponse = Result<ControlReply, ControlError>;
 pub(crate) enum ControlReply {
     /// The disk's size in bytes after the operation.
     DiskSize(u64),
+    MemoryTargetPublished,
+    Memory(MemoryObservation),
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     MountRegistered(ControlMount),
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
@@ -294,6 +323,8 @@ async fn handle_http(
     type ParseControlOp = fn(&[u8]) -> Result<ControlOp, ControlError>;
     let (parse, max_body): (ParseControlOp, _) = match request.uri().path() {
         RESIZE_PATH => (parse_resize, MAX_BODY),
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        MEMORY_PATH => (parse_memory, MAX_BODY),
         #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
         MOUNT_PATH => (parse_mount, MAX_MOUNT_BODY),
         _ => return invalid_request(StatusCode::NOT_FOUND, "unknown control path"),
@@ -331,11 +362,24 @@ fn parse_resize(body: &[u8]) -> Result<ControlOp, ControlError> {
     })
 }
 
+#[cfg(all(
+    any(test, feature = "native"),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+fn parse_memory(body: &[u8]) -> Result<ControlOp, ControlError> {
+    serde_json::from_slice::<MemoryRequest>(body)
+        .map(|request| ControlOp::Memory {
+            target_mib: request.target_mib,
+        })
+        .map_err(|error| ControlError::InvalidInput(error.to_string()))
+}
+
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 fn parse_mount(body: &[u8]) -> Result<ControlOp, ControlError> {
     let op = serde_json::from_slice(body)
         .map_err(|error| ControlError::InvalidInput(error.to_string()))?;
-    if matches!(op, ControlOp::ResizeDisk { .. }) {
+    if matches!(op, ControlOp::ResizeDisk { .. } | ControlOp::Memory { .. }) {
         return Err(ControlError::InvalidInput(
             "expected a mount operation".into(),
         ));
@@ -470,6 +514,11 @@ pub(crate) fn exchange(
             serde_json::to_vec(&ResizeDiskRequest { block_id, bytes })?,
             MAX_BODY,
         ),
+        ControlOp::Memory { target_mib } => (
+            MEMORY_PATH,
+            serde_json::to_vec(&MemoryRequest { target_mib })?,
+            MAX_BODY,
+        ),
         op => (MOUNT_PATH, serde_json::to_vec(&op)?, MAX_MOUNT_BODY),
     };
     // A blocking Unix connect waits on a full listen backlog until the deadline.
@@ -537,7 +586,6 @@ pub(crate) async fn grow_disk(
         Err(ControlError::Failed(message)) => Err(BoxliteError::Engine(format!(
             "disk resize completion is unknown: {message}; query allocation or retry the target"
         ))),
-        #[cfg(feature = "native")]
         _ => Err(BoxliteError::Engine(
             "disk resize completion is unknown: unexpected shim reply; retry the target".into(),
         )),

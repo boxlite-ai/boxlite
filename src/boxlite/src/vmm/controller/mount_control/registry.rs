@@ -138,7 +138,9 @@ impl Registry {
                 self.list_bytes -= cost;
                 Ok(ControlReply::MountUpdated)
             }
-            ControlOp::ResizeDisk { .. } => unreachable!("disk resize is dispatched by the VMM"),
+            ControlOp::ResizeDisk { .. } | ControlOp::Memory { .. } => {
+                unreachable!("resize is dispatched by the VMM")
+            }
         }
     }
 }

@@ -91,6 +91,28 @@ fn handle_control_op(
                 }
                 _ => ControlError::Failed(error.to_string()),
             }),
+        ControlOp::Memory { target_mib } => {
+            let result = match target_mib {
+                Some(mib) => vm
+                    .set_memory_target_mib(mib, GROW_TIMEOUT)
+                    .map(|()| ControlReply::MemoryTargetPublished),
+                None => vm.memory_status_with_retained_mappings(GROW_TIMEOUT).map(
+                    |(status, retained_empty_mib)| {
+                        ControlReply::Memory(vmm_socket::MemoryObservation {
+                            requested_mib: status.requested_mib,
+                            plugged_mib: status.plugged_mib,
+                            mapped_mib: status.mapped_mib,
+                            retained_empty_mib,
+                        })
+                    },
+                ),
+            };
+            result.map_err(|error| match error.kind() {
+                io::ErrorKind::Unsupported => ControlError::Unsupported(error.to_string()),
+                io::ErrorKind::InvalidInput => ControlError::InvalidInput(error.to_string()),
+                _ => ControlError::Failed(error.to_string()),
+            })
+        }
         op => mounts
             .ok_or_else(|| ControlError::Unsupported("guest transport is unavailable".into()))?
             .request(
@@ -207,7 +229,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
             }
         }),
         virtio_console: true,
-        hotplug_mib: 0,
+        hotplug_mib: spec.hotplug_mib,
     })
 }
 

@@ -226,7 +226,6 @@ async fn fixture(gate: Arc<GuestGate>, kind: VmmKind) -> Fixture {
         assert!(directory.is_none());
         let (block_id, bytes) = match op {
             ControlOp::ResizeDisk { block_id, bytes } => (block_id, bytes),
-            #[cfg(feature = "native")]
             _ => panic!("expected a disk resize request"),
         };
         assert_eq!(block_id, "vda");

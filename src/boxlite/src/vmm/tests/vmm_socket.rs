@@ -17,7 +17,7 @@ fn echo_resize(op: ControlOp, directory: Option<File>) -> ControlResponse {
     assert!(directory.is_none());
     match op {
         ControlOp::ResizeDisk { bytes, .. } => Ok(ControlReply::DiskSize(bytes)),
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         _ => panic!("expected a resize request"),
     }
 }
@@ -73,7 +73,7 @@ fn http_resize_reaches_the_handler() {
             assert_eq!(bytes, 4096);
             Ok(ControlReply::DiskSize(bytes))
         }
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         _ => panic!("expected a resize request"),
     })
     .unwrap();
@@ -93,7 +93,7 @@ async fn a_request_reaches_the_handler_and_its_answer_returns() {
         ControlOp::ResizeDisk { block_id, .. } => {
             Err(ControlError::InvalidInput(format!("no disk {block_id}")))
         }
-        #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         _ => panic!("expected a resize request"),
     })
     .unwrap();
@@ -683,7 +683,7 @@ mod mounts {
     }
 
     #[test]
-    fn another_uid_is_refused_mount_control() {
+    fn another_uid_is_refused_mount_and_memory_control() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let dir = tempfile::tempdir().unwrap();
@@ -699,10 +699,13 @@ mod mounts {
         std::thread::spawn(move || {
             serve_connections(
                 &runtime(),
-                listener.incoming().take(2),
+                listener.incoming().take(4),
                 owner,
                 move |op, directory| {
                     seen.fetch_add(1, Ordering::SeqCst);
+                    if matches!(op, ControlOp::Memory { .. }) {
+                        return Ok(ControlReply::MemoryTargetPublished);
+                    }
                     registry
                         .request(&tag, op, directory)
                         .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap()))
@@ -711,6 +714,13 @@ mod mounts {
             )
         });
         for (op, directory) in [
+            (ControlOp::Memory { target_mib: None }, None),
+            (
+                ControlOp::Memory {
+                    target_mib: Some(128),
+                },
+                None,
+            ),
             (ControlOp::ListMounts, None),
             (registration("/data"), Some(File::open(dir.path()).unwrap())),
         ] {

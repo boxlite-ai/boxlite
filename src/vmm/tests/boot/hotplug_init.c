@@ -49,8 +49,8 @@ static word wait_for(int (*ready)(word, word), word base, word seconds) {
     return now;
 }
 static const word MIB = 1UL << 20;
-static int grown(word now, word base) { return now >= base + 896 * MIB; }
-static int shrunk(word now, word base) { return now <= base + 384 * MIB; }
+static int grown(word now, word base) { return now == base + 1024 * MIB; }
+static int shrunk(word now, word base) { return now == base + 256 * MIB; }
 
 /* x86_64 pagemap: 4 KiB pages with the PFN in bits 0–54 and present in bit 63. */
 static void check_written_gpa(word address, word length) {

@@ -25,7 +25,9 @@ use std::{
 };
 
 use boxlite_hypervisor::{MemoryRegion, Vm};
-use vm_memory::{GuestAddress, GuestAddressSpace, GuestMemoryRegion, GuestRegionMmap};
+use vm_memory::{
+    GuestAddress, GuestAddressSpace, GuestMemoryBackend, GuestMemoryRegion, GuestRegionMmap,
+};
 
 use crate::memory::{GuestMemoryMmap, GuestMemoryView};
 
@@ -151,6 +153,15 @@ impl<V: Vm + ?Sized> HotplugMemory<V> {
         self.slots.iter().flatten().count() as u64 * SLOT_SIZE
     }
 
+    pub(crate) fn retained_empty_mapped_bytes(&self) -> u64 {
+        self.slots
+            .iter()
+            .zip(self.plugged.as_chunks::<BLOCKS_PER_SLOT>().0)
+            .filter(|(mapping, blocks)| mapping.is_some() && !blocks.iter().any(|&plugged| plugged))
+            .count() as u64
+            * SLOT_SIZE
+    }
+
     /// The block indexes of `count` blocks at `addr`, or `None` when the range
     /// is empty, misaligned or outside the window.
     pub(crate) fn blocks(&self, addr: u64, count: u16) -> Option<Range<usize>> {
@@ -175,8 +186,23 @@ impl<V: Vm + ?Sized> HotplugMemory<V> {
     /// Plugs `blocks`, mapping and registering every slot they need. A failure
     /// unregisters the slots this call added and leaves every block unplugged.
     pub(crate) fn plug(&mut self, blocks: Range<usize>) -> io::Result<()> {
+        let slots = slots_of(&blocks);
+        // A failed rollback may leave an unpublished but registered slot.
+        // Reusing it as a published slot would expose RAM through an incomplete view.
+        let touches_unpublished_slot = {
+            let view = self.view.memory();
+            slots
+                .clone()
+                .filter_map(|slot| self.slots[slot].as_ref())
+                .any(|region| !view.address_in_range(region.start_addr()))
+        };
+        if touches_unpublished_slot {
+            return Err(io::Error::other(
+                "a failed hotplug rollback retained an unpublished KVM mapping",
+            ));
+        }
         let mut added = Vec::new();
-        for slot in slots_of(&blocks) {
+        for slot in slots {
             if self.slots[slot].is_some() {
                 continue;
             }
@@ -271,11 +297,11 @@ impl<V: Vm + ?Sized> HotplugMemory<V> {
         Ok(region)
     }
 
-    /// Unregisters a slot that never reached the view; leaks it on failure.
-    fn release(&self, slot: usize, region: Arc<GuestRegionMmap>) {
+    /// Unregisters an unpublished slot, retaining ownership if KVM still maps it.
+    fn release(&mut self, slot: usize, region: Arc<GuestRegionMmap>) {
         if self.vm.unmap_memory(&kvm_region(&region)).is_err() {
-            tracing::warn!(slot, "leaking a hotplug slot KVM may still map");
-            std::mem::forget(region);
+            tracing::warn!(slot, "retaining a hotplug slot KVM may still map");
+            self.slots[slot] = Some(region);
         }
     }
 

@@ -88,6 +88,16 @@ impl VmControl {
 
     /// Reads hotplug capacity, target, and actual sizes from the active device.
     pub fn memory_status(&self, timeout: Duration) -> io::Result<MemoryStatus> {
+        self.memory_status_with_retained_mappings(timeout)
+            .map(|(status, _)| status)
+    }
+
+    /// Reads memory status and the MiB in empty slots still registered with KVM.
+    /// Both values are sampled in the same device control operation.
+    pub fn memory_status_with_retained_mappings(
+        &self,
+        timeout: Duration,
+    ) -> io::Result<(MemoryStatus, u32)> {
         self.memory()?.request(timeout, MemoryRequest::Status)
     }
 

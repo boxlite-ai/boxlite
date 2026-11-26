@@ -312,3 +312,50 @@ fn unplug_after_a_poisoned_view_lock_still_removes_the_slot_everywhere() {
     assert_eq!(memory.mapped_bytes(), 0);
     assert!(!view.memory().address_in_range(GuestAddress(HOTPLUG_START)));
 }
+
+#[test]
+fn failed_plug_rollback_reports_the_retained_mapping() {
+    let (_vm, view, mut memory) = window(MockVm::failing_at(&[1, 2]), 256);
+    let blocks = memory.blocks(SECOND_SLOT - BLOCK_SIZE, 2).unwrap();
+    assert!(memory.plug(blocks.clone()).is_err());
+    assert_eq!(memory.state(blocks.clone()), BlockState::Unplugged);
+    assert_eq!(memory.mapped_bytes(), SLOT_SIZE);
+    assert!(!view.memory().address_in_range(GuestAddress(HOTPLUG_START)));
+
+    memory.unplug_all().unwrap();
+    assert_eq!(memory.mapped_bytes(), 0);
+    memory.plug(blocks).unwrap();
+}
+
+#[test]
+fn a_published_slot_left_mapped_can_be_replugged() {
+    let (_, view, mut memory) = window(MockVm::failing_at(&[1]), 256);
+    let blocks = memory.blocks(HOTPLUG_START, 1).unwrap();
+    memory.plug(blocks.clone()).unwrap();
+
+    assert!(memory.unplug(blocks.clone()).is_err());
+    assert!(view.memory().address_in_range(GuestAddress(HOTPLUG_START)));
+    assert_eq!(memory.state(blocks.clone()), BlockState::Unplugged);
+
+    memory.plug(blocks.clone()).unwrap();
+    assert_eq!(memory.state(blocks), BlockState::Plugged);
+    assert_eq!(memory.mapped_bytes(), SLOT_SIZE);
+}
+
+#[test]
+fn retained_empty_bytes_exclude_partly_occupied_mappings() {
+    let (_, _, mut memory) = window(MockVm::failing_at(&[2]), 256);
+    let first = memory.blocks(HOTPLUG_START, 1).unwrap();
+    let second = memory.blocks(SECOND_SLOT, 1).unwrap();
+    memory.plug(first.clone()).unwrap();
+    memory.plug(second).unwrap();
+    assert_eq!(memory.retained_empty_mapped_bytes(), 0);
+
+    assert!(memory.unplug(first.clone()).is_err());
+    assert_eq!(memory.retained_empty_mapped_bytes(), SLOT_SIZE);
+    assert_eq!(memory.mapped_bytes(), 2 * SLOT_SIZE);
+
+    memory.unplug(first).unwrap();
+    assert_eq!(memory.retained_empty_mapped_bytes(), 0);
+    assert_eq!(memory.mapped_bytes(), SLOT_SIZE);
+}
