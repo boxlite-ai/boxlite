@@ -14,6 +14,7 @@ import {
   Context as TelemetryContext,
 } from '@opentelemetry/api'
 import { applyDecorators } from '@nestjs/common'
+import { performance } from 'node:perf_hooks'
 
 type ResponseInstrumentationResponse = {
   once(event: string, listener: (...args: any[]) => void): unknown
@@ -252,7 +253,7 @@ export function startTimedOperation(
     executionHistograms.set(metricName, histogram)
   }
   const span = getTracer().startSpan(name, { attributes }, parent)
-  const startedAt = Date.now()
+  const startedAt = performance.now()
   let finished = false
 
   return {
@@ -272,7 +273,7 @@ export function startTimedOperation(
         if (error !== undefined) span.recordException(error instanceof Error ? error : new Error(String(error)))
       }
       span.end()
-      histogram.record(Date.now() - startedAt, { ...metricAttributes, status })
+      histogram.record(performance.now() - startedAt, { ...metricAttributes, status })
     },
   }
 }

@@ -35,6 +35,7 @@ type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteExecutionId?: string
   __boxliteWsRoot?: TimedOperation
   __boxliteWsHandshake?: TimedOperation
+  __boxliteWsHandshakeSucceeded?: boolean
 }
 
 // Matches /api/v1/boxes/<id>/executions/<id>/attach and the
@@ -110,6 +111,7 @@ export class BoxliteWsProxyService {
           }
           const root = upgradeReq.__boxliteWsRoot
           if (root) {
+            upgradeReq.__boxliteWsHandshakeSucceeded = false
             const handshake = startTimedOperation(
               'box.exec.ws_handshake',
               {
@@ -128,12 +130,20 @@ export class BoxliteWsProxyService {
           upgradeReq.__boxliteAttachAudit?.bind(proxyReq)
         },
         open: (proxySocket) => {
-          this.upgrades.get(proxySocket)?.__boxliteWsHandshake?.finish()
+          const upgradeReq = this.upgrades.get(proxySocket)
+          if (upgradeReq) upgradeReq.__boxliteWsHandshakeSucceeded = true
+          upgradeReq?.__boxliteWsHandshake?.finish()
         },
         close: (_proxyRes, proxySocket) => {
           const upgradeReq = this.upgrades.get(proxySocket)
-          upgradeReq?.__boxliteWsHandshake?.finish('error', new Error('runner socket closed during handshake'))
-          upgradeReq?.__boxliteWsRoot?.finish()
+          if (!upgradeReq) return
+          upgradeReq.__boxliteWsHandshake?.finish('error', new Error('runner socket closed during handshake'))
+          upgradeReq.__boxliteWsRoot?.finish(
+            upgradeReq.__boxliteWsHandshakeSucceeded === false ? 'error' : 'success',
+            upgradeReq.__boxliteWsHandshakeSucceeded === false
+              ? new Error('runner socket closed before the upgrade completed')
+              : undefined,
+          )
         },
         error: (error, req) => {
           const upgradeReq = req as RunnerUpgradeRequest
@@ -187,7 +197,11 @@ export class BoxliteWsProxyService {
     })
     socket.once('close', () => {
       upgradeReq.__boxliteWsHandshake?.finish('error', new Error('client socket closed during handshake'))
-      root.finish(socketError === undefined ? 'success' : 'error', socketError)
+      const upgradeFailed = upgradeReq.__boxliteWsHandshakeSucceeded === false
+      root.finish(
+        socketError !== undefined || upgradeFailed ? 'error' : 'success',
+        socketError ?? (upgradeFailed ? new Error('client socket closed before the upgrade completed') : undefined),
+      )
     })
 
     const authentication = startTimedOperation(

@@ -119,6 +119,12 @@ func TestExecManagerTracesStartAndWaitAtSDKBoundary(t *testing.T) {
 	}
 	requireSpanAttribute(t, waitSpan, "box_id", "box-1")
 	requireSpanAttribute(t, waitSpan, "execution_id", "exec-1")
+	if waitSpan.Parent().SpanID() == startSpan.SpanContext().SpanID() {
+		t.Error("Wait is nested under the short StartExecution span instead of its parent")
+	}
+	if waitSpan.Parent().SpanID() != startSpan.Parent().SpanID() {
+		t.Error("StartExecution and Wait do not share the same parent")
+	}
 	for _, attr := range waitSpan.Attributes() {
 		if attr.Key == "exit_code" && attr.Value.AsInt64() == 17 {
 			return
@@ -187,7 +193,10 @@ func TestCreateInstrumentsNativePreparationGetOrCreateAndStart(t *testing.T) {
 		`"box.create_prepare"`,
 		`"box.get_or_create"`,
 		`"box.start"`,
-		`bx.Start(ctx)`,
+		`parentCtx := ctx`,
+		`ctx = context.WithoutCancel(parentCtx)`,
+		`startSpanCtx, startSpan :=`,
+		`bx.Start(startSpanCtx)`,
 		`c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)`,
 	} {
 		if !strings.Contains(source, fragment) {

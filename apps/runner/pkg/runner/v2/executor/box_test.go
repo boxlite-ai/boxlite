@@ -68,6 +68,9 @@ func TestCreateBoxJobTracesWaitPreparationAndCompletionReport(t *testing.T) {
 	if ended["job.wait"] != nil && time.Since(ended["job.wait"].StartTime()) < 500*time.Millisecond {
 		t.Errorf("job.wait did not start at the job creation timestamp: %v", ended["job.wait"].StartTime())
 	}
+	if ended["job"] != nil && ended["job.wait"] != nil && ended["job"].StartTime().After(ended["job.wait"].StartTime()) {
+		t.Errorf("job parent starts after job.wait: job=%v wait=%v", ended["job"].StartTime(), ended["job.wait"].StartTime())
+	}
 	if ended["update_job_status"] != nil && ended["job"] != nil && ended["update_job_status"].Parent().SpanID() != ended["job"].SpanContext().SpanID() {
 		t.Error("completion report is not a child of the job span")
 	}

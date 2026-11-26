@@ -464,6 +464,7 @@ func (c *Client) NestedVirtualizationEnabled() bool {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	parentCtx := ctx
 	ctx, prepareSpan := otel.Tracer("runner").Start(ctx, "box.create_prepare")
 	prepareSpan.SetAttributes(attribute.String("box_id", boxDto.Id))
 	prepareOpen := true
@@ -644,7 +645,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 	// Native creation cannot be cancelled after admission. Keep the target
 	// lease until it finishes; preparation above still obeys caller cancellation.
-	ctx = context.WithoutCancel(ctx)
+	ctx = context.WithoutCancel(parentCtx)
 
 	prepareOpen = false
 	prepareSpan.End()
@@ -721,9 +722,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// TestCreateHasNoFallibleStepAfterStart enforces this.
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
 	if !skipStart {
-		ctx, startSpan := otel.Tracer("runner").Start(ctx, "box.start")
+		startSpanCtx, startSpan := otel.Tracer("runner").Start(ctx, "box.start")
 		startSpan.SetAttributes(attribute.String("box_id", boxDto.Id))
-		if err := bx.Start(ctx); err != nil {
+		if err := bx.Start(startSpanCtx); err != nil {
 			startSpan.RecordError(err)
 			startSpan.SetStatus(codes.Error, "box start failed")
 			startSpan.End()

@@ -117,10 +117,15 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 		jobAttributes = append(jobAttributes, attribute.String("box_id", job.GetResourceId()))
 	}
 	tracer := otel.Tracer("runner")
-	ctx, jobSpan := tracer.Start(ctx, "job", trace.WithAttributes(jobAttributes...))
-	defer jobSpan.End()
 	now := time.Now()
-	if startedAt, ok := jobWaitStartedAt(job.GetCreatedAt(), now); ok {
+	startedAt, hasCreatedAt := jobWaitStartedAt(job.GetCreatedAt(), now)
+	jobSpanOptions := []trace.SpanStartOption{trace.WithAttributes(jobAttributes...)}
+	if hasCreatedAt {
+		jobSpanOptions = append(jobSpanOptions, trace.WithTimestamp(startedAt))
+	}
+	ctx, jobSpan := tracer.Start(ctx, "job", jobSpanOptions...)
+	defer jobSpan.End()
+	if hasCreatedAt {
 		_, waitSpan := tracer.Start(ctx, "job.wait", trace.WithTimestamp(startedAt))
 		waitSpan.End(trace.WithTimestamp(now))
 	}
