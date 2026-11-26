@@ -3,6 +3,7 @@
 
 import {
   BadRequestException,
+  ConflictException,
   RequestTimeoutException,
   ServiceUnavailableException,
   UnauthorizedException,
@@ -187,6 +188,7 @@ describe('Checkpoint REST authentication and request admission', () => {
         name: 'base',
         source_box_id: 'source-id',
         state: 'creating',
+        kind: 'disk',
         created_at: record.createdAt.toISOString(),
         size_bytes: 0,
       })
@@ -194,6 +196,57 @@ describe('Checkpoint REST authentication and request admission', () => {
     expect(checkpoints.create.mock.calls).toEqual(
       Array.from({ length: 3 }, () => [organizationId, 'source-id', 'base']),
     )
+  })
+
+  it('admits explicit disk capture', async () => {
+    const result = await request('/v1/checkpoints', 'checkpoint-write-key', {
+      source_box_id: 'source-id',
+      kind: 'disk',
+    })
+    expect(result.status).toBe(201)
+    expect(await result.json()).toMatchObject({ id: record.id, kind: 'disk' })
+    expect(checkpoints.create).toHaveBeenCalledWith(organizationId, 'source-id', undefined)
+  })
+
+  it('preserves the invalid_state code from a checkpoint source state conflict', async () => {
+    const message = 'Checkpoint source must be idle and stopped; stop the Box before creating a checkpoint'
+    checkpoints.create.mockRejectedValueOnce(new ConflictException({ message, code: 'invalid_state' }))
+    const result = await request('/v1/checkpoints', 'checkpoint-write-key', {
+      source_box_id: 'source-id',
+      kind: 'disk',
+    })
+    expect(result.status).toBe(409)
+    expect(await result.json()).toMatchObject({ code: 'invalid_state', message })
+  })
+
+  it('preserves a duplicate checkpoint name conflict without adding a code', async () => {
+    const message = 'Checkpoint name already exists'
+    checkpoints.create.mockRejectedValueOnce(new ConflictException(message))
+    const result = await request('/v1/checkpoints', 'checkpoint-write-key', {
+      source_box_id: 'source-id',
+      name: 'base',
+    })
+    expect(result.status).toBe(409)
+    const body = await result.json()
+    expect(body).toMatchObject({ message })
+    expect(body).not.toHaveProperty('code')
+  })
+
+  it('rejects full capture before calling the service', async () => {
+    const result = await request('/v1/checkpoints', 'checkpoint-write-key', {
+      source_box_id: 'source-id',
+      kind: 'full',
+    })
+    expect(result.status).toBe(400)
+    expect(await result.json()).toMatchObject({ code: 'unsupported' })
+    expect(checkpoints.create).not.toHaveBeenCalled()
+  })
+
+  it.each([null, 'bogus', 123])('rejects invalid checkpoint kind %j before calling the service', async (kind) => {
+    const result = await request('/v1/checkpoints', 'checkpoint-write-key', { source_box_id: 'source-id', kind })
+    expect(result.status).toBe(400)
+    expect(await result.json()).not.toHaveProperty('code', 'unsupported')
+    expect(checkpoints.create).not.toHaveBeenCalled()
   })
 
   it('allows reads without exposing the stored environment or object URI', async () => {

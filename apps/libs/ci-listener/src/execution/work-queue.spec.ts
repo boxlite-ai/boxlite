@@ -22,11 +22,14 @@ describe('CI keyed execution queue', () => {
       throw new StateConflict()
     })
     await entered.promise
+    expect(queue.revision('allocation')).toBe('old-proof')
     queue.enqueue('allocation', 'new-proof', newer)
+    expect(queue.revision('allocation')).toBe('new-proof')
     release.resolve()
     await new Promise<void>((resolve) => setImmediate(resolve))
     try {
       expect(newer).toHaveBeenCalledTimes(1)
+      expect(queue.revision('allocation')).toBeUndefined()
     } finally {
       await queue.close()
     }

@@ -58,17 +58,80 @@ pub struct X86BootRegisters {
     pub idt_limit: u16,
 }
 
-/// The x86 operations a VM offers the machine's boot loader.
+/// Boot configuration and paused platform-state transfer for an x86 VM.
 pub trait X86Vm: Vm<Vcpu: X86Vcpu> {
+    /// Captures VM-global state and starts a snapshot round with all vCPUs and
+    /// IRQ producers stopped. Complete pending userspace I/O first, then save
+    /// the VM and call [`X86Vcpu::save_state`] once per vCPU in the round.
+    /// Non-snapshot backends report Unsupported.
+    #[cfg(target_os = "linux")]
+    fn save_state(&self) -> Result<X86VmState> {
+        Err(crate::Error::vm_state(
+            "save",
+            std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported backend"),
+        ))
+    }
+
+    /// Restores the VM clock offset after RAM is mapped and before any
+    /// [`X86Vcpu::restore_state`] call on the identically configured destination.
+    /// Discard the destination after any ioctl error: writes are not transactional.
+    #[cfg(target_os = "linux")]
+    fn restore_before_vcpus(&self, _state: &X86VmState) -> Result<()> {
+        Err(crate::Error::vm_state(
+            "restore",
+            std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported backend"),
+        ))
+    }
+
+    /// Restores PIC0, PIC1, IOAPIC and PIT2 after every vCPU has completed
+    /// [`X86Vcpu::restore_state`] and before any [`Vcpu::run`] call.
+    /// Discard the destination after any ioctl error: writes are not transactional.
+    #[cfg(target_os = "linux")]
+    fn restore_after_vcpus(&self, _state: &X86VmState) -> Result<()> {
+        Err(crate::Error::vm_state(
+            "restore",
+            std::io::Error::new(std::io::ErrorKind::Unsupported, "unsupported backend"),
+        ))
+    }
+
     /// Host-supported CPUID values, before the VMM applies guest topology and
     /// policy. They are a ceiling: a guest must not see features beyond them.
     fn supported_cpuid(&self) -> &[X86CpuidEntry];
 }
 
-/// The x86 state a vCPU needs before its first guest entry.
-///
-/// Both writes are not transactional: discard the vCPU after any error.
+/// Boot configuration and paused-state transfer for an x86 vCPU.
 pub trait X86Vcpu: Vcpu {
+    /// Captures a stopped CPU without entering the guest. Complete I/O first.
+    /// Start each snapshot round with [`X86Vm::save_state`]. KVM rejects saves
+    /// before that call and permits one successful save per vCPU in the round.
+    /// A failed capture can be retried in the same round.
+    /// The image is architecture- and host-version-specific. The default reports
+    /// Unsupported (with placeholder CPU id 0) for non-snapshot backends/mocks.
+    #[cfg(target_os = "linux")]
+    fn save_state(&mut self) -> Result<X86VcpuState> {
+        Err(crate::Error::ConfigureVcpu {
+            id: 0,
+            operation: "save CPU state (unsupported backend)",
+            source: std::io::Error::from(std::io::ErrorKind::Unsupported),
+        })
+    }
+
+    /// Overwrites a fresh CPU after [`X86Vm::restore_before_vcpus`] without
+    /// entering the guest. Discard the destination VM on any error once the
+    /// first restore write is attempted. The default reports Unsupported
+    /// (with placeholder CPU id 0) for non-snapshot backends/mocks.
+    /// After this Linux-only restore installs the pvclock MSRs, call the
+    /// cross-platform [`Vcpu::notify_guest_stopped`] on each vCPU's owning
+    /// thread before its first [`Vcpu::run`].
+    #[cfg(target_os = "linux")]
+    fn restore_state(&mut self, _state: &X86VcpuState) -> Result<()> {
+        Err(crate::Error::ConfigureVcpu {
+            id: 0,
+            operation: "restore CPU state (unsupported backend)",
+            source: std::io::Error::from(std::io::ErrorKind::Unsupported),
+        })
+    }
+
     /// Installs the machine's CPUID and MSR policy. Call it before
     /// [`set_boot_registers`](Self::set_boot_registers).
     fn set_cpu_features(&mut self, cpuid: &[X86CpuidEntry], msrs: &[X86Msr]) -> Result<()>;
@@ -78,20 +141,31 @@ pub trait X86Vcpu: Vcpu {
     fn set_boot_registers(&mut self, state: &X86BootRegisters) -> Result<()>;
 }
 
-#[cfg(target_os = "linux")]
-const MAX_SNAPSHOT_CPUID_ENTRIES: usize = 256;
-
-/// VM-global KVM x86 platform state for the same host and KVM environment.
-/// The wire format is unstable. RAM, per-vCPU state, IRQ routing and
-/// device/irqfd configuration are separate.
+/// VM-global KVM x86 platform state; not a portable or stable wire format.
+///
+/// Only supported on the same host and KVM environment, with the same enabled
+/// VM capabilities (including in-kernel IRQ chips and PIT creation flags). All vCPUs,
+/// userspace I/O and external IRQ producers must be quiescent during transfer.
+/// RAM, per-vCPU state, IRQ routing and device/irqfd configuration are separate.
+/// KVM's running timers make capture non-atomic even with stopped vCPUs.
+/// KVM_SET_PIT2 rebases the host `count_load_time` for channels 1 and 2 and
+/// restarts channel 0 with its initial `count`. This loses sub-tick phase
+/// and can re-arm one-shot modes 0, 1 and 4.
+///
+/// A created PIT is captured even if the guest never programmed it: its reset
+/// channels/flags must overwrite the destination, not be confused with no PIT.
 #[cfg(target_os = "linux")]
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct X86VmState {
     /// PIC master (0), PIC slave (1), IOAPIC (2), in that order.
     pub irqchips: [X86IrqchipState; 3],
     /// None only when the source never created an in-kernel PIT.
+    #[serde(with = "exact_abi_option_serde")]
     pub pit: Option<kvm_bindings::kvm_pit_state2>,
-    /// Full KVM clock image with guest nanoseconds, flags, realtime and host TSC.
+    /// Full GET_CLOCK image: guest nanoseconds (from which SET_CLOCK rebuilds
+    /// the offset), flags, realtime and host TSC correlation. Restore excludes
+    /// snapshot downtime by passing zero flags to SET_CLOCK.
+    #[serde(with = "exact_abi_serde")]
     pub clock: kvm_bindings::kvm_clock_data,
 }
 
@@ -99,11 +173,11 @@ pub struct X86VmState {
 ///
 /// Unlike a public raw union, the private image cannot be replaced with a
 /// partially initialized member. Constructors zero it before writing a payload;
-/// deserialization zero-fills the backing buffer. Exposes only shared access.
+/// deserialization requires a full ABI image. Exposes only shared access.
 #[cfg(target_os = "linux")]
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
-pub struct X86IrqchipState(kvm_bindings::kvm_irqchip);
+pub struct X86IrqchipState(#[serde(with = "exact_abi_serde")] kvm_bindings::kvm_irqchip);
 
 #[cfg(target_os = "linux")]
 impl X86IrqchipState {
@@ -159,25 +233,49 @@ impl PartialEq for X86IrqchipState {
                             .zip(&b.redirtbl)
                             .all(|(a, b)| a.bits == b.bits)
                 }
-                // Unknown IDs remain comparable; KVM handles ioctl validation.
+                // Unknown IDs compare deterministically. Restore validates the
+                // expected IRQ chip IDs before issuing ioctls.
                 _ => a.chip.dummy == b.chip.dummy,
             }
         }
     }
 }
 
-/// A paused KVM x86 CPU image specific to the host CPU and KVM/kernel version.
-/// The wire format is unstable.
+/// A paused KVM x86 CPU image, specific to this architecture, host CPU and
+/// KVM/kernel version; not a portable or stable wire format.
 ///
-/// Includes the entire XSAVE area (including AVX and newer enabled components)
-/// in addition to the dedicated FPU image. CPUID/MSR flexible arrays are owned.
-/// The LAPIC image represents the x2APIC register range. The TSC frequency is
-/// per-vCPU. Nested virtualization, Hyper-V SynIC, guest-debug configuration,
-/// VM-wide state and RAM are outside this image.
+/// KVM_SET_XSAVE restores x87, SSE and enabled extended state from `xsave`.
+/// The image also carries the dedicated FPU capture and owned CPUID/MSR arrays.
+/// Capture probes KVM's advertised MSRs plus the 28 writable MTRRs, IA32_XSS,
+/// and IA32_DEBUGCTLMSR. Capture and restore gate SGX launch key hashes on
+/// SGX_LC and IA32_PERF_CAPABILITIES on PDCM and a nonzero PMU version in CPUID.
+/// It excludes MTRRcap, Hyper-V's
+/// `0x4000_0000..=0x4000_01ff` window and the x2APIC range carried by `lapic`.
+/// MCE bank configuration via KVM_X86_SETUP_MCE is outside this interface.
+///
+/// When KVM exposes KVM_VCPU_TSC_OFFSET, vCPUs share a host TSC reference per
+/// frequency at the VM clock capture and restore points. The resulting offsets
+/// preserve their relative TSC skew. Legacy kernels use direct TSC MSR access.
+/// Restore writes TSC_ADJUST and TSC first. The async page-fault interrupt
+/// vector and IA32_PERF_CAPABILITIES precede ordinary MSRs, followed by
+/// IA32_FEATURE_CONTROL, TSC_DEADLINE, then RTIT_CTL. APICv requires the host
+/// kernel fix `9cfec6d097c6` or its backport for LAPIC transfer.
+///
+/// Requires completed userspace I/O and a stopped vCPU. Nested virtualization,
+/// Hyper-V SynIC, guest-debug configuration, VM clock/irqchip/PIT state and RAM
+/// are intentionally outside this image; restore those separately if used.
+/// Restore requires a fresh, never-entered vCPU so omitted optional facilities
+/// retain reset state, never arbitrary destination state. Do not enable dynamic
+/// host XSTATE permissions after creating either the source or destination vCPU.
+/// Capture and restore reject paged 32-bit PAE because SREGS omits cached PDPTRs.
+/// They also reject CPUID that exposes CET shadow stack (SHSTK) because the
+/// image cannot represent its complete state. Both require a nonempty CPUID.
 #[cfg(target_os = "linux")]
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct X86VcpuState {
+    #[serde(with = "exact_abi_serde")]
     pub regs: kvm_bindings::kvm_regs,
+    #[serde(with = "exact_abi_serde")]
     pub sregs: kvm_bindings::kvm_sregs,
     #[serde(with = "fpu_serde")]
     pub fpu: kvm_bindings::kvm_fpu,
@@ -186,25 +284,119 @@ pub struct X86VcpuState {
     /// with room for host XSTATE components beyond the fixed KVM region.
     #[serde(deserialize_with = "vcpu_state_serde::words::<_, _, 65536>")]
     pub xsave: Vec<u32>,
-    /// Captured CPUID leaves, with a decode limit of 256 entries matching KVM.
-    #[serde(deserialize_with = "vcpu_state_serde::entries::<_, _, MAX_SNAPSHOT_CPUID_ENTRIES>")]
+    /// Captured CPUID leaves; decoding uses KVM's maximum entry count,
+    /// matching the buffer accepted by the restore path.
+    #[serde(
+        deserialize_with = "vcpu_state_serde::entries::<_, _, { kvm_bindings::KVM_MAX_CPUID_ENTRIES }>"
+    )]
     pub cpuid: Vec<kvm_bindings::kvm_cpuid_entry2>,
-    /// Readable KVM-advertised MSRs; decoding permits at most 4096 entries.
+    /// Readable MSRs from the filtered KVM-advertised and supplemental list.
+    /// Decoding permits at most 4096 entries.
     /// This is a decoding policy, not KVM's per-ioctl MSR batch limit.
-    #[serde(deserialize_with = "vcpu_state_serde::entries::<_, _, 4096>")]
+    #[serde(deserialize_with = "vcpu_state_serde::entries::<_, _, MAX_SNAPSHOT_MSR_ENTRIES>")]
     pub msrs: Vec<kvm_bindings::kvm_msr_entry>,
+    #[serde(with = "exact_abi_serde")]
     pub xcrs: kvm_bindings::kvm_xcrs,
+    #[serde(with = "exact_abi_serde")]
     pub debug_regs: kvm_bindings::kvm_debugregs,
+    #[serde(with = "exact_abi_serde")]
     pub events: kvm_bindings::kvm_vcpu_events,
+    #[serde(with = "exact_abi_serde")]
     pub mp_state: kvm_bindings::kvm_mp_state,
+    #[serde(with = "exact_abi_serde")]
     pub lapic: kvm_bindings::kvm_lapic_state,
     pub tsc_khz: u32,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) const MAX_SNAPSHOT_MSR_ENTRIES: usize = 4096;
+
+#[cfg(target_os = "linux")]
+mod exact_abi_serde {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+    use std::{fmt, marker::PhantomData};
+
+    pub(super) fn serialize<S: Serializer, T: Serialize>(
+        value: &T,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.serialize(s)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>, T: de::DeserializeOwned>(
+        d: D,
+    ) -> Result<T, D::Error> {
+        struct AbiBytes<T>(PhantomData<T>);
+
+        impl<'de, T: de::DeserializeOwned> de::Visitor<'de> for AbiBytes<T> {
+            type Value = T;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "exactly {} ABI bytes", size_of::<T>())
+            }
+
+            fn visit_bytes<E: de::Error>(self, bytes: &[u8]) -> Result<T, E> {
+                if bytes.len() != size_of::<T>() {
+                    return Err(E::invalid_length(bytes.len(), &self));
+                }
+                T::deserialize(de::value::BorrowedBytesDeserializer::new(bytes))
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<T, A::Error> {
+                let expected = size_of::<T>();
+                if let Some(len) = seq.size_hint().filter(|&len| len != expected) {
+                    return Err(de::Error::invalid_length(len, &self));
+                }
+                let mut bytes = Vec::with_capacity(expected);
+                for i in 0..expected {
+                    bytes.push(
+                        seq.next_element::<u8>()?
+                            .ok_or_else(|| de::Error::invalid_length(i, &self))?,
+                    );
+                }
+                if seq.next_element::<u8>()?.is_some() {
+                    return Err(de::Error::invalid_length(expected + 1, &self));
+                }
+                self.visit_bytes(&bytes)
+            }
+        }
+
+        d.deserialize_bytes(AbiBytes(PhantomData))
+    }
+
+    pub(super) struct ExactAbi<T>(pub(super) T);
+
+    impl<'de, T: de::DeserializeOwned> Deserialize<'de> for ExactAbi<T> {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            deserialize(d).map(Self)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod exact_abi_option_serde {
+    use super::exact_abi_serde::ExactAbi;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+
+    pub(super) fn serialize<S: Serializer, T: Serialize>(
+        value: &Option<T>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.serialize(s)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+        d: D,
+    ) -> Result<Option<T>, D::Error> {
+        Option::<ExactAbi<T>>::deserialize(d).map(|value| value.map(|entry| entry.0))
+    }
 }
 
 // Bounds are checked before reading elements; never reserve from an untrusted
 // length. These guards also protect callers that decode X86VcpuState directly.
 #[cfg(target_os = "linux")]
 mod vcpu_state_serde {
+    use super::exact_abi_serde::ExactAbi;
     use serde::{
         Deserialize, Deserializer,
         de::{self, SeqAccess, Visitor},
@@ -254,9 +446,10 @@ mod vcpu_state_serde {
     pub(super) fn entries<'de, D, T, const N: usize>(d: D) -> Result<Vec<T>, D::Error>
     where
         D: Deserializer<'de>,
-        T: Deserialize<'de>,
+        T: de::DeserializeOwned,
     {
-        bounded::<D, T, N>(d)
+        bounded::<D, ExactAbi<T>, N>(d)
+            .map(|entries| entries.into_iter().map(|entry| entry.0).collect())
     }
 }
 
@@ -333,64 +526,101 @@ mod fpu_serde {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    use super::MAX_SNAPSHOT_MSR_ENTRIES;
+    use kvm_bindings::KVM_MAX_CPUID_ENTRIES;
+    use serde::{
+        Deserializer,
+        de::{
+            DeserializeSeed, SeqAccess, Visitor,
+            value::{Error, U8Deserializer},
+        },
+    };
+    struct Sequence {
+        declared: Option<usize>,
+        actual: usize,
+        reads: usize,
+    }
+    impl<'de> SeqAccess<'de> for &mut Sequence {
+        type Error = Error;
+        fn size_hint(&self) -> Option<usize> {
+            self.declared
+        }
+        fn next_element_seed<T: DeserializeSeed<'de>>(
+            &mut self,
+            seed: T,
+        ) -> Result<Option<T::Value>, Error> {
+            self.reads += 1;
+            if self.actual == 0 {
+                return Ok(None);
+            }
+            self.actual -= 1;
+            seed.deserialize(U8Deserializer::new(42)).map(Some)
+        }
+    }
+    impl<'de> Deserializer<'de> for &mut Sequence {
+        type Error = Error;
+        fn deserialize_any<V: Visitor<'de>>(self, v: V) -> Result<V::Value, Error> {
+            v.visit_seq(self)
+        }
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string
+            bytes byte_buf option unit unit_struct newtype_struct seq tuple
+            tuple_struct map struct enum identifier ignored_any
+        }
+    }
+
+    #[test]
+    fn exact_abi_sequence_checks_hints_and_actual_length() {
+        type Image = kvm_bindings::kvm_mp_state;
+        let width = size_of::<Image>();
+        for declared in [Some(0), Some(width - 1), Some(width + 1), Some(usize::MAX)] {
+            let mut seq = Sequence {
+                declared,
+                actual: width,
+                reads: 0,
+            };
+            assert!(super::exact_abi_serde::deserialize::<_, Image>(&mut seq).is_err());
+            assert_eq!(seq.reads, 0);
+        }
+        for declared in [None, Some(width)] {
+            for actual in [0, width - 1, width, width + 1] {
+                let mut seq = Sequence {
+                    declared,
+                    actual,
+                    reads: 0,
+                };
+                let result = super::exact_abi_serde::deserialize::<_, Image>(&mut seq);
+                if actual == width {
+                    assert_eq!(result.unwrap().mp_state, u32::from_ne_bytes([42; 4]));
+                } else {
+                    assert!(result.is_err(), "{declared:?}, {actual}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn cpu_sequences_enforce_declared_count_and_bound_before_elements() {
-        use serde::{
-            Deserializer,
-            de::{
-                DeserializeSeed, SeqAccess, Visitor,
-                value::{Error, U8Deserializer},
-            },
-        };
-        struct Sequence {
-            declared: usize,
-            actual: usize,
-            reads: usize,
-        }
-        impl<'de> SeqAccess<'de> for &mut Sequence {
-            type Error = Error;
-            fn size_hint(&self) -> Option<usize> {
-                Some(self.declared)
-            }
-            fn next_element_seed<T: DeserializeSeed<'de>>(
-                &mut self,
-                seed: T,
-            ) -> Result<Option<T::Value>, Error> {
-                self.reads += 1;
-                if self.actual == 0 {
-                    return Ok(None);
-                }
-                self.actual -= 1;
-                seed.deserialize(U8Deserializer::new(42)).map(Some)
-            }
-        }
-        impl<'de> Deserializer<'de> for &mut Sequence {
-            type Error = Error;
-            fn deserialize_any<V: Visitor<'de>>(self, v: V) -> Result<V::Value, Error> {
-                v.visit_seq(self)
-            }
-            serde::forward_to_deserialize_any! {
-                bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string
-                bytes byte_buf option unit unit_struct newtype_struct seq tuple
-                tuple_struct map struct enum identifier ignored_any
-            }
-        }
-        for bound in [65536, 256, 4096] {
+        for bound in [65536, KVM_MAX_CPUID_ENTRIES, MAX_SNAPSHOT_MSR_ENTRIES] {
             // No element can be read, hence no element storage can be allocated.
             let mut seq = Sequence {
-                declared: bound + 1,
+                declared: Some(bound + 1),
                 actual: 1,
                 reads: 0,
             };
             let error = match bound {
                 65536 => super::vcpu_state_serde::words::<_, u32, 65536>(&mut seq).unwrap_err(),
-                256 => super::vcpu_state_serde::entries::<_, kvm_bindings::kvm_cpuid_entry2, 256>(
-                    &mut seq,
-                )
+                KVM_MAX_CPUID_ENTRIES => super::vcpu_state_serde::entries::<
+                    _,
+                    kvm_bindings::kvm_cpuid_entry2,
+                    KVM_MAX_CPUID_ENTRIES,
+                >(&mut seq)
                 .unwrap_err(),
-                _ => super::vcpu_state_serde::entries::<_, kvm_bindings::kvm_msr_entry, 4096>(
-                    &mut seq,
-                )
+                _ => super::vcpu_state_serde::entries::<
+                    _,
+                    kvm_bindings::kvm_msr_entry,
+                    MAX_SNAPSHOT_MSR_ENTRIES,
+                >(&mut seq)
                 .unwrap_err(),
             };
             assert!(error.to_string().contains("too long"));
@@ -398,7 +628,7 @@ mod tests {
         }
         for (declared, actual) in [(0, 1), (1, 0), (1, 2), (1, 1)] {
             let mut seq = Sequence {
-                declared,
+                declared: Some(declared),
                 actual,
                 reads: 0,
             };

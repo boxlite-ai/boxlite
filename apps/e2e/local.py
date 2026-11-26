@@ -380,9 +380,13 @@ def save_pids(pids):
     atomic_json(STATE / "pids.json", pids)
 
 
-def process_starttime(pid):
+def _proc_stat_fields(pid):
     raw = Path(f"/proc/{pid}/stat").read_text()
-    return raw[raw.rfind(")") + 2:].split()[19]
+    return raw[raw.rfind(")") + 2:].split()
+
+
+def process_starttime(pid):
+    return _proc_stat_fields(pid)[19]
 
 
 def process_matches(pid, starttime):
@@ -436,7 +440,8 @@ def owned_process(argv, home=None):
     home = RUNTIME_HOME if home is None else home
     if not argv:
         return False
-    if f"{home}/boxes/" not in "\0".join(argv):
+    command_line = "\0".join(argv)
+    if not any(f"{home}/{directory}/" in command_line for directory in ("boxes", "shims")):
         return False
     return Path(argv[0]).name in ("bwrap", "boxlite-shim")
 
@@ -544,8 +549,7 @@ def adoptable_box(box):
         if not 0 < pid < 2**31:
             return False
         os.kill(pid, 0)
-        raw = Path(f"/proc/{pid}/stat").read_text()
-        fields = raw[raw.rfind(")") + 2:].split()
+        fields = _proc_stat_fields(pid)
         if fields[0] == "Z":
             return False
         expected = lines[1].strip().removeprefix("+") if len(lines) > 1 else ""
@@ -560,15 +564,41 @@ def adoptable_box(box):
         return False
 
 
+def _box_names(argv):
+    prefix = f"{RUNTIME_HOME}/boxes/"
+    return {arg[len(prefix):].split("/", 1)[0] for arg in argv if arg.startswith(prefix)}
+
+
+def _shared_shim_box_names(pid):
+    try:
+        parent_argv = _argv(int(_proc_stat_fields(pid)[1]))
+    except (OSError, ValueError, IndexError):
+        parent_argv = []
+    if owned_process(parent_argv) and Path(parent_argv[0]).name == "bwrap":
+        return _box_names(parent_argv)
+
+    try:
+        environment = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return set()
+    for entry in environment.split(b"\0"):
+        key, _, value = entry.partition(b"=")
+        if key == b"BOXLITE_BOX_ID":
+            return {os.fsdecode(value)}
+    return set()
+
+
 def reap_unrecoverable_boxes():
     """Reap only owned trees that runtime recovery cannot identify as live."""
-    prefix = str(RUNTIME_HOME / "boxes") + "/"
     unrecoverable = []
     for pid in box_processes():
-        names = {arg[len(prefix):].split("/", 1)[0]
-                 for arg in _argv(pid) if arg.startswith(prefix)}
-        if not names or any(name in ("", ".", "..") for name in names):
-            continue  # Ambiguous ownership is not permission to kill.
+        argv = _argv(pid)
+        names = _box_names(argv)
+        if (not names and argv and argv[0].startswith(f"{RUNTIME_HOME}/shims/")
+                and Path(argv[0]).name == "boxlite-shim"):
+            names = _shared_shim_box_names(pid)
+        if not names or any("/" in name or name in ("", ".", "..") for name in names):
+            continue  # Reaping requires a valid Box ID.
         if not any(adoptable_box(RUNTIME_HOME / "boxes" / name) for name in names):
             unrecoverable.append(pid)
     if unrecoverable:

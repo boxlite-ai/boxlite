@@ -5,7 +5,7 @@ import type { ExecutionScope } from './execution/model'
 
 export interface CapacityRequest {
   scope: ExecutionScope
-  repository: number
+  repository?: number
   job?: JobNotice
   lease: ExecutionLease
   signal: AbortSignal

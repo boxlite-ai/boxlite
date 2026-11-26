@@ -22,7 +22,7 @@ parse_deps = false
 # the names must remain exported.
 [export]
 include = ["BoxliteDomainTargetType", "CAgentSendMode"]
-exclude = ["sockaddr_storage"]
+exclude = ["sockaddr_storage", "boxlite_test_agents_new", "boxlite_test_agents_wait_pending", "boxlite_test_agents_wait_queue", "boxlite_test_agents_free_counts"]
 
 [export.rename]
 sockaddr_storage = "struct sockaddr_storage"

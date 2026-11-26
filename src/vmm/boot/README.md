@@ -46,7 +46,13 @@ caches it on `kernel.lock`, `kernel.config` and the build script.
 
 The fragment enables virtio-mmio, the reporting-only balloon and its selected
 `PAGE_REPORTING` dependency. Rebuild after a fragment change; an older M1
-kernel cannot qualify reporting. The fragment carries no test-only setting: the
+kernel cannot qualify reporting.
+
+It also enables `VIRTIO_MEM` with memory hotplug and hot-remove.
+`MEMORY_HOTPLUG` selects `MEMORY_ISOLATION`, which with `COMPACTION` gives the
+`CONTIG_ALLOC` that virtio-mem needs to unplug.
+
+The fragment carries no test-only setting: the
 qualification init reaches the host through its console, so nothing in the
 guest needs a capability the shipped kernel lacks. Reporting is deliberately
 disabled by the pinned driver under `init_on_free=1` without PAGE_POISON
@@ -62,6 +68,13 @@ loopback setup and zygote IPC respectively.
 The native adapter attaches the requested devices and uses hvc0 for its default
 console; raw kernel boot tests can still select ttyS0.
 `make test:integration:vmm:native` verifies the actual agent with this kernel.
+
+The fragment enables `CONFIG_BLK_DEV_WRITE_MOUNTED` because `resize2fs` opens
+the mounted container root device read-write for initial sizing and online growth.
+Custom native kernels need this setting when initial disk sizing or online growth calls `resize2fs`.
+Without it, `resize2fs` reports `Resource busy while opening /dev/vda`.
+
+Rebuild the kernel after changing the fragment.
 
 ## Default: building inside a BoxLite box
 

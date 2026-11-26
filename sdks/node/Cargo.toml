@@ -38,3 +38,9 @@ lto = true
 strip = true  # Strip symbols for smaller binaries
 codegen-units = 1
 opt-level = 3
+
+# Test-only addon with the real N-API agent classes and a deterministic backend.
+[[example]]
+name = "agent_record_fixture"
+path = "tests/fixtures/agent_record_fixture.rs"
+crate-type = ["cdylib"]

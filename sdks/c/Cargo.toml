@@ -13,6 +13,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [features]
 default = []
+test-support = ["boxlite/test-support"]
 
 [dependencies]
 boxlite = { workspace = true, features = ["rest"] }

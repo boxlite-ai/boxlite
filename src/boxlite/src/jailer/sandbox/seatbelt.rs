@@ -116,6 +116,7 @@ impl Sandbox for SeatbeltSandbox {
             &ctx.paths,
             &ctx.unix_sockets,
             binary_path,
+            ctx.shim_cache_dir.as_deref(),
             ctx.network_enabled,
             ctx.sandbox_profile,
         );
@@ -161,6 +162,7 @@ fn build_sandbox_exec_args(
     paths: &[PathAccess],
     unix_sockets: &UnixSocketAccess,
     binary_path: &Path,
+    shim_cache_dir: Option<&Path>,
     network_enabled: bool,
     sandbox_profile: Option<&Path>,
 ) -> (String, Vec<String>) {
@@ -172,7 +174,13 @@ fn build_sandbox_exec_args(
         args.push(profile_path.display().to_string());
     } else {
         // Build strict modular policy: base + file permissions + optional network
-        let policy = build_sandbox_policy(paths, unix_sockets, binary_path, network_enabled);
+        let policy = build_sandbox_policy(
+            paths,
+            unix_sockets,
+            binary_path,
+            shim_cache_dir,
+            network_enabled,
+        );
         if std::env::var_os("BOXLITE_DEBUG_PRINT_SEATBELT").is_some() {
             eprintln!(
                 "BOXLITE_DEBUG seatbelt policy for {}:\n{}",
@@ -206,6 +214,7 @@ fn build_sandbox_policy(
     paths: &[PathAccess],
     unix_sockets: &UnixSocketAccess,
     binary_path: &Path,
+    shim_cache_dir: Option<&Path>,
     network_enabled: bool,
 ) -> String {
     let mut policy = String::new();
@@ -255,14 +264,107 @@ fn build_sandbox_policy(
         policy.push_str("; IP networking disabled\n");
     }
 
+    // 8. Protect the shim and its firmware even under writable paths.
+    append_shim_write_denials(&mut policy, binary_path, shim_cache_dir);
+
     policy
+}
+
+fn append_shim_write_denials(
+    policy: &mut String,
+    binary_path: &Path,
+    shim_cache_dir: Option<&Path>,
+) {
+    let link_path = canonicalize_or_original(binary_path);
+    let target = binary_path.canonicalize().ok();
+    append_file_write_denials(policy, &link_path, target.as_deref());
+
+    if let Some(cache_dir) = shim_cache_dir {
+        let root = append_subtree_write_denial(policy, cache_dir);
+
+        // Staged files are already covered by the cache subtree denial.
+        if link_path.starts_with(&root) && target.is_some_and(|path| path.starts_with(&root)) {
+            return;
+        }
+    }
+
+    let bin_dir = binary_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut firmware = Vec::new();
+    let enumeration = match std::fs::read_dir(bin_dir) {
+        Ok(mut entries) => entries.try_for_each(|entry| {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .as_encoded_bytes()
+                .starts_with(b"libkrunfw.")
+            {
+                let path = entry.path();
+                if path.is_file() {
+                    firmware.push(path);
+                }
+            }
+            Ok(())
+        }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    };
+    if let Err(err) = enumeration {
+        tracing::warn!(
+            path = %bin_dir.display(),
+            error = %err,
+            "Failed to enumerate shim firmware, denying writes to the shim directory"
+        );
+        append_subtree_write_denial(policy, bin_dir);
+    }
+
+    for path in firmware {
+        let link_path = canonicalize_or_original(&path);
+        let target = path.canonicalize().ok();
+        append_file_write_denials(policy, &link_path, target.as_deref());
+    }
+}
+
+fn append_subtree_write_denial(policy: &mut String, dir: &Path) -> PathBuf {
+    let link_path = canonicalize_or_original(dir);
+    let root = dir.canonicalize().unwrap_or_else(|_| link_path.clone());
+    if let Some(literal) = sbpl_path_literal(&root) {
+        policy.push_str(&format!(
+            "(deny file-write* (literal {literal}) (subpath {literal}))\n"
+        ));
+    } else {
+        tracing::warn!(path = ?root, "Skipping non-UTF-8 Seatbelt write denial");
+    }
+    if root != link_path {
+        append_literal_write_denial(policy, &link_path);
+    }
+    root
+}
+
+fn append_file_write_denials(policy: &mut String, link_path: &Path, target: Option<&Path>) {
+    append_literal_write_denial(policy, link_path);
+    if let Some(target) = target
+        && target != link_path
+    {
+        append_literal_write_denial(policy, target);
+    }
+}
+
+fn append_literal_write_denial(policy: &mut String, path: &Path) {
+    if let Some(literal) = sbpl_path_literal(path) {
+        policy.push_str(&format!("(deny file-write* (literal {literal}))\n"));
+    } else {
+        tracing::warn!(?path, "Skipping non-UTF-8 Seatbelt write denial");
+    }
 }
 
 /// Generate dynamic file-read policy for binary path + all pre-computed paths.
 fn build_dynamic_read_paths(binary_path: &Path, paths: &[PathAccess]) -> String {
     let mut rules = String::new();
 
-    // Add binary's parent directory (copied shim + libkrunfw)
+    // Grant access to the shim and the libkrunfw files staged beside it.
     if let Some(bin_dir) = binary_path.parent() {
         let bin_dir = canonicalize_or_original(bin_dir);
         if let Some(literal) = sbpl_path_literal(&bin_dir) {
@@ -465,6 +567,33 @@ fn darwin_user_cache_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    struct UnreadableShimDir(tempfile::TempDir);
+
+    impl Drop for UnreadableShimDir {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(self.0.path(), std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    fn unreadable_shim_dir() -> Option<UnreadableShimDir> {
+        let dir = UnreadableShimDir(tempfile::tempdir_in("/tmp").unwrap());
+        let path = dir.0.path();
+        for name in ["boxlite-shim", "libkrunfw.dylib"] {
+            std::fs::write(path.join(name), b"original").unwrap();
+        }
+        // Keep known paths searchable and writable while denying directory listing.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o311)).unwrap();
+        match std::fs::read_dir(path) {
+            Ok(_) => {
+                eprintln!("Skipping: can still enumerate a directory with mode 0o311");
+                return None;
+            }
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied),
+        }
+        Some(dir)
+    }
 
     #[test]
     fn test_seatbelt_policy_escapes_injected_file_path() {
@@ -477,6 +606,7 @@ mod tests {
             }],
             &UnixSocketAccess::default(),
             Path::new("/bin/sh"),
+            None,
             false,
         );
 
@@ -511,6 +641,7 @@ mod tests {
                 }],
                 &UnixSocketAccess::default(),
                 Path::new("/bin/sh"),
+                None,
                 false,
             );
             let literal = format!("\"{}/{encoded}\"", parent.display());
@@ -539,6 +670,7 @@ mod tests {
             }],
             &UnixSocketAccess::default(),
             &path.join("shim"),
+            None,
             false,
         );
         for rule in [
@@ -566,6 +698,7 @@ mod tests {
             }],
             &UnixSocketAccess::default(),
             Path::new("/bin/sh"),
+            None,
             false,
         );
         let expected = dir.path().canonicalize().unwrap().join("link");
@@ -591,6 +724,7 @@ mod tests {
                 connect: vec![socket],
             },
             Path::new("/bin/sh"),
+            None,
             false,
         );
         let literal = format!(
@@ -619,6 +753,7 @@ mod tests {
                     connect: vec![path.clone()],
                 },
                 &binary,
+                None,
                 false,
             );
             assert!(!policy.contains("invalid-"));
@@ -720,6 +855,7 @@ mod tests {
             &paths,
             &UnixSocketAccess::default(),
             &binary_path,
+            None,
             true,
             None,
         );
@@ -794,7 +930,13 @@ mod tests {
         }];
         let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
 
-        let policy = build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary_path, true);
+        let policy = build_sandbox_policy(
+            &paths,
+            &UnixSocketAccess::default(),
+            &binary_path,
+            None,
+            true,
+        );
 
         assert!(policy.contains("(allow network-outbound)"));
     }
@@ -807,8 +949,13 @@ mod tests {
         }];
         let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
 
-        let policy =
-            build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary_path, false);
+        let policy = build_sandbox_policy(
+            &paths,
+            &UnixSocketAccess::default(),
+            &binary_path,
+            None,
+            false,
+        );
 
         // Unfiltered grants are the IP-networking ones; they must be absent.
         for grant in [
@@ -850,7 +997,8 @@ mod tests {
         let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
 
         for network_enabled in [true, false] {
-            let policy = build_sandbox_policy(&paths, &unix_sockets, &binary_path, network_enabled);
+            let policy =
+                build_sandbox_policy(&paths, &unix_sockets, &binary_path, None, network_enabled);
             let socket_grants = policy
                 .split("(allow ")
                 .filter(|section| {
@@ -900,6 +1048,7 @@ mod tests {
                 connect: vec![],
             },
             &PathBuf::from("/usr/local/bin/boxlite-shim"),
+            None,
             false,
         );
         let socket_grant_sections = policy
@@ -942,6 +1091,137 @@ mod tests {
         assert!(SEATBELT_FILE_WRITE_POLICY.contains("(subpath \"/private/var/tmp\")"));
     }
 
+    #[test]
+    fn test_shared_shim_write_denials_follow_write_grants() {
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let shims = home.path().join("shims");
+        let generation = shims.join("0123456789abcdef");
+        std::fs::create_dir_all(&generation).unwrap();
+        let paths = [PathAccess {
+            path: home.path().to_path_buf(),
+            writable: true,
+        }];
+        let policy = build_sandbox_policy(
+            &paths,
+            &UnixSocketAccess::default(),
+            &generation.join("boxlite-shim"),
+            Some(&shims),
+            true,
+        );
+
+        let tmp_grant = policy.find("(subpath \"/private/tmp\")").unwrap();
+        let (grants, denials) = policy.rsplit_once("(allow file-write*").unwrap();
+        assert!(tmp_grant < grants.len());
+        assert!(grants.contains("; Dynamic write paths"));
+        let path = shims.canonicalize().unwrap();
+        let literal = sbpl_path_literal(&path).unwrap();
+        assert!(
+            denials.contains(&format!(
+                "(deny file-write* (literal {literal}) (subpath {literal}))"
+            )),
+            "missing write denial for {} after the write grants",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn test_seatbelt_policy_denies_writes_to_symlinked_cache() {
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let target = tempfile::tempdir_in("/tmp").unwrap();
+        let cache = home.path().join("shims");
+        std::os::unix::fs::symlink(target.path(), &cache).unwrap();
+        let generation = target.path().join("0123456789abcdef");
+        std::fs::create_dir(&generation).unwrap();
+        let shim = generation.join("boxlite-shim");
+        std::fs::write(&shim, b"shim").unwrap();
+
+        let policy = build_sandbox_policy(
+            &[],
+            &UnixSocketAccess::default(),
+            &shim,
+            Some(&cache),
+            false,
+        );
+        let target = target.path().canonicalize().unwrap();
+        let link = home.path().canonicalize().unwrap().join("shims");
+        let target = sbpl_path_literal(&target).unwrap();
+        let link = sbpl_path_literal(&link).unwrap();
+        assert!(
+            policy.contains(&format!(
+                "(deny file-write* (literal {target}) (subpath {target}))"
+            )),
+            "missing write denial for the cache target {target}"
+        );
+        assert!(
+            policy.contains(&format!("(deny file-write* (literal {link}))")),
+            "missing write denial for the cache symlink {link}"
+        );
+    }
+
+    #[test]
+    fn test_seatbelt_policy_denies_only_fallback_shim_and_firmware() {
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let parent = home.path().canonicalize().unwrap();
+        let shim = home.path().join("boxlite-shim");
+        let firmware = home.path().join("libkrunfw.dylib");
+        for (link, name) in [(&shim, "installed-shim"), (&firmware, "installed-firmware")] {
+            let target = parent.join(name);
+            std::fs::write(&target, b"original").unwrap();
+            std::os::unix::fs::symlink(target, link).unwrap();
+        }
+        let paths = [PathAccess {
+            path: home.path().to_path_buf(),
+            writable: true,
+        }];
+
+        let policy = build_sandbox_policy(&paths, &UnixSocketAccess::default(), &shim, None, false);
+        let parent = sbpl_path_literal(&parent).unwrap();
+        assert!(
+            !policy.contains(&format!(
+                "(deny file-write* (literal {parent}) (subpath {parent}))"
+            )),
+            "fallback shim parent must remain writable"
+        );
+        for link in [&shim, &firmware] {
+            for path in [canonicalize_or_original(link), link.canonicalize().unwrap()] {
+                let literal = sbpl_path_literal(&path).unwrap();
+                assert!(
+                    policy.contains(&format!("(deny file-write* (literal {literal}))")),
+                    "missing file write denial for {literal}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_seatbelt_policy_denies_writes_to_unreadable_shim_directory() {
+        let Some(dir) = unreadable_shim_dir() else {
+            return;
+        };
+        let target_dir = tempfile::tempdir_in("/tmp").unwrap();
+        let shim = dir.0.path().join("boxlite-shim");
+        let target = target_dir.path().join("boxlite-shim");
+        std::fs::rename(&shim, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &shim).unwrap();
+
+        let policy = build_sandbox_policy(&[], &UnixSocketAccess::default(), &shim, None, false);
+        let root = dir.0.path().canonicalize().unwrap();
+        let literal = sbpl_path_literal(&root).unwrap();
+        assert!(
+            policy.contains(&format!(
+                "(deny file-write* (literal {literal}) (subpath {literal}))"
+            )),
+            "missing subtree write denial for {literal}"
+        );
+        for path in [root.join("boxlite-shim"), target.canonicalize().unwrap()] {
+            let literal = sbpl_path_literal(&path).unwrap();
+            assert!(
+                policy.contains(&format!("(deny file-write* (literal {literal}))")),
+                "missing shim write denial for {literal}"
+            );
+        }
+    }
+
     /// The static write policy must NOT grant the whole per-user temp/cache
     /// tree (`/private/var/folders`, a.k.a. `$TMPDIR` / `DARWIN_USER_*_DIR`).
     /// The shim's TMPDIR is redirected to a box-scoped path by
@@ -968,11 +1248,12 @@ mod tests {
 
     #[test]
     fn test_dynamic_read_paths_empty() {
-        let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
+        let generation = "/var/lib/boxlite/shims/0123456789abcdef";
+        let binary_path = Path::new(generation).join("boxlite-shim");
         let policy = build_dynamic_read_paths(&binary_path, &[]);
 
         assert!(policy.contains("(allow file-read*"));
-        assert!(policy.contains("/usr/local/bin"));
+        assert!(policy.contains(generation));
     }
 
     #[test]
@@ -1031,8 +1312,13 @@ mod tests {
         }];
         let binary_path = PathBuf::from("/tmp/test/boxlite-shim");
 
-        let policy =
-            build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary_path, false);
+        let policy = build_sandbox_policy(
+            &paths,
+            &UnixSocketAccess::default(),
+            &binary_path,
+            None,
+            false,
+        );
 
         assert!(
             !policy.contains("(subpath \"/usr\")"),
@@ -1216,7 +1502,8 @@ mod tests {
 
         let paths = crate::jailer::build_path_access(&layout, &[], &[]);
         let binary = PathBuf::from("/usr/local/bin/boxlite-shim");
-        let policy = build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary, false);
+        let policy =
+            build_sandbox_policy(&paths, &UnixSocketAccess::default(), &binary, None, false);
 
         let mounts_str = mounts_base.to_string_lossy().to_string();
         assert!(
@@ -1297,6 +1584,7 @@ mod tests {
             paths,
             &UnixSocketAccess::default(),
             std::path::Path::new("/bin/sh"),
+            None,
             false,
             None,
         );
@@ -1480,6 +1768,7 @@ mod tests {
             &paths,
             &UnixSocketAccess::default(),
             std::path::Path::new("/bin/sh"),
+            None,
             false,
             None,
         );
@@ -1495,6 +1784,175 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout), "tmp-exec-ok\n");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_denies_writes_to_shared_shims_in_tmp() {
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let shims = home.path().join("shims");
+        let generation = shims.join("0123456789abcdef");
+        std::fs::create_dir_all(&generation).unwrap();
+        let shim = generation.join("boxlite-shim");
+        std::fs::write(&shim, b"shim").unwrap();
+        let paths = [PathAccess {
+            path: PathBuf::from("/bin"),
+            writable: false,
+        }];
+        let (sandbox_cmd, sandbox_args) = build_sandbox_exec_args(
+            &paths,
+            &UnixSocketAccess::default(),
+            &shim,
+            Some(&shims),
+            false,
+            None,
+        );
+        let allowed = home.path().join("allowed");
+        let run = |path: &Path| {
+            Command::new(&sandbox_cmd)
+                .args(&sandbox_args)
+                .args(["/bin/sh", "-c", "echo written > \"$1\"", "sh"])
+                .arg(path)
+                .output()
+                .unwrap()
+        };
+
+        let output = run(&allowed);
+        assert!(output.status.success(), "{:?}", output);
+        for blocked in [&shim, &shims.join("another-shim")] {
+            let output = run(blocked);
+            assert!(!output.status.success(), "write succeeded for {blocked:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("Operation not permitted"),
+                "{output:?}"
+            );
+        }
+        assert_eq!(std::fs::read(&shim).unwrap(), b"shim");
+        assert!(!shims.join("another-shim").exists());
+    }
+
+    fn run_shim_write_probe(
+        shim: &Path,
+        cache: Option<&Path>,
+        script: &str,
+        path: &Path,
+    ) -> std::process::Output {
+        let paths = [
+            PathAccess {
+                path: PathBuf::from("/bin"),
+                writable: false,
+            },
+            PathAccess {
+                path: path.to_path_buf(),
+                writable: false,
+            },
+        ];
+        let (sandbox_cmd, sandbox_args) = build_sandbox_exec_args(
+            &paths,
+            &UnixSocketAccess::default(),
+            shim,
+            cache,
+            false,
+            None,
+        );
+        Command::new(sandbox_cmd)
+            .args(sandbox_args)
+            .args(["/bin/sh", "-c", script, "sh"])
+            .arg(path)
+            .output()
+            .unwrap()
+    }
+
+    fn assert_shim_write_denied(output: std::process::Output) {
+        assert!(!output.status.success(), "write succeeded: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("Operation not permitted") && !stderr.contains("sandbox_apply"),
+            "expected a kernel file denial: {stderr}"
+        );
+    }
+
+    #[test]
+    fn test_seatbelt_runtime_denies_writes_to_symlinked_cache() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let target = tempfile::tempdir_in("/tmp").unwrap();
+        let cache = home.path().join("shims");
+        std::os::unix::fs::symlink(target.path(), &cache).unwrap();
+        let generation = target.path().join("0123456789abcdef");
+        std::fs::create_dir(&generation).unwrap();
+        let shim = generation.join("boxlite-shim");
+        std::fs::write(&shim, b"shim").unwrap();
+        let new_file = target.path().join("new-file");
+        assert_shim_write_denied(run_shim_write_probe(
+            &shim,
+            Some(&cache),
+            "printf changed > \"$1\"",
+            &new_file,
+        ));
+        std::fs::set_permissions(target.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_shim_write_denied(run_shim_write_probe(
+            &shim,
+            Some(&cache),
+            "/bin/chmod 700 \"$1\"",
+            target.path(),
+        ));
+        let permissions = std::fs::metadata(target.path()).unwrap().permissions();
+        assert_eq!(permissions.mode() & 0o7777, 0o755);
+        assert_shim_write_denied(run_shim_write_probe(
+            &shim,
+            Some(&cache),
+            "/bin/rm \"$1\"",
+            &cache,
+        ));
+        assert!(
+            std::fs::symlink_metadata(&cache)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!new_file.exists());
+    }
+
+    #[test]
+    fn test_seatbelt_runtime_fallback_shim_allows_sibling_writes() {
+        let home = tempfile::tempdir_in("/tmp").unwrap();
+        let shim = home.path().join("boxlite-shim");
+        let firmware = home.path().join("libkrunfw.dylib");
+        for path in [&shim, &firmware] {
+            std::fs::write(path, b"original").unwrap();
+        }
+        let sibling = home.path().join("writable");
+        let script = "printf changed > \"$1\"";
+
+        let output = run_shim_write_probe(&shim, None, script, &sibling);
+        assert!(output.status.success(), "sibling write failed: {output:?}");
+        assert_eq!(std::fs::read(sibling).unwrap(), b"changed");
+        for path in [&shim, &firmware] {
+            assert_shim_write_denied(run_shim_write_probe(&shim, None, script, path));
+            assert_eq!(std::fs::read(path).unwrap(), b"original");
+        }
+    }
+
+    #[test]
+    fn test_seatbelt_runtime_denies_firmware_overwrite_in_unreadable_shim_directory() {
+        if !is_sandbox_available() {
+            eprintln!("Skipping: sandbox-exec not available");
+            return;
+        }
+        let Some(dir) = unreadable_shim_dir() else {
+            return;
+        };
+        let shim = dir.0.path().join("boxlite-shim");
+        let firmware = dir.0.path().join("libkrunfw.dylib");
+        assert_shim_write_denied(run_shim_write_probe(
+            &shim,
+            None,
+            "printf changed > \"$1\"",
+            &firmware,
+        ));
+        assert_eq!(std::fs::read(&firmware).unwrap(), b"original");
     }
 
     #[cfg(target_os = "macos")]
@@ -1601,6 +2059,7 @@ mod tests {
             paths,
             unix_sockets,
             Path::new(PROBE_BIN),
+            None,
             network_enabled,
             None,
         );
@@ -1767,5 +2226,90 @@ mod tests {
                 panic!("network_enabled=false must still deny TCP listeners")
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_fallback_symlinked_runtime_execs_and_denies_sibling() {
+        use crate::jailer::Jail;
+        use crate::jailer::builder::JailerBuilder;
+        use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        if !is_sandbox_available() {
+            eprintln!("Skipping: sandbox-exec not available");
+            return;
+        }
+
+        let root = tempfile::tempdir_in("/tmp").expect("tempdir in /tmp");
+        let target_dir = root.path().join("target/debug");
+        let runtime_dir = target_dir.join("runtime");
+        let build_out = target_dir.join("build/boxlite-hash/out/runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        std::fs::create_dir_all(&build_out).unwrap();
+
+        let real_shim = target_dir.join("boxlite-shim");
+        std::fs::write(
+            &real_shim,
+            "#!/bin/sh\nif [ \"$#\" -gt 0 ]; then\n  /bin/cat \"$1\"\nelse\n  /bin/cat \"${0%/*}/libkrunfw.5.dylib\"\nfi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&real_shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let real_fw = build_out.join("libkrunfw.5.dylib");
+        std::fs::write(&real_fw, b"libkrunfw-fallback-ok\n").unwrap();
+
+        let sibling = target_dir.join("sibling.txt");
+        std::fs::write(&sibling, b"forbidden-sibling\n").unwrap();
+
+        let runtime_shim = runtime_dir.join("boxlite-shim");
+        let runtime_fw = runtime_dir.join("libkrunfw.5.dylib");
+        symlink("../boxlite-shim", &runtime_shim).unwrap();
+        symlink(
+            "../build/boxlite-hash/out/runtime/libkrunfw.5.dylib",
+            &runtime_fw,
+        )
+        .unwrap();
+
+        let layout = BoxFilesystemLayout::new(
+            root.path().join("boxes/test-box"),
+            FsLayoutConfig::without_bind_mount(),
+            false,
+        );
+        let jail = JailerBuilder::new()
+            .with_box_id("seatbelt-fallback-symlink")
+            .with_layout(layout)
+            .with_shim_cache_dir(&runtime_shim)
+            .with_additional_path_access(vec![PathAccess {
+                path: PathBuf::from("/bin"),
+                writable: false,
+            }])
+            .with_jailer_enabled(true)
+            .build_with(SeatbeltSandbox::new())
+            .unwrap();
+
+        let mut ok_cmd = jail.command(&runtime_shim, &[]);
+        let ok_out = ok_cmd.output().expect("run sandboxed symlinked shim");
+        assert!(
+            ok_out.status.success(),
+            "fallback symlinked runtime/ shim + libkrunfw.5.dylib must execute/read in Seatbelt: stderr={}",
+            String::from_utf8_lossy(&ok_out.stderr)
+        );
+        assert_eq!(ok_out.stdout, b"libkrunfw-fallback-ok\n");
+
+        let mut deny_cmd = jail.command(&runtime_shim, &[sibling.to_string_lossy().into_owned()]);
+        let deny_out = deny_cmd
+            .output()
+            .expect("run sandboxed shim against sibling");
+        assert!(
+            !deny_out.status.success(),
+            "reading ../sibling.txt must be denied by Seatbelt"
+        );
+        assert!(
+            String::from_utf8_lossy(&deny_out.stderr).contains("Operation not permitted"),
+            "expected Seatbelt denial for ../sibling.txt, got: {}",
+            String::from_utf8_lossy(&deny_out.stderr)
+        );
+        assert!(deny_out.stdout.is_empty());
     }
 }

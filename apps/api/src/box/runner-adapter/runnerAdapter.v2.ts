@@ -76,42 +76,19 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       throw new Error(`Box ${boxId} not found`)
     }
 
-    // Query for any incomplete jobs for this box to determine transitional state
+    // An incomplete job takes precedence over a previous terminal result.
+    const where = { resourceType: ResourceType.BOX, resourceId: boxId }
+    const order = { createdAt: 'DESC' } as const
     const incompleteJob = await this.jobRepository.findOne({
-      where: {
-        resourceType: ResourceType.BOX,
-        resourceId: boxId,
-        completedAt: IsNull(),
-      },
-      order: { createdAt: 'DESC' },
+      where: { ...where, completedAt: IsNull() },
+      order,
     })
-
-    let state = box.state
-
-    let daemonVersion: string | undefined = undefined
-
-    // If there's an incomplete job, infer the transitional state from job type
-    if (incompleteJob) {
-      state = this.inferStateFromJob(incompleteJob, box)
-      daemonVersion = incompleteJob.getResultMetadata()?.daemonVersion
-    } else {
-      // Look for latest job for this box
-      const latestJob = await this.jobRepository.findOne({
-        where: {
-          resourceType: ResourceType.BOX,
-          resourceId: boxId,
-        },
-        order: { createdAt: 'DESC' },
-      })
-      if (latestJob) {
-        state = this.inferStateFromJob(latestJob, box)
-        daemonVersion = latestJob.getResultMetadata()?.daemonVersion
-      }
-    }
-
+    const job = incompleteJob ?? (await this.jobRepository.findOne({ where, order }))
+    const failedDestroy = !incompleteJob && job?.type === JobType.DESTROY_BOX && job.status === JobStatus.FAILED
     return {
-      state,
-      daemonVersion,
+      state: job ? this.inferStateFromJob(job, box) : box.state,
+      daemonVersion: job?.getResultMetadata()?.daemonVersion,
+      ...(failedDestroy && { failedDestroyJob: true }),
     }
   }
 

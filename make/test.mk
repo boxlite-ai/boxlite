@@ -307,7 +307,7 @@ _ensure-kvm:
 test\:integration\:vmm\:kvm: _ensure-kvm
 	@cargo test -p boxlite-hypervisor -p boxlite-vmm --lib --no-run
 	@status=0; \
-	timeout 60s cargo test -p boxlite-hypervisor --lib kvm::vm::tests:: -- --ignored --test-threads=1 || status=1; \
+	timeout 60s cargo test -p boxlite-hypervisor --lib kvm:: -- --ignored --test-threads=1 || status=1; \
 	timeout 60s cargo test -p boxlite-vmm --lib -- --ignored --test-threads=1 vm::tests:: tests::kvm:: || status=1; \
 	exit $$status
 
@@ -323,9 +323,14 @@ export VMM_BALLOON_INIT
 VMM_DISK_GROW_INIT ?= $(CURDIR)/target/vmm/boot/disk-grow-init
 export VMM_DISK_GROW_INIT
 
+# Freestanding virtio-mem grow and shrink scenario.
+VMM_HOTPLUG_INIT ?= $(CURDIR)/target/vmm/boot/hotplug-init
+export VMM_HOTPLUG_INIT
+
 $(VMM_BALLOON_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/balloon_init.c
 $(VMM_DISK_GROW_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/disk_grow_init.c
-$(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT):
+$(VMM_HOTPLUG_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/hotplug_init.c
+$(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT) $(VMM_HOTPLUG_INIT):
 	@mkdir -p "$(@D)"
 	$(CC) -O2 -nostdlib -static -fno-pie -no-pie -fno-stack-protector -fno-builtin -Wl,--build-id=none "$<" -o "$@"
 
@@ -346,7 +351,7 @@ VMM_BOOT_TESTS_TIMEOUT ?= 900s
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
 # init restarts, once through the public Vm::new as the M1 smoke test.
-test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT)
+test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT) $(VMM_DISK_GROW_INIT) $(VMM_HOTPLUG_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture --skip boot::tests::guest_mounts::
 
@@ -370,7 +375,14 @@ _guest-boot-probe: $(if $(SETUP_DONE),,runtime\:debug)
 test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe $(VMM_DISK_GROW_INIT)
 	@cargo test -p boxlite --features native --lib --no-run
 	@timeout 300s cargo test -p boxlite --features native --lib vmm::native::tests:: -- --ignored --test-threads=1
-	@timeout 600s cargo test -p boxlite --features krun,gvproxy,native --test native_vmm -- --ignored --test-threads=1
+	@timeout 600s cargo test -p boxlite --test native_vmm -- --ignored --test-threads=1
+
+# PR2 primitives: descriptor registration, guest RPC attach/detach, and reference lifetime.
+PHONY_TARGETS += test\:integration\:vmm\:mount-delivery
+test\:integration\:vmm\:mount-delivery: export BOXLITE_TEST_ENGINE := native
+test\:integration\:vmm\:mount-delivery: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo test -p boxlite --features native --test native_mount_delivery --no-run
+	@timeout 180s cargo test -p boxlite --features native --test native_mount_delivery -- --ignored --test-threads=1 --nocapture
 
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
@@ -652,7 +664,8 @@ test\:all\:python:
 # Node.js SDK unit tests.
 test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js SDK unit tests..."
-	@cd sdks/node && npm test -- $(VITEST_FILTER)
+	@cargo build -p boxlite-node --example agent_record_fixture
+	@cd sdks/node && BOXLITE_AGENT_FIXTURE_DIR="$(abspath $(or $(CARGO_TARGET_DIR),target))/debug/examples" npm test -- $(VITEST_FILTER)
 	@echo "🧪 Running Node.js binding (Rust) unit tests..."
 	@cargo test -p boxlite-node --lib $(CARGOTEST_FILTER)
 
@@ -691,8 +704,8 @@ test\:all\:c:
 # Go SDK unit tests.
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
-	@$(MAKE) dev:go
-	@cd sdks/go && go test -tags boxlite_dev $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
+	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
+	@cd sdks/go && go test -a -count=1 -tags boxlite_dev,boxlite_agent_test $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
 # Native Go archive import/export tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.

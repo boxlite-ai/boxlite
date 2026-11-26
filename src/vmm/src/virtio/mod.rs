@@ -114,6 +114,12 @@ pub(crate) struct SourceId(pub(crate) u32);
 pub(crate) trait EventSource: Send {
     /// The source the workers register with their poller.
     fn as_source(&mut self) -> &mut dyn mio::event::Source;
+
+    /// Opens admission for host commands once dispatch can run.
+    fn worker_started(&mut self) {}
+
+    /// Closes host admission before dispatch stops. Must not wait for the worker.
+    fn worker_stopped(&mut self) {}
 }
 
 /// The interface a device uses to register background sources with the

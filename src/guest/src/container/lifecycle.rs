@@ -342,6 +342,20 @@ impl Container {
         self.user
     }
 
+    /// Runtime mount identity checks require a workload that cannot change its
+    /// own mount table. This policy is also the OCI bounding set for init and exec.
+    pub(crate) fn ensure_runtime_mounts_supported(&self) -> BoxliteResult<()> {
+        if self
+            .capabilities
+            .contains(&oci_spec::runtime::Capability::SysAdmin)
+        {
+            return Err(BoxliteError::Unsupported(
+                "runtime directory mounts require a container without CAP_SYS_ADMIN".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Destinations of every mount in the container: those it was created with,
     /// plus those `Container.Mount` added since (see
     /// [`Self::record_mount_destination`]).
@@ -368,6 +382,24 @@ impl Container {
     /// so [`Self::mount_destinations`] still covers every mount it has.
     pub fn record_mount_destination(&mut self, destination: PathBuf) {
         self.mount_destinations.push(destination);
+    }
+
+    /// Includes both OCI mounts and directories delivered at runtime.
+    pub(crate) fn has_mount_descendants(&self, destination: &Path) -> bool {
+        self.mount_destinations
+            .iter()
+            .any(|mount| mount != destination && mount.starts_with(destination))
+    }
+
+    /// Remove only the runtime layer, retaining any underlying OCI mount.
+    pub fn remove_mount_destination(&mut self, destination: &Path) {
+        if let Some(index) = self
+            .mount_destinations
+            .iter()
+            .rposition(|recorded| recorded == destination)
+        {
+            self.mount_destinations.remove(index);
+        }
     }
 
     /// The attacher, behind the lock that orders mounts and copies (see the
@@ -719,6 +751,47 @@ mod tests {
             let _ = self.0.kill();
             let _ = self.0.wait();
         }
+    }
+
+    #[test]
+    fn runtime_mount_removal_preserves_oci_layers_and_descendant_bookkeeping() {
+        let root = tempfile::tempdir().unwrap();
+        let mut container = Container {
+            id: "mount-bookkeeping".into(),
+            state_root: root.path().join("state"),
+            bundle_path: root.path().join("bundle"),
+            env: HashMap::new(),
+            user: (0, 0),
+            mount_destinations: vec!["/data".into(), "/data/oci-child".into(), "/database".into()],
+            attacher: Arc::default(),
+            capabilities: CapabilitySet::default(),
+            stdio: ContainerStdio::pipes().unwrap().0,
+            is_shutdown: std::sync::atomic::AtomicBool::new(true),
+        };
+        container.record_mount_destination("/data".into());
+        container.record_mount_destination("/data/runtime-child".into());
+        assert!(container.has_mount_descendants(Path::new("/data")));
+        container.remove_mount_destination(Path::new("/data/runtime-child"));
+        assert!(
+            container.has_mount_descendants(Path::new("/data")),
+            "OCI descendant still prevents detach"
+        );
+        container.remove_mount_destination(Path::new("/data"));
+        assert_eq!(
+            container.mount_destinations(),
+            &[
+                PathBuf::from("/data"),
+                PathBuf::from("/data/oci-child"),
+                PathBuf::from("/database"),
+            ]
+        );
+        assert!(!container.has_mount_descendants(Path::new("/data/oci-child")));
+        assert!(
+            !container.has_mount_descendants(Path::new("/dat")),
+            "prefixes are component-aware"
+        );
+        container.remove_mount_destination(Path::new("/absent"));
+        assert_eq!(container.mount_destinations().len(), 3);
     }
 
     #[test]

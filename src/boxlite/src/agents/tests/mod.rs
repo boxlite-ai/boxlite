@@ -131,7 +131,7 @@ async fn unsupported_operations_fail_before_reaching_the_box() {
             ..Default::default()
         },
         AgentSendOptions {
-            data: Some(serde_json::json!({ "k": 1 })),
+            data: Some(serde_json::value::to_raw_value(&serde_json::json!({ "k": 1 })).unwrap()),
             ..Default::default()
         },
         AgentSendOptions {
@@ -155,7 +155,7 @@ async fn unsupported_operations_fail_before_reaching_the_box() {
 async fn null_send_data_means_no_data() {
     let agent = offline_agent();
     let options = AgentSendOptions {
-        data: Some(serde_json::Value::Null),
+        data: Some(serde_json::value::RawValue::NULL.to_owned()),
         ..Default::default()
     };
     // Validation accepts null, so the call proceeds to the Box and hits the test network.
@@ -249,7 +249,7 @@ fn agents_records_use_documented_json_shapes() {
         steering: vec![],
     };
     assert_eq!(
-        records::turn_state(&turn),
+        serde_json::from_str::<serde_json::Value>(records::turn_state(&turn).get()).unwrap(),
         json!({
             "id": "msg", "agent_id": "ses", "status": "waiting_input", "cursor": "c1",
             "result": {"turn_id": "msg", "status": "waiting_input", "outcome": "question",
@@ -292,11 +292,11 @@ fn agents_respond_parses_answers_and_permissions_and_rejects_other_shapes() {
     use crate::agents::AgentResponse;
     use serde_json::json;
     assert!(matches!(
-        records::parse_response(json!({"type": "answer", "text": "yes", "data": {"n": 1}})),
-        Ok(AgentResponse::Answer { text, data: Some(data) }) if text == "yes" && data == json!({"n": 1})
+        records::parse_response(&json!({"type": "answer", "text": "yes", "data": {"n": 1}}).to_string()),
+        Ok(AgentResponse::Answer { text, data: Some(data) }) if text == "yes" && data.get() == r#"{"n":1}"#
     ));
     assert!(matches!(
-        records::parse_response(json!({"type": "permission", "approved": false})),
+        records::parse_response(&json!({"type": "permission", "approved": false}).to_string()),
         Ok(AgentResponse::Permission { approved: false })
     ));
     for invalid in [
@@ -308,7 +308,7 @@ fn agents_respond_parses_answers_and_permissions_and_rejects_other_shapes() {
     ] {
         assert!(
             matches!(
-                records::parse_response(invalid.clone()),
+                records::parse_response(&invalid.to_string()),
                 Err(BoxliteError::InvalidArgument(_))
             ),
             "accepted {invalid}"
@@ -351,7 +351,7 @@ fn agent_records_reject_wrong_field_types() {
         );
     }
     assert!(matches!(
-        records::parse_response(json!({"type": "answer", "text": false})),
+        records::parse_response(&json!({"type": "answer", "text": false}).to_string()),
         Err(BoxliteError::InvalidArgument(_))
     ));
 }

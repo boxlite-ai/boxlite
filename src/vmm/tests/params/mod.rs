@@ -182,6 +182,7 @@ fn agrees_with_validate_on_command_line_limits() {
             vsock: None,
             network: None,
             virtio_console: false,
+            hotplug_mib: 0,
         };
         assert_eq!(config.validate().is_ok(), accepted, "{config:?}");
     }

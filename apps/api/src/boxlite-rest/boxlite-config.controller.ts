@@ -25,6 +25,7 @@ export class BoxliteConfigController {
       capabilities: {
         checkpoints_enabled:
           this.config?.get('checkpoint.enabled') === true && !!this.config?.get('checkpoint.archivePrefix'),
+        memory_checkpoints_enabled: false,
         privileged_enabled: true,
         snapshots_enabled: false,
         clone_enabled: false,

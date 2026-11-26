@@ -135,7 +135,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SelfConfig {
     allowPublic: allow === 'true',
     group: env.CI_WORKER_GROUP_NAME ?? 'boxlite-ci-runner',
     worker: {
-      image: env.CI_WORKER_IMAGE ?? 'ghcr.io/actions/actions-runner:latest',
+      image: env.CI_WORKER_IMAGE ?? 'ghcr.io/boxlite-ai/boxlite-jitbox:latest',
       cpus: integer('CI_WORKER_CPUS', 2, 16),
       memoryMiB: memory,
       // Base labels; per-job selection substitutes the validated resource label for boxlite.

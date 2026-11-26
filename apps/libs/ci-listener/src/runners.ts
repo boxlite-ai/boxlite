@@ -19,11 +19,6 @@ export interface RunnerIdentity {
   id: number
   name: string
 }
-export interface RunnerObservation extends RunnerIdentity {
-  busy: boolean
-  status: 'online' | 'offline'
-  labels: string[]
-}
 export type RunnerEffect = { kind: 'register'; name: string } | { kind: 'remove'; id: number; name: string }
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
@@ -61,10 +56,9 @@ export class JitRegistration implements RunnerIdentity {
   }
 }
 
-/** Scoped REST JIT registration. beforeMutation must durably journal the intent and recheck the execution lease. */
+/** Verify scope access and unregister a known idle runner after journaling its removal. */
 export class GitHubRunners {
   private readonly scope: RunnerScope
-  private readonly labels: string[]
   constructor(
     private readonly credential: GitHubCredential,
     scope: RunnerScope,
@@ -81,7 +75,6 @@ export class GitHubRunners {
       !parseResourceLabels(labels)
     )
       throw new Error('Invalid GitHub runner labels')
-    this.labels = [...labels]
     if (typeof scope.allowPublic !== 'boolean' || typeof scope.allowPrivate !== 'boolean')
       throw new Error('Explicit repository visibility policy required')
     if (scope.kind === 'repository') this.scope = { ...scope, repository: decodeRepository(scope.repository) }
@@ -105,7 +98,7 @@ export class GitHubRunners {
       ? `/repos/${this.scope.repository.owner.login}/${this.scope.repository.name}`
       : `/orgs/${this.scope.account.login}`
   }
-  private async authority(admission: boolean, signal?: AbortSignal): Promise<void> {
+  async authority(admission: boolean, signal?: AbortSignal): Promise<ReadonlySet<string>> {
     const scope = this.scope
     if (scope.kind === 'repository') {
       const current = decodeRepository(
@@ -123,7 +116,7 @@ export class GitHubRunners {
       if (admission && current.private && !scope.allowPrivate)
         throw new Error('Private repository runners are disabled')
       if (admission && !current.private && !scope.allowPublic) throw new Error('Public repository runners are disabled')
-      return
+      return new Set([current.name.toLowerCase()])
     }
     const account = await this.credential.request(this.route, { signal })
     if (
@@ -133,7 +126,7 @@ export class GitHubRunners {
       account.login.toLowerCase() !== scope.account.login.toLowerCase()
     )
       throw new Error('Original runner organization authority changed')
-    if (!admission) return
+    if (!admission) return new Set()
     const group = await this.credential.request(`${this.route}/actions/runner-groups/${scope.group}`, { signal })
     if (
       !object(group) ||
@@ -145,12 +138,9 @@ export class GitHubRunners {
       group.allows_public_repositories !== scope.allowPublic
     )
       throw new Error('Runner group must have an explicit selected-repository policy')
-    const selected = await this.inventory(
-      `${this.route}/actions/runner-groups/${scope.group}/repositories`,
-      'repositories',
-      signal,
-    )
+    const selected = await this.inventory(`${this.route}/actions/runner-groups/${scope.group}/repositories`, signal)
     const expected = new Set(scope.repositories)
+    const names = new Set<string>()
     for (const value of selected) {
       const repository = decodeRepository(value)
       if (
@@ -159,97 +149,40 @@ export class GitHubRunners {
         (repository.private ? !scope.allowPrivate : !scope.allowPublic)
       )
         throw new Error('Runner group repository authorization changed')
+      names.add(repository.name.toLowerCase())
     }
     if (expected.size) throw new Error('Runner group repository authorization is incomplete')
+    return names
   }
-  async create(name: string, signal?: AbortSignal): Promise<JitRegistration> {
-    if (!workerName(name)) throw new Error('Original JIT worker name required')
-    await this.authority(true, signal)
-    await this.beforeMutation({ kind: 'register', name })
-    const value = await this.credential.request(`${this.route}/actions/runners/generate-jitconfig`, {
-      json: {
-        name,
-        runner_group_id: this.scope.kind === 'repository' ? 1 : this.scope.group,
-        labels: [...this.labels],
-        work_folder: '_work',
-      },
-      signal,
-    })
-    if (!object(value) || !object(value.runner) || !positive(value.runner.id) || value.runner.name !== name)
-      throw new Error('GitHub JIT registration identity is unknown')
-    return new JitRegistration({ id: value.runner.id, name }, value.encoded_jit_config)
-  }
-  /** Successful, complete enumeration under original authority is the only absence signal. */
-  async list(signal?: AbortSignal): Promise<RunnerObservation[]> {
-    await this.authority(false, signal)
-    const values = await this.inventory(`${this.route}/actions/runners`, 'runners', signal)
-    const runners = values.map((value): RunnerObservation => {
-      if (
-        !object(value) ||
-        !positive(value.id) ||
-        typeof value.name !== 'string' ||
-        !value.name ||
-        typeof value.busy !== 'boolean' ||
-        !['online', 'offline'].includes(value.status as string) ||
-        !Array.isArray(value.labels) ||
-        value.labels.length > 100 ||
-        !value.labels.every(
-          (label) =>
-            object(label) && typeof label.name === 'string' && label.name.length > 0 && label.name.length <= 128,
-        )
-      )
-        throw new Error('Invalid GitHub runner supply inventory')
-      return {
-        id: value.id,
-        name: value.name,
-        busy: value.busy,
-        status: value.status as RunnerObservation['status'],
-        labels: value.labels.map((label) => (label as { name: string }).name.toLowerCase()),
-      }
-    })
-    await this.authority(false, signal)
-    return runners
-  }
-
-  /** Successful, complete enumeration under original authority is the only absence signal. */
-  async lookup(identity: { id?: number; name: string }, signal?: AbortSignal): Promise<RunnerIdentity | null> {
-    identity = { ...identity }
-    if (!workerName(identity.name) || (identity.id !== undefined && !positive(identity.id)))
-      throw new Error('Original JIT runner identity required')
-    await this.authority(false, signal)
-    const values = await this.inventory(`${this.route}/actions/runners`, 'runners', signal)
-    let found: RunnerIdentity | null = null
-    for (const value of values) {
-      if (!object(value) || !positive(value.id) || typeof value.name !== 'string' || !value.name)
-        throw new Error('Invalid GitHub runner inventory')
-      if (identity.id === undefined ? value.name === identity.name : value.id === identity.id) {
-        if (found || value.name !== identity.name) throw new Error('GitHub runner identity is ambiguous or renamed')
-        found = { id: value.id, name: value.name }
-      }
-    }
-    await this.authority(false, signal)
-    return found
-  }
-  async remove(identity: RunnerIdentity, signal?: AbortSignal): Promise<void> {
-    identity = { ...identity }
-    if (!positive(identity.id)) throw new Error('Known original runner ID required for removal')
-    if (!(await this.lookup(identity, signal))) return
-    await this.beforeMutation({ kind: 'remove', id: identity.id, name: identity.name })
-    await this.credential.request(`${this.route}/actions/runners/${identity.id}`, {
-      method: 'DELETE',
-      response: 'empty',
-      signal,
-    })
-    if (await this.lookup(identity, signal)) throw new Error('GitHub runner deletion is not yet confirmed')
-  }
-  /** Uses the classic REST busy-refusal contract; missing runners cannot prove safe retirement. */
-  async retireIdle(identity: RunnerIdentity, signal?: AbortSignal): Promise<boolean> {
-    identity = { ...identity }
+  /** A REST 404 leaves retirement unresolved while the Actions service still lists the original runner. */
+  async retireKnownIdle(
+    identity: RunnerIdentity,
+    absentAfterDelete: () => Promise<RunnerIdentity | null>,
+    signal?: AbortSignal,
+    checkRetirement?: () => void,
+  ): Promise<boolean | null> {
     if (!positive(identity.id) || !workerName(identity.name)) throw new Error('Known original runner required')
-    const current = (await this.list(signal)).find((runner) => runner.id === identity.id)
-    if (current && current.name !== identity.name) throw new Error('Original runner identity changed')
-    if (!current || current.status !== 'online' || current.busy) return false
+    await this.authority(false, signal)
+    let value: unknown
+    try {
+      value = await this.credential.request(this.route + '/actions/runners/' + identity.id, { signal })
+    } catch (error) {
+      if (error instanceof GitHubRequestError && error.status === 404) return null
+      throw error
+    }
+    if (!object(value) || value.id !== identity.id || value.name !== identity.name)
+      throw new Error('Original scale set runner changed')
+    if (value.status !== 'online' || value.busy !== false) return false
+    return this.deleteIdle(identity, absentAfterDelete, signal, checkRetirement)
+  }
+  private async deleteIdle(
+    identity: RunnerIdentity,
+    remaining: () => Promise<RunnerIdentity | null>,
+    signal?: AbortSignal,
+    checkRetirement?: () => void,
+  ): Promise<boolean> {
     await this.beforeMutation({ kind: 'remove', ...identity })
+    checkRetirement?.()
     try {
       await this.credential.request(`${this.route}/actions/runners/${identity.id}`, {
         method: 'DELETE',
@@ -260,10 +193,10 @@ export class GitHubRunners {
       if (error instanceof GitHubRequestError && error.status === 422) return false
       throw error
     }
-    if (await this.lookup(identity, signal)) throw new Error('Idle runner retirement is not yet confirmed')
+    if (await remaining()) throw new Error('Idle runner retirement is not yet confirmed')
     return true
   }
-  private async inventory(route: string, field: 'runners' | 'repositories', signal?: AbortSignal): Promise<unknown[]> {
+  private async inventory(route: string, signal?: AbortSignal): Promise<unknown[]> {
     const result: unknown[] = [],
       seen = new Set<number>()
     let total: number | undefined
@@ -275,18 +208,18 @@ export class GitHubRunners {
         (value.total_count as number) < 0 ||
         (value.total_count as number) > 100_000 ||
         (total !== undefined && value.total_count !== total) ||
-        !Array.isArray(value[field]) ||
-        value[field].length > 100
+        !Array.isArray(value.repositories) ||
+        value.repositories.length > 100
       )
         throw new Error('Incomplete GitHub runner authorization inventory')
       total = value.total_count as number
-      for (const item of value[field]) {
+      for (const item of value.repositories) {
         if (!object(item) || !positive(item.id) || seen.has(item.id))
           throw new Error('Invalid or duplicate GitHub runner authorization inventory')
         seen.add(item.id)
         result.push(item)
       }
-      if (result.length > total || (result.length < total && value[field].length < 100))
+      if (result.length > total || (result.length < total && value.repositories.length < 100))
         throw new Error('Incomplete GitHub runner authorization inventory')
       if (result.length === total) return result
     }

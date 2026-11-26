@@ -5,15 +5,9 @@ GitHub jobs, creates ephemeral BoxLite worker Boxes, and supplies GitHub-generat
 JIT runner configuration. The official GitHub runner executes the job and reports
 logs and results directly to GitHub.
 
-The shared controller lives in [`../libs/ci-listener`](../libs/ci-listener/README.md).
-Its [label-capacity scheduler](../libs/ci-listener/README.md#label-capacity-scheduling)
-also runs in this image. A runner taking another matching job no longer blocks
-replenishment for its trigger job. Independent resources advance concurrently
-within `CI_WORKER_MAX` and the organization's actual quota. The shared Listener
-uses eight scope planners and 32 allocation consumers, with bounded keyed queues;
-these I/O budgets do not increase worker quota. A committed reservation can start
-execution before other reservations or JIT deliveries complete. PAT mode rebuilds counts when busy supply lacks
-webhook observations.
+The Listener Box uses the shared TypeScript Scale Set controller in both PAT and App mode. Each new specification is discovered through a signed notification or an authorized repository scan.
+
+The elected owner reserves available slots under `CI_WORKER_MAX`, acquires offers and starts a Box for each assigned job within its quota. [Scheduling protocol](../libs/ci-listener/README.md#github-runner-scale-sets)
 
 The hosted API imports the same controller and supplies native PostgreSQL/BoxService
 adapters; its deployed acceptance is still pending. The Node image is a local development artifact until the
@@ -122,7 +116,7 @@ App webhook handler.
 | `CI_LISTEN_ADDR`                | `0.0.0.0:8080`                          | Health/webhook HTTP listener                                              |
 | `CI_ALLOW_PUBLIC_REPOSITORIES`  | `false`                                 | Include public repositories whose workflows you intend to run             |
 | `CI_WORKER_GROUP_NAME`          | `boxlite-ci-runner`                     | Selected organization runner group                                        |
-| `CI_WORKER_IMAGE`               | `ghcr.io/actions/actions-runner:latest` | Image containing the official GitHub runner                               |
+| `CI_WORKER_IMAGE`               | `ghcr.io/boxlite-ai/boxlite-jitbox:latest` | Linux x86-64 worker with the GitHub Actions runner and GNU Make            |
 | `CI_WORKER_MAX`                 | `1`                                     | Total concurrency across all installations and repositories, from 1 to 16 |
 | `CI_WORKER_CPUS`                | `2`                                     | CPUs per CI Box, from 1 to 16                                             |
 | `CI_WORKER_MEMORY_GB`           | `2`                                     | Memory per CI Box; one GB converts to 1024 MiB and must yield whole MiB   |
@@ -273,9 +267,8 @@ for image requirements, the preparation deadline and failure diagnostics.
 
 1. A signed `workflow_job.queued` event stores a receipt and exact job identity,
    then wakes the shared controller; it does not assign the job itself.
-2. The controller verifies the installation/repository, rebuilds the complete
-   current GitHub queue before changing capacity, checks labels and durable
-   account/tenant limits, and records allocation intent.
+2. The owner opens a Scale Set session for the observed specification. It checks
+   the offered repository against the runner group and reserves slots under tenant limits. Assigned-job statistics trigger Box creation.
 3. The REST adapter creates a Box and durably records the returned original ID
    before boot/JIT work. It does not adopt a same-name Box after an unknown create.
 4. GitHub creates JIT configuration with a purpose-limited runner credential.
@@ -288,7 +281,7 @@ for image requirements, the preparation deadline and failure diagnostics.
    cleanup and the allocation record remain until runner absence is confirmed.
 
 A completed notification alone does not stop a running worker. Surplus online
-idle runners receive a 300-second registration grace, then use the shared
+idle runners use the shared
 [confirmed retirement protocol](../libs/ci-listener/README.md#surplus-idle-retirement).
 Uncertain unregistering never authorizes stopping a possibly assigned Box, including
 after restart. Its new persisted effect requires upgrading all state readers;

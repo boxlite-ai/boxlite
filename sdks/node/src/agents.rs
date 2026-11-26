@@ -133,11 +133,21 @@ impl JsAgentEventStream {
             return Ok(None);
         }
         let Some(stream) = guard.as_mut() else {
+            if let StreamState::Failed(error) = &*self.state.borrow() {
+                return Err(napi::Error::from_reason(error.clone()));
+            }
             return Ok(None);
         };
         tokio::select! {
             item = stream.next() => match item {
-                Some(Ok(event)) => Ok(Some(records::event(&event))),
+                Some(Ok(event)) => match checked_record(records::event(&event)) {
+                    Ok(record) => Ok(Some(record)),
+                    Err(error) => {
+                        *guard = None;
+                        self.state.send_replace(StreamState::Failed(error.reason.clone()));
+                        Err(error)
+                    }
+                },
                 Some(Err(error)) => { *guard = None; Err(map_err(error)) },
                 None => { *guard = None; Ok(None) },
             },
@@ -245,7 +255,12 @@ impl JsAgent {
             Some("reject") => AgentSendMode::Reject,
             Some(_) => return Err(invalid("unknown send mode")),
         };
-        let data = options.remove("data").filter(|value| !value.is_null());
+        let data = options
+            .remove("data")
+            .filter(|value| !value.is_null())
+            .map(|value| serde_json::value::to_raw_value(&value))
+            .transpose()
+            .map_err(|e| invalid(&e.to_string()))?;
         let idempotency_key = optional_string(options.remove("idempotencyKey"), "idempotencyKey")?;
         no_unknown(options)?;
         let turn = self
@@ -283,7 +298,7 @@ impl JsAgent {
     #[napi]
     pub async fn requests(&self) -> Result<Vec<Value>> {
         let requests = self.agent.requests().await.map_err(map_err)?;
-        Ok(records::requests(&requests)
+        Ok(checked_record(records::requests(&requests))?
             .as_array()
             .cloned()
             .unwrap_or_default())
@@ -296,7 +311,7 @@ impl JsAgent {
         response: Value,
         options: Option<Value>,
     ) -> Result<JsAgentTurn> {
-        let response = records::parse_response(response).map_err(map_err)?;
+        let response = records::parse_response(&response.to_string()).map_err(map_err)?;
         let turn = self
             .agent
             .respond(&request_id, response, control_options(options)?)
@@ -307,17 +322,17 @@ impl JsAgent {
 
     #[napi(getter)]
     pub fn state(&self) -> Result<Value> {
-        Ok(records::agent_state(&self.agent.state().map_err(map_err)?))
+        checked_record(records::agent_state(&self.agent.state().map_err(map_err)?))
     }
 
     #[napi(getter)]
     pub fn config(&self) -> Result<Value> {
-        Ok(records::config(&self.agent.config().map_err(map_err)?))
+        checked_record(records::config(&self.agent.config().map_err(map_err)?))
     }
 
     #[napi(getter)]
     pub fn capabilities(&self) -> Result<Value> {
-        Ok(records::capabilities(
+        checked_record(records::capabilities(
             &self.agent.capabilities().map_err(map_err)?,
         ))
     }
@@ -339,13 +354,14 @@ impl JsAgentTurn {
             _ => return Err(invalid("invalid timeout")),
         };
         no_unknown(options)?;
-        Ok(records::result(
+        let result = records::result(
             &self
                 .turn
                 .wait(AgentWaitOptions { timeout })
                 .await
                 .map_err(map_err)?,
-        ))
+        );
+        native_json_record(&result, 0).and_then(checked_record)
     }
 
     #[napi]
@@ -359,7 +375,7 @@ impl JsAgentTurn {
 
     #[napi]
     pub async fn steer(&self, text: String, options: Option<Value>) -> Result<Value> {
-        Ok(records::receipt(
+        checked_record(records::receipt(
             &self
                 .turn
                 .steer(&text, control_options(options)?)
@@ -378,7 +394,71 @@ impl JsAgentTurn {
 
     #[napi(getter)]
     pub fn state(&self) -> Result<Value> {
-        Ok(records::turn_state(&self.turn.state().map_err(map_err)?))
+        let state = records::turn_state(&self.turn.state().map_err(map_err)?);
+        native_json_record(&state, 0).and_then(checked_record)
+    }
+}
+
+// napi 3.16 converts JSON numbers through i64, finite f64, or u64. Its
+// last branch unwraps the u64, so reject unsupported tokens before dispatch.
+fn checked_record(record: Value) -> Result<Value> {
+    fn check(value: &Value, depth: usize) -> Result<()> {
+        if depth > 128 {
+            return Err(invalid("agent record exceeds the N-API JSON depth limit"));
+        }
+        match value {
+            Value::Number(n) if !(n.is_i64() || n.is_f64() || n.is_u64()) => {
+                Err(napi::Error::from_reason(
+                    "agent JSON number exceeds the Node binding's numeric range",
+                ))
+            }
+            Value::Number(n) if n.is_f64() && n.as_f64() == Some(0.0) => {
+                let token = n.to_string();
+                let mantissa = token.split(['e', 'E']).next().unwrap_or_default();
+                if mantissa.bytes().any(|b| matches!(b, b'1'..=b'9')) {
+                    return Err(napi::Error::from_reason(
+                        "nonzero agent JSON number underflows the Node binding's numeric range",
+                    ));
+                }
+                Ok(())
+            }
+            Value::Array(items) => items.iter().try_for_each(|item| check(item, depth + 1)),
+            Value::Object(fields) => fields.values().try_for_each(|item| check(item, depth + 1)),
+            _ => Ok(()),
+        }
+    }
+    check(&record, 0)?;
+    Ok(record)
+}
+
+// N-API requires a value tree. Decode JSON objects as literal maps so user keys
+// cannot be mistaken for the arbitrary-precision number marker.
+fn native_json_record(raw: &serde_json::value::RawValue, depth: usize) -> Result<Value> {
+    use serde_json::value::RawValue;
+    if depth > 128 {
+        return Err(invalid("agent record exceeds the N-API JSON depth limit"));
+    }
+    let json = raw.get();
+    let parse_error = |e: serde_json::Error| invalid(&e.to_string());
+    match json.as_bytes()[0] {
+        b'{' => {
+            let fields: std::collections::BTreeMap<String, &RawValue> =
+                serde_json::from_str(json).map_err(parse_error)?;
+            fields
+                .into_iter()
+                .map(|(key, value)| Ok((key, native_json_record(value, depth + 1)?)))
+                .collect::<Result<_>>()
+                .map(Value::Object)
+        }
+        b'[' => {
+            let items: Vec<&RawValue> = serde_json::from_str(json).map_err(parse_error)?;
+            items
+                .into_iter()
+                .map(|item| native_json_record(item, depth + 1))
+                .collect::<Result<_>>()
+                .map(Value::Array)
+        }
+        _ => serde_json::from_str(json).map_err(parse_error),
     }
 }
 

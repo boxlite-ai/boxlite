@@ -156,7 +156,7 @@ tags:
   - name: Images
     description: Container image management
   - name: Checkpoints
-    description: Independent managed disk archives
+    description: Independent managed checkpoint archives
   - name: Volumes
     description: Managed persistent volumes
   - name: Registries
@@ -324,8 +324,10 @@ paths:
         initialize the VM, or it will start lazily on first `exec`.
 
         `checkpoint_id` creates the box from a ready managed checkpoint
-        instead of an image. The box inherits every saved execution setting,
-        so only `name` may accompany it; any other field is refused with 400.
+        instead of an image. The server uses the checkpoint's `kind` to select
+        disk-only restore or full restore of disk, guest memory, and VM state.
+        The box inherits every saved execution setting. Only `name` may
+        accompany `checkpoint_id`; any other field is refused with 400.
         It requires `checkpoints_enabled` and a REST service: local SDK
         operations return Unsupported. A cloud wait failure after admission,
         including 408, carries `boxId` in the error body; query that box
@@ -2030,14 +2032,19 @@ paths:
       - $ref: "#/components/parameters/prefix"
     post:
       operationId: createCheckpoint
-      summary: Capture an independent disk checkpoint
+      summary: Capture a disk or full checkpoint
       description: |
-        Export the source box directly, without a snapshot or temporary clone.
-        The source must be stopped and idle; other states return 409.
-        Stop the box and wait for stopped before capture; capture never stops it automatically.
+        `disk` capture requires a stopped and idle source box and exports it
+        directly. `full` capture requires a running source box. On a backend
+        that supports the requested kind, a source state mismatch returns 409
+        with code `invalid_state`. If `full` is unsupported, the server returns
+        400 with code `unsupported`. Capture leaves the source lifecycle state
+        to the caller.
+
         Requires Box write permission. Sources with volumes or secrets are
-        refused. A local capture returns ready after export; cloud capture
-        returns creating and becomes ready only after upload succeeds.
+        refused. A local capture returns ready after export. A cloud capture
+        returns creating and becomes ready after upload succeeds. A 201
+        response accepting `full` includes `kind: "full"` even while creating.
       tags: [Checkpoints]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -2998,6 +3005,10 @@ components:
               type: boolean
               description: Whether managed checkpoint capture, use and deletion are supported
               example: true
+            memory_checkpoints_enabled:
+              type: boolean
+              description: Whether full checkpoint capture and restore support disk, guest memory, and VM state
+              example: false
             import_enabled:
               type: boolean
               description: Whether ordinary archive import is supported
@@ -3376,6 +3387,13 @@ components:
         - failed
         - unknown
 
+    CheckpointKind:
+      type: string
+      enum: [disk, full]
+      description: |
+        `disk` includes disk data only. `full` includes disk data, guest memory,
+        and VM state. Omission defaults to `disk`.
+
     Checkpoint:
       type: object
       required: [id, name, source_box_id, created_at, size_bytes, state]
@@ -3397,6 +3415,16 @@ components:
         state:
           type: string
           enum: [creating, ready, failed, deleting]
+        kind:
+          $ref: "#/components/schemas/CheckpointKind"
+        memory_size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Archived guest memory payload size in bytes. Omitted for disk
+            checkpoints, during `creating`, or when unavailable. A known size
+            of zero is reported as `0`.
         error_reason:
           type: string
           description: Optional failure description without environment values or object locations
@@ -3427,6 +3455,8 @@ components:
           minLength: 1
           maxLength: 128
           pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        kind:
+          $ref: "#/components/schemas/CheckpointKind"
 
     CreateBoxRequest:
       type: object
@@ -3468,7 +3498,9 @@ components:
           description: |
             ID or name of a ready managed checkpoint to create the box from
             (alternative to `image`). Mutually exclusive with `image` and
-            `rootfs_path`. Only `name` may accompany it.
+            `rootfs_path`. The checkpoint's `kind` selects disk-only
+            restore or full restore of disk, guest memory, and VM state.
+            Only `name` may accompany `checkpoint_id`.
         cpus:
           type: number
           minimum: 0.125

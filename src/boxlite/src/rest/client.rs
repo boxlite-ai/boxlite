@@ -353,7 +353,7 @@ impl ApiClient {
     pub(crate) async fn post_agent<T: DeserializeOwned>(
         &self,
         path: &str,
-        body: &serde_json::Value,
+        body: &impl serde::Serialize,
         key: Option<&str>,
     ) -> BoxliteResult<T> {
         let mut builder = self.agent_writes.post(self.url(path)).json(body);
@@ -833,6 +833,16 @@ impl ApiClient {
         ensure_capability(
             "guest privileged",
             config.capabilities.and_then(|caps| caps.privileged_enabled),
+        )
+    }
+
+    pub async fn require_memory_checkpoints_enabled(&self) -> BoxliteResult<()> {
+        let config = self.fetch_config().await?;
+        ensure_capability(
+            "full checkpoint",
+            config
+                .capabilities
+                .and_then(|caps| caps.memory_checkpoints_enabled),
         )
     }
 

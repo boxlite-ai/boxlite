@@ -39,13 +39,14 @@ mod default_runtime_dir;
 
 pub use agents::{Agent, AgentTurn, Agents};
 pub use litebox::{
-    BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
-    TunnelOptions,
+    BoxConnection, BoxReader, BoxResources, BoxTunnel, BoxWriter, LiteBox, ResizeOptions,
+    SocketAddress, TunnelForwarder, TunnelOptions,
 };
 pub use portal::GuestSession;
 pub use runtime::{
-    AuthHandle, BoxliteRuntime, CheckpointHandle, CheckpointInfo, CheckpointState, Domain,
-    DomainHandle, DomainList, DomainTarget, ImageHandle, Principal,
+    AuthHandle, BoxliteRuntime, CheckpointHandle, CheckpointInfo, CheckpointKind,
+    CheckpointOptions, CheckpointState, Domain, DomainHandle, DomainList, DomainTarget,
+    ImageHandle, Principal,
 };
 
 pub use boxlite_shared::BoxByteStream;

@@ -76,7 +76,7 @@ export class JobStateHandlerService {
         await this.handleStopBoxJobCompletion(job)
         break
       case JobType.DESTROY_BOX:
-        await this.handleDestroyBoxJobCompletion(job)
+        if (!(await this.handleDestroyBoxJobCompletion(job))) return
         break
       default:
         break
@@ -228,38 +228,38 @@ export class JobStateHandlerService {
     }
   }
 
-  private async handleDestroyBoxJobCompletion(job: Job): Promise<void> {
+  private async handleDestroyBoxJobCompletion(job: Job): Promise<boolean> {
     const boxId = job.resourceId
-    if (!boxId) return
+    if (!boxId) return false
 
     try {
       const box = await this.boxRepository.findOne({ where: { id: boxId } })
       if (!box) {
         this.logger.warn(`Box ${boxId} not found for DESTROY_BOX job ${job.id}`)
-        return
+        return false
       }
+      if (box.desiredState !== BoxDesiredState.DESTROYED) return false
       const updateData: Partial<Box> = {}
 
-      if (box.desiredState === BoxDesiredState.DESTROYED) {
-        if (job.status === JobStatus.COMPLETED) {
-          this.logger.debug(`DESTROY_BOX job ${job.id} completed successfully, marking box ${boxId} as DESTROYED`)
-          updateData.state = BoxState.DESTROYED
-          updateData.errorReason = null
-        } else if (job.status === JobStatus.FAILED) {
-          this.logger.error(`DESTROY_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
-          updateData.state = BoxState.ERROR
-          const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
-          updateData.errorReason = errorReason || 'Failed to destroy box'
-          updateData.recoverable = recoverable
-        }
+      if (job.status === JobStatus.COMPLETED) {
+        this.logger.debug(`DESTROY_BOX job ${job.id} completed successfully, marking box ${boxId} as DESTROYED`)
+        updateData.state = BoxState.DESTROYED
+        updateData.errorReason = null
       } else {
-        return
+        if (box.state === BoxState.DESTROYED) return false
+        this.logger.error(`DESTROY_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
+        updateData.state = BoxState.ERROR
+        const { recoverable, errorReason } = sanitizeBoxError(job.errorMessage)
+        updateData.errorReason = errorReason || 'Failed to destroy box'
+        updateData.recoverable = recoverable
       }
 
       await this.boxRepository.update(boxId, { updateData, entity: box })
       recordBoxJobOutcome('box.delete', job.status, box)
+      return true
     } catch (error) {
       this.logger.error(`Error handling DESTROY_BOX job completion for box ${boxId}:`, error)
+      return false
     }
   }
 }

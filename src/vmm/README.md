@@ -2,19 +2,26 @@
 
 BoxLite's native VMM. On Linux x86_64, `Vm::new` validates the machine
 configuration, creates the KVM VM with legacy devices and a reporting balloon,
-registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
-`StopHandle` stops it, and returns how the VM ended (see [Lifecycle](#lifecycle)).
+registers guest RAM, and loads the kernel and boot data. `Vm::run` runs the
+vCPUs until the guest powers off, resets, or a `VmControl` requests a stop.
+It returns how the VM ended (see [Lifecycle](#lifecycle)).
 `Error` wraps `boxlite_hypervisor::Error` with its cause chain intact. The
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `VmControl`, `Error`
-and `Result` are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
-carries; M2's engine adapter consumes that API and inspects the error's host
-cause.
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `VmControl`, `VmStatus`,
+`StopHandle`, `ControlReason`, `Error`, and `Result` are public. So are
+`BusKind` and `Conflict`, which `Error::ChipsetConflicts` carries.
 `Vm::new(config, console)` adds COM1, the CMOS RTC, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
+
+On Linux x86_64, the crate-internal `#[cfg(test)]` helper
+`Vm::new_device_less(config)` loads the kernel and optional initramfs into a
+KVM VM with an empty userspace chipset and no console worker. KVM still creates
+the in-kernel irqchip and PIT. Configuring disks, filesystem, vsock, network,
+virtio console, or `hotplug_mib` (virtio-mem) returns `Error::Control` with
+`ControlReason::UnsupportedDevice` before KVM opens.
 
 ```text
 boxlite-vmm
@@ -27,7 +34,9 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle`, `control` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam |
+| `control` | `VmControl` provides runtime controls for VM status, stop requests, and disk resize by configured ID |
+| `lifecycle` | `Lifecycle` coordinates the one-shot run with the shared stop latch |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -46,8 +55,9 @@ boxlite-vmm
 
 The Linux x86_64 native engine composes disks, reporting balloon, aggregate
 virtio-fs, Unix-backed vsock, gvproxy stream networking and virtio-console.
-The adapter maps the runtime specification into `VmConfig`; optional devices
-are omitted when not requested.
+The adapter maps the runtime specification into `VmConfig`. It creates an
+empty aggregate filesystem when there are no initial shares, so directory
+delivery remains available after boot. Network and vsock remain optional.
 
 The aggregate virtio-fs device is runtime-extensible: `insert_aggregate`
 publishes a live device by tag when it enters the transport, and
@@ -76,6 +86,61 @@ results alone do not establish complete M2 acceptance.
 Neither new crate depends on `boxlite-shared`; the release workflow publishes
 `boxlite-hypervisor`, then `boxlite-vmm`, before `boxlite`, now that the engine
 adapter depends on `boxlite-vmm`.
+
+## Host directory delivery
+
+On Linux x86_64 native Boxes, the host delivers directory descriptors to the
+shim on `vmm.sock`. The host-only socket uses mode `0600`. Mount requests also
+check the peer UID. Each connection carries one `POST /v1/mount-control`
+request and reply over HTTP/1.1, with JSON bodies capped at 64 KiB.
+
+Registration attaches one directory FD to the first request byte via `SCM_RIGHTS`.
+Guest RPCs use `box.sock`.
+
+```mermaid
+sequenceDiagram
+    participant Host as Host client
+    participant Shim as Shim on vmm.sock
+    participant FS as Aggregate virtio-fs
+    participant Guest as Guest agent on box.sock
+    Host->>Shim: Register with directory FD
+    Shim->>FS: Publish directory export
+    Shim-->>Host: Preparing record
+    Host->>Guest: Mount(export key, device tag, destination, mode)
+    Guest-->>Host: Mount complete
+    Host->>Shim: Set state Mounted
+```
+
+Registration reserves a target, allocates an export identity, and publishes a
+`Preparing` record before replying. A new connection can query the record if
+the reply is lost. List admission accounts for serialized JSON bytes,
+including escaping and later state changes.
+
+The kernel queues connections for the serial control thread. The client has
+one deadline for connect, queue wait, and I/O, including time behind a disk
+resize. The shim owns received descriptors before validating the
+request, so rejection releases them.
+
+Aggregate Mount and Detach reject containers whose capability bounding set
+includes `CAP_SYS_ADMIN`, before any namespace or mount mutation. The configured
+capabilities are preserved; ordinary containers retain directory delivery.
+
+Guest `Mount` resolves the export beneath the mounted aggregate root and binds
+it into the running container namespace. `Detach` lazily unmounts only the
+matching export incarnation and actual kernel mount identity. Open file and
+directory references survive detach; repeating an old detach does not remove a
+replacement. Descendant mounts must be detached first. A detach received before
+its corresponding mount retains a tombstone that rejects that delayed mount.
+
+Run `make test:unit:rust FILTER=vmm_socket` for HTTP and record checks.
+Run `make test:integration:vmm:mount-delivery` with a compatible `VMM_KERNEL`
+to register, attach, and retire a directory through the native shim and guest.
+
+The host control client is blocking and belongs in `spawn_blocking` when used
+from async code. Its caller must mark an incarnation `Detaching` before requesting
+guest detach, acknowledge that detach before retiring the export, and retain recovery ownership when outcomes
+are uncertain. The public `box.mounts()` facade and runtime transaction
+coordinator are a separate layer above these delivery primitives.
 
 ## Virtio network device
 
@@ -223,8 +288,28 @@ Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
   block unplugged. A failed unmap keeps the slot mapped and visible; `Drop`
   leaks a slot whose unmap fails.
 
-The virtio-mem device and host control handle that drive it arrive next; the
-`hotplug` tests use the recording backend.
+### Virtio-mem device and control
+
+On Linux x86_64, set `VmConfig.hotplug_mib` to the extra capacity above boot
+RAM (`0` disables virtio-mem). `Vm::new` checks the window before building the VM.
+
+BoxLite prepends `memhp_default_state=online` and
+`memory_hotplug.online_policy=auto-movable` to the caller's command line.
+Caller kernel parameters can override these defaults. Arguments after
+`--` go to init.
+
+`vm.control().set_memory_target_mib(256, timeout)` publishes a target of 256 MiB
+above boot RAM and notifies the guest, which plugs or unplugs blocks afterward.
+Targets are multiples of 128 MiB up to the configured capacity.
+
+Use `memory_status(timeout)` to read the capacity, target, plugged and mapped
+MiB. Shrinking is best effort, so the plugged size may stay above the target.
+
+`WouldBlock` means the device is inactive or the control queue is full. An
+accepted command can still run after the caller times out.
+
+Reset discards queued commands. After VM exit, both operations return
+`BrokenPipe` for an enabled device.
 
 ## Kernel loading
 
@@ -560,6 +645,20 @@ socket and guest-memory tests; real-guest qualification remains separate.
 
 ## Lifecycle
 
+`Vm::run(&mut self)` blocks on the thread that owns the VM. Call
+`vm.control()` before the run and pass clones of the `VmControl` to threads
+that need to read `status()`, request `stop()`, or call
+[`resize_disk()`](#virtio-block-device). Dropping the clones has no effect
+on execution. A VM created with the device-less test helper returns
+`InvalidInput` for disk resize because its registry is empty.
+
+| `VmStatus` | Meaning |
+| --- | --- |
+| `Created` | The VM is ready for its first run. |
+| `Running` | The driver has started the run, including vCPU setup. |
+| `Stopping` | A stop was requested or the driver is handling a terminal event. |
+| `Exited` | The run finished teardown, or the owner dropped the VM. |
+
 `Vm::run` runs on x86_64, against any backend that implements
 `boxlite_hypervisor::X86Vm`; unit tests drive it on the mock backend. Before
 it registers any RAM, `Vm::with_backend` builds the `Chipset` from the
@@ -597,9 +696,16 @@ becomes `Error::VirtioDevice`, while an error that ended the VM stays the result
 `Drop` retries an incomplete join and keeps RAM registered while workers still
 run; a quiesce failure after joining still permits RAM unmapping.
 
-`Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
-thread, even before `run` starts. A VM runs once: a second `run` fails with
-`AlreadyRan`, since its latch stays set and its vCPUs already exist.
+`VmControl::stop` and `StopHandle::stop` share the stop latch and return
+without waiting. A stop requested before the first run skips vCPU creation,
+performs cleanup, and returns `Ok(VmExit::StopRequested)` on successful cleanup.
+A second run returns `Error::AlreadyRan`.
+
+`run` publishes `Exited` after joining the vCPUs, shutting down the virtio
+workers, and finishing the console. A worker join timeout leaves the status at
+`Stopping` until the VM is dropped. RAM stays mapped after `run`.
+Dropping the VM handles RAM teardown and publishes `Exited` to surviving
+controls, including when the VM never ran.
 
 ## Long-mode entry
 
@@ -639,6 +745,9 @@ no topology, so it sets:
 - leaf 1: APIC ID `index`, `count` rounded up to a power of two, a 64-byte
   CLFLUSH line whatever the host reports, HTT when `count > 1`, and the
   hypervisor and TSC-deadline bits;
+- leaf 7 subleaf 0: SHSTK is masked because KVM snapshots do not capture the
+  shadow stack pointer (SSP) via `KVM_GET_ONE_REG`. `boxlite-hypervisor` rejects
+  CPUID that advertises SHSTK with `Unsupported` during capture and restore;
 - leaf 0xB, and 0x1F when KVM lists it: an SMT level of one thread and a
   core level of `count` cores whose shift of 6 covers every APIC ID up to 64;
 - on AMD and Hygon, 0x8000_001E (APIC and core ID `index`, node 0) and
@@ -680,7 +789,7 @@ are built from. `Vm` owns the chipset they form.
 - **Events.** A device ends the VM by sending `Event::GuestReset` or
   `Event::DeviceFailed` through an `EventSender`, which never blocks or
   panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`
-  poller. vCPU workers and `StopHandle` send the other events. An event sent
+  poller. vCPU workers and lifecycle controls send the other events. An event sent
   after the loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
   the oldest event, or `None` at its timeout, and rechecks the queue every
   second in case a wake-up was lost. Every event ends the VM; the VMM never

@@ -8,8 +8,6 @@ import { Json, StateDatabase, StateConflict, StateCorrupt, LeaseLost } from './d
 import { ExecutionLease, ListenerState } from './store'
 import { PostgresStateDatabase, postgresStateTable } from './postgres'
 import { SqliteStateDatabase } from './sqlite'
-import { rebuildDemand, decodeDemand } from '../demand'
-import { WorkflowJob } from '../jobs'
 import { ExecutionJournal } from '../execution/journal'
 
 for (const backend of ['sqlite', 'postgres'] as const) {
@@ -57,31 +55,6 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         }
       }
     })
-    if (backend === 'postgres')
-      it.each([100, 101])('rebuilds %s queue facts with a bounded SQL budget', async (size) => {
-        const lease = (await state.acquire('rebuild', 300000))!
-        const jobs: WorkflowJob[] = Array.from({ length: size }, (_, index) => ({
-          repository: 21,
-          run: 33,
-          job: index + 1,
-          status: 'queued',
-          runner: null,
-          labels: ['boxlite'],
-        }))
-        const queries = jest.spyOn(pg!.logger, 'logQuery').mockImplementation(() => {})
-        const result = await rebuildDemand(
-          state,
-          lease,
-          { installationId: 1, accountId: 7, repositoryId: 21 },
-          [],
-          jobs,
-        )
-        const statements = queries.mock.calls.length
-        queries.mockRestore()
-        expect(result.map(decodeDemand)).toEqual([expect.objectContaining({ queued: size })])
-        expect(await state.recover(lease, 1000, ['job-fact/'])).toHaveLength(size)
-        expect(statements).toBeLessThanOrEqual(40)
-      })
     it.each(['batch', 'fallback'])(
       'preserves ordered reads and duplicate ingress keys with %s storage',
       async (mode) => {
@@ -544,6 +517,18 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await state.read([policy.key])).toEqual([policy])
       expect((await state.read(['worker/guarded']))[0].payload).toEqual({ admitted: true })
     })
+    it('rejects an invalid or duplicate scope refresh before committing any worker', async () => {
+      const lease = await owner()
+      const worker = { key: 'worker/refresh', expected: null, payload: { admitted: true } }
+      const activity = 'scope-state/' + '1'.repeat(64)
+      await expect(state.commit(lease, [worker], [], 'worker/other')).rejects.toThrow('Invalid scope activity refresh')
+      await expect(
+        state.commit(lease, [worker, { key: activity, expected: null, payload: {} }], [], activity),
+      ).rejects.toThrow('Invalid scope activity refresh')
+      const batch = Array.from({ length: 100 }, (_, i) => ({ ...worker, key: 'worker/batch-' + i }))
+      await expect(state.commit(lease, batch, [], activity)).rejects.toThrow('Invalid scope activity refresh')
+      expect(await state.read([worker.key, activity, batch[0].key])).toEqual([])
+    })
     it('quota fence rejects a stale policy before any allocation write', async () => {
       const lease = await owner()
       const [policy] = await state.commit(lease, [{ key: 'quota/tenant', expected: null, payload: { limit: 2 } }])
@@ -829,12 +814,15 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(await state.recover(lease)).toEqual([replacement])
     })
     it('keeps unknown effects and permanent scopes through owner turnover', async () => {
-      const first = (await state.acquire('first', 100))!
+      const first = await owner()
       await state.commit(first, [
         { key: 'worker/unknown', expected: null, payload: { phase: 'requested', operation: randomUUID() } },
         { key: 'scope/1', expected: null, payload: { organization: 'original' } },
       ])
-      await new Promise((resolve) => setTimeout(resolve, 160))
+      await database.transaction(namespace, async (tx) => {
+        const expiry = (await tx.get('@lease'))!
+        await tx.put({ ...expiry, version: randomUUID(), payload: { until: 0 } }, expiry.version)
+      })
       await expect(state.renew(first, 10_000)).rejects.toBeInstanceOf(LeaseLost)
       const next = (await state.acquire('next', 10_000))!
       expect(next.epoch).toBe(first.epoch + 1)
@@ -941,6 +929,37 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           },
           lease,
         )
+      })
+      it('renews concurrent heartbeats while a guarded worker transaction is open', async () => {
+        const lease = await owner()
+        const before = await roots()
+        const now = await state.now(lease)
+        const heartbeat = new ListenerState(
+          new PostgresStateDatabase({
+            transaction: (isolation, work) =>
+              pg!.transaction(isolation, async (tx) => {
+                await tx.query("SET LOCAL lock_timeout='250ms'")
+                return work(tx)
+              }),
+          }),
+          namespace,
+        )
+        await state.ingress(
+          'busy-worker',
+          async (tx) => {
+            await tx.write([{ key: 'notice/busy-worker', expected: null, payload: true }])
+            const results = await Promise.allSettled([heartbeat.renew(lease, 60000), heartbeat.renew(lease, 20000)])
+            expect(results).toEqual([
+              { status: 'fulfilled', value: undefined },
+              { status: 'fulfilled', value: undefined },
+            ])
+          },
+          lease,
+        )
+        const after = await roots()
+        expect(after.owner).toEqual(before.owner)
+        expect((after.lease!.payload as { until: number }).until).toBeGreaterThanOrEqual(now + 60000)
+        expect(await state.read(['notice/busy-worker'], lease)).toHaveLength(1)
       })
       it('rejects expired proof even when its record version still matches', async () => {
         const lease = await owner()

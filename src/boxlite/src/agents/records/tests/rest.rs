@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::AgentOutcome;
 
 fn sample_turn(status: AgentTurnStatus) -> AgentTurnState {
     AgentTurnState {
@@ -11,7 +12,9 @@ fn sample_turn(status: AgentTurnStatus) -> AgentTurnState {
             status,
             outcome: Some(AgentOutcome::Question),
             text: Some("answer".into()),
-            data: Some(json!({"nested": null})),
+            data: Some(
+                RawValue::from_string(r#"{ "nested": null, "big": 1e400 }"#.into()).unwrap(),
+            ),
             artifacts: vec!["file".into()],
             usage: Some(json!({"tokens": 1})),
             error: None,
@@ -46,7 +49,10 @@ fn shared_enum_mappings_are_bidirectional_and_reject_unknown_values() {
         );
     }
     for value in [AgentOutcome::Answer, AgentOutcome::Question] {
-        assert_eq!(parse_outcome(outcome_name(value)).unwrap(), value);
+        assert_eq!(
+            parse_outcome(serde_json::to_value(value).unwrap().as_str().unwrap()).unwrap(),
+            value
+        );
     }
     assert!(parse_agent_status("invalid").is_err());
     assert!(parse_turn_status("invalid").is_err());
@@ -68,11 +74,11 @@ fn shared_records_round_trip_turns_and_nested_values() {
     ] {
         let original = sample_turn(status);
         let encoded = turn_state(&original);
-        let decoded: AgentTurnState = serde_json::from_value::<Turn>(encoded.clone())
+        let decoded: AgentTurnState = serde_json::from_str::<Turn>(encoded.get())
             .unwrap()
             .try_into()
             .unwrap();
-        assert_eq!(turn_state(&decoded), encoded);
+        assert_eq!(turn_state(&decoded).get(), encoded.get());
     }
 }
 
@@ -122,10 +128,13 @@ fn turn_decoders_reject_invalid_enum_values() {
         ("/result/outcome", "outcome"),
         ("/steering/0/status", "steering status"),
     ] {
-        let mut wire = turn_state(&sample_turn(AgentTurnStatus::Running));
+        let mut wire: Value =
+            serde_json::from_str(turn_state(&sample_turn(AgentTurnStatus::Running)).get()).unwrap();
         *wire.pointer_mut(path).unwrap() = json!("not-an-enum-value");
         let decoded: BoxliteResult<AgentTurnState> =
-            serde_json::from_value::<Turn>(wire).unwrap().try_into();
+            serde_json::from_str::<Turn>(&wire.to_string())
+                .unwrap()
+                .try_into();
         assert!(decoded.unwrap_err().to_string().contains(field), "{path}");
     }
 }
@@ -137,10 +146,13 @@ fn turn_decoders_reject_mismatched_child_ids() {
         "/requests/0/turn_id",
         "/steering/0/turn_id",
     ] {
-        let mut wire = turn_state(&sample_turn(AgentTurnStatus::Running));
+        let mut wire: Value =
+            serde_json::from_str(turn_state(&sample_turn(AgentTurnStatus::Running)).get()).unwrap();
         *wire.pointer_mut(path).unwrap() = json!("another-turn");
         let decoded: BoxliteResult<AgentTurnState> =
-            serde_json::from_value::<Turn>(wire).unwrap().try_into();
+            serde_json::from_str::<Turn>(&wire.to_string())
+                .unwrap()
+                .try_into();
         assert!(
             decoded
                 .unwrap_err()
@@ -158,11 +170,11 @@ fn turn_decoders_accept_absent_result_and_empty_children() {
     original.requests.clear();
     original.steering.clear();
     let wire = turn_state(&original);
-    let decoded: AgentTurnState = serde_json::from_value::<Turn>(wire.clone())
+    let decoded: AgentTurnState = serde_json::from_str::<Turn>(wire.get())
         .unwrap()
         .try_into()
         .unwrap();
-    assert_eq!(turn_state(&decoded), wire);
+    assert_eq!(turn_state(&decoded).get(), wire.get());
 }
 
 #[test]

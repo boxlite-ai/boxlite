@@ -34,6 +34,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     delivery: randomUUID(),
     event: 'workflow_job',
     digest: createHash('sha256').update('test-event').digest('hex'),
+    observation: { status: 'queued', labels: ['boxlite'], runner: null },
     hint: { installationId: 10, accountId: 20, repositoryId: 30, job: { id: 50, runId: 40 } },
   })
   beforeAll(async () => {
@@ -715,12 +716,10 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     )!
     const journal = new ExecutionJournal(store.state),
       key = await journal.define(lease, scope)
-    let row = (await journal.reserve(
-      lease,
-      key,
-      { repository: 30, run: 40, job: 50 },
-      testCapacity({ account: 1, tenant: 1 }),
-    ))!
+    let row = (await journal.reserve(lease, key, null, testCapacity({ account: 1, tenant: 1 }), {
+      labels: ['boxlite'],
+      scaleSet: 9,
+    }))!
     row = await journal.advance(lease, row.record.key, row.record.version, {
       box: { phase: 'requested', id: null },
       effect: { id: randomUUID(), kind: 'box-create' },
@@ -753,7 +752,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
         { image: 'runner', cpus: 1, memoryMiB: 512, labels: ['boxlite'] },
         (event) => (host as any).observe(event),
       )
-      await pool.tick(lease, testCapacity({ account: 1, tenant: 1 }))
+      await pool.balanceScaleSets(lease, [], testCapacity({ account: 1, tenant: 1 }), new AbortController().signal)
       expect((exit_code === 0 ? info : warn).mock.calls).toContainEqual([
         expect.objectContaining({
           event: 'ci-worker-exited',
@@ -762,7 +761,8 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
           organization: org,
           binding,
           boxId: 'original-log-box',
-          trigger: { repository: 30, run: 40, job: 50 },
+          trigger: null,
+          scaleSet: 9,
         }),
       ])
       expect(JSON.stringify([...info.mock.calls, ...warn.mock.calls])).not.toMatch(/catalog-|private-test|c2VjcmV0/)

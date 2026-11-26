@@ -52,9 +52,10 @@ export class BoxDestroyAction extends BoxAction {
         return DONT_SYNC_AGAIN
       }
 
-      if (box.state !== BoxState.DESTROYING) {
+      const needsTransition = box.state !== BoxState.DESTROYING
+      if (needsTransition || boxInfo.failedDestroyJob) {
         await runnerAdapter.destroyBox(box.id)
-        await this.updateBoxState(box, BoxState.DESTROYING, lockCode)
+        if (needsTransition) await this.updateBoxState(box, BoxState.DESTROYING, lockCode)
       }
 
       return SYNC_AGAIN

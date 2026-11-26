@@ -963,7 +963,7 @@ const configuration = {
   ci: {
     schedulerGeneration: process.env.CI_SCHEDULER_GENERATION,
     workerGroup: process.env.CI_WORKER_GROUP_NAME || 'boxlite-ci-runner',
-    workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/actions/actions-runner:latest',
+    workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/boxlite-ai/boxlite-jitbox:latest',
     ...ciWorkerResources(),
     githubOAuthClientId: process.env.CI_GITHUB_OAUTH_CLIENT_ID,
     githubOAuthClientSecret: process.env.CI_GITHUB_OAUTH_CLIENT_SECRET,

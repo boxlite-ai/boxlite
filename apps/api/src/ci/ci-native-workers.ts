@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { ConflictException, ForbiddenException, HttpException, Injectable, NotFoundException } from '@nestjs/common'
 import { EntityManager } from 'typeorm'
 import {
   ConfirmedWorkerAbsent,
@@ -123,6 +123,9 @@ export class CiNativeWorkers {
         } else if (
           typeof value.box !== 'string' ||
           value.rejectedCreationEffect !== undefined ||
+          (value.creationEffect !== undefined &&
+            allocation.value.box.phase === 'requested' &&
+            (allocation.value.effect?.kind !== 'box-create' || value.creationEffect !== allocation.value.effect.id)) ||
           !/^[A-Za-z0-9_-]{1,128}$/.test(value.box) ||
           (allocation.value.box.id !== null && value.box !== allocation.value.box.id)
         )
@@ -151,22 +154,31 @@ export class CiNativeWorkers {
           return rejectUndispatchedCreate(name, value.allocation.effect.id)
         throw new ConflictException('Original CI Box ID is not durably known')
       }
-      let box: Box
-      try {
-        box = await this.boxes.findOne(value.box, true)
-      } catch (error) {
-        if (error instanceof NotFoundException) throw new ConfirmedWorkerAbsent()
+      const create = value.allocation.effect
+      const creation =
+        value.allocation.box.phase === 'requested' && create?.kind === 'box-create'
+          ? { boxId: value.box, effect: create.id }
+          : undefined
+      // Old cleanup could prune failed destructions. Only the original Box's terminal state releases quota.
+      const box = await this.boxes.findOne(value.box, true).catch((error: unknown) => {
+        if (error instanceof NotFoundException)
+          throw new ConflictException('Original CI Box destruction is unconfirmed')
         throw error
-      }
+      })
       if (box.id !== value.box || box.organizationId !== scope.organization)
         throw new ForbiddenException('Original CI Box ownership changed')
       // Platform deletion renames the tombstone; its original ID and tenant remain authoritative.
-      if (box.state === BoxState.DESTROYED) throw new ConfirmedWorkerAbsent()
+      if (box.state === BoxState.DESTROYED) throw new ConfirmedWorkerAbsent(creation)
       if (box.name !== name) throw new ForbiddenException('Original CI Box ownership changed')
       return box
     }
     const context = () => Context.platform(PlatformReason.CI_RUNNER)
-    const rejectUndispatchedCreate = async (name: string, effect: string): Promise<never> => {
+    const rejectUndispatchedCreate = async (
+      name: string,
+      effect: string,
+      reason: ConfirmedWorkerCreationRejected['reason'] = 'undispatched',
+      cause?: unknown,
+    ): Promise<never> => {
       await this.store.transaction(async (tx, state) => {
         // The same expected-null ledger write fences a racing Box persistence transaction.
         const original = await inspect(tx, state, name)
@@ -193,7 +205,11 @@ export class CiNativeWorkers {
           },
         ])
       })
-      throw new ConfirmedWorkerCreationRejected(effect)
+      throw new ConfirmedWorkerCreationRejected(
+        effect,
+        reason,
+        cause instanceof HttpException ? cause.getStatus() : undefined,
+      )
     }
     const running = async (name: string) => {
       const box = await owned(name, 'jit-deliver')
@@ -285,7 +301,8 @@ export class CiNativeWorkers {
             return original.allocation.effect!.id
           })
         } catch (error) {
-          if (error instanceof CreationAdmissionDenied) return rejectUndispatchedCreate(launch.name, error.effect)
+          if (error instanceof CreationAdmissionDenied)
+            return rejectUndispatchedCreate(launch.name, error.effect, 'admission', error)
           throw error
         }
         const dto = Object.assign(new CreateBoxDto(), {
@@ -318,22 +335,23 @@ export class CiNativeWorkers {
                 box.organizationId !== scope.organization ||
                 box.name !== launch.name ||
                 original.record ||
+                original.allocation.effect?.id !== creationEffect ||
                 original.allocation.box.phase !== 'requested' ||
                 original.allocation.box.id !== null
               )
                 throw new ForbiddenException('Original CI persistence intent changed')
               await state.commit(lease, [
-                { key: original.key, expected: null, payload: { scope: originalScope, box: box.id } },
+                { key: original.key, expected: null, payload: { scope: originalScope, box: box.id, creationEffect } },
               ])
             },
           })
         } catch (error) {
           if (error instanceof CreationAdmissionDenied && error.effect === creationEffect)
-            return rejectUndispatchedCreate(launch.name, creationEffect)
+            return rejectUndispatchedCreate(launch.name, creationEffect, 'admission', error)
           // Classify by the effect boundary, so new error types cannot strand
           // a reservation. A failed COMMIT after onPersist remains uncertain.
           if (persistenceEntered) throw error
-          return rejectUndispatchedCreate(launch.name, creationEffect)
+          return rejectUndispatchedCreate(launch.name, creationEffect, 'before-persistence', error)
         }
         return boxToBoxResponse(created)
       },

@@ -12,6 +12,10 @@ use crate::MemoryRegion;
 /// KVM's limit on host pages in a single memory slot.
 pub(super) const MAX_PAGES_PER_SLOT: u64 = (1 << 31) - 1;
 
+pub(super) fn slot_bytes(page_size: usize, max_pages: u64) -> usize {
+    usize::try_from(max_pages.saturating_mul(page_size as u64)).unwrap_or(usize::MAX)
+}
+
 #[derive(Debug)]
 struct LogicalRegion {
     guest_addr: u64,
@@ -131,9 +135,7 @@ impl MemorySlots {
         }
         self.validate_range(region)?;
         let region = *region;
-        let view_bytes = max_pages
-            .saturating_mul(self.page_size() as u64)
-            .min(region.size as u64) as usize;
+        let view_bytes = slot_bytes(self.page_size(), max_pages).min(region.size);
         Ok((0..region.size.div_ceil(view_bytes)).map(move |index| {
             let offset = index * view_bytes;
             MemoryRegion {

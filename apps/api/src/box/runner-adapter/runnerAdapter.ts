@@ -16,6 +16,8 @@ import { RunnerServiceInfo } from '../common/runner-service-info'
 export interface RunnerBoxInfo {
   state: BoxState
   daemonVersion?: string
+  /** The latest job for this Box was a failed destroy and no incomplete job was observed. */
+  failedDestroyJob?: true
 }
 
 export interface RunnerMetrics {

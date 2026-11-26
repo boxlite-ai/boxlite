@@ -12,7 +12,20 @@ import (
 	"unsafe"
 )
 
-// CheckpointInfo describes an independent managed disk archive.
+// CheckpointKind specifies the contents of a managed checkpoint.
+type CheckpointKind string
+
+const (
+	CheckpointKindDisk CheckpointKind = "disk"
+	CheckpointKindFull CheckpointKind = "full"
+	// CheckpointKindUnknown represents a server-reported kind the SDK does not recognize.
+	CheckpointKindUnknown CheckpointKind = "unknown"
+)
+
+// CheckpointOptions selects the archive kind. An empty Kind selects disk.
+type CheckpointOptions struct{ Kind CheckpointKind }
+
+// CheckpointInfo describes an independent managed checkpoint archive.
 type CheckpointInfo struct {
 	ID          string
 	Name        string
@@ -21,6 +34,9 @@ type CheckpointInfo struct {
 	SizeBytes   uint64
 	State       string
 	ErrorReason string
+	Kind        CheckpointKind
+	// MemorySizeBytes is nil when the server does not report a memory size.
+	MemorySizeBytes *uint64
 }
 
 // Checkpoints manages organization-scoped checkpoints through REST. Its lifetime
@@ -45,14 +61,26 @@ func (c *Checkpoints) ready(ctx context.Context) (*Runtime, error) {
 	return c.runtime, nil
 }
 
-// Create captures source directly. Empty name lets the backend choose a name.
+// Create captures a disk checkpoint of a stopped box. An empty name lets the backend choose a name.
 // Cloud capture can initially report creating; query until ready before use.
 func (c *Checkpoints) Create(ctx context.Context, source, name string) (*CheckpointInfo, error) {
+	return c.CreateWithOptions(ctx, source, name, CheckpointOptions{})
+}
+
+// CreateWithOptions captures a disk checkpoint of a stopped box or a full
+// checkpoint of a running box on a REST server that supports full capture.
+// An empty name lets the backend choose a name.
+func (c *Checkpoints) CreateWithOptions(ctx context.Context, source, name string, opts CheckpointOptions) (*CheckpointInfo, error) {
 	if err := validateArchiveArgument(source, "checkpoint source", false); err != nil {
 		return nil, err
 	}
 	if err := validateArchiveArgument(name, "checkpoint name", true); err != nil {
 		return nil, err
+	}
+	switch opts.Kind {
+	case "", CheckpointKindDisk, CheckpointKindFull:
+	default:
+		return nil, &Error{Code: ErrInvalidArgument, Message: "checkpoint kind must be disk or full"}
 	}
 	runtime, err := c.ready(ctx)
 	if err != nil {
@@ -62,10 +90,15 @@ func (c *Checkpoints) Create(ctx context.Context, source, name string) (*Checkpo
 	defer C.free(unsafe.Pointer(cSource))
 	cName, freeName := archiveNameCString(name)
 	defer freeName()
+	var cKind *C.char
+	if opts.Kind != "" {
+		cKind = toCString(string(opts.Kind))
+		defer C.free(unsafe.Pointer(cKind))
+	}
 	result := make(chan handleResult[*C.CCheckpointInfo], 1)
 	handle := registerHandleForDispatch(cgo.NewHandle(result))
 	var nativeError C.CBoxliteError
-	code := C.boxlite_checkpoint_create(runtime.handle, cSource, cName, C.cbCheckpointInfo(), handleToPtr(handle), &nativeError)
+	code := C.boxlite_checkpoint_create_with_options(runtime.handle, cSource, cName, cKind, C.cbCheckpointInfo(), handleToPtr(handle), &nativeError)
 	if code != C.Ok {
 		deleteHandleForDispatch(handle)
 		return nil, freeError(&nativeError)
@@ -159,7 +192,21 @@ func (c *Checkpoints) Remove(ctx context.Context, key string, force bool) error 
 }
 
 func checkpointInfoFromC(info *C.CCheckpointInfo) CheckpointInfo {
-	return CheckpointInfo{ID: cString(info.id), Name: cString(info.name), SourceBoxID: cString(info.source_box_id), CreatedAt: cString(info.created_at), SizeBytes: uint64(info.size_bytes), State: cString(info.state), ErrorReason: cString(info.error_reason)}
+	checkpoint := CheckpointInfo{
+		ID:          cString(info.id),
+		Name:        cString(info.name),
+		SourceBoxID: cString(info.source_box_id),
+		CreatedAt:   cString(info.created_at),
+		SizeBytes:   uint64(info.size_bytes),
+		State:       cString(info.state),
+		ErrorReason: cString(info.error_reason),
+		Kind:        CheckpointKind(cString(info.kind)),
+	}
+	if info.has_memory_size_bytes != 0 {
+		size := uint64(info.memory_size_bytes)
+		checkpoint.MemorySizeBytes = &size
+	}
+	return checkpoint
 }
 
 func checkpointInfoResult(ctx context.Context, runtime *Runtime, result <-chan handleResult[*C.CCheckpointInfo], handle cgo.Handle) (*CheckpointInfo, error) {

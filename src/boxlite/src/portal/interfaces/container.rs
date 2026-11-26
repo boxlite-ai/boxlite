@@ -324,8 +324,58 @@ impl ContainerInterface {
                 source: source.to_string(),
                 destination: destination.to_string(),
                 read_only: true,
+                // Legacy share delivery only; aggregate delivery carries
+                // export_key and device_tag (M6 runtime coordination).
+                export_key: String::new(),
+                device_tag: String::new(),
             })
             .await?;
+        Ok(())
+    }
+
+    /// M6 aggregate delivery: bind the export `export_key` beneath the
+    /// aggregate root of `device_tag` at `destination` in the running
+    /// container. `read_only` gates the guest bind mode; content policy
+    /// stays with the host backend.
+    pub async fn mount_aggregate(
+        &mut self,
+        container_id: &str,
+        export_key: &str,
+        device_tag: &str,
+        destination: &str,
+        read_only: bool,
+    ) -> BoxliteResult<()> {
+        self.client
+            .mount(boxlite_shared::ContainerMountRequest {
+                container_id: container_id.to_string(),
+                source: String::new(),
+                destination: destination.to_string(),
+                read_only,
+                export_key: export_key.to_string(),
+                device_tag: device_tag.to_string(),
+            })
+            .await
+            .map_err(map_mount_status)?;
+        Ok(())
+    }
+
+    /// Lazily detach the runtime mount at `destination`: the destination
+    /// leaves the container mount table while descriptors opened before the
+    /// detach keep working.
+    pub async fn detach(
+        &mut self,
+        container_id: &str,
+        destination: &str,
+        export_key: &str,
+    ) -> BoxliteResult<()> {
+        self.client
+            .detach(boxlite_shared::ContainerDetachRequest {
+                container_id: container_id.to_string(),
+                destination: destination.to_string(),
+                export_key: export_key.to_string(),
+            })
+            .await
+            .map_err(map_mount_status)?;
         Ok(())
     }
 }
@@ -333,6 +383,13 @@ impl ContainerInterface {
 fn map_container_init_status(status: tonic::Status) -> BoxliteError {
     if status.code() == tonic::Code::InvalidArgument {
         return BoxliteError::InvalidArgument(status.message().to_owned());
+    }
+    status.into()
+}
+
+fn map_mount_status(status: tonic::Status) -> BoxliteError {
+    if status.code() == tonic::Code::Unimplemented {
+        return BoxliteError::Unsupported(status.message().to_owned());
     }
     status.into()
 }
@@ -349,6 +406,18 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tonic::transport::{Endpoint, Server};
     use tonic::{Request, Response, Status};
+
+    #[test]
+    fn unsupported_mounts_preserve_the_capability_error_category() {
+        assert!(
+            matches!(map_mount_status(tonic::Status::unimplemented("CAP_SYS_ADMIN")),
+            BoxliteError::Unsupported(message) if message == "CAP_SYS_ADMIN")
+        );
+        assert!(matches!(
+            map_mount_status(tonic::Status::unavailable("guest disconnected")),
+            BoxliteError::Rpc(_)
+        ));
+    }
 
     #[test]
     fn container_init_preserves_invalid_argument_status() {
@@ -377,6 +446,8 @@ mod tests {
         init_error: Option<ContainerInitErrorKind>,
         /// Last `Container.Init` request the stub saw, for wire assertions.
         seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
+        seen_mounts: Arc<Mutex<Vec<boxlite_shared::ContainerMountRequest>>>,
+        seen_detaches: Arc<Mutex<Vec<boxlite_shared::ContainerDetachRequest>>>,
     }
 
     #[tonic::async_trait]
@@ -421,9 +492,20 @@ mod tests {
 
         async fn mount(
             &self,
-            _: Request<boxlite_shared::ContainerMountRequest>,
+            request: Request<boxlite_shared::ContainerMountRequest>,
         ) -> Result<Response<boxlite_shared::ContainerMountResponse>, Status> {
-            Err(Status::unimplemented("not used by these tests"))
+            self.seen_mounts.lock().unwrap().push(request.into_inner());
+            Ok(Response::new(boxlite_shared::ContainerMountResponse {}))
+        }
+        async fn detach(
+            &self,
+            request: Request<boxlite_shared::ContainerDetachRequest>,
+        ) -> Result<Response<boxlite_shared::ContainerDetachResponse>, Status> {
+            self.seen_detaches
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            Ok(Response::new(boxlite_shared::ContainerDetachResponse {}))
         }
     }
 
@@ -438,6 +520,23 @@ mod tests {
         init_error: Option<ContainerInitErrorKind>,
         seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
     ) -> ContainerInterface {
+        interface_delivering(
+            start_reply,
+            init_error,
+            seen_init,
+            Arc::default(),
+            Arc::default(),
+        )
+        .await
+    }
+
+    async fn interface_delivering(
+        start_reply: StartReply,
+        init_error: Option<ContainerInitErrorKind>,
+        seen_init: Arc<Mutex<Option<ContainerInitRequest>>>,
+        seen_mounts: Arc<Mutex<Vec<boxlite_shared::ContainerMountRequest>>>,
+        seen_detaches: Arc<Mutex<Vec<boxlite_shared::ContainerDetachRequest>>>,
+    ) -> ContainerInterface {
         // Bind with std to learn a free port, then hand the address to tonic.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -449,6 +548,8 @@ mod tests {
                     start_reply,
                     init_error,
                     seen_init,
+                    seen_mounts,
+                    seen_detaches,
                 }))
                 .serve(addr)
                 .await
@@ -471,6 +572,47 @@ mod tests {
             }
         };
         ContainerInterface::new(channel)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delivery_requests_preserve_incarnation_modes_and_legacy_source_on_wire() {
+        let mounts = Arc::new(Mutex::new(Vec::new()));
+        let detaches = Arc::new(Mutex::new(Vec::new()));
+        let mut iface = interface_delivering(
+            StartReply::Success,
+            None,
+            Arc::default(),
+            Arc::clone(&mounts),
+            Arc::clone(&detaches),
+        )
+        .await;
+        iface.mount("box", "agents", "/opt/agents").await.unwrap();
+        for read_only in [false, true] {
+            iface
+                .mount_aggregate("box", "export-42", "boxlite", "/data", read_only)
+                .await
+                .unwrap();
+        }
+        iface.detach("box", "/data", "export-42").await.unwrap();
+        let mounts = mounts.lock().unwrap();
+        assert_eq!(mounts.len(), 3);
+        assert_eq!(mounts[0].source, "agents");
+        assert!(mounts[0].read_only);
+        assert!(mounts[0].export_key.is_empty());
+        assert!(mounts[0].device_tag.is_empty());
+        for (request, read_only) in mounts[1..].iter().zip([false, true]) {
+            assert_eq!(request.container_id, "box");
+            assert!(request.source.is_empty());
+            assert_eq!(request.export_key, "export-42");
+            assert_eq!(request.device_tag, "boxlite");
+            assert_eq!(request.destination, "/data");
+            assert_eq!(request.read_only, read_only);
+        }
+        let detaches = detaches.lock().unwrap();
+        assert_eq!(detaches.len(), 1);
+        assert_eq!(detaches[0].container_id, "box");
+        assert_eq!(detaches[0].destination, "/data");
+        assert_eq!(detaches[0].export_key, "export-42");
     }
 
     /// #988 regression: a guest agent that predates `Container.Start` answers
