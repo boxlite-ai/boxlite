@@ -37,4 +37,28 @@ var (
 		},
 		[]string{"operation", "status"},
 	)
+
+	// Exec attach WebSocket sessions this runner has ended, by end reason.
+	// The label values are the attachEndReason constants in
+	// pkg/api/controllers. A healthy runner only adds to exec_done and
+	// client_close; pong_timeout means a client held the socket but stopped
+	// answering pings for 45 seconds.
+	ExecAttachSessions = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "exec_attach_sessions_total",
+			Help: "Exec attach WebSocket sessions ended by this runner, by end reason",
+		},
+		[]string{"reason"},
+	)
+
+	// Exec attach requests this runner refused with 409, by refusal reason.
+	// A client that reconnects while its previous session still holds the
+	// single attach slot lands in slot_occupied.
+	ExecAttachRefusals = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "exec_attach_refusals_total",
+			Help: "Exec attach requests refused by this runner, by refusal reason",
+		},
+		[]string{"reason"},
+	)
 )

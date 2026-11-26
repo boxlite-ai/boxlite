@@ -6,12 +6,18 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/common"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -100,6 +106,20 @@ func setPeerCloseWaitForTest(d time.Duration) (restore func()) {
 	}
 }
 
+// attachStream is one output stream of an attach subscriber: the chunk
+// channel the exec's broadcaster feeds, plus the byte counters the
+// session-end log reports. *boxlite.streamSub is the production
+// implementation; tests substitute their own.
+type attachStream interface {
+	Chan() <-chan []byte
+	// Dropped is the bytes this subscriber lost to back-pressure because the
+	// client was not reading fast enough.
+	Dropped() uint64
+	// Replayed is the size of the backlog snapshot handed to the subscriber
+	// at subscribe time: output produced before this session attached.
+	Replayed() uint64
+}
+
 // attachExec is the surface of an exec session needed by the WebSocket
 // handler. *boxlite.ManagedExec implements it via a thin adapter; tests
 // substitute their own stubs.
@@ -108,7 +128,7 @@ type attachExec interface {
 	// channels plus a cancel function that must be called when the /attach
 	// session ends. The broadcaster owns the underlying pipe readers for
 	// the exec's lifetime, so there is no stale-pump race on reattach.
-	Subscribe(bufSize int) (stdout, stderr <-chan []byte, cancel func())
+	Subscribe(bufSize int) (stdout, stderr attachStream, cancel func())
 
 	WriteStdin(data []byte) (int, error)
 	DoneCh() <-chan struct{}
@@ -124,6 +144,8 @@ type attachExec interface {
 	// MarkDisconnected releases the slot and stamps LastDisconnectAt
 	// for Phase 4 reaping.
 	MarkDisconnected()
+	// AttachState snapshots the slot's bookkeeping for the handler's logs.
+	AttachState() boxlite.AttachState
 }
 
 // resolveAttachExec verifies the requested box, adopts live guest sessions,
@@ -188,6 +210,7 @@ func BoxliteExecAttach(ctx *gin.Context) {
 	}
 
 	if !target.MarkConnected() {
+		logAttachRefused(boxId, execId, target)
 		// Refuse BEFORE upgrade so the client gets a real HTTP 409.
 		ctx.JSON(http.StatusConflict, gin.H{
 			"error": fmt.Sprintf("execution %s already attached", execId),
@@ -198,11 +221,174 @@ func BoxliteExecAttach(ctx *gin.Context) {
 	conn, err := attachUpgrader.Upgrade(ctx.Writer, ctx.Request, nil)
 	if err != nil {
 		// Upgrade already wrote an error response on its own.
+		common.ExecAttachSessions.WithLabelValues(string(attachEndUpgradeFailed)).Inc()
+		slog.Warn("boxlite exec attach upgrade failed",
+			"boxId", boxId, "execId", execId,
+			"reason", attachEndUpgradeFailed, "error", err)
 		target.MarkDisconnected()
 		return
 	}
 
-	runAttachLoop(ctx.Request.Context(), conn, target)
+	runAttachLoop(ctx.Request.Context(), conn, target, boxId, execId)
+}
+
+// attachEndReason is how an attach session ended. It is the `reason` label
+// of exec_attach_sessions_total, so the values are part of the metrics
+// contract: do not rename one without a dashboards pass.
+type attachEndReason string
+
+const (
+	// attachEndExecDone: the exec finished and the exit frame was sent (or
+	// its drain timed out). The normal end.
+	attachEndExecDone attachEndReason = "exec_done"
+	// attachEndClientClose: the client sent a WebSocket Close frame.
+	attachEndClientClose attachEndReason = "client_close"
+	// attachEndPongTimeout: pongWait passed with no frame from the client.
+	// On a still-running exec this means the client stopped reading.
+	attachEndPongTimeout attachEndReason = "pong_timeout"
+	// attachEndReadError: reading from the client failed for any other
+	// reason — a reset, a dropped socket, a malformed frame. A client
+	// process killed without a Close frame lands here too.
+	attachEndReadError attachEndReason = "read_error"
+	// attachEndWriteFailed: a write to the client failed — output frame or
+	// keepalive ping.
+	attachEndWriteFailed attachEndReason = "write_failed"
+	// attachEndUpgradeFailed: the WebSocket upgrade itself failed. Counted
+	// and logged from BoxliteExecAttach, where no session exists yet.
+	attachEndUpgradeFailed attachEndReason = "upgrade_failed"
+	// attachEndPanic: a goroutine of the attach loop panicked.
+	attachEndPanic attachEndReason = "panic"
+	// attachEndServerShutdown: the server shut the connection down while
+	// no goroutine had reported a failure and the exec was still running.
+	attachEndServerShutdown attachEndReason = "server_shutdown"
+)
+
+// attachRefusalReason is why a /attach request got a 409: the `reason`
+// label of exec_attach_refusals_total.
+type attachRefusalReason string
+
+const (
+	// attachRefusalSlotOccupied: another client holds the single attach slot.
+	attachRefusalSlotOccupied attachRefusalReason = "slot_occupied"
+	// attachRefusalReaping: the reaper has claimed the exec, so nobody may
+	// attach again even if the slot is free.
+	attachRefusalReaping attachRefusalReason = "reaping"
+)
+
+// attachWriteError marks a failure that came out of a write to the client,
+// so the session-end log can tell "we could not send" from "we could not
+// read".
+type attachWriteError struct{ err error }
+
+func (e attachWriteError) Error() string { return e.err.Error() }
+func (e attachWriteError) Unwrap() error { return e.err }
+
+// attachOutput is one output stream of a session: the subscriber, the
+// channel byte its frames carry, and the bytes this session wrote to the
+// client. The counter is atomic because the session-end log reads it while
+// a pump blocked in a write may still be winding down.
+type attachOutput struct {
+	stream  attachStream
+	channel byte
+	sent    atomic.Uint64
+}
+
+// attachEndRecord keeps the first failure any goroutine of the attach loop
+// reported. The first error wins so that a read error caused by the teardown
+// after a write failure is not reported as the cause.
+type attachEndRecord struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (r *attachEndRecord) fail(err error) {
+	r.mu.Lock()
+	if r.err == nil {
+		r.err = err
+	}
+	r.mu.Unlock()
+}
+
+func (r *attachEndRecord) get() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
+}
+
+// classifyAttachEnd maps the first recorded failure to an end reason. A nil
+// failure means no goroutine reported anything: the server shut the
+// connection down.
+func classifyAttachEnd(err error) attachEndReason {
+	if err == nil {
+		return attachEndServerShutdown
+	}
+	if clientCloseCode(err) != 0 {
+		return attachEndClientClose
+	}
+	var writeErr attachWriteError
+	if errors.As(err, &writeErr) {
+		return attachEndWriteFailed
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return attachEndPongTimeout
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return attachEndPongTimeout
+	}
+	return attachEndReadError
+}
+
+// clientCloseCode returns the status code of the client's Close frame when
+// the error is one, else 0. gorilla reports a socket that dropped without
+// a Close frame as a CloseError too — code 1006, "unexpected EOF" — and a
+// TLS failure as 1015; neither is a frame the client sent, so both return 0
+// and classify as read_error.
+func clientCloseCode(err error) int {
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		return 0
+	}
+	switch closeErr.Code {
+	case websocket.CloseAbnormalClosure, websocket.CloseTLSHandshake:
+		return 0
+	}
+	return closeErr.Code
+}
+
+// execFinished reports whether the exec's Done channel is already closed.
+func execFinished(exec attachExec) bool {
+	select {
+	case <-exec.DoneCh():
+		return true
+	default:
+		return false
+	}
+}
+
+// logAttachRefused records a 409. The occupant's connection age is what
+// tells a client that reconnected before its old session was torn down
+// (the slot holder is young, a few seconds) from a client that vanished
+// without the server noticing (the slot holder is old, tens of seconds).
+// Nothing from the request is logged — no headers, no query string.
+func logAttachRefused(boxId, execId string, exec attachExec) {
+	state := exec.AttachState()
+	reason := attachRefusalSlotOccupied
+	if state.Reaping {
+		reason = attachRefusalReaping
+	}
+	common.ExecAttachRefusals.WithLabelValues(string(reason)).Inc()
+
+	args := []any{
+		"boxId", boxId, "execId", execId,
+		"reason", reason,
+		"execDone", execFinished(exec),
+	}
+	if state.Connected && !state.ConnectedAt.IsZero() {
+		args = append(args, "occupantConnectedForMs",
+			time.Since(state.ConnectedAt).Milliseconds())
+	}
+	slog.Warn("boxlite exec attach refused", args...)
 }
 
 // runAttachLoop owns the WebSocket lifecycle: spawns reader/writer/keepalive
@@ -213,7 +399,7 @@ func BoxliteExecAttach(ctx *gin.Context) {
 // unbounded allocation.
 const maxAttachFrameBytes = 1 * 1024 * 1024 // 1 MiB
 
-func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec) {
+func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec, boxId, execId string) {
 	conn.SetReadLimit(maxAttachFrameBytes)
 
 	// Detect a dead client via Pong liveness: a tiny Ping write fits in
@@ -241,6 +427,14 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		return conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
+	// Slot bookkeeping as of this session's claim: when the claim happened
+	// and how many sessions this exec has had so far.
+	slot := exec.AttachState()
+	started := time.Now()
+	if !slot.ConnectedAt.IsZero() {
+		started = slot.ConnectedAt
+	}
+
 	var (
 		writeMu   sync.Mutex     // serializes ALL writes to the WebSocket
 		pumpWg    sync.WaitGroup // stdout/stderr pump goroutines only
@@ -256,20 +450,36 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 			_ = writeCloseFrame(conn, &writeMu, code, reason)
 		})
 	}
+
+	// end keeps the first failure any goroutine reported; endReason is how
+	// the session ended and is written only by this goroutine.
+	var (
+		end       attachEndRecord
+		endReason attachEndReason
+	)
 	// fail cancels the loop on the first non-recoverable error from any
 	// goroutine. Subsequent errors are swallowed by the cancelled ctx.
-	fail := func(_ error) { cancel() }
+	fail := func(err error) {
+		end.fail(err)
+		cancel()
+	}
 
 	// Subscribe to the exec's per-stream broadcaster. The broadcaster owns
 	// the io.PipeReader for the exec's lifetime; this attach session reads
 	// from bounded channels that respond to ctx cancellation cleanly.
 	// Unsubscribe is deferred so the subscriber slice cannot grow unbounded
 	// across reattach cycles.
-	stdoutCh, stderrCh, unsubscribe := exec.Subscribe(attachSubscriberBuffer)
+	stdout, stderr, unsubscribe := exec.Subscribe(attachSubscriberBuffer)
+	out := [2]*attachOutput{
+		{stream: stdout, channel: chanStdout},
+		{stream: stderr, channel: chanStderr},
+	}
+	exitFrameSent := false
 
 	defer func() {
 		// Recover from any panic so we don't leak the connection.
 		if r := recover(); r != nil {
+			endReason = attachEndPanic
 			fail(fmt.Errorf("attach loop panic: %v", r))
 			closeWS(websocket.CloseInternalServerErr, "")
 			// A panic unwinds past the wait in the normal flow, and this Close
@@ -287,6 +497,17 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		// slot for the next client (or the Phase 4 reaper).
 		unsubscribe()
 		exec.MarkDisconnected()
+		logAttachSessionEnd(attachSessionReport{
+			boxId:         boxId,
+			execId:        execId,
+			reason:        endReason,
+			firstErr:      end.get(),
+			connectedFor:  time.Since(started),
+			outputs:       out,
+			exitFrameSent: exitFrameSent,
+			execDone:      execFinished(exec),
+			sessionCount:  slot.Sessions,
+		})
 	}()
 
 	// stdout pump (channel-backed; no race with prior attaches because the
@@ -294,7 +515,7 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	pumpWg.Add(1)
 	go func() {
 		defer pumpWg.Done()
-		pumpSubscriberChannel(loopCtx, conn, &writeMu, stdoutCh, chanStdout, fail)
+		out[0].pump(loopCtx, conn, &writeMu, fail)
 	}()
 
 	// stderr pump (for non-TTY only — TTY merges at the kernel, so stderr
@@ -303,7 +524,7 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		pumpWg.Add(1)
 		go func() {
 			defer pumpWg.Done()
-			pumpSubscriberChannel(loopCtx, conn, &writeMu, stderrCh, chanStderr, fail)
+			out[1].pump(loopCtx, conn, &writeMu, fail)
 		}()
 	}
 
@@ -333,6 +554,7 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	}
 
 	if cleanExit {
+		endReason = attachEndExecDone
 		// Unsubscribe closes the subscriber channels, which makes the
 		// pump goroutines drain their remaining buffered data and exit
 		// naturally — no ctx cancellation needed for pumps. This
@@ -352,15 +574,18 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		}
 
 		if drained {
-			_ = writeJSONFrame(conn, &writeMu, map[string]any{
+			if err := writeJSONFrame(conn, &writeMu, map[string]any{
 				"type":      "exit",
 				"exit_code": exec.ExitCodeValue(),
-			})
+			}); err == nil {
+				exitFrameSent = true
+			}
 			closeWS(websocket.CloseNormalClosure, "")
 		} else {
 			closeWS(websocket.CloseInternalServerErr, "pump drain timed out")
 		}
 	} else {
+		endReason = classifyAttachEnd(end.get())
 		// The failure exits send their Close here rather than leaving it to the
 		// deferred cleanup, so that every path that sends one goes on to
 		// complete the handshake below. A cancelled loop is not always a dead
@@ -382,16 +607,74 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	sideWg.Wait()
 }
 
+// attachSessionReport is what the one line every attach session leaves
+// behind says. Only byte counts are reported — never stdin or output
+// content, headers or the request URL.
+type attachSessionReport struct {
+	boxId, execId string
+	reason        attachEndReason
+	// firstErr is the first failure any goroutine reported, nil when the
+	// exec finished normally.
+	firstErr      error
+	connectedFor  time.Duration
+	outputs       [2]*attachOutput
+	exitFrameSent bool
+	// execDone is whether the exec had finished when the session ended.
+	execDone bool
+	// sessionCount is how many sessions (connects and reconnects) this exec
+	// had including this one.
+	sessionCount int
+}
+
+// logAttachSessionEnd writes the session-end line and bumps the counter.
+// The reason decides the level: a normal end and a client Close are DEBUG,
+// everything a healthy fleet should not produce is WARN, a panic is ERROR.
+func logAttachSessionEnd(r attachSessionReport) {
+	common.ExecAttachSessions.WithLabelValues(string(r.reason)).Inc()
+
+	level := slog.LevelWarn
+	switch r.reason {
+	case attachEndExecDone, attachEndClientClose:
+		level = slog.LevelDebug
+	case attachEndPanic:
+		level = slog.LevelError
+	}
+
+	args := []any{
+		"boxId", r.boxId, "execId", r.execId,
+		"reason", r.reason,
+		"connectedForMs", r.connectedFor.Milliseconds(),
+		"execAttachSessions", r.sessionCount,
+		"execDone", r.execDone,
+		"exitFrameSent", r.exitFrameSent,
+	}
+	if r.firstErr != nil {
+		args = append(args, "firstError", r.firstErr.Error())
+		if code := clientCloseCode(r.firstErr); code != 0 {
+			args = append(args, "clientCloseCode", code)
+		}
+	}
+	for _, o := range r.outputs {
+		args = append(args,
+			channelName(o.channel)+"ReplayedBytes", o.stream.Replayed(),
+			channelName(o.channel)+"SentBytes", o.sent.Load(),
+			channelName(o.channel)+"DroppedBytes", o.stream.Dropped(),
+		)
+	}
+	slog.Default().Log(context.Background(), level, "boxlite exec attach session ended", args...)
+}
+
 // attachSubscriberBuffer is the per-stream chunk buffer size for an attach
 // session. With ~4 KB chunks this gives ~1 MB of slack before the broadcaster
 // starts dropping chunks for a slow consumer.
 const attachSubscriberBuffer = 256
 
-// pumpSubscriberChannel forwards chunks from a broadcaster subscriber channel
-// to the WebSocket, prefixing each with the channel byte. Exits cleanly on
-// ctx cancellation, channel close (broadcaster ended / unsubscribed), or write
-// error.
-func pumpSubscriberChannel(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, ch <-chan []byte, channel byte, fail func(error)) {
+// pump forwards chunks from the stream's broadcaster channel to the
+// WebSocket, prefixing each with the channel byte and counting what it
+// managed to send. Exits cleanly on ctx cancellation, channel close
+// (broadcaster ended / unsubscribed), or write error.
+func (o *attachOutput) pump(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, fail func(error)) {
+	ch := o.stream.Chan()
 	for {
 		select {
 		case <-ctx.Done():
@@ -401,12 +684,13 @@ func pumpSubscriberChannel(ctx context.Context, conn *websocket.Conn, writeMu *s
 				return
 			}
 			frame := make([]byte, len(chunk)+1)
-			frame[0] = channel
+			frame[0] = o.channel
 			copy(frame[1:], chunk)
 			if werr := writeBinaryFrame(conn, writeMu, frame); werr != nil {
-				fail(fmt.Errorf("write %s frame: %w", channelName(channel), werr))
+				fail(attachWriteError{fmt.Errorf("write %s frame: %w", channelName(o.channel), werr)})
 				return
 			}
+			o.sent.Add(uint64(len(frame)))
 		}
 	}
 }
@@ -520,7 +804,7 @@ func runKeepalive(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex
 				if ctx.Err() != nil {
 					return
 				}
-				fail(fmt.Errorf("ping write: %w", err))
+				fail(attachWriteError{fmt.Errorf("ping write: %w", err)})
 				return
 			}
 		}
@@ -596,9 +880,8 @@ type managedExecAttach struct {
 	me *boxlite.ManagedExec
 }
 
-func (m managedExecAttach) Subscribe(bufSize int) (stdout, stderr <-chan []byte, cancel func()) {
-	outSub, errSub, cancel := m.me.Subscribe(bufSize)
-	return outSub.Chan(), errSub.Chan(), cancel
+func (m managedExecAttach) Subscribe(bufSize int) (stdout, stderr attachStream, cancel func()) {
+	return m.me.Subscribe(bufSize)
 }
 
 func (m managedExecAttach) WriteStdin(data []byte) (int, error) { return m.me.AttachWriteStdin(data) }
@@ -610,3 +893,4 @@ func (m managedExecAttach) Signal(sig int) error                { return m.me.At
 func (m managedExecAttach) CloseStdin() error                   { return m.me.AttachCloseStdin() }
 func (m managedExecAttach) MarkConnected() bool                 { return m.me.MarkConnected() }
 func (m managedExecAttach) MarkDisconnected()                   { m.me.MarkDisconnected() }
+func (m managedExecAttach) AttachState() boxlite.AttachState    { return m.me.AttachState() }
