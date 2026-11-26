@@ -2559,6 +2559,38 @@ mod tests {
     }
 
     #[test]
+    fn local_volume_response_satisfies_openapi_contract() {
+        let info = boxlite::runtime::types::VolumeInfo {
+            id: "018f6f36-7d28-7b28-a2fa-4b5c6d7e8f90".into(),
+            name: "workspace".into(),
+            created_at: chrono::Utc::now(),
+            size_bytes: None,
+        };
+        let response = serde_json::to_value(volume_info_to_response(&info)).unwrap();
+        let spec: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../openapi/box.openapi.yaml"
+            ))
+            .expect("read openapi spec"),
+        )
+        .expect("parse openapi spec");
+
+        for schema_name in ["Volume", "VolumeSummary"] {
+            let required = spec["components"]["schemas"][schema_name]["required"]
+                .as_sequence()
+                .unwrap();
+            for field in required {
+                let field = field.as_str().unwrap();
+                assert!(
+                    response.get(field).is_some(),
+                    "{schema_name} requires `{field}`, but the local response is {response}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mount_requests_accept_empty_and_reject_invalid_wire_fields() {
         for volumes in [None, Some(serde_json::json!([]))] {
             let body = serde_json::json!({"volumes": volumes});

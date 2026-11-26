@@ -2882,6 +2882,13 @@ components:
             typed_mounts_enabled:
               type: boolean
               description: Whether create-box accepts the typed `mounts` field.
+            object_storage_enabled:
+              type: boolean
+              description: Whether object-storage volume creation is configured
+              example: true
+            filestore_enabled:
+              type: boolean
+              description: Whether at least one Filestore instance is configured
               example: true
             idempotency_key_lifetime:
               type: string
@@ -3524,7 +3531,10 @@ components:
         Legacy managed-volume mount. New requests should use `mounts` with
         `type=volume`; do not send non-empty `volumes` and `mounts` together.
         Host bind mounts have no representation here because a REST path would
-        name the server's filesystem.
+        name the server's filesystem. This includes Filestore volumes — a volume
+        whose data directory lives on a Filestore NFS instance — which are
+        created through the volume endpoints and referenced identically by id
+        or name.
       additionalProperties: false
       required: [managed_volume, guest_path]
       properties:
@@ -3564,6 +3574,13 @@ components:
           description: User-assigned volume name
         state:
           $ref: "#/components/schemas/VolumeState"
+        storage_backend:
+          type: string
+          enum: [standard, performance]
+          description: |
+            The cloud storage class of the volume, derived from whether
+            `instance` is present. Absent for local directory volumes.
+          example: performance
         created_at:
           type: string
           format: date-time
@@ -3580,6 +3597,12 @@ components:
           description: >
             Best-effort size. Local directory volumes report null rather than scan
             the payload synchronously.
+        instance:
+          type: string
+          description: |
+            Filestore-only: the NFS instance holding the volume's data
+            directory. Absent for object-storage volumes, whose data lives in
+            boxlite-volume-<id>.
 
     CreateVolumeRequest:
       type: object
@@ -3594,6 +3617,26 @@ components:
           pattern: "^[a-zA-Z0-9][a-zA-Z0-9_.-]+$"
           minLength: 2
           example: my-data
+        storageBackend:
+          type: string
+          enum: [standard, performance]
+          default: standard
+          description: |
+            The storage class of the volume. `standard` stores data in
+            `boxlite-volume-<id>`; `performance` stores it in an NFS data
+            directory on the selected or automatically assigned Filestore
+            instance. This field, not the presence of `instance`, selects the
+            storage class.
+        instance:
+          type: string
+          pattern: "^[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+          description: |
+            The Filestore instance the volume's data directory lives on.
+            Valid only when storageBackend is performance. When omitted, the
+            API assigns an instance by hashing its configured names. The
+            instance must exist in GCP and in the API's FILESTORE_INSTANCES
+            configuration, checked at create and dispatch time.
+          example: boxlite-dev-shared
 
     Volume:
       type: object
@@ -3609,6 +3652,13 @@ components:
           description: User-assigned volume name
         state:
           $ref: "#/components/schemas/VolumeState"
+        storage_backend:
+          type: string
+          enum: [standard, performance]
+          description: |
+            The cloud storage class of the volume, derived from whether
+            `instance` is present. Absent for local directory volumes.
+          example: performance
         created_at:
           type: string
           format: date-time
@@ -3631,6 +3681,12 @@ components:
           description: >
             Best-effort size. Local directory volumes report null rather than scan
             the payload synchronously.
+        instance:
+          type: string
+          description: |
+            Filestore-only: the NFS instance holding the volume's data
+            directory. Absent for object-storage volumes, whose data lives in
+            boxlite-volume-<id>.
 
     ListVolumesResponse:
       type: object

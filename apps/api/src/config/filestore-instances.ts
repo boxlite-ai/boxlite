@@ -6,6 +6,7 @@ import {
   type FilestoreInstanceConfig,
 } from '../../../shared/filestore-instances'
 
+export { FILESTORE_INSTANCE_NAME_PATTERN } from '../../../shared/filestore-instances'
 export type { FilestoreInstanceConfig }
 
 export interface FilestoreInstancesConfig {
