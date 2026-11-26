@@ -948,10 +948,9 @@ Source evidence does not identify customer versus internal/probe traffic; use an
 Customer credentials are refused. The API resolves organization from the stored Box and checks Runner ownership;
 producers cannot choose a tenant. Only SSH evidence is accepted from Runners, and only tunnel evidence from Proxies.
 Unknown/deleted Boxes, warm stock, incompatible producers and timestamps outside seven days old/five minutes future are excluded.
-The response's `accepted` count measures local capture calls. The shared PostHog sender holds up to 100 events per API process,
-including at most two active deliveries. An idle sender can admit one full feature-usage batch.
-When all slots are occupied, each dropped event increments the OpenTelemetry counter `posthog_queue_overflow_total`.
-The API returns without waiting for delivery, and the sender checks consent before each transfer.
+The response's `accepted` count measures local capture calls. Each observation starts its consent check independently.
+Eligible cache hits can be delivered while unrelated observations in the same batch are still waiting for PostgreSQL.
+The API returns without waiting for consent checks or HTTP delivery.
 
 ```mermaid
 flowchart LR
@@ -1048,10 +1047,13 @@ Cloud deployments set `POSTHOG_ENVIRONMENT` to the deployed stage name on both A
 Without the key or host, analytics is disabled while business operations and operational logs continue.
 Product analytics requires a current, explicit personal grant. An organization inherits its recorded creator’s choice. An event that identifies both a person and an organization needs both grants. An unknown subject, an unavailable decision, or an event predating the most recent grant produces no PostHog event. Dashboard activity and Cloud metrics therefore describe the consenting population. Operational logging, metering and functional flag evaluation run independently.
 
-Delivery uses a bounded background queue and one HTTP attempt. An API instance shares concurrent reads for the same subject.
+Each event gets an asynchronous consent check and, if eligible, one HTTP attempt. An API instance shares concurrent reads for the same subject.
+Only messages needing a SQL lookup count towards the per-process backlog of 1,000. Each excess message increments `posthog_consent_backlog_dropped_total`.
+Up to two SQL consent reads run concurrently on a pool of at least three connections, one on a pool of two, and none on a pool of one.
+The SQL slot is released after the query. HTTP deliveries have no application-level concurrency limit.
 Redis caches each organization creator and each user's grant time or denial for 30 seconds. A cache miss reads PostgreSQL without an explicit lock; the read finishes before the PostHog transfer.
 Saving a choice invalidates that user's cache entry, and linking accounts invalidates the moved organizations' cached creators. An in-flight transfer may finish after withdrawal. A stale cache entry expires within 30 seconds.
-The Console reads membership and effective consent together when loading organization preferences. A full queue or unavailable Redis, database or transport drops optional analytics. Retention follows the PostHog project.
+The Console reads membership and effective consent together when loading organization preferences. A saturated consent backlog or unavailable Redis, database or transport can lose optional analytics. Retention follows the PostHog project.
 
 An Activity consumer needs the PostHog **API origin** (for example `https://us.posthog.com`, distinct
 from an ingestion origin such as `https://us.i.posthog.com`), project ID and a backend-only personal

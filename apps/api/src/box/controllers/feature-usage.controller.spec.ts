@@ -9,7 +9,6 @@ import { getRepositoryToken } from '@nestjs/typeorm'
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { AddressInfo } from 'node:net'
-import { metrics } from '@opentelemetry/api'
 import { AnalyticsService } from '../../analytics/services/analytics.service'
 import { AnalyticsConsentService } from '../../analytics/services/analytics-consent.service'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -86,25 +85,27 @@ describe('authenticated Cloud feature usage ingestion', () => {
     ])
   })
 
-  it('delivers one full SSH batch and counts only overflow while delivery is busy', async () => {
+  it('admits overlapping SSH batches without waiting for consent or limiting HTTP sends', async () => {
     const received: string[] = []
+    let firstBatchDelivered!: () => void
+    const warmFirstBatch = new Promise<void>((resolve) => {
+      firstBatchDelivered = resolve
+    })
     const sink = createServer(async (request, response) => {
       const chunks: Buffer[] = []
       for await (const chunk of request) chunks.push(chunk)
       const { batch } = JSON.parse(Buffer.concat(chunks).toString())
       received.push(...batch.map((entry: { uuid: string }) => entry.uuid))
+      if (received.length === 98) firstBatchDelivered()
       response.writeHead(200).end('{"status":1}')
     })
-    const counter = { add: jest.fn() }
-    const meter = metrics.getMeter('')
-    const createCounter = jest.spyOn(meter, 'createCounter').mockReturnValue(counter)
-    jest.spyOn(metrics, 'getMeter').mockReturnValue(meter)
+    let consentChecks = 0
     let release!: () => void
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
     let analytics: AnalyticsService | undefined
-    const observations = Array.from({ length: 100 }, () => event(occurredAt, { id: randomUUID() }))
+    const observations = Array.from({ length: 200 }, () => event(occurredAt, { id: randomUUID() }))
     try {
       await new Promise<void>((resolve) => sink.listen(0, '127.0.0.1', resolve))
       const config = {
@@ -115,25 +116,27 @@ describe('authenticated Cloud feature usage ingestion', () => {
         { get: (key: string) => config[key] } as TypedConfigService,
         {
           dispatch: async (_subjects, _at, deliver) => {
-            await gate
+            consentChecks++
+            if (consentChecks <= 2) await gate
             await deliver()
             return true
           },
         } as AnalyticsConsentService,
       )
-      expect(await (await send(observations)).json()).toEqual({ accepted: 100 })
-      expect(
-        await (await send([event(occurredAt, { id: randomUUID() }), event(occurredAt, { id: randomUUID() })])).json(),
-      ).toEqual({ accepted: 2 })
+      expect(await (await send(observations.slice(0, 100))).json()).toEqual({ accepted: 100 })
+      expect(consentChecks).toBe(100)
+      await warmFirstBatch
+      expect(received).not.toContain(observations[0].id)
+      expect(received).not.toContain(observations[1].id)
+      expect(await (await send(observations.slice(100))).json()).toEqual({ accepted: 100 })
+      expect(consentChecks).toBe(200)
     } finally {
       release()
       await analytics?.onApplicationShutdown()
       await new Promise<void>((resolve) => sink.close(() => resolve()))
     }
-    expect(received).toHaveLength(100)
+    expect(received).toHaveLength(200)
     expect(new Set(received)).toEqual(new Set(observations.map((entry) => entry.id)))
-    expect(createCounter).toHaveBeenCalledWith('posthog_queue_overflow_total', expect.anything())
-    expect(counter.add.mock.calls).toEqual([[1], [1]])
   })
 
   it.each(['tunnel_connection', 'tunnel_request'])('accepts Proxy evidence for %s', async (kind) => {

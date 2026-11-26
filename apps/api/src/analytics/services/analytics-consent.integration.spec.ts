@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import Redis from 'ioredis'
 import { DataSource } from 'typeorm'
+import { metrics } from '@opentelemetry/api'
 import { ProductAnalyticsConsent1795420800000 } from '../../migrations/pre-deploy/1795420800000-product-analytics-consent-migration'
 import { analyticsConsentCacheKey, AnalyticsConsentService } from './analytics-consent.service'
 
@@ -207,7 +208,92 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
-  it('reserves a database connection during saturation and cancels stalled transfers before later events can send', async () => {
+  it.each([
+    [3, 2],
+    [2, 1],
+    [1, 0],
+  ])('limits cold analytics SQL reads for a pool of %i to %i', async (poolSize, limit) => {
+    const pool = new DataSource({ ...options, extra: { max: poolSize } })
+    const limited = new AnalyticsConsentService(pool, redis)
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let inUse = 0,
+      peak = 0
+    const read = jest.spyOn(pool, 'query').mockImplementation(async () => {
+      inUse++
+      peak = Math.max(peak, inUse)
+      try {
+        await blocked
+        return [{ value: '1' }]
+      } finally {
+        inUse--
+      }
+    })
+    const cache = jest.spyOn(redis, 'get').mockResolvedValue(null)
+    const send = jest.fn(async () => {})
+    const deliveries = Promise.all(
+      Array.from({ length: 6 }, () => limited.dispatch({ users: [randomUUID()], organizations: [] }, new Date(), send)),
+    )
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(inUse).toBe(limit)
+    } finally {
+      release()
+      await deliveries
+      read.mockRestore()
+      cache.mockRestore()
+    }
+    expect(peak).toBe(limit)
+    expect(send).toHaveBeenCalledTimes(limit ? 6 : 0)
+  })
+
+  it('admits a warm event while 1000 cold messages share one blocked SQL lookup and counts the excess', async () => {
+    const meter = metrics.getMeter('')
+    const add = jest.fn()
+    jest.spyOn(meter, 'createCounter').mockReturnValue({ add })
+    jest.spyOn(metrics, 'getMeter').mockReturnValue(meter)
+    const limited = new AnalyticsConsentService(db, redis)
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const read = jest.spyOn(db, 'query').mockImplementation(async () => {
+      await blocked
+      return [{ value: '1' }]
+    })
+    const cache = jest
+      .spyOn(redis, 'get')
+      .mockImplementation(async (key) => (key === analyticsConsentCacheKey('grant', 'warm') ? '1' : null))
+    const cold = jest.fn(async () => {})
+    const warm = jest.fn(async () => {})
+    const at = new Date()
+    const dispatch = (id: string, send: () => Promise<void>) =>
+      limited.dispatch({ users: [id], organizations: [] }, at, send)
+    try {
+      const deliveries = Array.from({ length: 1001 }, () => dispatch('cold', cold))
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        expect(await dispatch('warm', warm)).toBe(true)
+        expect(warm).toHaveBeenCalledTimes(1)
+        expect(cold).not.toHaveBeenCalled()
+        expect(read).toHaveBeenCalledTimes(1)
+      } finally {
+        release()
+        await Promise.all(deliveries)
+      }
+      expect(cold).toHaveBeenCalledTimes(1000)
+      expect(add.mock.calls).toEqual([[1]])
+      expect(await dispatch('cold', cold)).toBe(true)
+    } finally {
+      read.mockRestore()
+      cache.mockRestore()
+      jest.restoreAllMocks()
+    }
+  })
+
+  it('allows business queries and checks new consent while an HTTP transfer is stalled', async () => {
     await consent.decide('member', true)
     await delay(3)
     let count = 0
@@ -217,25 +303,25 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     })
     const receiver = createServer((req) => {
       req.resume()
-      if (++count === 2) full()
+      count++
+      full()
     })
     await new Promise<void>((resolve) => receiver.listen(0, '127.0.0.1', resolve))
     const config: Record<string, unknown> = {
       'posthog.apiKey': 'phc_test',
       'posthog.host': 'http://127.0.0.1:' + (receiver.address() as AddressInfo).port,
-      'database.pool.max': 3,
     }
     const analytics = new AnalyticsService({ get: (key: string) => config[key] } as TypedConfigService, consent)
     try {
       const record = () =>
         analytics.capture({ event: 'test', distinctId: 'member' }, { users: ['member'], organizations: [] })
-      for (let i = 0; i < 64; i++) record()
+      record()
       await saturated
       expect(await db.query('SELECT 1 AS available')).toEqual([{ available: 1 }])
       await consent.decide('member', false)
       record()
       await analytics.onApplicationShutdown()
-      expect(count).toBe(2)
+      expect(count).toBe(1)
     } finally {
       receiver.closeAllConnections()
       await new Promise<void>((r) => receiver.close(() => r()))
