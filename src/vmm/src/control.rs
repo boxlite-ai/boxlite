@@ -32,12 +32,11 @@ impl VmControl {
 
     /// Requests a stop, including before execution starts, without waiting for exit.
     ///
-    /// During [`Self::export`], stop requests take effect at export checkpoints.
-    /// An in-flight platform `save_state` ioctl or file I/O call on the driver
-    /// delays both `export()` and `Vm::run()` until it returns. If stop is
-    /// requested during a vCPU's `save_state`, the driver abandons the capture
-    /// request so `export()` returns `TerminalOutcome` without waiting, but
-    /// `Vm::run()` still waits for the vCPU thread to exit.
+    /// A stop request does not interrupt an in-flight platform `save_state` or
+    /// snapshot file writeout. The driver handles the stop after that work
+    /// finishes. If stop is requested during a vCPU's `save_state`, the driver
+    /// abandons the capture request so [`Self::export`] returns `TerminalOutcome`
+    /// without waiting, but `Vm::run()` still waits for the vCPU thread to exit.
     pub fn stop(&self) {
         self.lifecycle.stop();
     }
@@ -58,6 +57,11 @@ impl VmControl {
     /// Pausing stops vCPUs but not KVM's in-kernel timers, so platform capture is
     /// non-atomic; PIT restore loses sub-tick phase and can re-arm one-shot modes
     /// (0, 1, and 4).
+    ///
+    /// While export is pending or active, `request_pause`, `resume`, and another
+    /// `export` are rejected. File writeout is synchronous and is not interrupted
+    /// by a stop request. If the VM is terminal at the final lifecycle check,
+    /// export returns `TerminalOutcome`.
     ///
     /// Both files are created exclusively with `create_new` and mode `0600`
     /// (subject to the process `umask`). An existing target returns `AlreadyExists`

@@ -746,9 +746,9 @@ On Linux x86_64, call `control.export(state_path, memory_path)` from a
 control thread while a device-less VM is paused. `Vm` currently has no public
 device-less constructor (`Vm::new_device_less` is crate-internal for tests).
 Other hosts return `ControlReason::Unsupported`. Other handles can observe the
-pause during capture and I/O. A competing resume or export returns
-`InvalidState`. Relative paths are resolved against the current working
-directory when the export is admitted.
+pause during capture and I/O. A competing `request_pause`, `resume`, or
+`export` returns `InvalidState`. Relative paths are resolved against the current
+working directory when the export is admitted.
 
 The driver saves platform state first. If it succeeds, each parked vCPU
 saves its state on its owning thread. The driver collects all replies
@@ -769,13 +769,13 @@ fails after creating a file, `boxlite-vmm` leaves it in place, even if partially
 written. The caller (runtime or runner) is responsible for cleanup, for example
 by exporting into a temporary directory and atomically renaming it on success.
 
-Capture and I/O failures leave a live VM paused. `stop()` takes effect at
-export checkpoints. An in-flight platform `save_state` ioctl or file I/O call
-on the driver delays both `export()` and `run()` until it returns. If stop is
+Capture and I/O failures leave a live VM paused. File writeout is synchronous
+and is not interrupted by a stop request. The driver handles the stop after
+an in-flight platform `save_state` or file writeout finishes. If stop is
 requested during a vCPU's `save_state`, the driver abandons the capture request
 so `export()` returns `TerminalOutcome` without waiting, but `run()` still waits
-for the vCPU thread to exit. A terminal state at the final lifecycle check yields
-`TerminalOutcome`.
+for the vCPU thread to exit. If the VM is terminal at the final lifecycle check,
+`finish_export` returns `TerminalOutcome`.
 
 The state file starts with a 32-byte little-endian header with the magic
 `BXLVMST1`, followed by Postcard machine state with vCPU records in ID order.

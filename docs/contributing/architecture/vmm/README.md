@@ -588,9 +588,11 @@ setup. Its empty disk registry makes `resize_disk()` return `InvalidInput`.
 ### Snapshot export
 
 `VmControl::export(state_path, memory_path)` reserves the control slot for a
-paused device-less VM on Linux x86_64. `Vm` currently has no public device-less
-constructor (`Vm::new_device_less` is crate-internal for tests). Once all vCPUs
-have completed pending I/O and parked, the driver saves the VM platform state.
+paused device-less VM on Linux x86_64. While export is pending or active,
+`request_pause`, `resume`, and another `export` are rejected. `Vm` currently has
+no public device-less constructor (`Vm::new_device_less` is crate-internal for
+tests). Once all vCPUs have completed pending I/O and parked, the driver saves
+the VM platform state.
 If this fails, the driver releases the slot and returns the error without
 dispatching vCPU capture. On success, each vCPU saves its state on its owning
 thread. The driver collects all replies, including failures, and writes the
@@ -607,15 +609,14 @@ state. The memory file contains raw RAM from offset zero in `ram.ranges()`
 order, skipping `[3 GiB, 4 GiB)`. Its length equals the header's RAM length.
 
 The driver creates both files exclusively with `create_new` and mode `0600`
-(subject to the process `umask`), checks for stop between chunks of up to 1 MiB,
-and releases the control slot at the final lifecycle check. Relative paths
-are resolved against the current working directory when the export is admitted.
-`stop()` takes effect at export checkpoints. An in-flight platform `save_state`
-ioctl or file I/O call on the driver delays both `export()` and `run()` until
-it returns. If stop is requested during a vCPU's `save_state`, the driver abandons
-the capture request so `export()` returns `TerminalOutcome` without waiting, but
-`run()` still waits for the vCPU thread to exit. A terminal state at the final
-lifecycle check yields `TerminalOutcome`. The driver skips `fsync`, and
+(subject to the process `umask`) and writes them synchronously without
+interruption by stop requests. Relative paths are resolved against the current
+working directory when the export is admitted. The driver handles a stop after
+an in-flight platform `save_state` or file writeout finishes. If stop is requested
+during a vCPU's `save_state`, the driver abandons the capture request so
+`export()` returns `TerminalOutcome` without waiting, but `run()` still waits
+for the vCPU thread to exit. `finish_export` releases the control slot and
+returns `TerminalOutcome` if the VM is terminal. The driver skips `fsync`, and
 dropping the files ignores delayed `close(2)` errors. `Ok(())` provides no
 guarantee of power-loss durability.
 

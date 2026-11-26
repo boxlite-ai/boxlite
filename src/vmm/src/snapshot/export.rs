@@ -21,16 +21,14 @@ pub(crate) fn drive(lifecycle: &Lifecycle, host: &impl X86Vm, ram: &GuestRam, co
     };
     let result = machine.and_then(|mut state| {
         state.vcpus.sort_unstable_by_key(|record| record.id);
-        lifecycle.check_export()?;
         let mut state_file = image::create_new_file(&request.state_path)?;
         let mut memory_file = image::create_new_file(&request.memory_path)?;
-        image::write_to_checked(
+        image::write_to(
             &mut state_file,
             &mut memory_file,
             state.vcpus.len() as u32,
             &state.encode()?,
             ram,
-            || lifecycle.check_export(),
         )
     });
     let _ = request.reply.send(lifecycle.finish_export(result));

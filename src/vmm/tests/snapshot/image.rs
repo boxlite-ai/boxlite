@@ -15,9 +15,7 @@ mod linux {
         events::EventLoop,
         lifecycle::Lifecycle,
         memory::{GuestRam, MMIO_HOLE_START, X86_LAYOUT},
-        snapshot::image::{
-            CHUNK, HEADER_LEN, Header, MAGIC, VERSION, create_new_file, write_to_checked,
-        },
+        snapshot::image::{HEADER_LEN, Header, MAGIC, VERSION, create_new_file, write_to},
     };
 
     const MIB: usize = 1 << 20;
@@ -100,15 +98,7 @@ mod linux {
         let mut state_writer = RecordingWriter::default();
         let mut memory_writer = RecordingWriter::default();
 
-        write_to_checked(
-            &mut state_writer,
-            &mut memory_writer,
-            2,
-            machine,
-            &ram,
-            || Ok(()),
-        )
-        .unwrap();
+        write_to(&mut state_writer, &mut memory_writer, 2, machine, &ram).unwrap();
 
         assert!(state_writer.flushed && memory_writer.flushed);
         assert_eq!(state_writer.writes, [32, machine.len()]);
@@ -131,7 +121,7 @@ mod linux {
         let ram = GuestRam::new(&[(GuestAddress(0), PAGE)]).unwrap();
         let mut state = Vec::new();
         let mut memory = Vec::new();
-        write_to_checked(&mut state, &mut memory, 2, b"state", &ram, || Ok(())).unwrap();
+        write_to(&mut state, &mut memory, 2, b"state", &ram).unwrap();
         let state_len = state.len() as u64;
         let memory_len = memory.len() as u64;
         let header = Header::read_from(&mut state.as_slice(), state_len, memory_len).unwrap();
@@ -191,7 +181,7 @@ mod linux {
                 fail_flush,
             };
             assert!(matches!(
-                write_to_checked(&mut state, &mut memory, 1, b"state", &ram, || Ok(())),
+                write_to(&mut state, &mut memory, 1, b"state", &ram),
                 Err(Error::Snapshot(error)) if error.to_string() == message
             ));
             drop((state, memory));
@@ -205,7 +195,25 @@ mod linux {
     }
 
     #[test]
-    fn stop_between_ram_chunks_or_after_flush_leaves_both_files_in_place() {
+    fn stop_during_or_after_writeout_leaves_both_complete_files_in_place() {
+        struct StopOnWrite<'a> {
+            writer: File,
+            stop: Option<&'a Lifecycle>,
+        }
+
+        impl Write for StopOnWrite<'_> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if let Some(lifecycle) = self.stop.take() {
+                    lifecycle.stop();
+                }
+                self.writer.write(buf)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.writer.flush()
+            }
+        }
+
         let ram = GuestRam::new(&[(GuestAddress(0), MIB + PAGE)]).unwrap();
         for stop_during_write in [true, false] {
             let dir = tempfile::tempdir().unwrap();
@@ -214,83 +222,29 @@ mod linux {
             let events = EventLoop::new().unwrap();
             let lifecycle = Lifecycle::new(events.sender(), true);
             let mut state = create_new_file(&state_path).unwrap();
-            let mut memory = create_new_file(&memory_path).unwrap();
-            let result = write_to_checked(&mut state, &mut memory, 1, b"state", &ram, || {
-                if stop_during_write && fs::metadata(&memory_path).unwrap().len() == MIB as u64 {
-                    lifecycle.stop();
-                }
-                lifecycle.check_export()
-            });
-            if stop_during_write {
-                assert!(result.is_err());
-            } else {
-                assert!(result.is_ok());
+            let mut memory = StopOnWrite {
+                writer: create_new_file(&memory_path).unwrap(),
+                stop: stop_during_write.then_some(&lifecycle),
+            };
+            let result = write_to(&mut state, &mut memory, 1, b"state", &ram);
+            assert!(result.is_ok());
+            drop((state, memory));
+            if !stop_during_write {
                 lifecycle.stop();
             }
-            drop((state, memory));
             assert!(matches!(
                 lifecycle.finish_export(result),
                 Err(Error::Control {
+                    operation: "export",
                     reason: ControlReason::TerminalOutcome,
-                    ..
                 })
             ));
             assert_eq!(fs::metadata(&state_path).unwrap().len(), 37);
-            let expected_memory_len = if stop_during_write { MIB } else { MIB + PAGE };
             assert_eq!(
                 fs::metadata(&memory_path).unwrap().len(),
-                expected_memory_len as u64
+                (MIB + PAGE) as u64
             );
         }
-    }
-
-    #[test]
-    fn multi_chunk_state_writes_stop_at_chunk_boundary_and_leave_files_in_place() {
-        let machine = vec![0x5a; CHUNK + PAGE];
-        let ram = GuestRam::new(&[(GuestAddress(0), PAGE)]).unwrap();
-        let mut state_writer = RecordingWriter::default();
-        let mut memory_writer = RecordingWriter::default();
-
-        write_to_checked(
-            &mut state_writer,
-            &mut memory_writer,
-            1,
-            &machine,
-            &ram,
-            || Ok(()),
-        )
-        .unwrap();
-
-        assert_eq!(state_writer.writes, [HEADER_LEN, CHUNK, PAGE]);
-        assert_eq!(&state_writer.output[HEADER_LEN..], machine.as_slice());
-
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state");
-        let memory_path = dir.path().join("memory");
-        let events = EventLoop::new().unwrap();
-        let lifecycle = Lifecycle::new(events.sender(), true);
-        let mut state = create_new_file(&state_path).unwrap();
-        let mut memory = create_new_file(&memory_path).unwrap();
-        let result = write_to_checked(&mut state, &mut memory, 1, &machine, &ram, || {
-            if fs::metadata(&state_path).unwrap().len() == (HEADER_LEN + CHUNK) as u64 {
-                lifecycle.stop();
-            }
-            lifecycle.check_export()
-        });
-        assert!(result.is_err());
-        drop((state, memory));
-        assert!(matches!(
-            lifecycle.finish_export(result),
-            Err(Error::Control {
-                reason: ControlReason::TerminalOutcome,
-                ..
-            })
-        ));
-        assert_eq!(
-            fs::metadata(&state_path).unwrap().len(),
-            (HEADER_LEN + CHUNK) as u64
-        );
-        assert_eq!(fs::metadata(&memory_path).unwrap().len(), 0);
     }
 }
 

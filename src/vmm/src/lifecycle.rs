@@ -271,12 +271,6 @@ impl Lifecycle {
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    pub(crate) fn check_export(&self) -> Result<()> {
-        let terminal = self.state().is_terminal();
-        terminal.then(export_terminated).map_or(Ok(()), Err)
-    }
-
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn finish_export(&self, result: Result<()>) -> Result<()> {
         let mut state = self.state();
         let terminal = state.is_terminal();

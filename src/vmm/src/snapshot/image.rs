@@ -25,13 +25,12 @@ pub(super) struct Header {
     machine_len: u64,
 }
 
-pub(crate) fn write_to_checked(
+pub(crate) fn write_to(
     state_writer: &mut dyn Write,
     memory_writer: &mut dyn Write,
     count: u32,
     machine: &[u8],
     ram: &GuestRam,
-    mut check: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     let header = Header {
         vcpus: count,
@@ -44,14 +43,11 @@ pub(crate) fn write_to_checked(
     bytes[12..16].copy_from_slice(&header.vcpus.to_le_bytes());
     bytes[16..24].copy_from_slice(&header.ram_len.to_le_bytes());
     bytes[24..32].copy_from_slice(&header.machine_len.to_le_bytes());
-    for chunk in std::iter::once(bytes.as_slice()).chain(machine.chunks(CHUNK)) {
-        check()?;
-        state_writer.write_all(chunk).map_err(Error::Snapshot)?;
-    }
+    state_writer.write_all(&bytes).map_err(Error::Snapshot)?;
+    state_writer.write_all(machine).map_err(Error::Snapshot)?;
     let mut buffer = vec![0; CHUNK];
     for (start, size) in ram.ranges() {
         for offset in (0..size).step_by(CHUNK) {
-            check()?;
             let chunk = &mut buffer[..CHUNK.min(size - offset)];
             ram.boot_memory()
                 .read_slice(chunk, GuestAddress(start.0 + offset as u64))
@@ -59,9 +55,7 @@ pub(crate) fn write_to_checked(
             memory_writer.write_all(chunk).map_err(Error::Snapshot)?;
         }
     }
-    check()?;
     state_writer.flush().map_err(Error::Snapshot)?;
-    check()?;
     memory_writer.flush().map_err(Error::Snapshot)
 }
 
