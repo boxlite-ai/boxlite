@@ -25,6 +25,9 @@ import (
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
 	"github.com/containerd/errdefs"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -461,6 +464,16 @@ func (c *Client) NestedVirtualizationEnabled() bool {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	ctx, prepareSpan := otel.Tracer("runner").Start(ctx, "box.create_prepare")
+	prepareSpan.SetAttributes(attribute.String("box_id", boxDto.Id))
+	prepareOpen := true
+	defer func() {
+		if prepareOpen {
+			prepareSpan.SetStatus(codes.Error, "box preparation failed")
+			prepareSpan.End()
+		}
+	}()
+
 	cpus, err := dto.CPUAllocation(boxDto.CpuQuota)
 	if err != nil {
 		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
@@ -633,6 +646,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// lease until it finishes; preparation above still obeys caller cancellation.
 	ctx = context.WithoutCancel(ctx)
 
+	prepareOpen = false
+	prepareSpan.End()
+
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if
 	// the box was already persisted by a prior CREATE_BOX for the SAME box (e.g.
@@ -663,7 +679,14 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 			}
 			return "", "", err
 		}
+		ctx, getOrCreateSpan := otel.Tracer("runner").Start(ctx, "box.get_or_create")
+		getOrCreateSpan.SetAttributes(attribute.String("box_id", boxDto.Id))
 		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
+		if err != nil {
+			getOrCreateSpan.RecordError(err)
+			getOrCreateSpan.SetStatus(codes.Error, "GetOrCreate failed")
+		}
+		getOrCreateSpan.End()
 	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
@@ -698,9 +721,15 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// TestCreateHasNoFallibleStepAfterStart enforces this.
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
 	if !skipStart {
+		ctx, startSpan := otel.Tracer("runner").Start(ctx, "box.start")
+		startSpan.SetAttributes(attribute.String("box_id", boxDto.Id))
 		if err := bx.Start(ctx); err != nil {
+			startSpan.RecordError(err)
+			startSpan.SetStatus(codes.Error, "box start failed")
+			startSpan.End()
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
 		}
+		startSpan.End()
 		c.recordPulledImage(ctx, boxDto.Id, bx)
 	}
 

@@ -14,6 +14,9 @@ import (
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // wsKeepaliveInterval is how often the server sends a WebSocket Ping on
@@ -202,7 +205,7 @@ func BoxliteExecAttach(ctx *gin.Context) {
 		return
 	}
 
-	runAttachLoop(ctx.Request.Context(), conn, target)
+	runAttachLoop(ctx.Request.Context(), conn, target, execId, boxId)
 }
 
 // runAttachLoop owns the WebSocket lifecycle: spawns reader/writer/keepalive
@@ -213,7 +216,7 @@ func BoxliteExecAttach(ctx *gin.Context) {
 // unbounded allocation.
 const maxAttachFrameBytes = 1 * 1024 * 1024 // 1 MiB
 
-func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec) {
+func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec, execID, boxID string) {
 	conn.SetReadLimit(maxAttachFrameBytes)
 
 	// Detect a dead client via Pong liveness: a tiny Ping write fits in
@@ -352,10 +355,24 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		}
 
 		if drained {
-			_ = writeJSONFrame(conn, &writeMu, map[string]any{
+			_, exitSpan := otel.Tracer("runner").Start(parentCtx, "box.exec.exit_frame")
+			exitCode := exec.ExitCodeValue()
+			exitSpan.SetAttributes(
+				attribute.Int("exit_code", exitCode),
+				attribute.String("execution_id", execID),
+				attribute.String("box_id", boxID),
+			)
+			err := writeJSONFrame(conn, &writeMu, map[string]any{
 				"type":      "exit",
-				"exit_code": exec.ExitCodeValue(),
+				"exit_code": exitCode,
 			})
+			if err != nil {
+				exitSpan.RecordError(err)
+				exitSpan.SetStatus(codes.Error, "failed to write exit frame")
+			} else {
+				exitSpan.SetStatus(codes.Ok, "")
+			}
+			exitSpan.End()
 			closeWS(websocket.CloseNormalClosure, "")
 		} else {
 			closeWS(websocket.CloseInternalServerErr, "pump drain timed out")

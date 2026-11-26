@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -108,6 +109,21 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 	}
 	// Extract trace context from job to continue distributed trace
 	ctx = e.extractTraceContext(ctx, job)
+	jobAttributes := []attribute.KeyValue{
+		attribute.String("job.id", job.GetId()),
+		attribute.String("job.type", string(job.GetType())),
+	}
+	if job.GetResourceType() == "BOX" {
+		jobAttributes = append(jobAttributes, attribute.String("box_id", job.GetResourceId()))
+	}
+	tracer := otel.Tracer("runner")
+	ctx, jobSpan := tracer.Start(ctx, "job", trace.WithAttributes(jobAttributes...))
+	defer jobSpan.End()
+	now := time.Now()
+	if startedAt, ok := jobWaitStartedAt(job.GetCreatedAt(), now); ok {
+		_, waitSpan := tracer.Start(ctx, "job.wait", trace.WithTimestamp(startedAt))
+		waitSpan.End(trace.WithTimestamp(now))
+	}
 
 	// Build log fields
 	jobLog := e.log.With(
@@ -143,6 +159,8 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 		status = apiclient.JOBSTATUS_FAILED
 		errMsg := err.Error()
 		errorMessage = &errMsg
+		jobSpan.RecordError(err)
+		jobSpan.SetStatus(codes.Error, "job execution failed")
 		jobLog.ErrorContext(ctx, "Job failed", "error", err)
 	} else {
 		jobLog.InfoContext(ctx, "Job completed successfully")
@@ -150,6 +168,8 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 
 	// Report status to API
 	if err := e.updateJobStatus(ctx, job.GetId(), status, resultMetadata, errorMessage); err != nil {
+		jobSpan.RecordError(err)
+		jobSpan.SetStatus(codes.Error, "update job status failed")
 		jobLog.ErrorContext(ctx, "Failed to update job status", "error", err)
 	} else {
 		e.acknowledgeCheckpointUpload(ctx, job)
@@ -276,6 +296,14 @@ func (e *Executor) updateJobStatus(ctx context.Context, jobID string, status api
 	}
 
 	return err
+}
+
+func jobWaitStartedAt(createdAt string, now time.Time) (time.Time, bool) {
+	startedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil || startedAt.After(now) {
+		return time.Time{}, false
+	}
+	return startedAt, true
 }
 
 // parsePayload is a helper to parse job payload into a specific type

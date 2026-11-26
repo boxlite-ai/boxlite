@@ -308,7 +308,8 @@ pkg/api/controllers/boxlite_exec.go
 pkg/api/controllers/boxlite_exec_attach.go
 └─ BoxliteExecAttach(ctx)                     GET /attach   (WebSocket upgrade)
    ├─ ManagedExec.MarkConnected()             409 if slot already taken
-   └─ runAttachLoop(parentCtx, conn, exec)    4 goroutines, fail-fast cancel
+   └─ runAttachLoop(parentCtx, conn, exec, execID, boxID)
+                                               4 goroutines, fail-fast cancel
       ├─ conn.SetReadDeadline(now + 45s)      45s = 3 × Ping interval; trips ReadMessage on dead peer
       ├─ conn.SetPongHandler(reset deadline)  each Pong pushes it out — until the loop is cancelled
       ├─ pumpSubscriberChannel() × {1,2}      stdout 0x01 / stderr 0x02 frames (subscribed to ManagedExec broadcaster)
@@ -337,6 +338,32 @@ pkg/boxlite/exec_manager.go
 ├─ execHandle (interface)                     Signal | Kill | ResizeTTY | Wait | Close
 └─ sdkExec (struct)                           adapter → *boxlite.Execution (FFI to Rust)
 ```
+
+#### Timing spans
+
+The runner emits OpenTelemetry spans at the real job and SDK seams, without adding
+success-path logs or per-output-frame telemetry:
+
+| Span | Start → end | Attributes |
+| --- | --- | --- |
+| `job` | Accepted job execution → completion report returns | `job.id`, `job.type`, `box_id` for box jobs |
+| `job.wait` | Job `createdAt` → runner `Execute` starts; invalid/future timestamps are skipped | Inherited job context |
+| `job.prepare` | CREATE_BOX payload decoding start → backend create begins | `box_id` |
+| `box.create_prepare` | `Client.Create` validation/options/volume preparation → native lookup begins | `box_id` |
+| `box.get_or_create` | Immediately around `Runtime.GetOrCreate` | `box_id` |
+| `box.start` | Immediately around `Box.Start`; includes image pull and total VM startup | `box_id` |
+| `update_job_status` | Job status report → API response/retry outcome | `job.id`, `job.status` |
+| `box.exec.start_execution` | Immediately around `Box.StartExecution`, not map registration | `box_id`, `execution_id` |
+| `box.exec.attach_output` | Immediately around the SDK output-reader attach | `box_id`, `execution_id` |
+| `box.exec.wait` | Execution `Wait` start → process exit/error | `box_id`, `execution_id`, `exit_code` |
+| `box.exec.exit_frame` | Exit JSON write start → WebSocket write outcome | `box_id`, `execution_id`, `exit_code` |
+
+`job` is the parent of job execution and `update_job_status`. The `Wait` goroutine uses a
+context explicitly captured from `StartExecution`, so returning the execution ID does not
+detach its lifetime from the trace. `box.exec.wait` measures process completion; the API's
+`box.exec.http` histogram measures only the HTTP acceptance response. No Rust/VMM change
+or new metric reader is required: durations come from the existing tracing pipeline and
+are stored in `otel_traces` when the collector exports to ClickHouse.
 
 #### Execution lifecycle
 

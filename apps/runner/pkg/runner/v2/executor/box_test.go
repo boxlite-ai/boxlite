@@ -9,9 +9,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type startErrorBackend struct {
@@ -23,6 +28,61 @@ type startErrorBackend struct {
 func (b *startErrorBackend) Start(_ context.Context, _ string, _ *string, metadata map[string]string) (string, error) {
 	b.metadata = metadata
 	return "", b.err
+}
+
+type createSuccessBackend struct {
+	*fakeBackend
+}
+
+func (b *createSuccessBackend) Create(context.Context, dto.CreateBoxDTO) (string, string, error) {
+	return "box-1", "boxlite", nil
+}
+
+func TestCreateBoxJobTracesWaitPreparationAndCompletionReport(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	defer func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	}()
+
+	h := newHarness(t, nil)
+	h.executor.backend = &createSuccessBackend{fakeBackend: h.backend}
+	job := apiclient.NewJob(testJobId, apiclient.JOBTYPE_CREATE_BOX, apiclient.JOBSTATUS_IN_PROGRESS, "BOX", testBoxId, time.Now().Add(-time.Second).Format(time.RFC3339Nano))
+	job.SetPayload(`{"id":"box-1","image":"base"}`)
+
+	h.executor.Execute(context.Background(), job)
+	assertCompleted(t, h.lastReport(t))
+
+	ended := make(map[string]sdktrace.ReadOnlySpan)
+	for _, span := range recorder.Ended() {
+		ended[span.Name()] = span
+	}
+	for _, name := range []string{"job", "job.wait", "job.prepare", "execute_CREATE_BOX", "update_job_status"} {
+		if ended[name] == nil {
+			t.Errorf("missing %s span; ended spans = %v", name, recorder.Ended())
+		}
+	}
+	if ended["job.wait"] != nil && time.Since(ended["job.wait"].StartTime()) < 500*time.Millisecond {
+		t.Errorf("job.wait did not start at the job creation timestamp: %v", ended["job.wait"].StartTime())
+	}
+	if ended["update_job_status"] != nil && ended["job"] != nil && ended["update_job_status"].Parent().SpanID() != ended["job"].SpanContext().SpanID() {
+		t.Error("completion report is not a child of the job span")
+	}
+}
+
+func TestJobWaitStartedAtRejectsInvalidAndFutureValues(t *testing.T) {
+	now := time.Now()
+	for _, value := range []string{"not-a-time", now.Add(time.Hour).Format(time.RFC3339Nano)} {
+		if _, ok := jobWaitStartedAt(value, now); ok {
+			t.Errorf("jobWaitStartedAt(%q) accepted an invalid wait start", value)
+		}
+	}
+	if started, ok := jobWaitStartedAt(now.Add(-time.Second).Format(time.RFC3339Nano), now); !ok || !started.Equal(now.Add(-time.Second)) {
+		t.Fatalf("valid job wait start = %v, %v", started, ok)
+	}
 }
 
 func TestStartBoxJobReportsFilestorePreparationFailure(t *testing.T) {
