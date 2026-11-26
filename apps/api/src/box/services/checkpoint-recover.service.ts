@@ -59,6 +59,7 @@ export class CheckpointRecoverService {
       regions: [selected.environment.region],
       boxClass: selected.environment.class,
       requiresPrivileged: selected.environment.privileged,
+      ...(selected.kind === 'full' ? { requiredCapability: 'memory_checkpoint' } : {}),
     })
     if (runner.apiVersion !== '2') throw new ConflictException('Checkpoint creation requires a v2 runner')
     const box = Object.assign(new Box(selected.environment.region, name), selected.environment, {
@@ -115,6 +116,7 @@ export class CheckpointRecoverService {
     this.checkpoints.assertEnabled()
     this.organizations.assertOrganizationIsNotSuspended(organization)
     const checkpoint = await this.checkpoints.get(organization.id, key)
+    if (checkpoint.kind === 'full') this.checkpoints.assertMemoryEnabled()
     if (checkpoint.state !== 'ready' || !checkpoint.archive) throw new ConflictException('Checkpoint is not ready')
     if (!checkpoint.environment.image) throw new BadRequestException('Checkpoint has no OCI image')
     const limits = await this.limits.resolve(organization)
@@ -136,6 +138,7 @@ export class CheckpointRecoverService {
       runner.apiVersion !== '2' ||
       runner.draining ||
       runner.unschedulable ||
+      (checkpoint.kind === 'full' && !runner.capabilities?.includes('memory_checkpoint')) ||
       runner.region !== env.region ||
       runner.class !== env.class ||
       (env.privileged && !runner.supportsPrivileged) ||
@@ -175,6 +178,7 @@ export class CheckpointRecoverService {
       targetBoxId: box.id,
       mode: operation.mode,
       archive: checkpoint.archive,
+      kind: checkpoint.kind,
       platformEnv: operation.platformEnv,
     })
     Object.assign(operation, { jobId: job.id, state: 'pending', errorReason: null })

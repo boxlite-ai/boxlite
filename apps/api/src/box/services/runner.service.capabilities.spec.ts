@@ -65,13 +65,14 @@ describe('Runner capability declarations', () => {
     expect(write.mock.calls[0][1]).not.toHaveProperty('capabilities')
   })
 
-  it.each([null, 'filestore', 1, ['filestore', 1]])('rejects invalid capabilities %p on the heartbeat boundary', (value) => {
-    const dto = Object.assign(new RunnerHealthcheckDto(), {
-      appVersion: 'dev',
-      capabilities: value,
-    })
-    expect(validateSync(dto).map((error) => error.property)).toEqual(
-      expect.arrayContaining(['capabilities']),
-    )
-  })
+  it.each([null, 'filestore', 1, ['filestore', 1]])(
+    'rejects invalid capabilities %p on the heartbeat boundary',
+    (value) => {
+      const dto = Object.assign(new RunnerHealthcheckDto(), {
+        appVersion: 'dev',
+        capabilities: value,
+      })
+      expect(validateSync(dto).map((error) => error.property)).toEqual(expect.arrayContaining(['capabilities']))
+    },
+  )
 })

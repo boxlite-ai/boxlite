@@ -68,7 +68,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   const imageAdmission = { assert: jest.fn() }
   const runnerSelection = { getRandomAvailableRunner: jest.fn() }
   const archiveStore = { remove: jest.fn() }
-  let settings: { archivePrefix?: string; maxPerOrganization: number; enabled?: boolean }
+  let settings: { archivePrefix?: string; maxPerOrganization: number; enabled?: boolean; memoryEnabled?: boolean }
   const cache = { invalidate: jest.fn() }
   const jobNotifications: { visible: boolean; boxUnlocked: boolean }[] = []
   const uploadNotifications = { lpush: jest.fn() }
@@ -239,6 +239,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       sizeBytes: 1024,
       sha256: 'a'.repeat(64),
       pinnedImage: 'registry.example/app@sha256:' + 'b'.repeat(64),
+      kind: checkpoint.kind,
     }
   }
 
@@ -262,6 +263,84 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await finish(uploading.activeJobId!, archive(checkpoint))
     return service.get(organizationId, checkpoint.id)
   }
+
+  async function fullSource(): Promise<Box> {
+    const box = await source()
+    await boxes.update(box.id, { state: BoxState.STARTED, desiredState: BoxDesiredState.STARTED })
+    return box
+  }
+
+  async function enableRunnerMemory(): Promise<void> {
+    runner.capabilities = ['memory_checkpoint']
+    await dataSource.getRepository(Runner).save(runner)
+  }
+
+  it('requires full rollout, a started source and runner capability for full capture', async () => {
+    const box = await source()
+    const capture = () => service.create(organizationId, box.id, undefined, 'full')
+    await expect(capture()).rejects.toMatchObject({ status: 400, response: { code: 'unsupported' } })
+    settings.memoryEnabled = true
+    await expect(capture()).rejects.toMatchObject({ status: 409, response: { code: 'invalid_state' } })
+    await boxes.update(box.id, { state: BoxState.STARTED, desiredState: BoxDesiredState.STARTED })
+    await expect(capture()).rejects.toMatchObject({
+      status: 409,
+      message: 'Source runner does not support full checkpoints',
+    })
+    expect(await checkpoints.count()).toBe(0)
+  })
+
+  it('persists full metadata and routes restore only to a memory-capable runner', async () => {
+    settings.memoryEnabled = true
+    await enableRunnerMemory()
+    const box = await fullSource()
+    const checkpoint = await service.create(organizationId, box.id, 'full-base', 'full')
+    const exportJob = await jobs.findOneByOrFail({ id: checkpoint.exportJobId! })
+    expect(exportJob.getPayload()).toEqual({ checkpointId: checkpoint.id, arcPath: checkpoint.arcPath, kind: 'full' })
+    expect(checkpoint).toMatchObject({ kind: 'full', memorySizeBytes: null })
+
+    const metadata = { ...archive(checkpoint), memorySizeBytes: 0 }
+    await finish(exportJob.id, metadata)
+    const uploading = await service.get(organizationId, checkpoint.id)
+    expect(uploading).toMatchObject({ kind: 'full', memorySizeBytes: 0, archive: metadata })
+    expect(await boxes.findOneByOrFail({ id: box.id })).toMatchObject({ state: BoxState.STARTED, pending: false })
+    await finish(uploading.activeJobId!, metadata)
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({ state: 'ready' })
+
+    const restore = () => recovery.createBox(organization, checkpoint.id, 'full-target', undefined)
+    settings.memoryEnabled = false
+    await expect(restore()).rejects.toMatchObject({ status: 400, response: { code: 'unsupported' } })
+    expect(runnerSelection.getRandomAvailableRunner).not.toHaveBeenCalled()
+    settings.memoryEnabled = true
+    await dataSource.getRepository(Runner).update(runner.id, { capabilities: [] })
+    await expect(restore()).rejects.toMatchObject({ status: 409 })
+    expect(runnerSelection.getRandomAvailableRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredCapability: 'memory_checkpoint' }),
+    )
+    await enableRunnerMemory()
+    const target = await restore().then(withCheckpointState)
+    const importJob = await jobs.findOneByOrFail({ id: target.activeJobId! })
+    expect(importJob.getPayload()).toMatchObject({ kind: 'full', archive: metadata })
+  })
+
+  it.each([
+    ['full', 'export', undefined],
+    ['full', 'export', -1],
+    ['full', 'export', Number.MAX_SAFE_INTEGER + 1],
+    ['full', 'upload', 2],
+    ['disk', 'export', 0],
+  ] as const)('rejects invalid %s %s memory metadata (%s)', async (kind, phase, memorySizeBytes) => {
+    settings.memoryEnabled = true
+    await enableRunnerMemory()
+    const box = await (kind === 'full' ? fullSource() : source())
+    const checkpoint = await service.create(organizationId, box.id, undefined, kind)
+    let jobId = checkpoint.exportJobId!
+    if (phase === 'upload') {
+      await finish(jobId, { ...archive(checkpoint), memorySizeBytes: 1 })
+      jobId = (await service.get(organizationId, checkpoint.id)).activeJobId!
+    }
+    await finish(jobId, { ...archive(checkpoint), memorySizeBytes })
+    expect(await service.get(organizationId, checkpoint.id)).toMatchObject({ state: 'failed', activeJobId: null })
+  })
 
   it('notifies checkpoint export and import only after their transactions commit', async () => {
     const checkpoint = await readyCheckpoint()

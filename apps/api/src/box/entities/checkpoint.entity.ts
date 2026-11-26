@@ -5,6 +5,7 @@ import { Check, Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDa
 import { Box } from './box.entity'
 import { BoxState } from '../enums/box-state.enum'
 
+export type CheckpointKind = 'disk' | 'full'
 export type CheckpointState = 'creating' | 'ready' | 'failed' | 'deleting'
 export type CheckpointEnvironment = Pick<
   Box,
@@ -42,10 +43,14 @@ export interface CheckpointArchive {
   sizeBytes: number
   sha256: string
   pinnedImage: string
+  kind?: CheckpointKind
+  memorySizeBytes?: number
 }
 
 @Entity('checkpoint')
 @Check('checkpoint_state_check', `"state" IN ('creating','ready','failed','deleting')`)
+@Check('checkpoint_kind_check', `"kind" IN ('disk','full')`)
+@Check('checkpoint_memory_size_bytes_check', `"memorySizeBytes" IS NULL OR "memorySizeBytes" >= 0`)
 @Index('checkpoint_org_name_key', ['organizationId', 'name'], { unique: true })
 @Index('checkpoint_active_job_key', ['activeJobId'], { unique: true, where: '"activeJobId" IS NOT NULL' })
 export class Checkpoint {
@@ -57,6 +62,13 @@ export class Checkpoint {
   @Column('uuid') sourceRunnerId: string
   @Column('varchar') sourceState: BoxState
   @Column({ type: 'varchar', default: 'creating' }) state: CheckpointState
+  @Column({ type: 'varchar', default: 'disk' }) kind: CheckpointKind
+  @Column({
+    type: 'bigint',
+    nullable: true,
+    transformer: { to: (v: number | null) => v, from: (v: string | null) => (v === null ? null : Number(v)) },
+  })
+  memorySizeBytes: number | null
   @Column() arcPath: string
   @Column({ type: 'uuid', nullable: true }) exportJobId: string | null
   @Column({ type: 'uuid', nullable: true }) activeJobId: string | null

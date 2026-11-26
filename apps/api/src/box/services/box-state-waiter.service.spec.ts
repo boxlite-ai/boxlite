@@ -38,6 +38,22 @@ describe('BoxStateWaiterService', () => {
     ])
   })
 
+  it('waits through checkpoint import and the stopped state until the Box starts', async () => {
+    const { waiter, subscriber, boxService } = makeWaiter(BoxState.RESTORING)
+    const started = jest.fn()
+    const pending = waiter.waitForStarted('box-1', 'org-1', 5).then(started)
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const emit = (state: BoxState) =>
+      subscriber.emit('message', BOX_EVENT_CHANNEL, JSON.stringify({ box: { id: 'box-1', state } }))
+    emit(BoxState.STOPPED)
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(boxService.toBoxDto).not.toHaveBeenCalled()
+    emit(BoxState.STARTED)
+    await pending
+    expect(started).toHaveBeenCalledWith({ id: 'box-1', state: BoxState.STARTED })
+  })
+
   it('rejects instead of returning a non-target state on timeout', async () => {
     jest.useFakeTimers()
     const { waiter } = makeWaiter()

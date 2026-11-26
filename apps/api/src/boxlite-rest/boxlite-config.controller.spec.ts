@@ -13,4 +13,13 @@ describe('checkpoint capability discovery', () => {
     expect(controller.getConfig().capabilities.memory_checkpoints_enabled).toBe(false)
     expect(controller.getConfig().capabilities.import_enabled).toBe(false)
   })
+
+  it.each([
+    { enabled: true, memoryEnabled: true, archivePrefix: undefined, expected: false },
+    { enabled: false, memoryEnabled: true, archivePrefix: 'gs://checkpoint-test/archives/', expected: false },
+    { enabled: true, memoryEnabled: true, archivePrefix: 'gs://checkpoint-test/archives/', expected: true },
+  ])('advertises memory checkpoints only when fully enabled: %j', ({ expected, ...checkpoint }) => {
+    const controller = new BoxliteConfigController(new ConfigService({ checkpoint }))
+    expect(controller.getConfig().capabilities.memory_checkpoints_enabled).toBe(expected)
+  })
 })

@@ -5,13 +5,18 @@ export function checkpointConfig(env: NodeJS.ProcessEnv = process.env) {
   const flag = env.CHECKPOINTS_ENABLED?.trim()
   if (flag && flag !== 'true' && flag !== 'false') throw new Error('CHECKPOINTS_ENABLED must be true or false')
   const enabled = flag === 'true'
+  const memoryFlag = env.MEMORY_CHECKPOINTS_ENABLED ?? 'false'
+  if (memoryFlag !== 'true' && memoryFlag !== 'false')
+    throw new Error('MEMORY_CHECKPOINTS_ENABLED must be true or false')
   const rawLimit = env.CHECKPOINT_MAX_PER_ORGANIZATION?.trim()
   const maxPerOrganization = rawLimit ? Number(rawLimit) : 10
   if ((rawLimit && !/^\d+$/.test(rawLimit)) || !Number.isSafeInteger(maxPerOrganization) || maxPerOrganization < 1) {
     throw new Error('CHECKPOINT_MAX_PER_ORGANIZATION must be a positive safe integer')
   }
   const raw = env.CHECKPOINT_ARCHIVE_PREFIX?.trim()
-  if (!raw) return { archivePrefix: undefined as string | undefined, maxPerOrganization, enabled: false }
+  if (!raw) {
+    return { archivePrefix: undefined as string | undefined, maxPerOrganization, enabled: false, memoryEnabled: false }
+  }
   const match = /^gs:\/\/([a-z0-9][a-z0-9._-]{1,61}[a-z0-9])(?:\/(.*))?$/.exec(raw)
   const suffix = match?.[2]?.replace(/\/+$/, '') ?? ''
   const segments = suffix ? suffix.split('/') : []
@@ -22,5 +27,6 @@ export function checkpointConfig(env: NodeJS.ProcessEnv = process.env) {
     archivePrefix: `gs://${match[1]}/${segments.length ? segments.join('/') + '/' : ''}`,
     maxPerOrganization,
     enabled,
+    memoryEnabled: enabled && memoryFlag === 'true',
   }
 }

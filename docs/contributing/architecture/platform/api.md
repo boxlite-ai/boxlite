@@ -88,10 +88,10 @@ disabled. Checkpoint capture and box creation from a checkpoint are a separate c
 `checkpoints_enabled` requires both `CHECKPOINTS_ENABLED=true` and a configured
 checkpoint archive prefix.
 
-Hosted `GET /v1/config` reports `memory_checkpoints_enabled: false`. Hosted
-`POST /v1/checkpoints` recognizes `kind: "disk"` and `kind: "full"`. Disk
-responses include `kind: "disk"`. A full request returns HTTP 400 with code
-`unsupported` before checkpoint admission.
+Hosted `GET /v1/config` reports `memory_checkpoints_enabled: true` only when
+checkpoints are enabled, storage is configured, and `MEMORY_CHECKPOINTS_ENABLED=true`
+(the default is `false`). Full capture and restore also require a runner that
+advertises `memory_checkpoint`.
 
 Private tunnels are enabled. Clients check that capability before every private
 prepare.
@@ -738,9 +738,9 @@ organization membership.
 
 | Method | Path | What it does |
 | ------ | ---- | ------------ |
-| `POST` | `/v1[/{prefix}]/checkpoints` | Takes `source_box_id`, optional `name`, and optional `kind` (defaults to `disk`). Returns `201` for accepted disk capture, `409` with `code: "invalid_state"` for a source state mismatch, or `400` with `code: "unsupported"` for `full`. |
+| `POST` | `/v1[/{prefix}]/checkpoints` | Takes `source_box_id`, optional `name`, and optional `kind` (defaults to `disk`). Returns `201` for accepted capture, `409` with `code: "invalid_state"` for a source state mismatch, or `400` with `code: "unsupported"` when full capture is disabled. |
 | `GET` | `/v1[/{prefix}]/checkpoints` | Lists organization checkpoints; accepts `pageToken` or `page_token`, and returns `next_page_token`. |
-| `GET` | `/v1[/{prefix}]/checkpoints/{key}` | Gets checkpoint metadata by ID or name, including state and optional `error_reason`. |
+| `GET` | `/v1[/{prefix}]/checkpoints/{key}` | Gets checkpoint metadata by ID or name, including state, `kind`, `memory_size_bytes` once known for full captures, and optional `error_reason`. |
 | `DELETE` | `/v1[/{prefix}]/checkpoints/{key}` | Deletes an unused checkpoint; `force=true` tolerates an already absent checkpoint, but active capture/use returns `409`; returns `204`. |
 | `POST` | `/v1[/{prefix}]/boxes` | With `checkpoint_id`, creates a Box from a checkpoint; returns `201`. |
 
@@ -750,11 +750,12 @@ creates a Box that inherits the saved settings. `checkpoint_id` excludes `image`
 `/boxes/import` route on the hosted service and no way to replace an existing Box
 from a checkpoint.
 
-Disk capture requires a stopped, idle source. Callers stop the Box and wait for
-`stopped` before requesting capture. A source state mismatch returns HTTP 409
+Disk capture requires an idle, stopped source. Full capture requires an idle,
+started source on a memory-capable runner. A source state mismatch returns HTTP 409
 with `code: "invalid_state"`. The runner checks again under its source-operation
-lock before native export. A `kind: "full"` request returns HTTP 400 with
-`code: "unsupported"` before admission.
+lock before native export. Full restores are routed only to runners with
+`memory_checkpoint`. Turning off memory checkpoint admission blocks new full
+captures and restores without changing access to retained checkpoint metadata.
 
 Capture, creation from a checkpoint, and deletion require `write:boxes`; reads require
 organization membership. Turning off checkpoint admission leaves reads, deletion, and
