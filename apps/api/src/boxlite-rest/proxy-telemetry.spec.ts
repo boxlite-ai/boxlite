@@ -18,6 +18,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
+import { startTimedOperation } from '../common/decorators/otel.decorator'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -275,5 +276,37 @@ describe('runner proxy telemetry', () => {
     expect(spans('box.exec.ws_handshake')[0].status.code).toBe(SpanStatusCode.ERROR)
     expect(spans('box.exec.ws')).toHaveLength(1)
     expect(spans('box.exec.ws')[0].status.code).toBe(SpanStatusCode.ERROR)
+  })
+
+  it('marks the root as failed when the runner never completes the upgrade', async () => {
+    const { service, options } = wsHarness()
+    const clientSocket = socket()
+    const req = {
+      url: '/api/v1/org-1/boxes/public-box/executions/exec-1/attach',
+      headers: { authorization: 'Bearer blk_live_test' },
+    }
+    await service.upgrade(req as any, clientSocket as any, Buffer.alloc(0))
+    options.on!.proxyReqWs!(proxyRequest() as any, req as any, clientSocket as any, {} as any, Buffer.alloc(0))
+
+    clientSocket.emit('close')
+
+    expect(spans('box.exec.ws_handshake')[0].status.code).toBe(SpanStatusCode.ERROR)
+    expect(spans('box.exec.ws')[0].status.code).toBe(SpanStatusCode.ERROR)
+  })
+
+  it('uses a monotonic clock for timed operation durations', async () => {
+    let wallClock = 5_000
+    const dateNow = jest.spyOn(Date, 'now').mockImplementation(() => wallClock)
+    try {
+      const operation = startTimedOperation('box.monotonic_test')
+      wallClock = 4_000
+      operation.finish()
+    } finally {
+      dateNow.mockRestore()
+    }
+
+    const points = await histogramPoints('box_monotonic_test_duration')
+    expect(points).toHaveLength(1)
+    expect(points[0].value.sum).toBeGreaterThanOrEqual(0)
   })
 })

@@ -420,6 +420,7 @@ func (m *ExecManager) start(ctx context.Context, source executionStarter, boxID 
 		LastDisconnectAt: now,
 	}
 
+	parentSpan := trace.SpanFromContext(ctx)
 	ctx, startSpan := otel.Tracer("runner").Start(ctx, "box.exec.start_execution",
 		trace.WithAttributes(attribute.String("box_id", boxID)))
 	handle, stdin, id, err := source.start(ctx, opts, exec.stdoutBus, exec.stderrBus)
@@ -435,7 +436,7 @@ func (m *ExecManager) start(ctx context.Context, source executionStarter, boxID 
 	exec.ID = id
 	exec.execution = handle
 	exec.stdinW = stdin
-	waitCtx := trace.ContextWithSpan(context.Background(), startSpan)
+	waitCtx := trace.ContextWithSpan(context.Background(), parentSpan)
 
 	go func() {
 		defer close(exec.Done)
