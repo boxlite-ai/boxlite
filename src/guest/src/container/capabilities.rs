@@ -174,7 +174,6 @@ impl CapabilitySet {
         self.0.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn contains(&self, capability: &Capability) -> bool {
         self.0.contains(capability)
     }

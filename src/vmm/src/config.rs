@@ -67,6 +67,10 @@ pub struct VmConfig {
     pub network: Option<NetConfig>,
     /// Send hvc0 output to the supplied console sink.
     pub virtio_console: bool,
+    /// Hotplug capacity in MiB above `memory_mib`. Zero disables virtio-mem.
+    /// A positive capacity must fit the guest's memory block alignment,
+    /// physical address limits and available KVM memory slots.
+    pub hotplug_mib: u32,
 }
 
 /// One virtio-fs device exposing the configured host directories.
@@ -104,6 +108,23 @@ pub struct NetConfig {
 }
 
 impl VmConfig {
+    #[cfg(test)]
+    pub(crate) fn validate_device_less(&self) -> Result<()> {
+        if !self.disks.is_empty()
+            || self.filesystem.is_some()
+            || self.vsock.is_some()
+            || self.network.is_some()
+            || self.virtio_console
+            || self.hotplug_mib > 0
+        {
+            return Err(Error::Control {
+                operation: "new_device_less",
+                reason: crate::ControlReason::UnsupportedDevice,
+            });
+        }
+        self.validate()
+    }
+
     /// Checks static configuration without calling the host. VM creation
     /// checks host and boot address limits before allocating RAM. The budget
     /// for the `virtio_mmio.device=` arguments that `devices::add_all` prepends is
@@ -139,6 +160,9 @@ impl VmConfig {
         {
             return Err(Error::InvalidCommandLine("not printable ASCII"));
         }
+        if !(u64::from(self.hotplug_mib) << 20).is_multiple_of(crate::hotplug::SLOT_SIZE) {
+            return Err(Error::InvalidHotplugSize(self.hotplug_mib));
+        }
         Ok(())
     }
 }
@@ -162,6 +186,7 @@ mod tests {
             vsock: None,
             network: None,
             virtio_console: false,
+            hotplug_mib: 0,
         }
     }
 

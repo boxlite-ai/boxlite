@@ -3,7 +3,18 @@
 
 //! Postcard coverage for the host-specific state images, without a VMM envelope.
 
-use super::{X86IrqchipState, X86VcpuState, X86VmState};
+use kvm_bindings::KVM_MAX_CPUID_ENTRIES;
+use serde::{Serialize, de::DeserializeOwned};
+
+use super::{MAX_SNAPSHOT_MSR_ENTRIES, X86IrqchipState, X86VcpuState, X86VmState};
+
+struct Blob<'a>(&'a [u8]);
+
+impl Serialize for Blob<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(self.0)
+    }
+}
 
 fn cpu() -> X86VcpuState {
     let mut state = X86VcpuState {
@@ -86,6 +97,13 @@ fn cpu_postcard_round_trips_every_state_field_and_rejects_truncation() {
 
 #[test]
 fn platform_postcard_round_trips_created_and_absent_pit() {
+    let mut state = platform();
+    round_trip(&state);
+    state.pit = None;
+    round_trip(&state);
+}
+
+fn platform() -> X86VmState {
     let mut state = X86VmState {
         irqchips: [
             X86IrqchipState::pic(
@@ -114,9 +132,7 @@ fn platform_postcard_round_trips_created_and_absent_pit() {
     state.clock.clock = 0x23456789;
     state.clock.realtime = 0x3456789;
     state.clock.host_tsc = 0x456789;
-    round_trip(&state);
-    state.pit = None;
-    round_trip(&state);
+    state
 }
 
 #[test]
@@ -131,45 +147,229 @@ fn cpu_postcard_enforces_flexible_array_bounds() {
         );
     }
     state.xsave.clear();
-    for count in [0, 255, 256, 257] {
+    for count in [
+        0,
+        KVM_MAX_CPUID_ENTRIES - 1,
+        KVM_MAX_CPUID_ENTRIES,
+        KVM_MAX_CPUID_ENTRIES + 1,
+    ] {
         state.cpuid.resize(count, Default::default());
         let bytes = postcard::to_allocvec(&state).unwrap();
         assert_eq!(
             postcard::from_bytes::<X86VcpuState>(&bytes).is_ok(),
-            count <= 256
+            count <= KVM_MAX_CPUID_ENTRIES
         );
     }
     state.cpuid.clear();
-    for count in [0, 4095, 4096, 4097] {
+    for count in [
+        0,
+        MAX_SNAPSHOT_MSR_ENTRIES - 1,
+        MAX_SNAPSHOT_MSR_ENTRIES,
+        MAX_SNAPSHOT_MSR_ENTRIES + 1,
+    ] {
         state.msrs.resize(count, Default::default());
         let bytes = postcard::to_allocvec(&state).unwrap();
         assert_eq!(
             postcard::from_bytes::<X86VcpuState>(&bytes).is_ok(),
-            count <= 4096
+            count <= MAX_SNAPSHOT_MSR_ENTRIES
         );
     }
+}
+
+fn wrong_abi_lengths(encoded: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
+    let payload: &[u8] = postcard::from_bytes(encoded).unwrap();
+    [0, payload.len() - 1, payload.len() + 1]
+        .into_iter()
+        .map(move |len| {
+            let mut wrong = payload.to_vec();
+            wrong.resize(len, 0);
+            postcard::to_allocvec(&Blob(&wrong)).unwrap()
+        })
+}
+
+#[test]
+fn fixed_abi_fields_reject_malformed_postcard_lengths() {
+    fn check<T: Serialize + DeserializeOwned>(value: &T) {
+        let encoded = postcard::to_allocvec(value).unwrap();
+        assert!(postcard::from_bytes::<T>(&encoded).is_ok());
+        for malformed in wrong_abi_lengths(&encoded) {
+            assert!(postcard::from_bytes::<T>(&malformed).is_err());
+        }
+    }
+    check(&platform().irqchips[0]);
+
+    #[derive(Serialize, serde::Deserialize)]
+    struct Abi<T>(
+        #[serde(
+            with = "super::exact_abi_serde",
+            bound = "T: Serialize + DeserializeOwned"
+        )]
+        T,
+    );
+    let state = cpu();
+    check(&Abi(state.regs));
+    check(&Abi(state.sregs));
+    check(&Abi(state.xcrs));
+    check(&Abi(state.debug_regs));
+    check(&Abi(state.events));
+    check(&Abi(state.mp_state));
+    check(&Abi(state.lapic));
+    check(&Abi(state.cpuid[0]));
+    check(&Abi(state.msrs[0]));
+    let vm = platform();
+    check(&Abi(vm.clock));
+    check(&Abi(vm.pit.unwrap()));
+}
+
+#[test]
+fn full_snapshots_reject_malformed_abi_field_lengths() {
+    fn check<T: Serialize + DeserializeOwned, F: Serialize>(state: &T, field: &F) {
+        let field_type = std::any::type_name::<F>();
+        let encoded = postcard::to_allocvec(state).unwrap();
+        let field = postcard::to_allocvec(field).unwrap();
+        let offsets: Vec<_> = encoded
+            .windows(field.len())
+            .enumerate()
+            .filter_map(|(offset, bytes)| (bytes == field).then_some(offset))
+            .collect();
+        assert_eq!(offsets.len(), 1, "locating {field_type}");
+        let offset = offsets[0];
+        for malformed in wrong_abi_lengths(&field) {
+            let mut bytes = encoded.clone();
+            bytes.splice(offset..offset + field.len(), malformed);
+            assert!(postcard::from_bytes::<T>(&bytes).is_err(), "{field_type}");
+        }
+    }
+    let vm = platform();
+    check(&vm, &vm.irqchips[1]);
+    check(&vm, vm.pit.as_ref().unwrap());
+    check(&vm, &vm.clock);
+    let state = cpu();
+    check(&state, &state.regs);
+    check(&state, &state.sregs);
+    check(&state, &state.cpuid[0]);
+    check(&state, &state.msrs[0]);
+    check(&state, &state.xcrs);
+    check(&state, &state.debug_regs);
+    check(&state, &state.events);
+    check(&state, &state.mp_state);
+    check(&state, &state.lapic);
 }
 
 #[test]
 fn fpu_postcard_rejects_non_abi_lengths() {
     #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
     struct Fpu(#[serde(with = "super::fpu_serde")] kvm_bindings::kvm_fpu);
-    struct Blob<'a>(&'a [u8]);
-    impl serde::Serialize for Blob<'_> {
-        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_bytes(self.0)
-        }
-    }
     let state = Fpu(cpu().fpu);
     let encoded = postcard::to_allocvec(&state).unwrap();
     assert_eq!(postcard::from_bytes::<Fpu>(&encoded).unwrap(), state);
     // Obtain the ABI payload from the production serializer, not a second
     // implementation of the FPU layout or its postcard length prefix.
-    let payload: &[u8] = postcard::from_bytes(&encoded).unwrap();
-    for len in [0, payload.len() - 1, payload.len() + 1] {
-        let mut wrong = payload.to_vec();
-        wrong.resize(len, 0);
-        let bytes = postcard::to_allocvec(&Blob(&wrong)).unwrap();
-        assert!(postcard::from_bytes::<Fpu>(&bytes).is_err(), "length {len}");
+    for malformed in wrong_abi_lengths(&encoded) {
+        assert!(postcard::from_bytes::<Fpu>(&malformed).is_err());
+    }
+}
+
+#[test]
+fn snapshot_defaults_fail_closed_for_an_unsnapshotable_backend() {
+    use crate::{MemoryRegion, Vcpu, VcpuExit, VcpuHandle, Vm, X86Vcpu, X86Vm};
+    struct Backend;
+    struct Cpu;
+    #[derive(Clone)]
+    struct Handle;
+    impl VcpuHandle for Handle {
+        fn kick(&self) -> crate::Result<()> {
+            panic!("unexpected kick")
+        }
+    }
+    impl Vcpu for Cpu {
+        type Handle = Handle;
+        fn run(&mut self) -> crate::Result<VcpuExit<'_>> {
+            panic!("unexpected guest entry")
+        }
+        fn complete_pending_io(&mut self) -> crate::Result<()> {
+            panic!("unexpected I/O completion")
+        }
+        fn handle(&self) -> Handle {
+            Handle
+        }
+    }
+    impl X86Vcpu for Cpu {
+        fn set_cpu_features(
+            &mut self,
+            _: &[crate::X86CpuidEntry],
+            _: &[crate::X86Msr],
+        ) -> crate::Result<()> {
+            panic!("unexpected boot features")
+        }
+        fn set_boot_registers(&mut self, _: &crate::X86BootRegisters) -> crate::Result<()> {
+            panic!("unexpected boot registers")
+        }
+    }
+    impl Vm for Backend {
+        type Vcpu = Cpu;
+        unsafe fn map_memory(&self, _: &MemoryRegion) -> crate::Result<()> {
+            panic!("unexpected map")
+        }
+        fn unmap_memory(&self, _: &MemoryRegion) -> crate::Result<()> {
+            panic!("unexpected unmap")
+        }
+        fn set_irq_line(&self, _: u32, _: bool) -> crate::Result<()> {
+            panic!("unexpected IRQ")
+        }
+        fn create_vcpu(&self, _: u32) -> crate::Result<Cpu> {
+            panic!("unexpected vCPU creation")
+        }
+    }
+    impl X86Vm for Backend {
+        fn supported_cpuid(&self) -> &[crate::X86CpuidEntry] {
+            panic!("unexpected boot CPUID")
+        }
+    }
+    let platform = X86VmState {
+        irqchips: [
+            X86IrqchipState::pic(0, Default::default()),
+            X86IrqchipState::pic(1, Default::default()),
+            X86IrqchipState::ioapic(Default::default()),
+        ],
+        pit: None,
+        clock: Default::default(),
+    };
+    for (operation, error) in [
+        ("save", Backend.save_state().unwrap_err()),
+        (
+            "restore",
+            Backend.restore_before_vcpus(&platform).unwrap_err(),
+        ),
+        (
+            "restore",
+            Backend.restore_after_vcpus(&platform).unwrap_err(),
+        ),
+    ] {
+        assert!(
+            matches!(error, crate::Error::VmState { operation: actual, ref source }
+            if actual == operation && source.kind() == std::io::ErrorKind::Unsupported
+                && source.raw_os_error().is_none())
+        );
+    }
+    for (operation, error) in [
+        (
+            "save CPU state (unsupported backend)",
+            Cpu.save_state().unwrap_err(),
+        ),
+        (
+            "restore CPU state (unsupported backend)",
+            Cpu.restore_state(&cpu()).unwrap_err(),
+        ),
+        (
+            "notify guest stopped (unsupported backend)",
+            Cpu.notify_guest_stopped().unwrap_err(),
+        ),
+    ] {
+        assert!(
+            matches!(error, crate::Error::ConfigureVcpu { id: 0, operation: actual, ref source }
+            if actual == operation && source.kind() == std::io::ErrorKind::Unsupported
+                && source.raw_os_error().is_none())
+        );
     }
 }

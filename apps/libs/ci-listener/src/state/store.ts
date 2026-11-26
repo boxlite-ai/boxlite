@@ -15,6 +15,9 @@ export interface StateChange {
   /** Undefined deletes an existing version; null is a persistable JSON value. */
   payload?: Json
 }
+// A key-only mutation advances the locked record's version and preserves its payload.
+type PreparedChange = StateChange | { key: string; expected?: never; payload?: never }
+export const MAX_STATE_CHECKS = 100
 export interface StateCheck {
   key: string
   version: string
@@ -171,7 +174,7 @@ export class ListenerState {
     lease = { ...lease }
     this.ttl(ttlMs)
     await this.database.transaction(this.namespace, async (tx) => {
-      const row = await this.assertLease(tx, lease, 'exclusive'),
+      const row = await this.assertLease(tx, lease, 'renew'),
         until = Math.max(this.until(row), (await tx.now()) + ttlMs)
       // Keep the locked identity tuple stable; snapshots may conservatively see an older deadline.
       if (!(await tx.put(record('@lease', { until }), row.version))) throw new StateConflict()
@@ -245,10 +248,20 @@ export class ListenerState {
     lease: ExecutionLease,
     changes: StateChange[],
     checks: readonly StateCheck[] = [],
+    refreshScopeActivity?: string,
   ): Promise<StateRecord[]> {
     lease = { ...lease }
-    const prepared = this.prepare(changes)
-    if (!Array.isArray(checks) || checks.length > 100) throw new Error('Invalid Listener state checks')
+    const prepared: PreparedChange[] = this.prepare(changes)
+    if (refreshScopeActivity !== undefined) {
+      if (
+        !/^scope-state\/[0-9a-f]{64}$/.test(refreshScopeActivity) ||
+        prepared.length >= 100 ||
+        prepared.some((change) => change.key === refreshScopeActivity)
+      )
+        throw new Error('Invalid scope activity refresh')
+      prepared.push({ key: refreshScopeActivity })
+    }
+    if (!Array.isArray(checks) || checks.length > MAX_STATE_CHECKS) throw new Error('Invalid Listener state checks')
     const fences = checks.map(({ key, version, expiresAt }) => ({ key, version, expiresAt }))
     if (
       new Set(fences.map((check) => check.key)).size !== fences.length ||
@@ -306,7 +319,12 @@ export class ListenerState {
   }
 
   /** Host adapters must check the live binding in this same database transaction. */
-  async ingress<T>(target: string, work: (tx: IngressTransaction) => Promise<T>, lease?: ExecutionLease): Promise<T> {
+  async ingress<T>(
+    target: string,
+    work: (tx: IngressTransaction) => Promise<T>,
+    lease?: ExecutionLease,
+    signal?: AbortSignal,
+  ): Promise<T> {
     if (!/^[A-Za-z0-9][A-Za-z0-9:._/-]{0,200}$/.test(target)) throw new Error('Invalid ingress target')
     return this.database.transaction(this.namespace, async (tx) => {
       if (lease) await this.assertLease(tx, lease)
@@ -334,6 +352,8 @@ export class ListenerState {
         },
       })
       if (lease) await this.assertLease(tx, lease)
+      // A superseded scan rolls back staged counters even if inventory changed during the final lease check.
+      signal?.throwIfAborted()
       return result
     })
   }
@@ -375,11 +395,17 @@ export class ListenerState {
     }
     return result
   }
-  private async apply(tx: StateTransaction, changes: StateChange[]): Promise<StateRecord[]> {
+  private async apply(tx: StateTransaction, changes: PreparedChange[]): Promise<StateRecord[]> {
     const result: StateRecord[] = []
     const ordered = changes.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
     for (let index = 0; index < ordered.length; index++) {
-      const change = ordered[index]
+      let change = ordered[index]
+      if (change.expected === undefined) {
+        // Lock in the same order as membership writes; a dispatch preserves their latest active count.
+        const current = await tx.get(change.key, true)
+        this.valid(current)
+        change = { key: change.key, expected: current!.version, payload: current!.payload }
+      }
       if (tx.insertMany && change.expected === null) {
         let end = index + 1
         while (end < ordered.length && ordered[end].expected === null) end++
@@ -405,16 +431,13 @@ export class ListenerState {
   private async assertLease(
     tx: StateTransaction,
     lease: ExecutionLease,
-    lock: 'shared' | 'exclusive' = 'shared',
+    operation: 'check' | 'renew' = 'check',
   ): Promise<StateRecord> {
     if (lease.namespace !== this.namespace) throw new LeaseLost()
     this.anchor(await tx.get('@anchor'))
-    // Identity changes wait for every guarded transaction; ordinary consumers
-    // share the fence. Renewal takes it exclusively before reading the deadline.
-    const current = this.owner(
-        await (lock === 'shared' && tx.getShared ? tx.getShared('@owner') : tx.get('@owner', true)),
-      ),
-      expiry = await tx.get('@lease'),
+    // Identity changes wait for both workers and renewals. Only renewals serialize on the deadline.
+    const current = this.owner(await (tx.getShared ? tx.getShared('@owner') : tx.get('@owner', true))),
+      expiry = await tx.get('@lease', operation === 'renew'),
       until = this.until(expiry)
     if (
       current.deployment !== this.deployment ||

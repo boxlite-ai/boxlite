@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Logger } from '@nestjs/common'
+import { QueryFailedError } from 'typeorm'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxManager } from './box.manager'
@@ -32,6 +34,7 @@ function makeManager(startFailure: Error) {
     {} as never,
     {} as never,
     imagePullFailureService as never,
+    { get: () => undefined } as never,
   )
   return { manager, boxRepository, imagePullFailureService, start }
 }
@@ -66,5 +69,28 @@ describe('BoxManager sync errors', () => {
         updateData: expect.objectContaining({ state: BoxState.ERROR, errorReason: 'explained' }),
       }),
     )
+  })
+
+  it('keeps database query parameters out of the final sync error log', async () => {
+    const failure = new QueryFailedError(
+      'INSERT INTO job VALUES (?)',
+      ['do-not-log'],
+      Object.assign(new Error('insert failed'), { code: '58000' }),
+    )
+    const { manager } = makeManager(failure)
+    const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
+
+    try {
+      await manager.syncInstanceState(BOX.id)
+      const syncLog = log.mock.calls.find(
+        ([first]) =>
+          typeof first === 'object' && first !== null && 'event' in first && first.event === 'box.sync.failed',
+      )
+      expect(syncLog).toBeDefined()
+      expect(JSON.stringify(log.mock.calls)).not.toContain('do-not-log')
+      expect(JSON.stringify(log.mock.calls)).not.toContain('INSERT INTO job')
+    } finally {
+      log.mockRestore()
+    }
   })
 })

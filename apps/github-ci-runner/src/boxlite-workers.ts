@@ -95,8 +95,12 @@ export class BoxLiteWorkers {
       )
         throw new Error('Original Box create intent changed')
     }
-    const rejectUndispatchedCreate = async (name: string, effect: string): Promise<never> => {
-      const rejected = new ConfirmedWorkerCreationRejected(effect),
+    const rejectUndispatchedCreate = async (
+      name: string,
+      effect: string,
+      reason: ConfirmedWorkerCreationRejected['reason'] = 'undispatched',
+    ): Promise<never> => {
+      const rejected = new ConfirmedWorkerCreationRejected(effect, reason),
         row = await allocation(name)
       creating(row, effect)
       const ledgerKey = 'box-rest/' + name,
@@ -172,11 +176,13 @@ export class BoxLiteWorkers {
         ...(value.exit_code === undefined ? {} : { exit_code: value.exit_code as number | null }),
       }
     }
-    const read = async (name: string, original: string): Promise<WorkerState> => {
+    const read = async (name: string, original: string, requested: boolean): Promise<WorkerState> => {
       try {
         return observe(await this.http.request('GET', '/boxes/' + original), name, original)
       } catch (error) {
         if (!(error instanceof BoxLiteRequestError) || error.status !== 404) throw error
+        // Public inventory also hides failed deletions. A requested creation still needs its original Box.
+        if (requested) throw new Error('Original CI Box creation outcome is still unknown', { cause: error })
         const seen = new Set<string>(),
           tokens = new Set<string>()
         let token: string | undefined
@@ -206,7 +212,8 @@ export class BoxLiteWorkers {
     }
     const get = async (name: string): Promise<WorkerState> => {
       const original = await ledger(name)
-      let box = await read(name, original.id)
+      const requested = original.row.value.box.phase === 'requested'
+      let box = await read(name, original.id, requested)
       if (original.row.value.box.phase !== 'requested' || original.row.value.closing) return box
       if (['running', 'stopped', 'error'].includes(box.status)) return box
       if (!['starting', 'created'].includes(box.status)) throw new Error('Original CI Box boot is pending')
@@ -229,7 +236,7 @@ export class BoxLiteWorkers {
       }
       const deadline = Date.now() + 120000
       for (;;) {
-        box = await read(name, original.id)
+        box = await read(name, original.id, requested)
         if (['running', 'stopped', 'error'].includes(box.status)) return box
         if (!['starting', 'created'].includes(box.status) || Date.now() >= deadline)
           throw new Error('Original CI Box boot is pending')
@@ -247,7 +254,7 @@ export class BoxLiteWorkers {
           row = await admission(launch.name)
         } catch (error) {
           if (original.value.box.phase === 'requested' && original.value.effect?.kind === 'box-create')
-            return rejectUndispatchedCreate(launch.name, original.value.effect.id)
+            return rejectUndispatchedCreate(launch.name, original.value.effect.id, 'admission')
           throw error
         }
         if (original.value.box.phase !== 'requested' || original.value.effect?.kind !== 'box-create')

@@ -115,11 +115,14 @@ for (const home of ['aws', 'gcp'] as const) {
 }
 
 for (const home of ['aws', 'gcp'] as const) {
-  for (const minimum of [undefined, '1', '3', '63']) {
-    test(`${home} delivers the platform subdomain minimum ${minimum ?? '(unset)'} from the stage group`, () => {
+  for (const [key, value] of [
+    ['DB_POOL_MAX', undefined],
+    ['DB_POOL_MAX', '25'],
+    ...[undefined, '1', '3', '63'].map((minimum) => ['PLATFORM_SUBDOMAIN_MIN_LENGTH', minimum] as const),
+  ] as const) {
+    test(`${home} delivers ${key} ${value ?? '(unset)'} from the stage group`, () => {
       const path = new URL('../../mstage.env.json', import.meta.url)
       const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
-      const key = 'PLATFORM_SUBDOMAIN_MIN_LENGTH'
       const required = Object.fromEntries(
         declared.envSelectGroup
           .api!.filter((name) => name !== key && !declared.envOptional.api!.includes(name))
@@ -130,7 +133,7 @@ for (const home of ['aws', 'gcp'] as const) {
         groups: declared.envSelectGroup,
         optional: declared.envOptional.api,
         where: path.pathname,
-        values: { ...required, ...(minimum === undefined ? {} : { [key]: minimum }) },
+        values: { ...required, ...(value === undefined ? {} : { [key]: value }) },
       })
       const { environment, secrets } = apiEnvironmentFrom({
         environment: { ...base, ...selected },
@@ -139,8 +142,8 @@ for (const home of ['aws', 'gcp'] as const) {
         stage: 'dev',
         home,
       })
-      assert.equal(environment[key], minimum)
-      assert.equal(Object.hasOwn(environment, key), minimum !== undefined)
+      assert.equal(environment[key], value)
+      assert.equal(Object.hasOwn(environment, key), value !== undefined)
       assert.equal(Object.hasOwn(secrets, key), false)
     })
   }

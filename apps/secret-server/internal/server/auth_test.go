@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boxlite-ai/secret-server/internal/attest"
 	"google.golang.org/api/idtoken"
 	"google.golang.org/api/option"
 )
@@ -23,6 +25,39 @@ import (
 type transport func(*http.Request) (*http.Response, error)
 
 func (f transport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type runnerVerifierFunc func(context.Context, http.Header) (attest.RunnerID, error)
+
+func (f runnerVerifierFunc) Verify(ctx context.Context, h http.Header) (attest.RunnerID, error) {
+	return f(ctx, h)
+}
+
+func TestFetchRouteVerifierOutage(t *testing.T) {
+	const proof = "synthetic-runner-proof"
+	called, verified := false, false
+	verifier := runnerVerifierFunc(func(_ context.Context, h http.Header) (attest.RunnerID, error) {
+		verified = h.Get(attest.GCPIITHeader) == proof
+		return "", errors.New("signing-key service unavailable")
+	})
+	mux := http.NewServeMux()
+	mux.Handle("/internal/v1/fetch", fetchAuth(verifier, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	})))
+	request := httptest.NewRequest(http.MethodPost, "/internal/v1/fetch", nil)
+	request.Header.Set(attest.GCPIITHeader, proof)
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+
+	if !verified || called || response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("verified=%v handler called=%v status=%d, want true, false, 503", verified, called, response.Code)
+	}
+	var problem struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil || problem.Code != "attestation_unavailable" {
+		t.Fatalf("error code %q, decode error %v, want attestation_unavailable", problem.Code, err)
+	}
+}
 
 func googleTokenFixture(t *testing.T) (*idtoken.Validator, func(map[string]any) string) {
 	t.Helper()

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -17,7 +18,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
-import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator'
+import { IsIn, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateIf } from 'class-validator'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
@@ -30,6 +31,9 @@ import { CheckpointService } from '../box/services/checkpoint.service'
 class CreateCheckpointRequest {
   @IsString() @MinLength(1) @MaxLength(128) source_box_id: string
   @IsOptional() @IsString() @Matches(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/) name?: string
+  @ValidateIf((_obj, value) => value !== undefined)
+  @IsIn(['disk', 'full'])
+  kind?: 'disk' | 'full'
 }
 
 @Controller(['v1/checkpoints', 'v1/:prefix/checkpoints'])
@@ -43,6 +47,9 @@ export class BoxliteCheckpointController {
   @HttpCode(201)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async create(@AuthContext() auth: OrganizationAuthContext, @Body() request: CreateCheckpointRequest) {
+    if (request.kind === 'full') {
+      throw new BadRequestException({ message: 'Full checkpoints are not supported', code: 'unsupported' })
+    }
     return response(
       await this.checkpoints.create(auth.organizationId, request.source_box_id, request.name ?? undefined),
     )
@@ -83,6 +90,7 @@ function response(checkpoint: Checkpoint) {
     name: checkpoint.name,
     source_box_id: checkpoint.sourceBoxId,
     state: checkpoint.state,
+    kind: 'disk',
     created_at: checkpoint.createdAt.toISOString(),
     size_bytes: checkpoint.archive?.sizeBytes ?? 0,
     ...(checkpoint.errorReason ? { error_reason: checkpoint.errorReason } : {}),

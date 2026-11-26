@@ -132,6 +132,28 @@ impl GuestInterface {
             .await?;
         Ok(())
     }
+
+    /// Fill the container root disk after the kernel observes its new capacity.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) async fn resize_filesystem(&mut self, minimum_bytes: u64) -> BoxliteResult<()> {
+        self.client
+            .resize_filesystem(boxlite_shared::ResizeFilesystemRequest {
+                device: "/dev/vda".into(),
+                minimum_bytes,
+            })
+            .await
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unimplemented {
+                    BoxliteError::Unsupported(
+                        "guest has no filesystem resize RPC; restart with the current runtime"
+                            .into(),
+                    )
+                } else {
+                    BoxliteError::Engine(format!("guest filesystem resize failed: {error}"))
+                }
+            })?;
+        Ok(())
+    }
 }
 
 /// A guest agent version as `(major, minor, patch)`.

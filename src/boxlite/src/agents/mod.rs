@@ -3,9 +3,9 @@
 //! BoxLite forwards each operation to a coding agent's native interface inside
 //! the Box. The agent owns its conversation, execution and recovery; BoxLite
 //! owns the Box and the transport, and starts the agent's own service when
-//! none runs. OpenCode 2.2 on a local runtime is the only implementation;
-//! unsupported operations and options fail with `Unsupported` before reaching
-//! the agent.
+//! none runs. OpenCode 2.2 is the local implementation. REST runtimes forward
+//! operations to the server's agent API; unsupported operations and options
+//! fail with `Unsupported` before reaching the agent.
 //!
 //! Each implementation is one module whose agent type implements
 //! [`AgentBackend`]; `Agents::create` maps the implementation name to it.
@@ -14,6 +14,8 @@ mod install;
 mod opencode;
 /// Shared JSON conversion for agent API consumers.
 pub mod records;
+#[cfg(feature = "rest")]
+mod rest;
 #[cfg(feature = "test-support")]
 mod test_support;
 mod types;
@@ -44,6 +46,9 @@ const TURN_POLL_INTERVAL: Duration = Duration::from_millis(500);
 trait AgentBackend: Send + Sync + std::fmt::Debug {
     /// Implementation and version named in errors, such as `OpenCode 2.2`.
     fn adapter(&self) -> &str;
+
+    /// Stable implementation name used by the wire contract.
+    fn implementation(&self) -> &str;
 
     /// The native agent ID that `Agents::get` accepts.
     fn id(&self) -> &str;
@@ -163,6 +168,13 @@ impl Agents {
         if self.test_backend {
             return Ok(Agent::for_test());
         }
+        #[cfg(feature = "rest")]
+        if let Ok(remote) = Arc::clone(&self.box_backend)
+            .as_any_arc()
+            .downcast::<crate::rest::litebox::RestBox>()
+        {
+            return rest::create(&remote, agent, &options).await;
+        }
         match agent {
             opencode::IMPLEMENTATION => {
                 self.require_local_runtime()?;
@@ -182,6 +194,13 @@ impl Agents {
         #[cfg(feature = "test-support")]
         if self.test_backend {
             return Ok(Agent::for_test());
+        }
+        #[cfg(feature = "rest")]
+        if let Ok(remote) = Arc::clone(&self.box_backend)
+            .as_any_arc()
+            .downcast::<crate::rest::litebox::RestBox>()
+        {
+            return rest::get(&remote, agent_id).await;
         }
         self.require_local_runtime()?;
         if !opencode::is_session_id(agent_id) {
@@ -209,8 +228,8 @@ impl Agents {
         Ok(())
     }
 
-    /// Checked before any validation, so remote runtimes always see `Unsupported`.
-    /// A cloud tunnel can publish the agent's server; a local one stays on this host.
+    /// Resolve the local Box for direct adapter calls and binary installation.
+    /// REST create and get dispatch through their backend before this check.
     fn require_local_runtime(&self) -> BoxliteResult<Arc<BoxImpl>> {
         Arc::clone(&self.box_backend)
             .as_any_arc()
@@ -250,6 +269,11 @@ impl Agent {
     /// The agent ID to pass to [`Agents::get`], such as from another process.
     pub fn id(&self) -> &str {
         self.backend.id()
+    }
+
+    /// The agent implementation name, such as `opencode`.
+    pub fn implementation(&self) -> &str {
+        self.backend.implementation()
     }
 
     /// Stop admissions and close the agent loop.
@@ -322,10 +346,22 @@ impl AgentTurn {
         let observe = async {
             loop {
                 let state = self.backend.turn(&self.state.id).await?;
+                let has_known_outcome = matches!(
+                    state.status,
+                    AgentTurnStatus::Completed
+                        | AgentTurnStatus::Cancelled
+                        | AgentTurnStatus::Failed
+                );
                 if let Some(result) = state.result {
-                    return Ok(result);
+                    if has_known_outcome && state.status == result.status {
+                        return Ok(result);
+                    }
+                    return Err(BoxliteError::InvalidState(format!(
+                        "turn {} has status {:?} with result status {:?}",
+                        self.state.id, state.status, result.status
+                    )));
                 }
-                if state.status == AgentTurnStatus::Unknown {
+                if has_known_outcome || state.status == AgentTurnStatus::Unknown {
                     return Err(BoxliteError::InvalidState(format!(
                         "turn {} ended without a recorded outcome",
                         self.state.id

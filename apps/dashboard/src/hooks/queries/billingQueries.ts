@@ -8,7 +8,11 @@ import type { OrganizationWallet } from '@/billing-api/types/OrganizationWallet'
 import type { SeriesGranularity } from '@/billing-api'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
-import { UseQueryOptions } from '@tanstack/react-query'
+import { useQuery, type UseQueryOptions } from '@tanstack/react-query'
+import { useAuth } from 'react-oidc-context'
+import { useApi } from '../useApi'
+import { useConfig } from '../useConfig'
+import { queryKeys } from './queryKeys'
 import { useOrganizationBillingPortalUrlQuery } from './useOrganizationBillingPortalUrlQuery'
 import {
   useFetchOrganizationCheckoutUrlQuery,
@@ -46,6 +50,25 @@ export function useOwnerWalletQuery(
 export function useOwnerPlanQuery() {
   const scope = useSelectedOrgBillingScope()
   return useOrganizationPlanQuery(scope)
+}
+
+export function useOwnerTrialEligibilityQuery() {
+  const { organizationId, enabled } = useSelectedOrgBillingScope()
+  const { user } = useAuth()
+  const { billingApi } = useApi()
+  const { billingApiUrl } = useConfig()
+  const subject = user?.profile.sub
+  return useQuery({
+    queryKey: queryKeys.organization.trialEligibility(organizationId, subject),
+    queryFn: () => billingApi.getPlanTrialEligibility(organizationId),
+    enabled: Boolean(enabled && subject && billingApiUrl),
+    // An offer belongs to this owner and organization for this visit to Plans.
+    placeholderData: undefined,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
 }
 
 export function useOwnerBillingPortalUrlQuery() {

@@ -1,6 +1,7 @@
 package boxlite
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"math"
@@ -29,15 +30,54 @@ func agentFixture(t *testing.T, name string) json.RawMessage {
 
 func sameAgentJSON(t *testing.T, got, want []byte) {
 	t.Helper()
-	var left, right any
-	if err := json.Unmarshal(got, &left); err != nil {
+	equal, err := equalAgentJSON(got, want)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(want, &right); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(left, right) {
+	if !equal {
 		t.Fatalf("JSON mismatch: got %s, want %s", got, want)
+	}
+}
+
+func equalAgentJSON(got, want []byte) (bool, error) {
+	var values [2]any
+	for i, raw := range [][]byte{got, want} {
+		if !json.Valid(raw) {
+			return false, errors.New("invalid JSON")
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		// Compare numeric tokens exactly; only whitespace and object order are irrelevant.
+		decoder.UseNumber()
+		if err := decoder.Decode(&values[i]); err != nil {
+			return false, err
+		}
+	}
+	return reflect.DeepEqual(values[0], values[1]), nil
+}
+
+func TestAgentJSONComparisonPreservesNumbers(t *testing.T) {
+	for _, tc := range []struct {
+		left, right string
+		equal       bool
+	}{
+		{`{"a":1,"b":[2]}`, ` {"b":[2],"a":1} `, true},
+		{`9007199254740992`, `9007199254740993`, false},
+		{`0.123456789012345678901`, `0.123456789012345678902`, false},
+		{`{"nested":[9223372036854775806]}`, `{"nested":[9223372036854775807]}`, false},
+		{`1e1000`, `2e1000`, false},
+	} {
+		equal, err := equalAgentJSON([]byte(tc.left), []byte(tc.right))
+		if err != nil || equal != tc.equal {
+			t.Errorf("compare %s and %s: %v, %v; want %v", tc.left, tc.right, equal, err, tc.equal)
+		}
+	}
+	for _, invalid := range []string{``, `{`, `1 2`} {
+		if _, err := equalAgentJSON([]byte(invalid), []byte(`null`)); err == nil {
+			t.Errorf("invalid left JSON accepted: %q", invalid)
+		}
+		if _, err := equalAgentJSON([]byte(`null`), []byte(invalid)); err == nil {
+			t.Errorf("invalid right JSON accepted: %q", invalid)
+		}
 	}
 }
 
@@ -216,6 +256,75 @@ func TestAgentRetentionDecimalBoundaries(t *testing.T) {
 			t.Fatalf("invalid retention %s: %+v, %v", raw, got, err)
 		}
 	}
+}
+
+func TestAgentRetentionBoundariesFromCore(t *testing.T) {
+	got, err := parseAgentCapabilities(agentFixture(t, "capabilities_max"))
+	if err != nil || got.IdempotencyRetention == nil || *got.IdempotencyRetention != time.Duration(math.MaxInt64) {
+		t.Fatalf("core maximum retention: %+v, %v", got, err)
+	}
+	if got, err := parseAgentCapabilities(agentFixture(t, "capabilities_overflow")); got != nil || err == nil {
+		t.Fatalf("core overflow retention: %+v, %v", got, err)
+	}
+}
+
+func TestAgentCapabilityIntegerBoundaries(t *testing.T) {
+	for _, field := range []string{"max_queued_turns", "max_pending_steering"} {
+		for _, want := range []uint{0, 1, ^uint(0)} {
+			raw, err := json.Marshal(want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := parseAgentCapabilities(agentField(t, agentFixture(t, "capabilities"), field, raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := got.MaxQueuedTurns
+			if field == "max_pending_steering" {
+				value = got.MaxPendingSteering
+			}
+			if value == nil || *value != want {
+				t.Fatalf("%s: got %v, want %d", field, value, want)
+			}
+		}
+		for _, raw := range []string{"1.5", "18446744073709551616"} {
+			got, err := parseAgentCapabilities(agentField(t, agentFixture(t, "capabilities"), field, json.RawMessage(raw)))
+			if got != nil || err == nil {
+				t.Fatalf("%s accepted %s: %+v, %v", field, raw, got, err)
+			}
+		}
+	}
+}
+
+func TestAgentNumericPayloadsFromCore(t *testing.T) {
+	numbers := agentFixture(t, "numeric_data")
+	sameAgentJSON(t, numbers, []byte(`[9007199254740992,9007199254740993,-9223372036854775808,9223372036854775807,18446744073709551615,0.123456789012345678901,0.123456789012345678902]`))
+	config, err := parseAgentConfig(agentFixture(t, "numeric_config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range []json.RawMessage{config.Limits, config.Permissions, config.OutputSchema} {
+		sameAgentJSON(t, data, numbers)
+	}
+	encoded, err := agentConfigJSON(*config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameAgentJSON(t, encoded, agentFixture(t, "numeric_config"))
+	result, err := parseAgentResult(agentFixture(t, "result"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(result.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	sameAgentJSON(t, payload["numbers"], numbers)
+	encoded, err = agentResponseJSON(AgentAnswer{Text: "yes", Data: result.Data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameAgentJSON(t, encoded, agentFixture(t, "answer"))
 }
 
 func TestAgentRecordsFromCore(t *testing.T) {

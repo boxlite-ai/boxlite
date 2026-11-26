@@ -80,6 +80,80 @@ unsafe fn read_getter(
     crate::boxlite_free_string(json);
     parsed
 }
+// A current-thread executor lets the test release before the first poll or
+// after the result has been queued, without racing a background worker.
+unsafe fn check_wait_release_order(turn: *mut CAgentTurn, runtime: *mut RuntimeHandle) {
+    let executor = Arc::new(
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap(),
+    );
+    let mut local = CAgentTurn {
+        core: (*turn).core.clone(),
+        queue: (*turn).queue.clone(),
+        runtime: executor.clone(),
+    };
+    for cancel_first in [true, false] {
+        let mut seen = Seen::default();
+        let data = &mut seen as *mut Seen as *mut c_void;
+        let mut handle = ptr::dangling_mut();
+        let cb: CAgentJsonCb = if cancel_first {
+            Some(error_json_cb)
+        } else {
+            Some(json_cb)
+        };
+        assert_eq!(
+            boxlite_agent_turn_wait_cancellable(
+                ptr::null_mut(),
+                ptr::null(),
+                cb,
+                data,
+                &mut handle,
+                ptr::null_mut()
+            ),
+            BoxliteErrorCode::InvalidArgument
+        );
+        assert!(handle.is_null());
+        assert_eq!(
+            boxlite_agent_turn_wait_cancellable(
+                &mut local,
+                ptr::null(),
+                cb,
+                data,
+                &mut handle,
+                ptr::null_mut()
+            ),
+            BoxliteErrorCode::Ok
+        );
+        assert!(!handle.is_null());
+        if cancel_first {
+            boxlite_agent_wait_free(handle);
+        }
+        executor.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while local.queue.inner.lock().unwrap().is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        });
+        if !cancel_first {
+            boxlite_agent_wait_free(handle);
+        }
+        assert!(!seen.done);
+        assert_eq!(crate::boxlite_runtime_drain(runtime, 0, ptr::null_mut()), 1);
+        assert!(seen.done);
+        if cancel_first {
+            assert_eq!(seen.error.unwrap().0, BoxliteErrorCode::Stopped);
+        } else {
+            assert_eq!(seen.json.unwrap()["text"], "hello");
+        }
+        assert_eq!(crate::boxlite_runtime_drain(runtime, 0, ptr::null_mut()), 0);
+    }
+}
+
 #[test]
 fn c_calls_and_getters_reach_core_through_drain() {
     unsafe {
@@ -265,6 +339,7 @@ fn c_calls_and_getters_reach_core_through_drain() {
         drain(runtime_ptr, &mut seen);
         assert_eq!(seen.json.take().unwrap()["text"], "hello");
         seen.done = false;
+        check_wait_release_order(turn, runtime_ptr);
         let turn_id = CString::new("turn-1").unwrap();
         assert_eq!(
             boxlite_agent_get_turn(

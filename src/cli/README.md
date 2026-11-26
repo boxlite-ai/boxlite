@@ -165,9 +165,13 @@ Explicit defaults such as `--auto-delete 0` and `--network enabled` also reject;
 global connection options remain available.
 
 Checkpoints are managed by the selected REST server. Local runtimes return
-an unsupported-operation error. Each checkpoint captures a stopped box's disk
-and execution configuration, survives source deletion, and can create multiple
-boxes. It does not capture memory or running processes.
+an unsupported-operation error. Checkpoints capture disk and execution
+configuration, survive source deletion, and can create multiple boxes.
+
+`checkpoint create --kind <disk|full>` selects the capture type. `disk` is the
+default and requires a stopped, idle box. `full` also captures guest memory and
+VM state and requires a running box. Before requesting a full capture, the CLI
+checks that `GET /v1/config` reports `memory_checkpoints_enabled: true`.
 
 ```bash
 # Use a REST context, or pass --url with the selected server.
@@ -193,9 +197,9 @@ replace an existing box from a checkpoint; remove the box and create a new one.
 
 Storage and capture coordination belong to the server.
 The SDK's `CheckpointHandle` only validates inputs and sends REST requests.
-The separate `import ARCHIVE` command keeps the native archive workflow unchanged.
-Local `serve` reports `checkpoints_enabled: false` and exposes no checkpoint
-management routes. Existing binary archive export/import remains available.
+Local `serve` reports `checkpoints_enabled: false` and
+`memory_checkpoints_enabled: false` and exposes no checkpoint management routes.
+Use `import ARCHIVE` to import a binary archive.
 The cloud runner verifies the downloaded artifact SHA before ordinary native
 import, which owns archive validation; this creates no local
 checkpoint catalog or recovery records.

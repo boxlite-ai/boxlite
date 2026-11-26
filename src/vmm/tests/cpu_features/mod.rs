@@ -110,6 +110,33 @@ fn places_each_vcpu_by_apic_id_in_one_package_of_cores() {
 }
 
 #[test]
+fn masks_shadow_stack_only_on_leaf_7_subleaf_0() {
+    let indexed_subleaf_1 = X86CpuidEntry {
+        subleaf: 1,
+        subleaf_required: true,
+        ..entry(7, [0x11, 0x22, 0x180, 0x44])
+    };
+    for (subleaf_required, subleaf) in [(true, 0), (false, 1)] {
+        let subleaf_0 = X86CpuidEntry {
+            subleaf,
+            subleaf_required,
+            ..entry(7, [0x11, 0x22, 0x1c0, 0x44])
+        };
+        let cpuid = vcpu_cpuid(&[subleaf_0, indexed_subleaf_1], 0, 1);
+        assert_eq!(
+            subleaves(&cpuid, 7),
+            [
+                X86CpuidEntry {
+                    ecx: 0x140,
+                    ..subleaf_0
+                },
+                indexed_subleaf_1
+            ]
+        );
+    }
+}
+
+#[test]
 fn amd_reports_the_apic_id_in_its_extended_topology_leaves() {
     let mut supported = amd();
     let features = supported

@@ -31,6 +31,7 @@ fn config(disks: Vec<DiskConfig>) -> VmConfig {
         vsock: None,
         network: None,
         virtio_console: false,
+        hotplug_mib: 0,
     }
 }
 
@@ -110,7 +111,7 @@ fn block_id_routes_growth_independently_of_disk_order() {
             config(disks.clone()),
             || Ok(MockVm::new()),
             |_, _| Ok(BootRegisters::default()),
-            |chipset, mut ctx, config| {
+            |chipset, mut ctx, config, _| {
                 let mut slots = Slots::new();
                 for (index, disk) in config.disks.iter().enumerate() {
                     blk::add_disk(chipset, &mut ctx, disk, index, slots.take()?)?;

@@ -25,11 +25,13 @@ import { reportedBoxState } from '../utils/box-state.util'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
+import { boxVolumeForDispatch } from '../utils/box-volume.util'
+import { isFilestoreVolume } from '../entities/volume.entity'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
-import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
+import { chargedNativeTombstone, pendingDeletionTarget } from '../constants/checkpoint-deletion'
 import { GetRunnerParams, RunnerService } from './runner.service'
 import { BoxExitCodeService } from './box-exit-code.service'
 import { BoxError } from '../../exceptions/box-error.exception'
@@ -68,6 +70,7 @@ import {
 import { NetworkMode } from '../enums/network-mode.enum'
 import { networkMode } from '../utils/network-policy.util'
 import { VolumeService } from './volume.service'
+import { FilestoreInstanceResolver } from './filestore-instance.resolver'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import {
   BoxSortField,
@@ -227,6 +230,7 @@ export class BoxService {
     private readonly imagePullFailureService: ImagePullFailureService,
     private readonly organizationBoxLimits: OrganizationBoxLimitsService,
     private readonly secretServerClient: SecretServerClient,
+    private readonly filestoreInstanceResolver: FilestoreInstanceResolver,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -363,23 +367,44 @@ export class BoxService {
       const needsFreshBox = !!options.onPersist || requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
-        const volumeIdOrNames = createBoxDto.volumes.map((v) => v.volumeId)
-        const canonical = await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
-        // Replace the caller's selector with the id it resolved to inside this
-        // organization. A name is only unique per organization, but everything
-        // downstream (the runner, the `boxlite-volume-<id>` bucket) reads this
-        // field as a global id - see VolumeService.validateVolumes.
-        createBoxDto.volumes = createBoxDto.volumes.map((volume) => {
-          const canonicalId = canonical.get(volume.volumeId)
-          if (!canonicalId) {
+        const volumes = await this.volumeService.validateVolumes(
+          organization.id,
+          createBoxDto.volumes.map((v) => v.volumeId),
+        )
+        // Replace the caller's selector with the volume it resolved to inside
+        // this organization. A name is only unique per organization, but
+        // everything downstream (the runner, the `boxlite-volume-<id>` bucket,
+        // a filestore data directory `boxlite-filestore-<instance>/<id>`) reads
+        // the stored value as a globally canonical id - see
+        // VolumeService.validateVolumes. The filestore reference rides along
+        // for the runner's mount dispatch with the address the API resolves
+        // from its FILESTORE_INSTANCES configuration; the runner configures
+        // no instances of its own. A name that left the configuration between
+        // the volume's create and this dispatch fails loudly here.
+        const resolvedVolumes = []
+        for (const volume of createBoxDto.volumes) {
+          const resolved = volumes.get(volume.volumeId)
+          if (!resolved) {
             // validateVolumes keys every selector or throws, so this is
             // unreachable today. Fail closed anyway: the alternative fallback
             // is silently persisting the caller's own string, which is exactly
             // the tenant-controlled passthrough the resolution exists to stop.
             throw new BadRequestError(`Volume '${volume.volumeId}' could not be resolved`)
           }
-          return { ...volume, volumeId: canonicalId }
-        })
+          const instance = isFilestoreVolume(resolved)
+            ? await this.filestoreInstanceResolver.resolve(resolved.instance, 'configured')
+            : undefined
+          resolvedVolumes.push(
+            boxVolumeForDispatch({
+              ...volume,
+              volumeId: resolved.id,
+              ...(instance
+                ? { filestore: { instance: resolved.instance, server: instance.server, export: instance.export } }
+                : {}),
+            }),
+          )
+        }
+        createBoxDto.volumes = resolvedVolumes
       } else if (image && !needsFreshBox) {
         //  No volumes requested — try to claim a pre-warmed box matching this image/spec
         //  before creating a fresh one.
@@ -1039,7 +1064,11 @@ export class BoxService {
       selected.organizationId,
     )
 
-    if (box.pending && !checkpointState?.activeJobId) {
+    const waitingFilestoreRestart =
+      box.state === BoxState.STOPPED &&
+      box.desiredState === BoxDesiredState.STARTED &&
+      box.volumes?.some((volume) => volume.filestore)
+    if (box.pending && !checkpointState?.activeJobId && !waitingFilestoreRestart) {
       throw new BoxError('Box state change in progress')
     }
 
@@ -1424,10 +1453,13 @@ export class BoxService {
     const twentyFourHoursAgo = new Date()
     twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24)
 
-    const destroyedBoxs = await this.boxRepository.delete({
-      state: BoxState.DESTROYED,
-      updatedAt: LessThan(twentyFourHoursAgo),
-    })
+    const retained = chargedNativeTombstone(this.configService.get('ci.githubClientId'))
+    const destroyedBoxs = await this.boxRepository
+      .createQueryBuilder()
+      .delete()
+      .where({ state: BoxState.DESTROYED, updatedAt: LessThan(twentyFourHoursAgo) })
+      .andWhere(`NOT ${retained.sql}`, retained.parameters)
+      .execute()
 
     if (destroyedBoxs.affected > 0) {
       this.logger.debug(`Cleaned up ${destroyedBoxs.affected} destroyed boxes`)
@@ -1441,11 +1473,12 @@ export class BoxService {
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
+    const target = pendingDeletionTarget(this.configService.get('ci.githubClientId'))
     const result = await this.boxRepository
       .createQueryBuilder()
       .delete()
       .where({ state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED, updatedAt: LessThan(sevenDaysAgo) })
-      .andWhere(`NOT ${CANCELLED_CHECKPOINT_TARGET_SQL}`)
+      .andWhere(`NOT ${target.sql}`, target.parameters)
       .execute()
 
     if (result.affected > 0) {

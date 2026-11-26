@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, LessThan, In, EntityManager } from 'typeorm'
@@ -36,7 +36,8 @@ export class JobService {
 
   /**
    * Create a job within the provided transaction manager
-   * If manager is null, uses the default repository (for non-transactional operations)
+   * With a manager, the transaction owner must call notifyRunner after commit.
+   * With null, insertion commits before this method notifies the runner.
    * @template T The JobType enum value - ensures compile-time type safety for resourceType and payload
    */
   async createJob<T extends JobType>(
@@ -73,9 +74,7 @@ export class JobService {
 
       this.logger.debug(`Created job ${job.id} of type ${type} for ${contextInfo} on runner ${runnerId}`)
 
-      // Notify runner via Redis - happens outside transaction
-      // If transaction rolls back, notification is harmless (runner will poll and find nothing)
-      await this.notifyRunner(runnerId, job.id)
+      if (!manager) await this.notifyRunner(runnerId, job.id)
 
       return job
     } catch (error) {
@@ -88,12 +87,27 @@ export class JobService {
         }
         throw new JobConflictError()
       }
-      this.logger.error(`Error creating job: ${error}`)
+      this.logger.error(
+        {
+          event: 'job.create.failed',
+          jobType: type,
+          runnerId,
+          resourceType,
+          resourceId,
+          code: (error as { code?: string | number } | null)?.code,
+          errorName: error instanceof Error ? error.name : typeof error,
+        },
+        'Job creation failed',
+      )
+      if (type === JobType.CREATE_BOX) {
+        throw new ServiceUnavailableException('Could not create box job')
+      }
       throw error
     }
   }
 
-  private async notifyRunner(runnerId: string, jobId: string): Promise<void> {
+  /** Best-effort wake-up for a committed job; polling recovers missed notifications. */
+  async notifyRunner(runnerId: string, jobId: string): Promise<void> {
     try {
       await this.redis.lpush(runnerJobQueueKey(runnerId), jobId)
       this.logger.debug(`Notified runner ${runnerId} about job ${jobId} via Redis`)
@@ -251,6 +265,13 @@ export class JobService {
 
       if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
         job.completedAt = new Date()
+        if (job.type === JobType.CREATE_BOX) {
+          const payload = job.getPayload()
+          if (payload?.secretCredential) {
+            delete payload.secretCredential
+            job.payload = JSON.stringify(payload)
+          }
+        }
       }
 
       if (resultMetadata) {

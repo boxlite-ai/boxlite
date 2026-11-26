@@ -134,29 +134,30 @@ class AgentSpecTest(unittest.TestCase):
         validate("AgentEvent", json.loads(data))
 
     def test_record_fields_and_fractional_retention(self):
-        records = (ROOT / "src/boxlite/src/agents/records.rs").read_text()
-        functions = dict(re.findall(
-            r"pub fn (\w+)\([^\n]*\).*?\n(.*?)(?=\npub fn |\n///|\nfn |\Z)",
-            records, re.S,
-        ))
-        for schema, function in {
-            "AgentState": "agent_state", "AgentTurnState": "turn_state",
-            "AgentResult": "result", "AgentSteeringReceipt": "receipt",
-            "AgentCapabilities": "capabilities", "AgentEvent": "event",
+        # go_json_fixture_matches_core_records checks these records against Rust output.
+        records = json.loads((ROOT / "sdks/go/testdata/agents.json").read_text())
+        for schema, sample in {
+            "AgentState": "state", "AgentTurnState": "turn", "AgentResult": "result",
+            "AgentSteeringReceipt": "receipt", "AgentCapabilities": "capabilities",
+            "AgentEvent": "event", "AgentConfig": "config",
         }.items():
-            fields = set(re.findall(r'"(\w+)"\s*:', functions[function]))
-            self.assertEqual(set(SCHEMAS[schema]["properties"]), fields, schema)
-        config_fields = set(re.findall(r'"(\w+)"\s*:', functions["config"]))
-        config_fields.update(re.findall(r'\(\s*"(\w+)"\s*,', functions["config"]))
-        self.assertEqual(set(SCHEMAS["AgentConfig"]["properties"]), config_fields)
-        request = functions["requests"]
-        outer = re.search(r'json!\(\{ "id":.*?\}\)', request).group()
-        self.assertEqual(set(SCHEMAS["AgentRequest"]["properties"]),
-                         set(re.findall(r'"(\w+)"\s*:', outer)))
-        for variant in SCHEMAS["AgentRequest"]["properties"]["kind"]["oneOf"]:
-            kind = variant["properties"]["type"]["const"]
-            record = re.search(r'json!\(\{ "type": "' + kind + r'".*?\}\)', request).group()
-            self.assertEqual(set(variant["properties"]), set(re.findall(r'"(\w+)"\s*:', record)))
+            with self.subTest(schema=schema):
+                record = records[sample]
+                self.assertEqual(set(SCHEMAS[schema]["properties"]), set(record))
+                validate(schema, record)
+
+        request_schema = SCHEMAS["AgentRequest"]
+        variants = {
+            variant["properties"]["type"]["const"]: variant["properties"]
+            for variant in request_schema["properties"]["kind"]["oneOf"]
+        }
+        self.assertEqual(set(variants), {r["kind"]["type"] for r in records["requests"]})
+        for request in records["requests"]:
+            kind = request["kind"]
+            with self.subTest(kind=kind["type"]):
+                self.assertEqual(set(request_schema["properties"]), set(request))
+                self.assertEqual(set(variants[kind["type"]]), set(kind))
+                validate("AgentRequest", request)
         validate("AgentCapabilities", {"operations": [], "input_kinds": [], "max_queued_turns": 0,
                  "max_pending_steering": None, "idempotency_retention_seconds": 0.5})
         self.assertFalse(jsonschema.Draft202012Validator(SCHEMAS["AgentTurnStatus"]).is_valid("bogus"))

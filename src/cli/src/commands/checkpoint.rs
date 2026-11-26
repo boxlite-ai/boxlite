@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use anyhow::{Result, bail};
-use boxlite::{BoxliteRuntime, CheckpointInfo};
+use boxlite::{BoxliteRuntime, CheckpointInfo, CheckpointKind, CheckpointOptions, CheckpointState};
 use clap::{Args, Subcommand};
 use tabled::Tabled;
 
@@ -18,7 +18,7 @@ pub struct CheckpointArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum CheckpointCommand {
-    /// Capture a box's disk and execution configuration.
+    /// Capture a box's disk (or disk and memory) and execution configuration.
     Create(CaptureArgs),
     /// List checkpoints independently of source boxes.
     #[command(visible_alias = "ls")]
@@ -31,11 +31,28 @@ pub enum CheckpointCommand {
     Delete(DeleteArgs),
 }
 
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum CheckpointKindArg {
+    Disk,
+    Full,
+}
+
+impl From<CheckpointKindArg> for CheckpointKind {
+    fn from(kind: CheckpointKindArg) -> Self {
+        match kind {
+            CheckpointKindArg::Disk => Self::Disk,
+            CheckpointKindArg::Full => Self::Full,
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 pub struct CaptureArgs {
     pub source: String,
     #[arg(long)]
     pub name: Option<String>,
+    #[arg(long, value_enum)]
+    pub kind: Option<CheckpointKindArg>,
 }
 
 #[derive(Args, Debug)]
@@ -76,7 +93,12 @@ pub async fn execute(args: CheckpointArgs, global: &GlobalFlags) -> Result<()> {
     let checkpoints = rt.checkpoints();
     match args.command {
         CheckpointCommand::Create(args) => {
-            let info = checkpoints.create(&args.source, args.name).await?;
+            let options = CheckpointOptions {
+                kind: args.kind.map(Into::into),
+            };
+            let info = checkpoints
+                .create_with_options(&args.source, args.name, options)
+                .await?;
             println!("{}", info.id);
         }
         CheckpointCommand::List(args) => {
@@ -87,11 +109,12 @@ pub async fn execute(args: CheckpointArgs, global: &GlobalFlags) -> Result<()> {
                     println!("{}", info.id);
                 }
             } else {
+                let output: Vec<_> = infos.iter().map(CheckpointJson::from).collect();
                 formatter::print_output(
                     &mut std::io::stdout().lock(),
-                    &infos,
+                    &output,
                     format,
-                    |writer, infos| table(writer, infos),
+                    |writer, _| table(writer, &infos),
                 )?;
             }
         }
@@ -100,9 +123,9 @@ pub async fn execute(args: CheckpointArgs, global: &GlobalFlags) -> Result<()> {
             let info = checkpoints.get(&args.checkpoint).await?;
             formatter::print_output(
                 &mut std::io::stdout().lock(),
-                &info,
+                &CheckpointJson::from(&info),
                 format,
-                |writer, info| table(writer, std::slice::from_ref(info)),
+                |writer, _| table(writer, std::slice::from_ref(&info)),
             )?;
         }
         CheckpointCommand::Delete(args) => {
@@ -115,6 +138,37 @@ pub async fn execute(args: CheckpointArgs, global: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct CheckpointJson<'a> {
+    id: &'a str,
+    name: &'a str,
+    source_box_id: &'a str,
+    created_at: &'a chrono::DateTime<chrono::Utc>,
+    size_bytes: u64,
+    state: &'a CheckpointState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_reason: Option<&'a str>,
+    kind: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_size_bytes: Option<u64>,
+}
+
+impl<'a> From<&'a CheckpointInfo> for CheckpointJson<'a> {
+    fn from(info: &'a CheckpointInfo) -> Self {
+        Self {
+            id: &info.id,
+            name: &info.name,
+            source_box_id: &info.source_box_id,
+            created_at: &info.created_at,
+            size_bytes: info.size_bytes,
+            state: &info.state,
+            error_reason: info.error_reason.as_deref(),
+            kind: info.kind.as_str(),
+            memory_size_bytes: info.memory_size_bytes,
+        }
+    }
+}
+
 #[derive(Tabled)]
 struct Row {
     #[tabled(rename = "ID")]
@@ -123,6 +177,8 @@ struct Row {
     name: String,
     #[tabled(rename = "SOURCE")]
     source: String,
+    #[tabled(rename = "KIND")]
+    kind: String,
     #[tabled(rename = "STATE")]
     state: String,
     #[tabled(rename = "SIZE")]
@@ -138,6 +194,7 @@ fn table(writer: &mut dyn Write, infos: &[CheckpointInfo]) -> Result<()> {
             id: info.id.clone(),
             name: info.name.clone(),
             source: info.source_box_id.clone(),
+            kind: info.kind.as_str().to_string(),
             state: format!("{:?}", info.state).to_lowercase(),
             size: crate::commands::volume::ls::format_size(Some(info.size_bytes)),
             created: formatter::format_time(&info.created_at),

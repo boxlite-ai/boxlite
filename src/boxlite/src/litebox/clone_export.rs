@@ -18,12 +18,9 @@ use crate::runtime::types::BoxStatus;
 impl BoxImpl {
     fn options_for_copy(&self) -> BoxliteResult<crate::runtime::options::BoxOptions> {
         let mut options = self.config.options.clone();
-        if let Some(policy) = self
-            .runtime
-            .box_manager
-            .update_box(self.id())?
-            .outbound_policy
-        {
+        let state = self.runtime.box_manager.update_box(self.id())?;
+        options.disk_size_gb = state.disk_size_gb.or(options.disk_size_gb);
+        if let Some(policy) = state.outbound_policy {
             options.network = policy.try_into()?;
         }
         Ok(options)

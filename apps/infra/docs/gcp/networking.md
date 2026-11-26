@@ -24,6 +24,9 @@ GCP uses private runner hosts, direct Cloud Run VPC egress, and separate public 
 | Private VM/GKE → internet | Cloud NAT when internet egress is enabled |
 | Backoffice → ClickHouse | Consumer PSC endpoint → service attachment → internal passthrough LB |
 
+The internal API load balancer forwards `/internal/v1/credentials/introspect` verbatim
+in its priority 1 rule. The priority 2 catch-all adds `/api/` to short paths such as `/boxes`.
+
 Cloud Run API ingress is restricted to internal/load-balancer traffic. The collector and registry proxy are internal-only.
 Their VPC egress mode is `PRIVATE_RANGES_ONLY`: public internet traffic does not automatically take
 Cloud NAT. There is no Serverless VPC Access connector in this resource graph.

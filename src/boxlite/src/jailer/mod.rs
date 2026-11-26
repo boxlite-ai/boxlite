@@ -60,7 +60,7 @@ mod common;
 mod error;
 mod pre_exec;
 pub(crate) mod sandbox;
-pub(crate) mod shim_copy;
+pub(crate) mod shim_cache;
 
 // Linux-only modules
 #[cfg(target_os = "linux")]
@@ -171,8 +171,9 @@ pub trait Jail: Send + Sync {
 // ============================================================================
 
 use crate::disk::read_backing_chain;
-use crate::runtime::layout::BoxFilesystemLayout;
+use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, dirs};
 use crate::volumes::{VolumeShare, classify_volume_share};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 // ============================================================================
@@ -188,7 +189,6 @@ use std::path::PathBuf;
 ///
 /// ```text
 /// {box_dir}/                          # NOT granted wholesale
-/// ├── bin/                        [RO]  # copied shim binary + libkrunfw
 /// ├── boot/                       [RO]  # staged custom kernel + initramfs
 /// ├── shared/                     [RW]  # guest-visible virtio-fs share root
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
@@ -281,14 +281,12 @@ fn build_path_access(
         }
     }
 
-    // Read-only directories (copied shim/libraries and staged boot assets).
-    for dir in [layout.bin_dir(), layout.boot_dir()] {
-        if dir.exists() {
-            paths.push(PathAccess {
-                path: dir,
-                writable: false,
-            });
-        }
+    let boot_dir = layout.boot_dir();
+    if boot_dir.exists() {
+        paths.push(PathAccess {
+            path: boot_dir,
+            writable: false,
+        });
     }
 
     // shared/ is exposed as a read-write virtio-fs share root on macOS.
@@ -424,6 +422,7 @@ pub struct Jailer<S: Sandbox> {
     pub(crate) box_id: String,
     /// Box filesystem layout (provides typed path accessors).
     pub(crate) layout: BoxFilesystemLayout,
+    pub(crate) shim_cache_dir: Option<PathBuf>,
     /// FDs to preserve through pre_exec: each (source_fd, target_fd) is dup2'd
     /// before FD cleanup. Used for watchdog pipe inheritance across fork.
     pub(crate) preserved_fds: Vec<(std::os::fd::RawFd, i32)>,
@@ -472,50 +471,67 @@ impl<S: Sandbox> Jail for Jailer<S> {
 
         let mut ctx = self.context();
 
-        // Grant read access to original binary's library directory so the
-        // dynamic linker can load libraries from the original location.
-        #[allow(clippy::collapsible_if)]
+        let mut effective_binary = binary.to_path_buf();
         if self.security.jailer_enabled {
-            if let Some(lib_dir) = binary.parent().filter(|d| d.exists()) {
-                ctx.paths.push(PathAccess {
-                    path: lib_dir.to_path_buf(),
-                    writable: false,
-                });
+            let bin_dir = self.layout.bin_dir();
+            if let Err(err) = std::fs::remove_dir_all(&bin_dir)
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %bin_dir.display(), error = %err, "Failed to remove legacy shim directory");
             }
-        }
-
-        // Shim copy (Firecracker pattern) — shared for both platforms
-        let effective_binary = if self.security.jailer_enabled {
-            match shim_copy::copy_shim_to_box(binary, self.layout.root()) {
-                Ok(copied) => {
-                    tracing::info!(
-                        original = %binary.display(),
-                        copied = %copied.display(),
-                        "Using copied shim binary (Firecracker pattern)"
-                    );
-                    copied
+            let mut staged_ok = false;
+            if let Some(cache_dir) = self.resolve_shim_cache_dir() {
+                match shim_cache::stage_shim(binary, &cache_dir) {
+                    Ok(staged) => {
+                        effective_binary = staged;
+                        staged_ok = true;
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "Failed to stage shim, using original")
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to copy shim, using original");
-                    binary.to_path_buf()
-                }
+                ctx.shim_cache_dir = Some(cache_dir);
+            } else {
+                tracing::debug!(box_id = %self.box_id, "No shim cache directory resolved, using original shim");
             }
-        } else {
-            binary.to_path_buf()
-        };
 
-        // copy_shim_to_box() created box/bin and the copied shim above, but
-        // context() computed the bind list *before* that — so box/bin (which
-        // didn't exist yet) was skipped. Add it now, read-only, otherwise bwrap
-        // can't see the shim binary it is about to exec (execvp ENOENT).
-        #[allow(clippy::collapsible_if)]
-        if self.security.jailer_enabled {
-            if let Some(bin_dir) = effective_binary.parent().filter(|d| d.exists()) {
-                if !ctx.paths.iter().any(|pa| pa.path == bin_dir) {
+            // Keep the original library directory visible to the dynamic linker.
+            let original_dir = binary.parent().filter(|p| !p.as_os_str().is_empty());
+            let effective_dir = effective_binary
+                .parent()
+                .filter(|p| p.exists())
+                .map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+            for dir in original_dir
+                .filter(|p| p.exists())
+                .into_iter()
+                .chain(effective_dir.as_deref())
+            {
+                if !ctx.paths.iter().any(|pa| pa.path == dir && !pa.writable) {
                     ctx.paths.push(PathAccess {
-                        path: bin_dir.to_path_buf(),
+                        path: dir.to_path_buf(),
                         writable: false,
                     });
+                }
+            }
+
+            // On fallback (staging failed or no cache dir), a symlinked runtime/
+            // layout points outside effective_dir/original_dir; grant read-only
+            // single-file access to each resolved target without exposing sibling files.
+            if !staged_ok {
+                for file in shim_cache::resolve_runtime_files(&effective_binary).files {
+                    let inside_granted_dir = original_dir
+                        .is_some_and(|dir| file.canonical_source.starts_with(dir))
+                        || effective_dir
+                            .as_deref()
+                            .is_some_and(|dir| file.canonical_source.starts_with(dir));
+                    if !inside_granted_dir
+                        && !ctx.paths.iter().any(|pa| pa.path == file.canonical_source)
+                    {
+                        ctx.paths.push(PathAccess {
+                            path: file.canonical_source,
+                            writable: false,
+                        });
+                    }
                 }
             }
         }
@@ -551,6 +567,17 @@ impl<S: Sandbox> Jail for Jailer<S> {
 }
 
 impl<S: Sandbox> Jailer<S> {
+    pub(crate) fn resolve_shim_cache_dir(&self) -> Option<PathBuf> {
+        self.shim_cache_dir.clone().or_else(|| {
+            let boxes = self.layout.root().parent()?;
+            if boxes.file_name() == Some(OsStr::new(dirs::BOXES_DIR)) {
+                boxes.parent().map(FilesystemLayout::shims_dir_for)
+            } else {
+                None
+            }
+        })
+    }
+
     /// Get the security options.
     pub fn security(&self) -> &SecurityOptions {
         &self.security
@@ -644,6 +671,7 @@ impl<S: Sandbox> Jailer<S> {
             resource_limits: &self.security.resource_limits,
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),
+            shim_cache_dir: None,
             detached: self.detach,
         }
     }
@@ -788,16 +816,14 @@ mod tests {
         let box_dir = dir.path().to_path_buf();
         let layout = test_layout(box_dir.clone());
 
-        // Create bin + boot + shared dirs
+        // A legacy bin directory may exist alongside boot and shared.
         std::fs::create_dir_all(layout.bin_dir()).unwrap();
         std::fs::create_dir_all(layout.boot_dir()).unwrap();
         std::fs::create_dir_all(layout.shared_dir()).unwrap();
 
         let paths = build_path_access(&layout, &[], &[]);
 
-        let bin = paths.iter().find(|p| p.path == layout.bin_dir());
-        assert!(bin.is_some(), "bin/ should be included");
-        assert!(!bin.unwrap().writable, "bin/ should be read-only");
+        assert!(paths.iter().all(|p| p.path != layout.bin_dir()));
 
         let boot = paths.iter().find(|p| p.path == layout.boot_dir());
         assert!(boot.is_some(), "boot/ should be included");
@@ -967,6 +993,7 @@ mod tests {
                 resource_limits: &limits,
                 network_enabled: false,
                 sandbox_profile: None,
+                shim_cache_dir: None,
                 detached: true,
             };
             let mut cmd = std::process::Command::new("/usr/bin/cat");
@@ -1256,7 +1283,7 @@ mod tests {
         std::fs::create_dir_all(layout.sockets_dir()).unwrap();
         std::fs::create_dir_all(layout.mounts_dir()).unwrap();
         std::fs::create_dir_all(layout.logs_dir()).unwrap();
-        std::fs::create_dir_all(layout.bin_dir()).unwrap();
+        std::fs::create_dir_all(layout.boot_dir()).unwrap();
 
         let paths = build_path_access(&layout, &[], &[]);
 

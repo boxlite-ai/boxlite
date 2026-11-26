@@ -276,6 +276,8 @@ func TestNewRejectsBadConfiguration(t *testing.T) {
 		{"dev on staging", []string{DevName}, "staging", ""},
 		{"dev on production", []string{DevName}, "production", ""},
 		{"invalid registry JSON", []string{GCPIITName}, "staging", `{"gcp_iit": [`},
+		{"null registry", []string{GCPIITName}, "staging", `null`},
+		{"null mode registry", []string{GCPIITName}, "staging", `{"gcp_iit":null}`},
 		{"unknown registry mode", []string{GCPIITName}, "staging", `{"aws_iid": {"i-1": "rnr_a"}}`},
 		{"empty instance ID", []string{GCPIITName}, "staging", `{"gcp_iit": {"": "rnr_a"}}`},
 		{"empty runner ID", []string{GCPIITName}, "staging", `{"gcp_iit": {"1": ""}}`},
@@ -287,7 +289,7 @@ func TestNewRejectsBadConfiguration(t *testing.T) {
 			}
 		})
 	}
-	if _, err := New(Config{Attestors: []string{GCPIITName}, Environment: "staging", GCPIIT: GCPIITConfig{Audience: testAudience}},
+	if _, err := New(Config{Attestors: []string{GCPIITName}, Environment: "staging", Registry: testRegistry, GCPIIT: GCPIITConfig{Audience: testAudience}},
 		newFakeVerifier(), slog.New(slog.DiscardHandler)); err == nil {
 		t.Fatal("gcp_iit without project and service account accepted")
 	}

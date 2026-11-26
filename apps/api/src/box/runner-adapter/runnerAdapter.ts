@@ -16,6 +16,8 @@ import { RunnerServiceInfo } from '../common/runner-service-info'
 export interface RunnerBoxInfo {
   state: BoxState
   daemonVersion?: string
+  /** The latest job for this Box was a failed destroy and no incomplete job was observed. */
+  failedDestroyJob?: true
 }
 
 export interface RunnerMetrics {
@@ -48,6 +50,7 @@ export interface RunnerAdapter {
   runnerInfo(signal?: AbortSignal): Promise<RunnerInfo>
 
   boxInfo(boxId: string): Promise<RunnerBoxInfo>
+  assertFilestoreVolumeSupport(box: Box): Promise<void>
   /** `image` is the ref the runner pulls, which may be pinned tighter than `box.image`. */
   createBox(
     box: Box,

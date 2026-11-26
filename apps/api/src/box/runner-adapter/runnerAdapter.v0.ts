@@ -8,7 +8,8 @@ import axios, { AxiosError } from 'axios'
 import axiosDebug from 'axios-debug-log'
 import axiosRetry from 'axios-retry'
 
-import { Injectable, Logger } from '@nestjs/common'
+import { Inject, Injectable, Logger } from '@nestjs/common'
+import { TypedConfigService } from '../../config/typed-config.service'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
 import { Runner } from '../entities/runner.entity'
 import {
@@ -120,6 +121,17 @@ export function sanitizedNonJsonRunnerMessage(data: unknown): string {
 
 @Injectable()
 export class RunnerAdapterV0 implements RunnerAdapter {
+  @Inject(TypedConfigService)
+  private readonly config: TypedConfigService
+
+  private rejectSecretReferences(box: Box): void {
+    if (
+      box.secrets?.length &&
+      (this.config.get('secretServer.enabled') || box.secrets.some((s) => s.secretId !== undefined))
+    ) {
+      throw new Error('Secret Server secrets require a v2 runner')
+    }
+  }
   private readonly logger = new Logger(RunnerAdapterV0.name)
   private boxApiClient: BoxApi
   private runnerApiClient: DefaultApi
@@ -254,12 +266,29 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
+  async assertFilestoreVolumeSupport(box: Box): Promise<void> {
+    this.assertNoFilestoreVolumes(box)
+  }
+
+  // A filestore volume needs the runner-side NFS mount support that only the
+  // v2 runner protocol carries. Failing loudly here is the point: stripping
+  // the reference would create a box whose volume silently never mounts.
+  private assertNoFilestoreVolumes(box: Box): void {
+    if (box.volumes?.some((volume) => volume.filestore)) {
+      throw new Error(
+        `Box ${box.id} references a Filestore volume, which requires a v2 runner; runner ${this.runner.id} only speaks the v0 protocol`,
+      )
+    }
+  }
+
   async createBox(
     box: Box,
     image: string,
     metadata?: { [key: string]: string },
     nestedVirtualization = false,
   ): Promise<StartBoxResponse | undefined> {
+    this.rejectSecretReferences(box)
+    this.assertNoFilestoreVolumes(box)
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
@@ -342,6 +371,8 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   }
 
   async recoverBox(box: Box): Promise<void> {
+    this.rejectSecretReferences(box)
+    this.assertNoFilestoreVolumes(box)
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }

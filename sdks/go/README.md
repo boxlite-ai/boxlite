@@ -31,20 +31,32 @@ create call. The checkpoint handle only manages checkpoints. Archive import is a
 separate operation for local `.boxlite` files and is unchanged. The CLI form is
 `boxlite create --checkpoint ID [--name NAME]`.
 
-The source must be stopped before `Create`; stop it and wait for `stopped` first.
-Checkpoint creation rejects other states and never stops the source automatically.
+`Create` captures a disk checkpoint from a stopped box. With
+`CreateWithOptions(ctx, source, name, opts)`, set `opts.Kind` to a
+`CheckpointKind`: leave it empty or use `CheckpointKindDisk` for disk capture.
+Use `CheckpointKindFull` to capture disk, guest memory, and VM state from a
+running box. Full capture checks `capabilities.memory_checkpoints_enabled`
+through `GET /v1/config` before submitting the capture. If the server omits or
+disables the capability, the call returns `ErrUnsupported`. Disk capture skips
+the preflight.
 
-On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `List`, `Get` and
-`Remove`, each taking a context. The handle follows its runtime's
+On REST runtimes, `runtime.Checkpoints()` exposes `Create`, `CreateWithOptions`,
+`List`, `Get`, and `Remove`, each taking a context. The handle follows its runtime's
 lifetime and needs no separate close. Captured archives survive source deletion.
 
 ```go
-checkpoint, err := runtime.Checkpoints().Create(ctx, "source", "dev-base")
+checkpoint, err := runtime.Checkpoints().CreateWithOptions(ctx, "source", "dev-base",
+    boxlite.CheckpointOptions{Kind: boxlite.CheckpointKindFull})
 if err != nil { return err }
 worker, err := runtime.Create(ctx, "", boxlite.WithCheckpoint(checkpoint.ID), boxlite.WithName("worker"))
 if err != nil { return err }
 defer worker.Close()
 ```
+
+`CheckpointInfo.Kind` reports the archive kind, including `"unknown"` for an
+unrecognized server kind. `CheckpointInfo.MemorySizeBytes` is a pointer to the
+archived guest memory size and is `nil` when the server omits it. A reported
+zero comes back as a pointer to zero.
 
 Pass an empty image with `WithCheckpoint`; combining it with an image or
 `WithRootfsPath` returns an error.
@@ -474,6 +486,22 @@ called after `Close` — or racing a finishing `Close` — return an
 the box keeps running in the runtime.
 
 ## Development
+
+Agent calls and getters reach the C SDK and Rust core through the
+[shared JSON mapping](../../docs/reference/agents.md#go-json-mapping).
+`Box.Agents()` acquires its namespace lazily. Agent and turn wrappers must not be
+copied after first use; `Runtime.Close` releases their native handles.
+Canceling a call stops the Go wait without canceling submitted agent work;
+late returned handles are released. Canceling an `AgentTurn.Wait` or closing its
+runtime also releases that call’s native observer. Other waits on the same
+turn continue until their own completion, cancellation, or runtime shutdown. `Agent.Close` invokes the core operation
+rather than freeing the local handle. Both event methods return `Unsupported`.
+
+The Go unit and coverage targets enable C `test-support` and the
+`boxlite_agent_test` Go tag. Deterministic tests cross the C/core boundary without
+requiring a VM; normal SDK builds exclude these test entry points.
+Run `make test:unit:go FILTER=Agent` and add `RACE=1` for race checks.
+
 
 Build from source (requires Rust toolchain):
 

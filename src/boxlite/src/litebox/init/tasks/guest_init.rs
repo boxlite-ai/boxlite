@@ -363,6 +363,14 @@ mod tests {
                 thawed_count: 0,
             }))
         }
+
+        async fn resize_filesystem(
+            &self,
+            _: tonic::Request<boxlite_shared::ResizeFilesystemRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ResizeFilesystemResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
     }
 
     #[tonic::async_trait]
@@ -394,6 +402,14 @@ mod tests {
             &self,
             _: tonic::Request<boxlite_shared::ContainerMountRequest>,
         ) -> Result<tonic::Response<boxlite_shared::ContainerMountResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
+
+        async fn detach(
+            &self,
+            _: tonic::Request<boxlite_shared::ContainerDetachRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::ContainerDetachResponse>, tonic::Status>
         {
             Err(tonic::Status::unimplemented("not used by these tests"))
         }

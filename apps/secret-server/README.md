@@ -253,8 +253,13 @@ Invalid attestation configuration prevents startup before the listener opens.
   and `email_verified`, the Compute Engine `project_id`, and that
   `instance_id` is in the registry's `gcp_iit` section.
 - **Registry.** JSON `{mode: {machine_id: runner_id}}`, written by hand for
-  staging. Unknown modes and empty IDs fail startup. An empty `gcp_iit` map,
-  or a map for a disabled attestor, logs a warning.
+  staging. With `gcp_iit` enabled, an unset or blank registry fails startup.
+  An explicit `{}` allows startup and logs a warning that no GCP runners can
+  authenticate.
+
+- **Registry entries.** The registry and each mode's machine map must be JSON
+  objects. JSON `null`, unknown modes, and empty IDs fail startup. Entries for a
+  disabled attestor log a warning.
 - **dev attestor.** Reads `X-Boxlite-Dev-Runner` and is refused unless
   `ENVIRONMENT` is `local` or `dev`. It rejects runner IDs registered under
   another mode.

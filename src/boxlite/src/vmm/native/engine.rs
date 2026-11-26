@@ -8,6 +8,7 @@ use std::{fs::File, io, path::PathBuf, time::Duration};
 use crate::experimental::custom_kernel::KernelFormat;
 use crate::rootfs::guest::Strategy;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
+use crate::vmm::controller::mount_control::Registry;
 use crate::vmm::vmm_socket::{self, ControlError, ControlOp, ControlReply, ControlResponse};
 use crate::vmm::{
     DiskFormat, InstanceSpec, Vmm, VmmConfig, VmmInstance, VmmKind, engine::VmmInstanceImpl,
@@ -52,11 +53,11 @@ impl VmmInstanceImpl for NativeVmmInstance {
             })?),
             None => Box::new(io::sink()),
         };
+        let mut mounts = self.config.vsock.is_some().then(Registry::default);
         let mut vm = Vm::new(self.config, sink).map_err(map_vmm_error)?;
         let vm_control = vm.control();
-        // Without the channel the box still runs; it only cannot grow online.
-        if let Err(error) = vmm_socket::serve(&self.vmm_socket_path, move |op| {
-            handle_control_op(&vm_control, op)
+        if let Err(error) = vmm_socket::serve(&self.vmm_socket_path, move |op, directory| {
+            handle_control_op(&vm_control, mounts.as_mut(), op, directory)
         }) {
             tracing::warn!(
                 %error,
@@ -73,8 +74,13 @@ impl VmmInstanceImpl for NativeVmmInstance {
 /// How long a grow may wait for the block device's worker.
 const GROW_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Serves one control operation against the VM's disks.
-pub(crate) fn handle_control_op(vm: &VmControl, op: ControlOp) -> ControlResponse {
+/// Serves host requests against this VM and its mount records.
+fn handle_control_op(
+    vm: &VmControl,
+    mounts: Option<&mut Registry>,
+    op: ControlOp,
+    directory: Option<File>,
+) -> ControlResponse {
     match op {
         ControlOp::ResizeDisk { block_id, bytes } => vm
             .resize_disk(&block_id, bytes, GROW_TIMEOUT)
@@ -85,6 +91,14 @@ pub(crate) fn handle_control_op(vm: &VmControl, op: ControlOp) -> ControlRespons
                 }
                 _ => ControlError::Failed(error.to_string()),
             }),
+        op => mounts
+            .ok_or_else(|| ControlError::Unsupported("guest transport is unavailable".into()))?
+            .request(
+                boxlite_shared::constants::mount_tags::AGGREGATE,
+                op,
+                directory,
+            )
+            .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap_or(libc::EIO))),
     }
 }
 
@@ -155,7 +169,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
         cmdline: build_cmdline(spec, kernel.command_line.as_deref()),
         initramfs: kernel.initramfs.clone(),
         disks,
-        filesystem: (!spec.fs_shares.shares().is_empty()).then(|| FsConfig {
+        filesystem: Some(FsConfig {
             tag: boxlite_shared::constants::mount_tags::AGGREGATE.into(),
             shares: spec
                 .fs_shares
@@ -193,6 +207,7 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
             }
         }),
         virtio_console: true,
+        hotplug_mib: 0,
     })
 }
 
@@ -243,6 +258,8 @@ pub(crate) fn map_vmm_error(error: boxlite_vmm::Error) -> BoxliteError {
         Error::InvalidVcpuCount(_)
             | Error::InvalidMemorySize(_)
             | Error::GuestMemoryAddressLimit { .. }
+            | Error::InvalidHotplugSize(_)
+            | Error::PlanHotplugMemory { .. }
             | Error::InvalidCommandLine(_)
             | Error::InvalidDiskCount(_)
     ) {

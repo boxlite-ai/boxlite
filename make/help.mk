@@ -127,6 +127,7 @@ help:
 	@echo "    make test:apps:mdeploy      - Type-check and test deployment scripts"
 	@echo "    make test:apps:mbuild       - Type-check and test image publication scripts"
 	@echo "    make test:e2e:drivers       - Test acceptance-client argument handling"
+	@echo "    make test:e2e:serve:volume  - Start boxlite serve and test volume REST CRUD"
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
 	@echo "    make fmt:proxy              - Format the proxy package"
 	@echo "    make test:skill:boxlite-diagrams - Run diagram skill validator tests"

@@ -58,6 +58,7 @@ new JsBoxlite(options: JsOptions)
 | `close()` | `() => void` | Close runtime (no-op) |
 | `images` | getter `=> ImageHandle` | The images this runtime can boot from; see [`ImageHandle`](#imagehandle) |
 | `registries` | getter `=> RegistryHandle` | The server's registry logins; throws `unsupported` on a local runtime. See [`RegistryHandle`](#registryhandle) |
+| `checkpoints` | getter `=> CheckpointHandle` | Managed checkpoint archives. See [`CheckpointHandle`](#checkpointhandle) |
 
 #### Example
 
@@ -81,6 +82,27 @@ boxes.forEach(info => console.log(`${info.id}: ${info.state.status}`));
 ```
 
 ---
+
+### `CheckpointHandle`
+
+Use `runtime.checkpoints` to manage REST checkpoint archives. Operations on an
+embedded runtime reject with `unsupported`.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `create` | `(source: string, name?: string \| null, options?: CheckpointOptions \| null) => Promise<CheckpointInfo>` | Capture a box by ID or name |
+| `list` | `() => Promise<CheckpointInfo[]>` | List checkpoints |
+| `get` | `(key: string) => Promise<CheckpointInfo>` | Get a checkpoint by ID or name |
+| `remove` | `(key: string, force?: boolean \| null) => Promise<void>` | Remove a checkpoint. With `force: true`, absence is treated as success. |
+
+`CheckpointOptions.kind` accepts `"disk"`, `"full"`, or `null`. Disk capture is
+the default. Full capture includes guest memory and VM state and requires the
+server to advertise `memory_checkpoints_enabled`.
+
+`CheckpointInfo` includes `id`, `name`, `sourceBoxId`, `createdAt`, `sizeBytes`,
+`state`, and optional `errorReason`. Its `kind` is a `CheckpointKind` (`"disk"`,
+`"full"`, or `"unknown"` for an unrecognized server value). `memorySizeBytes?: number`
+reports the archived guest memory size when available, including zero.
 
 ### `ImageHandle`
 

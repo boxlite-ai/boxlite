@@ -41,6 +41,7 @@ The SDK provides two API styles:
 - [Native API](#native-api)
   - [Runtime Management](#runtime-management)
   - [Box Management](#box-management)
+  - [Managed checkpoints](#managed-checkpoints)
   - [Network Tunnels](#network-tunnels)
   - [Command Execution](#command-execution)
   - [Discovery & Introspection](#discovery--introspection)
@@ -696,6 +697,39 @@ void boxlite_box_free(CBoxHandle* handle);
 Safe to call with NULL. Use when you need to release a box handle without freeing the entire runtime.
 
 ---
+
+### Managed checkpoints
+
+```c
+enum BoxliteErrorCode boxlite_checkpoint_create_with_options(
+    CBoxliteRuntime *runtime, const char *source, const char *name,
+    const char *kind, CCheckpointInfoCb cb, void *user_data,
+    CBoxliteError *out_error);
+```
+
+Pass a box ID or name as `source` and use `NULL` to let the server choose a
+checkpoint name. `boxlite_checkpoint_create` captures a disk checkpoint from a
+stopped box. The options entry point does the same with a `NULL` or `"disk"`
+kind. Pass `"full"` to capture disk, guest memory, and VM state from a running
+box. Full capture requires
+`capabilities.memory_checkpoints_enabled: true` from `GET /v1/config`. If the
+server omits or disables the capability, the callback receives `Unsupported`
+and the SDK skips the capture request. Disk capture skips the preflight.
+
+The function copies its string inputs before returning. An unrecognized kind
+or invalid UTF-8 in `kind` returns `InvalidArgument` synchronously, populating
+`out_error` if supplied. Callbacks run through `boxlite_runtime_drain` for
+accepted requests.
+
+`CCheckpointInfo.kind` contains `"disk"`, `"full"`, or `"unknown"`.
+`memory_size_bytes` is the archived guest memory size. The representation
+uses `has_memory_size_bytes == 1` for a reported size, including zero, and
+`has_memory_size_bytes == 0` with a zero value when absent.
+Release standalone metadata, including its strings, with
+`boxlite_free_checkpoint_info`. List entries belong to their enclosing list,
+which callers release with `boxlite_free_checkpoint_list`. Compile consumers
+against the header that matches the library because indexing
+`CCheckpointList.items` uses `sizeof(CCheckpointInfo)`.
 
 ### Network tunnels
 

@@ -60,6 +60,11 @@ settings, timeout defaults and enabled stage-secret delivery without contacting 
 For documentation-only edits, check local links,
 anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.
 
+The [wrapper tests](deployment/pulumi-logs.test.ts) for release preflight, state export, repeated termination
+and detached-child cancellation use a PID file as the child's readiness signal.
+Install signal handlers and finish fixture setup before writing the PID to a sibling temporary file.
+Rename it to the polled path so the parent can read the complete PID and interrupt the wrapper immediately.
+
 For local OAuth preparation, `make test:apps:infra:auth0` runs the tooling typecheck and Auth0 bootstrap,
 login-policy, email-provider, MCP configuration, and configure-login command tests.
 It requires no live tenant or management credentials.

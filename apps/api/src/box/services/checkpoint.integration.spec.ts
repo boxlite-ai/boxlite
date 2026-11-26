@@ -1,3 +1,5 @@
+import { SecretCredentialService } from './secret-credential.service'
+import { AddSecretCredential1794873600000 } from '../../migrations/pre-deploy/1794873600000-add-secret-credential-migration'
 // Copyright 2026 BoxLite AI
 // SPDX-License-Identifier: AGPL-3.0
 
@@ -68,6 +70,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   const archiveStore = { remove: jest.fn() }
   let settings: { archivePrefix?: string; maxPerOrganization: number; enabled?: boolean }
   const cache = { invalidate: jest.fn() }
+  const jobNotifications: { visible: boolean; boxUnlocked: boolean }[] = []
   const uploadNotifications = { lpush: jest.fn() }
 
   beforeAll(async () => {
@@ -101,11 +104,38 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     }).initialize()
     await dataSource.query(`CREATE SCHEMA "${schema}"`)
     await dataSource.synchronize()
+    const migrationRunner = dataSource.createQueryRunner()
+    try {
+      await new AddSecretCredential1794873600000().up(migrationRunner)
+    } finally {
+      await migrationRunner.release()
+    }
     checkpoints = dataSource.getRepository(Checkpoint)
     boxes = dataSource.getRepository(Box)
     states = dataSource.getRepository(BoxCheckpointState)
     jobs = dataSource.getRepository(Job)
-    const jobService = new JobService(jobs, { lpush: jest.fn().mockResolvedValue(1) } as any, {} as any)
+    const jobService = new JobService(
+      jobs,
+      {
+        lpush: async (_queue: string, id: string) => {
+          const observed = await jobs.findOneBy({ id })
+          let boxUnlocked = false
+          if (observed) {
+            const observer = dataSource.createQueryRunner()
+            await observer.startTransaction()
+            try {
+              await observer.query('SELECT id FROM box WHERE id = $1 FOR UPDATE NOWAIT', [observed.resourceId])
+              boxUnlocked = true
+            } finally {
+              await observer.rollbackTransaction()
+              await observer.release()
+            }
+          }
+          jobNotifications.push({ visible: !!observed, boxUnlocked })
+        },
+      } as any,
+      {} as any,
+    )
     const config = { get: (key: string) => (key === 'checkpoint' ? settings : undefined) } as ConfigService
     service = new CheckpointService(dataSource, config, jobService, cache as any, archiveStore as never)
     receiver = new CheckpointJobReceiver(
@@ -137,6 +167,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   })
 
   beforeEach(async () => {
+    jobNotifications.length = 0
     uploadNotifications.lpush.mockReset().mockResolvedValue(1)
     await dataSource.query(
       `TRUNCATE TABLE "${schema}"."checkpoint_operation", "${schema}"."checkpoint", "${schema}"."job", "${schema}"."box", "${schema}"."runner", "${schema}"."image", "${schema}"."registry_credential" CASCADE`,
@@ -172,6 +203,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     return Object.assign(Object.create(BoxService.prototype), {
       findOneByIdOrName: (id: string, organizationId: string) => boxes.findOneByOrFail({ id, organizationId }),
       boxRepository: repository,
+      configService: { get: () => undefined },
       eventEmitter: events,
       logger: { debug: jest.fn() },
     })
@@ -230,6 +262,15 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await finish(uploading.activeJobId!, archive(checkpoint))
     return service.get(organizationId, checkpoint.id)
   }
+
+  it('notifies checkpoint export and import only after their transactions commit', async () => {
+    const checkpoint = await readyCheckpoint()
+    await recovery.createBox(organization, checkpoint.id, 'notification-target', undefined)
+    expect(jobNotifications).toEqual([
+      { visible: true, boxUnlocked: true },
+      { visible: true, boxUnlocked: true },
+    ])
+  })
 
   it('preserves exact MiB through checkpoint capture and new-Box recovery', async () => {
     const original = await source('memory-source')
@@ -385,7 +426,10 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
   it('requires a stopped source before accepting checkpoint capture', async () => {
     const box = await source()
     await boxes.update(box.id, { state: BoxState.STARTED, desiredState: BoxDesiredState.STARTED })
-    await expect(service.create(organizationId, box.id, 'running-source')).rejects.toMatchObject({ status: 409 })
+    await expect(service.create(organizationId, box.id, 'running-source')).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'invalid_state' }),
+    })
     expect(await checkpoints.count()).toBe(0)
     expect(await jobs.count()).toBe(0)
     expect(await states.count()).toBe(0)
@@ -779,9 +823,17 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     const operation = await dataSource
       .getRepository(CheckpointOperation)
       .findOneByOrFail({ jobId: created.activeJobId! })
+    const credentials = new SecretCredentialService(dataSource)
+    const issued = await credentials.issue({
+      boxId: created.id,
+      runnerId: created.runnerId,
+      organizationId,
+      secretIds: [randomUUID()],
+    })
     const deleted = await lifecycleService()
       .destroy(created.id, organizationId, Context.user())
       .then(withCheckpointState)
+    expect(await credentials.consume(issued.token, created.runnerId)).toEqual({ active: false })
     expect(deleted).toMatchObject({
       desiredState: BoxDesiredState.DESTROYED,
       pending: true,
@@ -840,6 +892,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
       {} as never,
       destroy as never,
       {} as never,
+      { get: () => undefined } as never,
     )
     await manager.syncStates()
     expect(
@@ -1248,7 +1301,10 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await dataSource
       .getRepository(BoxMigration)
       .insert({ boxId: box.id, state: BoxMigrationState.PENDING_EXPORT, arcPath: '', updatedAt: box.updatedAt })
-    await expect(service.create(organizationId, box.id)).rejects.toMatchObject({ status: 409 })
+    await expect(service.create(organizationId, box.id)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'invalid_state' }),
+    })
     expect(await jobs.count()).toBe(0)
     expect(await checkpoints.count()).toBe(0)
     expect(await boxes.findOneByOrFail({ id: box.id }).then(withCheckpointState)).toMatchObject({
@@ -1265,7 +1321,10 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     await jobs.insert(
       new Job({ type: JobType.START_BOX, runnerId: runner.id, resourceType: ResourceType.BOX, resourceId: box.id }),
     )
-    await expect(service.create(organizationId, box.id)).rejects.toMatchObject({ status: 409 })
+    await expect(service.create(organizationId, box.id)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'invalid_state' }),
+    })
     expect(await checkpoints.count()).toBe(0)
     expect(await jobs.count()).toBe(1)
   })

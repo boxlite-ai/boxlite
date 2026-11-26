@@ -1,0 +1,143 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import test from 'node:test'
+import { output } from '@pulumi/pulumi'
+import { awsApiProvider } from '../stack/providers/aws/api.ts'
+import { denyPublicInternalRoutes } from '../stack/providers/aws/internal-route-policy.ts'
+
+test('AWS API synthesis attaches the deny policy to the service ALB', () => {
+  const globals = globalThis as any
+  const previous = { aws: globals.aws, sst: globals.sst, $app: globals.$app }
+  const resources = new Map<string, any>()
+  class Resource {
+    arn = output('generated-acl-arn')
+    name = output('resource-name')
+    constructor(name: string, args: any) {
+      resources.set(name, args)
+    }
+  }
+  const albArn = output('arn:aws:elasticloadbalancing:us-west-2:123456789012:loadbalancer/app/actual-api/123')
+  class Service {
+    url = output('https://api.example.com/')
+    nodes = {
+      loadBalancer: { arn: albArn, arnSuffix: output('app/actual-api/123') },
+      taskRole: { arn: output('task-role-arn'), name: output('task-role') },
+    }
+  }
+  class Router {
+    url = output('https://dashboard.example.com/')
+    route() {}
+  }
+  try {
+    globals.$app = { stage: 'dev' }
+    globals.aws = {
+      wafv2: { WebAcl: Resource, WebAclAssociation: Resource },
+      iam: { Role: Resource, RolePolicy: Resource },
+    }
+    globals.sst = { aws: { Service, Router } }
+    awsApiProvider({
+      domain: 'example.com',
+      dashboardDomain: null,
+      dns: {} as any,
+      dependencies: {
+        host: { cloud: 'aws', cluster: {} },
+        placement: { cloud: 'aws' },
+        storage: {
+          binding: { cloud: 'aws', bucketArn: output('bucket-arn'), credentialVending: { roleName: 'vending' } },
+        },
+        database: { binding: { passwordRef: output('db-password') } },
+        cache: { binding: { passwordRef: output('cache-password') } },
+        clickhouse: { active: false },
+        waitFor: [],
+      } as any,
+    })({ domain: 'example.com', image: 'api-image', port: 3000, environment: {}, secrets: {}, capabilities: [] })
+    const association = resources.get('ApiInternalRoutePolicyAssociation')
+    assert.ok(association, 'the public service must have an ACL association')
+    assert.equal(association.resourceArn, albArn)
+    assert.ok(association.webAclArn)
+    assert.deepEqual(resources.get('ApiInternalRoutePolicy').rules[0].action, { block: {} })
+  } finally {
+    Object.assign(globals, previous)
+  }
+})
+
+test('AWS public ALB policy blocks decoded internal paths without sampling credentials', () => {
+  const resources: { name: string; args: any }[] = []
+  const previous = (globalThis as any).aws
+  const previousApp = (globalThis as any).$app
+  class Resource {
+    arn = 'policy-arn'
+    constructor(name: string, args: any) {
+      resources.push({ name, args })
+    }
+  }
+  try {
+    ;(globalThis as any).aws = { wafv2: { WebAcl: Resource, WebAclAssociation: Resource } }
+    ;(globalThis as any).$app = { stage: 'dev' }
+    denyPublicInternalRoutes('public-alb')
+    const policy = resources[0].args
+    assert.equal(policy.scope, 'REGIONAL')
+    assert.deepEqual(policy.defaultAction, { allow: {} })
+    const rule = policy.rules[0]
+    assert.deepEqual(rule.action, { block: {} })
+    const match = rule.statement.regexMatchStatement
+    assert.ok(match)
+    assert.deepEqual(match.fieldToMatch, { uriPath: {} })
+    assert.deepEqual(match.textTransformations, [
+      { priority: 0, type: 'URL_DECODE' },
+      { priority: 1, type: 'LOWERCASE' },
+    ])
+    for (const [path, denied] of [
+      ['/internal/v1/credentials/introspect', true],
+      ['/api/INTERNAL/v1/credentials/introspect', true],
+      ['/api/%69nternal/v1/credentials/introspect', true],
+      ['/internal', true],
+      ['/api/internal', true],
+      ['/api/v1/boxes/internal/start', false],
+      ['/api/internal-box', false],
+    ] as const) {
+      const normalized = decodeURIComponent(path).toLowerCase()
+      const blocked = new RegExp(match.regexString).test(normalized)
+      assert.equal(blocked, denied, path)
+    }
+    assert.equal(policy.name, 'boxlite-dev-internal-routes')
+    assert.equal(rule.visibilityConfig.sampledRequestsEnabled, false)
+    assert.deepEqual(resources[1].args, { resourceArn: 'public-alb', webAclArn: 'policy-arn' })
+  } finally {
+    ;(globalThis as any).aws = previous
+    ;(globalThis as any).$app = previousApp
+  }
+})
+
+test('ingress policies attach to public backends while GCP internal routing preserves the root endpoint', () => {
+  const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
+  const gcp = source('../stack/providers/gcp/api.ts')
+  const external = gcp.slice(
+    gcp.indexOf("new gcp.compute.BackendService('ApiBackend'"),
+    gcp.indexOf("new gcp.compute.URLMap('ApiUrlMap'"),
+  )
+  assert.match(external, /securityPolicy: internalRoutePolicy.id/)
+  const internal = gcp.slice(
+    gcp.indexOf("new gcp.compute.RegionBackendService('ApiInternalBackend'"),
+    gcp.indexOf("new gcp.compute.RegionUrlMap('ApiInternalUrlMap'"),
+  )
+  assert.doesNotMatch(internal, /securityPolicy/)
+  const expression = gcp.match(/expression: "(request.path.urlDecode\(\).lower\(\)\.matches\('[^']+'\))"/)?.[1]
+  assert.ok(expression)
+  const argument = expression.match(/\('([^']+)'\)/)![1]
+  for (const [path, denied] of [
+    ['/internal/v1/credentials/introspect', true],
+    ['/api/%69NTERNAL/v1/credentials/introspect', true],
+    ['/internal', true],
+    ['/api/internal', true],
+    ['/api/v1/boxes/internal/start', false],
+    ['/api/internal-box', false],
+  ] as const) {
+    const normalized = decodeURIComponent(path).toLowerCase()
+    assert.equal(new RegExp(argument).test(normalized), denied, path)
+  }
+  assert.match(gcp, /fullPathMatch: '\/internal\/v1\/credentials\/introspect'/)
+  assert.match(gcp, /ingress: 'INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER'/)
+  assert.match(source('../stack/providers/aws/api.ts'), /denyPublicInternalRoutes\(service.nodes.loadBalancer.arn\)/)
+  assert.match(source('../../stack/api.ts'), /denyPublicInternalRoutes\(api.nodes.loadBalancer.arn\)/)
+})

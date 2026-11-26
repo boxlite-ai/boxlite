@@ -194,6 +194,50 @@ func TestFetchStartupRejectsInvalidEndpoint(t *testing.T) {
 	}
 }
 
+func TestFetchRuntimeRequiresGCPRunnerRegistry(t *testing.T) {
+	for _, role := range []string{"fetch", "all"} {
+		t.Run(role, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			t.Cleanup(cancel)
+			runtimeDatabase(t, ctx)
+			t.Setenv("SECRET_SERVER_ROLE", role)
+			t.Setenv("SECRET_SERVER_ATTESTORS", "gcp_iit")
+			t.Setenv("SECRET_SERVER_INTROSPECTION_URL", "https://api.invalid/internal/v1/credentials/introspect")
+			t.Setenv("SECRET_SERVER_AUDIENCE", "https://secret.example.invalid")
+			t.Setenv("SECRET_SERVER_GCP_PROJECT", "test-project")
+			t.Setenv("SECRET_SERVER_RUNNER_SERVICE_ACCOUNT", "runner@example.invalid")
+
+			for _, tc := range []struct{ name, registry string }{
+				{"unset", ""}, {"empty", ""}, {"whitespace", " \t\n"},
+				{"null registry", `null`}, {"null mode registry", `{"gcp_iit":null}`},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					t.Setenv("SECRET_SERVER_RUNNER_REGISTRY", tc.registry)
+					if tc.name == "unset" {
+						if err := os.Unsetenv("SECRET_SERVER_RUNNER_REGISTRY"); err != nil {
+							t.Fatal(err)
+						}
+					}
+					listenCalled := errors.New("listener reached")
+					err := runWithListener(ctx, nil, func(_, _ string) (net.Listener, error) {
+						return nil, listenCalled
+					})
+					if err == nil || !strings.Contains(err.Error(), "SECRET_SERVER_RUNNER_REGISTRY") {
+						t.Errorf("startup returned %v, want a registry configuration error before listening", err)
+					}
+				})
+			}
+			t.Run("explicit empty map", func(t *testing.T) {
+				t.Setenv("SECRET_SERVER_RUNNER_REGISTRY", "{}")
+				s := startRuntime(t, ctx)
+				if got := runtimeStatus(t, s.awaitAddress(t, ctx), "/ready", ""); got != http.StatusOK {
+					t.Fatalf("/ready with explicit empty registry returned %d, want 200", got)
+				}
+			})
+		})
+	}
+}
+
 func TestStartupWaitsForMigrationLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	t.Cleanup(cancel)

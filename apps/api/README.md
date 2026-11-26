@@ -268,18 +268,25 @@ Coverage runs bypass the cache.
 
 ## Checkpoint capture
 
-`POST /api/v1/checkpoints` accepts `source_box_id` and an optional `name`.
+`POST /api/v1/checkpoints` accepts `source_box_id`, an optional `name` and an optional
+`kind` of `disk` or `full`. Omission selects `disk`. Explicit `null` returns HTTP 400.
+`full` returns HTTP 400 with `code: "unsupported"`.
+
 `GET /api/v1/checkpoints` and `GET /api/v1/checkpoints/{id-or-name}` read the
-organization's records. The routes also accept the existing organization path
-prefix. Capture requires Box write permission; reads require organization
-membership, following the existing Box read policy. List/detail responses omit stored environment values and
-internal object locations.
+organization's records. Create, list and detail responses include `kind: "disk"`.
+List and detail responses omit stored environment values and internal object locations.
+
+The routes also accept the organization path prefix. Capture requires Box write
+permission, and reads require organization membership under the Box read policy.
+`GET /v1/config` (hosted at `/api/v1/config`) reports
+`capabilities.memory_checkpoints_enabled: false`.
 
 Checkpoint operations stay outside the MCP OAuth allowlist, like export/import.
 The `checkpoints` collection name is reserved and cannot be claimed as an application subdomain.
 
 A source must be stopped and idle on a ready v2 runner, without volumes or secrets.
-Stop the Box and wait for `stopped` before capture; other states return `409`.
+Stop the Box and wait for `stopped` before capture. A source state mismatch
+returns HTTP 409 with `code: "invalid_state"`.
 Checkpoint capture never stops the source automatically or uses hot export.
 Creating a checkpoint takes the source's `BOX` job slot
 until native export completes. The completion transaction clears its checkpoint
@@ -713,11 +720,15 @@ CI and recovery acceptance are still pending.
 ### JIT Box deletion and capacity recovery
 
 Hosted worker recovery checks the recorded Box ID and organization before
-interpreting its lifecycle state. Platform soft deletion renames the Box; a
-confirmed `DESTROYED` record for that original ID releases its physical capacity
+interpreting its lifecycle state. V2 polling reads jobs by the globally unique
+Box ID, preferring an incomplete job to the latest terminal result.
+A destroy callback applies while the Box is marked for deletion.
+
+Platform soft deletion renames the Box. A confirmed `DESTROYED` record for that original ID releases its physical capacity
 even after the rename. Pending deletion retains capacity until confirmation.
+
 Unknown IDs, conflicting ledgers, foreign organizations and renamed live Boxes
-remain denied. Confirmed Box absence makes its physical capacity available; the
+remain denied. After confirmed Box absence releases physical capacity, the
 allocation remains recorded until the original runner cleanup also finishes.
 A successful CI job alone does not prove that cleanup finished.
 
@@ -1377,6 +1388,62 @@ start endpoint retains its existing startup wait; the Listener observes the orig
 ID and registers a JIT runner only after `running`. A lost creation response remains
 an uncertain outcome and must not trigger a blind retry or adoption by name.
 
+### Creation quota index
+
+Limited creates use PostgreSQL transaction locks and count committed Boxes in a
+separate `READ COMMITTED` statement after locking. Cached Box data cannot admit a request.
+Older API instances, warm-pool claims, checkpoint restores, and other callback-based
+creates take the original organization lock exclusively.
+
+To try parallel admission, an ordinary one-Box insert needs a safe integer request
+limit of at least 8.
+It randomly selects one of 8 organization lanes without checking whether it is free.
+It locks that lane, then takes the original lock in shared mode.
+
+Parallel admission requires a nonnegative safe integer count and at least 8 slots
+under the request's resolved limit.
+
+At the count snapshot, other admitted inserts that are not yet visible still hold
+their lanes. At most 8 additional slots are needed, including this insert.
+
+Otherwise the first transaction finishes without writing. A new transaction takes the
+exclusive lock and checks the exact limit against a fresh count. Limits below 8 and
+limits that are not safe integers take the exclusive path directly.
+
+A limit of 1000 allows parallel admission at 850 or 992 counted Boxes. At 993 the
+exclusive path can still fill the remaining slots. No separate threshold is configured.
+
+Each request's resolved limit is checked at admission, not refreshed at commit. With a
+common resolved limit, concurrent limited creates do not exceed it.
+
+A later request with a higher limit can bring the count above an earlier request's
+lower limit before the earlier request commits. A plan change does not revoke an
+existing admission.
+
+Lock waits share about five seconds; the count and writes retain the connection's
+default lock timeout. Box and last activity still commit together.
+
+Older exclusive-only instances still exclude parallel writers on the original key.
+Parallel releases must use that same key, lane namespaces, and lane count. An earlier
+parallel release may fall back sooner, but shares the same eight lanes and does not
+add capacity.
+
+Mix these releases only if the admission-time contract above is acceptable. A mixed
+rollout does not preserve the earlier request's lower limit at its commit.
+
+The partial B-tree `box_creation_quota_idx` on `box("organizationId")` limits the
+count scan to rows outside `error`, `destroying`, `destroyed`, `archiving`, and `archived`.
+If PostgreSQL cannot use the index, including during rollout or rollback, admission
+still enforces the same cap. Recheck index eligibility if the quota predicate changes.
+
+The pre-deploy migration runs outside a transaction. Use one migration runner
+and allow for extra database I/O during the build. Retry after cancellation:
+the migration replaces a matching invalid index but refuses a same-name object
+with a different definition.
+
+For online rollback, use TypeORM revert with `--transaction none` when this is
+the latest applied migration. The concurrent drop does not require an API rollback.
+
 ## Native hosted CI Listener (in development)
 
 `CiListenerService` imports the shared TypeScript `Listener` directly. Every API
@@ -1432,35 +1499,30 @@ A denied or stale callback rolls back both rows. Commerce limits still apply;
 providing the callback forces fresh Box creation.
 
 Cleanup uses the known original Box ID and scope, even after admission is revoked.
-A missing ownership record is an error. Only absence of the known original Box row
-or a confirmed destroyed state permits the shared controller to mark it absent;
-failed destruction does not. Physical capacity returns after original Box absence
-is confirmed. Runner cleanup debt and its original allocation identity remain until
+A missing ownership record is an error.
+
+For a created Box, the native adapter
+requires the original ID and organization on a row in the `DESTROYED` state
+before returning physical capacity. A missing row leaves destruction unconfirmed.
+
+Runner cleanup debt and its original allocation identity remain until
 GitHub runner absence is confirmed. An elapsed timeout or a completed notice does not prove
 a running Box is idle.
 
-The shared [label-capacity scheduler](../libs/ci-listener/README.md#label-capacity-scheduling)
-counts queued demand and compatible starting/idle supply. Busy runners retain Box
-quota but no longer exclusively cover their trigger jobs. Actual job observations
-support recovery, while new reservations use independent allocation identities.
-Hosted PostgreSQL and standalone SQLite use this shared implementation.
+Every hosted installation uses GitHub Scale Set messages. A signed job webhook discovers new resource labels automatically.
 
-Fresh webhook counts cannot authorize more Boxes: potential capacity changes
-first rebuild the complete current GitHub queue for the original runner scope.
-Incomplete refreshes defer changes while known stopped resources still clean up.
-Surplus online idle workers follow the shared
-[retirement protocol](../libs/ci-listener/README.md#surplus-idle-retirement), including
-the registration grace, exact unregister acknowledgement and original-Box absence
-checks. Pending `runner-retire` effects survive takeover and make older state
-readers fail closed; consult that section before deployment or rollback.
+The elected owner reserves the organization's quota before acquiring an offer and starts the Box when GitHub reports assigned demand. [Shared scheduling protocol](../libs/ci-listener/README.md#github-runner-scale-sets)
 
-The controller recovers historical allocations alongside new capacity demand.
+The controller reconciles its set allocations alongside new capacity demand.
 Transient journal initialization failures retry through the existing session
 loop. An unexpectedly stopped hosted scheduler rejects new webhook ingress
 instead of acknowledging work that this replica cannot schedule.
+
 One ordinary cleanup failure does not skip other workers; an absent Box's pending
 runner cleanup does not hold physical capacity. Query failures retain capacity
-until the original outcome is known. Lease loss, corrupt/conflicting state, abort
+until the original outcome is known.
+
+Lease loss, corrupt/conflicting state, abort
 and pending credential retirement stop further work. These rules match standalone
 Listener Boxes and recover from the existing PostgreSQL journal after restart.
 
@@ -1526,8 +1588,12 @@ cleanup using the original App. Delivery recovery keeps separate App checkpoints
 | `CI_GITHUB_ORG_APP_CLIENT_SECRET`                                | Optional Organization App OAuth secret reference for legacy browser grants                                                     |
 | `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                              |
 | `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                        |
-| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                         |
+| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/boxlite-ai/boxlite-jitbox:latest` / `boxlite-ci-runner`. Set `CI_WORKER_IMAGE` to select a different image. |
 | `CI_SCHEDULER_GENERATION`                                        | Positive deployment generation; mdeploy uses `GITHUB_RUN_ID` or an explicit per-deploy override, never process startup time    |
+
+The default JitBox image includes GNU Make for Linux x86-64 jobs. After an
+organization first boots the tag, its image catalog pins the digest. To adopt a
+later build published under the same tag, update the organization's catalog tag.
 
 Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. Use the
 `boxlite` workflow label for configured defaults, or
@@ -1550,7 +1616,8 @@ for reference syntax and deployment behavior.
 
 Run Node 24 and use `make build:apps:api`. On GCP Cloud Run, background scheduling
 requires CPU allocation while idle and at least one minimum instance. mdeploy adds
-`cpuIdle: false` for custom domains and a service-level minimum of one instance when hosted CI is configured.
+`cpuIdle: false` for custom domains and defaults to one minimum instance when hosted CI is configured.
+An explicit `deploy.api.minInstances` overrides that default, including zero.
 This incurs idle instance costs. The database lease handles restarts and overlapping replicas; minimum instances
 do not guarantee that a process never restarts. These settings and formal hosted-App CI
 still require dev deployment acceptance.
@@ -1616,10 +1683,7 @@ source; in-memory queues are bounded execution indexes, not another service.
 
 Scope planners use eight concurrent I/O positions and allocation consumers use
 32. These management budgets are separate from organization/Commerce limits.
-Repository observation versions fence delayed retirement tasks, including demand
-found by an authoritative scan without a webhook. Before enabling this protocol,
-drain older webhook writers that cannot advance these observation versions.
-No CI-state reset is required. See [queue and shutdown contracts](../libs/ci-listener/README.md#asynchronous-allocation-queue).
+Scale Set target versions fence delayed allocation and retirement tasks. [Queue and shutdown contracts](../libs/ci-listener/README.md#asynchronous-allocation-queue)
 
 ### Hosted CI management
 
@@ -1755,3 +1819,17 @@ Dashboard owns its normalized telemetry display types, independently of the remo
 
 The nullable physical `user.keyPair` column remains for older API instances and rollback; the current entity no longer maps it.
 No user-key data migration runs in this release. `User.publicKeys` and historical audit action identifiers remain unchanged.
+
+## Organization cancellation feedback
+
+The Console uses `PUT /api/organizations/:organizationId/cancellation-feedback` after confirming cancellation through the existing billing API. The endpoint accepts `{ "reasons": ["other"], "intent": null, "note": "My project ended" }` and returns 204 only after updating the organization's nullable `cancellationFeedback` JSONB field.
+
+Reasons are stable IDs; intent is optional, and custom text is limited to 1,000 characters and requires `other`. Unknown fields and empty answers are rejected. The server supplies `submittedBy` and `submittedAt` and stores the last accepted write, replacing the previous object.
+
+JWT authentication, organization access and a current OWNER membership are required, including for administrator accounts. API keys cannot submit feedback. Ordinary entity queries omit the field (`select: false`), and OrganizationDto does not expose it.
+
+Feedback is not a cancellation receipt or subscription history. Writing it never changes a subscription, and a save failure must not reverse a completed cancellation. Authorized database operators can inspect the field using existing restricted database access.
+
+Deploy the additive pre-deploy migration and API before the updated Console. Billing requires no deployment for this feature. Reverting the schema migration drops saved feedback, so retain the column during an application rollback if data must be preserved.
+
+Run `make test:apps:api TEST_FILES=cancellation-feedback` with `CANCELLATION_TEST_DATABASE_URL` pointing at a disposable loopback PostgreSQL database. The integration suite creates an isolated schema and exercises real JWT verification, organization guards, validation and latest-value replacement. It verifies independent reads and persistence after restarting the API and its database connection.
