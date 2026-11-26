@@ -45,9 +45,9 @@ init runs, the agent records that mount under the key: it resolves the
 destination through init's `/proc/<pid>/root` the way the runtime did, keeps an
 `O_PATH` descriptor on the mount point, and reads the mount ID. `Detach` then
 handles it like an attached mount. A `BindMount` with `added` set was saved
-while the box was stopped: its target must be empty and reached through no
-symbolic link, and its owner is not remapped. `Ping` advertises this with
-`records_boot_mounts`.
+while the box was stopped: its target must be empty, reached through no
+symbolic link, and not overlap another mount. Its owner is not remapped.
+`Ping` advertises this with `records_boot_mounts`.
 
 Two recorded mounts that resolve to one mount, through an image link between
 their destinations or two spellings of one target, fail `Container.Init`:

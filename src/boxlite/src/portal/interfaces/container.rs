@@ -200,7 +200,10 @@ impl ContainerInterface {
                     owner_gid: m.owner_gid,
                     kind: kind as i32,
                     subpath,
-                    record_key: record.as_ref().map_or_default(|(key, _)| key.clone()),
+                    record_key: record
+                        .as_ref()
+                        .map(|(key, _)| key.clone())
+                        .unwrap_or_default(),
                     added: record.is_some_and(|(_, added)| added),
                 }
             })

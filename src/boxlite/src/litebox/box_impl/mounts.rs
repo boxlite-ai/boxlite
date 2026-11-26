@@ -14,7 +14,6 @@ use std::future::Future;
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use boxlite_shared::constants::mount_tags::AGGREGATE;
@@ -34,10 +33,6 @@ use crate::vmm::controller::mount_control::{MountControlClient, MountRequestId};
 /// How long one guest mount or detach may take before its outcome is unknown.
 const GUEST_STEP_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Whether the VM run a change was admitted to is still the live one. Export
-/// identities restart with every run, so no request may outlive the run it names.
-type RunCheck = Arc<dyn Fn() -> bool + Send + Sync>;
-
 /// The running VM a change acts on, with the store that tracks its progress.
 struct Running {
     store: BoxStore,
@@ -48,7 +43,9 @@ struct Running {
     control: PathBuf,
     guest: ContainerInterface,
     container_id: String,
-    is_current: RunCheck,
+    /// The box's lifecycle lock, held until the change ends: no start or stop
+    /// can replace the VM under it. Only its drop matters.
+    _lifecycle: OwnedLockGuard,
 }
 
 impl Running {
@@ -68,7 +65,6 @@ impl Running {
         step: &'static str,
         request: impl FnOnce(&MountControlClient) -> io::Result<T> + Send + 'static,
     ) -> BoxliteResult<T> {
-        ensure_current(self.is_current.as_ref())?;
         let client = MountControlClient::new(&self.control);
         tokio::task::spawn_blocking(move || request(&client))
             .await
@@ -109,7 +105,6 @@ impl Running {
     /// the guest detach that identity when `detach`, then retire the export.
     async fn converge(&mut self, export: &str, target: &str, detach: bool) -> BoxliteResult<()> {
         if detach {
-            ensure_current(self.is_current.as_ref())?;
             self.detach(export, target).await?;
         }
         self.retire(export).await
@@ -182,17 +177,6 @@ async fn guest_step<T>(
                 "guest {step} of {target} did not finish within {GUEST_STEP_TIMEOUT:?}"
             )))
         })
-}
-
-/// Whether the VM run a change was admitted to is still the live one.
-fn ensure_current(is_current: &(dyn Fn() -> bool + Send + Sync)) -> BoxliteResult<()> {
-    if is_current() {
-        Ok(())
-    } else {
-        Err(BoxliteError::Stopped(
-            "the box's VM run ended; use runtime.get() for its next run".into(),
-        ))
-    }
 }
 
 /// Whether `target` still holds the entry of `request_id`.
@@ -367,7 +351,7 @@ impl BoxImpl {
             .await
             .map_err(|error| BoxliteError::Internal(format!("open source task: {error}")))??;
         self.mount_change(
-            |admission| Self::add_while_stopped(self, &request, admission),
+            || self.add_while_stopped(&request),
             |run| {
                 let request = request.clone();
                 self.owned_mount(Self::add_while_running(run, request, directory))
@@ -383,7 +367,7 @@ impl BoxImpl {
         self.require_aggregate_mounts()?;
         let target = target_key(target)?;
         self.mount_change(
-            |admission| Self::remove_while_stopped(self, &target, admission),
+            || self.remove_while_stopped(&target),
             |run| {
                 let target = target.clone();
                 self.owned_mount(Self::remove_while_running(run, target))
@@ -423,58 +407,69 @@ impl BoxImpl {
     /// inside its VM run.
     async fn mount_change<T, R>(
         &self,
-        stopped: impl FnOnce(OwnedLockGuard) -> BoxliteResult<T>,
+        stopped: impl FnOnce() -> BoxliteResult<T>,
         running: impl FnOnce(Running) -> R,
     ) -> BoxliteResult<T>
     where
         R: Future<Output = BoxliteResult<T>>,
     {
-        let admission = self.admit_operation().await?;
-        let is_stopped = {
-            let state = self.state.read();
-            match state.status {
-                BoxStatus::Paused => {
-                    return Err(BoxliteError::InvalidState(format!(
+        let admitted = self
+            .with_operation(async move {
+                match self.state.read().status {
+                    BoxStatus::Paused => Err(BoxliteError::InvalidState(format!(
                         "Box {} is paused; its mounts stay in place until it resumes or stops",
                         self.id()
-                    )));
-                }
-                BoxStatus::Running => false,
-                BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed => true,
-                status => {
-                    return Err(BoxliteError::InvalidState(format!(
+                    ))),
+                    BoxStatus::Running => Ok(None),
+                    BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed => {
+                        stopped().map(Some)
+                    }
+                    status => Err(BoxliteError::InvalidState(format!(
                         "Cannot change mounts of box {} while it is {status}",
                         self.id()
-                    )));
+                    ))),
                 }
-            }
-        };
-        if is_stopped {
-            return stopped(admission);
-        }
-        drop(admission);
-        match self.running().await? {
-            Some(run) => running(run).await,
-            // The box stopped while this handle looked at a running one.
-            None => Err(BoxliteError::InvalidState(format!(
-                "the lifecycle of box {} changed while a mount change was admitted; retry",
-                self.id()
-            ))),
+            })
+            .await?;
+        match admitted {
+            Some(result) => Ok(result),
+            None => match self.running().await? {
+                Some(run) => running(run).await,
+                // The box stopped while this handle looked at a running one.
+                None => Err(BoxliteError::InvalidState(format!(
+                    "the lifecycle of box {} changed while a mount change was admitted; retry",
+                    self.id()
+                ))),
+            },
         }
     }
 
-    /// The running VM of a change. The admission refreshed the handle with
-    /// the persisted lifecycle, so the run it holds is the live one.
+    /// The running VM of a change. It takes the box's lifecycle lock and holds
+    /// it until the change ends, so no start or stop can replace the VM under it.
     async fn running(&self) -> BoxliteResult<Option<Running>> {
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
                 "Mount cancelled during shutdown".into(),
             ));
         }
-        let (pid, started_at) = {
+        let (pid, started_at, lock_id) = {
             let state = self.state.read();
-            (state.pid, state.started_at)
+            (state.pid, state.started_at, state.lock_id)
         };
+        let lock_id = lock_id.ok_or_else(|| {
+            BoxliteError::Internal(format!("box {} is missing lock_id", self.id()))
+        })?;
+        let lifecycle =
+            OwnedLockGuard::new_async(self.runtime.lock_manager.retrieve(lock_id)?).await;
+        // The lock was free between the admission and here, so another process
+        // may have moved the lifecycle on.
+        let current = self.runtime.box_manager.update_box(self.id())?;
+        if current.pid != pid
+            || current.started_at != started_at
+            || current.status != BoxStatus::Running
+        {
+            return Ok(None);
+        }
         let Some(pid) = pid else {
             return Ok(None);
         };
@@ -483,21 +478,19 @@ impl BoxImpl {
         let live = self.mount_live().await?;
         self.ensure_container_started(live).await?;
         let guest = live.guest_session.container().await?;
-        let state = Arc::clone(&self.state);
         Ok(Some(Running {
             store: self.runtime.box_manager.store().clone(),
             id: self.id().clone(),
             run: BoxRun { pid, started_at },
             control: self.layout.sockets().vmm_sock(),
+            _lifecycle: lifecycle,
             guest,
             container_id: self.container_id().to_owned(),
-            is_current: Arc::new(move || {
-                let state = state.read();
-                state.status.is_active() && state.pid == Some(pid) && state.started_at == started_at
-            }),
         }))
     }
 
+    /// The VM's live state. The caller holds the lifecycle lock, so an adopted
+    /// VM is initialized under it.
     async fn mount_live(&self) -> BoxliteResult<&LiveState> {
         // An adopted VM needs exclusive admission for initialization. Once
         // initialized, concurrent changes share the handle.
@@ -507,18 +500,12 @@ impl BoxImpl {
         {
             return Ok(live);
         }
-        self.existing_live_state().await
+        self.existing_live_state_locked().await
     }
 
     /// Save the declaration for the next start. The source only has to be a
-    /// directory now: every delivery opens it again. The admission stays with
-    /// the write, so it lands as admitted whatever the caller does meanwhile.
-    fn add_while_stopped(
-        &self,
-        request: &CheckedRequest,
-        admission: OwnedLockGuard,
-    ) -> BoxliteResult<MountInfo> {
-        let _admission = admission;
+    /// directory now: every delivery opens it again.
+    fn add_while_stopped(&self, request: &CheckedRequest) -> BoxliteResult<MountInfo> {
         self.runtime
             .box_manager
             .store()
@@ -534,8 +521,7 @@ impl BoxImpl {
 
     /// Drop the declaration at `target`. The host source plays no part, so a
     /// declaration whose source is gone still goes.
-    fn remove_while_stopped(&self, target: &str, admission: OwnedLockGuard) -> BoxliteResult<()> {
-        let _admission = admission;
+    fn remove_while_stopped(&self, target: &str) -> BoxliteResult<()> {
         self.runtime
             .box_manager
             .store()
@@ -639,7 +625,6 @@ impl BoxImpl {
             Err(error) => return Err(run.settle(&target, request_id, error)),
         };
 
-        ensure_current(run.is_current.as_ref())?;
         if let Err(error) = run.mount(&export, &target, request.read_only).await {
             // `Unsupported` means the guest refused before touching the
             // container, so nothing needs detaching. Any other outcome is
@@ -721,7 +706,6 @@ impl BoxImpl {
                 }
             }
         };
-        ensure_current(run.is_current.as_ref())?;
         run.detach(&key, &target).await?;
         if exported {
             run.retire(&key).await?;

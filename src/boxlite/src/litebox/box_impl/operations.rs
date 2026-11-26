@@ -1,7 +1,7 @@
 //! Lifecycle admission, state refresh, and observer reports for one box.
 
 use super::*;
-use crate::lock::{LockGuard, OwnedLockGuard};
+use crate::lock::LockGuard;
 use crate::runtime::rt_impl::RuntimeImpl;
 
 #[derive(Clone, Copy)]
@@ -30,19 +30,11 @@ impl BoxImpl {
     where
         F: Future<Output = BoxliteResult<R>>,
     {
-        let _guard = self.admit_operation().await?;
-        operation.await
-    }
-
-    /// Refresh the handle under the lifecycle lock. A stopped mount change
-    /// moves the guard into its database writer so cancellation cannot let
-    /// a start pass a commit already in flight.
-    pub(super) async fn admit_operation(&self) -> BoxliteResult<OwnedLockGuard> {
         let lock_id = self.state.read().lock_id.ok_or_else(|| {
             BoxliteError::Internal(format!("box {} is missing lock_id", self.id()))
         })?;
         let locker = self.runtime.lock_manager.retrieve(lock_id)?;
-        let guard = OwnedLockGuard::new_async(locker).await;
+        let _guard = LockGuard::new_async(locker.as_ref()).await;
         let current = self.runtime.box_manager.update_box(self.id())?;
         {
             let mut state = self.state.write();
@@ -58,7 +50,7 @@ impl BoxImpl {
             }
             *state = current;
         }
-        Ok(guard)
+        operation.await
     }
 
     pub(crate) fn try_with_operation<F, R>(

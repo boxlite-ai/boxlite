@@ -87,6 +87,11 @@ fn require_empty_target(rootfs: &Path, destination: &Path) -> BoxliteResult<()> 
     }
 }
 
+/// Whether two mount destinations are the same path or one lies below the other.
+fn overlaps(first: &Path, second: &Path) -> bool {
+    first.starts_with(second) || second.starts_with(first)
+}
+
 /// Record each mount the runtime made for a declared directory, under the
 /// identity every process of the container will find. Init is created and has
 /// not run, so nothing has touched these mounts since the runtime made them.
@@ -542,6 +547,25 @@ impl ContainerService for GuestServer {
                 });
             } else {
                 unrecorded.push(PathBuf::from(&m.destination));
+            }
+            // A saved directory may not overlap another mount: the runtime
+            // applies mounts in order, so a target above or below one is
+            // neither known to be empty nor known to land where it was checked.
+            if m.added {
+                if let Some(other) = init_req.mounts.iter().find(|other| {
+                    other.destination != m.destination
+                        && overlaps(Path::new(&m.destination), Path::new(&other.destination))
+                }) {
+                    return Ok(Response::new(ContainerInitResponse {
+                        result: Some(container_init_response::Result::Error(init_error(
+                            "check the target of a saved directory",
+                            &BoxliteError::InvalidState(format!(
+                                "{} overlaps the mount at {}",
+                                m.destination, other.destination
+                            )),
+                        ))),
+                    }));
+                }
             }
             if m.added {
                 if let Err(error) = require_empty_target(&bundle_rootfs, Path::new(&m.destination))

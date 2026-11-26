@@ -551,11 +551,11 @@ returns `InvalidState`.
 On a stopped or newly created box, `add` returns `Configured` and leaves the
 box idle. The next start delivers each saved directory before the first user
 process runs. A delivery failure identifies the target, and so does a start
-that finds two declared directories on one mount, through an image link or
-two spellings of one target. You can remove its declaration even if the host
-directory has disappeared; the target is then free for good. Directory binds
-from either creation format, `BoxOptions.volumes` or `BoxOptions.mounts`, can
-also be queried and removed on a supported box.
+that finds a saved directory overlapping another mount, below it, above it, or
+on it through an image link or two spellings of one target. You can remove its
+declaration even if the host directory has disappeared; the target is then free
+for good. Directory binds from either creation format, `BoxOptions.volumes` or
+`BoxOptions.mounts`, can also be queried and removed on a supported box.
 
 On a running box, `add` returns `Mounted` after guest confirmation and the
 SQLite commit. `remove` returns `()` after the guest detaches the mount, the

@@ -260,7 +260,8 @@ async fn build_config(
     // records those mounts, so an online removal can select them.
     let confirmed = declared
         .as_ref()
-        .map_or_default(|declared| declared.record(&mut container_mounts, &options.advanced));
+        .map(|declared| declared.record(&mut container_mounts, &options.advanced))
+        .unwrap_or_default();
 
     // Get guest rootfs from runtime cache and configure with disk
     let guest_rootfs = runtime
