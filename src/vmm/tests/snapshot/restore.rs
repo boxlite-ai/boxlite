@@ -290,7 +290,7 @@ fn drive<H: X86Vm, T>(
 ) -> T {
     let control = vm.control();
     if initially_paused {
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         assert_eq!(control.status(), VmStatus::Created);
     }
     let result = thread::scope(|scope| {
@@ -388,7 +388,7 @@ fn pause_during_restore_startup_parks_vcpus_before_guest_entry() {
             observed.recv_timeout(WAIT).unwrap(),
             Install::Cpu(id, _) if id == u32::from(COUNT - 1)
         ) {}
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         // Observe acceptance before the last vCPU's setup hold can time out.
         let deadline = Instant::now() + WAIT / 2;
         while control.status() == VmStatus::Running && Instant::now() < deadline {
@@ -495,7 +495,7 @@ fn run_reports_install_failures_wakes_pause_waiters_and_joins_every_started_vcpu
         let backing = Arc::downgrade(ram.boot_memory());
         let mut vm = Vm::with_restored_ram(ram, machine(COUNT), || Ok(backend)).unwrap();
         let control = vm.control();
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         let error = thread::scope(|scope| {
             let (ready, started) = mpsc::channel();
             let (reply, result) = mpsc::channel();
@@ -669,7 +669,7 @@ fn export_after_progress(
     loop {
         control.resume().unwrap();
         thread::sleep(Duration::from_millis(10));
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         control.wait_paused(WAIT).unwrap();
         control.export(&files.state, &files.memory).unwrap();
         if progressed(&files.memory) {
@@ -823,7 +823,7 @@ fn kvm_split_ram_export_destroy_restore_resume_continues_both_counters() {
             );
             thread::sleep(Duration::from_millis(10));
         }
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         control.wait_paused(WAIT).unwrap();
         // The release byte takes effect when the restored vCPU resumes.
         memory.write_obj(1u8, RELEASE).unwrap();
@@ -983,7 +983,7 @@ fn linux_wait_for_progress(
         );
         control.resume().unwrap();
         thread::sleep(Duration::from_millis(200));
-        control.pause().unwrap();
+        control.request_pause().unwrap();
         control.wait_paused(WAIT).unwrap();
         control.export(&files.state, &files.memory).unwrap();
         let after = linux_snapshot(files);

@@ -651,7 +651,7 @@ import returns a device-less VM in `Created`.
    the IRQ chips and PIT. Only success opens the gate for guest entry.
 
 A setup failure aborts guest entry. The driver joins every started vCPU and
-publishes `Exited`. A `control.pause()` reservation made in `Created` keeps
+publishes `Exited`. A `control.request_pause()` reservation made in `Created` keeps
 guest entry closed through `Paused` until `control.resume()`.
 
 On Linux x86_64 with read/write `/dev/kvm`, `make test:integration:vmm:kvm`

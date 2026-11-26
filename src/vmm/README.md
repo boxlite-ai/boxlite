@@ -802,7 +802,7 @@ A setup error keeps the guest from entering, and `run()` returns the error
 after joining every started vCPU and publishing `Exited`.
 
 To inspect or re-export the restored state before guest entry, reserve a
-pause with `control.pause()` while the VM is in `Created`. Start `vm.run()`
+pause with `control.request_pause()` while the VM is in `Created`. Start `vm.run()`
 on the VM owner thread and use `control.wait_paused(timeout)` from a control
 thread. Call `control.resume()` when the guest can enter.
 
