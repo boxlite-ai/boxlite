@@ -16,6 +16,7 @@ import (
 type ExportCheckpointPayload struct {
 	CheckpointID string `json:"checkpointId"`
 	ArcPath      string `json:"arcPath"`
+	Kind         string `json:"kind,omitempty"`
 }
 
 func (e *Executor) checkpointSetup(arcPath string) (checkpoint.Artifacts, error) {
@@ -38,6 +39,11 @@ func (e *Executor) exportCheckpoint(ctx context.Context, job *apiclient.Job) (an
 	if err := e.parsePayload(job.Payload, &payload); err != nil {
 		return nil, err
 	}
+	ref := checkpoint.Reference{CheckpointID: payload.CheckpointID, ExportJobID: job.Id, SourceBoxID: job.ResourceId, ArcPath: payload.ArcPath, Kind: payload.Kind}
+	kind := ref.NormalizedKind()
+	if kind != checkpoint.KindDisk && kind != checkpoint.KindFull {
+		return nil, fmt.Errorf("invalid checkpoint kind %q", payload.Kind)
+	}
 	artifacts, err := e.checkpointSetup(payload.ArcPath)
 	if err != nil {
 		return nil, err
@@ -46,9 +52,8 @@ func (e *Executor) exportCheckpoint(ctx context.Context, job *apiclient.Job) (an
 	if !ok {
 		return nil, fmt.Errorf("backend does not support checkpoint export")
 	}
-	ref := checkpoint.Reference{CheckpointID: payload.CheckpointID, ExportJobID: job.Id, SourceBoxID: job.ResourceId, ArcPath: payload.ArcPath}
-	return artifacts.Export(ctx, ref, func(ctx context.Context, directory string) (string, string, error) {
-		return exporter.ExportCheckpoint(ctx, job.ResourceId, directory)
+	return artifacts.Export(ctx, ref, func(ctx context.Context, directory string) (checkpoint.CaptureResult, error) {
+		return exporter.ExportCheckpoint(ctx, job.ResourceId, directory, kind)
 	})
 }
 

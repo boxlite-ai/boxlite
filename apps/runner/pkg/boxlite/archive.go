@@ -12,19 +12,27 @@ import (
 	"github.com/boxlite-ai/runner/pkg/checkpoint"
 )
 
-func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir string) (string, string, error) {
+func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir, kind string) (checkpoint.CaptureResult, error) {
+	requiredState, options := boxlite.StateStopped, boxlite.ExportOptions{}
+	switch kind {
+	case "", checkpoint.KindDisk:
+	case checkpoint.KindFull:
+		requiredState, options.IncludeMemory = boxlite.StateRunning, true
+	default:
+		return checkpoint.CaptureResult{}, fmt.Errorf("invalid checkpoint kind %q", kind)
+	}
 	operation, err := c.lockCheckpointTarget(ctx, boxId)
 	if err != nil {
-		return "", "", err
+		return checkpoint.CaptureResult{}, err
 	}
 	defer operation.Close()
 	ctx = context.WithoutCancel(ctx)
 	info, err := c.nativeBoxInfo(ctx, boxId)
 	if err != nil {
-		return "", "", err
+		return checkpoint.CaptureResult{}, err
 	}
-	if info.State != boxlite.StateStopped {
-		return "", "", fmt.Errorf("checkpoint source must be stopped; stop the Box before creating a checkpoint")
+	if info.State != requiredState {
+		return checkpoint.CaptureResult{}, fmt.Errorf("checkpoint source must be %s (got %s)", requiredState, info.State)
 	}
 	digest := ""
 	if info.ResolvedImage != nil {
@@ -32,10 +40,20 @@ func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir string) (s
 	}
 	pinned, err := checkpoint.PinImage(info.Image, digest)
 	if err != nil {
-		return "", "", err
+		return checkpoint.CaptureResult{}, err
 	}
-	archive, err := c.exportBox(ctx, boxId, destDir)
-	return archive, pinned, err
+	archive, err := c.exportBoxWithOptions(ctx, boxId, destDir, options)
+	if err != nil {
+		return checkpoint.CaptureResult{}, err
+	}
+	result := checkpoint.CaptureResult{ArchivePath: archive, PinnedImage: pinned}
+	if options.IncludeMemory {
+		result.MemorySizeBytes, err = readCheckpointMemorySizeBytes(archive)
+		if err != nil {
+			return checkpoint.CaptureResult{}, fmt.Errorf("read full checkpoint memory size: %w", err)
+		}
+	}
+	return result, nil
 }
 
 // ExportBox packs a box into a portable .boxlite archive inside destDir and
@@ -47,10 +65,10 @@ func (c *Client) ExportBox(ctx context.Context, boxId, destDir string) (string, 
 		return "", err
 	}
 	defer operation.Close()
-	return c.exportBox(context.WithoutCancel(ctx), boxId, destDir)
+	return c.exportBoxWithOptions(context.WithoutCancel(ctx), boxId, destDir, boxlite.ExportOptions{})
 }
 
-func (c *Client) exportBox(ctx context.Context, boxId, destDir string) (string, error) {
+func (c *Client) exportBoxWithOptions(ctx context.Context, boxId, destDir string, options boxlite.ExportOptions) (string, error) {
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create export directory %s: %w", destDir, err)
 	}
@@ -60,7 +78,7 @@ func (c *Client) exportBox(ctx context.Context, boxId, destDir string) (string, 
 		return "", err
 	}
 
-	archivePath, err := bx.Export(ctx, destDir)
+	archivePath, err := bx.ExportWithOptions(ctx, destDir, options)
 	if err != nil {
 		return "", fmt.Errorf("failed to export box %s: %w", boxId, err)
 	}

@@ -40,7 +40,7 @@ type BoxBackend interface {
 // CheckpointExporter captures a disk archive and the source's original OCI
 // build without extending the existing migration export contract.
 type CheckpointExporter interface {
-	ExportCheckpoint(ctx context.Context, boxId, destDir string) (archivePath, pinnedImage string, err error)
+	ExportCheckpoint(ctx context.Context, boxId, destDir, kind string) (checkpoint.CaptureResult, error)
 }
 
 type CheckpointRestorer interface {

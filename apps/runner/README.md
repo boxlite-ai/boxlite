@@ -815,9 +815,11 @@ The [checkpoint design](https://github.com/boxlite-ai/boxlite/issues/2367)
 defines the capture, transfer and recovery contracts; the transfer helper alone
 does not provide target recovery ownership.
 
-Checkpoint creation requires an idle, stopped source; running and transitional
-sources are refused without stopping them. The runner rechecks `stopped` while
-holding the source operation lease, so a concurrent start cannot race export.
+`EXPORT_CHECKPOINT` accepts an optional `kind`: `disk` (the default when omitted)
+requires a stopped source, and `full` requires a running source and native support
+for exporting memory. The runner checks the state under the source operation
+lease; it does not start or stop the source to make it eligible. The runner does
+not yet advertise the `memory_checkpoint` capability.
 
 Checkpoint capture separates native export from upload. `EXPORT_CHECKPOINT`
 owns the source `BOX` job slot; it reports an immutable archive record and never
@@ -827,7 +829,11 @@ operation lease, so a later source start can proceed independently.
 
 Each capture uses `<BOXLITE_HOME_DIR>/work/checkpoints/<checkpoint-id>/<export-job-id>/`.
 Its record pins the image digest that built the source disk, archive size,
-SHA-256 and object URI. Redelivery reuses that capture; it never substitutes a
+SHA-256 and object URI. The result carries `kind` when supplied, and for `full`
+it also carries `memorySizeBytes` from the archive manifest (a nonnegative
+integer, including zero). Disk results omit `memorySizeBytes`. Pass the export
+result unchanged to `UPLOAD_CHECKPOINT`; upload returns the same metadata.
+Redelivery reuses that capture; it never substitutes a
 fresh source export if the published file is missing or corrupt. Fixed lock
 files serialize duplicate deliveries across processes sharing the work directory.
 
@@ -848,11 +854,16 @@ policy; native runtime has no checkpoint-specific archive preparer.
 
 `IMPORT_CHECKPOINT` downloads and verifies SHA-256, imports a candidate under an
 operation-specific native name, publishes its public-to-native identity mapping,
-and only then removes the predecessor. Import failures retain the original Box.
+and only then removes the predecessor. The candidate must be `stopped` or
+`configured` with PID zero. Import failures retain the original Box. The
+request's `archive` carries the upload result, including `kind` and
+`memorySizeBytes` for a full checkpoint. An optional request-level `kind` must
+match `archive.kind` when both are set.
 
 Runner streams the archive to a temporary plain tar, changing only the first
 manifest member's pinned image and six platform environment keys. It copies
-the remaining tar bytes unchanged, preserving GNU sparse members. It performs
+the remaining tar bytes unchanged, preserving GNU sparse members and full
+checkpoint memory data. The manifest's `memory_checkpoint` metadata is retained. It performs
 no separate disk validation or startup preflight; the existing native import
 owns archive extraction and validation. This adds one stream read and temporary
 write, without extracting disk files or recompressing them.

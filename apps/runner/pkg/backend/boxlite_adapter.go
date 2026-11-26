@@ -68,8 +68,8 @@ func (a *BoxliteAdapter) ImportBox(ctx context.Context, boxId, archivePath strin
 	return a.client.ImportBox(ctx, boxId, archivePath)
 }
 
-func (a *BoxliteAdapter) ExportCheckpoint(ctx context.Context, boxId, destDir string) (string, string, error) {
-	return a.client.ExportCheckpoint(ctx, boxId, destDir)
+func (a *BoxliteAdapter) ExportCheckpoint(ctx context.Context, boxId, destDir, kind string) (checkpoint.CaptureResult, error) {
+	return a.client.ExportCheckpoint(ctx, boxId, destDir, kind)
 }
 
 func (a *BoxliteAdapter) RestoreCheckpoint(ctx context.Context, request checkpoint.RestoreRequest, attemptID string, artifacts checkpoint.Artifacts, store storage.ArchiveStore) (checkpoint.RestoreResult, error) {

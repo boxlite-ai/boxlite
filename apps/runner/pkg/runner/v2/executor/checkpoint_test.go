@@ -25,7 +25,7 @@ import (
 
 type checkpointBackend struct {
 	*fakeBackend
-	capture func(context.Context, string, string) (string, string, error)
+	capture func(context.Context, string, string, string) (checkpoint.CaptureResult, error)
 	restore func(context.Context, checkpoint.RestoreRequest, string, checkpoint.Artifacts, storage.ArchiveStore) (checkpoint.RestoreResult, error)
 	start   func()
 }
@@ -63,12 +63,12 @@ func TestCheckpointDeleteAcceptsAnAlreadyAbsentNativeTarget(t *testing.T) {
 	}
 }
 
-func (b *checkpointBackend) ExportCheckpoint(ctx context.Context, boxID, directory string) (string, string, error) {
+func (b *checkpointBackend) ExportCheckpoint(ctx context.Context, boxID, directory, kind string) (checkpoint.CaptureResult, error) {
 	if b.capture != nil {
-		return b.capture(ctx, boxID, directory)
+		return b.capture(ctx, boxID, directory, kind)
 	}
 	archive, err := b.fakeBackend.ExportBox(ctx, boxID, directory)
-	return archive, "example/app@sha256:" + strings.Repeat("a", 64), err
+	return checkpoint.CaptureResult{ArchivePath: archive, PinnedImage: "example/app@sha256:" + strings.Repeat("a", 64)}, err
 }
 
 func (b *checkpointBackend) Start(context.Context, string, *string, map[string]string) (string, error) {
@@ -136,17 +136,53 @@ func TestCheckpointExportReportsAnArtifactWithoutUploadingOrStopping(t *testing.
 	}
 }
 
+func TestCheckpointExportKind(t *testing.T) {
+	for _, kind := range []string{checkpoint.KindFull, "invalid"} {
+		t.Run(kind, func(t *testing.T) {
+			h, backend, job := checkpointHarness(t)
+			payload := ExportCheckpointPayload{CheckpointID: uuid.NewString(), ArcPath: "gs://bucket/checkpoints/full.boxlite", Kind: kind}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job.SetPayload(string(data))
+			backend.capture = func(ctx context.Context, source, directory, gotKind string) (checkpoint.CaptureResult, error) {
+				if source != job.ResourceId || gotKind != checkpoint.KindFull || kind != checkpoint.KindFull {
+					t.Fatalf("unexpected capture: %q %q", source, gotKind)
+				}
+				archive, err := backend.fakeBackend.ExportBox(ctx, source, directory)
+				zero := int64(0)
+				return checkpoint.CaptureResult{ArchivePath: archive, PinnedImage: "example/app@sha256:" + strings.Repeat("a", 64), MemorySizeBytes: &zero}, err
+			}
+			if kind != checkpoint.KindFull {
+				if _, err := h.executor.exportCheckpoint(t.Context(), job); err == nil || !strings.Contains(err.Error(), "invalid checkpoint kind") {
+					t.Fatalf("invalid kind: %v", err)
+				}
+				return
+			}
+			h.executor.Execute(t.Context(), job)
+			artifact := capturedArtifact(t, h, job)
+			if artifact.Kind != kind || artifact.MemorySizeBytes == nil || *artifact.MemorySizeBytes != 0 {
+				t.Fatalf("missing result metadata: %+v", artifact)
+			}
+		})
+	}
+}
+
 func TestCheckpointExportCancellationBeforeLateNativeResultKeepsTheArchive(t *testing.T) {
 	h, backend, job := checkpointHarness(t)
 	entered, resume := make(chan struct{}), make(chan struct{})
-	backend.capture = func(ctx context.Context, source, directory string) (string, string, error) {
+	backend.capture = func(ctx context.Context, source, directory, kind string) (checkpoint.CaptureResult, error) {
+		if kind != checkpoint.KindDisk {
+			t.Errorf("omitted kind was not normalized: %q", kind)
+		}
 		close(entered)
 		<-resume
 		if ctx.Err() != nil {
-			return "", "", errors.New("native export received cancellation")
+			return checkpoint.CaptureResult{}, errors.New("native export received cancellation")
 		}
 		archive, err := backend.fakeBackend.ExportBox(ctx, source, directory)
-		return archive, "example/app@sha256:" + strings.Repeat("b", 64), err
+		return checkpoint.CaptureResult{ArchivePath: archive, PinnedImage: "example/app@sha256:" + strings.Repeat("b", 64)}, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
