@@ -135,6 +135,7 @@ impl ImageManager {
     /// and reuses every layer already stored. When no answer comes back — the
     /// registry cannot be reached, fails on its side, or throttles — the cached
     /// image stands in, so an offline host still starts what it has.
+    #[allow(dead_code)]
     pub async fn refresh(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
         let manifest = self.store.refresh(image_ref).await?;
         Ok(self.image_object(image_ref, manifest).await)

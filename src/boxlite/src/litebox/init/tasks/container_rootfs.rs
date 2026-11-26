@@ -213,7 +213,13 @@ async fn run_container_rootfs(
         working_dir_override,
     );
 
-    let disk = create_cow_disk(&rootfs_result, layout, disk_size_gb)?;
+    let layout = layout.clone();
+    let span = tracing::Span::current();
+    let disk = tokio::task::spawn_blocking(move || {
+        span.in_scope(|| create_cow_disk(&rootfs_result, &layout, disk_size_gb))
+    })
+    .await
+    .map_err(|e| BoxliteError::Internal(format!("Create COW disk task failed: {e}")))??;
 
     Ok((
         container_image_config,
@@ -307,12 +313,8 @@ fn apply_user_overrides(
 
 /// The image a new disk is built from.
 ///
-/// The one pull that decides what a box runs, so the one that asks the
-/// registry: the cache is keyed by the ref string, and a tag cached here may
-/// have moved since, or have been cached by someone else's box. A digest names
-/// one build, so the cache is already the answer. `refresh` still starts from
-/// the cache when the registry gives no answer, so an offline host behaves as
-/// it did before.
+/// Prefer the local cache for tags as well as digests. An uncached reference
+/// still goes to the registry; checking for a moved tag is an explicit refresh.
 ///
 /// A restart never comes here: it reads the build its disk was made from, see
 /// [`image_for_restart`].
@@ -320,20 +322,15 @@ async fn image_for_new_disk(
     images: &ImageManager,
     image_ref: &str,
 ) -> BoxliteResult<crate::images::ImageObject> {
-    if names_one_build(image_ref) {
-        images.pull(image_ref).await
-    } else {
-        images.refresh(image_ref).await
-    }
+    images.pull(image_ref).await
 }
 
 /// The image a restart reads its config from: the build its disk was made from.
 ///
 /// A restart keeps its disk, so the entrypoint, env and user must come from
-/// that same build. The ref alone does not say which one: a new box built from
-/// a tag gets whatever the tag points to now, while the ref's cache entry keeps
-/// the build this host first cached for it. The digest recorded when the disk
-/// was built names the build, and the store indexes every pull under that
+/// that same build. The ref alone does not say which one: its cache entry may
+/// have been removed or replaced since the disk was built. The recorded digest
+/// names the build, and the store indexes every pull under that
 /// digest too, so this is still answered from the cache. A box with nothing
 /// recorded — imported, or made by a release that recorded no build — reads by
 /// ref, which for a box made here names the build this host first cached, the
@@ -371,14 +368,6 @@ fn pinned_ref(image_ref: &str, digest: &str) -> String {
         _ => name,
     };
     format!("{name}@{digest}")
-}
-
-/// Whether `image_ref` is pinned to a digest, and so names one build wherever
-/// it is resolved. A ref that does not parse is left to the pull to reject.
-fn names_one_build(image_ref: &str) -> bool {
-    image_ref
-        .parse::<oci_client::Reference>()
-        .is_ok_and(|reference| reference.digest().is_some())
 }
 
 /// What to record about the image this start read, if anything.
@@ -475,7 +464,7 @@ async fn prepare_disk_rootfs(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_user_overrides, image_for_new_disk, image_for_restart, names_one_build, pinned_ref,
+        apply_user_overrides, image_for_new_disk, image_for_restart, pinned_ref,
         records_resolved_image,
     };
     use crate::db::Database;
@@ -577,16 +566,18 @@ mod tests {
         }
     }
 
-    /// The cache may hold the tag, but a new disk still asks the registry.
     #[tokio::test]
-    async fn a_new_disk_from_a_tag_asks_the_registry() {
+    async fn a_new_disk_uses_a_cached_tag_and_only_pulls_on_a_miss() {
         let (_dir, images, host) = images_behind_a_404().await;
         let tag = format!("{host}/acme/app:v1");
         seed_cached_build(&images, &tag, FIRST).await;
 
-        let answer = image_for_new_disk(&images, &tag).await;
+        let image = image_for_new_disk(&images, &tag).await.unwrap();
+        assert_eq!(image.manifest_digest(), FIRST);
 
-        assert!(answer.is_err(), "the registry's 404 must reach the caller");
+        let missing = format!("{host}/acme/app:missing");
+        assert!(image_for_new_disk(&images, &missing).await.is_err());
+        assert!(images.refresh(&tag).await.is_err());
     }
 
     #[tokio::test]
@@ -666,20 +657,6 @@ mod tests {
         let image = image_for_restart(&images, &tag, None).await.unwrap();
 
         assert_eq!(image.manifest_digest(), FIRST);
-    }
-
-    /// A digest, with or without the tag it was read from, needs no registry.
-    #[test]
-    fn a_digest_names_one_build() {
-        assert!(names_one_build(&format!("quay.io/acme/app@{DIGEST}")));
-        assert!(names_one_build(&format!("quay.io/acme/app:v1@{DIGEST}")));
-    }
-
-    /// A tag, written or implied, may have moved since this host cached it.
-    #[test]
-    fn a_tag_does_not() {
-        assert!(!names_one_build("quay.io/acme/app:v1"));
-        assert!(!names_one_build("alpine"));
     }
 
     /// What a restart asks for: the same repository, at the recorded build.

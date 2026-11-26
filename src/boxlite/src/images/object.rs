@@ -133,7 +133,7 @@ impl ImageObject {
     /// runtime configuration (entrypoint, env, workdir).
     pub async fn load_config(&self) -> BoxliteResult<oci_spec::image::ImageConfiguration> {
         let config_path = self.blob_source.config_path(&self.manifest.config_digest);
-        let config_json = std::fs::read_to_string(&config_path).map_err(|e| {
+        let config_json = tokio::fs::read_to_string(&config_path).await.map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to read config from {}: {}",
                 config_path.display(),

@@ -30,10 +30,10 @@ use oci_client::manifest::{
 use oci_client::secrets::RegistryAuth as OciRegistryAuth;
 use oci_spec::image::MediaType;
 use parking_lot::Mutex;
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{OnceCell, RwLock, watch};
 
 // ============================================================================
 // INNER STATE (no locking awareness)
@@ -47,13 +47,48 @@ struct ImageStoreInner {
     index: ImageIndexStore,
     /// Storage is Arc-wrapped so it can be shared with BlobSource
     storage: Arc<ImageStorage>,
+    /// Positive entries only, backed by immutable, content-addressed blobs.
+    /// Kept under the same lock as index mutations to make invalidation atomic.
+    /// Direct edits to the files or index outside this store are not tracked.
+    verified: HashMap<String, VerifiedCachedImage>,
 }
+
+struct VerifiedCachedImage {
+    manifest: ImageManifest,
+    /// This index entry must exist for restarts pinned to the build.
+    digest_ref: String,
+}
+
+type RegistryClientCell = Arc<OnceCell<Arc<oci_client::Client>>>;
 
 impl ImageStoreInner {
     fn new(images_dir: PathBuf, db: Database) -> BoxliteResult<Self> {
         let storage = Arc::new(ImageStorage::new(images_dir)?);
         let index = ImageIndexStore::new(db);
-        Ok(Self { index, storage })
+        Ok(Self {
+            index,
+            storage,
+            verified: HashMap::new(),
+        })
+    }
+
+    fn upsert(&mut self, image_ref: &str, manifest: &ImageManifest) -> BoxliteResult<()> {
+        let cached_image = CachedImage {
+            manifest_digest: manifest.manifest_digest.clone(),
+            config_digest: manifest.config_digest.clone(),
+            layers: manifest.layers.iter().map(|l| l.digest.clone()).collect(),
+            cached_at: chrono::Utc::now().to_rfc3339(),
+            complete: true,
+        };
+        self.index.upsert(image_ref, &cached_image)?;
+        self.invalidate_verified(|reference| reference == image_ref);
+        tracing::debug!("Updated index for image: {}", image_ref);
+        Ok(())
+    }
+
+    fn invalidate_verified(&mut self, mut changed: impl FnMut(&str) -> bool) {
+        self.verified
+            .retain(|reference, entry| !changed(reference) && !changed(&entry.digest_ref));
     }
 }
 
@@ -87,6 +122,8 @@ pub struct ImageStore {
     /// Mutable state protected by RwLock
     inner: RwLock<ImageStoreInner>,
     in_flight: Mutex<HashMap<ResolveKey, ResolveReceiver>>,
+    /// Per-host clients so registry TLS settings and auth state stay isolated.
+    registry_clients: Mutex<HashMap<String, RegistryClientCell>>,
     /// Registry host names to search for unqualified image references.
     registries: Vec<String>,
     /// Registry transport, TLS, auth, and search settings.
@@ -123,6 +160,7 @@ impl ImageStore {
         Ok(Self {
             inner: RwLock::new(inner),
             in_flight: Mutex::new(HashMap::new()),
+            registry_clients: Mutex::new(HashMap::new()),
             registries,
             image_registries,
             image_registry_proxy,
@@ -179,6 +217,7 @@ impl ImageStore {
     /// what changed. The cache stands in only for a registry that did not
     /// answer — see [`RegistryPullError`] — never for one that said the image
     /// is gone or not this caller's to read.
+    #[allow(dead_code)]
     pub async fn refresh(&self, image_ref: &str) -> BoxliteResult<ImageManifest> {
         self.resolve(image_ref, CacheUse::Fallback).await
     }
@@ -237,15 +276,11 @@ impl ImageStore {
         for reference in candidates {
             let ref_str = reference.whole();
 
-            // Fast path: check cache with read lock
-            if cache == CacheUse::First {
-                let inner = self.inner.read().await;
-                let cached = self.try_load_cached(&inner, &ref_str)?;
-                drop(inner);
-                if let Some(manifest) = cached {
-                    tracing::info!("Using cached image: {}", ref_str);
-                    return self.serve_cached(&reference, manifest).await;
-                }
+            if cache == CacheUse::First
+                && let Some(manifest) = self.cached_manifest(&reference, &ref_str).await?
+            {
+                tracing::info!("Using cached image: {}", ref_str);
+                return Ok(manifest);
             }
 
             // Slow path: pull from registry
@@ -267,14 +302,14 @@ impl ImageStore {
                     throttled |= matches!(failure, RegistryPullError::Throttled(_));
                     let e = failure.into_error();
                     if !answered && cache == CacheUse::Fallback {
-                        let cached = self.try_load_cached(&*self.inner.read().await, &ref_str)?;
+                        let cached = self.cached_manifest(&reference, &ref_str).await?;
                         if let Some(manifest) = cached {
                             tracing::warn!(
                                 reference = %ref_str,
                                 error = %e,
                                 "Registry gave no answer; using the cached image"
                             );
-                            return self.serve_cached(&reference, manifest).await;
+                            return Ok(manifest);
                         }
                     }
                     tracing::debug!(
@@ -337,7 +372,7 @@ impl ImageStore {
     /// meanwhile is either among them or indexed after. Their layers stay in
     /// storage, so pulling one of these builds again reuses them.
     pub async fn forget_matching(&self, is_match: impl Fn(&str) -> bool) -> BoxliteResult<usize> {
-        let inner = self.inner.write().await;
+        let mut inner = self.inner.write().await;
         let references: Vec<String> = inner
             .index
             .list_all()?
@@ -346,6 +381,10 @@ impl ImageStore {
             .filter(|reference| is_match(reference))
             .collect();
         inner.index.remove_all(&references)?;
+        if !references.is_empty() {
+            let removed: HashSet<&str> = references.iter().map(String::as_str).collect();
+            inner.invalidate_verified(|reference| removed.contains(reference));
+        }
         Ok(references.len())
     }
 
@@ -532,8 +571,41 @@ impl ImageStore {
     // INTERNAL: Cache Operations
     // ========================================================================
 
-    /// Try to load image from local cache.
-    fn try_load_cached(
+    /// Look up a verified local image without querying SQLite or reading blobs
+    /// on a memory hit. For older caches, backfill the digest alias before
+    /// publishing the result. Hold the write lock on a miss so a concurrent
+    /// remove cannot leave a stale memory entry or resurrect an alias.
+    async fn cached_manifest(
+        &self,
+        reference: &Reference,
+        image_ref: &str,
+    ) -> BoxliteResult<Option<ImageManifest>> {
+        if let Some(entry) = self.inner.read().await.verified.get(image_ref) {
+            return Ok(Some(entry.manifest.clone()));
+        }
+
+        let mut inner = self.inner.write().await;
+        if let Some(entry) = inner.verified.get(image_ref) {
+            return Ok(Some(entry.manifest.clone()));
+        }
+        let Some(manifest) = self.load_cached_from_disk(&inner, image_ref)? else {
+            return Ok(None);
+        };
+        let digest_ref = digest_key(reference, &manifest);
+        if digest_ref != image_ref && inner.index.get(&digest_ref)?.is_none() {
+            inner.upsert(&digest_ref, &manifest)?;
+        }
+        inner.verified.insert(
+            image_ref.to_owned(),
+            VerifiedCachedImage {
+                manifest: manifest.clone(),
+                digest_ref,
+            },
+        );
+        Ok(Some(manifest))
+    }
+
+    fn load_cached_from_disk(
         &self,
         inner: &ImageStoreInner,
         image_ref: &str,
@@ -747,8 +819,8 @@ impl ImageStore {
     /// entry keeps the build this host first cached for it, as it always has,
     /// because a box made before builds were recorded restarts by reading it,
     /// and moving it to follow the tag would pair a newer build's config with
-    /// that box's disk. A new disk never reads it — a refresh hands its answer
-    /// straight back — so nothing needs it to move.
+    /// that box's disk. New disks also use this cached entry by default; an
+    /// explicit refresh returns the registry's current build without moving it.
     async fn record_in_index(
         &self,
         reference: &Reference,
@@ -756,52 +828,15 @@ impl ImageStore {
     ) -> BoxliteResult<()> {
         let by_ref = reference.whole();
         let by_digest = digest_key(reference, manifest);
+        let mut inner = self.inner.write().await;
         if by_digest != by_ref {
-            self.update_index(&by_digest, manifest).await?;
-            let first = self.try_load_cached(&*self.inner.read().await, &by_ref)?;
-            if first.is_some() {
+            let has_first = inner.verified.contains_key(&by_ref);
+            inner.upsert(&by_digest, manifest)?;
+            if has_first || self.load_cached_from_disk(&inner, &by_ref)?.is_some() {
                 return Ok(());
             }
         }
-        self.update_index(&by_ref, manifest).await
-    }
-
-    /// Serve a cached image, making sure its build can be found by digest.
-    ///
-    /// A pull indexes both keys itself, but a cache written before digests were
-    /// indexed holds only the tag. Served from there — offline, say — the tag
-    /// reports a digest that a pinned pull (a curated pin, a catalog hit, a
-    /// restart) would then miss, and that pull needs the very registry that
-    /// just gave no answer.
-    async fn serve_cached(
-        &self,
-        reference: &Reference,
-        manifest: ImageManifest,
-    ) -> BoxliteResult<ImageManifest> {
-        let by_digest = digest_key(reference, &manifest);
-        let indexed = self.inner.read().await.index.get(&by_digest)?.is_some();
-        if !indexed {
-            self.update_index(&by_digest, &manifest).await?;
-        }
-        Ok(manifest)
-    }
-
-    /// Update index with newly pulled image.
-    async fn update_index(&self, image_ref: &str, manifest: &ImageManifest) -> BoxliteResult<()> {
-        let inner = self.inner.read().await;
-
-        let cached_image = CachedImage {
-            manifest_digest: manifest.manifest_digest.clone(),
-            config_digest: manifest.config_digest.clone(),
-            layers: manifest.layers.iter().map(|l| l.digest.clone()).collect(),
-            cached_at: chrono::Utc::now().to_rfc3339(),
-            complete: true,
-        };
-
-        inner.index.upsert(image_ref, &cached_image)?;
-
-        tracing::debug!("Updated index for image: {}", image_ref);
-        Ok(())
+        inner.upsert(&by_ref, manifest)
     }
 
     // ========================================================================
@@ -991,7 +1026,17 @@ impl ImageStore {
                     continue;
                 }
                 tracing::warn!("Cached layer corrupted, will re-download: {}", layer.digest);
-                let _ = tokio::fs::remove_file(storage.layer_tarball_path(&layer.digest)).await;
+                // Keep eviction and unlink together so a concurrent lookup
+                // cannot cache an entry just before its layer is removed.
+                let mut inner = self.inner.write().await;
+                inner.verified.retain(|_, entry| {
+                    !entry
+                        .manifest
+                        .layers
+                        .iter()
+                        .any(|l| l.digest == layer.digest)
+                });
+                let _ = std::fs::remove_file(storage.layer_tarball_path(&layer.digest));
             }
             layers_to_download.push(layer);
         }
@@ -1156,19 +1201,36 @@ impl ImageStore {
         Ok(())
     }
 
-    /// Build the client for one pull: through the proxy when one is set, and
-    /// trusting the system certificate store on top of the bundled roots. It
-    /// fails where `Client::new` would log the error and fall back to a default
-    /// client without the proxy and TLS settings.
-    async fn client_for(&self, reference: &Reference) -> BoxliteResult<oci_client::Client> {
+    async fn client_for(&self, reference: &Reference) -> BoxliteResult<Arc<oci_client::Client>> {
         let host = reference.registry();
+        let cell = self
+            .registry_clients
+            .lock()
+            .entry(host.to_owned())
+            .or_default()
+            .clone();
+        let client = cell.get_or_try_init(|| self.build_client(host)).await?;
+        Ok(Arc::clone(client))
+    }
+
+    /// Build lazily, off the async runtime. Unlike `Client::new`, propagate
+    /// errors rather than falling back to a client without the TLS/proxy settings.
+    async fn build_client(&self, host: &str) -> BoxliteResult<Arc<oci_client::Client>> {
         let mut config = client_config_for_registry(host, &self.image_registries);
         image_registry_proxy::apply(self.image_registry_proxy.as_ref(), &mut config);
         // With verification off no root is consulted, so the store is not read.
-        if !config.accept_invalid_certificates {
-            config.extra_root_certificates = system_trust::root_certificates().await;
-        }
-        oci_client::Client::try_from(config).map_err(|e| {
+        let roots = if !config.accept_invalid_certificates {
+            system_trust::root_certificates().await
+        } else {
+            &[]
+        };
+        tokio::task::spawn_blocking(move || {
+            config.extra_root_certificates = roots.to_vec();
+            oci_client::Client::try_from(config).map(Arc::new)
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("registry client task failed: {e}")))?
+        .map_err(|e| {
             let mut message = e.to_string();
             let mut source = std::error::Error::source(&e);
             while let Some(cause) = source {
@@ -1755,6 +1817,12 @@ pub(super) mod tests {
             .await
             .expect("pull must finish");
             pulled.expect_err("the fixture serves no image");
+            let roots = system_trust::root_certificates().await;
+            assert!(!roots.is_empty(), "the child loaded the fixture CA");
+            tokio::fs::remove_file(std::env::var_os("SSL_CERT_FILE").unwrap())
+                .await
+                .unwrap();
+            assert!(std::ptr::eq(roots, system_trust::root_certificates().await));
             return;
         }
 
@@ -1829,6 +1897,23 @@ pub(super) mod tests {
                 "store holds the registry CA: {store_holds_registry_ca}; request: {request:?}",
             );
         }
+    }
+
+    #[tokio::test]
+    async fn registry_clients_are_reused_only_within_a_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_tmp(dir.path());
+        let first = "quay.io/acme/app:v1".parse().unwrap();
+        let second = "quay.io/acme/other:v2".parse().unwrap();
+        let other_host = "ghcr.io/acme/app:v1".parse().unwrap();
+
+        let (first_client, second_client) =
+            tokio::try_join!(store.client_for(&first), store.client_for(&second)).unwrap();
+        assert!(Arc::ptr_eq(&first_client, &second_client));
+        assert!(!Arc::ptr_eq(
+            &first_client,
+            &store.client_for(&other_host).await.unwrap()
+        ));
     }
 
     #[test]
@@ -2022,6 +2107,8 @@ pub(super) mod tests {
         let manifest = seed_cached_image(&store, &tag).await;
         let alias = format!("quay.io/acme/app@{}", manifest.manifest_digest);
         seed_cached_build(&store, &alias, &manifest.manifest_digest).await;
+        store.pull(&tag).await.unwrap();
+        store.pull(&alias).await.unwrap();
         // Stands in for a delete the database fails, such as on a full disk.
         // The tag is the older entry, so it is dropped second, after the alias.
         db.conn()
@@ -2037,6 +2124,11 @@ pub(super) mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("refused"), "{error}");
+        {
+            let inner = store.inner.read().await;
+            assert!(inner.verified.contains_key(&tag));
+            assert!(inner.verified.contains_key(&alias));
+        }
         let mut held: Vec<String> = store
             .list()
             .await
@@ -2065,32 +2157,14 @@ pub(super) mod tests {
         let store = images.store();
         let manifest = seed_cached_image(store, "quay.io/acme/app:v1").await;
 
-        // A pull part-way through `update_index` holds the read lock.
-        let pull = store.inner.read().await;
-        let remove = tokio::spawn({
-            let images = images.clone();
-            async move { images.remove("quay.io/acme/app").await }
-        });
-        // The lock is fair, so once the remove queues for it no reader gets
-        // in; nothing signals that moment, so it is polled.
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while store.inner.try_read().is_ok() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the remove never waited for the index");
-        let pulled = CachedImage {
-            manifest_digest: manifest.manifest_digest,
-            config_digest: manifest.config_digest,
-            layers: vec![],
-            cached_at: chrono::Utc::now().to_rfc3339(),
-            complete: true,
-        };
-        pull.index.upsert("quay.io/acme/app:v2", &pulled).unwrap();
+        // A pull part-way through indexing holds the write lock.
+        let mut pull = store.inner.write().await;
+        let mut remove = std::pin::pin!(images.remove("quay.io/acme/app"));
+        assert!(futures::poll!(&mut remove).is_pending());
+        pull.upsert("quay.io/acme/app:v2", &manifest).unwrap();
         drop(pull);
 
-        remove.await.unwrap().unwrap();
+        remove.await.unwrap();
 
         let left: Vec<String> = store
             .list()
@@ -2100,6 +2174,58 @@ pub(super) mod tests {
             .map(|(reference, _)| reference)
             .collect();
         assert!(left.is_empty(), "{left:?}");
+    }
+
+    #[tokio::test]
+    async fn verified_cache_is_invalidated_on_overwrite_and_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = registry_answering(404).await;
+        let (store, tag, first) = store_with_cached_image(&dir, &host).await;
+        let other_tag = format!("{host}/acme/other:v1");
+        seed_cached_image(&store, &other_tag).await;
+        store.pull(&other_tag).await.unwrap();
+
+        assert_eq!(
+            store.pull(&tag).await.unwrap().manifest_digest,
+            first.manifest_digest
+        );
+        let first_alias = format!("{host}/acme/app@{}", first.manifest_digest);
+        store.pull(&first_alias).await.unwrap();
+        // A warm hit only needs a read lock, even when another reader holds it.
+        {
+            let inner = store.inner.read().await;
+            assert!(inner.verified.contains_key(&tag));
+            assert!(inner.verified.contains_key(&first_alias));
+            let mut hit = std::pin::pin!(store.pull(&tag));
+            assert!(futures::poll!(&mut hit).is_ready());
+        }
+
+        let next_digest = format!("sha256:{}", "f".repeat(64));
+        seed_cached_build(&store, &tag, &next_digest).await;
+        assert_eq!(store.pull(&tag).await.unwrap().manifest_digest, next_digest);
+        assert_eq!(
+            store.pull(&first_alias).await.unwrap().manifest_digest,
+            first.manifest_digest
+        );
+        let next_alias = format!("{host}/acme/app@{next_digest}");
+        store.pull(&next_alias).await.unwrap();
+
+        assert_eq!(store.forget_matching(|r| r == next_alias).await.unwrap(), 1);
+        {
+            let inner = store.inner.read().await;
+            assert!(!inner.verified.contains_key(&next_alias));
+            assert!(!inner.verified.contains_key(&tag));
+            assert!(inner.verified.contains_key(&other_tag));
+        }
+        assert!(store.pull(&next_alias).await.is_err());
+        // The tag still exists; serving it must restore the missing alias.
+        assert_eq!(store.pull(&tag).await.unwrap().manifest_digest, next_digest);
+        assert_eq!(
+            store.pull(&next_alias).await.unwrap().manifest_digest,
+            next_digest
+        );
+        assert_eq!(store.forget_matching(|r| r == tag).await.unwrap(), 1);
+        assert!(store.pull(&tag).await.is_err());
     }
 
     /// Build a cache entry the store will actually accept: the manifest, its
@@ -2174,7 +2300,12 @@ pub(super) mod tests {
             config_digest,
             diff_ids: vec![],
         };
-        store.update_index(image_ref, &manifest).await.unwrap();
+        store
+            .inner
+            .write()
+            .await
+            .upsert(image_ref, &manifest)
+            .unwrap();
         manifest
     }
 
