@@ -894,7 +894,7 @@ fn open_subscription(
             Err(error) => {
                 push_event(
                     &queue,
-                    RuntimeEvent::AgentCompletion(Box::new(move || unsafe {
+                    RuntimeEvent::AgentSubscription(Box::new(move || unsafe {
                         deliver::<()>(Err(error), |_, error| {
                             on_open(ptr::null_mut(), error, data as *mut c_void)
                         });
@@ -913,7 +913,7 @@ fn open_subscription(
         });
         push_event(
             &queue,
-            RuntimeEvent::AgentCompletion(Box::new(move || unsafe {
+            RuntimeEvent::AgentSubscription(Box::new(move || unsafe {
                 on_open(Box::into_raw(handle), ptr::null(), data as *mut c_void);
             })),
         )
@@ -934,7 +934,7 @@ fn open_subscription(
                 item = stream.next() => match item {
                     Some(Ok(event)) => {
                         let value = boxlite::agents::records::event(&event);
-                        push_event(&queue, RuntimeEvent::AgentCompletion(Box::new(move || unsafe {
+                        push_event(&queue, RuntimeEvent::AgentSubscription(Box::new(move || unsafe {
                             deliver_json(Ok(value), on_event, data);
                         }))).await;
                     }
@@ -945,7 +945,7 @@ fn open_subscription(
         };
         push_event(
             &queue,
-            RuntimeEvent::AgentCompletion(Box::new(move || unsafe {
+            RuntimeEvent::AgentSubscription(Box::new(move || unsafe {
                 match terminal {
                     Some(error) => deliver::<()>(Err(error), |_, error| {
                         on_event(ptr::null(), error, data as *mut c_void)

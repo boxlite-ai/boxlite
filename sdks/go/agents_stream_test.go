@@ -695,3 +695,65 @@ func TestAgentStreamDecodePreservesNativeError(t *testing.T) {
 	e, err := stream.Next(context.Background())
 	checkAgentError(t, e, err, ErrNetwork)
 }
+
+func TestAgentStreamShutdownDispatchesOnlySubscriptions(t *testing.T) {
+	r, ns := testAgents(t, false)
+	stream := openTestAgentStream(t, testCreateAgent(t, ns), context.Background(), "pending")
+	r.stopDrain()
+	b, token := testQueueUnrelatedCallback(r)
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	receiveAgent(t, stream.state.done)
+	select {
+	case <-b.entered:
+		t.Fatal("shutdown dispatched an unrelated callback")
+	default:
+		token.Delete()
+	}
+}
+
+func TestAgentStreamCanceledBeforeNativeEOF(t *testing.T) {
+	_, ns := testAgents(t, false)
+	a := testCreateAgent(t, ns)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := openTestAgentStream(t, a, ctx, "after-response")
+	// Hold back AfterFunc delivery while the real native terminal arrives.
+	if !s.state.stopWatch() {
+		t.Fatal("subscription watcher already ran")
+	}
+	cancel()
+	if _, err := a.Respond(context.Background(), "request-1", AgentAnswer{Text: "continue"}, AgentControlOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	receiveAgent(t, s.state.done)
+	for _, kind := range []string{"first", "future"} {
+		if e := nextAgent(t, s); e.Kind != kind {
+			t.Fatalf("event = %v, want %s", e, kind)
+		}
+	}
+	if _, err := s.Next(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("native EOF after subscription cancellation returned %v", err)
+	}
+}
+
+func TestAgentStreamNativeRejectsOpen(t *testing.T) {
+	r, ns := testAgents(t, false)
+	a := testCreateAgent(t, ns)
+	stream, err := testAgentRejectedOpen(a)
+	checkAgentError(t, stream, err, ErrInvalidArgument)
+	if len(r.agentStreamSnapshot()) != 0 || len(r.agentBufferSnapshot()) != 0 {
+		t.Fatal("synchronous rejection retained subscription state")
+	}
+}
+
+func TestAgentStreamNilReadContextPreservesEvent(t *testing.T) {
+	_, ns := testAgents(t, false)
+	stream := openTestAgentStream(t, testCreateAgent(t, ns), context.Background(), "after-response")
+	event, err := stream.Next(nil)
+	checkAgentError(t, event, err, ErrInvalidArgument)
+	if first := nextAgent(t, stream); first.Kind != "first" {
+		t.Fatalf("after invalid read: %+v", first)
+	}
+}

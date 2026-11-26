@@ -144,6 +144,9 @@ func (s *agentSubscription) finish(err error) {
 	s.terminal = true
 	if s.err == nil && !s.closed {
 		s.err = err
+		if err == nil && s.ctx != nil {
+			s.err = s.ctx.Err()
+		}
 	}
 	p := s.takeLocked()
 	s.signalLocked()
@@ -412,6 +415,6 @@ func (r *Runtime) connectedAgentStreams() int {
 // without a transferred handle remain C-owned and do not delay runtime free.
 func (r *Runtime) drainAgentTerminals() {
 	for r.connectedAgentStreams() > 0 {
-		C.boxlite_runtime_drain(r.handle, C.int(drainTimeoutMs), nil)
+		C.boxlite_go_drain_subscription(r.handle, C.int(drainTimeoutMs))
 	}
 }

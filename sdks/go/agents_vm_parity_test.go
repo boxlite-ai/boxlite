@@ -298,6 +298,9 @@ func goAgentRunningRestart(f *goAgentVMFixture) {
 	if queued.Status != AgentTurnQueued {
 		f.t.Fatalf("expected queued turn: %+v", queued)
 	}
+	if status := f.snapshot(f.get(a, running.ID)).Status; status != AgentTurnRunning {
+		f.t.Fatalf("turn before restart = %v, want running", status)
+	}
 	events.Close()
 	f.restart()
 	adopted, e := f.box.Agents().Get(f.ctx, running.AgentID)
@@ -439,10 +442,10 @@ func goAgentInstalledRestart(f *goAgentVMFixture) {
 	if e != nil {
 		f.t.Fatal(e)
 	}
-	f.wait(f.send(a, "ping"))
 	if f.mounts() != "1" {
 		f.t.Fatal("first Go lookup did not restore mount")
 	}
+	f.wait(f.send(a, "ping"))
 }
 func goAgentMountRetry(f *goAgentVMFixture) {
 	f.delivered()

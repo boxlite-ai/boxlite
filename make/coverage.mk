@@ -93,11 +93,11 @@ coverage\:go:
 	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
 	@mkdir -p target/coverage
 	@rc=0; \
-	(cd sdks/go && go test -a -count=1 -tags boxlite_dev,boxlite_agent_test -covermode=atomic -coverpkg=./... \
+	(cd sdks/go && $(GO_DEV_ENV) go test -a -count=1 -tags $(GO_DEV_TAGS),boxlite_agent_test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/go-sdk.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	(cd src/deps/libgvproxy-sys/gvproxy-bridge && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/gvproxy.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
-	(cd apps/runner && GOFLAGS=-tags=boxlite_dev go test -covermode=atomic -coverpkg=./... \
+	(cd apps/runner && $(GO_DEV_ENV) GOFLAGS=-tags=$(GO_DEV_TAGS) go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/runner.out" $(GOTEST_FILTER) ./...) || rc=$$?; \
 	(cd apps/image-service && go test -covermode=atomic -coverpkg=./... \
 		-coverprofile="$(PROJECT_ROOT)/target/coverage/image-service.out" $(GOTEST_FILTER) ./...) || rc=$$?; \

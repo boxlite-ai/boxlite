@@ -197,7 +197,7 @@ fn go_opencode_vm_parity() {
     let registry = boxlite_test_utils::registry::local_registry().search_registry();
     let filter = std::env::var("BOXLITE_GO_AGENT_VM_FILTER")
         .unwrap_or_else(|_| "^TestGoAgentVMParity$".into());
-    let status = std::process::Command::new(program)
+    let output = std::process::Command::new(program)
         .arg(format!("-test.run={filter}"))
         .args(["-test.timeout=25m", "-test.v", "--"])
         .args([
@@ -206,7 +206,20 @@ fn go_opencode_vm_parity() {
             &home.path,
             std::path::Path::new(&registry.host),
         ])
-        .status()
+        .stderr(std::process::Stdio::inherit())
+        .output()
         .expect("run Go equivalents of Rust OpenCode tests");
-    assert!(status.success(), "Go parity suite failed: {status}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    print!("{stdout}");
+    assert!(
+        output.status.success(),
+        "Go parity suite failed: {}",
+        output.status
+    );
+    assert!(
+        stdout.lines().any(|line| line
+            .trim_start()
+            .starts_with("--- PASS: TestGoAgentVMParity/")),
+        "no Go VM scenario passed for {filter}"
+    );
 }

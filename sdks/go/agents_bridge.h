@@ -15,5 +15,6 @@ enum BoxliteErrorCode go_agent_steer(struct CAgentTurn *, const char *, const st
 enum BoxliteErrorCode go_agent_interrupt(struct CAgentTurn *, const struct CAgentControlOptions *, uintptr_t, CBoxliteError *);
 enum BoxliteErrorCode go_agent_events(struct CAgent *, const struct CAgentEventsOptions *, uintptr_t, CBoxliteError *);
 enum BoxliteErrorCode go_agent_turn_events(struct CAgentTurn *, const struct CAgentEventsOptions *, uintptr_t, CBoxliteError *);
+void boxlite_go_drain_subscription(CBoxliteRuntime *, int);
 size_t go_agent_event_length(const char *, size_t);
 #endif

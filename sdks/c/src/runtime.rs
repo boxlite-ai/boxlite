@@ -206,7 +206,7 @@ pub unsafe extern "C" fn boxlite_runtime_drain(
     timeout_ms: c_int,
     out_error: *mut CBoxliteError,
 ) -> c_int {
-    drain(runtime, timeout_ms, out_error)
+    drain(runtime, timeout_ms, out_error, false)
 }
 
 unsafe fn runtime_new(
@@ -512,7 +512,23 @@ unsafe fn runtime_free(runtime: *mut RuntimeHandle) {
     }
 }
 
-unsafe fn drain(rt: *mut RuntimeHandle, timeout_ms: c_int, out_error: *mut FFIError) -> c_int {
+/// Internal Go shutdown entry point. The ordinary drainer has joined and the
+/// runtime is being destroyed. Discard unrelated events as runtime_free would,
+/// making room even when a subscription producer is blocked on a full queue.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_go_drain_subscription(
+    runtime: *mut CBoxliteRuntime,
+    timeout_ms: c_int,
+) {
+    unsafe { drain(runtime, timeout_ms, ptr::null_mut(), true) };
+}
+
+unsafe fn drain(
+    rt: *mut RuntimeHandle,
+    timeout_ms: c_int,
+    out_error: *mut FFIError,
+    subscription_only: bool,
+) -> c_int {
     if rt.is_null() {
         unsafe { write_error(out_error, null_pointer_error("runtime")) };
         return -1;
@@ -567,6 +583,13 @@ unsafe fn drain(rt: *mut RuntimeHandle, timeout_ms: c_int, out_error: *mut FFIEr
         };
 
         // ─── Lock RELEASED — dispatch to user callback ───
+        if subscription_only {
+            if let RuntimeEvent::AgentSubscription(dispatch) = event {
+                dispatch();
+                return 1;
+            }
+            continue;
+        }
         unsafe { dispatch_event(event) };
         count = count.saturating_add(1);
     }
@@ -575,7 +598,9 @@ unsafe fn drain(rt: *mut RuntimeHandle, timeout_ms: c_int, out_error: *mut FFIEr
 unsafe fn dispatch_event(event: RuntimeEvent) {
     unsafe {
         match event {
-            RuntimeEvent::AgentCompletion(dispatch) => dispatch(),
+            RuntimeEvent::AgentCompletion(dispatch) | RuntimeEvent::AgentSubscription(dispatch) => {
+                dispatch()
+            }
             RuntimeEvent::AgentCreate {
                 callback,
                 user_data,

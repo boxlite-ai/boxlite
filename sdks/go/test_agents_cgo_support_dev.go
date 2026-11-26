@@ -145,3 +145,19 @@ func testDeliverAgentRecord(s *agentSubscription, record string) {
 	defer C.free(unsafe.Pointer(value))
 	goBoxliteAgentEvent(value, nil, C.uintptr_t(s.token))
 }
+
+// Queue an unrelated callback after the ordinary drainer has joined.
+func testQueueUnrelatedCallback(r *Runtime) (*agentTestBarrier, cgo.Handle) {
+	b := &agentTestBarrier{entered: make(chan struct{}), release: make(chan struct{})}
+	close(b.release)
+	token := cgo.NewHandle(b)
+	C.test_agent_barrier(r.handle, C.uintptr_t(token))
+	return b, token
+}
+
+// Invalid native arguments exercise synchronous rejection after Go registers a token.
+func testAgentRejectedOpen(a *Agent) (AgentEventStream, error) {
+	return openAgentEvents(context.Background(), a.native, AgentEventsOptions{}, func(_ *C.struct_CAgent, opts *C.struct_CAgentEventsOptions, token C.uintptr_t, err *C.CBoxliteError) C.enum_BoxliteErrorCode {
+		return C.go_agent_events(nil, opts, token, err)
+	})
+}

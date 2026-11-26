@@ -295,7 +295,7 @@ Closing a stream does not interrupt agent work.
 `Runtime.Close` discards buffers and makes reads return `ErrRuntimeClosed`, including when
 the read context is also canceled at the read decision.
 It cancels connected subscriptions before joining the ordinary drainer, then
-alone drains their terminal callbacks. Pending connects do not hold shutdown
+dispatches only subscription callbacks until their terminals arrive. Other queued callbacks are discarded during teardown. Pending connects do not hold shutdown
 open; their callback state is released after native runtime destruction.
 Garbage collection requests stream closure as a fallback; deterministic cleanup
 uses stream or runtime `Close`.

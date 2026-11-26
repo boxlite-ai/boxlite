@@ -561,11 +561,11 @@ test\:integration\:go\:agents:
 	@mkdir -p sdks/c/tests/build
 	@cd sdks/c/tests/build && cmake .. -DBOXLITE_LIB_DIR="$(if $(CARGO_TARGET_DIR),$(abspath $(CARGO_TARGET_DIR)),$(PROJECT_ROOT)/target)/debug"
 	@cd sdks/c/tests/build && cmake --build . --target test_agents_opencode -j
-	@cd sdks/go && go test -c -tags boxlite_dev,boxlite_agent_vm -o ../../target/debug/go-agent-vm
+	@cd sdks/go && $(GO_DEV_ENV) go test -c -tags $(GO_DEV_TAGS),boxlite_agent_vm -o "$(GO_DEBUG_DIR)/go-agent-vm"
 	@BOXLITE_C_AGENT_VM_BIN="$(PROJECT_ROOT)/sdks/c/tests/build/test_agents_opencode" \
-		BOXLITE_GO_AGENT_VM_BIN="$(PROJECT_ROOT)/target/debug/go-agent-vm" \
+		BOXLITE_GO_AGENT_VM_BIN="$(GO_DEBUG_DIR)/go-agent-vm" \
 		cargo test -p boxlite-c --lib go_opencode_vm_matches_rust -- --ignored --test-threads=1 --nocapture
-	@BOXLITE_GO_AGENT_VM_BIN="$(PROJECT_ROOT)/target/debug/go-agent-vm" \
+	@BOXLITE_GO_AGENT_VM_BIN="$(GO_DEBUG_DIR)/go-agent-vm" \
 		cargo test -p boxlite-c --lib go_opencode_vm_parity -- --ignored --test-threads=1 --nocapture
 
 # Rerun the scenario matrix without repeating the C/Go/Rust result comparison.
@@ -573,8 +573,8 @@ test\:integration\:go\:agents\:parity:
 	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
 		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
 	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
-	@cd sdks/go && go test -c -tags boxlite_dev,boxlite_agent_vm -o ../../target/debug/go-agent-vm
-	@BOXLITE_GO_AGENT_VM_BIN="$(PROJECT_ROOT)/target/debug/go-agent-vm" \
+	@cd sdks/go && $(GO_DEV_ENV) go test -c -tags $(GO_DEV_TAGS),boxlite_agent_vm -o "$(GO_DEBUG_DIR)/go-agent-vm"
+	@BOXLITE_GO_AGENT_VM_BIN="$(GO_DEBUG_DIR)/go-agent-vm" \
 		cargo test -p boxlite-c --lib go_opencode_vm_parity -- --ignored --test-threads=1 --nocapture
 
 # Run the same OpenCode scenario in Rust, Python and Node, comparing each SDK
@@ -730,7 +730,7 @@ test\:all\:c:
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
 	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
-	@cd sdks/go && go test -a -count=1 -tags boxlite_dev,boxlite_agent_test $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
+	@cd sdks/go && $(GO_DEV_ENV) go test -a -count=1 -tags $(GO_DEV_TAGS),boxlite_agent_test $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
 # Native Go archive import/export tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.
