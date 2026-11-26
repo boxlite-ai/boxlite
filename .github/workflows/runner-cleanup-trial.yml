@@ -1,0 +1,63 @@
+name: BoxLite local cleanup diagnostic
+on:
+  push:
+    branches: [ci/boxlite-runner-trials-2833]
+    paths: [.github/workflows/runner-cleanup-trial.yml]
+permissions:
+  contents: read
+jobs:
+  cleanup:
+    runs-on: boxlite
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 6a96c6a7be1a8af2113ac7acc5154c7e18314b03
+          persist-credentials: false
+      - name: Diagnose cleanup of test-owned processes
+        run: |
+          python3 - <<'PY'
+          import contextlib
+          import io
+          import os
+          from pathlib import Path
+          import sys
+          import unittest
+
+          sys.path.insert(0, 'tests/scripts')
+          from test_e2e_local import LocalE2ETest, local
+
+          original_argv = local._argv
+          original_adopt = local.adoptable_box
+          original_pids = local.stop_orphaned_boxes
+          events = []
+          def argv(pid):
+              args = original_argv(pid)
+              if not args or '/boxes/' not in args[0]:
+                  events.append(('argv', pid, args[:1]))
+              return args
+          def adopt(path):
+              result = original_adopt(path)
+              events.append(('adopt', path.name, result))
+              if path.name == 'stale' and result:
+                  pid = int((path / 'shim.pid').read_text().splitlines()[0])
+                  events.append(('stale expected / observed', '0', local.process_starttime(pid)))
+              return result
+          def stop(*args, **kwargs):
+              events.append(('cleaning', kwargs.get('pids')))
+              return original_pids(*args, **kwargs)
+          local._argv, local.adoptable_box, local.stop_orphaned_boxes = argv, adopt, stop
+          failures = 0
+          for attempt in range(80):
+              events.clear()
+              result = unittest.TestResult()
+              with contextlib.redirect_stdout(io.StringIO()):
+                  LocalE2ETest('test_start_reaps_only_unrecoverable_box_processes').run(result)
+              if not result.wasSuccessful():
+                  failures += 1
+                  print('attempt', attempt + 1, 'observations', events, flush=True)
+                  print((result.failures + result.errors)[0][1], flush=True)
+                  if failures >= 3: break
+          print('failures', failures, 'in', attempt + 1, 'attempts', flush=True)
+          sys.exit(bool(failures))
+          PY
