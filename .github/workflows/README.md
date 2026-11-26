@@ -29,7 +29,8 @@ The connection needs permission to register workers and quota for the requested
 The Node release upload builds and packs the npm packages before attaching them.
 Uploads of prepared C SDK archives, runtime archives and Python wheels use the default worker.
 
-The C SDK workflow uses GitHub-hosted Ubuntu for a caller-selected commit or an x64-only recovery build.
+The C SDK workflow installs the BoxLite worker toolchain before source checkout.
+A caller-selected commit or an x64-only recovery build runs on GitHub-hosted Ubuntu.
 Linux ARM64 and macOS matrix jobs use their native platforms. Building an ARM64
 container image with Buildx exercises a different path from native ARM64 SDK tests.
 

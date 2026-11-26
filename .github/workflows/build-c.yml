@@ -101,6 +101,13 @@ jobs:
         include: ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' || needs.config.outputs.platforms) }}
 
     steps:
+      - name: Install BoxLite worker build tools
+        if: matrix.os == 'ubuntu-latest' && runner.environment == 'self-hosted'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends make ripgrep xz-utils zstd \
+            build-essential pkg-config libssl-dev patchelf python3
+
       # This job builds a caller-selected commit, and a `uses: ./...` action is resolved from the
       # checked-out tree rather than from this workflow's own ref. So the steps below need
       # .github/actions/ to exist in the SELECTED commit, not just in the one defining this file.
@@ -111,11 +118,6 @@ jobs:
         with:
           ref: ${{ needs.resolve-ref.outputs.sha }}
           submodules: recursive
-
-      - uses: ./.github/actions/setup-boxlite-runner
-        if: matrix.os == 'ubuntu-latest' && runner.environment == 'self-hosted'
-        with:
-          native-build: 'true'
 
       - uses: ./.github/actions/setup-rust
         with:

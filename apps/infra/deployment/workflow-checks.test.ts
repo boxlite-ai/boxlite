@@ -97,6 +97,14 @@ test('selected-commit and recovery C SDK builds can run independently of BoxLite
   }
 })
 
+test('the C SDK worker installs its host tools before checking out a selected commit', () => {
+  const steps = workflow('build-c.yml').jobs.build.steps
+  const bootstrap = steps.findIndex((step: any) => step.if?.includes("runner.environment == 'self-hosted'"))
+  const checkout = steps.findIndex((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.ok(bootstrap >= 0 && bootstrap < checkout, 'worker setup must precede the selected source')
+  assert.match(steps[bootstrap].run, /apt-get install/)
+})
+
 test('CodeQL places every language on its qualified runner and retains its build mode', () => {
   const job = workflow('codeql.yml').jobs.analyze
   assert.equal(job['runs-on'], '${{ matrix.runner }}')
