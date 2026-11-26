@@ -24,7 +24,15 @@ Diagrams of this design:
 BoxLite line references are to commit `42ec1a2a6`. External citations name
 their project; their revisions are pinned under [References](#references).
 `libkrun/` is the vendored copy at `src/deps/libkrun-sys/vendor/libkrun/`
-(upstream `e12b9b3`).
+(upstream `27c8308`).
+
+Submodule revision `27c8308` brings Transparent Huge Pages for Linux guest boot
+RAM (`boxlite-ai/libkrun#17`), underlying checkpoint and virtio-mem updates, and
+checkpoint vsock/musl fixes (`boxlite-ai/libkrun#18`). On `stage`, the
+`libkrun-sys` Rust FFI binding surface preserves its existing contract;
+`BwrapSandbox` forwards `KRUN_USE_THP=1` to `boxlite-shim` when set on the
+host, and `mdeploy` injects `KRUN_USE_THP="1"` by default for `stage`
+runners.
 
 ## Scope
 
