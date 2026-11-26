@@ -3,6 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { OrganizationService } from '../organization/services/organization.service'
+import { RegistrationService } from '../auth/registration.service'
+import { JwtStrategy } from '../auth/jwt.strategy'
+import { UserEvents } from './constants/user-events.constant'
+import { UserCreatedEvent } from './events/user-created.event'
 import { randomUUID } from 'node:crypto'
 import axios from 'axios'
 import type Redis from 'ioredis'
@@ -366,6 +371,70 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     expect(await records.findOneBy({ userId: SOCIAL })).toBeNull()
     expect(await dataSource.getRepository(Organization).count()).toBe(1)
   })
+
+  it.each([
+    [true, 'done'],
+    [false, 'done'],
+    [true, 'failed'],
+  ] as const)(
+    'preserves the default after a late link result with legal=%s and outcome=%s',
+    async (legalEnabled, outcome) => {
+      await user(SOCIAL)
+      const existingOrg = await organization(SOCIAL, 'original organization')
+      await member(existingOrg, SOCIAL, OrganizationMemberRole.OWNER, true)
+      const op = { id: randomUUID(), source_id: SOCIAL, target_id: PRIMARY }
+      await jobs.prepare(op)
+
+      const events = new EventEmitter2()
+      const config = { get: () => false, getOrThrow: () => undefined } as unknown as TypedConfigService
+      const organizations = new OrganizationService(
+        dataSource.getRepository(Organization),
+        {} as never,
+        events,
+        config,
+        {} as never,
+        {} as never,
+        {} as never,
+      )
+      events.on(UserEvents.CREATED, (event: UserCreatedEvent) => organizations.handleUserCreatedEvent(event))
+      const users = new UserService(dataSource.getRepository(User), events, dataSource)
+      const legal = { tosVersion: 'terms', privacyVersion: 'privacy' }
+      const registration = new RegistrationService(
+        users,
+        {} as never,
+        config,
+        { recordFirstUse: async () => undefined } as never,
+        { getCurrent: () => legal } as never,
+      )
+      const jwt = new JwtStrategy(
+        { jwksUri: 'https://issuer.example/jwks', audience: 'api', issuer: 'https://issuer.example/' },
+        users,
+        config,
+        { recordFirstUse: async () => undefined } as never,
+      )
+      const identity = { sub: PRIMARY, email: 'target@gmail.com', email_verified: true }
+      const provision = () =>
+        legalEnabled
+          ? registration.register(identity, { accepted: true, ...legal })
+          : jwt.validate({ get: () => undefined } as never, identity)
+
+      await expect(provision()).rejects.toMatchObject({ status: 409, response: { code: 'account_link_pending' } })
+      expect(await users.findOne(PRIMARY)).toBeNull()
+      expect(await dataSource.getRepository(Organization).count()).toBe(1)
+
+      await jobs.complete(op, outcome)
+      await expect(provision()).resolves.toBeDefined()
+      const defaults = (await membershipsOf(PRIMARY)).filter((membership) => membership.isDefaultForUser)
+      expect(defaults).toHaveLength(1)
+      if (outcome === 'done') {
+        expect(defaults[0].organizationId).toBe(existingOrg)
+        expect(await dataSource.getRepository(Organization).count()).toBe(1)
+      } else {
+        expect(defaults[0].organizationId).not.toBe(existingOrg)
+        expect(await membershipsOf(SOCIAL)).toMatchObject([{ organizationId: existingOrg, isDefaultForUser: true }])
+      }
+    },
+  )
 
   it('does nothing for a social identity BoxLite never saw', async () => {
     await user(PRIMARY)

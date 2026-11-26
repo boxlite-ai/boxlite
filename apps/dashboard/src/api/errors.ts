@@ -41,6 +41,7 @@ export class OrganizationSuspendedError extends BoxliteError {}
 
 const registrationCodes = [
   'registration_required',
+  'account_link_pending',
   'consent_required',
   'legal_version_mismatch',
   'turnstile_token_required',

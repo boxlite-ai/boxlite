@@ -229,6 +229,20 @@ describe('RegistrationGate', () => {
     },
   )
 
+  it('retries account lookup when the account link is still being confirmed', async () => {
+    const message = 'Your account link is still being confirmed. Try again shortly.'
+    api.userApi.getAuthenticatedUser.mockRejectedValueOnce(new RegistrationError(message, 'account_link_pending'))
+    await render()
+
+    expect(document.body.textContent).toContain(message)
+    expect(businessMount).not.toHaveBeenCalled()
+    api.userApi.getAuthenticatedUser.mockResolvedValueOnce(userResponse)
+    await click('Try again')
+
+    expect(businessMount).toHaveBeenCalledTimes(1)
+    expect(api.register).not.toHaveBeenCalled()
+  })
+
   it.each(['reconnect', 'invalidation'])(
     'keeps admitted business mounted during %s and transient failure',
     async (trigger) => {

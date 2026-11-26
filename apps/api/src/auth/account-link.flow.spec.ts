@@ -84,6 +84,7 @@ function tenant(
     preparationPending?: boolean
     resumedOperationId?: string
     slowResult?: boolean
+    preparationSignals?: Array<AbortSignal | undefined>
   } = {},
 ) {
   const calls: Call[] = []
@@ -177,6 +178,10 @@ function tenant(
       body: init.body && JSON.parse(init.body),
     }
     calls.push(call)
+    if (options.preparationSignals && url.endsWith('/prepare')) {
+      options.preparationSignals.push(init.signal)
+      throw new Error('simulated transport stall')
+    }
     if (options.slowResult && url.endsWith('/result')) init.signal?.throwIfAborted()
     const { status, body } = await answer(call)
     return {
@@ -699,6 +704,17 @@ describe('login-time account link, Action and API together', () => {
       expect(step.seen.denied).toEqual([expect.stringMatching(/still checking/i)])
     })
 
+    it('bounds both preparation attempts with abort signals', async () => {
+      const preparationSignals: Array<AbortSignal | undefined> = []
+      const { action, calls } = tenant({ preparationSignals })
+      const step = transaction()
+
+      await action.onContinuePostLogin(google({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }), step.api)
+
+      expect(links(calls)).toEqual([])
+      expect(preparationSignals).toEqual([expect.any(AbortSignal), expect.any(AbortSignal)])
+    })
+
     it('continues the login when a confirmed link exceeds the result callback deadline', async () => {
       const { action, complete, timeout } = tenant({ slowResult: true })
       const step = transaction()
@@ -706,7 +722,7 @@ describe('login-time account link, Action and API together', () => {
       await action.onContinuePostLogin(google({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }), step.api)
 
       expect(timeout).toHaveBeenCalledWith(expect.any(Number))
-      expect(timeout.mock.calls[0][0]).toBeLessThanOrEqual(2000)
+      expect(timeout.mock.lastCall?.[0]).toBeLessThanOrEqual(2000)
       expect(complete).not.toHaveBeenCalled()
       expect(step.seen.denied).toEqual([])
       expect(step.seen.primary).toEqual([PASSWORD_USER])

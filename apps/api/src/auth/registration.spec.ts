@@ -368,6 +368,7 @@ describe('POST /api/auth/register', () => {
         {
           transaction: async (work) =>
             work({
+              query: async () => [],
               insert: async () => {
                 throw conflict
               },

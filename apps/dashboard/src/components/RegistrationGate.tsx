@@ -131,11 +131,15 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
   const description = legal
     ? 'Review the terms to create your BoxLite account.'
     : 'Complete the security check to create your BoxLite account. Next, we’ll help you set up your organization.'
+  const accountRetryMessage =
+    account.error instanceof RegistrationError && account.error.code === 'account_link_pending'
+      ? account.error.message
+      : 'We couldn’t confirm your account. Try again to continue.'
 
   return (
     <SetupLayout
       title={canRegister ? title : 'Let’s try that again'}
-      description={canRegister ? description : 'We couldn’t confirm your account. Try again to continue.'}
+      description={canRegister ? description : accountRetryMessage}
       compactFooter={canRegister && Boolean(legal)}
     >
       {message && (

@@ -322,17 +322,25 @@ async function linkRequest(event, endpoint, audience, claims, signal) {
   })
 }
 
+async function prepareLink(event, claims, deadline) {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) throw new AccountLinkPendingError()
+  const signal = AbortSignal.timeout(Math.min(5000, remaining))
+  const response = await linkRequest(event, 'prepare', PREPARE_AUDIENCE, claims, signal)
+  if (response.status !== 201) return { status: response.status }
+  return { status: response.status, preparation: await response.json() }
+}
+
 async function link(event, api, primaryUserId, userId, deadline) {
   const token = await managementToken(event, api)
   const attemptId = require('crypto').randomUUID()
   const claims = { sub: userId, primary_user_id: primaryUserId, operation_id: attemptId }
   // Retrying preparation is safe before this invocation has sent a link request.
-  const prepared = await linkRequest(event, 'prepare', PREPARE_AUDIENCE, claims).catch(() =>
-    linkRequest(event, 'prepare', PREPARE_AUDIENCE, claims),
+  const { status: preparationStatus, preparation } = await prepareLink(event, claims, deadline).catch(() =>
+    prepareLink(event, claims, deadline),
   )
-  if (prepared.status === 409) throw new AccountLinkPendingError()
-  if (prepared.status !== 201) throw new Error(`preparing account link answered ${prepared.status}`)
-  const preparation = await prepared.json()
+  if (preparationStatus === 409) throw new AccountLinkPendingError()
+  if (preparationStatus !== 201) throw new Error(`preparing account link answered ${preparationStatus}`)
   const { operationId, dispatchUntil } = preparation
   if (
     preparation.ready !== true ||

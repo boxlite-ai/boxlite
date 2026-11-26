@@ -10,6 +10,7 @@ import { TypedConfigService } from '../config/typed-config.service'
 import { LinkedIdentityService } from '../user/linked-identity.service'
 import { RegistrationConsent } from '../user/registration-consent.entity'
 import { User } from '../user/user.entity'
+import { lockAccountLinkIdentities } from '../user/account-link-registration'
 import { AccountLinkAuth0Reader } from './account-link-auth0-reader.service'
 
 export interface AccountLinkOperation {
@@ -62,7 +63,7 @@ export class AccountLinkConsentJobs {
     const { id, source_id: source, target_id: target } = request
     const retry = await this.checkRetry(request)
     return this.dataSource.transaction(async (em) => {
-      await this.lockIdentities(em, request)
+      await lockAccountLinkIdentities(em, source, target)
 
       const [previous]: (Attempt & LinkJob)[] = await em.query(
         `SELECT job.*, attempt."dispatch_until", attempt."rejected" FROM "account_link_attempt" AS attempt
@@ -150,20 +151,13 @@ export class AccountLinkConsentJobs {
     return { operationId, ready: true, dispatchUntil: attempt.dispatch_until.getTime() }
   }
 
-  private async lockIdentities(em: EntityManager, { source_id, target_id }: AccountLinkOperation): Promise<void> {
-    // Serialize operations even when the target user has no row yet.
-    for (const id of [source_id, target_id].sort()) {
-      await em.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`account-link:${id}`])
-    }
-  }
-
   async complete(
     operation: AccountLinkOperation,
     outcome: AccountLinkResult,
     evidence: CompletionEvidence = { attemptId: operation.id },
   ): Promise<void> {
     const keys = await this.dataSource.transaction(async (em) => {
-      await this.lockIdentities(em, operation)
+      await lockAccountLinkIdentities(em, operation.source_id, operation.target_id)
       const [job]: LinkJob[] = await em.query(
         `SELECT * FROM "account_link_consent_job" WHERE "id" = $1
          AND "source_id" = $2 AND "target_id" = $3 FOR UPDATE`,

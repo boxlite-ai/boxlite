@@ -576,9 +576,11 @@ test('forwards reconciliation endpoints when management writes are disabled', ()
     ...base,
     OIDC_MANAGEMENT_API_ENABLED: 'false',
     OIDC_MANAGEMENT_API_BASE_URL: 'https://management.example.com/api/v2',
+    OIDC_MANAGEMENT_API_AUDIENCE: 'https://custom-audience.example.com/api/v2/',
     OIDC_MANAGEMENT_API_TOKEN_URL: 'https://management.example.com/oauth/token',
   })
   assert.equal(environment.OIDC_MANAGEMENT_API_ENABLED, undefined)
+  assert.equal(environment.OIDC_MANAGEMENT_API_AUDIENCE, 'https://custom-audience.example.com/api/v2/')
   assert.equal(environment.OIDC_MANAGEMENT_API_BASE_URL, 'https://management.example.com/api/v2')
   assert.equal(environment.OIDC_MANAGEMENT_API_TOKEN_URL, 'https://management.example.com/oauth/token')
 })

@@ -201,6 +201,7 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
     ...passthrough('OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST'),
     ...passthrough('OIDC_MANAGEMENT_API_BASE_URL'),
     ...passthrough('OIDC_MANAGEMENT_API_TOKEN_URL'),
+    ...(audience && { OIDC_MANAGEMENT_API_AUDIENCE: audience }),
     // The MCP endpoint's OAuth resource: the URL clients connect to, on the
     // control plane's host as `DASHBOARD_BASE_API_URL` is. Browser sign-in also
     // needs `auth0:configure-mcp` on the tenant; API keys work without it.
@@ -208,7 +209,6 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
     ...(management
       ? {
           OIDC_MANAGEMENT_API_ENABLED: 'true',
-          OIDC_MANAGEMENT_API_AUDIENCE: audience as string,
         }
       : {}),
   }

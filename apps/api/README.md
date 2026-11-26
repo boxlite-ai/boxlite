@@ -484,6 +484,10 @@ without validating the challenge again. Both require a valid JWT and request bod
 Challenge rejection returns `403 turnstile_verification_failed`; verification service
 failure returns `503 turnstile_unavailable`. Neither creates a local account. The
 internal registration endpoint is excluded from public Swagger and MCP tools.
+First JWT signup returns `409 account_link_pending` while an incoming account
+link is still confirming a default organization to inherit. Try again after
+the link completes. A failed link leaves the target free to create its own
+default organization.
 Existing users, including MCP tokens without profile claims, keep their local profile
 and existing permissions. When protection is enabled, new MCP users first register in Dashboard.
 Notification connections check local user existence before joining rooms.

@@ -250,6 +250,10 @@ export function buildApi(input: ApiInputs) {
         ...(process.env.OIDC_MANAGEMENT_API_TOKEN_URL && {
           OIDC_MANAGEMENT_API_TOKEN_URL: process.env.OIDC_MANAGEMENT_API_TOKEN_URL,
         }),
+        ...(process.env.OIDC_MANAGEMENT_API_ENABLED !== 'true' &&
+          process.env.OIDC_MANAGEMENT_API_AUDIENCE && {
+            OIDC_MANAGEMENT_API_AUDIENCE: process.env.OIDC_MANAGEMENT_API_AUDIENCE,
+          }),
         // Optional: Auth0 Management API (enables account linking etc.)
         ...(process.env.OIDC_MANAGEMENT_API_ENABLED === 'true' && {
           OIDC_MANAGEMENT_API_ENABLED: 'true',
