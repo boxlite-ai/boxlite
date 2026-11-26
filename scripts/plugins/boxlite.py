@@ -4,8 +4,10 @@ import argparse
 from contextlib import contextmanager
 import hashlib
 import json
+import os
 import re
 import shutil
+import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
@@ -128,6 +130,17 @@ def validate_payload(root):
     return files
 
 
+def validate_claude_commit():
+    """Check the Git tree Claude Directory receives, including worktree cache paths."""
+    tree = subprocess.check_output(
+        ['git', 'ls-tree', '-rz', '--name-only', 'HEAD:plugins/boxlite-claude'], cwd=REPO)
+    committed = {os.fsdecode(name) for name in tree.split(b'\0') if name}
+    expected = SHARED_SOURCE | CLAUDE_SOURCE
+    if committed != expected:
+        raise ValueError(f'Claude Directory commit inventory differs: '
+                         f'unexpected={sorted(committed - expected)!r}, missing={sorted(expected - committed)!r}')
+
+
 def validate_claude(root, portable):
     """Check the complete Directory source before passing it to a host."""
     files = list(package_files(root))
@@ -226,6 +239,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['check', 'dist', 'submission'])
     args = parser.parse_args()
+    validate_claude_commit()
     if args.action == 'check':
         print(f'Validated Claude source and {len(validate())} Codex submission files')
     else:

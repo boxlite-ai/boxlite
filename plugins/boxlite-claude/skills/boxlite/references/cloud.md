@@ -1,7 +1,7 @@
 # Shared cloud operations
 
-Both cloud authentication modes use `https://api.boxlite.ai/mcp`, the same discovered tools, and this workflow.
-Only the credential and its granted permissions differ. Lifecycle and execution use native MCP; the packaged file helper calls the existing MCP file tools programmatically.
+Both cloud authentication modes use the BoxLite MCP service and the tools discovered on the selected connection.
+The selected credential determines the granted permissions. Lifecycle and execution use native MCP; the packaged file helper calls the existing MCP file tools programmatically.
 
 ## Create and execute
 

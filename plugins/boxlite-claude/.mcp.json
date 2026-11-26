@@ -3,6 +3,13 @@
     "boxlite": {
       "type": "http",
       "url": "https://api.boxlite.ai/mcp"
+    },
+    "boxlite-api": {
+      "type": "http",
+      "url": "https://api.boxlite.ai/mcp?connection=api-key",
+      "headers": {
+        "Authorization": "Bearer ${user_config.api_key}"
+      }
     }
   }
 }

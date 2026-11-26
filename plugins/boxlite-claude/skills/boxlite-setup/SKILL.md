@@ -22,34 +22,26 @@ Reuse the user's explicit choice, or present these three options before workload
 | Mode | Connection | Requirements |
 | --- | --- | --- |
 | Cloud OAuth | Host OAuth -> BoxLite MCP | BoxLite account and host authorization |
-| Cloud API key | User key -> the same BoxLite MCP | BoxLite API key supplied privately through the host environment |
+| Cloud API key | User key -> the same BoxLite MCP | BoxLite API key saved in Claude’s sensitive plugin setting |
 | Local | Local CLI -> embedded runtime | Shell, compatible CLI, and virtualization; no cloud account |
 
-Both cloud choices use `https://api.boxlite.ai/mcp`, the same tools, and the [cloud workflow](../boxlite/references/cloud.md).
+Both cloud connections expose the same tools and follow the [cloud workflow](../boxlite/references/cloud.md).
 Local is an independent [runtime workflow](../boxlite/references/local.md); never send its work to the cloud.
 Never change modes, accounts, organizations, or credential sources to recover from a denial.
 
 Record the choice privately in the project or session, outside Git and plugin files.
 A cloud record contains `mode` (`cloud-oauth` or `cloud-api`) and the selected host MCP connection name, never tokens.
-Without a writable project, retain the selection in the conversation; OAuth needs no local configuration file.
+Without a writable project, retain the selection in the conversation.
 
 ## Cloud OAuth
 
-If switching from the local API-key configuration below, run `claude mcp remove --scope local boxlite` in the same project and restart Claude Code.
-Open `/mcp` and authorize `plugin:boxlite:boxlite` in the browser. Claude manages consent and token storage.
+Use the bundled OAuth connection for normal interactive sign-in. Open `/mcp`, select `plugin:boxlite:boxlite`, and authorize it in the browser.
 
 ## Cloud API key
 
-Supply `BOXLITE_API_KEY` privately in the environment that launches Claude Code. If it is missing or empty, stop before connecting.
-In the project where you use BoxLite, register this local override once:
+Use this connection when the user explicitly selects API-key authentication. Open the BoxLite plugin’s settings in `/plugin`, enter the key in the masked **BoxLite API key** field, and reload the plugin.
 
-```sh
-claude mcp add-json --scope local boxlite '{"type":"http","url":"https://api.boxlite.ai/mcp","headers":{"Authorization":"Bearer ${BOXLITE_API_KEY}"}}'
-```
-
-Keep the single quotes so the saved configuration contains only the variable reference. Restart Claude Code with the key available.
-Claude Code gives the local entry precedence over the plugin entry at the same URL. Select `boxlite` in `/mcp` and use its tools.
-If the key is rejected, stop and repair the selected credential. When upgrading from the plugin’s API-key setting, supply your key through this environment variable.
+Select `plugin:boxlite:boxlite-api` in `/mcp`. Claude sends the key from secure storage on this connection only. If the key is missing or rejected, stop and update the setting before retrying.
 
 ## Verify the selected cloud connection
 

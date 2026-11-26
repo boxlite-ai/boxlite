@@ -27,8 +27,16 @@ Archive names follow the synchronized manifest version.
 The packager uses an exact inventory, fixed ZIP metadata and ordering, and excludes private state and caches.
 
 Claude Directory reads `plugins/boxlite-claude` at the published Git ref.
+Run the package checks from a Git checkout of the candidate commit.
 
-Claude ships one MCP endpoint at `https://api.boxlite.ai/mcp` for OAuth. Users choosing an API key configure a project-local Claude Code override at the same URL with a Bearer header. See the [Claude setup skill](../../plugins/boxlite-claude/skills/boxlite-setup/SKILL.md#cloud-api-key) for configuration and switching.
+Each packaging command compares that commit's Claude file list against the allowlist before staging files.
+For example, a committed `public/notes.txt` fails validation even if the working copy has been deleted.
+
+Claude bundles OAuth at `https://api.boxlite.ai/mcp` for interactive sign-in.
+The optional API-key connection uses `https://api.boxlite.ai/mcp?connection=api-key` so Claude can distinguish the two connections.
+Only the API-key connection sends the sensitive `userConfig.api_key` value in its Authorization header.
+
+See the [Claude setup skill](../../plugins/boxlite-claude/skills/boxlite-setup/SKILL.md#cloud-api-key) for configuration and switching.
 
 The release build assembles the Codex ZIP from `plugins/boxlite-codex` and shared files in `plugins/boxlite-claude`. Edit cloud operations and authentication checks once in the Claude source. Each host's setup skill supplies its own connection names and credential configuration.
 
@@ -178,6 +186,9 @@ The test saves a private command transcript in `target/plugins/evidence/local.js
 Image downloads use the selected registry; no cloud account or API credential is needed.
 
 ## Directory submission
+
+Run each Codex review prompt in a fresh conversation with the review workspace's OAuth connection.
+The list case is read-only. Each other positive case creates its own Box and uses the returned ID for its operations and cleanup.
 
 Submit the standalone Codex ZIP to OpenAI and the repository path `plugins/boxlite-claude` to Claude Directory.
 Keep reviewer credentials in each portal's private access fields; do not include credentials, private organization IDs, or raw host transcripts in the ZIP.

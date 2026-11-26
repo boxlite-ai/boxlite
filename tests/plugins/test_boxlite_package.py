@@ -17,6 +17,17 @@ package = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package)
 
 
+def commit_claude_fixture(repo, *extra_files):
+    repository = ['git', '-C', str(repo)]
+    subprocess.run([*repository, 'init', '--quiet'], check=True)
+    sources = package.SHARED_SOURCE | package.CLAUDE_SOURCE | set(extra_files)
+    paths = [f'plugins/boxlite-claude/{name}' for name in sorted(sources)]
+    subprocess.run([*repository, 'add', '--force', '--', *paths], check=True)
+    subprocess.run([*repository, '-c', 'user.name=Fixture', '-c', 'user.email=test@example.invalid',
+                    '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false',
+                    'commit', '--quiet', '-m', 'Record Claude Directory fixture'], check=True)
+
+
 class PackageTests(unittest.TestCase):
     def setUp(self):
         """Copy actual plugin resources into an isolated package root."""
@@ -70,7 +81,7 @@ class PackageTests(unittest.TestCase):
                 self.assertFalse((self.root / name).exists(), name)
                 self.assertEqual(zipped.read(name), (self.claude / name).read_bytes())
 
-    def test_installed_claude_exposes_one_cloud_endpoint(self):
+    def test_installed_claude_uses_plugin_credentials(self):
         output = Path(self.temp.name) / 'output'
         package.build(output, self.root)
         marketplace = output / 'boxlite-marketplace'
@@ -82,9 +93,35 @@ class PackageTests(unittest.TestCase):
         for name in ('skills/boxlite-setup/references/cloud-auth.md', 'skills/boxlite/references/cloud.md'):
             self.assertEqual((codex / name).read_bytes(), (plugin / name).read_bytes())
         config = json.loads((plugin / '.claude-plugin/plugin.json').read_text())
-        self.assertNotIn('userConfig', config)
+        key = config.get('userConfig', {}).get('api_key', {})
+        self.assertEqual((key.get('type'), key.get('sensitive'), key.get('required')),
+                         ('string', True, False))
         servers = json.loads((plugin / '.mcp.json').read_text())['mcpServers']
-        self.assertEqual(servers, {'boxlite': {'type': 'http', 'url': package.MCP_URL}})
+        self.assertEqual(servers, {
+            'boxlite': {'type': 'http', 'url': package.MCP_URL},
+            'boxlite-api': {'type': 'http', 'url': package.MCP_URL + '?connection=api-key',
+                            'headers': {'Authorization': 'Bearer ${user_config.api_key}'}},
+        })
+
+    def test_check_compares_claude_inventory_with_committed_files(self):
+        repo = Path(self.temp.name) / 'checkout'
+        claude = repo / 'plugins/boxlite-claude'
+        shutil.copytree(self.claude, claude)
+        shutil.copytree(self.root, repo / 'plugins/boxlite-codex')
+        script = repo / 'scripts/plugins/boxlite.py'
+        script.parent.mkdir(parents=True)
+        shutil.copyfile(REPO / 'scripts/plugins/boxlite.py', script)
+        commit_claude_fixture(repo)
+        notes = claude / 'public/notes.txt'
+        notes.parent.mkdir()
+        notes.write_text('local notes')
+        command = [sys.executable, str(script), 'check']
+        subprocess.run(command, cwd=repo, check=True, capture_output=True)
+        commit_claude_fixture(repo, 'public/notes.txt')
+        notes.unlink()  # Directory still receives the committed file.
+        result = subprocess.run(command, cwd=repo, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, 'check accepted committed public/notes.txt')
+        self.assertIn('public/notes.txt', result.stderr)
 
     def test_claude_directory_rejects_source_drift(self):
         for name in ('plugin.json', 'missing-hook', '.claude-plugin/plugin.json'):
@@ -294,6 +331,7 @@ class PackageTests(unittest.TestCase):
         root = Path(self.temp.name) / 'make-python'
         shutil.copytree(self.root, root / 'plugins/boxlite-codex')
         shutil.copytree(self.claude, root / 'plugins/boxlite-claude')
+        commit_claude_fixture(root)
         (root / 'scripts/plugins').mkdir(parents=True)
         shutil.copyfile(REPO / 'scripts/plugins/boxlite.py', root / 'scripts/plugins/boxlite.py')
         (root / 'tests/plugins').mkdir(parents=True)
@@ -352,6 +390,7 @@ class PackageTests(unittest.TestCase):
         root = Path(self.temp.name) / 'make-claude'
         shutil.copytree(self.root, root / 'plugins/boxlite-codex')
         shutil.copytree(self.claude, root / 'plugins/boxlite-claude')
+        commit_claude_fixture(root)
         (root / 'scripts/plugins').mkdir(parents=True)
         shutil.copyfile(REPO / 'scripts/plugins/boxlite.py', root / 'scripts/plugins/boxlite.py')
         (root / 'tests/plugins').mkdir(parents=True)
@@ -400,6 +439,7 @@ class PackageTests(unittest.TestCase):
         root = Path(self.temp.name) / 'make-work'
         shutil.copytree(self.root, root / 'plugins/boxlite-codex')
         shutil.copytree(self.claude, root / 'plugins/boxlite-claude')
+        commit_claude_fixture(root)
         (root / 'scripts/plugins').mkdir(parents=True)
         shutil.copyfile(REPO / 'scripts/plugins/boxlite.py', root / 'scripts/plugins/boxlite.py')
         (root / 'tests/plugins').mkdir(parents=True)

@@ -1,6 +1,6 @@
 # Native cloud authentication
 
-OAuth and API keys use the same production endpoint and MCP contracts.
+OAuth and API keys use the same production MCP service and tool contracts.
 Configure credentials in the host, outside the distributed plugin; never place a key value on argv.
 
 ## OAuth registration
