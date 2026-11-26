@@ -15,6 +15,7 @@ import {
   Matches,
   ValidateNested,
 } from 'class-validator'
+import { MAX_FEATURE_USAGE_BATCH_SIZE } from '../../common/constants/constants'
 import { BOX_ID_REGEX } from '../utils/box-id.util'
 
 export const FEATURE_USAGE_KINDS = ['ssh', 'tunnel_connection', 'tunnel_request'] as const
@@ -38,7 +39,7 @@ export class FeatureUsageEventDto {
 export class FeatureUsageBatchDto {
   @IsArray()
   @ArrayMinSize(1)
-  @ArrayMaxSize(100)
+  @ArrayMaxSize(MAX_FEATURE_USAGE_BATCH_SIZE)
   @ValidateNested({ each: true })
   @Type(() => FeatureUsageEventDto)
   events: FeatureUsageEventDto[]

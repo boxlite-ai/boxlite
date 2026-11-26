@@ -5,3 +5,4 @@
  */
 
 export const BOX_EVENT_CHANNEL = 'box.event.channel'
+export const MAX_FEATURE_USAGE_BATCH_SIZE = 100
