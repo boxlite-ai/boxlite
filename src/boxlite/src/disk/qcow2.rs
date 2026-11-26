@@ -195,6 +195,26 @@ impl Qcow2Helper {
         child_path: &Path,
         virtual_size: u64,
     ) -> BoxliteResult<Disk> {
+        Self::create_cow_child_disk_impl(base_disk, backing_format, child_path, virtual_size, true)
+    }
+
+    /// Create a COW child on the startup path without waiting for disk durability.
+    pub(crate) fn create_cow_child_disk_unsynced(
+        base_disk: &Path,
+        backing_format: BackingFormat,
+        child_path: &Path,
+        virtual_size: u64,
+    ) -> BoxliteResult<Disk> {
+        Self::create_cow_child_disk_impl(base_disk, backing_format, child_path, virtual_size, false)
+    }
+
+    fn create_cow_child_disk_impl(
+        base_disk: &Path,
+        backing_format: BackingFormat,
+        child_path: &Path,
+        virtual_size: u64,
+        sync: bool,
+    ) -> BoxliteResult<Disk> {
         // Ensure parent directory exists
         if let Some(parent) = child_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -223,7 +243,7 @@ impl Qcow2Helper {
         );
 
         // Create COW child with backing file reference
-        Self::write_cow_child_header(child_path, base_disk, backing_format, virtual_size)?;
+        Self::write_cow_child_header(child_path, base_disk, backing_format, virtual_size, sync)?;
 
         tracing::info!("Created COW child disk: {}", child_path.display());
         // COW children are per-box, should be cleaned up
@@ -549,6 +569,7 @@ impl Qcow2Helper {
         backing_path: &Path,
         backing_format: BackingFormat,
         virtual_size: u64,
+        sync: bool,
     ) -> BoxliteResult<()> {
         use std::io::Write;
 
@@ -727,16 +748,15 @@ impl Qcow2Helper {
             ))
         })?;
 
-        // Sync to disk to ensure header is durable before returning.
-        // Without this, the header may stay in page cache and be lost if the
-        // process exits before the kernel flushes it (causing EINVAL on restart).
-        file.sync_all().map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to sync COW child disk {}: {}",
-                child_path.display(),
-                e
-            ))
-        })?;
+        if sync {
+            file.sync_all().map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to sync COW child disk {}: {}",
+                    child_path.display(),
+                    e
+                ))
+            })?;
+        }
 
         Ok(())
     }

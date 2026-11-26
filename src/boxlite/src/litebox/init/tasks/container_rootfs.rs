@@ -248,16 +248,16 @@ fn create_cow_disk(
             };
 
             let cow_disk_path = layout.disk_path();
-            let temp_disk = Qcow2Helper::create_cow_child_disk(
+            // The written header survives a process crash in the OS page cache.
+            // Only host power loss before writeback can lose the unsynced header.
+            let temp_disk = Qcow2Helper::create_cow_child_disk_unsynced(
                 base_disk_path,
                 BackingFormat::Raw,
                 &cow_disk_path,
                 target_disk_size,
             )?;
 
-            // Make disk persistent so it survives stop/restart
-            // create_cow_child_disk returns non-persistent disk, but we want to preserve
-            // COW disks across box restarts (only delete on remove)
+            // Keep the child across box restarts; remove it when the box is removed.
             let disk_path = temp_disk.leak(); // Prevent cleanup
             let disk = Disk::new(disk_path, DiskFormat::Qcow2, true); // persistent=true
 

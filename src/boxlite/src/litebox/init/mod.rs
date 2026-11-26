@@ -149,10 +149,8 @@ fn box_metrics_from_pipeline(pipeline_metrics: &PipelineMetrics) -> BoxMetricsSt
     }
     if let Some(duration_ms) = pipeline_metrics.task_duration_ms("vmm_attach") {
         metrics.set_stage_box_spawn(duration_ms);
-    }
-    if let Some(_duration_ms) = pipeline_metrics.task_duration_ms("guest_connect") {
-        // Track guest connection time
-        // Could add a new metric field if needed
+    } else if let Some(duration_ms) = pipeline_metrics.task_duration_ms("guest_connect") {
+        metrics.set_guest_boot_duration(duration_ms);
     }
     if let Some(duration_ms) = pipeline_metrics.task_duration_ms("guest_init") {
         metrics.set_stage_container_init(duration_ms);
@@ -477,6 +475,58 @@ mod plan_tests {
                 vec!["guest_init".to_string(), "port_publish".to_string()],
             ),
         ]
+    }
+
+    #[test]
+    fn guest_connect_duration_is_reported_as_guest_boot_duration() {
+        use crate::pipeline::{StageMetrics, TaskMetrics};
+
+        let pipeline = PipelineMetrics {
+            total_duration_ms: 100,
+            stages: vec![StageMetrics {
+                index: 0,
+                execution: ExecutionMode::Sequential,
+                duration_ms: 40,
+                tasks: vec![TaskMetrics {
+                    name: "guest_connect".into(),
+                    duration_ms: 37,
+                }],
+            }],
+        };
+        assert_eq!(
+            box_metrics_from_pipeline(&pipeline).guest_boot_duration_ms,
+            Some(37)
+        );
+    }
+
+    #[test]
+    fn running_box_reattach_does_not_report_guest_boot_duration() {
+        use crate::pipeline::{StageMetrics, TaskMetrics};
+
+        let stages = plan_shape(BoxStatus::Running)
+            .into_iter()
+            .enumerate()
+            .map(|(index, (execution, names))| StageMetrics {
+                index,
+                execution,
+                duration_ms: 0,
+                tasks: names
+                    .into_iter()
+                    .map(|name| TaskMetrics {
+                        name,
+                        duration_ms: 0,
+                    })
+                    .collect(),
+            })
+            .collect();
+        let pipeline = PipelineMetrics {
+            total_duration_ms: 0,
+            stages,
+        };
+        assert_eq!(
+            box_metrics_from_pipeline(&pipeline).guest_boot_duration_ms,
+            None
+        );
     }
 
     #[test]

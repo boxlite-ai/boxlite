@@ -132,38 +132,47 @@ impl ImageStorage {
         self.layer_tarball_path(digest).exists()
     }
 
-    /// Verify layer integrity by computing SHA256 hash and comparing.
-    ///
-    /// **Mutability**: Immutable - reads file and computes hash, no state changes.
-    pub async fn verify_layer(&self, digest: &str) -> BoxliteResult<bool> {
+    /// Check the size of a committed layer, or hash it if the size is unknown.
+    /// Staged downloads verify the SHA256 before publishing the file.
+    pub async fn verify_layer(&self, digest: &str, size: i64) -> BoxliteResult<bool> {
         use sha2::{Digest, Sha256};
+        use std::io::ErrorKind;
+        use tokio::io::AsyncReadExt;
 
         let layer_path = self.layer_tarball_path(digest);
+        let verify_error = |e| {
+            BoxliteError::Storage(format!(
+                "Failed to read layer {} for verification: {e}",
+                layer_path.display()
+            ))
+        };
 
-        if !layer_path.exists() {
-            return Ok(false);
+        if size > 0 {
+            return match tokio::fs::metadata(&layer_path).await {
+                Ok(metadata) => Ok(metadata.is_file() && metadata.len() == size as u64),
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
+                Err(e) => Err(verify_error(e)),
+            };
         }
 
-        // Read file and compute hash
-        let file_data = tokio::fs::read(&layer_path).await.map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to read layer {} for verification: {}",
-                layer_path.display(),
-                e
-            ))
-        })?;
-
+        let mut file = match tokio::fs::File::open(&layer_path).await {
+            Ok(file) => file,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(verify_error(e)),
+        };
         let mut hasher = Sha256::new();
-        hasher.update(&file_data);
+        let mut buffer = vec![0; 64 * 1024];
+        loop {
+            let n = file.read(&mut buffer).await.map_err(verify_error)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buffer[..n]);
+        }
         let computed_hash = format!("sha256:{}", hex::encode(hasher.finalize()));
 
         if computed_hash != digest {
-            tracing::error!(
-                "Layer integrity check failed:\n  Expected: {}\n  Computed: {}\n  File size: {} bytes",
-                digest,
-                computed_hash,
-                file_data.len()
-            );
+            tracing::error!(expected = digest, computed = %computed_hash, "Layer digest mismatch");
             return Ok(false);
         }
 
@@ -778,6 +787,28 @@ mod tests {
         std::fs::write(layer_path, b"fake layer data").unwrap();
 
         assert!(store.has_layer("sha256:layer1"));
+    }
+
+    #[tokio::test]
+    async fn verify_layer_uses_size_when_known_and_hash_otherwise() {
+        use sha2::{Digest, Sha256};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let data = vec![1; 128 * 1024];
+        let digest = format!("sha256:{}", hex::encode(Sha256::digest(&data)));
+        let path = store.layer_tarball_path(&digest);
+        let size = data.len() as i64;
+
+        assert!(!store.verify_layer(&digest, size).await.unwrap());
+        assert!(!store.verify_layer(&digest, 0).await.unwrap());
+        std::fs::write(&path, &data).unwrap();
+        assert!(store.verify_layer(&digest, 0).await.unwrap());
+        assert!(!store.verify_layer(&digest, size + 1).await.unwrap());
+
+        std::fs::write(path, vec![2; data.len()]).unwrap();
+        assert!(store.verify_layer(&digest, size).await.unwrap());
+        assert!(!store.verify_layer(&digest, -1).await.unwrap());
     }
 
     #[test]

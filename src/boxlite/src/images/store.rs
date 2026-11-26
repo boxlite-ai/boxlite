@@ -29,9 +29,11 @@ use oci_client::manifest::{
 };
 use oci_client::secrets::RegistryAuth as OciRegistryAuth;
 use oci_spec::image::MediaType;
+use parking_lot::Mutex;
+use std::collections::{HashMap, hash_map::Entry};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, watch};
 
 // ============================================================================
 // INNER STATE (no locking awareness)
@@ -84,6 +86,7 @@ impl ImageStoreInner {
 pub struct ImageStore {
     /// Mutable state protected by RwLock
     inner: RwLock<ImageStoreInner>,
+    in_flight: Mutex<HashMap<ResolveKey, ResolveReceiver>>,
     /// Registry host names to search for unqualified image references.
     registries: Vec<String>,
     /// Registry transport, TLS, auth, and search settings.
@@ -119,6 +122,7 @@ impl ImageStore {
         let registries = search_registries(&image_registries);
         Ok(Self {
             inner: RwLock::new(inner),
+            in_flight: Mutex::new(HashMap::new()),
             registries,
             image_registries,
             image_registry_proxy,
@@ -180,6 +184,41 @@ impl ImageStore {
     }
 
     async fn resolve(&self, image_ref: &str, cache: CacheUse) -> BoxliteResult<ImageManifest> {
+        let key = (image_ref.to_owned(), cache);
+        loop {
+            let (mut receiver, sender) = match self.in_flight.lock().entry(key.clone()) {
+                Entry::Occupied(entry) => (entry.get().clone(), None),
+                Entry::Vacant(entry) => {
+                    let (sender, receiver) = watch::channel(None);
+                    entry.insert(receiver.clone());
+                    (receiver, Some(sender))
+                }
+            };
+
+            if let Some(sender) = sender {
+                drop(receiver);
+                // Drop the entry before closing the channel, even on cancellation.
+                let flight = ResolveFlight {
+                    store: self,
+                    key: &key,
+                };
+                let result = self.resolve_once(image_ref, cache).await;
+                drop(flight);
+                // Only callers already waiting on this flight get its result.
+                if sender.receiver_count() != 0 {
+                    sender.send_replace(Some(clone_resolution(&result)));
+                }
+                return result;
+            }
+
+            if receiver.changed().await.is_ok() {
+                return clone_resolution(receiver.borrow().as_ref().expect("flight completed"));
+            }
+            // The leader was cancelled; join or start a fresh flight.
+        }
+    }
+
+    async fn resolve_once(&self, image_ref: &str, cache: CacheUse) -> BoxliteResult<ImageManifest> {
         use super::ReferenceIter;
 
         tracing::debug!(
@@ -940,34 +979,22 @@ impl ImageStore {
     ) -> Result<(), RegistryPullError> {
         use futures::future::join_all;
 
-        // Check which layers need downloading (quick read lock)
-        let layers_to_download: Vec<_> = {
-            let inner = self.inner.read().await;
-            let mut to_download = Vec::new();
-            for layer in layers {
-                if !inner.storage.has_layer(&layer.digest) {
-                    to_download.push(layer.clone());
-                } else {
-                    // Verify cached layer
-                    match inner.storage.verify_layer(&layer.digest).await {
-                        Ok(true) => {
-                            tracing::debug!("Layer tarball cached and verified: {}", layer.digest);
-                        }
-                        _ => {
-                            tracing::warn!(
-                                "Cached layer corrupted, will re-download: {}",
-                                layer.digest
-                            );
-                            let _ = std::fs::remove_file(
-                                inner.storage.layer_tarball_path(&layer.digest),
-                            );
-                            to_download.push(layer.clone());
-                        }
-                    }
+        let storage = self.storage().await;
+        let mut layers_to_download = Vec::new();
+        for layer in layers {
+            if storage.has_layer(&layer.digest) {
+                if matches!(
+                    storage.verify_layer(&layer.digest, layer.size).await,
+                    Ok(true)
+                ) {
+                    tracing::debug!("Layer tarball cached and verified: {}", layer.digest);
+                    continue;
                 }
+                tracing::warn!("Cached layer corrupted, will re-download: {}", layer.digest);
+                let _ = tokio::fs::remove_file(storage.layer_tarball_path(&layer.digest)).await;
             }
-            to_download
-        }; // Read lock released
+            layers_to_download.push(layer);
+        }
 
         if layers_to_download.is_empty() {
             return Ok(());
@@ -980,8 +1007,8 @@ impl ImageStore {
 
         // Download in parallel (no lock held)
         let download_futures = layers_to_download
-            .iter()
-            .map(|layer| self.download_layer(client, reference, layer));
+            .into_iter()
+            .map(|layer| Self::download_layer(&storage, client, reference, layer));
 
         let results = join_all(download_futures).await;
 
@@ -993,7 +1020,7 @@ impl ImageStore {
     }
 
     async fn download_layer(
-        &self,
+        storage: &ImageStorage,
         client: &oci_client::Client,
         reference: &Reference,
         layer: &LayerInfo,
@@ -1014,21 +1041,17 @@ impl ImageStore {
                 );
             }
 
-            // Stage download (quick read lock for path computation)
-            let mut staged = {
-                let inner = self.inner.read().await;
-                match inner
-                    .storage
-                    .stage_layer_download(&layer.digest, layer.size)
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(e) => {
-                        last_error = Some(RegistryPullError::Failed(BoxliteError::Storage(
-                            format!("Failed to stage layer {} download: {e}", layer.digest),
-                        )));
-                        continue;
-                    }
+            let mut staged = match storage
+                .stage_layer_download(&layer.digest, layer.size)
+                .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    last_error = Some(RegistryPullError::Failed(BoxliteError::Storage(format!(
+                        "Failed to stage layer {} download: {e}",
+                        layer.digest
+                    ))));
+                    continue;
                 }
             };
 
@@ -1093,22 +1116,14 @@ impl ImageStore {
         reference: &Reference,
         config_digest: &str,
     ) -> Result<(), RegistryPullError> {
-        // Check if already cached (quick read lock)
-        {
-            let inner = self.inner.read().await;
-            if inner.storage.has_config(config_digest) {
-                tracing::debug!("Config blob already cached: {}", config_digest);
-                return Ok(());
-            }
+        let storage = self.storage().await;
+        if storage.has_config(config_digest) {
+            tracing::debug!("Config blob already cached: {}", config_digest);
+            return Ok(());
         }
 
         tracing::debug!("Downloading config blob: {}", config_digest);
-
-        // Start staged download (quick read lock)
-        let mut staged = {
-            let inner = self.inner.read().await;
-            inner.storage.stage_config_download(config_digest).await?
-        };
+        let mut staged = storage.stage_config_download(config_digest).await?;
 
         // Download to temp file (no lock)
         if let Err(e) = client
@@ -1243,8 +1258,54 @@ fn digest_key(reference: &Reference, manifest: &ImageManifest) -> String {
     .whole()
 }
 
+type ResolveKey = (String, CacheUse);
+type ResolveReceiver = watch::Receiver<Option<BoxliteResult<ImageManifest>>>;
+
+struct ResolveFlight<'a> {
+    store: &'a ImageStore,
+    key: &'a ResolveKey,
+}
+
+impl Drop for ResolveFlight<'_> {
+    fn drop(&mut self) {
+        self.store.in_flight.lock().remove(self.key);
+    }
+}
+
+// BoxliteError is not Clone. Preserve its variant and message for waiters.
+fn clone_resolution(result: &BoxliteResult<ImageManifest>) -> BoxliteResult<ImageManifest> {
+    use BoxliteError::*;
+
+    match result {
+        Ok(manifest) => Ok(manifest.clone()),
+        Err(error) => Err(match error {
+            UnsupportedEngine => UnsupportedEngine,
+            Engine(s) => Engine(s.clone()),
+            Config(s) => Config(s.clone()),
+            Storage(s) => Storage(s.clone()),
+            Image(s) => Image(s.clone()),
+            Portal(s) => Portal(s.clone()),
+            Network(s) => Network(s.clone()),
+            Rpc(s) => Rpc(s.clone()),
+            RpcTransport(s) => RpcTransport(s.clone()),
+            Internal(s) => Internal(s.clone()),
+            Execution(s) => Execution(s.clone()),
+            Unsupported(s) => Unsupported(s.clone()),
+            NotFound(s) => NotFound(s.clone()),
+            AlreadyExists(s) => AlreadyExists(s.clone()),
+            InvalidState(s) => InvalidState(s.clone()),
+            Database(s) => Database(s.clone()),
+            MetadataError(s) => MetadataError(s.clone()),
+            InvalidArgument(s) => InvalidArgument(s.clone()),
+            Stopped(s) => Stopped(s.clone()),
+            ResourceExhausted(s) => ResourceExhausted(s.clone()),
+            SessionReaped(s) => SessionReaped(s.clone()),
+        }),
+    }
+}
+
 /// How much a pull trusts the ref-keyed cache.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum CacheUse {
     /// A cached image answers without asking the registry: [`ImageStore::pull`].
     First,
@@ -2322,6 +2383,83 @@ pub(super) mod tests {
             .await
             .expect("the newer build is found by its digest");
         assert_eq!(by_digest.manifest_digest, newer_digest);
+    }
+
+    #[tokio::test]
+    async fn concurrent_refreshes_share_only_the_in_flight_resolution() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&requests);
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = String::new();
+                BufReader::new(&mut socket)
+                    .read_line(&mut request)
+                    .await
+                    .unwrap();
+                let status = if request.starts_with("GET /v2/acme/app/manifests/v1 ") {
+                    // The second round receives an authoritative error instead of falling back.
+                    if count.fetch_add(1, Ordering::Relaxed) == 1 {
+                        404
+                    } else {
+                        503
+                    }
+                } else {
+                    200
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} Status\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, &host).await;
+
+        let (first, second) = tokio::join!(store.refresh(&image_ref), store.refresh(&image_ref));
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+        assert_eq!(first.unwrap().manifest_digest, seeded.manifest_digest);
+        assert_eq!(second.unwrap().manifest_digest, seeded.manifest_digest);
+
+        let (first, second, cached) = tokio::join!(
+            store.refresh(&image_ref),
+            store.refresh(&image_ref),
+            store.pull(&image_ref),
+        );
+        assert_eq!(cached.unwrap().manifest_digest, seeded.manifest_digest);
+        let first = first.unwrap_err();
+        let second = second.unwrap_err();
+        assert!(matches!(second, BoxliteError::Storage(_)));
+        assert_eq!(first.to_string(), second.to_string());
+        assert_eq!(requests.load(Ordering::Relaxed), 2);
+
+        let refreshed = store.refresh(&image_ref).await.unwrap();
+        assert_eq!(refreshed.manifest_digest, seeded.manifest_digest);
+        assert_eq!(requests.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn a_waiter_retries_when_the_resolution_leader_is_cancelled() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (store, image_ref, seeded) = store_with_cached_image(&temp_dir, "127.0.0.1:1").await;
+        let locked = store.inner.write().await;
+        let mut leader = Box::pin(store.pull(&image_ref));
+        let mut waiter = Box::pin(store.pull(&image_ref));
+        assert!(futures::poll!(&mut leader).is_pending());
+        assert!(futures::poll!(&mut waiter).is_pending());
+        drop(leader);
+        assert!(store.in_flight.lock().is_empty());
+        drop(locked);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter stalled after cancellation")
+            .unwrap();
+        assert_eq!(result.manifest_digest, seeded.manifest_digest);
     }
 
     /// Offline is the case the fallback exists for: a host that has the image

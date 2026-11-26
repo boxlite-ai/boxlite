@@ -69,7 +69,6 @@ impl BoxMetricsStorage {
     }
 
     /// Set guest boot duration (called once after guest is ready).
-    #[allow(dead_code)] // API designed but not yet wired up
     pub(crate) fn set_guest_boot_duration(&mut self, duration_ms: u128) {
         self.guest_boot_duration_ms = Some(duration_ms);
     }
