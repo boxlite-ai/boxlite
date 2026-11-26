@@ -1,0 +1,65 @@
+---
+name: BoxLite native Python wheels and installed package tests
+'on':
+  push:
+    branches:
+    - ci/boxlite-runner-trials-2833
+    paths:
+    - ".github/workflows/runner-wheels-x64.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  wheels:
+    name: wheels (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-16gbmem-64gbdisk
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: ubuntu-latest
+          target: linux-x64-gnu
+          rust_target: x86_64-unknown-linux-gnu
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        submodules: recursive
+        ref: 4422612e6eeeb7814e66326354c33ca84beeef83
+        persist-credentials: false
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
+        libssl-dev patchelf python3
+    - uses: "./.github/actions/setup-rust"
+      with:
+        toolchain: stable
+        cache: "${{ runner.os != 'Linux' }}"
+    - uses: "./.github/actions/sccache"
+    - uses: "./.github/actions/build-guest"
+      if: runner.os == 'Linux'
+    - name: Build wheels
+      uses: pypa/cibuildwheel@v3.2.0
+      env:
+        CIBW_BUILD_VERBOSITY: 0
+        BOXLITE_HOST_SCCACHE_DIR: "${{ env.SCCACHE_DIR }}"
+        BOXLITE_HOST_SCCACHE_BIN: "${{ env.SCCACHE_PATH }}"
+      with:
+        package-dir: sdks/python
+    - name: Return container cache to the runner
+      if: always() && runner.os == 'Linux'
+      run: |
+        if [ -d "$SCCACHE_DIR" ]; then
+          sudo chown -R "$(id -u):$(id -g)" "$SCCACHE_DIR"
+        fi
+    - name: Upload wheels as artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-${{ matrix.os }}
+        path: "./wheelhouse/*.whl"
+        retention-days: 1
+        if-no-files-found: error
+    timeout-minutes: 120
+    env:
+      SKIP_INSTALL_NODEJS: '1'
+      CARGO_INCREMENTAL: '0'
