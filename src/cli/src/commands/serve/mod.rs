@@ -2141,7 +2141,6 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/exec",
             post(executions::start_execution),
         )
-        .route("/v1/boxes/{box_id}/exec/sync", post(executions::exec_sync))
         .route(
             "/v1/boxes/{box_id}/executions",
             get(executions::list_executions),
@@ -2401,6 +2400,8 @@ mod tests {
                 working_dir: None,
                 tty: false,
                 user: None,
+                sync: false,
+                max_output_bytes: None,
             };
 
             let err = build_box_command(&req).expect_err("invalid timeout should fail");
@@ -2423,6 +2424,8 @@ mod tests {
                 working_dir: None,
                 tty: false,
                 user: user.map(str::to_string),
+                sync: false,
+                max_output_bytes: None,
             })
             .expect("valid request")
         };

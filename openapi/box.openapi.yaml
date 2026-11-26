@@ -84,11 +84,12 @@ info:
 
     ## Execution Model
 
-    Use `POST /exec/sync` for non-interactive commands: one HTTP request
-    waits for completion and returns the exit code and bounded stdout/stderr.
-    It does not support TTY or interactive stdin.
+    Use `POST /exec` with `"sync": true` (`sync` defaults to `false`) for
+    non-interactive commands: one HTTP request waits for completion and returns
+    the exit code and bounded stdout/stderr. It does not support `tty: true` or
+    interactive stdin.
 
-    For streaming or interactive commands:
+    For streaming or interactive commands (default `sync: false`):
     1. `POST /exec` creates the execution and returns its guest-assigned `execution_id`.
     2. `GET /executions/{exec_id}/attach` upgrades to a bidirectional
        WebSocket carrying stdin, stdout, stderr, and in-band control
@@ -820,12 +821,13 @@ paths:
       - $ref: "#/components/parameters/boxId"
     post:
       operationId: startExecution
-      summary: Start an asynchronous command execution
+      summary: Start a command execution (async by default, or sync when sync is true)
       description: |
-        Starts a command in the box and returns an execution ID immediately.
-        The box is automatically started if not already running.
+        Starts a command in the box. The box is automatically started if not
+        already running.
 
-        Use the returned `execution_id` to:
+        When `sync` is `false` (or omitted), returns `201` with an
+        `execution_id` immediately. Use the returned `execution_id` to:
         - Attach stdio: `GET /executions/{exec_id}/attach` (WebSocket)
         - Check status: `GET /executions/{exec_id}`
         - Send signal: `POST /executions/{exec_id}/signal`
@@ -836,6 +838,12 @@ paths:
         /executions` enumerates the sessions that are still running, so a
         client that lost its handle — a crashed process, a dropped
         connection — can recover the id and attach or kill it.
+
+        When `sync` is `true`, waits for the command to complete without a
+        WebSocket and returns `200` with `SyncExecResponse`. Stdin receives EOF
+        and `tty: true` is rejected with `400`. Nonzero exit codes still return
+        `200`. On timeout the server attempts to kill the execution and returns
+        `408`.
       tags: [Execution]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -846,8 +854,14 @@ paths:
             schema:
               $ref: "#/components/schemas/ExecRequest"
       responses:
+        "200":
+          description: Command completed (when `sync` is `true`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncExecResponse"
         "201":
-          description: Execution started
+          description: Execution started (when `sync` is `false` or omitted)
           headers:
             Location:
               description: URL of the execution resource
@@ -861,47 +875,10 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
-        "409":
-          $ref: "#/components/responses/ConflictError"
-
-  /{prefix}/boxes/{box_id}/exec/sync:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/boxId"
-    post:
-      operationId: execSync
-      summary: Run a non-interactive command and return its result
-      description: |
-        Starts the box if needed and waits for the command to complete without
-        a WebSocket. Stdin receives EOF and no TTY is allocated. Nonzero
-        exit codes still return 200. On timeout the server attempts to kill
-        the execution and returns 408.
-      tags: [Execution]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SyncExecRequest"
-      responses:
-        "200":
-          description: Command completed
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SyncExecResponse"
-        "400":
-          $ref: "#/components/responses/BadRequestError"
-        "401":
-          $ref: "#/components/responses/UnauthorizedError"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
         "408":
           $ref: "#/components/responses/RequestTimeoutError"
         "409":
           $ref: "#/components/responses/ConflictError"
-        "500":
-          $ref: "#/components/responses/InternalError"
 
   /{prefix}/boxes/{box_id}/executions:
     parameters:
@@ -4003,6 +3980,20 @@ components:
             User to run the command as, Docker format `<name|uid>[:<group|gid>]`.
             Absent or empty uses the box default user. Unknown users or groups return 400.
           example: "1000:1000"
+        sync:
+          type: boolean
+          default: false
+          description: >-
+            When `true`, wait synchronously for the command to complete and return `200` with
+            `SyncExecResponse` instead of `201` with `ExecResponse`. Mutually exclusive with `tty: true`.
+        max_output_bytes:
+          type: integer
+          minimum: 1024
+          maximum: 10485760
+          default: 1048576
+          description: >-
+            Maximum captured bytes per stream (stdout and stderr independently).
+            Only applies when `sync` is `true`.
 
     ExecResponse:
       type: object
@@ -4013,40 +4004,6 @@ components:
           type: string
           description: Unique execution identifier
           example: exec-01HJK5ABCDEF
-
-    SyncExecRequest:
-      type: object
-      description: Non-interactive command request; TTY and stdin input are not supported.
-      additionalProperties: false
-      required: [command]
-      properties:
-        command:
-          type: string
-          minLength: 1
-        args:
-          type: array
-          items:
-            type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        timeout_seconds:
-          type: number
-          minimum: 0.1
-          maximum: 300
-          default: 30
-        working_dir:
-          type: string
-        user:
-          type: string
-          description: User in Docker format `<name|uid>[:<group|gid>]`.
-        max_output_bytes:
-          type: integer
-          minimum: 1024
-          maximum: 10485760
-          default: 1048576
-          description: Maximum captured bytes per stream (stdout and stderr independently).
 
     SyncExecResponse:
       type: object

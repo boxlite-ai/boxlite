@@ -38,18 +38,18 @@ Complete API documentation for each SDK:
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
-implementation currently serves all 50 paths:
+implementation currently serves all 49 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|
-| `boxlite serve` | boxes, lifecycle, exec, `exec/sync`, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
-| reference server | boxes, lifecycle, exec, `exec/sync`, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
+| `boxlite serve` | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me, images (from its local image cache) | registries, `network/tunnel`, `network/inbound`. Volume routes are registered but every operation answers `400 UnsupportedError`, as do `images/usage` and both alias write routes |
+| reference server | boxes, lifecycle, exec, files, snapshots, clone/export/import, metrics, config, me | volumes, images, registries, `network/tunnel`, `network/inbound`, attach, and `DELETE …/executions/{exec_id}` (kill) |
 
-Use `POST /{prefix}/boxes/{box_id}/exec/sync` for a non-interactive command
-that should return its exit code and bounded stdout/stderr in one HTTP response.
-It needs no WebSocket, sends EOF on stdin, and returns `408` on timeout.
-For streaming or TTY, use `POST /exec` and WebSocket `/attach` on servers
-that support attachment.
+Use `POST /{prefix}/boxes/{box_id}/exec` with `"sync": true` (`sync` defaults
+to `false`) for a non-interactive command that should return its exit code and
+bounded stdout/stderr in one HTTP response. It needs no WebSocket, sends EOF on
+stdin, and returns `408` on timeout. For streaming or TTY, omit `sync` (or set
+`"sync": false`) and use WebSocket `/attach` on servers that support attachment.
 
 Read each server's routes rather than either README — both under-report.
 `GET /config` does not close this gap: its feature flags (`tty_enabled`,

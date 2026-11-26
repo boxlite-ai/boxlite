@@ -900,6 +900,10 @@ pub(crate) struct ExecRequest {
     pub tty: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sync: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_bytes: Option<usize>,
 }
 
 impl ExecRequest {
@@ -918,26 +922,10 @@ impl ExecRequest {
             working_dir: cmd.working_dir.clone(),
             tty: cmd.tty,
             user: cmd.user.clone(),
+            sync: false,
+            max_output_bytes: None,
         }
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SyncExecRequest {
-    pub command: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub env: Option<HashMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timeout_seconds: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub working_dir: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_output_bytes: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1664,11 +1652,15 @@ mod tests {
             working_dir: Some("/app".to_string()),
             tty: false,
             user: None,
+            sync: false,
+            max_output_bytes: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"command\":\"python3\""));
         assert!(json.contains("\"timeout_seconds\":30.0"));
         assert!(json.contains("\"working_dir\":\"/app\""));
+        assert!(!json.contains("\"sync\""));
+        assert!(!json.contains("\"max_output_bytes\""));
     }
 
     #[test]

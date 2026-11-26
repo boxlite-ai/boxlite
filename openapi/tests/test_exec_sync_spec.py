@@ -1,4 +1,4 @@
-"""Check the synchronous execution wire contract."""
+"""Check the synchronous execution wire contract on POST /exec."""
 import unittest
 from pathlib import Path
 
@@ -10,47 +10,51 @@ EXEC_PATH = "/{prefix}/boxes/{box_id}/exec"
 
 
 class ExecSyncSpecTests(unittest.TestCase):
-    def test_route_and_error_responses(self):
-        path = SPEC["paths"][f"{EXEC_PATH}/sync"]
-        self.assertEqual(path["parameters"], SPEC["paths"][EXEC_PATH]["parameters"])
-        post = path["post"]
-        self.assertEqual(post["operationId"], "execSync")
+    def test_route_and_responses(self):
+        self.assertNotIn(f"{EXEC_PATH}/sync", SPEC["paths"])
+        self.assertNotIn("SyncExecRequest", SCHEMAS)
+
+        post = SPEC["paths"][EXEC_PATH]["post"]
+        self.assertEqual(post["operationId"], "startExecution")
         self.assertEqual(post["tags"], ["Execution"])
         self.assertEqual(post.get("security", SPEC["security"]), [{"BearerAuth": []}])
+
         body = post["requestBody"]
         self.assertTrue(body["required"])
         self.assertEqual(body["content"]["application/json"]["schema"], {
-            "$ref": "#/components/schemas/SyncExecRequest",
+            "$ref": "#/components/schemas/ExecRequest",
         })
+
         responses = post["responses"]
         self.assertEqual(responses["200"]["content"]["application/json"]["schema"], {
             "$ref": "#/components/schemas/SyncExecResponse",
         })
+        self.assertEqual(responses["201"]["content"]["application/json"]["schema"], {
+            "$ref": "#/components/schemas/ExecResponse",
+        })
         for status, name in {
-            "400": "BadRequestError", "401": "UnauthorizedError", "404": "NotFoundError",
-            "408": "RequestTimeoutError", "409": "ConflictError", "500": "InternalError",
+            "400": "BadRequestError",
+            "404": "NotFoundError",
+            "408": "RequestTimeoutError",
+            "409": "ConflictError",
         }.items():
             with self.subTest(status=status):
                 self.assertEqual(responses[status], {"$ref": f"#/components/responses/{name}"})
                 self.assertIn(name, SPEC["components"]["responses"])
 
-    def test_request_fields_and_limits(self):
-        request = SCHEMAS["SyncExecRequest"]
+    def test_exec_request_sync_fields_and_limits(self):
+        request = SCHEMAS["ExecRequest"]
         self.assertEqual(request["required"], ["command"])
         fields = request["properties"]
-        self.assertEqual(set(fields), {
-            "command", "args", "env", "timeout_seconds", "working_dir", "user", "max_output_bytes",
-        })
-        self.assertEqual(fields["command"], {"type": "string", "minLength": 1})
-        self.assertEqual(fields["args"]["items"], {"type": "string"})
-        self.assertEqual(fields["env"]["additionalProperties"], {"type": "string"})
-        for name, expected in {
-            "timeout_seconds": ("number", 0.1, 300, 30),
-            "max_output_bytes": ("integer", 1024, 10485760, 1048576),
-        }.items():
-            with self.subTest(field=name):
-                field = fields[name]
-                self.assertEqual(tuple(field[k] for k in ("type", "minimum", "maximum", "default")), expected)
+        self.assertIn("sync", fields)
+        self.assertEqual(fields["sync"]["type"], "boolean")
+        self.assertIs(fields["sync"]["default"], False)
+
+        max_output = fields["max_output_bytes"]
+        self.assertEqual(
+            tuple(max_output[k] for k in ("type", "minimum", "maximum", "default")),
+            ("integer", 1024, 10485760, 1048576),
+        )
 
     def test_response_required_fields(self):
         response = SCHEMAS["SyncExecResponse"]

@@ -33,7 +33,7 @@ use super::exec::RestExecControl;
 use super::types::{
     BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
     ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
-    SnapshotResponse, SyncExecRequest, SyncExecResponse,
+    SnapshotResponse, SyncExecResponse,
 };
 
 /// REST-backed box handle.
@@ -399,19 +399,13 @@ impl BoxBackend for RestBox {
         if command.user.is_some() {
             self.client.require_exec_user_enabled().await?;
         }
-        let req = SyncExecRequest {
-            command: command.command,
-            args: command.args,
-            env: command.env.map(|pairs| pairs.into_iter().collect()),
-            timeout_seconds: command.timeout.map(|d| d.as_secs_f64()),
-            working_dir: command.working_dir,
-            user: command.user,
-            max_output_bytes,
-        };
+        let mut req = ExecRequest::from_command(&command);
+        req.sync = true;
+        req.max_output_bytes = max_output_bytes;
         let res = self
             .client
             .post_with_timeout::<SyncExecResponse, _>(
-                &format!("/boxes/{}/exec/sync", self.id),
+                &format!("/boxes/{}/exec", self.id),
                 &req,
                 // Let the server report its deadline before the transport times out.
                 timeout + std::time::Duration::from_secs(30),
@@ -3175,7 +3169,7 @@ mod tests {
         let read = read_request_head(socket).await;
         let end = read.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
         let head = String::from_utf8_lossy(&read[..end]).to_ascii_lowercase();
-        assert!(head.starts_with("post /v1/boxes/sync-box/exec/sync http/1.1\r\n"));
+        assert!(head.starts_with("post /v1/boxes/sync-box/exec http/1.1\r\n"));
         assert!(!head.contains("upgrade:"));
         let length: usize = head
             .lines()
@@ -3224,7 +3218,8 @@ mod tests {
             server.await.unwrap(),
             serde_json::json!({
                 "command": "echo", "args": ["hi"], "env": {"K": "V"},
-                "working_dir": "/tmp", "timeout_seconds": 1.5, "max_output_bytes": 2048,
+                "working_dir": "/tmp", "timeout_seconds": 1.5,
+                "tty": false, "sync": true, "max_output_bytes": 2048,
             })
         );
     }
@@ -3263,16 +3258,16 @@ mod tests {
     async fn sync_exec_request_times_out_without_a_response() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let client = client_for(listener.local_addr().unwrap().port());
-        let body = serde_json::json!({"command": "true"});
+        let body = serde_json::json!({"command": "true", "sync": true});
         let request = client.post_with_timeout::<SyncExecResponse, _>(
-            "/boxes/sync-box/exec/sync",
+            "/boxes/sync-box/exec",
             &body,
             Duration::from_millis(50),
         );
         let stub = async {
             let (mut socket, _) = listener.accept().await.unwrap();
             let head = read_request_head(&mut socket).await;
-            assert!(head.starts_with(b"POST /v1/boxes/sync-box/exec/sync HTTP/1.1\r\n"));
+            assert!(head.starts_with(b"POST /v1/boxes/sync-box/exec HTTP/1.1\r\n"));
             // Keep the socket open without replying until the client returns.
             socket
         };
@@ -3300,7 +3295,7 @@ mod tests {
             Err(BoxliteError::Internal(msg)) if msg == "server timed out: execution timed out"));
         assert_eq!(
             server.await.unwrap(),
-            serde_json::json!({"command": "true"})
+            serde_json::json!({"command": "true", "tty": false, "sync": true})
         );
     }
 

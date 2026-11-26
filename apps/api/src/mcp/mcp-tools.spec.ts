@@ -232,7 +232,6 @@ const API_KEY_ONLY = [
   'listInvites',
   'createInvite',
   'cancelInvite',
-  'execSync',
 ]
 
 describe('MCP OAuth allowlist', () => {

@@ -93,8 +93,7 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 | `/{prefix}/boxes/{id}` | DELETE | Remove box |
 | `/{prefix}/boxes/{id}/start` | POST | Start box |
 | `/{prefix}/boxes/{id}/stop` | POST | Stop box |
-| `/{prefix}/boxes/{id}/exec` | POST | Start an asynchronous command and return an execution ID |
-| `/{prefix}/boxes/{id}/exec/sync` | POST | Run a non-interactive command and return its exit code and bounded stdout/stderr; no WebSocket or TTY |
+| `/{prefix}/boxes/{id}/exec` | POST | Start an asynchronous command (`sync: false`, default) or run synchronously and return exit code + bounded stdout/stderr (`sync: true`) |
 | `/{prefix}/boxes/{id}/executions/{eid}` | GET | Execution status |
 | `/{prefix}/boxes/{id}/executions/{eid}/signal` | POST | Send signal |
 | `/{prefix}/boxes/{id}/executions/{eid}/resize` | POST | Resize TTY |

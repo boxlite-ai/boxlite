@@ -1,6 +1,6 @@
 //! No-VM execution status and lifetime boundaries.
 
-use super::super::handlers::executions::{exec_sync, finish_sync_execution, get_execution};
+use super::super::handlers::executions::{finish_sync_execution, get_execution, start_execution};
 use super::*;
 
 async fn sync_response_json(response: axum::response::Response) -> serde_json::Value {
@@ -60,23 +60,20 @@ async fn sync_exec_times_out_and_kills_the_execution() {
 }
 
 #[tokio::test]
-async fn sync_exec_route_rejects_invalid_arguments_and_unknown_fields() {
+async fn sync_exec_route_rejects_invalid_arguments() {
     let (url, server) = serve_router(Arc::new(lifecycle_state())).await;
     let client = reqwest::Client::new();
     for request in [
-        r#"{}"#,
-        r#"{"command":""}"#,
-        r#"{"command":"true","timeout_seconds":0.09}"#,
-        r#"{"command":"true","timeout_seconds":301}"#,
-        r#"{"command":"true","timeout_seconds":1e999}"#,
-        r#"{"command":"true","max_output_bytes":1023}"#,
-        r#"{"command":"true","max_output_bytes":10485761}"#,
-        r#"{"command":"true","max_output_bytes":-1}"#,
-        r#"{"command":"true","tty":false}"#,
-        r#"{"command":"true","stdin":""}"#,
+        r#"{"command":"","sync":true}"#,
+        r#"{"command":"true","sync":true,"timeout_seconds":0.09}"#,
+        r#"{"command":"true","sync":true,"timeout_seconds":301}"#,
+        r#"{"command":"true","sync":true,"max_output_bytes":1023}"#,
+        r#"{"command":"true","sync":true,"max_output_bytes":10485761}"#,
+        r#"{"command":"true","sync":true,"tty":true}"#,
+        r#"{"command":"true","sync":true,"stdin":""}"#,
     ] {
         let response = client
-            .post(format!("{url}/v1/boxes/does-not-exist/exec/sync"))
+            .post(format!("{url}/v1/boxes/does-not-exist/exec"))
             .header("content-type", "application/json")
             .body(request)
             .send()
@@ -88,6 +85,68 @@ async fn sync_exec_route_rejects_invalid_arguments_and_unknown_fields() {
         assert_eq!(body["error"]["code"], "invalid_argument");
     }
     server.abort();
+}
+
+#[tokio::test]
+async fn async_exec_route_returns_created_when_sync_is_false_or_omitted() {
+    let upstream_app = axum::Router::new()
+        .route(
+            "/v1/boxes/{id}",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({
+                    "box_id": STUB_BOX_ID,
+                    "name": STUB_BOX_NAME,
+                    "status": "running",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "pid": null,
+                    "image": "alpine:latest",
+                    "cpus": 1,
+                    "memory_mib": 512,
+                    "auto_stop": 0,
+                    "auto_delete": 0,
+                    "auto_resume": true,
+                }))
+            }),
+        )
+        .route(
+            "/v1/boxes/{id}/exec",
+            axum::routing::post(|| async {
+                (
+                    StatusCode::CREATED,
+                    axum::Json(serde_json::json!({"execution_id": "exec-async-1"})),
+                )
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_url = format!("http://{}", listener.local_addr().unwrap());
+    let upstream_task = tokio::spawn(async move {
+        let _ = axum::serve(listener, upstream_app).await;
+    });
+
+    let mut state = lifecycle_state();
+    state.runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream_url)).unwrap();
+    let (url, server) = serve_router(Arc::new(state)).await;
+    let client = reqwest::Client::new();
+
+    for request in [
+        r#"{"command":"true"}"#,
+        r#"{"command":"true","sync":false}"#,
+    ] {
+        let response = client
+            .post(format!("{url}/v1/boxes/{STUB_BOX_ID}/exec"))
+            .header("content-type", "application/json")
+            .body(request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED, "{request}");
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["execution_id"], "exec-async-1");
+    }
+
+    server.abort();
+    upstream_task.abort();
 }
 
 #[tokio::test]
@@ -115,11 +174,12 @@ async fn sync_exec_prevents_auto_stop_and_cancellation_restarts_the_idle_window(
         .insert(STUB_BOX_ID.to_owned(), now - Duration::from_secs(600));
 
     {
-        let request = serde_json::from_value(serde_json::json!({"command": "true"})).unwrap();
-        let handler = exec_sync(
+        let request =
+            serde_json::from_value(serde_json::json!({"command": "true", "sync": true})).unwrap();
+        let handler = start_execution(
             axum::extract::State(state.clone()),
             axum::extract::Path(STUB_BOX_NAME.to_owned()),
-            Ok(Json(request)),
+            Json(request),
         );
         tokio::pin!(handler);
         tokio::select! {

@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Json;
-use axum::extract::rejection::JsonRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -14,7 +13,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 
 use super::super::types::{
-    ExecRequest, ExecResponse, ResizeRequest, SignalRequest, SyncExecRequest, SyncExecResponse,
+    ExecRequest, ExecResponse, ResizeRequest, SignalRequest, SyncExecResponse,
 };
 use super::super::{
     ActiveExecution, AppState, MAIN_SESSION_ID_HEADER, RecoveredTerminal, SessionKind,
@@ -27,6 +26,10 @@ pub(in crate::commands::serve) async fn start_execution(
     Path(box_id): Path<String>,
     Json(req): Json<ExecRequest>,
 ) -> Response {
+    if req.sync {
+        return run_sync_execution(state, box_id, req).await;
+    }
+
     let litebox = match get_or_resume_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
@@ -77,20 +80,15 @@ pub(in crate::commands::serve) async fn start_execution(
         .into_response()
 }
 
-pub(in crate::commands::serve) async fn exec_sync(
-    State(state): State<Arc<AppState>>,
-    Path(box_id): Path<String>,
-    req: Result<Json<SyncExecRequest>, JsonRejection>,
-) -> Response {
-    let Json(req) = match req {
-        Ok(req) => req,
-        Err(err) => {
-            return error_from_boxlite(&boxlite::BoxliteError::InvalidArgument(err.body_text()));
-        }
-    };
+async fn run_sync_execution(state: Arc<AppState>, box_id: String, req: ExecRequest) -> Response {
+    if req.stdin.is_some() {
+        return error_from_boxlite(&boxlite::BoxliteError::InvalidArgument(
+            "stdin is not supported for synchronous exec".into(),
+        ));
+    }
     let (timeout, limit) = match validate_sync_exec(
         &req.command,
-        false,
+        req.tty,
         req.timeout_seconds,
         req.max_output_bytes,
     ) {

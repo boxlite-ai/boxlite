@@ -31,6 +31,7 @@ import base64
 import io
 import json
 import logging
+import math
 import os
 import sys
 import tarfile
@@ -56,8 +57,6 @@ from fastapi import (
     Request,
     Response,
 )
-from fastapi.exception_handlers import request_validation_exception_handler
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -205,18 +204,9 @@ class ExecCommandRequest(BaseModel):
     timeout_seconds: Optional[float] = None
     working_dir: Optional[str] = None
     tty: bool = False
-
-
-class SyncExecCommandRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    command: str = Field(min_length=1)
-    args: Optional[list[str]] = None
-    env: Optional[dict[str, str]] = None
-    timeout_seconds: float = Field(default=30.0, ge=0.1, le=300.0)
-    working_dir: Optional[str] = None
+    sync: bool = False
+    max_output_bytes: Optional[Any] = None
     user: Optional[str] = None
-    max_output_bytes: int = Field(default=1048576, ge=1024, le=10485760)
 
 
 class SignalRequest(BaseModel):
@@ -958,6 +948,9 @@ async def start_execution(
     req: ExecCommandRequest,
     _auth: dict = Depends(require_auth),
 ):
+    if req.sync:
+        return await _run_sync_execution(box_id, req)
+
     box_handle = await get_box_or_404(box_id)
 
     kwargs = {}
@@ -1009,18 +1002,64 @@ async def collect_exec_output(stream, limit: int) -> tuple[str, bool]:
     return buffered.decode("utf-8", errors="replace"), truncated
 
 
-@app.post("/v1/{prefix}/boxes/{box_id}/exec/sync", status_code=200)
-async def exec_sync(
-    prefix: str,
-    box_id: str,
-    req: SyncExecCommandRequest,
-    _auth: dict = Depends(require_auth),
-):
+def _validate_sync_exec_request(
+    req: ExecCommandRequest,
+) -> tuple[float, int] | JSONResponse:
+    if not req.command:
+        return error_response(
+            400, "command must not be empty", "InvalidArgumentError", "invalid_argument"
+        )
+    if req.tty:
+        return error_response(
+            400,
+            "tty is not supported when sync is true",
+            "InvalidArgumentError",
+            "invalid_argument",
+        )
+
+    timeout_seconds = 30.0 if req.timeout_seconds is None else req.timeout_seconds
+    if (
+        isinstance(timeout_seconds, bool)
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds < 0.1
+        or timeout_seconds > 300.0
+    ):
+        return error_response(
+            400,
+            "timeout_seconds must be between 0.1 and 300",
+            "InvalidArgumentError",
+            "invalid_argument",
+        )
+
+    max_output_bytes = 1_048_576 if req.max_output_bytes is None else req.max_output_bytes
+    if (
+        isinstance(max_output_bytes, bool)
+        or not isinstance(max_output_bytes, int)
+        or max_output_bytes < 1024
+        or max_output_bytes > 10_485_760
+    ):
+        return error_response(
+            400,
+            "max_output_bytes must be an integer between 1024 and 10485760",
+            "InvalidArgumentError",
+            "invalid_argument",
+        )
+
+    return float(timeout_seconds), max_output_bytes
+
+
+async def _run_sync_execution(box_id: str, req: ExecCommandRequest) -> JSONResponse:
+    validated = _validate_sync_exec_request(req)
+    if isinstance(validated, JSONResponse):
+        return validated
+    timeout_seconds, max_output_bytes = validated
+
     box_handle = await get_box_or_404(box_id)
     execution = None
 
     async def run():
         nonlocal execution
+        # Synchronous exec is at-most-once: never retry transport errors.
         execution = await box_handle.exec(
             req.command,
             args=req.args,
@@ -1028,7 +1067,7 @@ async def exec_sync(
             tty=False,
             cwd=req.working_dir,
             user=req.user,
-            timeout_secs=req.timeout_seconds + 5.0,
+            timeout_secs=timeout_seconds + 5.0,
         )
         stdout = execution.stdout()
         stderr = execution.stderr()
@@ -1039,8 +1078,8 @@ async def exec_sync(
             return await execution.wait()
 
         tasks = (
-            asyncio.create_task(collect_exec_output(stdout, req.max_output_bytes)),
-            asyncio.create_task(collect_exec_output(stderr, req.max_output_bytes)),
+            asyncio.create_task(collect_exec_output(stdout, max_output_bytes)),
+            asyncio.create_task(collect_exec_output(stderr, max_output_bytes)),
             asyncio.create_task(wait()),
         )
         try:
@@ -1052,7 +1091,7 @@ async def exec_sync(
 
     try:
         (stdout, stdout_truncated), (stderr, stderr_truncated), result = (
-            await asyncio.wait_for(run(), timeout=req.timeout_seconds)
+            await asyncio.wait_for(run(), timeout=timeout_seconds)
         )
     except asyncio.TimeoutError:
         if execution is not None:
@@ -1069,16 +1108,7 @@ async def exec_sync(
     }
     if result.error_message:
         payload["error_message"] = result.error_message
-    return payload
-
-
-@app.exception_handler(RequestValidationError)
-async def sync_exec_validation_error(request: Request, err: RequestValidationError):
-    if request.scope.get("endpoint") is exec_sync:
-        return error_response(
-            400, "invalid sync exec request", "InvalidArgumentError", "invalid_argument"
-        )
-    return await request_validation_exception_handler(request, err)
+    return JSONResponse(status_code=200, content=payload)
 
 
 @app.get("/v1/{prefix}/boxes/{box_id}/executions")

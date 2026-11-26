@@ -16,15 +16,16 @@ async def chunks(items):
 
 class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.close_stdin = AsyncMock()
         self.execution = SimpleNamespace(
+            id=lambda: "exec-async-1",
             stdout=lambda: chunks(["hello\n"]),
             stderr=lambda: chunks([b"warning\n"]),
             stdin=lambda: SimpleNamespace(close=self.close_stdin),
             wait=AsyncMock(return_value=SimpleNamespace(exit_code=0, error_message=None)),
             kill=AsyncMock(),
         )
-        self.close_stdin = AsyncMock()
-        self.box = SimpleNamespace(exec=AsyncMock(return_value=self.execution))
+        self.box = SimpleNamespace(id="test-box", exec=AsyncMock(return_value=self.execution))
         self.runtime = SimpleNamespace(get=AsyncMock(return_value=None))
         for patcher in (
             patch.object(SERVER, "state", SERVER.AppState()),
@@ -37,7 +38,7 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def post(self, payload, box_id="test-box"):
         # Call the ASGI app directly to exercise routing and validation without httpx.
-        path = f"/v1/demo/boxes/{box_id}/exec/sync"
+        path = f"/v1/demo/boxes/{box_id}/exec"
         messages = []
 
         async def receive():
@@ -53,10 +54,18 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
         }, receive, send)
         return messages[0]["status"], json.loads(messages[1]["body"])
 
+    async def test_async_backward_compatible_when_sync_omitted_or_false(self):
+        for extra in ({}, {"sync": False}):
+            with self.subTest(extra=extra):
+                status, payload = await self.post({"command": "echo", **extra})
+                self.assertEqual(status, 201)
+                self.assertEqual(payload, {"execution_id": "exec-async-1"})
+
     async def test_success_forwards_sdk_options_and_closes_stdin(self):
         status, payload = await self.post({
             "command": "echo", "args": ["hello"], "env": {"LANG": "C"},
             "timeout_seconds": 12.0, "working_dir": "/tmp", "user": "1000:1000",
+            "sync": True,
         })
         self.assertEqual(status, 200)
         self.assertEqual(payload, {
@@ -75,7 +84,7 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
             exit_code=127, error_message="command not found",
         )
         self.execution.stderr = lambda: chunks([b"unknown command\n"])
-        status, payload = await self.post({"command": "unknown"})
+        status, payload = await self.post({"command": "unknown", "sync": True})
         self.assertEqual(status, 200)
         self.assertEqual(payload["exit_code"], 127)
         self.assertEqual(payload["stderr"], "unknown command\n")
@@ -101,7 +110,7 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
         self.execution.stderr = lambda: stream("é" * 513, "overflow", stderr_drained)
         self.execution.wait.side_effect = wait
         status, payload = await self.post({
-            "command": "echo", "max_output_bytes": 1024, "timeout_seconds": 1,
+            "command": "echo", "max_output_bytes": 1024, "timeout_seconds": 1, "sync": True,
         })
         self.assertEqual(status, 200)
         self.assertEqual(payload["stdout"], "a" * 1024)
@@ -113,7 +122,9 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_utf8_and_exact_limit(self):
         self.execution.stdout = lambda: chunks([b"\xffa", b"\xe2", b"\x82\xac"])
         self.execution.stderr = lambda: chunks([b"b" * 1024, b""])
-        status, payload = await self.post({"command": "echo", "max_output_bytes": 1024})
+        status, payload = await self.post({
+            "command": "echo", "max_output_bytes": 1024, "sync": True,
+        })
         self.assertEqual(status, 200)
         self.assertEqual(payload["stdout"], "\ufffda€")
         self.assertEqual(payload["stderr"], "b" * 1024)
@@ -135,7 +146,9 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
         self.execution.stderr = lambda: stream("stderr")
         self.execution.wait.side_effect = blocked.wait
         self.execution.kill.side_effect = RuntimeError("already exited")
-        status, payload = await self.post({"command": "sleep", "timeout_seconds": 0.1})
+        status, payload = await self.post({
+            "command": "sleep", "timeout_seconds": 0.1, "sync": True,
+        })
         self.assertEqual(status, 408)
         self.assertEqual(payload, {"error": {
             "message": "execution timed out", "type": "TimeoutError", "code": "timeout",
@@ -145,7 +158,7 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_does_not_retry_transient_transport_error(self):
         self.box.exec.side_effect = [RuntimeError("gRPC transport error: retry"), self.execution]
-        status, payload = await self.post({"command": "echo"})
+        status, payload = await self.post({"command": "echo", "sync": True})
         self.assertEqual(status, 503)
         self.assertEqual(payload["error"]["code"], "upstream_unavailable")
         self.assertEqual(self.box.exec.await_count, 1)
@@ -157,13 +170,13 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
             {"max_output_bytes": 1024.5}, {"tty": True},
         ):
             with self.subTest(fields=fields):
-                status, payload = await self.post({"command": "echo", **fields})
+                status, payload = await self.post({"command": "echo", "sync": True, **fields})
                 self.assertEqual(status, 400)
                 self.assertEqual(payload["error"]["code"], "invalid_argument")
         self.box.exec.assert_not_awaited()
 
     async def test_missing_box_returns_404(self):
-        status, _ = await self.post({"command": "echo"}, box_id="missing")
+        status, _ = await self.post({"command": "echo", "sync": True}, box_id="missing")
         self.assertEqual(status, 404)
         self.runtime.get.assert_awaited_once_with("missing")
         self.box.exec.assert_not_awaited()

@@ -358,18 +358,9 @@ pub(super) struct ExecRequest {
     pub tty: bool,
     #[serde(default)]
     pub user: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct SyncExecRequest {
-    pub command: String,
     #[serde(default)]
-    pub args: Vec<String>,
-    pub env: Option<HashMap<String, String>>,
-    pub timeout_seconds: Option<f64>,
-    pub working_dir: Option<String>,
-    pub user: Option<String>,
+    pub sync: bool,
+    #[serde(default)]
     pub max_output_bytes: Option<usize>,
 }
 
