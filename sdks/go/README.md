@@ -186,6 +186,13 @@ if err != nil {
 defer restored.Close()
 ```
 
+`Box.Export` and `Box.ExportWithOptions` with zero-valued `ExportOptions` both
+export disk only. To request guest memory and VM state as well, call
+`box.ExportWithOptions(ctx, dest, boxlite.ExportOptions{IncludeMemory: true})`.
+The runtime's full-checkpoint archive creation is currently a placeholder that
+returns `ErrUnsupported` if reached. REST returns `ErrUnsupported` without
+sending an HTTP request.
+
 ### Streaming file uploads
 
 `CopyInStream` accepts a raw tar reader and defaults to replacing existing files.

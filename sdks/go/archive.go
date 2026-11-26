@@ -51,7 +51,13 @@ func abandonOwnedResult[T any](result <-chan handleResult[T], handle cgo.Handle,
 	}()
 }
 
-// Export exports the box to a portable .boxlite archive.
+// ExportOptions controls what is included in a box archive.
+type ExportOptions struct {
+	// IncludeMemory requests guest memory and VM state in addition to disk.
+	IncludeMemory bool
+}
+
+// Export exports the box to a portable, disk-only .boxlite archive.
 //
 // If dest is a directory, Export creates the archive inside it and returns the
 // actual archive file path selected by the backend.
@@ -59,6 +65,12 @@ func abandonOwnedResult[T any](result <-chan handleResult[T], handle cgo.Handle,
 // Export never deletes the archive. The caller owns the returned file and is
 // responsible for retaining, moving, or deleting it.
 func (b *Box) Export(ctx context.Context, dest string) (string, error) {
+	return b.ExportWithOptions(ctx, dest, ExportOptions{})
+}
+
+// ExportWithOptions exports the box to a .boxlite archive with the given options.
+// Destination handling and archive ownership are the same as for Export.
+func (b *Box) ExportWithOptions(ctx context.Context, dest string, opts ExportOptions) (string, error) {
 	if err := validateArchiveArgument(dest, "export destination", false); err != nil {
 		return "", err
 	}
@@ -83,10 +95,16 @@ func (b *Box) Export(ctx context.Context, dest string) (string, error) {
 	result := make(chan handleResult[*C.char], 1)
 	handle := registerHandleForDispatch(cgo.NewHandle(result))
 
+	var includeMemory C.int
+	if opts.IncludeMemory {
+		includeMemory = 1
+	}
+	cOptions := C.CExportOptions{include_memory: includeMemory}
 	var cError C.CBoxliteError
-	code := C.boxlite_box_export(
+	code := C.boxlite_box_export_with_options(
 		boxHandle,
 		cDest,
+		&cOptions,
 		C.cbBoxExport(),
 		handleToPtr(handle),
 		&cError,
