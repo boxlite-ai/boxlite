@@ -12,7 +12,9 @@ use std::{
 };
 use vm_memory::GuestAddressSpace as _;
 
-use boxlite_hypervisor::{KvmVcpu, KvmVm, VcpuExit, VcpuHandle as _, X86BootRegisters, X86Segment};
+use boxlite_hypervisor::{
+    IoCompletion, KvmVcpu, KvmVm, Vcpu, VcpuExit, VcpuHandle as _, X86BootRegisters, X86Segment,
+};
 use vm_memory::{Bytes, GuestAddress};
 
 use crate::memory::{GuestMemoryMmap, GuestRam, ram_ranges};
@@ -49,10 +51,10 @@ impl FlatGuest {
         &self.vm
     }
 
-    /// Runs the guest, handing each exit to `serve`, until `serve` returns
-    /// `false`; the guest then runs no further instruction. Returns how many
-    /// exits it made. A guest that stops exiting fails the test.
-    pub(crate) fn run(&mut self, mut serve: impl FnMut(VcpuExit<'_>) -> bool) -> usize {
+    /// Runs the guest until `serve` returns `false`, then serves any remaining
+    /// exits from the current instruction without starting another. Returns the
+    /// total number of exits served. A guest that stops exiting fails the test.
+    pub(crate) fn run(&mut self, serve: impl FnMut(VcpuExit<'_>) -> bool) -> usize {
         let (finished, deadline) = mpsc::channel::<()>();
         let kick = self.vcpu.handle();
         let watchdog = thread::spawn(move || {
@@ -63,19 +65,7 @@ impl FlatGuest {
                 kick.kick().unwrap();
             }
         });
-        let mut exits = 0;
-        loop {
-            match self.vcpu.run().expect("run vCPU") {
-                VcpuExit::Interrupted => panic!("the guest stopped exiting after {exits} exits"),
-                exit => {
-                    exits += 1;
-                    if !serve(exit) {
-                        break;
-                    }
-                }
-            }
-        }
-        self.vcpu.complete_pending_io().unwrap();
+        let exits = drive_vcpu(&mut self.vcpu, serve);
         drop(finished);
         watchdog.join().unwrap();
         exits
@@ -89,6 +79,32 @@ impl FlatGuest {
             .read_slice(data, GuestAddress(addr))
             .unwrap();
     }
+}
+
+fn drive_vcpu(vcpu: &mut impl Vcpu, mut serve: impl FnMut(VcpuExit<'_>) -> bool) -> usize {
+    let mut exits = 0;
+    loop {
+        match vcpu.run().expect("run vCPU") {
+            VcpuExit::Interrupted => panic!("the guest stopped exiting after {exits} exits"),
+            exit => {
+                exits += 1;
+                if !serve(exit) {
+                    break;
+                }
+            }
+        }
+    }
+    while let IoCompletion::Exit(exit) = vcpu.complete_pending_io().expect("complete pending I/O") {
+        match exit {
+            VcpuExit::Interrupted => panic!("the guest stopped exiting after {exits} exits"),
+            exit => {
+                exits += 1;
+                // The stop request is already latched; finish this instruction.
+                serve(exit);
+            }
+        }
+    }
+    exits
 }
 
 /// Writes `program` at [`CODE`] and the flat GDT into `memory`, and returns
@@ -129,5 +145,65 @@ pub(crate) fn load(memory: &GuestMemoryMmap, program: &[u8]) -> X86BootRegisters
 impl Drop for FlatGuest {
     fn drop(&mut self) {
         let _ = self.ram.unmap(&*self.vm);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use boxlite_hypervisor::Result;
+
+    use super::*;
+    use crate::mock_vm::MockHandle;
+
+    #[derive(Default)]
+    struct SplitIoCpu {
+        entered: bool,
+        completions: usize,
+    }
+
+    impl Vcpu for SplitIoCpu {
+        type Handle = MockHandle;
+
+        fn run(&mut self) -> Result<VcpuExit<'_>> {
+            assert!(!self.entered, "the guest must not re-enter after stop");
+            self.entered = true;
+            Ok(VcpuExit::MmioWrite {
+                guest_addr: 0x1fff,
+                bytes: b"A",
+            })
+        }
+
+        fn complete_pending_io(&mut self) -> Result<IoCompletion<'_>> {
+            self.completions += 1;
+            match self.completions {
+                1 => Ok(IoCompletion::Exit(VcpuExit::MmioWrite {
+                    guest_addr: 0x2000,
+                    bytes: b"B",
+                })),
+                2 => Ok(IoCompletion::Done),
+                _ => panic!("the drain must stop at Done"),
+            }
+        }
+
+        fn handle(&self) -> Self::Handle {
+            unreachable!("driving the mock does not use a watchdog")
+        }
+    }
+
+    #[test]
+    fn serves_follow_up_mmio_before_stopping() {
+        let mut cpu = SplitIoCpu::default();
+        let mut writes = Vec::new();
+        let exits = drive_vcpu(&mut cpu, |exit| {
+            let VcpuExit::MmioWrite { guest_addr, bytes } = exit else {
+                panic!("expected an MMIO write, got {exit:?}");
+            };
+            writes.push((guest_addr, bytes[0]));
+            false
+        });
+
+        assert_eq!((exits, writes.len()), (2, 2), "count and serve both exits");
+        assert_eq!(writes, [(0x1fff, b'A'), (0x2000, b'B')]);
+        assert_eq!(cpu.completions, 2);
     }
 }

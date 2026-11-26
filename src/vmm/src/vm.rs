@@ -231,6 +231,11 @@ impl<H: HostVm> Vm<H> {
             &host_vm,
         )?;
         let chipset = chipset.build()?;
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let device_less = chipset.is_empty();
+        // Public VM constructors and chipset inspection are Linux x86_64-only.
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let device_less = false;
         if let Err(error) = ram.map(&*host_vm) {
             drop(chipset);
             drop(workers);
@@ -243,7 +248,7 @@ impl<H: HostVm> Vm<H> {
             return Err(error);
         }
 
-        let lifecycle = Arc::new(Lifecycle::new(sender.clone()));
+        let lifecycle = Arc::new(Lifecycle::new(sender.clone(), device_less));
         let mut vm = Self {
             chipset: Some(chipset),
             workers: Some(workers),
@@ -272,19 +277,37 @@ impl<H: HostVm> Vm<H> {
     pub fn control(&self) -> VmControl {
         self.control.clone()
     }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn lifecycle(&self) -> &Arc<Lifecycle> {
+        &self.lifecycle
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
 impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
     fn run_vcpus(&mut self) -> Result<VmExit> {
-        use std::thread;
+        use std::{
+            io::ErrorKind,
+            panic::{self, AssertUnwindSafe},
+            thread,
+            time::Duration,
+        };
 
-        use boxlite_hypervisor::VcpuHandle as _;
+        use boxlite_hypervisor::VcpuHandle;
 
         use crate::{
-            events::Event,
+            events::{Event, RECHECK},
+            lifecycle::VmStatus,
             vcpu::{StartGate, Workers},
         };
+
+        const KICK_RETRY: Duration = Duration::from_millis(10);
+
+        fn retryable_kick(error: &boxlite_hypervisor::Error) -> bool {
+            matches!(error, boxlite_hypervisor::Error::KickVcpu { source, .. }
+                if matches!(source.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted))
+        }
 
         self.fresh_vm = false;
         let gate = StartGate::default();
@@ -295,6 +318,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             boot_regs: &self.boot_regs,
             chipset: self.chipset.as_ref().expect("live VM has a chipset"),
             sender: &self.sender,
+            lifecycle: &self.lifecycle,
             kicks: &kicks,
             gate: &gate,
         };
@@ -303,6 +327,43 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner);
         let event = thread::scope(|scope| {
+            // Release workers before the scope joins them, including on unwind.
+            struct StopVcpus<'a, H: VcpuHandle> {
+                lifecycle: &'a Lifecycle,
+                gate: &'a StartGate,
+                kicks: &'a Mutex<Vec<H>>,
+            }
+
+            impl<H: VcpuHandle> Drop for StopVcpus<'_, H> {
+                fn drop(&mut self) {
+                    self.lifecycle.mark_stopping();
+                    self.gate.abort();
+                    // Late registrations cannot enter the guest after the stop latch.
+                    let mut pending = std::mem::take(
+                        &mut *self.kicks.lock().unwrap_or_else(PoisonError::into_inner),
+                    );
+                    while !pending.is_empty() {
+                        pending.retain(|kick| {
+                            match panic::catch_unwind(AssertUnwindSafe(|| kick.kick())) {
+                                Ok(Ok(())) => {}
+                                Ok(Err(error)) if retryable_kick(&error) => return true,
+                                Ok(Err(error)) => tracing::warn!(%error, "failed to kick a vCPU"),
+                                Err(_) => tracing::warn!("vCPU kick panicked during shutdown"),
+                            }
+                            false
+                        });
+                        if !pending.is_empty() {
+                            thread::sleep(KICK_RETRY);
+                        }
+                    }
+                }
+            }
+
+            let _stop = StopVcpus {
+                lifecycle: &self.lifecycle,
+                gate: &gate,
+                kicks: &kicks,
+            };
             for id in 0..vcpus.vcpu_count {
                 let vcpus = &vcpus;
                 let spawned = thread::Builder::new()
@@ -317,28 +378,51 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     break;
                 }
             }
-            let event = events.wait(None);
-            self.lifecycle.mark_stopping();
-            if event.is_err() {
-                // Without an event the stop latch is still open; close it so
-                // the vCPUs stop and the scope can join them.
-                vcpus.sender.send(Event::StopRequested);
-            }
-            // Wake every vCPU still in the guest; a vCPU still being
-            // configured sees the latch before its first entry.
-            for kick in kicks.lock().unwrap_or_else(PoisonError::into_inner).iter() {
-                if let Err(error) = kick.kick() {
-                    tracing::warn!(%error, "failed to kick a vCPU");
+            let mut pending_kicks = 0u64;
+            loop {
+                let wait = if pending_kicks != 0 {
+                    KICK_RETRY
+                } else {
+                    RECHECK
+                };
+                match events.wait(Some(wait)) {
+                    Ok(Some(event)) => break Ok(event),
+                    Err(error) => break Err(error),
+                    Ok(None) => {}
+                }
+                let kick_all = self.lifecycle.drive(self.vcpu_count);
+                if !kick_all && pending_kicks == 0 {
+                    continue;
+                }
+                if self.lifecycle.status() != VmStatus::Pausing || vcpus.sender.is_stopping() {
+                    pending_kicks = 0;
+                    continue;
+                }
+                let kicks = kicks.lock().unwrap_or_else(PoisonError::into_inner);
+                // Startup only appends handles, so their indices stay stable.
+                for (index, kick) in kicks.iter().enumerate() {
+                    let bit = 1u64 << index;
+                    if !kick_all && pending_kicks & bit == 0 {
+                        continue;
+                    }
+                    match kick.kick() {
+                        Ok(()) => pending_kicks &= !bit,
+                        Err(error) if retryable_kick(&error) => {
+                            pending_kicks |= bit;
+                        }
+                        Err(error) => {
+                            vcpus.sender.send(Event::VcpuFailed(error.into()));
+                            break;
+                        }
+                    }
                 }
             }
-            event
         });
         match event {
-            Ok(Some(Event::StopRequested)) => Ok(VmExit::StopRequested),
-            Ok(Some(Event::GuestShutdown)) => Ok(VmExit::GuestShutdown),
-            Ok(Some(Event::GuestReset)) => Ok(VmExit::GuestReset),
-            Ok(Some(Event::VcpuFailed(error) | Event::DeviceFailed(error))) => Err(error),
-            Ok(None) => unreachable!("a wait without a timeout returns an event"),
+            Ok(Event::StopRequested) => Ok(VmExit::StopRequested),
+            Ok(Event::GuestShutdown) => Ok(VmExit::GuestShutdown),
+            Ok(Event::GuestReset) => Ok(VmExit::GuestReset),
+            Ok(Event::VcpuFailed(error) | Event::DeviceFailed(error)) => Err(error),
             Err(error) => Err(Error::EventLoop(error)),
         }
     }

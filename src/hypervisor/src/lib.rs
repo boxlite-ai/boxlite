@@ -31,7 +31,7 @@ pub use x86::{X86BootRegisters, X86CpuidEntry, X86Msr, X86Segment, X86Vcpu, X86V
 pub use x86::{X86IrqchipState, X86VcpuState, X86VmState};
 
 pub use error::{Error, Result};
-pub use exit::VcpuExit;
+pub use exit::{IoCompletion, VcpuExit};
 pub use memory::MemoryRegion;
 pub use vcpu::{Vcpu, VcpuHandle};
 pub use vm::Vm;

@@ -91,7 +91,7 @@ need no hypervisor.
 | Create a vCPU | `Vm::create_vcpu`, on the thread that will run it | `hv_vcpu_create`, which also returns the `hv_vcpu_exit_t` the vCPU reports its exits in | `KVM_CREATE_VCPU`, then `mmap` of its `kvm_run`; `KVM_ARM_VCPU_INIT` on arm64, with secondaries powered off (`KVM_ARM_VCPU_POWER_OFF`) | `WHvCreateVirtualProcessor` |
 | Set boot registers | x86_64: `X86Vcpu::set_cpu_features`, then `X86Vcpu::set_boot_registers`; arm64 adds its own extension trait | `hv_vcpu_set_reg`, `hv_vcpu_set_sys_reg` | `KVM_SET_ONE_REG` on arm64; on x86_64 `KVM_SET_CPUID2`, then `KVM_SET_MSRS`, `KVM_SET_REGS`, `KVM_SET_FPU` and `KVM_SET_SREGS`, in Firecracker's order ([Firecracker `src/vmm/src/arch/x86_64/vcpu.rs:222–301`](https://github.com/firecracker-microvm/firecracker/blob/68698adfee9b252df130b7a98e3ba04eb81f0f54/src/vmm/src/arch/x86_64/vcpu.rs#L222-L301)); unlike Firecracker, the VMM leaves the local APIC LINT pins in their KVM reset state, ExtINT on the boot vCPU LINT0, and Linux programs LINT1 itself | `WHvSetVirtualProcessorRegisters` |
 | Run to the next exit | `Vcpu::run` → `VcpuExit` | `hv_vcpu_run` | `KVM_RUN` | `WHvRunVirtualProcessor` |
-| Complete pending I/O before stop or state capture | `Vcpu::complete_pending_io`; no further guest instruction executes | write the read result and advance PC without `hv_vcpu_run` | `KVM_RUN` with `immediate_exit` set; KVM completes the access before checking it | finish emulation and update registers/RIP without `WHvRunVirtualProcessor` |
+| Complete pending I/O before stop or state capture | Dispatch exits from `Vcpu::complete_pending_io` until `Ok(IoCompletion::Done)` | Write the read result and advance PC without `hv_vcpu_run` | `KVM_RUN` with `immediate_exit` set may return more exits from the same instruction | Finish emulation and update registers/RIP without `WHvRunVirtualProcessor` |
 | Read the exit | the backend decodes it into a `VcpuExit` | `hv_vcpu_exit_t`: the reason and, for an exception, the syndrome and guest address | `kvm_run.exit_reason` and its union | the `WHV_RUN_VP_EXIT_CONTEXT` that `WHvRunVirtualProcessor` fills |
 | Kick from another thread | `VcpuHandle::kick` | `hv_vcpus_exit` | set `immediate_exit`, then signal the vCPU thread | `WHvCancelRunVirtualProcessor` |
 | Set an interrupt line | `Vm::set_irq_line` | `hv_gic_set_spi` | `KVM_IRQ_LINE` | a userspace IOAPIC, in a crate M10 picks, then `WHvRequestInterrupt` |
@@ -191,11 +191,15 @@ inside the guest; only the exits below reach the VMM.
 
 `VcpuExit` (`src/hypervisor/src/exit.rs`) is what `run` returns. MMIO and port
 data borrow a per-vCPU buffer inside the backend, as in libkrun and kvm-ioctls.
-The VMM therefore handles an exit before it runs that vCPU again, and the next
-`run` completes the guest's instruction. Before stopping or saving state, the
-VMM releases the borrowed exit and calls `complete_pending_io` instead. That
-operation succeeds without guest execution when nothing is pending, and a
-successfully completed access is not completed again.
+The VMM handles each exit before it runs that vCPU again. The next `run`
+continues the guest's instruction. Before stopping or saving state, the
+VMM releases the borrowed exit and calls `complete_pending_io`. If it receives
+`Ok(IoCompletion::Exit(exit))`, it handles that exit and releases its borrow
+before calling again. For example, KVM can return a second MMIO fragment or the
+write phase of a read-modify-write instruction. `Ok(IoCompletion::Done)` confirms
+completion without executing another guest instruction. With no pending I/O,
+completion is a no-op. `IoCompletion` is `#[must_use]` even after the caller
+unwraps the `Result`.
 
 | Exit | Meaning | HVF | KVM | WHP (M10) |
 | --- | --- | --- | --- | --- |
@@ -434,8 +438,9 @@ worker slot synchronously.
   - `run()` spawns one per vCPU, named `vcpuN`. Each creates and configures its
     vCPU and waits at a start gate until every vCPU is configured; a thread
     that fails to start aborts the gate.
-  - It then loops: run, dispatch the exit through the chipset, run again.
-  - An idle vCPU waits inside the host, never in a VMM thread. KVM's in-kernel
+  - Before each guest entry, a vCPU checks the pause and stop state. It waits
+    on a condition variable while parked.
+  - When the VM is running, idle vCPUs wait inside the host. KVM's in-kernel
     irqchip waits out `HLT`; with the in-kernel GIC, HVF waits out `WFI` inside
     `hv_vcpu_run` and wakes the vCPU for its vtimer and for SPIs set from any
     thread, as an M5 Pro on macOS 27 showed
@@ -465,8 +470,9 @@ worker slot synchronously.
     cleanup; quiesce success does not imply snapshot support or delivery of
     buffered network traffic.
 - **The `run()` thread.**
-  - It waits on one poller for stop requests, vCPU outcomes and device
-    failures.
+  - It waits on one `EventLoop` poller for control wakeups, stop requests,
+    vCPU outcomes and device failures. The `RECHECK` interval is one second,
+    so the mailbox and terminal queue are revisited even if a wakeup is lost.
   - The poller is `mio`, which uses epoll on Linux and kqueue on macOS and is
     already in `Cargo.lock` through tokio. rust-vmm's event-manager and crosvm's
     `WaitContext` are epoll-only.
@@ -498,14 +504,35 @@ sink to take the rest, and bytes it never takes are counted as dropped and
 logged.
 
 The driver holds exclusive access to `Vm` throughout `run`. `VmControl`
-provides backend-independent runtime controls. External threads use `status()`,
-`stop()`, and `resize_disk()` without holding the VM itself.
-`StopHandle::stop` uses the same latch.
+provides backend-independent runtime controls. External threads use
+`status()`, `stop()`, `request_pause()`, `wait_paused(timeout)`, `resume()`, and
+`resize_disk()` without holding the VM itself. `StopHandle::stop` uses the
+same stop latch.
 
-`VmStatus` starts at `Created`, advances to `Running` as the driver starts,
-and becomes `Stopping` on a stop request or when the driver processes a
-terminal event. A stop in `Created` goes directly to `Stopping`, so the
-first `run` skips vCPU creation and takes the usual cleanup path.
+`VmStatus` normally moves from `Created` to `Running`. A device-less VM
+can reserve its first pause in `Created`. It keeps that status until
+`run` claims the reservation and enters `Pausing` before releasing the
+vCPU start gate. Every vCPU parks before its first guest entry.
+
+During execution, `request_pause()` posts a command in a single-slot mailbox.
+The driver accepts it in `Running`, enters `Pausing`, and kicks the vCPUs.
+At `checkpoint`, each vCPU owner dispatches exits from `complete_pending_io`
+until it returns `Ok(IoCompletion::Done)`, then calls `notify_guest_stopped`. A
+terminal exit or error returns immediately without acknowledging the pause. The
+checkpoint also skips acknowledgement if a stop arrived during completion.
+The driver publishes `Paused` after one acknowledgement from each vCPU.
+`resume()` uses the same slot and epoch to reopen guest entry and return to
+`Running`. The mailbox lock serializes admission against concurrent clones. A
+pure poller wake prompts the driver to check the mailbox. Terminal events use
+the same poller and keep their queue priority.
+
+`request_pause()` posts the request and wakes the driver without waiting.
+`wait_paused(timeout)` observes the reserved, queued, or active epoch and its
+timeout leaves the pause in place.
+
+A stop or terminal event moves the VM to `Stopping`, releases parked vCPUs,
+and wakes pending control calls with `TerminalOutcome`. A stop in `Created`
+lets the first `run` skip vCPU creation and take the usual cleanup path.
 The first terminal event determines the outcome of an active run.
 
 On teardown, the driver joins all scoped vCPUs, shuts down virtio workers,

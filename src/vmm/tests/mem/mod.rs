@@ -223,6 +223,7 @@ fn a_timed_out_control_command_can_still_publish_its_target() {
     let mut mem = VirtioMem::new(memory, registry.register_memory().unwrap());
     let control = registry.finish(Arc::new(crate::lifecycle::Lifecycle::new(
         crate::events::EventLoop::new().unwrap().sender(),
+        false,
     )));
     let sources = Arc::new(Sources::default());
     let interrupt = Arc::new(Interrupt::default());
