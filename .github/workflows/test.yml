@@ -559,7 +559,7 @@ jobs:
     name: Python Tests (${{ matrix.platform.target }} / Python ${{ matrix.python-version }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.python == 'true' }}
-    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-2vcpu-4gbmem-30gbdisk' || matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -596,7 +596,7 @@ jobs:
     name: Node.js Tests (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.node == 'true' }}
-    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-2vcpu-4gbmem-30gbdisk' || matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:

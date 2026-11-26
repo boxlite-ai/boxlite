@@ -30,13 +30,13 @@ function matrixRunner(selection: string, os: string) {
   return new Evaluator(ast, context).evaluate().coerceString()
 }
 
-test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native platform routing', () => {
+test('Ubuntu x64 matrix jobs request their qualified BoxLite workers and preserve native platform routing', () => {
   const { platforms } = JSON.parse(readFileSync(join(REPO_ROOT, '.github/ci-config.json'), 'utf8'))
   const jobs = [
     ['lint.yml', 'clippy', 'boxlite-4vcpu-16gbmem-64gbdisk'],
     ['test.yml', 'guest_artifacts', 'boxlite-4vcpu-16gbmem-64gbdisk'],
-    ['test.yml', 'python', 'boxlite-2vcpu-4gbmem-30gbdisk'],
-    ['test.yml', 'node', 'boxlite-2vcpu-4gbmem-30gbdisk'],
+    ['test.yml', 'python', 'boxlite'],
+    ['test.yml', 'node', 'boxlite'],
     ['build-go.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
     ['build-node.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
   ] as const
@@ -53,7 +53,7 @@ test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native p
 for (const [name, job, runner] of [
   ['build-go.yml', 'config', 'boxlite'],
   ['build-plugins.yml', 'build', 'boxlite'],
-  ['api-client-drift.yml', 'check-generated-clients', 'boxlite-2vcpu-8gbmem-30gbdisk'],
+  ['api-client-drift.yml', 'check-generated-clients', 'boxlite'],
   ['test.yml', 'dashboard', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['test.yml', 'secret-server-postgres', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['build-box-images.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
@@ -84,11 +84,11 @@ test('CodeQL places every language on its qualified runner and retains its build
   const job = workflow('codeql.yml').jobs.analyze
   assert.equal(job['runs-on'], '${{ matrix.runner }}')
   assert.deepEqual(job.strategy.matrix.include, [
-    { language: 'actions', 'build-mode': 'none', runner: 'boxlite-2vcpu-4gbmem-64gbdisk' },
+    { language: 'actions', 'build-mode': 'none', runner: 'boxlite' },
     { language: 'c-cpp', 'build-mode': 'none', runner: 'ubuntu-latest' },
     { language: 'go', 'build-mode': 'autobuild', runner: 'ubuntu-latest' },
     { language: 'javascript-typescript', 'build-mode': 'none', runner: 'ubuntu-latest' },
-    { language: 'python', 'build-mode': 'none', runner: 'boxlite-2vcpu-8gbmem-30gbdisk' },
+    { language: 'python', 'build-mode': 'none', runner: 'boxlite' },
     { language: 'rust', 'build-mode': 'none', runner: 'ubuntu-latest' },
   ])
 })
