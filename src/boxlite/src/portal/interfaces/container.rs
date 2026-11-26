@@ -441,6 +441,11 @@ mod tests {
             map_mount_status(tonic::Status::unavailable("guest disconnected")),
             BoxliteError::Rpc(_)
         ));
+        // A check the guest ran after it acted: the caller undoes the mount, it does not skip it.
+        assert!(matches!(
+            map_mount_status(Status::internal("the mount was attached, but unverified")),
+            BoxliteError::Rpc(_)
+        ));
     }
 
     #[test]

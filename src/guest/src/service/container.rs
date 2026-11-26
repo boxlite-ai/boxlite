@@ -105,18 +105,61 @@ fn effective_target(destination: &Path, earlier: &[(String, PathBuf)]) -> Option
     Some(source.join(destination.strip_prefix(target).unwrap_or(Path::new(""))))
 }
 
+/// Refuse a saved directory that would hide a mount, or whose target has
+/// entries where it lands. Mounts apply in list order, as on Linux: a saved
+/// directory may sit below an earlier mount and have later ones below it, but
+/// it must not cover an earlier mount, and a later one must not cover it.
+/// Below an earlier mount its target is that mount's source.
+fn check_saved_target(
+    destination: &str,
+    position: usize,
+    mounts: &[BindMount],
+    earlier: &[(String, PathBuf)],
+    rootfs: &Path,
+) -> BoxliteResult<()> {
+    let target = Path::new(destination);
+    for (index, other) in mounts.iter().enumerate() {
+        let other_path = Path::new(&other.destination);
+        if other.destination == destination || !hides(index, position, target, other_path) {
+            continue;
+        }
+        return Err(BoxliteError::InvalidState(if index < position {
+            format!(
+                "{destination} would cover the earlier mount at {}",
+                other_path.display()
+            )
+        } else {
+            format!(
+                "the later mount at {} would cover {destination}",
+                other_path.display()
+            )
+        }));
+    }
+    match effective_target(target, earlier) {
+        Some(below) => require_empty_target(Path::new("/"), &below).map_err(|error| {
+            BoxliteError::InvalidState(format!("{destination} is below an earlier mount: {error}"))
+        }),
+        None => require_empty_target(rootfs, target),
+    }
+}
+
 /// Record each mount the runtime made for a declared directory, under the
-/// identity every process of the container will find. Init is created and has
-/// not run, so nothing has touched these mounts since the runtime made them.
+/// identity every process of the container will find, and note where its other
+/// mounts sit. Init is created and has not run, so nothing has touched these
+/// mounts since the runtime made them.
 async fn record_mounts(
     container: &Container,
     mounts: Vec<RecordedMount>,
     unrecorded: Vec<PathBuf>,
 ) -> BoxliteResult<()> {
-    if mounts.is_empty() {
+    if mounts.is_empty() && unrecorded.is_empty() {
         return Ok(());
     }
-    container.ensure_runtime_mounts_supported()?;
+    // Adopting a mount needs the capability; noting where the others sit does
+    // not.
+    if !mounts.is_empty() {
+        container.ensure_runtime_mounts_supported()?;
+    }
     let init = container.init_pid().ok_or_else(|| {
         BoxliteError::InvalidState("the container is created but its init process is gone".into())
     })?;
@@ -562,60 +605,14 @@ impl ContainerService for GuestServer {
             } else {
                 unrecorded.push(PathBuf::from(&m.destination));
             }
-            // Mounts apply in list order, as on Linux. A saved directory may
-            // sit below an earlier mount and have later ones below it, but it
-            // must not cover an earlier mount, and a later one must not cover
-            // it: one of the two would hide the other.
             if m.added {
-                let saved = Path::new(&m.destination);
-                let hidden = init_req
-                    .mounts
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, other)| {
-                        if other.destination == m.destination {
-                            return None;
-                        }
-                        let other = Path::new(&other.destination);
-                        if !hides(index, position, saved, other) {
-                            return None;
-                        }
-                        Some(if index < position {
-                            format!(
-                                "{} would cover the earlier mount at {}",
-                                m.destination,
-                                other.display()
-                            )
-                        } else {
-                            format!(
-                                "the later mount at {} would cover {}",
-                                other.display(),
-                                m.destination
-                            )
-                        })
-                    });
-                if let Some(problem) = hidden {
-                    return Ok(Response::new(ContainerInitResponse {
-                        result: Some(container_init_response::Result::Error(init_error(
-                            "check the target of a saved directory",
-                            &BoxliteError::InvalidState(problem),
-                        ))),
-                    }));
-                }
-            }
-            if m.added {
-                // Below an earlier mount the target is that mount's source:
-                // the runtime mounts in list order, so that is the directory
-                // the saved one lands in.
-                let checked = match effective_target(Path::new(&m.destination), &earlier) {
-                    Some(below) => require_empty_target(Path::new("/"), &below).map_err(|error| {
-                        BoxliteError::InvalidState(format!(
-                            "{} is below an earlier mount: {error}",
-                            m.destination
-                        ))
-                    }),
-                    None => require_empty_target(&bundle_rootfs, Path::new(&m.destination)),
-                };
+                let checked = check_saved_target(
+                    &m.destination,
+                    position,
+                    &init_req.mounts,
+                    &earlier,
+                    &bundle_rootfs,
+                );
                 if let Err(error) = checked {
                     return Ok(Response::new(ContainerInitResponse {
                         result: Some(container_init_response::Result::Error(init_error(
@@ -1425,5 +1422,43 @@ mod tests {
             Some(PathBuf::from("/share/work/other"))
         );
         assert_eq!(effective_target(Path::new("/data"), &earlier), None);
+    }
+
+    #[tokio::test]
+    async fn mounts_without_a_record_are_still_noted() {
+        use crate::container::Container;
+        use libcontainer::container::{ContainerStatus, State};
+
+        // A created container whose init is this test's own process.
+        let home = tempfile::tempdir().unwrap();
+        let id = home
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        State::new(
+            &id,
+            ContainerStatus::Running,
+            Some(i32::try_from(std::process::id()).unwrap()),
+            home.path().join("bundle"),
+        )
+        .save(home.path())
+        .unwrap();
+        let container = Container::for_unit_test(
+            &id,
+            home.path().parent().unwrap().to_path_buf(),
+            home.path().join("bundle"),
+        );
+
+        // Only mounts the runtime made without a record: there is nothing to
+        // adopt, yet a later runtime mount must not cover them.
+        record_mounts(&container, Vec::new(), vec![PathBuf::from("/tmp")])
+            .await
+            .unwrap();
+        assert_eq!(
+            container.attacher().read().await.unrecorded(),
+            &[PathBuf::from("/tmp")]
+        );
     }
 }

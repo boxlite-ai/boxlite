@@ -12,17 +12,20 @@
 use std::fs::File;
 use std::future::Future;
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use boxlite_shared::constants::mount_tags::AGGREGATE;
+use boxlite_shared::constants::{STANDARD_MOUNT_TARGETS, mount_tags::AGGREGATE, paths_overlap};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::{BoxImpl, BoxRun, LiveState};
+use super::{BoxImpl, BoxRun};
 use crate::db::{BoxStore, Mounts};
 use crate::experimental::ExperimentalFeature;
-use crate::litebox::mounts::{MountInfo, MountProgress, MountRequest, MountState, target_key};
+use crate::litebox::mounts::{
+    MountInfo, MountProgress, MountRequest, MountState, normalize_target, target_key,
+};
 use crate::lock::OwnedLockGuard;
 use crate::portal::interfaces::ContainerInterface;
 use crate::runtime::id::BoxID;
@@ -101,13 +104,14 @@ impl Running {
         .await
     }
 
-    /// Bring the mount of `export` at `target` to "no mount, no export": have
-    /// the guest detach that identity when `detach`, then retire the export.
-    async fn converge(&mut self, export: &str, target: &str, detach: bool) -> BoxliteResult<()> {
-        if detach {
-            self.detach(export, target).await?;
-        }
-        self.retire(export).await
+    /// The export the shim registered for `request_id`, if any.
+    async fn registered_export(&self, request_id: MountRequestId) -> BoxliteResult<Option<String>> {
+        let record = self
+            .control("find the registration", move |client| {
+                client.find_registered(request_id)
+            })
+            .await?;
+        Ok(record.map(|record| record.export))
     }
 
     /// Drop the reservation of a request that left nothing behind. A later
@@ -133,30 +137,29 @@ impl Running {
         })
     }
 
-    /// Report a refusal to detach this request's mount: the mount is still in
-    /// place, so its entry is `Mounted` again. An outcome the guest did not
-    /// report leaves the entry `Detaching` for a retry.
+    /// Report a refusal to detach this request's mount. The guest touched
+    /// nothing, so its entry returns to `found`, the state the removal found.
+    /// An outcome the guest did not report leaves the entry `Detaching` for a
+    /// retry.
     fn refused(
         &self,
         target: &str,
         request_id: MountRequestId,
+        found: MountState,
         error: BoxliteError,
     ) -> BoxliteError {
         if !refusal(&error) {
             return error;
         }
         let restored = self.update(|mounts| {
-            let entry = mounts
+            if let Some(entry) = mounts
                 .progress
                 .get_mut(target)
-                .filter(|entry| entry.request_id == request_id);
-            match entry {
-                Some(entry) => {
-                    entry.state = MountState::Mounted;
-                    Ok(())
-                }
-                None => Ok(()),
+                .filter(|entry| entry.request_id == request_id)
+            {
+                entry.state = found;
             }
+            Ok(())
         });
         match restored {
             Err(stopped @ BoxliteError::Stopped(_)) => stopped,
@@ -169,7 +172,6 @@ impl Running {
     fn settle(self, target: &str, request_id: MountRequestId, error: BoxliteError) -> BoxliteError {
         match self.release(target, request_id) {
             Ok(()) => error,
-            Err(stopped @ BoxliteError::Stopped(_)) => stopped,
             Err(release) => unconverged(error, release),
         }
     }
@@ -186,9 +188,15 @@ impl Running {
         error: BoxliteError,
         detach: bool,
     ) -> BoxliteError {
-        match self.converge(export, target, detach).await {
+        let cleanup = async {
+            if detach {
+                self.detach(export, target).await?;
+            }
+            self.retire(export).await
+        }
+        .await;
+        match cleanup {
             Ok(()) => self.settle(target, request_id, error),
-            Err(stopped @ BoxliteError::Stopped(_)) => stopped,
             Err(cleanup) => unconverged(error, cleanup),
         }
     }
@@ -274,18 +282,30 @@ fn checked_request(request: &MountRequest) -> BoxliteResult<CheckedRequest> {
     let source = request.source.to_str().ok_or_else(|| {
         BoxliteError::InvalidArgument(format!("source must be valid UTF-8: {:?}", request.source))
     })?;
+    let target = target_key(&request.target)?;
+    // The runtime mounts its own filesystems before any user mount applies,
+    // so a directory there, above or below one would hide it.
+    if let Some(root) = STANDARD_MOUNT_TARGETS
+        .into_iter()
+        .find(|root| paths_overlap(&target, root))
+    {
+        return Err(BoxliteError::InvalidArgument(format!(
+            "mount target {target} is reserved for the container's own mount at {root}"
+        )));
+    }
     Ok(CheckedRequest {
         source: source.to_owned(),
-        target: target_key(&request.target)?,
+        target,
         read_only: request.read_only,
     })
 }
 
-/// Open a directory without following a symbolic link in its final component.
-fn open_source(source: &Path) -> BoxliteResult<File> {
+/// Open a directory without following a symbolic link in its final component,
+/// and report where it really is.
+fn open_source(source: &Path) -> BoxliteResult<(File, PathBuf)> {
     // A trailing slash or dot makes Linux follow the preceding component even
     // with O_NOFOLLOW. Strip that spelling while preserving `..` resolution.
-    std::fs::OpenOptions::new()
+    let directory = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(source.components().as_path())
@@ -298,24 +318,34 @@ fn open_source(source: &Path) -> BoxliteResult<File> {
                 source.display()
             )),
             _ => BoxliteError::Storage(format!("open source {}: {error}", source.display())),
-        })
+        })?;
+    // The descriptor names the directory the kernel opened, whichever way the
+    // path spells it.
+    let root = std::fs::canonicalize(format!("/proc/self/fd/{}", directory.as_raw_fd())).map_err(
+        |error| BoxliteError::Storage(format!("resolve source {}: {error}", source.display())),
+    )?;
+    Ok((directory, root))
 }
 
-/// A target that already has a mount, on any plane.
-fn occupied(target: &str) -> BoxliteError {
-    BoxliteError::InvalidState(format!("a mount already exists at {target}"))
+/// Refuse a target that already has a mount on any plane, or one with a
+/// mount below it: a directory applied last would cover that mount.
+fn require_free(mounts: &Mounts, target: &str) -> BoxliteResult<()> {
+    if mounts.occupied(target) {
+        return Err(BoxliteError::InvalidState(format!(
+            "a mount already exists at {target}"
+        )));
+    }
+    if let Some(below) = mounts.below(target) {
+        return Err(BoxliteError::InvalidState(format!(
+            "a mount at {below} sits below {target} and would be covered"
+        )));
+    }
+    Ok(())
 }
 
 /// A target that has no mount to remove.
 fn missing(target: &str) -> BoxliteError {
     BoxliteError::NotFound(format!("no mount at {target}"))
-}
-
-/// A mount below `target`: one applied there would cover it.
-fn covering(target: &str, below: &str) -> BoxliteError {
-    BoxliteError::InvalidState(format!(
-        "a mount at {below} sits below {target} and would be covered"
-    ))
 }
 
 /// Whether the guest refused a step before it touched the container. The guest
@@ -357,6 +387,68 @@ fn unconverged(error: BoxliteError, cleanup: BoxliteError) -> BoxliteError {
     }
 }
 
+/// Run `work` against the store of box `id` on the blocking pool: the store
+/// reads and writes SQLite, and its declarations name host paths.
+async fn on_mount_store<T: Send + 'static>(
+    store: &BoxStore,
+    id: &str,
+    work: impl FnOnce(&BoxStore, &str) -> BoxliteResult<T> + Send + 'static,
+) -> BoxliteResult<T> {
+    let (store, id) = (store.clone(), id.to_owned());
+    tokio::task::spawn_blocking(move || work(&store, &id))
+        .await
+        .map_err(|error| BoxliteError::Internal(format!("mount store task: {error}")))?
+}
+
+/// Refuse a source that is, holds or lies inside the directory of another
+/// mount on record. The next start delivers every declaration as its own
+/// share, and refuses two shares whose roots overlap. The record at `target`
+/// itself is left to the target's own check.
+fn require_disjoint_source(
+    mounts: &Mounts,
+    target: &str,
+    source: &str,
+    root: &Path,
+) -> BoxliteResult<()> {
+    let on_record = mounts.declarations.iter().chain(
+        mounts
+            .progress
+            .iter()
+            .map(|(other, entry)| (other, &entry.request)),
+    );
+    for (other, request) in on_record {
+        if other == target {
+            continue;
+        }
+        // A source that cannot be resolved is named by the next start.
+        let Ok(resolved) = request.source.canonicalize() else {
+            continue;
+        };
+        if resolved.starts_with(root) || root.starts_with(&resolved) {
+            return Err(BoxliteError::InvalidState(format!(
+                "source {source} overlaps the directory mounted at {other}; a start could not \
+                 deliver both"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A directory cannot go below a file the box was created with: the file's
+/// mount leaves no path to mount it at.
+fn require_below_no_file(binds: &[(String, String)], target: &str) -> BoxliteResult<()> {
+    for (source, guest) in binds {
+        let file = std::fs::metadata(source).is_ok_and(|metadata| !metadata.is_dir());
+        let below = |key: String| target.starts_with(format!("{key}/").as_str());
+        if file && normalize_target(guest).is_some_and(below) {
+            return Err(BoxliteError::InvalidState(format!(
+                "a file the box was created with is mounted at {guest}; no directory can sit below it"
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl BoxImpl {
     /// Admission shared by every mount operation: the `native-vmm`
     /// experimental opt-in and the native engine. Neither starts the box.
@@ -389,11 +481,11 @@ impl BoxImpl {
         }
     }
 
-    /// A directory cannot go below a file the box was created with: the
-    /// file's mount leaves no path to mount it at.
-    fn require_below_no_file(&self, target: &str) -> BoxliteResult<()> {
+    /// The host source and container target of every bind the box was created
+    /// with.
+    fn created_binds(&self) -> impl Iterator<Item = (&str, &str)> {
         let options = &self.config.options;
-        let binds = options
+        options
             .volumes
             .iter()
             .filter(|volume| volume.managed_volume.is_none())
@@ -403,17 +495,7 @@ impl BoxImpl {
                     mount.source.as_deref().unwrap_or_default(),
                     mount.target.as_str(),
                 )
-            }));
-        for (source, guest) in binds {
-            let file = std::fs::metadata(source).is_ok_and(|metadata| !metadata.is_dir());
-            let below = |key: String| target.starts_with(format!("{key}/").as_str());
-            if file && target_key(Path::new(guest)).is_ok_and(below) {
-                return Err(BoxliteError::InvalidState(format!(
-                    "a file the box was created with is mounted at {guest}; no directory can sit below it"
-                )));
-            }
-        }
-        Ok(())
+            }))
     }
 
     /// Deliver a host directory into the container, or save it for the next
@@ -422,18 +504,21 @@ impl BoxImpl {
         self.require_runtime_mounts()?;
         self.require_aggregate_mounts()?;
         let request = checked_request(&request)?;
-        self.require_below_no_file(&request.target)?;
-        // Opening reads the host directory, which may sit on slow storage.
-        let source = request.source.clone();
-        let directory = tokio::task::spawn_blocking(move || open_source(Path::new(&source)))
-            .await
-            .map_err(|error| BoxliteError::Internal(format!("open source task: {error}")))??;
+        // The host filesystem may sit on slow storage.
+        let created: Vec<_> = self
+            .created_binds()
+            .map(|(source, guest)| (source.to_owned(), guest.to_owned()))
+            .collect();
+        let (target, source) = (request.target.clone(), request.source.clone());
+        let (directory, root) = tokio::task::spawn_blocking(move || {
+            require_below_no_file(&created, &target)?;
+            open_source(Path::new(&source))
+        })
+        .await
+        .map_err(|error| BoxliteError::Internal(format!("open source task: {error}")))??;
         self.mount_change(
-            || self.add_while_stopped(&request),
-            |run| {
-                let request = request.clone();
-                self.owned_mount(Self::add_while_running(run, request, directory))
-            },
+            || self.add_while_stopped(&request, &root),
+            |run| Self::add_while_running(run, request.clone(), directory, root.clone()),
         )
         .await
     }
@@ -446,10 +531,7 @@ impl BoxImpl {
         let target = target_key(target)?;
         self.mount_change(
             || self.remove_while_stopped(&target),
-            |run| {
-                let target = target.clone();
-                self.owned_mount(Self::remove_while_running(run, target))
-            },
+            |run| Self::remove_while_running(run, target.clone()),
         )
         .await
     }
@@ -469,38 +551,42 @@ impl BoxImpl {
         Ok(self.mounts().await?.lookup(&target))
     }
 
-    /// The declarations and progress from the store, read on the blocking
-    /// pool: loading them inspects creation sources on the host filesystem.
+    /// The declarations and progress from the store.
     async fn mounts(&self) -> BoxliteResult<Mounts> {
-        let store = self.runtime.box_manager.store().clone();
-        let id = self.id().as_str().to_owned();
-        tokio::task::spawn_blocking(move || store.mounts(&id))
-            .await
-            .map_err(|error| BoxliteError::Internal(format!("mount read task: {error}")))?
+        on_mount_store(
+            self.runtime.box_manager.store(),
+            self.id().as_str(),
+            |store, id| store.mounts(id),
+        )
+        .await
     }
 
     /// Run a change against the lifecycle it is admitted to. The lifecycle
     /// lock decides once: a stopped box commits under the admission, so a
     /// start cannot pass a write in flight, and a running one takes the change
     /// inside its VM run.
-    async fn mount_change<T, R>(
+    async fn mount_change<T, S, F, R>(
         &self,
-        stopped: impl FnOnce() -> BoxliteResult<T>,
+        stopped: S,
         running: impl FnOnce(Running) -> R,
     ) -> BoxliteResult<T>
     where
-        R: Future<Output = BoxliteResult<T>>,
+        S: FnOnce() -> F,
+        F: Future<Output = BoxliteResult<T>>,
+        R: Future<Output = BoxliteResult<T>> + Send + 'static,
+        T: Send + 'static,
     {
         let admitted = self
             .with_operation(async move {
-                match self.state.read().status {
+                let status = self.state.read().status;
+                match status {
                     BoxStatus::Paused => Err(BoxliteError::InvalidState(format!(
                         "Box {} is paused; its mounts stay in place until it resumes or stops",
                         self.id()
                     ))),
                     BoxStatus::Running => Ok(None),
                     BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed => {
-                        stopped().map(Some)
+                        stopped().await.map(Some)
                     }
                     status => Err(BoxliteError::InvalidState(format!(
                         "Cannot change mounts of box {} while it is {status}",
@@ -512,7 +598,7 @@ impl BoxImpl {
         match admitted {
             Some(result) => Ok(result),
             None => match self.running().await? {
-                Some(run) => running(run).await,
+                Some(run) => self.owned_mount(running(run)).await,
                 // The box stopped while this handle looked at a running one.
                 None => Err(BoxliteError::InvalidState(format!(
                     "the lifecycle of box {} changed while a mount change was admitted; retry",
@@ -552,8 +638,9 @@ impl BoxImpl {
             return Ok(None);
         };
         // The guest mounts into the namespace of the container's init, so the
-        // container runs first.
-        let live = self.mount_live().await?;
+        // container runs first. The caller holds the lifecycle lock, so an
+        // adopted VM is initialized under it.
+        let live = self.existing_live_state_locked().await?;
         self.ensure_container_started(live).await?;
         let guest = live.guest_session.container().await?;
         Ok(Some(Running {
@@ -567,54 +654,55 @@ impl BoxImpl {
         }))
     }
 
-    /// The VM's live state. The caller holds the lifecycle lock, so an adopted
-    /// VM is initialized under it.
-    async fn mount_live(&self) -> BoxliteResult<&LiveState> {
-        // An adopted VM needs exclusive admission for initialization. Once
-        // initialized, concurrent changes share the handle.
-        if !self.shutdown_token.is_cancelled()
-            && self.state.read().status == BoxStatus::Running
-            && let Some(live) = self.live.get()
-        {
-            return Ok(live);
-        }
-        self.existing_live_state_locked().await
-    }
-
     /// Save the declaration for the next start. The source only has to be a
     /// directory now: every delivery opens it again.
-    fn add_while_stopped(&self, request: &CheckedRequest) -> BoxliteResult<MountInfo> {
-        self.runtime
-            .box_manager
-            .store()
-            .update_mounts(self.id().as_str(), |mounts| {
-                if mounts.occupied(&request.target) {
-                    return Err(occupied(&request.target));
-                }
-                // A saved directory applies after the box's own mounts, so it
-                // must not have one of them below it.
-                if let Some(below) = mounts.below(&request.target) {
-                    return Err(covering(&request.target, below));
-                }
-                mounts.declare(request.request());
-                Ok(())
-            })?;
+    async fn add_while_stopped(
+        &self,
+        request: &CheckedRequest,
+        root: &Path,
+    ) -> BoxliteResult<MountInfo> {
+        let (source, target, root) = (
+            request.source.clone(),
+            request.target.clone(),
+            root.to_owned(),
+        );
+        let stored = request.request();
+        // The overlap check reads the store before the transaction: two stopped
+        // adds that pass it together are named by the next start.
+        on_mount_store(
+            self.runtime.box_manager.store(),
+            self.id().as_str(),
+            move |store, id| {
+                require_disjoint_source(&store.mounts(id)?, &target, &source, &root)?;
+                store.update_mounts(id, |mounts| {
+                    require_free(mounts, &target)?;
+                    mounts.declare(stored);
+                    Ok(())
+                })
+            },
+        )
+        .await?;
         Ok(request.info(MountState::Configured))
     }
 
     /// Drop the declaration at `target`. The host source plays no part, so a
     /// declaration whose source is gone still goes.
-    fn remove_while_stopped(&self, target: &str) -> BoxliteResult<()> {
-        self.runtime
-            .box_manager
-            .store()
-            .update_mounts(self.id().as_str(), |mounts| {
-                if !mounts.declarations.contains_key(target) {
-                    return Err(missing(target));
-                }
-                mounts.forget(target);
-                Ok(())
-            })
+    async fn remove_while_stopped(&self, target: &str) -> BoxliteResult<()> {
+        let target = target.to_owned();
+        on_mount_store(
+            self.runtime.box_manager.store(),
+            self.id().as_str(),
+            move |store, id| {
+                store.update_mounts(id, |mounts| {
+                    if !mounts.declarations.contains_key(&target) {
+                        return Err(missing(&target));
+                    }
+                    mounts.forget(&target);
+                    Ok(())
+                })
+            },
+        )
+        .await
     }
 
     /// Keep a running change running after its caller gives up: a cancelled
@@ -648,19 +736,21 @@ impl BoxImpl {
         mut run: Running,
         request: CheckedRequest,
         directory: File,
+        root: PathBuf,
     ) -> BoxliteResult<MountInfo> {
         let target = request.target.clone();
         let stored = request.request();
+        // The lifecycle lock is held, so every earlier add of this run has
+        // committed its declaration.
+        let (source, checked) = (request.source.clone(), target.clone());
+        on_mount_store(&run.store, run.id.as_str(), move |store, id| {
+            require_disjoint_source(&store.mounts(id)?, &checked, &source, &root)
+        })
+        .await?;
         let request_id: MountRequestId = uuid::Uuid::new_v4().into_bytes();
         // Reserve the target and publish `Preparing` before anything is registered.
         run.update(|mounts| {
-            if mounts.occupied(&target) {
-                return Err(occupied(&target));
-            }
-            // Nothing may sit below a mount applied last: it would be covered.
-            if let Some(below) = mounts.below(&target) {
-                return Err(covering(&target, below));
-            }
+            require_free(mounts, &target)?;
             mounts.progress.insert(
                 target.clone(),
                 MountProgress {
@@ -675,10 +765,10 @@ impl BoxImpl {
         })?;
         let registered = run
             .control("register the directory", {
-                let target = target.clone();
+                let (target, source) = (target.clone(), request.source.clone());
                 move |client| {
                     client.register_with_request_id(
-                        request.source,
+                        source,
                         target,
                         directory,
                         request.read_only,
@@ -692,13 +782,8 @@ impl BoxImpl {
             // A transport failure can hide either a registration or a refusal.
             // Only this request's ID finds a registration whose reply was lost.
             Err(error @ (BoxliteError::Storage(_) | BoxliteError::Internal(_))) => {
-                match run
-                    .control("find the registration", move |client| {
-                        client.find_registered(request_id)
-                    })
-                    .await
-                {
-                    Ok(Some(record)) => record.export,
+                match run.registered_export(request_id).await {
+                    Ok(Some(export)) => export,
                     // Nothing was registered, so nothing is mounted.
                     Ok(None) => return Err(run.settle(&target, request_id, error)),
                     // The shim cannot say: the entry stays listed for a remove.
@@ -727,16 +812,11 @@ impl BoxImpl {
             })?;
             entry.state = MountState::Mounted;
             entry.export = Some(export.clone());
-            mounts.declare(stored.clone());
+            mounts.declare(stored);
             Ok(())
         });
         match committed {
-            Ok(()) => Ok(MountInfo {
-                source: stored.source,
-                target: stored.target,
-                read_only: stored.read_only,
-                state: MountState::Mounted,
-            }),
+            Ok(()) => Ok(request.info(MountState::Mounted)),
             // The guest holds a mount that is not on record. Only undoing it
             // keeps the store truthful.
             Err(stopped @ BoxliteError::Stopped(_)) => Err(stopped),
@@ -749,10 +829,9 @@ impl BoxImpl {
     async fn remove_while_running(mut run: Running, target: String) -> BoxliteResult<()> {
         // Refuse what could not be detached, then publish `Detaching`, both
         // before anything changes in the guest.
-        let (request_id, named, delivered) = run.update(|mounts| {
+        let (request_id, named, delivered, found) = run.update(|mounts| {
             // A mount below the target would leave the container with it.
-            let mounted_below = mounts.below(&target).map(str::to_owned);
-            if let Some(below) = mounted_below {
+            if let Some(below) = mounts.below(&target) {
                 return Err(BoxliteError::InvalidState(format!(
                     "remove the mount at {below} first; one the box was created with needs a stop"
                 )));
@@ -767,32 +846,108 @@ impl BoxImpl {
                 }
             })?;
             let delivered = entry.delivered_at_start;
+            let found = entry.state;
             entry.state = MountState::Detaching;
-            Ok((entry.request_id, entry.export.clone(), delivered))
+            Ok((entry.request_id, entry.export.clone(), delivered, found))
         })?;
         let (key, exported) = match named {
             Some(export) => (export, true),
             None if delivered => (uuid::Uuid::from_bytes(request_id).to_string(), false),
             // An add whose export was never committed: its registration names it.
-            None => {
-                match run
-                    .control("find the registration", move |client| {
-                        client.find_registered(request_id)
-                    })
-                    .await?
-                {
-                    Some(record) => (record.export, true),
-                    // Nothing was registered, so nothing is mounted.
-                    None => return run.end(&target, request_id),
-                }
-            }
+            None => match run.registered_export(request_id).await? {
+                Some(export) => (export, true),
+                // Nothing was registered, so nothing is mounted.
+                None => return run.end(&target, request_id),
+            },
         };
         if let Err(error) = run.detach(&key, &target).await {
-            return Err(run.refused(&target, request_id, error));
+            return Err(run.refused(&target, request_id, found, error));
         }
         if exported {
             run.retire(&key).await?;
         }
         run.end(&target, request_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::litebox::mounts::tests::Fixture;
+    use crate::litebox::state::{BoxState, BoxStatus};
+    use tonic::transport::Endpoint;
+
+    const WORK: &str = "/work";
+
+    /// A change on a running box whose shim and guest are never reached.
+    async fn running(fx: &Fixture, state: &BoxState) -> Running {
+        let endpoint = Endpoint::from_shared("http://127.0.0.1:1")
+            .unwrap()
+            .connect_lazy();
+        Running {
+            store: fx.runtime.box_manager.store().clone(),
+            id: fx.id.clone(),
+            run: BoxRun {
+                pid: state.pid.expect("the fixture gives a running box a pid"),
+                started_at: state.started_at,
+            },
+            control: PathBuf::new(),
+            guest: ContainerInterface::new(endpoint),
+            container_id: fx.config.container.id.to_string(),
+            _lifecycle: OwnedLockGuard::new_async(
+                fx.runtime
+                    .lock_manager
+                    .retrieve(state.lock_id.unwrap())
+                    .unwrap(),
+            )
+            .await,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_removal_leaves_the_entry_as_it_found_it() {
+        let fx = Fixture::new(BoxStatus::Running);
+        let state = fx.runtime.box_manager.update_box(&fx.id).unwrap();
+        let store = fx.runtime.box_manager.store().clone();
+        // An add interrupted before its commit, then a committed mount.
+        for (found, left) in [
+            (MountState::Preparing, MountState::Preparing),
+            (MountState::Mounted, MountState::Mounted),
+        ] {
+            let request_id: MountRequestId = [7; 16];
+            store
+                .update_mounts(fx.id.as_str(), |mounts| {
+                    mounts.progress.insert(
+                        WORK.into(),
+                        MountProgress {
+                            request: fx.request(),
+                            state: found,
+                            request_id,
+                            export: None,
+                            delivered_at_start: false,
+                        },
+                    );
+                    Ok(())
+                })
+                .unwrap();
+            let run = running(&fx, &state).await;
+            let refused = run.refused(
+                WORK,
+                request_id,
+                found,
+                BoxliteError::InvalidState("detach descendant mounts first".into()),
+            );
+            drop(run);
+
+            assert!(
+                matches!(refused, BoxliteError::InvalidState(_)),
+                "the caller still reports the refusal: {refused}"
+            );
+            assert_eq!(
+                store.mounts(fx.id.as_str()).unwrap().progress[WORK].state,
+                left,
+                "an entry the removal found {found:?}"
+            );
+        }
     }
 }

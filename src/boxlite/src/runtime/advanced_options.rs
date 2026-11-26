@@ -974,12 +974,7 @@ impl AdvancedBoxOptions {
     /// Aggregate delivery needs a mount namespace the workload cannot modify.
     /// Match the guest's capability resolution: with `add=ALL`, named drops win.
     pub(crate) fn permits_aggregate_mounts(&self) -> bool {
-        if self.privileged {
-            return false;
-        }
-        let Some(caps) = &self.capabilities else {
-            return true;
-        };
+        let caps = self.effective_capabilities();
         let sys_admin = |name: &String| {
             name.eq_ignore_ascii_case("SYS_ADMIN") || name.eq_ignore_ascii_case("CAP_SYS_ADMIN")
         };

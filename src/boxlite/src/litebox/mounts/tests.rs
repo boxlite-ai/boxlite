@@ -13,7 +13,7 @@ use crate::litebox::box_impl::BoxImpl;
 use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
 use crate::litebox::state::{BoxState, BoxStatus};
 use crate::runtime::id::BoxIDMint;
-use crate::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
+use crate::runtime::options::{BoxOptions, BoxliteOptions, MountSpec, RootfsSpec};
 use crate::runtime::rt_impl::{RuntimeImpl, SharedRuntimeImpl};
 use crate::runtime::types::ContainerID;
 use crate::vmm::VmmKind;
@@ -22,17 +22,22 @@ use super::{MountRequest, MountState};
 
 const WORK: &str = "/work";
 
-struct Fixture {
+pub(crate) struct Fixture {
     /// Keeps the runtime's home alive.
     _home: tempfile::TempDir,
-    runtime: SharedRuntimeImpl,
-    id: BoxID,
-    config: BoxConfig,
-    source: PathBuf,
+    pub(crate) runtime: SharedRuntimeImpl,
+    pub(crate) id: BoxID,
+    pub(crate) config: BoxConfig,
+    pub(crate) source: PathBuf,
 }
 
 impl Fixture {
-    fn new(status: BoxStatus) -> Self {
+    pub(crate) fn new(status: BoxStatus) -> Self {
+        Self::with_mounts(status, Vec::new())
+    }
+
+    /// A native box with its locks allocated, created with `mounts`.
+    pub(crate) fn with_mounts(status: BoxStatus, mounts: Vec<MountSpec>) -> Self {
         let home = tempfile::tempdir_in("/tmp").unwrap();
         let runtime = RuntimeImpl::new_for_test_with_features(
             BoxliteOptions {
@@ -53,7 +58,7 @@ impl Fixture {
         let mut state = BoxState::new();
         state.set_lock_id(lock_id);
         state.status = status;
-        if status == BoxStatus::Paused {
+        if matches!(status, BoxStatus::Paused | BoxStatus::Running) {
             state.set_pid(Some(4242));
         }
         let id = BoxIDMint::mint();
@@ -66,6 +71,7 @@ impl Fixture {
             },
             options: BoxOptions {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
+                mounts,
                 ..Default::default()
             },
             engine_kind: VmmKind::Native,
@@ -86,7 +92,7 @@ impl Fixture {
         BoxStore::new(Database::open(&self.runtime.layout.db_dir().join("boxlite.db")).unwrap())
     }
 
-    fn handle(&self) -> BoxImpl {
+    pub(crate) fn handle(&self) -> BoxImpl {
         BoxImpl::new(
             self.config.clone(),
             self.runtime.box_manager.update_box(&self.id).unwrap(),
@@ -95,7 +101,7 @@ impl Fixture {
         )
     }
 
-    fn request(&self) -> MountRequest {
+    pub(crate) fn request(&self) -> MountRequest {
         MountRequest {
             source: self.source.clone(),
             target: WORK.into(),
@@ -225,4 +231,79 @@ async fn an_added_source_is_refused_once_it_is_a_link_in_any_spelling() {
             .unwrap_err();
         assert!(matches!(error, BoxliteError::InvalidState(_)), "{error}");
     }
+}
+
+#[tokio::test]
+async fn a_source_that_overlaps_a_delivered_directory_is_refused() {
+    let fx = Fixture::new(BoxStatus::Stopped);
+    let bx = fx.handle();
+    let (parent, sibling) = (fx.source.join("parent"), fx.source.join("sibling"));
+    let child = parent.join("child");
+    for directory in [&parent, &child, &sibling] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let add = |source: &Path, target: &str| MountRequest {
+        source: source.into(),
+        target: target.into(),
+        read_only: false,
+    };
+    bx.mount_add(add(&parent, "/parent")).await.unwrap();
+
+    // The same directory, below it, and above it: the next start could not
+    // deliver the two as separate shares.
+    std::os::unix::fs::symlink(&parent, fx.source.join("alias")).unwrap();
+    for (source, target) in [
+        (parent.clone(), "/again"),
+        (child.clone(), "/child"),
+        (fx.source.join("alias/child"), "/alias"),
+        (fx.source.clone(), "/above"),
+    ] {
+        let error = bx.mount_add(add(&source, target)).await.unwrap_err();
+        assert!(
+            matches!(error, BoxliteError::InvalidState(_)) && error.to_string().contains("/parent"),
+            "{target}: {error}"
+        );
+        assert_eq!(bx.mount_get(Path::new(target)).await.unwrap(), None);
+    }
+
+    // A directory beside it is delivered on its own.
+    let sibling = bx.mount_add(add(&sibling, "/sibling")).await.unwrap();
+    assert_eq!(sibling.state, MountState::Configured);
+    assert_eq!(bx.mount_list().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_target_at_or_around_the_containers_own_mounts_is_refused() {
+    let fx = Fixture::new(BoxStatus::Stopped);
+    let bx = fx.handle();
+    for target in [
+        "/dev",
+        "/dev/",
+        "/dev/null",
+        "/proc",
+        "/sys/fs",
+        "/tmp",
+        "/tmp/work",
+    ] {
+        let request = MountRequest {
+            target: target.into(),
+            ..fx.request()
+        };
+        let error = bx.mount_add(request).await.unwrap_err();
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{target}: {error}"
+        );
+    }
+
+    // A path that only shares the spelling is another directory.
+    let beside = MountRequest {
+        target: "/tmpwork".into(),
+        ..fx.request()
+    };
+    assert_eq!(
+        bx.mount_add(beside).await.unwrap().state,
+        MountState::Configured
+    );
+    assert_eq!(bx.mount_list().await.unwrap().len(), 1);
 }

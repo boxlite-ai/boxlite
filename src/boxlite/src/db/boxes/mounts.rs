@@ -184,19 +184,10 @@ impl Mounts {
             state,
             declarations: creation.directories,
             unmanaged: creation.unmanaged,
-            changes: saved.changes,
+            changes: BTreeMap::new(),
         };
-        for (target, change) in &this.changes {
-            match change {
-                Some(request) => {
-                    this.declarations.insert(target.clone(), request.clone());
-                }
-                // The target stays free, whatever its source is now.
-                None => {
-                    this.declarations.remove(target);
-                    this.unmanaged.remove(target);
-                }
-            }
+        for (target, change) in saved.changes {
+            this.apply(&target, change);
         }
         Ok(this)
     }
@@ -240,17 +231,30 @@ impl Mounts {
         self.changes.get(target).is_some_and(Option::is_some)
     }
 
+    /// Record what a change did to the target: a directory is declared there,
+    /// or the target is free again, whatever its source is now.
+    fn apply(&mut self, target: &str, change: Option<MountRequest>) {
+        self.changes.insert(target.to_owned(), change.clone());
+        match change {
+            Some(request) => {
+                self.declarations.insert(target.to_owned(), request);
+            }
+            None => {
+                self.declarations.remove(target);
+                self.unmanaged.remove(target);
+            }
+        }
+    }
+
     /// Save a declaration for the next start.
     pub(crate) fn declare(&mut self, request: MountRequest) {
         let target = request.target.to_string_lossy().into_owned();
-        self.changes.insert(target.clone(), Some(request.clone()));
-        self.declarations.insert(target, request);
+        self.apply(&target, Some(request));
     }
 
     /// Drop the declaration at `target`.
     pub(crate) fn forget(&mut self, target: &str) {
-        self.declarations.remove(target);
-        self.changes.insert(target.to_owned(), None);
+        self.apply(target, None);
     }
 
     pub(crate) fn lookup(&self, target: &str) -> Option<MountInfo> {
@@ -317,8 +321,8 @@ impl Mounts {
     /// or fail without naming the target. A directory added through `mount()`
     /// also refuses a link, as it did when it was added.
     pub(crate) fn check_sources(&self) -> BoxliteResult<()> {
-        for request in self.declarations.values() {
-            let added = self.is_added(&request.target.to_string_lossy());
+        for (target, request) in &self.declarations {
+            let added = self.is_added(target);
             let metadata = if added {
                 // A trailing separator or dot would make the kernel follow a final link.
                 std::fs::symlink_metadata(request.source.components().as_path())

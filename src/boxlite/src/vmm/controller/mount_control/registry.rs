@@ -22,6 +22,8 @@ pub(crate) struct Registry {
 struct RegisteredMount {
     mount: ControlMount,
     request_id: Option<MountRequestId>,
+    /// The bytes the record takes in a `ListMounts` reply, JSON escaping included.
+    cost: usize,
 }
 
 fn errno(code: i32) -> io::Error {
@@ -106,8 +108,7 @@ impl Registry {
                     target,
                     read_only,
                 };
-                // Empty List envelope plus worst-case serialized records; the
-                // counter includes JSON escaping without copying existing records.
+                // Empty List envelope plus the serialized record.
                 let cost = record_cost(&mount)?;
                 let envelope = br#"{"Ok":{"mounts":[]}}"#.len();
                 if self.list_bytes + cost + envelope > MAX_MOUNT_BODY {
@@ -123,6 +124,7 @@ impl Registry {
                 self.mounts.push(RegisteredMount {
                     mount: mount.clone(),
                     request_id,
+                    cost,
                 });
                 self.list_bytes += cost;
                 Ok(ControlReply::MountRegistered(mount))
@@ -152,9 +154,7 @@ impl Registry {
                     return Ok(ControlReply::MountUpdated);
                 };
                 filesystem.remove(&export)?;
-                let cost = record_cost(&self.mounts[index].mount)?;
-                self.mounts.remove(index);
-                self.list_bytes -= cost;
+                self.list_bytes -= self.mounts.remove(index).cost;
                 Ok(ControlReply::MountUpdated)
             }
             ControlOp::ResizeDisk { .. } => unreachable!("disk resize is dispatched by the VMM"),

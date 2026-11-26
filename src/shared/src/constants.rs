@@ -57,6 +57,21 @@ pub mod mount_tags {
     pub const SHARED: &str = "BoxLiteShared";
 }
 
+/// Roots of the mounts the guest runtime makes for every container before any
+/// user mount applies. A directory delivered at runtime must not sit at, below
+/// or above one of them: it would hide the container's own mount.
+pub const STANDARD_MOUNT_TARGETS: [&str; 4] = ["/dev", "/proc", "/sys", "/tmp"];
+
+/// Whether the container paths `a` and `b` are equal, or one lies below the
+/// other.
+pub fn paths_overlap(a: &str, b: &str) -> bool {
+    fn below(path: &str, dir: &str) -> bool {
+        path.strip_prefix(dir)
+            .is_some_and(|rest| rest.starts_with('/'))
+    }
+    a == b || below(a, b) || below(b, a)
+}
+
 /// SSH lifecycle limits shared between host and guest.
 pub mod ssh {
     use std::time::Duration;

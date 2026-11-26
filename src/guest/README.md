@@ -26,11 +26,14 @@ later RPCs.
 
 Aggregate Mount and Detach require a container whose capability bounding set
 excludes `CAP_SYS_ADMIN`. Aggregate Mount also requires that the target mount
-namespace belong to the guest agent's user namespace. The agent rejects
-unsupported targets before publishing a mount. Mount replay and Detach must
-refer to the recorded namespace. If init has switched namespaces, the agent
-reports a failed precondition and retains the record. Legacy share delivery is
-read-only.
+namespace belong to the guest agent's user namespace. Before publishing a
+mount, the agent rejects unsupported targets and any destination at, below or
+above `/proc`, `/dev`, `/sys` or `/tmp`, which the runtime mounts itself. Mount
+replay and Detach start in the recorded namespace: if init has switched, the
+agent reports a failed precondition and retains the record. The namespace is
+confirmed again once the mount changed; a failure then leaves the outcome
+unknown, so the agent reports `INTERNAL` and retains the record. Legacy share
+delivery is read-only.
 
 The agent clones the export with `open_tree`, applies recursive read-only flags
 when requested, and moves the clone into the running container's mount namespace
@@ -43,15 +46,16 @@ A `BindMount` with a `record_key` on `Container.Init` is mounted by the containe
 runtime like any whole-directory bind. Once the container is created, before
 init runs, the agent records that mount under the key: it resolves the
 destination through init's `/proc/<pid>/root` the way the runtime did, keeps an
-`O_PATH` descriptor on the mount point, and reads the mount ID. `Detach` then
-handles it like an attached mount. A `BindMount` with `added` set was saved
-while the box was stopped: its target must be empty and reached through no
-symbolic link. Mounts apply in list order, as on Linux: a saved directory may
-sit below an earlier mount and have later ones below it, but it must not
-cover an earlier mount, and no later mount may cover it. Its owner is not
-remapped. `Ping` advertises this with `records_boot_mounts`, which is set only
-where the kernel identifies a mount namespace. A guest without it receives
-the directories created with the box as plain binds.
+`O_PATH` descriptor on the mount point, and reads the mount ID. It also notes
+where the mounts without a record sit, so a later Mount cannot cover them.
+`Detach` then handles it like an attached mount. A `BindMount` with `added` set
+was saved while the box was stopped: its target must be empty and reached
+through no symbolic link. Mounts apply in list order, as on Linux: a saved
+directory may sit below an earlier mount and have later ones below it, but it
+must not cover an earlier mount, and no later mount may cover it. Its owner is
+not remapped. `Ping` advertises this with `records_boot_mounts`, which is set
+only where the kernel identifies a mount namespace. A guest without it
+receives the directories created with the box as plain binds.
 
 Two recorded mounts that resolve to one mount, through an image link between
 their destinations or two spellings of one target, fail `Container.Init`:

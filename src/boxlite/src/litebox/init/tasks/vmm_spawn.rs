@@ -256,8 +256,6 @@ async fn build_config(
         );
     }
     let mut container_mounts = container_mgr.build_container_mounts();
-    // The container runtime mounts each declared directory once. The guest
-    // records those mounts, so an online removal can select them.
     let confirmed = declared
         .as_ref()
         .map(|declared| declared.record(&mut container_mounts, &options.advanced))

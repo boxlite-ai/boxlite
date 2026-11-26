@@ -30,6 +30,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use boxlite_shared::constants::{paths_overlap, STANDARD_MOUNT_TARGETS};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::fcntl::OFlag;
 use nix::libc;
@@ -201,9 +202,19 @@ impl Target {
         Ok(id)
     }
 
-    fn check_current_namespace(&self, id: NonZeroU64) -> BoxliteResult<()> {
-        Self::open(self.pid)?.check_namespace(Some(id))?;
-        Ok(())
+    /// Confirm, once the mount changed, that the process is still in the
+    /// namespace `expected`: the held descriptor can outlive the process's
+    /// membership in it. A failure here leaves the outcome unknown, so it is
+    /// no refusal: the caller undoes the mount or retries.
+    fn check_after_change(&self, step: &'static str, expected: NonZeroU64) -> BoxliteResult<()> {
+        Self::open(self.pid)
+            .and_then(|current| current.check_namespace(Some(expected)))
+            .map(|_| ())
+            .map_err(|error| {
+                BoxliteError::Internal(format!(
+                    "{step}, but the container's mount namespace could not be confirmed: {error}"
+                ))
+            })
     }
 }
 
@@ -302,6 +313,11 @@ impl Attacher {
             .is_some_and(|record| record.tree.is_some())
     }
 
+    #[cfg(test)]
+    pub(crate) fn unrecorded(&self) -> &[PathBuf] {
+        &self.unrecorded
+    }
+
     /// The caller holds the container's attacher write lock across the syscall
     /// and its metadata update. Tombstones outlive canceled RPC callers.
     pub(crate) fn attach_runtime(
@@ -312,6 +328,16 @@ impl Attacher {
         destination: &Path,
         read_only: bool,
     ) -> BoxliteResult<RuntimeAttach> {
+        // The runtime mounts its own filesystems before any user mount applies.
+        if let Some(root) = STANDARD_MOUNT_TARGETS
+            .into_iter()
+            .find(|root| paths_overlap(&destination.to_string_lossy(), root))
+        {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "{} is reserved for the container's own mount at {root}",
+                destination.display()
+            )));
+        }
         if let Some(record) = self.runtime.get(key) {
             if record.destination != destination
                 || (record.tree.is_some()
@@ -328,7 +354,7 @@ impl Attacher {
             };
             let namespace_id = target.check_namespace(record.namespace_id)?;
             self.check_runtime(target, destination, Mode::Verify(tree.id))?;
-            target.check_current_namespace(namespace_id)?;
+            target.check_after_change("the mount is still in place", namespace_id)?;
             return Ok(RuntimeAttach {
                 added: false,
                 confirmation: Ok(()),
@@ -362,7 +388,8 @@ impl Attacher {
         );
         Ok(RuntimeAttach {
             added: true,
-            confirmation: confirmation.and_then(|()| target.check_current_namespace(namespace_id)),
+            confirmation: confirmation
+                .and_then(|()| target.check_after_change("the mount was attached", namespace_id)),
         })
     }
 
@@ -498,8 +525,7 @@ impl Attacher {
                 return Err(error);
             }
         }
-        // The helper's namespace FD can outlive init's membership in it.
-        target.check_current_namespace(namespace_id)?;
+        target.check_after_change("the mount was detached", namespace_id)?;
         let record = self.runtime.get_mut(key).expect("checked incarnation");
         record.tree = None;
         Ok(true)
@@ -1966,5 +1992,69 @@ mod tests {
             panic!("opened the namespace of a process that has exited");
         };
         assert!(matches!(error, BoxliteError::NotFound(_)), "{error}");
+    }
+
+    /// The target of a container whose init already exited.
+    fn gone_target(namespace: File) -> Target {
+        let mut exited = std::process::Command::new("true").spawn().unwrap();
+        let pid = Pid::from_raw(i32::try_from(exited.id()).unwrap());
+        exited.wait().unwrap();
+        Target { pid, namespace }
+    }
+
+    #[test]
+    fn a_runtime_mount_never_covers_a_mount_the_container_needs() {
+        let target = Target::open(nix::unistd::getpid()).unwrap();
+        let mut attacher = Attacher::default();
+        // At, below and above what the runtime mounts itself.
+        for destination in ["/dev", "/dev/null", "/proc", "/sys/fs", "/tmp", "/tmp/work"] {
+            let error = attacher
+                .attach_runtime(
+                    "reserved",
+                    Path::new("/missing"),
+                    &target,
+                    Path::new(destination),
+                    false,
+                )
+                .unwrap_err();
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "{destination}: {error}"
+            );
+        }
+        assert!(attacher.runtime.is_empty());
+        // A path that only shares the spelling is another directory: the attach goes on.
+        let error = attacher
+            .attach_runtime(
+                "inside",
+                Path::new("/missing"),
+                &target,
+                Path::new("/tmpwork"),
+                false,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&error, BoxliteError::Storage(message) if message.contains("clone")),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_namespace_check_after_the_mount_changed_is_no_refusal() {
+        let own = Target::open(nix::unistd::getpid()).unwrap();
+        let namespace_id = own.namespace_id().unwrap();
+        own.check_after_change("the mount was attached", namespace_id)
+            .unwrap();
+
+        // Init is gone, so whether the mount reached the container stays
+        // unknown. The caller must undo it, not read a refusal.
+        let error = gone_target(File::open("/proc/self/ns/mnt").unwrap())
+            .check_after_change("the mount was detached", namespace_id)
+            .unwrap_err();
+        assert!(
+            matches!(&error, BoxliteError::Internal(message)
+                if message.contains("the mount was detached") && message.contains("gone")),
+            "{error}"
+        );
     }
 }

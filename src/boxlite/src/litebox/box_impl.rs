@@ -415,14 +415,14 @@ impl BoxImpl {
         let background_start_finished = Arc::clone(&self.background_start_finished);
 
         tokio::spawn(async move {
-            let result = Self::ensure_container_started_owned(
+            match Self::ensure_container_started_owned(
                 container_start,
                 guest_session,
                 container_id,
                 shutdown_token,
             )
-            .await;
-            match result {
+            .await
+            {
                 Ok(true) => {
                     for listener in &event_listeners {
                         listener.on_box_started(&box_id);

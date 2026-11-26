@@ -548,6 +548,10 @@ on a target the guest creates when missing; a target with entries, or one
 reached through a symbolic link, is refused. Adding at an occupied target
 returns `InvalidState`, and so does a target with another mount below it: the
 new mount would cover that one. A target below an existing mount is allowed.
+A target at, below or above `/proc`, `/dev`, `/sys` or `/tmp` returns
+`InvalidArgument`: the container mounts those itself. A source that is, holds
+or lies inside a delivered directory returns `InvalidState`: the next start
+delivers each directory as its own share, and refuses overlapping ones.
 
 On a stopped or newly created box, `add` returns `Configured` and leaves the
 box idle. The next start delivers each saved directory before the first user
@@ -558,7 +562,8 @@ another directory through an image link or two spellings of one target. You
 can remove its declaration even if the host directory has disappeared; the
 target is then free for good. Directory binds from either creation format,
 `BoxOptions.volumes` or `BoxOptions.mounts`, can also be queried and removed on
-a supported box.
+a supported box. A clone or an export carries every committed `add` and
+`remove`.
 
 A guest agent or kernel that cannot record mounts still starts a box whose
 directories were all created with it: they stay plain binds, so `remove` asks
@@ -569,10 +574,11 @@ On a running box, `add` returns `Mounted` after guest confirmation and the
 SQLite commit. `remove` returns `()` after the guest detaches the mount, the
 shim retires its export and the runtime commits the removal. Open file and
 directory descriptors stay usable. Remove nested mounts deepest first: while
-one sits below the target, `remove` returns `InvalidState` and the entry
-stays `Mounted`. A mount the box was created with below the target, such as a
-file bind, keeps the directory mounted until the box stops. After success
-`get(target)` returns `None` and a second `remove(target)` returns `NotFound`.
+one sits below the target, `remove` returns `InvalidState` and the entry is
+again what the removal found: `Mounted`, or `Preparing` for an interrupted
+add. A mount the box was created with below the target, such as a file bind,
+keeps the directory mounted until the box stops. After success `get(target)`
+returns `None` and a second `remove(target)` returns `NotFound`.
 
 `list` and `get` read the last SQLite commit while delivery is in flight.
 `Preparing` identifies a pending add and `Detaching` identifies pending cleanup.

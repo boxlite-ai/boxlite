@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::backend::BoxBackend;
 #[cfg(all(test, feature = "native", target_os = "linux", target_arch = "x86_64"))]
-mod tests;
+pub(crate) mod tests;
 
 /// A host directory and its destination in the container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

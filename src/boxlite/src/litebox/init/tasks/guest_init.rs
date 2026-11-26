@@ -51,7 +51,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (guest_session, volume_mgr, rootfs_init, mut container_mounts, bootstrap) = {
+        let (guest_session, volume_mgr, rootfs_init, container_mounts, bootstrap) = {
             let mut ctx = ctx.lock().await;
             let guest_session = ctx
                 .guest_session
@@ -130,7 +130,6 @@ impl PipelineTask<InitCtx> for GuestInitTask {
         if !records {
             // The guest got plain binds, so no directory of this run has an
             // identity an online removal could select.
-            unrecord(&mut container_mounts);
             ctx.confirmed.clear();
         }
         ctx.guest_session = Some(guest_session);

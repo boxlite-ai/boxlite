@@ -653,3 +653,38 @@ async fn a_directory_may_not_cover_a_mount_the_box_already_has() {
     })
     .await;
 }
+
+#[tokio::test]
+#[ignore = "requires native runtime, KVM and VMM_KERNEL"]
+async fn overlapping_host_directories_are_refused_while_the_box_runs() {
+    scenario(async |lab| {
+        let parent = source("parent");
+        let child = parent.path().join("child");
+        std::fs::create_dir(&child).unwrap();
+        let bx = lab.create(options()).await;
+        bx.start().await.unwrap();
+        bx.mount()
+            .add(request(parent.path(), "/parent", false))
+            .await
+            .unwrap();
+
+        // The next start delivers each directory as its own share, and refuses
+        // two shares whose roots overlap.
+        for (source, target) in [(parent.path(), "/again"), (child.as_path(), "/child")] {
+            let error = bx
+                .mount()
+                .add(request(source, target, false))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, BoxliteError::InvalidState(_))
+                    && error.to_string().contains("/parent"),
+                "{target}: {error}"
+            );
+            assert_eq!(bx.mount().get(target).await.unwrap(), None);
+        }
+        demand(&bx, "test ! -e /again && test ! -e /child").await;
+        bx.stop().await.unwrap();
+    })
+    .await;
+}
