@@ -19,6 +19,7 @@ import (
 var (
 	_ interface {
 		Export(context.Context, string) (string, error)
+		ExportWithOptions(context.Context, string, ExportOptions) (string, error)
 	} = (*Box)(nil)
 
 	_ interface {
@@ -154,6 +155,22 @@ func TestArchiveArgumentValidation(t *testing.T) {
 			},
 		},
 		{
+			name:      "empty export destination with options",
+			parameter: "export destination",
+			call: func() error {
+				_, err := box.ExportWithOptions(context.Background(), "", ExportOptions{IncludeMemory: true})
+				return err
+			},
+		},
+		{
+			name:      "NUL export destination with options",
+			parameter: "export destination",
+			call: func() error {
+				_, err := box.ExportWithOptions(context.Background(), "archive\x00ignored", ExportOptions{IncludeMemory: true})
+				return err
+			},
+		},
+		{
 			name:      "empty archive path",
 			parameter: "archive path",
 			call: func() error {
@@ -196,6 +213,48 @@ func TestArchiveArgumentValidation(t *testing.T) {
 				t.Fatalf("error %q does not identify %q", err, tt.parameter)
 			}
 		})
+	}
+}
+
+func TestExportWithOptionsIncludeMemoryUnsupportedOverREST(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/boxes/source-box" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"box_id":"source-box","name":"source-name","status":"stopped",
+			"created_at":"2026-08-07T00:00:00Z","updated_at":"2026-08-07T00:00:00Z",
+			"pid":null,"image":"source-image","cpus":1,"memory_mib":256
+		}`)
+	}))
+	defer server.Close()
+
+	runtime, err := NewRest(BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatalf("NewRest: %v", err)
+	}
+	defer runtime.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	box, err := runtime.Get(ctx, "source-box")
+	if err != nil {
+		t.Fatalf("Get source box: %v", err)
+	}
+	defer box.Close()
+	beforeExport := requests.Load()
+
+	dest := filepath.Join(t.TempDir(), "archive.boxlite")
+	path, err := box.ExportWithOptions(ctx, dest, ExportOptions{IncludeMemory: true})
+	var boxliteErr *Error
+	if path != "" || !errors.As(err, &boxliteErr) || boxliteErr.Code != ErrUnsupported {
+		t.Errorf("ExportWithOptions = (%q, %v), want empty path and ErrUnsupported", path, err)
+	}
+	if got := requests.Load() - beforeExport; got != 0 {
+		t.Errorf("ExportWithOptions made %d HTTP requests, want 0", got)
 	}
 }
 

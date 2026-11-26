@@ -258,6 +258,11 @@ typedef void (*CAgentEventsOpenCb)(struct CAgentEvents*, const CBoxliteError*, v
 // Box export completion.
 typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
 
+typedef struct CExportOptions {
+  // Non-zero includes guest memory and VM state; zero exports disk only.
+  int include_memory;
+} CExportOptions;
+
 typedef struct RuntimeHandle CBoxliteRuntime;
 
 // Runtime import completion.
@@ -1101,7 +1106,7 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
 
-// Submit a box export.
+// Submit a disk-only box export.
 //
 // On success, the callback owns the returned path and must release it with
 // `boxlite_free_string`. The archive itself is never deleted by this bridge.
@@ -1110,6 +1115,17 @@ enum BoxliteErrorCode boxlite_box_export(CBoxHandle *handle,
                                          CBoxExportCb cb,
                                          void *user_data,
                                          CBoxliteError *out_error);
+
+// Submit a box export with options; pass NULL for disk-only export.
+//
+// Options are copied before this function returns. On success, the callback
+// owns the returned path and must release it with `boxlite_free_string`.
+enum BoxliteErrorCode boxlite_box_export_with_options(CBoxHandle *handle,
+                                                      const char *dest,
+                                                      const struct CExportOptions *options,
+                                                      CBoxExportCb cb,
+                                                      void *user_data,
+                                                      CBoxliteError *out_error);
 
 // Submit a trusted archive import.
 //

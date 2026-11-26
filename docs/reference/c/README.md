@@ -41,6 +41,7 @@ The SDK provides two API styles:
 - [Native API](#native-api)
   - [Runtime Management](#runtime-management)
   - [Box Management](#box-management)
+  - [Archive export](#archive-export)
   - [Managed checkpoints](#managed-checkpoints)
   - [Network Tunnels](#network-tunnels)
   - [Command Execution](#command-execution)
@@ -697,6 +698,28 @@ void boxlite_box_free(CBoxHandle* handle);
 Safe to call with NULL. Use when you need to release a box handle without freeing the entire runtime.
 
 ---
+
+### Archive export
+
+`boxlite_box_export` submits a disk-only `.boxlite` archive export. To pass
+options, use `boxlite_box_export_with_options` with a `CExportOptions` pointer:
+
+```c
+CExportOptions options = { .include_memory = 1 };
+BoxliteErrorCode code = boxlite_box_export_with_options(
+    box, dest, &options, callback, user_data, &error);
+```
+
+`NULL` options or `include_memory = 0` selects disk-only export. Any nonzero
+value requests a full checkpoint with guest memory and VM state. The runtime's
+full-checkpoint archive creation is currently a placeholder that returns
+`Unsupported` if reached. REST rejects the request with `Unsupported` without
+sending an HTTP request.
+
+The SDK copies the options before returning. After a successful submission,
+completion (including runtime errors) is delivered through the callback. On
+success, release the callback's archive path with `boxlite_free_string`; the
+caller owns the archive file itself.
 
 ### Managed checkpoints
 

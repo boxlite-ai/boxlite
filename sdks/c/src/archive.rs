@@ -43,7 +43,13 @@ impl Drop for TokioRuntimeDropGuard {
     }
 }
 
-/// Submit a box export.
+#[repr(C)]
+pub struct CExportOptions {
+    /// Non-zero includes guest memory and VM state; zero exports disk only.
+    pub include_memory: std::os::raw::c_int,
+}
+
+/// Submit a disk-only box export.
 ///
 /// On success, the callback owns the returned path and must release it with
 /// `boxlite_free_string`. The archive itself is never deleted by this bridge.
@@ -55,7 +61,25 @@ pub unsafe extern "C" fn boxlite_box_export(
     user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    unsafe { export_box(handle, dest, cb, user_data, out_error) }
+    unsafe {
+        boxlite_box_export_with_options(handle, dest, std::ptr::null(), cb, user_data, out_error)
+    }
+}
+
+/// Submit a box export with options; pass NULL for disk-only export.
+///
+/// Options are copied before this function returns. On success, the callback
+/// owns the returned path and must release it with `boxlite_free_string`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_export_with_options(
+    handle: *mut CBoxHandle,
+    dest: *const c_char,
+    options: *const CExportOptions,
+    cb: CBoxExportCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe { export_box(handle, dest, options, cb, user_data, out_error) }
 }
 
 /// Submit a trusted archive import.
@@ -84,9 +108,14 @@ pub unsafe extern "C" fn boxlite_runtime_import(
     }
 }
 
+unsafe fn export_includes_memory(options: *const CExportOptions) -> bool {
+    unsafe { options.as_ref() }.is_some_and(|options| options.include_memory != 0)
+}
+
 unsafe fn export_box(
     handle: *mut BoxHandle,
     dest: *const c_char,
+    options: *const CExportOptions,
     cb: CBoxExportCb,
     user_data: *mut c_void,
     out_error: *mut FFIError,
@@ -106,6 +135,7 @@ unsafe fn export_box(
         };
         let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
+        let include_memory = export_includes_memory(options);
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();
         let queue = handle_ref.queue.clone();
@@ -113,7 +143,7 @@ unsafe fn export_box(
 
         handle_ref.tokio_rt.spawn(async move {
             let result = lite
-                .export(ExportOptions::default(), &dest)
+                .export(ExportOptions { include_memory }, &dest)
                 .await
                 .and_then(|archive| archive_path_to_c_string(archive.path()));
             push_event(
@@ -317,6 +347,45 @@ mod tests {
             )
         };
         assert_invalid_argument(code, &mut error, "cb");
+    }
+
+    #[test]
+    fn export_options_map_null_and_zero_to_disk_only() {
+        assert!(!unsafe { export_includes_memory(ptr::null()) });
+        for include_memory in [0, 1, 2, -1] {
+            let options = CExportOptions { include_memory };
+            assert_eq!(
+                unsafe { export_includes_memory(&options) },
+                include_memory != 0
+            );
+        }
+    }
+
+    #[test]
+    fn export_with_options_rejects_invalid_arguments_synchronously() {
+        let options = CExportOptions { include_memory: 1 };
+        let dangling_handle = ptr::NonNull::<BoxHandle>::dangling().as_ptr();
+        let mut error = FFIError::default();
+        let dest = c"archive.boxlite".as_ptr();
+        let cb: CBoxExportCb = Some(noop_export_cb);
+        for (handle, dest, cb, parameter) in [
+            (ptr::null_mut(), dest, cb, "handle"),
+            (dangling_handle, ptr::null(), cb, "dest"),
+            (dangling_handle, c"".as_ptr(), cb, "dest"),
+            (dangling_handle, dest, None, "cb"),
+        ] {
+            let code = unsafe {
+                boxlite_box_export_with_options(
+                    handle,
+                    dest,
+                    &options,
+                    cb,
+                    ptr::null_mut(),
+                    &mut error,
+                )
+            };
+            assert_invalid_argument(code, &mut error, parameter);
+        }
     }
 
     #[test]
