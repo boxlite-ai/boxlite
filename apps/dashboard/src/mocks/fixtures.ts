@@ -93,13 +93,12 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
   }
 }
 
+const mockQuery = new URLSearchParams(globalThis.location?.search)
+
 export const MOCK_ORGANIZATION: Organization = {
   id: MOCK_ORGANIZATION_ID,
-  appHostingPermissions: ['read:apps', 'write:apps', 'delete:apps'],
-  name:
-    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'trial-onboarding'
-      ? 'Personal workspace'
-      : 'Mock Org',
+  appHostingPermissions: mockQuery.get('appHosting') === 'restricted' ? [] : ['read:apps', 'write:apps', 'delete:apps'],
+  name: mockQuery.get('preview') === 'trial-onboarding' ? 'Personal workspace' : 'Mock Org',
   createdBy: MOCK_USER.sub,
   isDefaultForAuthenticatedUser: true,
   personal: true,
@@ -239,7 +238,7 @@ export const MOCK_BOXES: Box[] = [
 ]
 
 // Opt-in fleet fixtures survive reloads without changing the default small account.
-if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('preview') === 'fleet') {
+if (mockQuery.get('preview') === 'fleet') {
   for (let index = 0; index < 7; index++) {
     const running = index < 4
     MOCK_BOXES.push(

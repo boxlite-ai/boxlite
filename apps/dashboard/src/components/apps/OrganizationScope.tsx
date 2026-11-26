@@ -1,13 +1,11 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
 import { AppHostingAccess } from './AppHostingAccess'
-import { AppHostingRequest } from './AppHostingRequest'
 import { RoutePath } from '@/enums/RoutePath'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { organizationAllowsScope } from '@/lib/app-hosting-permissions'
-import { hasSeenAppHostingIntro, setAppHostingIntroSeen } from '@/lib/apps/intro'
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 
 /** Open forms belong to the organization in which they were started. */
@@ -15,7 +13,6 @@ export function OrganizationScope({ children }: { children: ReactNode }) {
   const { selectedOrganization, authenticatedUserHasPermission, organizationMembersStatus } = useSelectedOrganization()
   const organizationId = selectedOrganization?.id
   const { pathname } = useLocation()
-  const [introSeen, setIntroSeen] = useState(hasSeenAppHostingIntro)
   const previous = useRef(organizationId)
   const changed = !!previous.current && previous.current !== organizationId
   useEffect(() => {
@@ -25,7 +22,7 @@ export function OrganizationScope({ children }: { children: ReactNode }) {
   if (changed && pathname !== RoutePath.APPS) return <Navigate to={RoutePath.APPS} replace />
   const readApps = OrganizationRolePermissionsEnum.READ_APPS
   if (!organizationAllowsScope(readApps, selectedOrganization.appHostingPermissions))
-    return <AppHostingRequest key={selectedOrganization.id} organizationId={selectedOrganization.id} />
+    return <AppHostingAccess key={selectedOrganization.id} organizationId={selectedOrganization.id} />
   if (organizationMembersStatus === 'loading') return <p className="p-6">Loading App permissions…</p>
   if (organizationMembersStatus === 'error')
     return (
@@ -38,15 +35,6 @@ export function OrganizationScope({ children }: { children: ReactNode }) {
       <p role="alert" className="p-6">
         Ask your organization administrator for App read permission to view Apps.
       </p>
-    )
-  if (!introSeen)
-    return (
-      <AppHostingAccess
-        onContinue={() => {
-          setAppHostingIntroSeen(true)
-          setIntroSeen(true)
-        }}
-      />
     )
   return <Fragment key={organizationId}>{children}</Fragment>
 }

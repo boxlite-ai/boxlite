@@ -4,7 +4,6 @@
 import { AgentHandoffPanel } from '@/components/apps/AgentHandoffPanel'
 import { OrganizationScope } from '@/components/apps/OrganizationScope'
 import { DomainsTab } from '@/components/apps/tabs/DomainsTab'
-import { setAppHostingIntroSeen } from './intro'
 import type { AppDetail } from './types'
 import { ApiClient } from '@/api/apiClient'
 import { useCreateApp } from '@/hooks/mutations/useAppMutations'
@@ -74,7 +73,6 @@ describe('cloud App organization isolation', () => {
     state.organization = { id: 'org-a' }
     state.organizationAppPermissions = ['read:apps']
     state.permitted = true
-    setAppHostingIntroSeen(true)
     requests = []
     respond = async (request) => response(request, [{ id: 'one', name: 'current-app' }])
     axios.defaults.adapter = async (request) => {
@@ -91,7 +89,6 @@ describe('cloud App organization isolation', () => {
     act(() => root.unmount())
     cache.clear()
     vi.unstubAllEnvs()
-    sessionStorage.clear()
     axios.defaults.adapter = adapter
     if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard)
     else Reflect.deleteProperty(navigator, 'clipboard')
@@ -317,7 +314,6 @@ describe('cloud App organization isolation', () => {
   })
 
   it('directs a member without read permission to their administrator in an invited organization', () => {
-    setAppHostingIntroSeen(false)
     state.permitted = false
     function Management() {
       useAppsQuery()
@@ -358,12 +354,13 @@ describe('cloud App organization isolation', () => {
         </OrganizationScope>,
         path,
       )
+      expect(host.textContent).toContain('From insight to a cloud app.')
       expect(host.textContent).toContain('experimental feature')
       expect(host.textContent).toContain('the BoxLite team will contact you by email')
       expect(host.textContent).not.toContain('App management')
       expect(requests).toHaveLength(0)
       const button = host.querySelector('button')!
-      expect(button.textContent).toBe('Request access')
+      expect(button.textContent).toBe('Get early access')
       await act(async () => button.click())
       await settled()
       expect(button.disabled).toBe(true)
@@ -400,7 +397,7 @@ describe('cloud App organization isolation', () => {
     await act(async () => finish())
     await settled()
     expect(host.querySelector('[role="status"]')).toBeNull()
-    expect(host.querySelector('button')?.textContent).toBe('Request access')
+    expect(host.querySelector('button')?.textContent).toBe('Get early access')
     respond = async (request) => ({ ...response(request, ''), status: 204 })
     await act(async () => host.querySelector('button')!.click())
     await settled()
@@ -425,29 +422,33 @@ describe('cloud App organization isolation', () => {
     expect(host.querySelector('[role="status"]')).toBeNull()
   })
 
-  it('shows the introduction for a mock fixture URL in a non-mock build', () => {
+  it('uses organization permissions for an early access link with a mock query in a non-mock build', () => {
     vi.stubEnv('VITE_ENABLE_MOCKING', 'false')
-    sessionStorage.clear()
+    state.organizationAppPermissions = []
+    state.permitted = false
     render(
       <OrganizationScope>
         <button>New app</button>
       </OrganizationScope>,
       '/dashboard/apps?appHosting=enabled',
     )
-    expect(host.textContent).toContain('Get early access')
+    expect(host.querySelector('button')?.textContent).toBe('Get early access')
     expect(host.textContent).not.toContain('New app')
   })
 
-  it('remembers the introduction across App mounts when browser storage is unavailable', () => {
-    sessionStorage.clear()
-    const save = vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
-      throw new DOMException('Storage unavailable', 'QuotaExceededError')
-    })
-    render(<OrganizationScope>App list</OrganizationScope>)
-    act(() => host.querySelector('button')!.click())
-    expect(host.textContent).toBe('App list')
-    render(<OrganizationScope key="detail">App details</OrganizationScope>)
+  it('opens App details as soon as the requested read grant is available', async () => {
+    state.organizationAppPermissions = []
+    state.permitted = false
+    respond = async (request) => ({ ...response(request, ''), status: 204 })
+    const showDetails = () => render(<OrganizationScope>App details</OrganizationScope>, '/dashboard/apps/app-one')
+    showDetails()
+    await act(async () => host.querySelector('button')!.click())
+    await settled()
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('Request sent')
+    state.organizationAppPermissions = ['read:apps']
+    state.permitted = true
+    showDetails()
     expect(host.textContent).toBe('App details')
-    save.mockRestore()
+    expect(requests).toHaveLength(1)
   })
 })

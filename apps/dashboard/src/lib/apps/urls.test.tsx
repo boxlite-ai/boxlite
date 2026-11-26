@@ -5,7 +5,6 @@ import { ApiClient } from '@/api/apiClient'
 import AppDetailsPage from '@/components/apps/AppDetails'
 import { LiveCard } from '@/components/apps/OverviewHero'
 import AppsPage from '@/pages/Apps'
-import { setAppHostingIntroSeen } from './intro'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import axios, { type AxiosResponse, type InternalAxiosRequestConfig } from 'axios'
 import { act, type ComponentProps, type ReactNode } from 'react'
@@ -124,7 +123,6 @@ describe('cloud App URL availability', () => {
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
-    setAppHostingIntroSeen(true)
     vi.stubGlobal(
       'ResizeObserver',
       class {
@@ -163,21 +161,15 @@ describe('cloud App URL availability', () => {
     document.body.innerHTML = ''
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
-    sessionStorage.clear()
   })
 
   it.each([
     { mocking: 'false', url: null },
     { mocking: 'true', url: APP_URL },
-  ])('opens early access and follows an App card with mocking=$mocking and URL $url', async ({ mocking, url }) => {
+  ])('an invited reader follows an App card with mocking=$mocking and URL $url', async ({ mocking, url }) => {
     vi.stubEnv('VITE_ENABLE_MOCKING', mocking)
-    sessionStorage.clear()
     app = detail(url)
     render()
-    const button = host.querySelector('button')!
-    expect(button.textContent).toBe('Get early access')
-    expect(requests).toHaveLength(0)
-    act(() => button.click())
     await settled()
     expect(host.textContent).toContain('New app')
     const link = host.querySelector<HTMLAnchorElement>('a[aria-label="Open demo"]')!
@@ -198,13 +190,8 @@ describe('cloud App URL availability', () => {
     ])
   })
 
-  it('opens early access directly at the linked App and environment', async () => {
-    vi.stubEnv('VITE_ENABLE_MOCKING', 'false')
-    sessionStorage.clear()
+  it('opens the linked App and environment immediately for an invited reader', async () => {
     render('/dashboard/apps/demo?env=staging')
-    const button = host.querySelector('button')!
-    expect(button.textContent).toBe('Get early access')
-    act(() => button.click())
     await settled()
     expect(host.querySelector('h1')?.textContent).toBe('demo')
     expect(requests.find((request) => request.url === '/v1/org-a/apps/demo/view')?.params).toEqual({ env: 'staging' })
