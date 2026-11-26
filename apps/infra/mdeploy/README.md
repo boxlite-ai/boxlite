@@ -131,7 +131,10 @@ or [AWS runner convergence](../docs/aws/runners.md) for the update mechanism and
 ### Runner process environment
 
 `BOXLITE_RUNNER_ENV` is an optional JSON object in mstage's `runner` environment
-group. From `apps/infra`, for example:
+group. For the `stage` environment, `mdeploy` injects `KRUN_USE_THP="1"` by
+default while preserving other keys; explicitly setting `KRUN_USE_THP` (for
+example `"0"`) overrides that default. Other stages (`dev`, `prod`) receive no
+default `KRUN_USE_THP`. From `apps/infra`, for example:
 
 ```sh
 npm run mstage env set -- --stage dev --json 'BOXLITE_RUNNER_ENV={"BOXLITE_EXPERIMENTAL":"nested-virtualization"}'

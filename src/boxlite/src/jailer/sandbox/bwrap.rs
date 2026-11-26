@@ -157,6 +157,7 @@ impl Sandbox for BwrapSandbox {
         if let Ok(rust_backtrace) = std::env::var("RUST_BACKTRACE") {
             bwrap_cmd.setenv("RUST_BACKTRACE", rust_backtrace);
         }
+        apply_thp_env(&mut bwrap_cmd, std::env::var_os("KRUN_USE_THP").as_deref());
 
         bwrap_cmd.chdir("/");
 
@@ -177,6 +178,14 @@ impl Sandbox for BwrapSandbox {
 
     fn name(&self) -> &'static str {
         "bwrap"
+    }
+}
+
+/// Forward `KRUN_USE_THP=1` into the sanitized sandbox environment only when
+/// explicitly enabled on the host, avoiding unvalidated values inside bwrap.
+fn apply_thp_env(bwrap_cmd: &mut bwrap::BwrapCommand, krun_use_thp: Option<&std::ffi::OsStr>) {
+    if krun_use_thp == Some(std::ffi::OsStr::new("1")) {
+        bwrap_cmd.setenv("KRUN_USE_THP", "1");
     }
 }
 
@@ -387,6 +396,39 @@ mod tests {
             let sibling_out = sibling_cmd.output().expect("execute sibling probe");
             assert!(!sibling_out.status.success());
             assert!(sibling_out.stdout.is_empty());
+        }
+    }
+
+    #[test]
+    fn apply_thp_env_forwards_only_explicit_one() {
+        use std::ffi::OsStr;
+
+        let build_args = |val: Option<&OsStr>| -> Vec<String> {
+            let mut bwrap_cmd = bwrap::BwrapCommand::new();
+            apply_thp_env(&mut bwrap_cmd, val);
+            bwrap_cmd.get_args().to_vec()
+        };
+
+        let enabled_args = build_args(Some(OsStr::new("1")));
+        assert!(
+            enabled_args
+                .windows(3)
+                .any(|w| w[0] == "--setenv" && w[1] == "KRUN_USE_THP" && w[2] == "1")
+        );
+
+        for disabled in [
+            None,
+            Some(OsStr::new("")),
+            Some(OsStr::new("0")),
+            Some(OsStr::new("true")),
+        ] {
+            let args = build_args(disabled);
+            assert!(
+                !args
+                    .windows(2)
+                    .any(|w| w[0] == "--setenv" && w[1] == "KRUN_USE_THP"),
+                "unexpected KRUN_USE_THP for {disabled:?}"
+            );
         }
     }
 }

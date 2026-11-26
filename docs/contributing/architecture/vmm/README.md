@@ -29,7 +29,10 @@ their project; their revisions are pinned under [References](#references).
 Submodule revision `27c8308` brings Transparent Huge Pages for Linux guest boot
 RAM (`boxlite-ai/libkrun#17`), underlying checkpoint and virtio-mem updates, and
 checkpoint vsock/musl fixes (`boxlite-ai/libkrun#18`). On `stage`, the
-`libkrun-sys` Rust FFI binding surface preserves its existing contract.
+`libkrun-sys` Rust FFI binding surface preserves its existing contract;
+`BwrapSandbox` forwards `KRUN_USE_THP=1` to `boxlite-shim` when set on the
+host, and `mdeploy` injects `KRUN_USE_THP="1"` by default for `stage`
+runners.
 
 ## Scope
 

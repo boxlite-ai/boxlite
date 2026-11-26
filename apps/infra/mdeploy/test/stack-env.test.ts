@@ -339,3 +339,61 @@ test('runner JSON cannot shadow direct values, secrets, or generated secret addr
     )
   }
 })
+
+test('stage injects KRUN_USE_THP=1 into BOXLITE_RUNNER_ENV by default without overriding explicit values', () => {
+  const withRunnerEnv: GroupDeclaration = {
+    ...declaration,
+    groups: { ...declaration.groups, runner: ['BOXLITE_RUNNER_ENV'] },
+    optional: { runner: ['BOXLITE_RUNNER_ENV'] },
+  }
+  const readStage = (stage: string, extra: Record<string, string> = {}) =>
+    readStackEnvironment({
+      environment: { ...complete, ...extra },
+      declaration: withRunnerEnv,
+      app: 'boxlite-app',
+      stage,
+      region: 'us-central1',
+      home: 'gcp',
+    })
+
+  // Unset on stage -> defaults to KRUN_USE_THP="1"
+  assert.deepEqual(JSON.parse(readStage('stage').runnerEnvironment.BOXLITE_RUNNER_ENV ?? ''), {
+    KRUN_USE_THP: '1',
+  })
+
+  // Existing keys are preserved alongside the default
+  assert.deepEqual(
+    JSON.parse(
+      readStage('stage', { BOXLITE_RUNNER_ENV: JSON.stringify({ FOO: 'bar' }) }).runnerEnvironment.BOXLITE_RUNNER_ENV ??
+        '',
+    ),
+    { KRUN_USE_THP: '1', FOO: 'bar' },
+  )
+
+  // Explicit KRUN_USE_THP overrides the stage default
+  assert.deepEqual(
+    JSON.parse(
+      readStage('stage', { BOXLITE_RUNNER_ENV: JSON.stringify({ KRUN_USE_THP: '0', FOO: 'bar' }) }).runnerEnvironment
+        .BOXLITE_RUNNER_ENV ?? '',
+    ),
+    { KRUN_USE_THP: '0', FOO: 'bar' },
+  )
+
+  // Other stages are unaffected
+  for (const other of ['dev', 'prod']) {
+    assert.equal(Object.hasOwn(readStage(other).runnerEnvironment, 'BOXLITE_RUNNER_ENV'), false)
+    assert.deepEqual(
+      JSON.parse(
+        readStage(other, { BOXLITE_RUNNER_ENV: JSON.stringify({ FOO: 'bar' }) }).runnerEnvironment.BOXLITE_RUNNER_ENV ??
+          '',
+      ),
+      { FOO: 'bar' },
+    )
+  }
+
+  // Invalid JSON still throws the original renderRunnerEnvironment error
+  assert.throws(
+    () => readStage('stage', { BOXLITE_RUNNER_ENV: '{' }),
+    /BOXLITE_RUNNER_ENV must be a JSON object of strings/,
+  )
+})
