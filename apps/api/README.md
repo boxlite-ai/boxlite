@@ -1048,7 +1048,7 @@ Without the key or host, analytics is disabled while business operations and ope
 Product analytics requires a current, explicit personal grant. An organization inherits its recorded creator’s choice. An event that identifies both a person and an organization needs both grants. An unknown subject, an unavailable decision, or an event predating the most recent grant produces no PostHog event. Dashboard activity and Cloud metrics therefore describe the consenting population. Operational logging, metering and functional flag evaluation run independently.
 
 Each event gets an asynchronous consent check and, if eligible, one HTTP attempt. An API instance shares concurrent reads for the same subject.
-Only messages needing a SQL lookup count towards the per-process backlog of 1,000. Each excess message increments `posthog_consent_backlog_dropped_total`.
+Only messages needing a SQL lookup count towards the per-process backlog. Set `POSTHOG_CONSENT_BACKLOG_LIMIT` in the mstage API group to override the default of 1,000. Each excess message increments `posthog_consent_backlog_dropped_total`.
 Up to two SQL consent reads run concurrently on a pool of at least three connections, one on a pool of two, and none on a pool of one.
 The SQL slot is released after the query. HTTP deliveries have no application-level concurrency limit.
 Redis caches each organization creator and each user's grant time or denial for 30 seconds. A cache miss reads PostgreSQL without an explicit lock; the read finishes before the PostHog transfer.

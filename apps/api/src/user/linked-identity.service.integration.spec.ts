@@ -9,6 +9,9 @@ import { AnalyticsConsentService } from '../analytics/services/analytics-consent
 import { ProductAnalyticsConsent1795420800000 } from '../migrations/pre-deploy/1795420800000-product-analytics-consent-migration'
 import Redis from 'ioredis'
 import { DataSource } from 'typeorm'
+import { ConfigService } from '@nestjs/config'
+import { configuration } from '../config/configuration'
+import { TypedConfigService } from '../config/typed-config.service'
 import { ApiKey } from '../api-key/api-key.entity'
 import { apiKeyValidationCacheKey } from '../common/utils/api-key'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
@@ -156,7 +159,11 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     try {
       await client.connect()
       await migration.up(runner)
-      const consent = new AnalyticsConsentService(dataSource, client)
+      const consent = new AnalyticsConsentService(
+        dataSource,
+        client,
+        new TypedConfigService(new ConfigService(configuration)),
+      )
       await consent.decide(SOCIAL, true)
       await delay(3)
       const subjects = { users: [], organizations: [org] }

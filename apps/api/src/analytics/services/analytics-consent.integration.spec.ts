@@ -3,7 +3,9 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { recordBusinessEvent } from '../../common/utils/business-event.util'
 import { AnalyticsService } from './analytics.service'
-import type { TypedConfigService } from '../../config/typed-config.service'
+import { ConfigService } from '@nestjs/config'
+import { configuration } from '../../config/configuration'
+import { TypedConfigService } from '../../config/typed-config.service'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import Redis from 'ioredis'
@@ -29,6 +31,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE,
   }
+  const defaultConfig = new TypedConfigService(new ConfigService(configuration))
   const both = { users: ['member'], organizations: [org] }
   beforeAll(async () => {
     observer = await new DataSource(options).initialize()
@@ -58,7 +61,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
       commandTimeout: 1000,
     })
     await redis.connect()
-    consent = new AnalyticsConsentService(db, redis)
+    consent = new AnalyticsConsentService(db, redis, defaultConfig)
   })
   beforeEach(async () => {
     await db.query('TRUNCATE product_analytics_consent')
@@ -133,7 +136,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
       await Promise.all(Array.from({ length: 32 }, () => consent.dispatch(both, new Date(), send)))
       expect(reads).toHaveBeenCalledTimes(3)
       expect(send).toHaveBeenCalledTimes(32)
-      const other = new AnalyticsConsentService(db, redis)
+      const other = new AnalyticsConsentService(db, redis, defaultConfig)
       await other.dispatch(both, new Date(), send)
       expect(send).toHaveBeenCalledTimes(33)
       expect(reads).toHaveBeenCalledTimes(3)
@@ -156,7 +159,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     const reads = jest.spyOn(db, 'query')
     const send = jest.fn(async () => {})
     try {
-      expect(await new AnalyticsConsentService(db, offline).dispatch(both, new Date(), send)).toBe(false)
+      expect(await new AnalyticsConsentService(db, offline, defaultConfig).dispatch(both, new Date(), send)).toBe(false)
       expect(reads).not.toHaveBeenCalled()
       expect(send).not.toHaveBeenCalled()
     } finally {
@@ -214,7 +217,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     [1, 0],
   ])('limits cold analytics SQL reads for a pool of %i to %i', async (poolSize, limit) => {
     const pool = new DataSource({ ...options, extra: { max: poolSize } })
-    const limited = new AnalyticsConsentService(pool, redis)
+    const limited = new AnalyticsConsentService(pool, redis, defaultConfig)
     let release!: () => void
     const blocked = new Promise<void>((resolve) => {
       release = resolve
@@ -249,12 +252,13 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     expect(send).toHaveBeenCalledTimes(limit ? 6 : 0)
   })
 
-  it('admits a warm event while 1000 cold messages share one blocked SQL lookup and counts the excess', async () => {
+  it.each([1000, 3])('admits warm events when the configured backlog of %i cold events is full', async (limit) => {
     const meter = metrics.getMeter('')
     const add = jest.fn()
     jest.spyOn(meter, 'createCounter').mockReturnValue({ add })
     jest.spyOn(metrics, 'getMeter').mockReturnValue(meter)
-    const limited = new AnalyticsConsentService(db, redis)
+    const settings = new TypedConfigService(new ConfigService({ posthog: { consentBacklogLimit: limit } }))
+    const limited = new AnalyticsConsentService(db, redis, settings)
     let release!: () => void
     const blocked = new Promise<void>((resolve) => {
       release = resolve
@@ -272,7 +276,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     const dispatch = (id: string, send: () => Promise<void>) =>
       limited.dispatch({ users: [id], organizations: [] }, at, send)
     try {
-      const deliveries = Array.from({ length: 1001 }, () => dispatch('cold', cold))
+      const deliveries = Array.from({ length: limit + 1 }, () => dispatch('cold', cold))
       try {
         await new Promise<void>((resolve) => setImmediate(resolve))
         expect(await dispatch('warm', warm)).toBe(true)
@@ -283,7 +287,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
         release()
         await Promise.all(deliveries)
       }
-      expect(cold).toHaveBeenCalledTimes(1000)
+      expect(cold).toHaveBeenCalledTimes(limit)
       expect(add.mock.calls).toEqual([[1]])
       expect(await dispatch('cold', cold)).toBe(true)
     } finally {

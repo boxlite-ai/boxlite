@@ -4,6 +4,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common'
 import { metrics } from '@opentelemetry/api'
 import Redis from 'ioredis'
 import { DataSource } from 'typeorm'
+import { TypedConfigService } from '../../config/typed-config.service'
 import { analyticsNoticeVersion } from '../../../../shared/console-analytics'
 
 export interface AnalyticsSubjects {
@@ -14,7 +15,6 @@ export interface AnalyticsSubjects {
 type Decision = { allowed: boolean | null; notice_version: number | null; decided_at: Date | null }
 type Subject = 'creator' | 'grant'
 const ttlMs = 30_000
-const maxColdEvents = 1000
 export const analyticsConsentCacheKey = (kind: Subject, id: string) =>
   `analytics:consent:v${analyticsNoticeVersion}:${kind}:${id}`
 
@@ -41,6 +41,7 @@ export class AnalyticsConsentService {
   private readonly cacheReads = new Map<string, Promise<string | null>>()
   private readonly databaseReads = new Map<string, Promise<string>>()
   private readonly sqlWaiters: (() => void)[] = []
+  private readonly maxColdEvents: number
   private readonly maxSqlReads: number
   private activeSqlReads = 0
   private coldEvents = 0
@@ -51,7 +52,9 @@ export class AnalyticsConsentService {
   constructor(
     private readonly db: DataSource,
     @InjectRedis() private readonly redis: Redis,
+    config: TypedConfigService,
   ) {
+    this.maxColdEvents = config.getOrThrow('posthog.consentBacklogLimit')
     const poolMax = db.options.extra?.max ?? db.options.poolSize ?? 10
     this.maxSqlReads = Math.max(0, Math.min(2, poolMax - 1))
   }
@@ -146,7 +149,7 @@ export class AnalyticsConsentService {
     let cold = false
     const admitCold = () => {
       if (cold) return true
-      if (this.coldEvents >= maxColdEvents) {
+      if (this.coldEvents >= this.maxColdEvents) {
         this.overflow.add(1)
         return false
       }
