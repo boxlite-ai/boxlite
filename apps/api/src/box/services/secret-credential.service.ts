@@ -3,6 +3,7 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common'
 import { createHash, randomBytes } from 'node:crypto'
 import { DataSource, EntityManager } from 'typeorm'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 type CredentialGrant = { secret_id: string }
 type ActiveCredential = {
@@ -26,6 +27,14 @@ export class SecretCredentialService {
     manager?: EntityManager,
   ): Promise<{ token: string; expiresAt: string }> {
     if (!manager) return this.database.transaction((transaction) => this.issue(binding, transaction))
+    return this.issueWithManager(binding, manager)
+  }
+
+  @WithInstrumentation('secret.credential_issue')
+  private async issueWithManager(
+    binding: { runnerId: string; boxId: string; organizationId: string; secretIds: string[] },
+    manager: EntityManager,
+  ): Promise<{ token: string; expiresAt: string }> {
     const token = `bxsc_${randomBytes(32).toString('base64url')}`
     const grants = binding.secretIds.map((secret_id) => ({ secret_id }))
     try {

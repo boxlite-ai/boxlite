@@ -51,6 +51,7 @@ import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
+import { WithInstrumentation, withResponseInstrumentation } from '../common/decorators/otel.decorator'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -136,19 +137,26 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
-      req,
-      res,
-      next,
-      USER_OPERATION,
-      {
-        operation: req.method === 'POST' ? 'box.exec' : undefined,
-        admit: req.method === 'POST' ? requireExecReady : undefined,
-      },
-    )
+    const proxy = () =>
+      this.proxyToRunner(
+        authContext,
+        boxId,
+        (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
+        req,
+        res,
+        next,
+        USER_OPERATION,
+        {
+          operation: req.method === 'POST' ? 'box.exec' : undefined,
+          admit: req.method === 'POST' ? requireExecReady : undefined,
+        },
+      )
+    return req.method === 'POST'
+      ? withResponseInstrumentation('box.exec.http', res, proxy, {
+          component: BoxliteProxyController.name,
+          method: 'proxyExec',
+        })
+      : proxy()
   }
 
   @All(':boxId/executions/:execId/signal')
@@ -510,6 +518,7 @@ export class BoxliteProxyController {
     await this.tunnelService.revoke(box.id, port)
   }
 
+  @WithInstrumentation('box.runner_proxy_setup')
   private async proxyToRunner(
     authContext: OrganizationAuthContext,
     boxId: string,

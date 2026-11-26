@@ -12,6 +12,7 @@ import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { Organization } from '../../organization/entities/organization.entity'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 export const AUTO_RESUME_TIMEOUT_SECONDS = 30
 
@@ -38,6 +39,7 @@ export class BoxAutoResumeService {
   ) {}
 
   /** Submit or join Start and return only after the Box is actually STARTED. */
+  @WithInstrumentation('box.auto_resume')
   async ensureReady(boxId: string, organization: Organization, admit?: ProxyAdmission): Promise<void> {
     let box = await this.submitOrJoinStart(boxId, organization, admit)
 
@@ -54,6 +56,7 @@ export class BoxAutoResumeService {
     }
   }
 
+  @WithInstrumentation('box.auto_resume_start')
   private async submitOrJoinStart(boxId: string, organization: Organization, admit?: ProxyAdmission): Promise<Box> {
     const lockKey = getStateChangeLockKey(boxId)
     const deadline = Date.now() + AUTO_RESUME_TIMEOUT_SECONDS * 1000

@@ -28,7 +28,7 @@ import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { BoxCreatedEvent } from '../events/box-create.event'
 import { Box } from '../entities/box.entity'
 
-import { WithInstrumentation, WithSpan } from '../../common/decorators/otel.decorator'
+import { WithInstrumentation, WithMetric, WithSpan } from '../../common/decorators/otel.decorator'
 
 import { BoxStartAction } from './box-actions/box-start.action'
 import { BoxStopAction } from './box-actions/box-stop.action'
@@ -478,6 +478,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     event: BoxEvents.CREATED,
   })
   @TrackJobExecution()
+  @WithMetric('box.created_event')
   @WithSpan()
   private async handleBoxCreatedEvent(event: BoxCreatedEvent) {
     await this.syncInstanceState(event.box.id)

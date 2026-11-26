@@ -7,6 +7,7 @@ import { Injectable } from '@nestjs/common'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { isDigestPinned, parseImageRef } from '../utils/image-ref.util'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 /**
  * The build each runner booted for a curated tag, handed back to that runner.
@@ -36,6 +37,7 @@ export class CuratedImagePinService {
   }
 
   /** The ref to hand a runner for a curated image: pinned once that runner has booted it. */
+  @WithInstrumentation('image.curated_pin')
   async refFor(runnerId: string, ref: string): Promise<string> {
     if (isDigestPinned(ref)) {
       return ref

@@ -74,6 +74,7 @@ export class AuditService implements OnApplicationBootstrap {
     }
   }
 
+  @WithInstrumentation('audit.create')
   async createLog(createDto: CreateAuditLogInternalDto, timeoutMs?: number): Promise<AuditLog> {
     const auditLog = new AuditLog(createDto)
 
@@ -84,6 +85,7 @@ export class AuditService implements OnApplicationBootstrap {
     return auditLog
   }
 
+  @WithInstrumentation('audit.update')
   async updateLog(id: string, updateDto: UpdateAuditLogInternalDto, timeoutMs?: number): Promise<AuditLog> {
     const updated = await this.writeWithDeadline(timeoutMs, async (repository, signal) => {
       const auditLog = await repository.findOne({ where: { id } })
@@ -124,6 +126,7 @@ export class AuditService implements OnApplicationBootstrap {
     return updated
   }
 
+  @WithInstrumentation('audit.pending_lease')
   async keepPendingLogAlive(id: string, initialTimeoutMs = AUDIT_WRITE_TIMEOUT_MS): Promise<PendingAuditLease> {
     const controller = new AbortController()
     const renew = async (initial = false) => {
@@ -164,34 +167,35 @@ export class AuditService implements OnApplicationBootstrap {
         if (completion) return completion
         stopped = true
         clearTimeout(timer)
-        completion = (async () => {
-          await renewal
-          const row = await this.writeWithDeadline(AUDIT_WRITE_TIMEOUT_MS, async (repository) => {
-            // A late response must neither replace reconciliation nor recreate a published row.
-            const [rows] = await repository.query(
-              `UPDATE audit_log SET "statusCode" = $2, "errorMessage" = $3,
-               "targetId" = COALESCE($4, "targetId"), "organizationId" = COALESCE($5, "organizationId"),
-               "leaseExpiresAt" = NULL
-               WHERE id = $1 AND "statusCode" IS NULL AND "leaseExpiresAt" > clock_timestamp()
-               RETURNING *`,
-              [
-                id,
-                result.statusCode,
-                result.errorMessage ?? null,
-                result.targetId ?? null,
-                result.organizationId ?? null,
-              ],
-            )
-            if (rows.length !== 1) throw new Error('Pending audit lease lost')
-            return rows[0]
-          })
-          if (this.configService.get('audit.consoleLogEnabled')) {
-            delete row.leaseExpiresAt
-            this.logger.log(`AUDIT_ENTRY: ${JSON.stringify(row)}`)
-          }
-        })()
+        completion = this.completePendingLog(id, result, renewal)
         return completion
       },
+    }
+  }
+
+  @WithInstrumentation('audit.pending_lease_complete')
+  private async completePendingLog(
+    id: string,
+    result: UpdateAuditLogInternalDto,
+    renewal: Promise<void> | undefined,
+  ): Promise<void> {
+    await renewal
+    const row = await this.writeWithDeadline(AUDIT_WRITE_TIMEOUT_MS, async (repository) => {
+      // A late response must neither replace reconciliation nor recreate a published row.
+      const [rows] = await repository.query(
+        `UPDATE audit_log SET "statusCode" = $2, "errorMessage" = $3,
+         "targetId" = COALESCE($4, "targetId"), "organizationId" = COALESCE($5, "organizationId"),
+         "leaseExpiresAt" = NULL
+         WHERE id = $1 AND "statusCode" IS NULL AND "leaseExpiresAt" > clock_timestamp()
+         RETURNING *`,
+        [id, result.statusCode, result.errorMessage ?? null, result.targetId ?? null, result.organizationId ?? null],
+      )
+      if (rows.length !== 1) throw new Error('Pending audit lease lost')
+      return rows[0]
+    })
+    if (this.configService.get('audit.consoleLogEnabled')) {
+      delete row.leaseExpiresAt
+      this.logger.log(`AUDIT_ENTRY: ${JSON.stringify(row)}`)
     }
   }
 

@@ -7,6 +7,15 @@
 import { trace, context, metrics, SpanStatusCode, Histogram } from '@opentelemetry/api'
 import { applyDecorators } from '@nestjs/common'
 
+type ResponseInstrumentationResponse = {
+  once(event: string, listener: (...args: any[]) => void): unknown
+  off(event: string, listener: (...args: any[]) => void): unknown
+  writableFinished: boolean
+  destroyed: boolean
+  closed: boolean
+  statusCode: number
+}
+
 // Lazy initialization to ensure SDK is started before getting tracer/meter
 const getTracer = () => trace.getTracer('')
 const getMeter = () => metrics.getMeter('')
@@ -214,4 +223,59 @@ export function WithInstrumentation(config?: string | InstrumentationConfig): Me
   }
 
   return applyDecorators(...decorators)
+}
+
+export async function withResponseInstrumentation<T>(
+  name: string,
+  response: ResponseInstrumentationResponse,
+  operation: () => Promise<T> | T,
+  attributes: Record<string, string> = {},
+): Promise<T> {
+  const metricName = toSnakeCase(name)
+  let histogram = executionHistograms.get(metricName)
+  if (!histogram) {
+    histogram = getMeter().createHistogram(`${metricName}_duration`, { unit: 'ms' })
+    executionHistograms.set(metricName, histogram)
+  }
+
+  const span = getTracer().startSpan(name, { attributes }, context.active())
+  const startedAt = Date.now()
+  let finished = false
+
+  const finish = (status: 'success' | 'error', error?: unknown) => {
+    if (finished) return
+    finished = true
+    response.off('finish', onFinish)
+    response.off('close', onClose)
+    response.off('error', onError)
+
+    if (error !== undefined || status === 'error') {
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: error instanceof Error ? error.message : error === undefined ? undefined : String(error),
+      })
+      if (error !== undefined) span.recordException(error instanceof Error ? error : new Error(String(error)))
+    } else {
+      span.setStatus({ code: SpanStatusCode.OK })
+    }
+    span.end()
+    histogram.record(Date.now() - startedAt, { ...attributes, status })
+  }
+  const onFinish = () => finish(response.statusCode >= 400 ? 'error' : 'success')
+  const onClose = () => finish(response.writableFinished && response.statusCode < 400 ? 'success' : 'error')
+  const onError = (error: unknown) => finish('error', error)
+
+  response.once('finish', onFinish)
+  response.once('close', onClose)
+  response.once('error', onError)
+
+  try {
+    const result = await context.with(trace.setSpan(context.active(), span), operation)
+    if (response.writableFinished) onFinish()
+    else if (response.destroyed || response.closed) onClose()
+    return result
+  } catch (error) {
+    finish('error', error)
+    throw error
+  }
 }
