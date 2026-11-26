@@ -89,7 +89,7 @@ function ApiKeyForm({
   const initialized = useRef(false)
   const generation = useRef(0)
   const pending = useRef(false)
-  const availablePermissions = SUPPORTED_API_KEY_PERMISSIONS.filter((permission) =>
+  const availablePermissions: Permission[] = SUPPORTED_API_KEY_PERMISSIONS.filter((permission) =>
     grantedPermissions.includes(permission),
   )
   const permissionsSignature = [...availablePermissions].sort().join(',')
