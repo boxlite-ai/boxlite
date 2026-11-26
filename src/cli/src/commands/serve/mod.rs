@@ -99,7 +99,7 @@ struct AppState {
     /// Optional expected API key (`--api-key` / `$BOXLITE_SERVE_API_KEY`).
     /// `None` ⇒ permissive (no auth enforced).
     api_key: Option<String>,
-    /// Lifecycle deadlines per box, in seconds.
+    /// Lifecycle deadlines (in seconds) and synchronous execution activity per box.
     ///
     /// Held here rather than in `BoxOptions` because the engine accepts neither
     /// on a local runtime, which is what `serve` drives:
@@ -116,7 +116,7 @@ struct AppState {
     ///
     /// In memory only: a restart forgets every deadline, and a box created
     /// before it is never swept.
-    lifecycle: RwLock<HashMap<String, LifecyclePolicy>>,
+    lifecycle: RwLock<HashMap<String, BoxLifecycle>>,
     /// Last observed user activity per box, for AutoStop.
     ///
     /// `serve` holds the `$BOXLITE_HOME` lock for its whole life, so nothing
@@ -161,7 +161,49 @@ impl LifecyclePolicy {
     }
 }
 
+#[derive(Default)]
+struct BoxLifecycle {
+    policy: LifecyclePolicy,
+    sync_exec: Arc<std::sync::Mutex<SyncExecActivity>>,
+}
+
+#[derive(Default)]
+struct SyncExecActivity {
+    in_flight: usize,
+    last_activity: Option<Instant>,
+}
+
+impl SyncExecActivity {
+    /// Fold completion into the idle clock, or exempt the box while busy.
+    fn idle_time(&self, idle: std::time::Duration, now: Instant) -> Option<std::time::Duration> {
+        if self.in_flight != 0 {
+            return None;
+        }
+        Some(match self.last_activity {
+            Some(last) => idle.min(now.saturating_duration_since(last)),
+            None => idle,
+        })
+    }
+}
+
+struct SyncExecGuard(Arc<std::sync::Mutex<SyncExecActivity>>);
+
+impl Drop for SyncExecGuard {
+    fn drop(&mut self) {
+        let mut activity = self.0.lock().unwrap();
+        activity.in_flight -= 1;
+        activity.last_activity = Some(Instant::now());
+    }
+}
+
 impl AppState {
+    async fn track_sync_exec(&self, box_id: &str) -> SyncExecGuard {
+        let mut lifecycle = self.lifecycle.write().await;
+        let activity = &lifecycle.entry(box_id.to_owned()).or_default().sync_exec;
+        activity.lock().unwrap().in_flight += 1;
+        SyncExecGuard(Arc::clone(activity))
+    }
+
     /// Start one wait observer without claiming an output reader.
     pub(in crate::commands::serve) async fn watch_recovered(
         &self,
@@ -221,7 +263,7 @@ impl AppState {
             .retain(|_, active| active.box_id() != box_id);
     }
 
-    /// Remember a box's deadlines. A policy with neither set is not stored.
+    /// Remember a box's deadlines without disturbing its in-flight executions.
     pub(in crate::commands::serve) async fn set_lifecycle(
         &self,
         box_id: &str,
@@ -233,7 +275,9 @@ impl AppState {
         self.lifecycle
             .write()
             .await
-            .insert(box_id.to_string(), policy);
+            .entry(box_id.to_owned())
+            .or_default()
+            .policy = policy;
     }
 
     /// The box's deadlines, or an all-zero policy when it has none.
@@ -242,7 +286,7 @@ impl AppState {
             .read()
             .await
             .get(box_id)
-            .copied()
+            .map(|entry| entry.policy)
             .unwrap_or_default()
     }
 
@@ -266,8 +310,8 @@ impl AppState {
 
     /// Mark a box as used right now, resetting its AutoStop window.
     ///
-    /// The single write site for the idle clock, so the request middleware and
-    /// the sweep agree on what "used" means.
+    /// Synchronous execution completion also updates the canonical clock in
+    /// `SyncExecActivity`, so cancellation can refresh it without awaiting.
     pub(in crate::commands::serve) async fn record_box_activity(&self, box_id: &str) {
         self.last_activity
             .write()
@@ -295,7 +339,7 @@ impl AppState {
     ///
     /// Only `last_activity` is pruned. It is the map unauthenticated input can
     /// grow, and re-seeding a live box costs nothing but a fresh window. The
-    /// `lifecycle` map is written only by `create_box`, always with a canonical
+    /// `lifecycle` map is written only with a resolved, canonical
     /// id, so pruning it would buy nothing and would race: a box created after
     /// the caller's `list_info` snapshot would have its deadline dropped and
     /// never re-added.
@@ -974,7 +1018,13 @@ async fn run_lifecycle_once(state: &AppState, now: Instant) {
         let box_id = info.id.to_string();
         // The policy lives here, not on `BoxInfo`: neither deadline is handed
         // to the runtime, so neither comes back from it.
-        let policy = state.lifecycle_of(&box_id).await;
+        let (policy, sync_exec) = {
+            let lifecycle = state.lifecycle.read().await;
+            let Some(entry) = lifecycle.get(&box_id) else {
+                continue;
+            };
+            (entry.policy, Arc::clone(&entry.sync_exec))
+        };
         if policy.is_empty() {
             continue;
         }
@@ -986,6 +1036,9 @@ async fn run_lifecycle_once(state: &AppState, now: Instant) {
         }
 
         let idle = idle_or_seed(&state.last_activity, &box_id, &live, now).await;
+        let Some(idle) = sync_exec.lock().unwrap().idle_time(idle, now) else {
+            continue;
+        };
         // The delete deadline uses `last_updated`: for a box at rest that
         // transition *is* the stop, which is the anchor AutoDelete wants.
         let since_stop = (now_utc - info.last_updated)
@@ -1001,14 +1054,25 @@ async fn run_lifecycle_once(state: &AppState, now: Instant) {
         ) {
             LifecycleAction::Leave => {}
             LifecycleAction::Stop => {
-                tracing::info!(
-                    box_id = %box_id,
-                    idle_secs = idle.as_secs(),
-                    auto_stop = policy.auto_stop,
-                    "AutoStop deadline reached, stopping box"
-                );
                 match tokio::time::timeout(LIFECYCLE_OP_TIMEOUT, state.runtime.get(&box_id)).await {
                     Ok(Ok(Some(bx))) => {
+                        // The lookup awaited I/O; an exec may have started or
+                        // finished since the first idle check.
+                        let deadline = std::time::Duration::from_secs(u64::from(policy.auto_stop));
+                        if sync_exec
+                            .lock()
+                            .unwrap()
+                            .idle_time(idle, now)
+                            .is_none_or(|idle| idle < deadline)
+                        {
+                            continue;
+                        }
+                        tracing::info!(
+                            box_id = %box_id,
+                            idle_secs = idle.as_secs(),
+                            auto_stop = policy.auto_stop,
+                            "AutoStop deadline reached, stopping box"
+                        );
                         match tokio::time::timeout(LIFECYCLE_OP_TIMEOUT, bx.stop()).await {
                             Ok(Ok(())) => {}
                             Ok(Err(error)) => {
@@ -2077,6 +2141,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/exec",
             post(executions::start_execution),
         )
+        .route("/v1/boxes/{box_id}/exec/sync", post(executions::exec_sync))
         .route(
             "/v1/boxes/{box_id}/executions",
             get(executions::list_executions),
@@ -3888,6 +3953,14 @@ mod tests {
     /// about it — one consults it, one consults the held AutoStop deadline —
     /// and that disagreement is what lets a test tell them apart.
     async fn stub_upstream(status: &'static str, auto_resume: bool) -> StubUpstream {
+        stub_upstream_with_pending_exec(status, auto_resume, None).await
+    }
+
+    async fn stub_upstream_with_pending_exec(
+        status: &'static str,
+        auto_resume: bool,
+        exec_started: Option<Arc<tokio::sync::Notify>>,
+    ) -> StubUpstream {
         fn canned_box(status: &str, auto_resume: bool) -> serde_json::Value {
             serde_json::json!({
                 "box_id": STUB_BOX_ID,
@@ -3915,9 +3988,14 @@ mod tests {
                     let execs = Arc::clone(&execs);
                     move |axum::extract::Path(id): axum::extract::Path<String>| {
                         let execs = Arc::clone(&execs);
+                        let exec_started = exec_started.clone();
                         async move {
                             if id == STUB_BOX_ID || id == STUB_BOX_NAME {
                                 execs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                if let Some(started) = exec_started {
+                                    started.notify_one();
+                                    std::future::pending::<()>().await;
+                                }
                             }
                             // The reply shape does not matter: the counter is the
                             // whole point, and every caller here is proving only
@@ -4813,7 +4891,12 @@ mod tests {
         );
         assert_eq!(created["auto_delete"], 604_800);
         assert_eq!(
-            state.lifecycle.read().await.get(STUB_BOX_ID).copied(),
+            state
+                .lifecycle
+                .read()
+                .await
+                .get(STUB_BOX_ID)
+                .map(|entry| entry.policy),
             Some(LifecyclePolicy {
                 auto_stop: 900,
                 auto_delete: 604_800,

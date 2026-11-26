@@ -27,8 +27,10 @@ pub use attach::AttachOptions;
 pub use copy::CopyOptions;
 pub(crate) use crash_report::CrashReport;
 pub use exec::{
-    BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
-    ExecutionInfo,
+    BoxCommand, DEFAULT_SYNC_EXEC_MAX_OUTPUT_BYTES, DEFAULT_SYNC_EXEC_TIMEOUT_SECS, ExecResult,
+    ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId, ExecutionInfo,
+    MAX_SYNC_EXEC_MAX_OUTPUT_BYTES, MAX_SYNC_EXEC_TIMEOUT_SECS, MIN_SYNC_EXEC_MAX_OUTPUT_BYTES,
+    MIN_SYNC_EXEC_TIMEOUT_SECS, SyncExecResult, collect_sync_execution, validate_sync_exec,
 };
 pub use executions::ExecutionsHandle;
 pub(crate) use manager::BoxManager;
@@ -133,6 +135,24 @@ impl LiteBox {
 
     pub async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         self.box_backend.exec(command).await
+    }
+
+    /// Run a non-interactive command to completion with a 1 MiB capture limit per stream.
+    /// The command timeout defaults to 30 seconds.
+    pub async fn exec_sync(&self, command: BoxCommand) -> BoxliteResult<SyncExecResult> {
+        self.box_backend.exec_sync(command, None).await
+    }
+
+    /// Run a non-interactive command with a custom capture limit per stream.
+    /// The limit must be between 1 KiB and 10 MiB, inclusive.
+    pub async fn exec_sync_with_limit(
+        &self,
+        command: BoxCommand,
+        max_output_bytes: usize,
+    ) -> BoxliteResult<SyncExecResult> {
+        self.box_backend
+            .exec_sync(command, Some(max_output_bytes))
+            .await
     }
 
     /// Get the live execution namespace without starting the box.

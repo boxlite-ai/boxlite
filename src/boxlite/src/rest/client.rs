@@ -350,6 +350,16 @@ impl ApiClient {
         self.send_json(builder).await
     }
 
+    pub async fn post_with_timeout<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> BoxliteResult<T> {
+        let builder = self.http.post(self.url(path)).json(body).timeout(timeout);
+        self.send_json(builder).await
+    }
+
     pub(crate) async fn post_agent<T: DeserializeOwned>(
         &self,
         path: &str,

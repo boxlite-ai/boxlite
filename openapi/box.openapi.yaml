@@ -84,7 +84,11 @@ info:
 
     ## Execution Model
 
-    Command execution has three related operations:
+    Use `POST /exec/sync` for non-interactive commands: one HTTP request
+    waits for completion and returns the exit code and bounded stdout/stderr.
+    It does not support TTY or interactive stdin.
+
+    For streaming or interactive commands:
     1. `POST /exec` creates the execution and returns its guest-assigned `execution_id`.
     2. `GET /executions/{exec_id}/attach` upgrades to a bidirectional
        WebSocket carrying stdin, stdout, stderr, and in-band control
@@ -859,6 +863,45 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/exec/sync:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: execSync
+      summary: Run a non-interactive command and return its result
+      description: |
+        Starts the box if needed and waits for the command to complete without
+        a WebSocket. Stdin receives EOF and no TTY is allocated. Nonzero
+        exit codes still return 200. On timeout the server attempts to kill
+        the execution and returns 408.
+      tags: [Execution]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncExecRequest"
+      responses:
+        "200":
+          description: Command completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncExecResponse"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "408":
+          $ref: "#/components/responses/RequestTimeoutError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /{prefix}/boxes/{box_id}/executions:
     parameters:
@@ -2547,6 +2590,13 @@ components:
             message: "Organization box creation limit reached: 2 of 2 boxes are already counted"
             code: resource_exhausted
 
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
     ServiceUnavailableError:
       description: A required backend service is not configured or available
       headers:
@@ -3963,6 +4013,59 @@ components:
           type: string
           description: Unique execution identifier
           example: exec-01HJK5ABCDEF
+
+    SyncExecRequest:
+      type: object
+      description: Non-interactive command request; TTY and stdin input are not supported.
+      additionalProperties: false
+      required: [command]
+      properties:
+        command:
+          type: string
+          minLength: 1
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        timeout_seconds:
+          type: number
+          minimum: 0.1
+          maximum: 300
+          default: 30
+        working_dir:
+          type: string
+        user:
+          type: string
+          description: User in Docker format `<name|uid>[:<group|gid>]`.
+        max_output_bytes:
+          type: integer
+          minimum: 1024
+          maximum: 10485760
+          default: 1048576
+          description: Maximum captured bytes per stream (stdout and stderr independently).
+
+    SyncExecResponse:
+      type: object
+      required: [exit_code, stdout, stderr, stdout_truncated, stderr_truncated]
+      properties:
+        exit_code:
+          type: integer
+        stdout:
+          type: string
+          description: Captured stdout decoded as UTF-8 with invalid bytes replaced.
+        stderr:
+          type: string
+          description: Captured stderr decoded as UTF-8 with invalid bytes replaced.
+        stdout_truncated:
+          type: boolean
+        stderr_truncated:
+          type: boolean
+        error_message:
+          type: string
 
     ExecutionInfo:
       type: object

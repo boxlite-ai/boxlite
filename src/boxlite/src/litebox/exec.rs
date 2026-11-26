@@ -6,11 +6,50 @@
 use crate::BoxliteError;
 use crate::runtime::backend::ExecBackend;
 use boxlite_shared::errors::BoxliteResult;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+pub const DEFAULT_SYNC_EXEC_TIMEOUT_SECS: f64 = 30.0;
+pub const MIN_SYNC_EXEC_TIMEOUT_SECS: f64 = 0.1;
+pub const MAX_SYNC_EXEC_TIMEOUT_SECS: f64 = 300.0;
+pub const DEFAULT_SYNC_EXEC_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+pub const MIN_SYNC_EXEC_MAX_OUTPUT_BYTES: usize = 1024;
+pub const MAX_SYNC_EXEC_MAX_OUTPUT_BYTES: usize = 10 * 1024 * 1024;
+
+/// Validate synchronous exec parameters and resolve their defaults.
+pub fn validate_sync_exec(
+    command: &str,
+    tty: bool,
+    timeout_seconds: Option<f64>,
+    max_output_bytes: Option<usize>,
+) -> BoxliteResult<(Duration, usize)> {
+    if command.is_empty() {
+        return Err(BoxliteError::InvalidArgument(
+            "command must not be empty".into(),
+        ));
+    }
+    if tty {
+        return Err(BoxliteError::InvalidArgument(
+            "exec_sync does not support tty".into(),
+        ));
+    }
+    let seconds = timeout_seconds.unwrap_or(DEFAULT_SYNC_EXEC_TIMEOUT_SECS);
+    if !(MIN_SYNC_EXEC_TIMEOUT_SECS..=MAX_SYNC_EXEC_TIMEOUT_SECS).contains(&seconds) {
+        return Err(BoxliteError::InvalidArgument(format!(
+            "timeout_seconds must be in {MIN_SYNC_EXEC_TIMEOUT_SECS}..={MAX_SYNC_EXEC_TIMEOUT_SECS}"
+        )));
+    }
+    let limit = max_output_bytes.unwrap_or(DEFAULT_SYNC_EXEC_MAX_OUTPUT_BYTES);
+    if !(MIN_SYNC_EXEC_MAX_OUTPUT_BYTES..=MAX_SYNC_EXEC_MAX_OUTPUT_BYTES).contains(&limit) {
+        return Err(BoxliteError::InvalidArgument(format!(
+            "max_output_bytes must be in {MIN_SYNC_EXEC_MAX_OUTPUT_BYTES}..={MAX_SYNC_EXEC_MAX_OUTPUT_BYTES}"
+        )));
+    }
+    Ok((Duration::from_secs_f64(seconds), limit))
+}
 
 /// Command builder for executing programs in a box.
 ///
@@ -39,6 +78,18 @@ pub struct BoxCommand {
 }
 
 impl BoxCommand {
+    pub(crate) fn sync_exec_limits(
+        &self,
+        max_output_bytes: Option<usize>,
+    ) -> BoxliteResult<(Duration, usize)> {
+        validate_sync_exec(
+            &self.command,
+            self.tty,
+            self.timeout.map(|d| d.as_secs_f64()),
+            max_output_bytes,
+        )
+    }
+
     /// Create a new command.
     pub fn new(command: impl Into<String>) -> Self {
         Self {
@@ -319,11 +370,31 @@ impl Execution {
         mpsc::UnboundedReceiver<Vec<u8>>,
         mpsc::UnboundedSender<ExecResult>,
     ) {
+        Self::stub_with_kill_hook(id, || {})
+    }
+
+    /// Build a stub that invokes a hook when killed.
+    #[cfg(feature = "test-support")]
+    #[allow(clippy::type_complexity)]
+    pub fn stub_with_kill_hook(
+        id: &str,
+        on_kill: impl FnMut() + Send + Sync + 'static,
+    ) -> (
+        Self,
+        mpsc::UnboundedSender<String>,
+        mpsc::UnboundedSender<String>,
+        mpsc::UnboundedReceiver<Vec<u8>>,
+        mpsc::UnboundedSender<ExecResult>,
+    ) {
         use async_trait::async_trait;
 
-        struct NoopBackend;
+        struct StubBackend<F>(F);
         #[async_trait]
-        impl ExecBackend for NoopBackend {
+        impl<F: FnMut() + Send + Sync> ExecBackend for StubBackend<F> {
+            async fn kill(&mut self, _: &str) -> BoxliteResult<()> {
+                (self.0)();
+                Ok(())
+            }
             async fn signal(&mut self, _: &str, _: i32) -> BoxliteResult<()> {
                 Ok(())
             }
@@ -346,7 +417,7 @@ impl Execution {
 
         let exec = Self::new(
             id.to_string(),
-            Box::new(NoopBackend),
+            Box::new(StubBackend(on_kill)),
             result_rx,
             Some(ExecStdin::new(stdin_tx)),
             Some(ExecStdout::new(stdout_rx)),
@@ -354,6 +425,61 @@ impl Execution {
         );
         (exec, stdout_tx, stderr_tx, stdin_rx, result_tx)
     }
+}
+
+/// Exit status and bounded output of a non-interactive execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncExecResult {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    pub error_message: Option<String>,
+}
+
+/// Close stdin and collect both output streams while waiting for exit.
+/// The limit applies independently to the bytes exposed by each `Execution`
+/// output stream. The captured prefix is decoded lossily if it cuts a code point.
+pub async fn collect_sync_execution(
+    execution: &mut Execution,
+    max_output_bytes: usize,
+) -> BoxliteResult<SyncExecResult> {
+    drop(execution.stdin());
+    let stdout = execution.stdout();
+    let stderr = execution.stderr();
+    let output = async {
+        Ok(tokio::join!(
+            capture_output(stdout, max_output_bytes),
+            capture_output(stderr, max_output_bytes),
+        ))
+    };
+    let (exit, ((stdout, stdout_truncated), (stderr, stderr_truncated))) =
+        tokio::try_join!(execution.wait(), output)?;
+    Ok(SyncExecResult {
+        exit_code: exit.exit_code,
+        stdout,
+        stderr,
+        stdout_truncated,
+        stderr_truncated,
+        error_message: exit.error_message,
+    })
+}
+
+async fn capture_output(
+    stream: Option<impl Stream<Item = String> + Unpin>,
+    limit: usize,
+) -> (String, bool) {
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    if let Some(mut stream) = stream {
+        while let Some(chunk) = stream.next().await {
+            let keep = chunk.len().min(limit - bytes.len());
+            bytes.extend_from_slice(&chunk.as_bytes()[..keep]);
+            truncated |= keep < chunk.len();
+        }
+    }
+    (String::from_utf8_lossy(&bytes).into_owned(), truncated)
 }
 
 /// Exit status of a process.
@@ -545,6 +671,84 @@ mod tests {
             _y_pixels: u32,
         ) -> BoxliteResult<()> {
             Ok(())
+        }
+    }
+
+    #[test]
+    fn sync_exec_validates_parameters() {
+        assert_eq!(
+            validate_sync_exec("true", false, None, None).unwrap(),
+            (Duration::from_secs(30), 1024 * 1024)
+        );
+        for (command, tty, timeout, limit) in [
+            ("", false, None, None),
+            ("true", true, None, None),
+            ("true", false, Some(0.099), None),
+            ("true", false, Some(300.001), None),
+            ("true", false, Some(f64::NAN), None),
+            ("true", false, Some(f64::INFINITY), None),
+            ("true", false, None, Some(1023)),
+            ("true", false, None, Some(10 * 1024 * 1024 + 1)),
+        ] {
+            assert!(matches!(
+                validate_sync_exec(command, tty, timeout, limit),
+                Err(BoxliteError::InvalidArgument(_))
+            ));
+        }
+        for (seconds, limit) in [(0.1, 1024), (300.0, 10 * 1024 * 1024)] {
+            assert!(validate_sync_exec("true", false, Some(seconds), Some(limit)).is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_exec_collects_until_eof_even_after_truncation() {
+        for (limit, expected, truncated, code) in [(32, "abé-tail", false, 0), (3, "ab�", true, 7)]
+        {
+            let (stdout_tx, stdout_rx) = mpsc::unbounded_channel();
+            let (stderr_tx, stderr_rx) = mpsc::unbounded_channel();
+            let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel();
+            let (result_tx, result_rx) = mpsc::unbounded_channel();
+            let mut execution = Execution::new(
+                "sync".into(),
+                Box::new(StubExecBackend {
+                    kill_observed: StdArc::default(),
+                }),
+                result_rx,
+                Some(ExecStdin::new(stdin_tx)),
+                Some(ExecStdout::new(stdout_rx)),
+                Some(ExecStderr::new(stderr_rx)),
+            );
+            let error_message = (code != 0).then(|| "exit diagnostic".to_string());
+            let producer = async {
+                assert!(stdin_rx.recv().await.is_none());
+                result_tx
+                    .send(ExecResult {
+                        exit_code: code,
+                        error_message: error_message.clone(),
+                    })
+                    .unwrap();
+                stdout_tx.send("abé".into()).unwrap();
+                tokio::task::yield_now().await;
+                stdout_tx.send("-tail".into()).unwrap();
+                stderr_tx.send("err".into()).unwrap();
+                drop((stdout_tx, stderr_tx));
+            };
+            let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+                tokio::join!(collect_sync_execution(&mut execution, limit), producer)
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                result.unwrap(),
+                SyncExecResult {
+                    exit_code: code,
+                    stdout: expected.into(),
+                    stderr: "err".into(),
+                    stdout_truncated: truncated,
+                    stderr_truncated: false,
+                    error_message,
+                }
+            );
         }
     }
 

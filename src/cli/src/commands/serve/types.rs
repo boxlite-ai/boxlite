@@ -360,6 +360,30 @@ pub(super) struct ExecRequest {
     pub user: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SyncExecRequest {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub env: Option<HashMap<String, String>>,
+    pub timeout_seconds: Option<f64>,
+    pub working_dir: Option<String>,
+    pub user: Option<String>,
+    pub max_output_bytes: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub(super) struct SyncExecResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
 #[derive(Serialize)]
 pub(super) struct ExecResponse {
     pub execution_id: String,

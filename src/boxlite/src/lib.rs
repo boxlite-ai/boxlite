@@ -60,6 +60,7 @@ pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
     AttachOptions, BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout,
     Execution, ExecutionId, ExecutionInfo, ExecutionsHandle, HealthState, HealthStatus,
+    SyncExecResult, collect_sync_execution, validate_sync_exec,
 };
 pub use litebox::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
 pub use metrics::{BoxMetrics, RuntimeMetrics};

@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
-    AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox, SshConfig, SshStatus,
+    AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox, SshConfig, SshStatus, SyncExecResult,
 };
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
@@ -103,6 +103,12 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     }
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
+
+    async fn exec_sync(
+        &self,
+        command: BoxCommand,
+        max_output_bytes: Option<usize>,
+    ) -> BoxliteResult<SyncExecResult>;
 
     async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>>;
 

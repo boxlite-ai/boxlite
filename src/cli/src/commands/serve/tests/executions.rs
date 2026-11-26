@@ -1,7 +1,155 @@
 //! No-VM execution status and lifetime boundaries.
 
-use super::super::handlers::executions::get_execution;
+use super::super::handlers::executions::{exec_sync, finish_sync_execution, get_execution};
 use super::*;
+
+async fn sync_response_json(response: axum::response::Response) -> serde_json::Value {
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+#[tokio::test]
+async fn sync_exec_returns_output_and_truncates_each_stream_independently() {
+    for truncated in [false, true] {
+        let (execution, stdout, stderr, mut stdin, result) = Execution::stub("sync");
+        let out = "a".repeat(if truncated { 1025 } else { 1024 });
+        stdout.send(out).unwrap();
+        stderr.send("err".into()).unwrap();
+        result
+            .send(boxlite::ExecResult {
+                exit_code: 7,
+                error_message: None,
+            })
+            .unwrap();
+        drop((stdout, stderr, result));
+        let response = finish_sync_execution(execution, Duration::from_secs(1), 1024).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(stdin.recv().await.is_none());
+        assert_eq!(
+            sync_response_json(response).await,
+            serde_json::json!({
+                "exit_code": 7,
+                "stdout": "a".repeat(1024),
+                "stderr": "err",
+                "stdout_truncated": truncated,
+                "stderr_truncated": false,
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn sync_exec_times_out_and_kills_the_execution() {
+    let (killed_tx, mut killed_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (execution, stdout, stderr, _stdin, result) =
+        Execution::stub_with_kill_hook("sync", move || {
+            killed_tx.send(()).unwrap();
+        });
+    let response = finish_sync_execution(execution, Duration::from_millis(100), 1024).await;
+    drop((stdout, stderr, result));
+    assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+    killed_rx
+        .try_recv()
+        .expect("timeout did not kill the execution");
+    let body = sync_response_json(response).await;
+    assert_eq!(body["error"]["type"], "TimeoutError");
+    assert_eq!(body["error"]["code"], "timeout");
+    assert_eq!(body["error"]["message"], "execution timed out");
+}
+
+#[tokio::test]
+async fn sync_exec_route_rejects_invalid_arguments_and_unknown_fields() {
+    let (url, server) = serve_router(Arc::new(lifecycle_state())).await;
+    let client = reqwest::Client::new();
+    for request in [
+        r#"{}"#,
+        r#"{"command":""}"#,
+        r#"{"command":"true","timeout_seconds":0.09}"#,
+        r#"{"command":"true","timeout_seconds":301}"#,
+        r#"{"command":"true","timeout_seconds":1e999}"#,
+        r#"{"command":"true","max_output_bytes":1023}"#,
+        r#"{"command":"true","max_output_bytes":10485761}"#,
+        r#"{"command":"true","max_output_bytes":-1}"#,
+        r#"{"command":"true","tty":false}"#,
+        r#"{"command":"true","stdin":""}"#,
+    ] {
+        let response = client
+            .post(format!("{url}/v1/boxes/does-not-exist/exec/sync"))
+            .header("content-type", "application/json")
+            .body(request)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{request}");
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["type"], "InvalidArgumentError");
+        assert_eq!(body["error"]["code"], "invalid_argument");
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn sync_exec_prevents_auto_stop_and_cancellation_restarts_the_idle_window() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let upstream = stub_upstream_with_pending_exec("running", true, Some(started.clone())).await;
+    let mut state = lifecycle_state();
+    state.runtime =
+        BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone())).unwrap();
+    let state = Arc::new(state);
+    state
+        .set_lifecycle(
+            STUB_BOX_ID,
+            LifecyclePolicy {
+                auto_stop: 60,
+                auto_delete: 0,
+            },
+        )
+        .await;
+    let now = Instant::now();
+    state
+        .last_activity
+        .write()
+        .await
+        .insert(STUB_BOX_ID.to_owned(), now - Duration::from_secs(600));
+
+    {
+        let request = serde_json::from_value(serde_json::json!({"command": "true"})).unwrap();
+        let handler = exec_sync(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(STUB_BOX_NAME.to_owned()),
+            Ok(Json(request)),
+        );
+        tokio::pin!(handler);
+        tokio::select! {
+            _ = started.notified() => {},
+            response = &mut handler => panic!("sync exec returned early: {}", response.status()),
+            _ = tokio::time::sleep(Duration::from_secs(5)) => panic!("exec did not reach upstream"),
+        }
+        run_lifecycle_once(&state, now).await;
+        assert_eq!(
+            upstream.stops(),
+            0,
+            "in-flight sync exec must prevent AutoStop"
+        );
+    } // Cancel the handler before the upstream responds.
+
+    let finished = Instant::now();
+    run_lifecycle_once(&state, finished).await;
+    assert_eq!(
+        upstream.stops(),
+        0,
+        "cancellation must refresh the idle clock"
+    );
+    run_lifecycle_once(&state, finished + Duration::from_secs(61)).await;
+    assert_eq!(
+        upstream.stops(),
+        1,
+        "the cancelled exec must no longer pin the box"
+    );
+    upstream.task.abort();
+}
 
 async fn recorded_exit(state: &AppState, box_id: &str, exec_id: &str, code: i32) {
     let (execution, _out, _err, _input, result) = Execution::stub(exec_id);

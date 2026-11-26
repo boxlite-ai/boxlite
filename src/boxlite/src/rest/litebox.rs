@@ -18,7 +18,7 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
     AttachOptions, BoxCommand, BoxConnection, BoxTunnel, ExecResult, ExecStderr, ExecStdin,
-    ExecStdout, Execution, SshConfig, SshStatus, TunnelOptions,
+    ExecStdout, Execution, SshConfig, SshStatus, SyncExecResult, TunnelOptions,
 };
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
@@ -33,7 +33,7 @@ use super::exec::RestExecControl;
 use super::types::{
     BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
     ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
-    SnapshotResponse,
+    SnapshotResponse, SyncExecRequest, SyncExecResponse,
 };
 
 /// REST-backed box handle.
@@ -390,6 +390,43 @@ impl BoxBackend for RestBox {
             None,
         ))
     }
+    async fn exec_sync(
+        &self,
+        command: BoxCommand,
+        max_output_bytes: Option<usize>,
+    ) -> BoxliteResult<SyncExecResult> {
+        let (timeout, _) = command.sync_exec_limits(max_output_bytes)?;
+        if command.user.is_some() {
+            self.client.require_exec_user_enabled().await?;
+        }
+        let req = SyncExecRequest {
+            command: command.command,
+            args: command.args,
+            env: command.env.map(|pairs| pairs.into_iter().collect()),
+            timeout_seconds: command.timeout.map(|d| d.as_secs_f64()),
+            working_dir: command.working_dir,
+            user: command.user,
+            max_output_bytes,
+        };
+        let res = self
+            .client
+            .post_with_timeout::<SyncExecResponse, _>(
+                &format!("/boxes/{}/exec/sync", self.id),
+                &req,
+                // Let the server report its deadline before the transport times out.
+                timeout + std::time::Duration::from_secs(30),
+            )
+            .await?;
+        Ok(SyncExecResult {
+            exit_code: res.exit_code,
+            stdout: res.stdout,
+            stderr: res.stderr,
+            stdout_truncated: res.stdout_truncated,
+            stderr_truncated: res.stderr_truncated,
+            error_message: res.error_message,
+        })
+    }
+
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
         if command.user.is_some() {
@@ -3119,6 +3156,165 @@ mod tests {
             socket.write_all(reply.as_bytes()).await.unwrap();
             head
         })
+    }
+
+    async fn serve_sync_exec_once(
+        listener: TcpListener,
+        status: u16,
+        response: &'static str,
+    ) -> serde_json::Value {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        serve_sync_exec_request(&mut socket, status, response).await
+    }
+
+    async fn serve_sync_exec_request(
+        socket: &mut TcpStream,
+        status: u16,
+        response: &str,
+    ) -> serde_json::Value {
+        let read = read_request_head(socket).await;
+        let end = read.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        let head = String::from_utf8_lossy(&read[..end]).to_ascii_lowercase();
+        assert!(head.starts_with("post /v1/boxes/sync-box/exec/sync http/1.1\r\n"));
+        assert!(!head.contains("upgrade:"));
+        let length: usize = head
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let mut body = read[end..].to_vec();
+        let received = body.len();
+        body.resize(length, 0);
+        socket.read_exact(&mut body[received..]).await.unwrap();
+        socket.write_all(format!(
+            "HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{response}",
+            response.len(),
+        ).as_bytes()).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn sync_exec_posts_json_and_decodes_the_result_without_websocket() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let bx = rest_box_for(listener.local_addr().unwrap().port(), "sync-box");
+        let server = tokio::spawn(serve_sync_exec_once(
+            listener,
+            200,
+            r#"{"exit_code":7,"stdout":"out","stderr":"err","stdout_truncated":true,"stderr_truncated":false,"error_message":"diagnostic"}"#,
+        ));
+        let cmd = BoxCommand::new("echo")
+            .arg("hi")
+            .env("K", "V")
+            .working_dir("/tmp")
+            .timeout(Duration::from_millis(1500));
+        assert_eq!(
+            bx.exec_sync(cmd, Some(2048)).await.unwrap(),
+            SyncExecResult {
+                exit_code: 7,
+                stdout: "out".into(),
+                stderr: "err".into(),
+                stdout_truncated: true,
+                stderr_truncated: false,
+                error_message: Some("diagnostic".into()),
+            }
+        );
+        assert_eq!(
+            server.await.unwrap(),
+            serde_json::json!({
+                "command": "echo", "args": ["hi"], "env": {"K": "V"},
+                "working_dir": "/tmp", "timeout_seconds": 1.5, "max_output_bytes": 2048,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_exec_reuses_the_connection_across_request_timeouts() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let bx = rest_box_for(listener.local_addr().unwrap().port(), "sync-box");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            for seconds in [300, 1] {
+                let request = serve_sync_exec_request(
+                    &mut socket,
+                    200,
+                    r#"{"exit_code":0,"stdout":"","stderr":"","stdout_truncated":false,"stderr_truncated":false}"#,
+                )
+                .await;
+                assert_eq!(
+                    request["timeout_seconds"].as_f64(),
+                    Some(f64::from(seconds))
+                );
+            }
+        });
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            for seconds in [300, 1] {
+                let cmd = BoxCommand::new("true").timeout(Duration::from_secs(seconds));
+                assert_eq!(bx.exec_sync(cmd, None).await.unwrap().exit_code, 0);
+            }
+            server.await.unwrap();
+        })
+        .await;
+        result.expect("both requests must complete on the same connection");
+    }
+
+    #[tokio::test]
+    async fn sync_exec_request_times_out_without_a_response() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let client = client_for(listener.local_addr().unwrap().port());
+        let body = serde_json::json!({"command": "true"});
+        let request = client.post_with_timeout::<SyncExecResponse, _>(
+            "/boxes/sync-box/exec/sync",
+            &body,
+            Duration::from_millis(50),
+        );
+        let stub = async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let head = read_request_head(&mut socket).await;
+            assert!(head.starts_with(b"POST /v1/boxes/sync-box/exec/sync HTTP/1.1\r\n"));
+            // Keep the socket open without replying until the client returns.
+            socket
+        };
+        let (result, _socket) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(request, stub)
+        })
+        .await
+        .expect("the request timeout should fire before the test deadline");
+        assert!(
+            matches!(&result, Err(BoxliteError::Network(msg)) if msg.starts_with("timed out")),
+            "expected a network timeout, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_exec_maps_http_408() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let bx = rest_box_for(listener.local_addr().unwrap().port(), "sync-box");
+        let server = tokio::spawn(serve_sync_exec_once(
+            listener,
+            408,
+            r#"{"error":{"message":"execution timed out","type":"TimeoutError","code":"timeout"}}"#,
+        ));
+        assert!(matches!(bx.exec_sync(BoxCommand::new("true"), None).await,
+            Err(BoxliteError::Internal(msg)) if msg == "server timed out: execution timed out"));
+        assert_eq!(
+            server.await.unwrap(),
+            serde_json::json!({"command": "true"})
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_exec_rejects_tty_before_connecting() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let bx = rest_box_for(listener.local_addr().unwrap().port(), "sync-box");
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            bx.exec_sync(BoxCommand::new("true").tty(true), None),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
     }
 
     /// `revoke_tunnel()` withdraws exactly the port `tunnel()` would open:
