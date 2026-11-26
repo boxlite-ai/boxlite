@@ -55,6 +55,10 @@ impl VmControl {
     }
 
     /// Exports a paused device-less VM on Linux x86_64 to new state and raw RAM files.
+    /// Pausing stops vCPUs but not KVM's in-kernel timers, so platform capture is
+    /// non-atomic; PIT restore loses sub-tick phase and can re-arm one-shot modes
+    /// (0, 1, and 4).
+    ///
     /// Both files are created with mode `0600` (subject to the process `umask`).
     /// Export skips `fsync`, and dropping the files ignores delayed `close(2)` errors.
     /// `Ok(())` provides no guarantee of power-loss durability.

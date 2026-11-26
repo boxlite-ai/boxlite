@@ -754,7 +754,9 @@ The driver saves platform state first. If it succeeds, each parked vCPU
 saves its state on its owning thread. The driver collects all replies
 and sorts the vCPU records by ID before writing either file. Following
 `boxlite-hypervisor`'s capture exclusions, x86 machine state excludes nested
-virtualization, Hyper-V SynIC, and guest-debug state.
+virtualization, Hyper-V SynIC, and guest-debug state. Pausing stops vCPUs but
+not KVM's in-kernel timers, so platform capture is non-atomic; PIT restore
+loses sub-tick phase and can re-arm one-shot modes (0, 1, and 4).
 
 Export creates two files with mode `0600` (subject to the process `umask`). It
 skips `fsync`, and dropping the files ignores delayed `close(2)` errors.

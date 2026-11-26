@@ -596,7 +596,9 @@ dispatching vCPU capture. On success, each vCPU saves its state on its owning
 thread. The driver collects all replies, including failures, and writes the
 platform state and ID-ordered vCPU records only if every capture succeeds.
 Following `boxlite-hypervisor`'s capture exclusions, x86 machine state excludes
-nested virtualization, Hyper-V SynIC, and guest-debug state.
+nested virtualization, Hyper-V SynIC, and guest-debug state. Pausing stops
+vCPUs but not KVM's in-kernel timers, so platform capture is non-atomic; PIT
+restore loses sub-tick phase and can re-arm one-shot modes (0, 1, and 4).
 
 The state file has a 32-byte little-endian header containing the eight-byte
 magic `BXLVMST1`, `u32` version `1`, `u32` vCPU count, `u64` RAM length, and

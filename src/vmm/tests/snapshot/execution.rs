@@ -453,7 +453,13 @@ fn vcpu_panic_interrupts_capture_before_a_blocked_vcpu_replies() {
     let control = vm.control();
     control.request_pause().unwrap();
     thread::scope(|scope| {
-        let driver = scope.spawn(|| vm.run());
+        let (driver_done_tx, driver_done_rx) = mpsc::channel();
+        let vm = &mut vm;
+        let driver = scope.spawn(move || {
+            let exit = vm.run();
+            let _ = driver_done_tx.send(());
+            exit
+        });
         let mut releases = ReleaseOnDrop(releases);
         let _stop = StopOnDrop(&control);
         control.wait_paused(WAIT).unwrap();
@@ -478,14 +484,21 @@ fn vcpu_panic_interrupts_capture_before_a_blocked_vcpu_replies() {
         for release in releases.0.drain(..) {
             release.send(()).unwrap();
         }
-        assert!(matches!(
-            driver.join().unwrap(),
-            Err(Error::VcpuPanicked { vcpu: 0 })
-        ));
         expect_export_error(
             result.expect("panic did not wake capture"),
             ControlReason::TerminalOutcome,
         );
+        assert!(
+            !matches!(
+                driver_done_rx.recv_timeout(WAIT),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "driver did not exit after vCPU panic"
+        );
+        assert!(matches!(
+            driver.join().unwrap(),
+            Err(Error::VcpuPanicked { vcpu: 0 })
+        ));
         assert!(!state_path.exists() && !memory_path.exists());
     });
 }
