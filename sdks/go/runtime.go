@@ -287,7 +287,14 @@ func (r *Runtime) getOrCreate(ctx context.Context, image string, existingID *str
 		if res.err != nil {
 			return nil, false, res.err
 		}
-		return newBoxFromHandle(r, res.value.box, cfg.name), res.value.created, nil
+		name := cfg.name
+		if existingID != nil {
+			// Adopt uses the options name as a lookup key, which may be the ID.
+			storedName := C.boxlite_box_name(res.value.box)
+			name = cString(storedName)
+			freeBoxliteString(storedName)
+		}
+		return newBoxFromHandle(r, res.value.box, name), res.value.created, nil
 	case <-ctx.Done():
 		abandonAsync(ch, h, r.closing, freeOrphanHandle)
 		return nil, false, ctx.Err()

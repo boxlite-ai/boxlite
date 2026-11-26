@@ -70,6 +70,10 @@ export/import and the runner's archive preparation helper remain available.
 
 ### Create a box
 
+To reopen an existing box by ID, use `rt.Adopt(ctx, id, image, opts...)`.
+On the returned handle, `ID()` reports the box ID and `Name()` reports its
+stored name, or an empty string for an unnamed box.
+
 ```go
 package main
 

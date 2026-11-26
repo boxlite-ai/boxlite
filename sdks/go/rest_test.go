@@ -817,3 +817,39 @@ func TestRestAdoptRejectsCheckpointBeforeLookup(t *testing.T) {
 		t.Fatalf("expected checkpoint rejection, got %v", err)
 	}
 }
+
+func TestRestAdoptByIDReportsStoredName(t *testing.T) {
+	const id = "01J0000000000000000000000A"
+	for _, tc := range []struct {
+		description, wireName, wantName string
+	}{
+		{"named", `"worker"`, "worker"},
+		{"unnamed", "null", ""},
+	} {
+		t.Run(tc.description, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/v1/boxes/"+id {
+					t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"box_id":%q,"name":%s,"status":"configured","privileged":false,"effective_capabilities":{"add":[],"drop":[]},"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z","image":"alpine","cpus":1,"memory_mib":128}`, id, tc.wireName)
+			}))
+			defer server.Close()
+			rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rt.Close()
+			box, err := rt.Adopt(t.Context(), id, "alpine", WithName("ignored"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer box.Close()
+			if box.ID() != id || box.Name() != tc.wantName {
+				t.Fatalf("Adopt returned ID=%q name=%q, want ID=%q name=%q", box.ID(), box.Name(), id, tc.wantName)
+			}
+		})
+	}
+}
