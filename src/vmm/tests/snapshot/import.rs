@@ -68,7 +68,7 @@ fn snapshot(count: u32, payload: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let ram = GuestRam::new(&[(GuestAddress(0), PAGE)]).unwrap();
     let mut state = Vec::new();
     let mut memory = Vec::new();
-    image::write_to_checked(&mut state, &mut memory, count, payload, &ram, || Ok(())).unwrap();
+    image::write_to(&mut state, &mut memory, count, payload, &ram).unwrap();
     (state, memory)
 }
 
