@@ -53,7 +53,7 @@ test('Ubuntu x64 matrix jobs request their qualified BoxLite workers and preserv
 for (const [name, job, runner] of [
   ['build-go.yml', 'config', 'boxlite'],
   ['build-plugins.yml', 'build', 'boxlite'],
-  ['api-client-drift.yml', 'check-generated-clients', 'boxlite'],
+  ['api-client-drift.yml', 'check-generated-clients', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['test.yml', 'dashboard', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['test.yml', 'secret-server-postgres', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['build-box-images.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
@@ -85,11 +85,11 @@ test('CodeQL places every language on its qualified runner and retains its build
   assert.equal(job['runs-on'], '${{ matrix.runner }}')
   assert.deepEqual(job.strategy.matrix.include, [
     { language: 'actions', 'build-mode': 'none', runner: 'boxlite' },
-    { language: 'c-cpp', 'build-mode': 'none', runner: 'ubuntu-latest' },
-    { language: 'go', 'build-mode': 'autobuild', runner: 'ubuntu-latest' },
-    { language: 'javascript-typescript', 'build-mode': 'none', runner: 'ubuntu-latest' },
+    { language: 'c-cpp', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-64gbdisk' },
+    { language: 'go', 'build-mode': 'autobuild', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
+    { language: 'javascript-typescript', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-64gbdisk' },
     { language: 'python', 'build-mode': 'none', runner: 'boxlite' },
-    { language: 'rust', 'build-mode': 'none', runner: 'ubuntu-latest' },
+    { language: 'rust', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-64gbdisk' },
   ])
 })
 

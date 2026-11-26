@@ -38,7 +38,7 @@ concurrency:
 jobs:
   check-generated-clients:
     name: Regenerate API clients and diff
-    runs-on: boxlite
+    runs-on: boxlite-2vcpu-4gbmem-30gbdisk
     services:
       # generate-openapi.ts boots the full NestJS app; SKIP_CONNECTIONS=true
       # defers DB/queue connections but bootstrap still issues Redis commands
