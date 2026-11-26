@@ -1,6 +1,7 @@
 import { NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { DataSource, EntityManager } from 'typeorm'
 import { Box } from '../entities/box.entity'
+import { BoxConflictError } from '../errors/box-conflict.error'
 import { OutboundControlRecord } from '../entities/outbound-control-record'
 import { OutboundSnapshot, validOutboundRevision, validOutboundSnapshot } from '../runner-adapter/outbound-control'
 import { validManagedControl } from '../runner-adapter/protected-outbound'
@@ -43,6 +44,36 @@ export function persistedOutbound(box: Box): OutboundSnapshot {
   }
   if (!validOutboundSnapshot(result)) throw new ServiceUnavailableException('Stored outbound policy is invalid')
   return result
+}
+
+/** Call with the Box row locked on the primary so intent and references describe one owner. */
+export async function hasProtectedBoxAuthority(manager: EntityManager, box: Box): Promise<boolean> {
+  const { bootstrap, managed } = outboundRecord(box)
+  if (bootstrap || managed) return true
+  const [reference] = await manager.query(
+    'SELECT 1 FROM outbound_proxy_reference WHERE organization_id = $1 AND box_id = $2 LIMIT 1',
+    [box.organizationId, box.id],
+  )
+  return !!reference
+}
+
+/** Check ordinary ownership under the same Box row lock used by managed admission. */
+export async function lockOrdinaryBox(
+  manager: EntityManager,
+  id: string,
+  runnerId: string,
+  allowPreviousRunner = false,
+): Promise<void> {
+  const box = await manager
+    .createQueryBuilder(Box, 'box')
+    .select(['box.id', 'box.organizationId', 'box.runnerId', 'box.prevRunnerId', 'box.outboundControl'])
+    .where('box.id = :id', { id })
+    .setLock('pessimistic_write')
+    .getOne()
+  if (!box || (box.runnerId !== runnerId && !(allowPreviousRunner && box.prevRunnerId === runnerId))) {
+    throw new BoxConflictError()
+  }
+  if (await hasProtectedBoxAuthority(manager, box)) throw new BoxConflictError()
 }
 
 export type LockedOutboundBox = {

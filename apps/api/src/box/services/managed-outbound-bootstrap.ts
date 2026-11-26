@@ -9,6 +9,7 @@ import { ProxyRegistryStore, ProxyReservation } from '../outbound-proxy/proxy-re
 import { RunnerAdapter } from '../runner-adapter/runnerAdapter'
 import { ProtectedBootControl, ProtectedBootReceipt } from '../runner-adapter/protected-runner'
 import {
+  hasProtectedBoxAuthority,
   LockedOutboundBox,
   OutboundPolicyStore,
   outboundRecord,
@@ -36,15 +37,9 @@ export class ManagedOutboundBootstrap {
   }
 
   async isProtected(box: Box): Promise<boolean> {
-    return this.store.locked(box.id, box.organizationId, async ({ box: current, manager }) => {
-      const record = outboundRecord(current)
-      if (record.bootstrap || record.managed) return true
-      const [reference] = await manager.query(
-        'SELECT 1 FROM outbound_proxy_reference WHERE organization_id = $1 AND box_id = $2 LIMIT 1',
-        [box.organizationId, box.id],
-      )
-      return !!reference
-    })
+    return this.store.locked(box.id, box.organizationId, ({ box: current, manager }) =>
+      hasProtectedBoxAuthority(manager, current),
+    )
   }
 
   async seed(manager: EntityManager, box: Box, proxyName: string | null) {

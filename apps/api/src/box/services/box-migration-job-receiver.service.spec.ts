@@ -132,6 +132,7 @@ function makeHarness(row?: { box?: Box | null; migration?: BoxMigration | null; 
       }
       return entity === Runner ? sourceRunner : migration
     }),
+    query: jest.fn().mockResolvedValue([]),
     createQueryBuilder,
   }
   const dataSource = {

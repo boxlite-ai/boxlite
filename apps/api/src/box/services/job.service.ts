@@ -18,10 +18,13 @@ import { JobStateHandlerService } from './job-state-handler.service'
 import { propagation, context as otelContext } from '@opentelemetry/api'
 import { PaginatedList } from '../../common/interfaces/paginated-list.interface'
 import { runnerJobQueueKey } from '../constants/runner-job-queue'
+import type { LockCode } from '../common/redis-lock.provider'
+import { lockOrdinaryBox } from '../stores/outbound-policy.store'
 
 const REDIS_BLOCKING_COMMAND_TIMEOUT_BUFFER_MS = 3_000
 
 const DEFAULT_STALE_TIMEOUT_MINUTES = 10
+const ORDINARY_LIFECYCLE_JOBS = new Set([JobType.CREATE_BOX, JobType.START_BOX, JobType.STOP_BOX, JobType.DESTROY_BOX])
 
 @Injectable()
 export class JobService {
@@ -46,6 +49,7 @@ export class JobService {
     resourceType: ResourceTypeForJobType<T>,
     resourceId: string,
     payload?: string | Record<string, any>,
+    stateChangeLockOwner?: LockCode,
   ): Promise<Job> {
     // Use provided manager if available, otherwise use default repository
     const repo = manager ? manager.getRepository(Job) : this.jobRepository
@@ -63,10 +67,20 @@ export class JobService {
         resourceId,
         status: JobStatus.PENDING,
         payload: encodedPayload,
+        stateChangeLockOwner: stateChangeLockOwner?.getCode(),
         traceContext,
       })
 
-      await repo.insert(job)
+      if (resourceType === ResourceType.BOX && ORDINARY_LIFECYCLE_JOBS.has(type)) {
+        const insert = async (transaction: EntityManager) => {
+          await lockOrdinaryBox(transaction, resourceId, runnerId, type === JobType.DESTROY_BOX)
+          await transaction.insert(Job, job)
+        }
+        if (manager) await insert(manager)
+        else await this.jobRepository.manager.transaction(insert)
+      } else {
+        await repo.insert(job)
+      }
 
       // Log with context-specific info
       const contextInfo = resourceId ? `${resourceType} ${resourceId}` : 'N/A'

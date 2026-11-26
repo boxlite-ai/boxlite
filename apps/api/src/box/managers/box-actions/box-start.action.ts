@@ -5,8 +5,10 @@
  */
 
 import { Injectable, Logger } from '@nestjs/common'
+import type { EntityManager } from 'typeorm'
 import { BoxRepository } from '../../repositories/box.repository'
 import { Box } from '../../entities/box.entity'
+import { Runner } from '../../entities/runner.entity'
 import { BoxState } from '../../enums/box-state.enum'
 import { DONT_SYNC_AGAIN, BoxAction, SYNC_AGAIN, SyncState } from './box.action'
 import { RunnerState } from '../../enums/runner-state.enum'
@@ -104,7 +106,7 @@ export class BoxStartAction extends BoxAction {
     )
     const protectedStart = await this.outboundBootstrap?.start(box, runnerAdapter, { image, metadata, nested })
     if (protectedStart === 'pending' || protectedStart === 'managed-stopped') return DONT_SYNC_AGAIN
-    if (protectedStart !== 'ready') await runnerAdapter.createBox(box, image, metadata, nested)
+    if (protectedStart !== 'ready') await runnerAdapter.createBox(box, image, metadata, nested, undefined, lockCode)
 
     await this.updateBoxState(box, BoxState.CREATING, lockCode)
     return SYNC_AGAIN
@@ -136,7 +138,7 @@ export class BoxStartAction extends BoxAction {
       )
     }
 
-    if (protectedStart !== 'ready') await runnerAdapter.startBox(box.id, box.authToken, metadata)
+    if (protectedStart !== 'ready') await runnerAdapter.startBox(box.id, box.authToken, metadata, undefined, lockCode)
 
     await this.updateBoxState(box, BoxState.STARTING, lockCode)
     return SYNC_AGAIN
@@ -161,8 +163,8 @@ export class BoxStartAction extends BoxAction {
         await this.updateBoxState(box, BoxState.STARTED, lockCode, undefined, undefined, boxInfo.daemonVersion)
 
         if (box.prevRunnerId) {
-          await this.boxRepository.cleanupPreviousRunner(box, (runnerId) =>
-            this.removeBoxFromPreviousRunner(box.id, runnerId),
+          await this.boxRepository.cleanupPreviousRunner(box, (runnerId, manager) =>
+            this.removeBoxFromPreviousRunner(box.id, runnerId, manager),
           )
         }
 
@@ -236,8 +238,8 @@ export class BoxStartAction extends BoxAction {
     return false
   }
 
-  private async removeBoxFromPreviousRunner(boxId: string, runnerId: string): Promise<void> {
-    const runner = await this.runnerService.findOne(runnerId)
+  private async removeBoxFromPreviousRunner(boxId: string, runnerId: string, manager: EntityManager): Promise<void> {
+    const runner = await manager.findOneBy(Runner, { id: runnerId })
     if (!runner) {
       this.logger.warn(`Previously assigned runner ${runnerId} for box ${boxId} not found`)
       return
@@ -246,7 +248,7 @@ export class BoxStartAction extends BoxAction {
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
     try {
-      await runnerAdapter.destroyBox(boxId)
+      await runnerAdapter.destroyBox(boxId, undefined, manager)
     } catch (error) {
       if (error.response?.status !== 404 && error.statusCode !== 404) {
         this.logger.error(`Failed to cleanup box ${boxId} on previous runner ${runner.id}:`, error)

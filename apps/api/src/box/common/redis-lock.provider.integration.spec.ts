@@ -25,18 +25,23 @@ describeIfRedis('Redis lock checkpoints (real Redis)', () => {
     const leases: RedisLockLease[] = []
     try {
       await redis.connect()
-      const first = await new RedisLockProvider(redis).acquireLease(key, 30)
+      const provider = new RedisLockProvider(redis)
+      const first = await provider.acquireLease(key, 30)
       expect(first).not.toBeNull()
       leases.push(first!)
+      const priorOwner = (await provider.getCode(key))!
       await expect(first!.readCheckpoint()).resolves.toBeNull()
       await first!.saveCheckpoint('box-1')
       expect(await redis.ttl(`{${key}}:checkpoint`)).toBe(-1)
       await first!.release()
       expect(await redis.exists(key)).toBe(0)
 
-      const next = await new RedisLockProvider(redis).acquireLease(key, 30)
+      const next = await provider.acquireLease(key, 30)
       expect(next).not.toBeNull()
       leases.push(next!)
+      const successorOwner = await provider.getCode(key)
+      await provider.releaseLease(key, priorOwner)
+      expect(await provider.getCode(key)).toEqual(successorOwner)
       await expect(next!.readCheckpoint()).resolves.toBe('box-1')
       await next!.saveCheckpoint('box-2')
       await expect(first!.saveCheckpoint('stale-box')).rejects.toBeInstanceOf(LockOwnershipLostError)

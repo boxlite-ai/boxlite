@@ -7,6 +7,7 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository, IsNull } from 'typeorm'
+import type { EntityManager } from 'typeorm'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
 import { Runner } from '../entities/runner.entity'
 import { Box } from '../entities/box.entity'
@@ -19,6 +20,7 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerState } from '../enums/runner-state.enum'
+import type { LockCode } from '../common/redis-lock.provider'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -130,6 +132,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     image: string,
     metadata?: { [key: string]: string },
     nestedVirtualization = false,
+    _protectedPlaceholder?: boolean,
+    lockOwner?: LockCode,
   ): Promise<StartBoxResponse | undefined> {
     if (!image) {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
@@ -173,7 +177,15 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       regionId: box.region,
     }
 
-    await this.jobService.createJob(null, JobType.CREATE_BOX, this.runner.id, ResourceType.BOX, box.id, payload)
+    await this.jobService.createJob(
+      null,
+      JobType.CREATE_BOX,
+      this.runner.id,
+      ResourceType.BOX,
+      box.id,
+      payload,
+      lockOwner,
+    )
 
     this.logger.debug(`Created CREATE_BOX job for box ${box.id} on runner ${this.runner.id}`)
 
@@ -185,11 +197,18 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     boxId: string,
     authToken: string,
     metadata?: { [key: string]: string },
+    _skipStart?: boolean,
+    lockOwner?: LockCode,
   ): Promise<StartBoxResponse | undefined> {
-    await this.jobService.createJob(null, JobType.START_BOX, this.runner.id, ResourceType.BOX, boxId, {
-      authToken,
-      metadata,
-    })
+    await this.jobService.createJob(
+      null,
+      JobType.START_BOX,
+      this.runner.id,
+      ResourceType.BOX,
+      boxId,
+      { authToken, metadata },
+      lockOwner,
+    )
 
     this.logger.debug(`Created START_BOX job for box ${boxId} on runner ${this.runner.id}`)
 
@@ -197,16 +216,30 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     return undefined
   }
 
-  async stopBox(boxId: string, force?: boolean): Promise<void> {
-    await this.jobService.createJob(null, JobType.STOP_BOX, this.runner.id, ResourceType.BOX, boxId, {
-      force,
-    })
+  async stopBox(boxId: string, force?: boolean, lockOwner?: LockCode): Promise<void> {
+    await this.jobService.createJob(
+      null,
+      JobType.STOP_BOX,
+      this.runner.id,
+      ResourceType.BOX,
+      boxId,
+      { force },
+      lockOwner,
+    )
 
     this.logger.debug(`Created STOP_BOX job for box ${boxId} on runner ${this.runner.id}`)
   }
 
-  async destroyBox(boxId: string): Promise<void> {
-    await this.jobService.createJob(null, JobType.DESTROY_BOX, this.runner.id, ResourceType.BOX, boxId)
+  async destroyBox(boxId: string, lockOwner?: LockCode, manager?: EntityManager): Promise<void> {
+    await this.jobService.createJob(
+      manager ?? null,
+      JobType.DESTROY_BOX,
+      this.runner.id,
+      ResourceType.BOX,
+      boxId,
+      undefined,
+      lockOwner,
+    )
 
     this.logger.debug(`Created DESTROY_BOX job for box ${boxId} on runner ${this.runner.id}`)
   }

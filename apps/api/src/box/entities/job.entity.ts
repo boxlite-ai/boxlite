@@ -74,6 +74,9 @@ export class Job {
   })
   resultMetadata: string | null
 
+  @Column({ type: 'uuid', nullable: true })
+  stateChangeLockOwner: string | null
+
   @Column({
     type: 'jsonb',
     nullable: true,
@@ -116,6 +119,7 @@ export class Job {
     resourceType: ResourceType
     resourceId: string
     payload?: string | null
+    stateChangeLockOwner?: string | null
     traceContext?: Record<string, string> | null
     errorMessage?: string | null
     startedAt?: Date | null
@@ -129,6 +133,7 @@ export class Job {
     this.resourceType = params.resourceType
     this.resourceId = params.resourceId
     this.payload = params.payload || null
+    this.stateChangeLockOwner = params.stateChangeLockOwner ?? null
     this.traceContext = params.traceContext || null
     this.errorMessage = params.errorMessage || null
     this.startedAt = params.startedAt || null

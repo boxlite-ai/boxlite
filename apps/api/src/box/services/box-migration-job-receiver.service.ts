@@ -15,6 +15,7 @@ import { Runner } from '../entities/runner.entity'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
+import { hasProtectedBoxAuthority } from '../stores/outbound-policy.store'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { getMigrateJobLockKey } from '../utils/lock-key.util'
 
@@ -48,8 +49,7 @@ type MigrationWrite = Partial<Pick<BoxMigration, 'state' | 'arcPath'>> & { runne
 interface ValidatedMigration {
   entityManager: EntityManager
   box: Box
-  //  ValidCheck: nothing outside the migration has touched the box since it was
-  //  claimed, so the migration may still move it.
+  // The Box is still parked at the claimed revision and has ordinary ownership.
   undisturbed: boolean
 }
 
@@ -162,7 +162,7 @@ export class BoxMigrationJobReceiver {
     await this.withMigration(job, BoxMigrationState.PENDING_EXPORT, async ({ entityManager, box, undisturbed }) => {
       const sourceDraining = await this.isDraining(entityManager, box.runnerId)
       if (!undisturbed) {
-        this.logger.log(`Box ${box.id} was touched while it was exported; rolling back instead of importing`)
+        this.logger.log(`Box ${box.id} is ineligible for ordinary migration; rolling back its export`)
       } else if (!sourceDraining) {
         this.logger.log(
           `Runner ${box.runnerId} stopped draining while box ${box.id} was exported; rolling back instead of importing`,
@@ -204,7 +204,9 @@ export class BoxMigrationJobReceiver {
         if (!sourceRunnerId) {
           this.logger.error(`Box ${box.id} was imported onto runner ${targetRunnerId} but has no runner of its own`)
         } else if (!undisturbed) {
-          this.logger.log(`Box ${box.id} was touched while it was imported; rolling back the copy on ${targetRunnerId}`)
+          this.logger.log(
+            `Box ${box.id} is ineligible for ordinary migration; rolling back its copy on ${targetRunnerId}`,
+          )
         }
 
         if (!sourceRunnerId || !undisturbed) {
@@ -300,6 +302,7 @@ export class BoxMigrationJobReceiver {
     return this.dataSource.transaction(async (entityManager) => {
       const box = await entityManager.findOne(Box, {
         where: { id: job.resourceId },
+        select: ['id', 'organizationId', 'name', 'runnerId', 'state', 'desiredState', 'updatedAt', 'outboundControl'],
         lock: { mode: 'pessimistic_write' },
         loadEagerRelations: false,
       })
@@ -323,7 +326,8 @@ export class BoxMigrationJobReceiver {
         return null
       }
 
-      return apply({ entityManager, box, undisturbed: migration.isUndisturbedBy(box) })
+      const undisturbed = migration.isUndisturbedBy(box) && !(await hasProtectedBoxAuthority(entityManager, box))
+      return apply({ entityManager, box, undisturbed })
     })
   }
 

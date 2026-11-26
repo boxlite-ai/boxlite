@@ -829,6 +829,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     const locks = {
       lock: jest.fn().mockResolvedValue(true),
       unlock: jest.fn(),
+      releaseLease: jest.fn().mockResolvedValue(undefined),
       isLocked: jest.fn().mockResolvedValue(false),
     }
     const manager = new BoxManager(

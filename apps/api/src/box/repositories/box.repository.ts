@@ -35,7 +35,7 @@ import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
 import { OutboundPolicy } from '../runner-adapter/network-policy'
 import { OutboundControl } from '../runner-adapter/outbound-control'
 import { OutboundPolicyCoordinator, OutboundPrecondition } from '../services/outbound-policy.coordinator'
-import { OutboundPolicyStore, persistedOutbound } from '../stores/outbound-policy.store'
+import { lockOrdinaryBox, OutboundPolicyStore, persistedOutbound } from '../stores/outbound-policy.store'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
@@ -121,7 +121,7 @@ export class BoxRepository extends BaseRepository<Box> {
   /** Keep the previous assignment while an outbound reference can still belong to it. */
   async cleanupPreviousRunner(
     assignment: Pick<Box, 'id' | 'organizationId' | 'runnerId' | 'prevRunnerId'>,
-    destroyLegacy: (runnerId: string) => Promise<void>,
+    destroyLegacy: (runnerId: string, manager: EntityManager) => Promise<void>,
   ): Promise<void> {
     const { id, organizationId, runnerId, prevRunnerId } = assignment
     if (!runnerId || !prevRunnerId || runnerId === prevRunnerId) return
@@ -149,7 +149,7 @@ export class BoxRepository extends BaseRepository<Box> {
         return
       }
 
-      await destroyLegacy(prevRunnerId)
+      await destroyLegacy(prevRunnerId, manager)
       await manager.query('UPDATE box SET "prevRunnerId" = NULL, "updatedAt" = now() WHERE id = $1', [id])
     })
   }
@@ -263,15 +263,15 @@ export class BoxRepository extends BaseRepository<Box> {
    */
   async update(
     id: string,
-    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number },
+    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number; ordinaryJobRunnerId?: string },
     raw?: false,
   ): Promise<Box>
   async update(
     id: string,
-    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number },
+    params: { updateData: Partial<Box>; entity?: Box; maxCreatedBoxes?: number; ordinaryJobRunnerId?: string },
     raw = false,
   ): Promise<Box | void> {
-    const { updateData, entity, maxCreatedBoxes } = params
+    const { updateData, entity, maxCreatedBoxes, ordinaryJobRunnerId } = params
 
     if (raw) {
       await this.repository.update(id, updateData)
@@ -290,6 +290,7 @@ export class BoxRepository extends BaseRepository<Box> {
     const invariantChanges = box.enforceInvariants()
 
     await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
+      if (ordinaryJobRunnerId !== undefined) await lockOrdinaryBox(entityManager, id, ordinaryJobRunnerId)
       const result = await entityManager.update(
         Box,
         {
@@ -656,7 +657,7 @@ export class BoxRepository extends BaseRepository<Box> {
       .where('migration.boxId = box.id')
       .andWhere('migration.state <> :claimable')
 
-    return entityManager
+    const parked = await entityManager
       .createQueryBuilder(Box, 'box')
       .select('box.id', 'id')
       .addSelect('box.updatedAt', 'updatedAt')
@@ -664,11 +665,24 @@ export class BoxRepository extends BaseRepository<Box> {
       .andWhere('box.state = :state', { state: BoxState.STOPPED })
       .andWhere('box.desiredState = :desiredState', { desiredState: BoxDesiredState.STOPPED })
       .andWhere('box.pending = false')
+      .andWhere("NOT (COALESCE(box.outboundControl, '{}'::jsonb) ?| ARRAY['bootstrap', 'managed'])")
       .andWhere(`NOT EXISTS ${migrationInFlight.getQuery()}`)
       .setParameter('claimable', BoxMigrationState.COMPLETED)
       .setLock('pessimistic_write')
       .setOnLocked('skip_locked')
       .getRawMany<ParkedBox>()
+    if (parked.length === 0) return parked
+
+    // Read references after locking the Box rows, using a fresh statement snapshot.
+    // A writer can commit a reference without changing the Box row during the first query.
+    const references: { box_id: string }[] = await entityManager.query(
+      `SELECT DISTINCT p.box_id FROM outbound_proxy_reference p
+        JOIN box b ON b.id = p.box_id AND b."organizationId" = p.organization_id
+        WHERE p.box_id = ANY($1::varchar[])`,
+      [parked.map(({ id }) => id)],
+    )
+    const protectedIds = new Set(references.map(({ box_id }) => box_id))
+    return parked.filter(({ id }) => !protectedIds.has(id))
   }
 
   /**

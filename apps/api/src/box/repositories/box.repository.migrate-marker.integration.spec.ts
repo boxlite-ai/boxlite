@@ -9,9 +9,15 @@ import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
+import { Job } from '../entities/job.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
 import { BoxState } from '../enums/box-state.enum'
+import { JobStatus } from '../enums/job-status.enum'
+import { JobType } from '../enums/job-type.enum'
+import { ResourceType } from '../enums/resource-type.enum'
+import { BoxMigrationJobReceiver } from '../services/box-migration-job-receiver.service'
+import { ManagedOutboundBootstrap } from '../services/managed-outbound-bootstrap'
 import { BoxRepository } from './box.repository'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
@@ -66,6 +72,7 @@ describeIfDatabase('BoxRepository.markParkedBoxesForExport (integration, real Po
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     ownsSchema = true
     await dataSource.synchronize()
+    await dataSource.query('CREATE TABLE outbound_proxy_reference (organization_id uuid, box_id varchar)')
     boxes = dataSource.getRepository(Box)
     migrations = dataSource.getRepository(BoxMigration)
     repository = new BoxRepository(
@@ -93,9 +100,65 @@ describeIfDatabase('BoxRepository.markParkedBoxesForExport (integration, real Po
   })
 
   beforeEach(async () => {
+    await dataSource.query('DELETE FROM outbound_proxy_reference')
     await dataSource.query(`DELETE FROM "${schemaName}"."box_migration"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."box_last_activity"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."box"`)
+  })
+
+  it('marks only the ordinary Box on a draining Runner', async () => {
+    const ordinary = parkedBox('ordinary')
+    const protectedBox = parkedBox('protected')
+    const retainedReference = parkedBox('retained-reference')
+    await boxes.insert([ordinary, protectedBox, retainedReference])
+    const bootstrap = new ManagedOutboundBootstrap(dataSource, {} as never)
+    await dataSource.transaction((manager) => bootstrap.seed(manager, protectedBox, null))
+    await dataSource.query('INSERT INTO outbound_proxy_reference (organization_id, box_id) VALUES ($1, $2)', [
+      retainedReference.organizationId,
+      retainedReference.id,
+    ])
+
+    expect(await repository.markParkedBoxesForExport([drainingRunnerId])).toBe(1)
+    expect((await migrations.find()).map((migration) => migration.boxId)).toEqual([ordinary.id])
+  })
+
+  it('rolls back a completed ordinary import when the Box acquires a protected reference', async () => {
+    const box = parkedBox('protected-during-import')
+    await boxes.insert(box)
+    const stored = await boxes.findOneByOrFail({ id: box.id })
+    await migrations.insert({
+      boxId: box.id,
+      state: BoxMigrationState.PENDING_IMPORT,
+      updatedAt: stored.updatedAt,
+    })
+    await dataSource.query('INSERT INTO outbound_proxy_reference (organization_id, box_id) VALUES ($1, $2)', [
+      box.organizationId,
+      box.id,
+    ])
+    const cache = { invalidate: jest.fn() }
+    const receiver = new BoxMigrationJobReceiver(
+      dataSource,
+      { unlock: jest.fn().mockResolvedValue(undefined) } as never,
+      cache as never,
+    )
+
+    await receiver.handleJobCompletion(
+      new Job({
+        id: randomUUID(),
+        type: JobType.IMPORT_BOX,
+        status: JobStatus.COMPLETED,
+        runnerId: healthyRunnerId,
+        resourceType: ResourceType.BACKUP,
+        resourceId: box.id,
+      }),
+    )
+
+    expect(await migrations.findOneByOrFail({ boxId: box.id })).toMatchObject({
+      state: BoxMigrationState.PENDING_ROLLBACK,
+      runnerId: healthyRunnerId,
+    })
+    expect(await boxes.findOneByOrFail({ id: box.id })).toMatchObject({ runnerId: drainingRunnerId })
+    expect(cache.invalidate).not.toHaveBeenCalled()
   })
 
   it('opens the migration on a copy of the box stamp, leaving the box alone', async () => {
@@ -116,6 +179,7 @@ describeIfDatabase('BoxRepository.markParkedBoxesForExport (integration, real Po
 
   it('breaks the timestamp equality on the next write from outside the migration', async () => {
     const box = parkedBox('started-underneath')
+    box.updatedAt = new Date('2000-01-01T00:00:00Z')
     await boxes.insert(box)
     await repository.markParkedBoxesForExport([drainingRunnerId])
 
@@ -127,14 +191,13 @@ describeIfDatabase('BoxRepository.markParkedBoxesForExport (integration, real Po
     const migration = await migrations.findOneByOrFail({ boxId: box.id })
     expect(migration.state).toBe(BoxMigrationState.PENDING_EXPORT)
     expect(migration.updatedAt).not.toEqual(interfered.updatedAt)
-    // Both stamps come from the server — TypeORM's update builder writes
-    // updatedAt as CURRENT_TIMESTAMP too — so the later write is strictly newer
-    // and this ordering carries no dependence on the test machine's clock.
+    // Updating the Box replaces the fixture's older stamp with the database time.
     expect(migration.updatedAt.getTime()).toBeLessThan(interfered.updatedAt.getTime())
   })
 
   it('claims a box a previous drain already migrated', async () => {
     const box = parkedBox('re-drained')
+    box.updatedAt = new Date('2000-01-01T00:00:00Z')
     await boxes.insert(box)
     const finished = await boxes.findOneByOrFail({ id: box.id })
     await migrations.insert({ boxId: box.id, state: BoxMigrationState.COMPLETED, updatedAt: finished.updatedAt })
