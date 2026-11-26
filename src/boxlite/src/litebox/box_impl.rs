@@ -481,7 +481,10 @@ impl BoxImpl {
     /// refused (docker refuses `exec` on a non-running container too); a stopped
     /// *box* is still woken up.
     fn ensure_usable_without_rerunning_main(&self, op: &str) -> BoxliteResult<()> {
-        let status = self.state.read().status;
+        let (status, pending_memory_restore) = {
+            let state = self.state.read();
+            (state.status, state.pending_memory_restore)
+        };
 
         // Already up: nothing to boot, nothing to re-run.
         if status == BoxStatus::Running {
@@ -509,7 +512,8 @@ impl BoxImpl {
         // A box with no command of its own boots the image's default — the
         // cloud's agent daemon, the SDK's boot-and-exec — and waking that is the
         // whole point of the implicit start, so it stays.
-        if self.has_user_main_command() {
+        // A memory restore resumes the existing init instead of running it anew.
+        if !pending_memory_restore && self.has_user_main_command() {
             let already = if status == BoxStatus::Stopped {
                 "its main command has already run, and starting the box again would run it \
                  a second time"
@@ -938,7 +942,7 @@ impl BoxImpl {
 
         // Publish the terminal state only after persistence succeeds, so a failed
         // write cannot make this run look like a stale handle on the next retry.
-        {
+        let (remove_checkpoint, row_exists) = {
             let mut current = self.state.write();
             let mut state = current.clone();
 
@@ -968,27 +972,46 @@ impl BoxImpl {
                 }
             }
 
-            if was_persisted {
+            let remove_checkpoint = !state.status.is_configured();
+            if remove_checkpoint {
+                state.pending_memory_restore = false;
+            }
+
+            let row_exists = if was_persisted {
                 // Box was persisted - sync to DB
                 // Note: If the box was already removed (e.g., by cleanup after init failure),
                 // this will return NotFound. We ignore that error since the box is already gone.
                 match self.runtime.box_manager.save_box(&self.config.id, &state) {
-                    Ok(()) => {}
+                    Ok(()) => true,
                     Err(BoxliteError::NotFound(_)) => {
                         tracing::debug!(
                             box_id = %self.config.id,
                             "Box already removed from DB during stop (likely cleanup after init failure)"
                         );
-                        *current = state;
-                        return Ok(StopCommit::Settled);
+                        false
                     }
                     Err(e) => return Err(e),
                 }
             } else {
                 // Box was never started - persist now so it survives restarts
                 self.runtime.box_manager.add_box(&self.config, &state)?;
-            }
+                true
+            };
             *current = state;
+            (remove_checkpoint, row_exists)
+        };
+
+        if remove_checkpoint {
+            let path = self.checkpoint_dir();
+            if let Err(error) = std::fs::remove_dir_all(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(box_id = %self.id(), path = %path.display(), %error,
+                    "Failed to remove checkpoint directory on stop");
+            }
+        }
+        if !row_exists {
+            return Ok(StopCommit::Settled);
         }
 
         // Invalidate cache so new handles get fresh BoxImpl
@@ -1423,6 +1446,29 @@ impl BoxImpl {
             .ok_or_else(|| BoxliteError::Unsupported("box networking is disabled".into()))
     }
 
+    fn checkpoint_dir(&self) -> std::path::PathBuf {
+        self.layout
+            .root()
+            .join(crate::litebox::archive::CHECKPOINT_DIRNAME)
+    }
+
+    /// Called only after Running is persisted and the cleanup guard is disarmed.
+    fn finish_checkpoint_restore(&self) {
+        // The restored container has already started; do not send Container.Start.
+        let _ = self.container_start.set(());
+
+        // The VM still uses guest-rootfs.ext4. Only reclaim the one-shot state file.
+        let path = self
+            .checkpoint_dir()
+            .join(crate::litebox::archive::VMSTATE_FILENAME);
+        if let Err(error) = std::fs::remove_file(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(box_id = %self.id(), path = %path.display(), %error,
+                "Failed to remove staged vmstate.krun after restore");
+        }
+    }
+
     /// Initialize LiveState via BoxBuilder.
     ///
     /// BoxBuilder handles all status types with different execution plans:
@@ -1433,9 +1479,6 @@ impl BoxImpl {
     /// Note: Lock is allocated in create(), not here. DB persistence also
     /// happens in create().
     async fn init_live_state(&self, allow_start: bool) -> BoxliteResult<LiveState> {
-        use super::BoxBuilder;
-        use std::sync::Arc;
-
         let state = self.state.read().clone();
         if !allow_start && state.status != BoxStatus::Running {
             return Err(BoxliteError::InvalidState(format!(
@@ -1443,16 +1486,34 @@ impl BoxImpl {
                 self.config.id
             )));
         }
-        let is_first_start = state.status == BoxStatus::Configured;
-        // Reattaching to a live box: its init is already running, so mark the
-        // container-start done up front — `ensure_container_started` must not try
-        // to run it a second time.
         let adopting_running = state.status == BoxStatus::Running;
+        let restoring_checkpoint = !adopting_running && state.pending_memory_restore;
+        let result = self
+            .build_live_state(state, adopting_running, restoring_checkpoint)
+            .await;
+        if result.is_err() {
+            // Spawn or cleanup may have persisted a newer state (including consuming
+            // the pending restore). Read it after the build's cleanup guard drops.
+            let mut state = self.state.write();
+            if let Ok(persisted) = self.runtime.box_manager.update_box(self.id()) {
+                *state = persisted;
+            }
+        }
+        result
+    }
 
+    async fn build_live_state(
+        &self,
+        mut state: BoxState,
+        adopting_running: bool,
+        restoring_checkpoint: bool,
+    ) -> BoxliteResult<LiveState> {
+        use super::BoxBuilder;
+
+        let is_first_start = state.status == BoxStatus::Configured;
         // Build the box (lock is held)
         // New and restarted VMs remain guarded until DB persistence succeeds.
         // Running adoption disarms cleanup before reconnecting to the live VM.
-        let mut state = state;
         let persisted = self.runtime.box_manager.update_box(self.id())?;
         state.outbound_policy = persisted.outbound_policy;
         let mut config = self.config.clone();
@@ -1534,6 +1595,9 @@ impl BoxImpl {
             state.exit_code = None;
 
             state.record_resolved_image(resolved_image);
+            if restoring_checkpoint {
+                state.pending_memory_restore = false;
+            }
 
             // Initialize health status if health check is configured
             if self.config.options.advanced.health_check.is_some() {
@@ -1570,6 +1634,9 @@ impl BoxImpl {
 
         // All operations succeeded - disarm the cleanup guard
         cleanup_guard.disarm();
+        if restoring_checkpoint {
+            self.finish_checkpoint_restore();
+        }
 
         // Archive any leftover crash artifact from a prior lifecycle so
         // the next attach preflight doesn't trip on stale evidence.
@@ -2838,3 +2905,7 @@ mod tests {
 #[cfg(test)]
 #[path = "ssh_tests.rs"]
 mod ssh_tests;
+
+#[cfg(test)]
+#[path = "tests/checkpoint_restore_commit.rs"]
+mod checkpoint_restore_commit_tests;

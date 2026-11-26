@@ -155,6 +155,14 @@ this refresh, under the same admission as boot. For example, `metrics()` waiting
 behind a stop must not restart a job whose command already ran. Explicit `start()`
 still permits a restart; attach-before-start still permits preparing a fresh box.
 
+After `BoxImpl` persists a resumed VM as `Running` with `pending_memory_restore`
+cleared, it disarms the cleanup guard, sets the `container_start` latch to skip
+`Container.Start`, and reclaims `vmstate.krun`. It retains `guest-rootfs.ext4`
+until stop. If initialization fails, `BoxImpl` reloads the persisted `BoxState`
+after guard cleanup so the handle reflects any restore flag changes. `finish_stop`
+clears the flag and removes the checkpoint directory on a non-`Configured` stop;
+a box that stays `Configured` keeps its staged checkpoint.
+
 Watcher observes processes and probes health without holding admission. It reports
 events through `RuntimeImpl::apply_box_observation` using a weak runtime reference;
 resolving an event does not arm another watcher. Successful observation resolution
