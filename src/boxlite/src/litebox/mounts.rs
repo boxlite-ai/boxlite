@@ -69,10 +69,11 @@ pub(crate) struct MountProgress {
     pub state: MountState,
     /// The request that owns the entry. A step of any other request leaves it alone.
     pub request_id: [u8; 16],
-    /// The shim export of a runtime add. `None` for an add whose registration
-    /// reply is still outstanding, and for a directory the start delivered,
-    /// which the guest recorded under the request ID.
+    /// The shim export of a runtime add, once its registration replied.
     pub export: Option<String>,
+    /// Whether a start delivered the mount. The guest then recorded it under
+    /// `request_id`, and the shim holds no export for it.
+    pub delivered_at_start: bool,
 }
 
 /// The target as the shim, the guest and the store all spell it: an absolute

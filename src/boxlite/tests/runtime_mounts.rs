@@ -515,3 +515,70 @@ async fn interrupted_and_committed_changes_choose_the_next_boot() {
     })
     .await;
 }
+
+#[tokio::test]
+#[ignore = "requires native runtime, KVM and VMM_KERNEL"]
+async fn a_directory_stays_mounted_while_a_mount_sits_below_it() {
+    scenario(async |lab| {
+        let (data, nested) = (source("above"), source("below"));
+        let mut opts = options();
+        opts.mounts.push(MountSpec::bind_mount(
+            data.path().to_str().unwrap(),
+            "/work",
+        ));
+        opts.mounts.push(MountSpec::bind_mount(
+            nested.path().to_str().unwrap(),
+            "/work/nested",
+        ));
+        let bx = lab.create(opts).await;
+        bx.start().await.unwrap();
+        assert_eq!(
+            run(&bx, "cat /work/nested/probe").await,
+            (0, "below".into())
+        );
+
+        // The guest keeps a parent mounted while a child is mounted, so the
+        // refusal comes before anything is marked.
+        let error = bx.mount().remove("/work").await.unwrap_err();
+        assert!(
+            matches!(error, BoxliteError::InvalidState(_))
+                && error.to_string().contains("/work/nested"),
+            "{error}"
+        );
+        assert_eq!(
+            bx.mount()
+                .get("/work")
+                .await
+                .unwrap()
+                .map(|mount| mount.state),
+            Some(MountState::Mounted)
+        );
+        assert_eq!(run(&bx, "cat /work/probe").await, (0, "above".into()));
+
+        // The child goes first, then the parent.
+        bx.mount().remove("/work/nested").await.unwrap();
+        bx.mount().remove("/work").await.unwrap();
+        assert!(bx.mount().list().await.unwrap().is_empty());
+        bx.stop().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires native runtime, KVM and VMM_KERNEL"]
+async fn two_mounts_at_one_destination_are_refused_before_the_workload_runs() {
+    scenario(async |lab| {
+        let (first, second) = (source("first"), source("second"));
+        let mut opts = options();
+        for (data, target) in [(first.path(), "/work"), (second.path(), "/work/")] {
+            opts.mounts
+                .push(MountSpec::bind_mount(data.to_str().unwrap(), target));
+        }
+        let bx = lab.create(opts).await;
+        // Neither of two mounts on one directory could be detached alone.
+        let error = bx.start().await.unwrap_err().to_string();
+        assert!(error.contains("another declared directory"), "{error}");
+        assert!(bx.info().await.unwrap().pid.is_none());
+    })
+    .await;
+}

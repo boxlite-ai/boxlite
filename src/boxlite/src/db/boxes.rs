@@ -603,6 +603,17 @@ mod tests {
                     .lookup("/file")
                     .is_some()
             );
+            // A removed file bind stays removed: its target is free again
+            // when the file comes back.
+            reopened
+                .update_mounts(TEST_ID_1, |mounts| {
+                    mounts.forget("/file");
+                    Ok(())
+                })
+                .unwrap();
+            std::fs::write(&file, b"static").unwrap();
+            let mounts = reopened.mounts(TEST_ID_1).unwrap();
+            assert!(!mounts.occupied("/file") && mounts.lookup("/file").is_none());
         }
     }
 

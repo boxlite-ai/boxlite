@@ -203,3 +203,26 @@ async fn paused_unsupported_and_unsafe_changes_are_refused() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn an_added_source_is_refused_once_it_is_a_link_in_any_spelling() {
+    for slash in ["", "/"] {
+        let fx = Fixture::new(BoxStatus::Stopped);
+        let real = fx._home.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let request = MountRequest {
+            source: PathBuf::from(format!("{}{slash}", fx.source.display())),
+            ..fx.request()
+        };
+        fx.handle().mount_add(request).await.unwrap();
+        std::fs::remove_dir(&fx.source).unwrap();
+        std::os::unix::fs::symlink(&real, &fx.source).unwrap();
+        let error = fx
+            .reopened()
+            .mounts(fx.id.as_str())
+            .unwrap()
+            .check_sources()
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::InvalidState(_)), "{error}");
+    }
+}

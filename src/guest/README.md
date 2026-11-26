@@ -49,6 +49,12 @@ while the box was stopped: its target must be empty and reached through no
 symbolic link, and its owner is not remapped. `Ping` advertises this with
 `records_boot_mounts`.
 
+Two recorded mounts that resolve to one mount, through an image link between
+their destinations or two spellings of one target, fail `Container.Init`:
+neither could be detached alone. `Detach` also refuses a recorded directory
+that has one of the runtime's other mounts at or below it, files and volumes
+included, because a lazy detach would take that mount along.
+
 The incarnation record retains the original cloned-tree descriptor. This pins
 the mounted tree rather than the directory underneath it, preventing mount-ID
 reuse while the record is attached. The agent reads that tree's checked

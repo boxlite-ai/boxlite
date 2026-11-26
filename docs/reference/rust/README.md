@@ -550,16 +550,21 @@ returns `InvalidState`.
 
 On a stopped or newly created box, `add` returns `Configured` and leaves the
 box idle. The next start delivers each saved directory before the first user
-process runs. A delivery failure identifies the target. You can remove its
-declaration even if the host directory has disappeared. Directory binds from
-either creation format, `BoxOptions.volumes` or `BoxOptions.mounts`, can also
-be queried and removed on a supported box.
+process runs. A delivery failure identifies the target, and so does a start
+that finds two declared directories on one mount, through an image link or
+two spellings of one target. You can remove its declaration even if the host
+directory has disappeared; the target is then free for good. Directory binds
+from either creation format, `BoxOptions.volumes` or `BoxOptions.mounts`, can
+also be queried and removed on a supported box.
 
 On a running box, `add` returns `Mounted` after guest confirmation and the
 SQLite commit. `remove` returns `()` after the guest detaches the mount, the
 shim retires its export and the runtime commits the removal. Open file and
-directory descriptors stay usable. Remove nested mounts deepest first. After
-success `get(target)` returns `None` and a second `remove(target)` returns `NotFound`.
+directory descriptors stay usable. Remove nested mounts deepest first: while
+one sits below the target, `remove` returns `InvalidState` and the entry
+stays `Mounted`. A mount the box was created with below the target, such as a
+file bind, keeps the directory mounted until the box stops. After success
+`get(target)` returns `None` and a second `remove(target)` returns `NotFound`.
 
 `list` and `get` read the last SQLite commit while delivery is in flight.
 `Preparing` identifies a pending add and `Detaching` identifies pending cleanup.

@@ -203,8 +203,9 @@ fn owns(mounts: &Mounts, target: &str, request_id: MountRequestId) -> bool {
         .is_some_and(|entry| entry.request_id == request_id)
 }
 
-/// The entry of `request_id` at `target`, when it is still there. Another
-/// request's entry, or none, means a removal took the mount meanwhile.
+/// The entry of `request_id` at `target` while it still takes its add.
+/// Another request's entry, a removed one, or one a removal is detaching
+/// means the mount is no longer the add's.
 fn own_entry<'a>(
     mounts: &'a mut Mounts,
     target: &str,
@@ -213,7 +214,7 @@ fn own_entry<'a>(
     mounts
         .progress
         .get_mut(target)
-        .filter(|entry| entry.request_id == request_id)
+        .filter(|entry| entry.request_id == request_id && entry.state == MountState::Preparing)
 }
 
 /// A request as the shim, the guest and the store take it: an absolute UTF-8
@@ -360,7 +361,11 @@ impl BoxImpl {
         self.require_runtime_mounts()?;
         self.require_aggregate_mounts()?;
         let request = checked_request(&request)?;
-        let directory = open_source(Path::new(&request.source))?;
+        // Opening reads the host directory, which may sit on slow storage.
+        let source = request.source.clone();
+        let directory = tokio::task::spawn_blocking(move || open_source(Path::new(&source)))
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("open source task: {error}")))??;
         self.mount_change(
             |admission| Self::add_while_stopped(self, &request, admission),
             |run| {
@@ -391,7 +396,7 @@ impl BoxImpl {
     /// the store.
     pub(crate) async fn mount_list(&self) -> BoxliteResult<Vec<MountInfo>> {
         self.require_runtime_mounts()?;
-        Ok(self.mounts()?.visible())
+        Ok(self.mounts().await?.visible())
     }
 
     /// The entry at `target`, or `None` when nothing is declared or in
@@ -399,11 +404,17 @@ impl BoxImpl {
     pub(crate) async fn mount_get(&self, target: &Path) -> BoxliteResult<Option<MountInfo>> {
         self.require_runtime_mounts()?;
         let target = target_key(target)?;
-        Ok(self.mounts()?.lookup(&target))
+        Ok(self.mounts().await?.lookup(&target))
     }
 
-    fn mounts(&self) -> BoxliteResult<Mounts> {
-        self.runtime.box_manager.store().mounts(self.id().as_str())
+    /// The declarations and progress from the store, read on the blocking
+    /// pool: loading them inspects creation sources on the host filesystem.
+    async fn mounts(&self) -> BoxliteResult<Mounts> {
+        let store = self.runtime.box_manager.store().clone();
+        let id = self.id().as_str().to_owned();
+        tokio::task::spawn_blocking(move || store.mounts(&id))
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("mount read task: {error}")))?
     }
 
     /// Run a change against the lifecycle it is admitted to. The lifecycle
@@ -584,6 +595,7 @@ impl BoxImpl {
                     state: MountState::Preparing,
                     request_id,
                     export: None,
+                    delivered_at_start: false,
                 },
             );
             Ok(())
@@ -663,8 +675,22 @@ impl BoxImpl {
     /// Remove this run's mount at `target`: detach its identity in the guest,
     /// retire its export, then commit the removal of the declaration.
     async fn remove_while_running(mut run: Running, target: String) -> BoxliteResult<()> {
-        // Publish `Detaching` before anything changes in the guest.
+        // Refuse what could not be detached, then publish `Detaching`, both
+        // before anything changes in the guest.
         let (request_id, named, delivered) = run.update(|mounts| {
+            // A mount below the target would leave the container with it.
+            let below = format!("{target}/");
+            let mounted_below = mounts
+                .unmanaged
+                .iter()
+                .chain(mounts.declarations.keys())
+                .chain(mounts.progress.keys())
+                .find(|other| other.starts_with(below.as_str()));
+            if let Some(below) = mounted_below {
+                return Err(BoxliteError::InvalidState(format!(
+                    "remove the mount at {below} first; one the box was created with needs a stop"
+                )));
+            }
             let entry = mounts.progress.get_mut(&target).ok_or_else(|| {
                 if mounts.declarations.contains_key(&target) {
                     BoxliteError::InvalidState(format!(
@@ -674,9 +700,7 @@ impl BoxImpl {
                     missing(&target)
                 }
             })?;
-            // A directory the start delivered has no shim export: the guest
-            // recorded it under the request ID.
-            let delivered = entry.export.is_none() && entry.state != MountState::Preparing;
+            let delivered = entry.delivered_at_start;
             entry.state = MountState::Detaching;
             Ok((entry.request_id, entry.export.clone(), delivered))
         })?;

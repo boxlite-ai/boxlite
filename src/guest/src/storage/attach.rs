@@ -95,6 +95,9 @@ pub(crate) struct Attacher {
     /// Pidfd of a killed child that had not exited yet.
     straggler: Option<OwnedFd>,
     runtime: HashMap<String, RuntimeMount>,
+    /// Where the mounts the runtime made for files and volumes sit, links
+    /// resolved. Detaching a recorded directory above one would take it along.
+    unrecorded: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -374,6 +377,19 @@ impl Attacher {
                 io::Error::from_raw_os_error(code)
             ))
         })?;
+        // Two declared directories can land on one mount: an image link
+        // between their destinations, or two spellings of one target. Neither
+        // could be detached alone, so the container does not start.
+        if self
+            .runtime
+            .values()
+            .any(|record| record.tree.as_ref().is_some_and(|tree| tree.id == id))
+        {
+            return Err(BoxliteError::InvalidState(format!(
+                "{} is mounted where another declared directory already is",
+                destination.display()
+            )));
+        }
         self.runtime.insert(
             key.to_owned(),
             RuntimeMount {
@@ -385,6 +401,22 @@ impl Attacher {
                 tree: Some(MountedTree { fd: fd.into(), id }),
             },
         );
+        Ok(())
+    }
+
+    /// Note where the runtime's other mounts sit, links resolved, so that a
+    /// recorded directory above one of them is not detached from under it.
+    /// The caller holds the container's attacher write lock.
+    pub(crate) fn note_unrecorded(
+        &mut self,
+        target: &Target,
+        destinations: &[PathBuf],
+    ) -> BoxliteResult<()> {
+        let root = File::open(format!("/proc/{}/root", target.pid))?;
+        for destination in destinations {
+            self.unrecorded
+                .push(Path::new("/").join(resolve_in_root(&root, destination)?));
+        }
         Ok(())
     }
 
@@ -420,6 +452,18 @@ impl Attacher {
         // `mount_point` is where each mount sits with links resolved, so two
         // spellings of one directory still compare as parent and child.
         let mount_point = self.runtime[key].mount_point.clone();
+        // A mount the runtime made for a file or a volume leaves only with the
+        // container, so a recorded directory above it stays too.
+        if self
+            .unrecorded
+            .iter()
+            .any(|path| path.starts_with(&mount_point))
+        {
+            return Err(BoxliteError::InvalidState(format!(
+                "a mount the box was created with sits at or below {}; stop the box to remove this directory",
+                mount_point.display()
+            )));
+        }
         if self.runtime.values().any(|record| {
             record.tree.is_some()
                 && record.mount_point != mount_point
@@ -1397,6 +1441,39 @@ mod tests {
         assert!(attacher
             .detach_runtime("canceled", &target, Path::new("/different"))
             .is_err());
+    }
+
+    #[test]
+    fn a_mount_of_the_box_below_a_directory_keeps_it_attached() {
+        let target = Target::open(nix::unistd::getpid()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("config.yml"), b"kept").unwrap();
+        let mut attacher = Attacher::default();
+        attacher
+            .note_unrecorded(&target, &[directory.join("config.yml")])
+            .unwrap();
+        // The record of a directory the runtime mounted. The guard reads only
+        // where it sits, before any namespace is entered.
+        attacher.runtime.insert(
+            "data".into(),
+            RuntimeMount {
+                source: PathBuf::new(),
+                destination: directory.clone(),
+                mount_point: directory.clone(),
+                read_only: false,
+                namespace_id: None,
+                tree: Some(MountedTree {
+                    fd: OwnedFd::from(File::open("/").unwrap()),
+                    id: 0,
+                }),
+            },
+        );
+        let error = attacher
+            .detach_runtime("data", &target, &directory)
+            .unwrap_err();
+        assert!(error.to_string().contains("sits at or below"), "{error}");
     }
 
     #[test]

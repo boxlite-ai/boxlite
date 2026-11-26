@@ -57,7 +57,7 @@ pub(crate) struct Mounts {
     /// Last committed progress of the current VM run, by target.
     pub progress: BTreeMap<String, MountProgress>,
     /// Creation targets that are no directory declaration: files and managed volumes.
-    unmanaged: BTreeSet<String>,
+    pub(crate) unmanaged: BTreeSet<String>,
     changes: BTreeMap<String, Option<MountRequest>>,
 }
 
@@ -70,37 +70,32 @@ fn info(request: &MountRequest, state: MountState) -> MountInfo {
     }
 }
 
-impl Mounts {
-    fn load(conn: &Connection, id: &str) -> BoxliteResult<Self> {
-        // One statement, so every field comes from the same WAL snapshot.
-        let row: Option<(String, String, String, Option<String>)> = db_err!(
+/// The mounts of the creation formats, split by what their sources are on the
+/// host.
+struct Creation {
+    directories: BTreeMap<String, MountRequest>,
+    unmanaged: BTreeSet<String>,
+}
+
+impl Creation {
+    /// No write changes the creation options after create, so they are read
+    /// apart from the state row. The split inspects the host filesystem, so
+    /// callers take the connection for this read alone and open no transaction
+    /// around it.
+    fn read(conn: &Connection, id: &str) -> BoxliteResult<Self> {
+        let (volumes, mounts): (String, String) = db_err!(
             conn.query_row(
-                "SELECT s.json, coalesce(c.json ->> '$.options.volumes', '[]'),
-                    coalesce(c.json ->> '$.options.mounts', '[]'), s.json ->> '$.mounts'
-             FROM box_state s JOIN box_config c USING (id) WHERE s.id = ?1",
+                "SELECT coalesce(json ->> '$.options.volumes', '[]'),
+                    coalesce(json ->> '$.options.mounts', '[]') FROM box_config WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
-        )?;
-        let (state, volumes, mounts, saved) =
-            row.ok_or_else(|| BoxliteError::NotFound(id.to_owned()))?;
-        let state: BoxState = db_err!(serde_json::from_str(&state))?;
-        let saved: Saved = match saved {
-            Some(json) => db_err!(serde_json::from_str(&json))?,
-            None => Saved::default(),
-        };
+        )?
+        .ok_or_else(|| BoxliteError::NotFound(id.to_owned()))?;
         let volumes: Vec<VolumeSpec> = db_err!(serde_json::from_str(&volumes))?;
         let mounts: Vec<MountSpec> = db_err!(serde_json::from_str(&mounts))?;
         let mut this = Self {
-            // Progress belongs to one run. A stopped box, or a later run, has none.
-            progress: saved
-                .run
-                .filter(|run| Some(run.pid) == state.pid && run.started_at == state.started_at)
-                .map(|run| run.targets)
-                .unwrap_or_default(),
-            state,
-            declarations: BTreeMap::new(),
             unmanaged: volumes
                 .iter()
                 .filter(|volume| volume.managed_volume.is_some())
@@ -113,7 +108,7 @@ impl Mounts {
                 )
                 .filter_map(normalize_target)
                 .collect(),
-            changes: saved.changes,
+            directories: BTreeMap::new(),
         };
         let directories = volumes
             .iter()
@@ -148,7 +143,7 @@ impl Mounts {
             {
                 this.unmanaged.insert(key);
             } else {
-                this.declarations.insert(
+                this.directories.insert(
                     key.clone(),
                     MountRequest {
                         source: source.into(),
@@ -158,11 +153,50 @@ impl Mounts {
                 );
             }
         }
+        Ok(this)
+    }
+}
+
+impl Mounts {
+    fn load(conn: &Connection, id: &str, creation: Creation) -> BoxliteResult<Self> {
+        // One statement, so the state and the mounts come from the same WAL snapshot.
+        let row: Option<(String, Option<String>)> = db_err!(
+            conn.query_row(
+                "SELECT json, json ->> '$.mounts' FROM box_state WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+        )?;
+        let (state, saved) = row.ok_or_else(|| BoxliteError::NotFound(id.to_owned()))?;
+        let state: BoxState = db_err!(serde_json::from_str(&state))?;
+        let saved: Saved = match saved {
+            Some(json) => db_err!(serde_json::from_str(&json))?,
+            None => Saved::default(),
+        };
+        let mut this = Self {
+            // Progress belongs to one run. A stopped box, or a later run, has none.
+            progress: saved
+                .run
+                .filter(|run| Some(run.pid) == state.pid && run.started_at == state.started_at)
+                .map(|run| run.targets)
+                .unwrap_or_default(),
+            state,
+            declarations: creation.directories,
+            unmanaged: creation.unmanaged,
+            changes: saved.changes,
+        };
         for (target, change) in &this.changes {
             match change {
-                Some(request) => this.declarations.insert(target.clone(), request.clone()),
-                None => this.declarations.remove(target),
-            };
+                Some(request) => {
+                    this.declarations.insert(target.clone(), request.clone());
+                }
+                // The target stays free, whatever its source is now.
+                None => {
+                    this.declarations.remove(target);
+                    this.unmanaged.remove(target);
+                }
+            }
         }
         Ok(this)
     }
@@ -274,7 +308,8 @@ impl Mounts {
         for request in self.declarations.values() {
             let added = self.is_added(&request.target.to_string_lossy());
             let metadata = if added {
-                std::fs::symlink_metadata(&request.source)
+                // A trailing separator or dot would make the kernel follow a final link.
+                std::fs::symlink_metadata(request.source.components().as_path())
             } else {
                 std::fs::metadata(&request.source)
             };
@@ -327,6 +362,7 @@ impl Mounts {
                     state: MountState::Mounted,
                     request_id: key.into_bytes(),
                     export: None,
+                    delivered_at_start: true,
                 },
             );
         }
@@ -346,7 +382,8 @@ fn undeliverable(request: &MountRequest, cause: impl Display) -> BoxliteError {
 impl BoxStore {
     /// The declarations of box `id` and the progress of its current VM run.
     pub(crate) fn mounts(&self, id: &str) -> BoxliteResult<Mounts> {
-        Mounts::load(&self.db.conn(), id)
+        let creation = Creation::read(&self.db.conn(), id)?;
+        Mounts::load(&self.db.conn(), id, creation)
     }
 
     /// Apply `change` to the declarations and progress of box `id`, with the
@@ -356,9 +393,12 @@ impl BoxStore {
         id: &str,
         change: impl FnOnce(&mut Mounts) -> BoxliteResult<T>,
     ) -> BoxliteResult<T> {
+        // Before the transaction, so that the inspection in `Creation::read`
+        // holds neither the connection nor the database write lock.
+        let creation = Creation::read(&self.db.conn(), id)?;
         let mut conn = self.db.conn();
         let tx = db_err!(conn.transaction_with_behavior(TransactionBehavior::Immediate))?;
-        let mut mounts = Mounts::load(&tx, id)?;
+        let mut mounts = Mounts::load(&tx, id, creation)?;
         let result = change(&mut mounts)?;
         Self::write_state(&tx, id, &mounts.state)?;
         db_err!(tx.execute(

@@ -90,7 +90,11 @@ fn require_empty_target(rootfs: &Path, destination: &Path) -> BoxliteResult<()> 
 /// Record each mount the runtime made for a declared directory, under the
 /// identity every process of the container will find. Init is created and has
 /// not run, so nothing has touched these mounts since the runtime made them.
-async fn record_mounts(container: &Container, mounts: Vec<RecordedMount>) -> BoxliteResult<()> {
+async fn record_mounts(
+    container: &Container,
+    mounts: Vec<RecordedMount>,
+    unrecorded: Vec<PathBuf>,
+) -> BoxliteResult<()> {
     if mounts.is_empty() {
         return Ok(());
     }
@@ -110,6 +114,7 @@ async fn record_mounts(container: &Container, mounts: Vec<RecordedMount>) -> Box
                 mount.read_only,
             )?;
         }
+        attacher.note_unrecorded(&target, &unrecorded)?;
         Ok::<(), BoxliteError>(())
     })
     .await
@@ -486,6 +491,7 @@ impl ContainerService for GuestServer {
         // Keep every resolved volume subpath mount alive until startup is done.
         let mut resolved_mounts = Vec::new();
         let mut recorded = Vec::new();
+        let mut unrecorded = Vec::new();
         let mut user_mounts = Vec::with_capacity(init_req.mounts.len());
         for m in &init_req.mounts {
             let volume_dir = container_layout.volume_dir(&m.volume_name);
@@ -534,6 +540,8 @@ impl ContainerService for GuestServer {
                     destination: PathBuf::from(&m.destination),
                     read_only: m.read_only,
                 });
+            } else {
+                unrecorded.push(PathBuf::from(&m.destination));
             }
             if m.added {
                 if let Err(error) = require_empty_target(&bundle_rootfs, Path::new(&m.destination))
@@ -630,7 +638,7 @@ impl ContainerService for GuestServer {
                 // The runtime made the mounts of declared directories. Their
                 // identity is recorded now: the container is created and
                 // nothing in it has run.
-                if let Err(error) = record_mounts(&container, recorded).await {
+                if let Err(error) = record_mounts(&container, recorded, unrecorded).await {
                     return Ok(Response::new(ContainerInitResponse {
                         result: Some(container_init_response::Result::Error(init_error(
                             "record the mount of a declared directory",

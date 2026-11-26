@@ -160,18 +160,18 @@ async fn build_config(
     let volume_options = options.clone();
     // Declared sources are checked before the resolver runs: it would mount a
     // file where a declared directory used to be, or fail without naming the
-    // target.
-    if let Some(declared) = &declared {
-        declared.check_sources()?;
-    }
-    // Volume resolution does file IO and takes filesystem locks, so keep it
-    // off Tokio's async worker threads.
-    let user_volumes = tokio::task::spawn_blocking(move || {
+    // target. Both read the host filesystem, and the resolution takes
+    // filesystem locks, so keep them off Tokio's async worker threads.
+    let (declared, user_volumes) = tokio::task::spawn_blocking(move || {
+        if let Some(declared) = &declared {
+            declared.check_sources()?;
+        }
         resolve_user_volumes(
             &volume_options.volumes,
             &volume_options.mounts,
             &local_volume_store,
         )
+        .map(|volumes| (declared, volumes))
     })
     .await
     .map_err(|error| BoxliteError::Internal(format!("volume resolution task failed: {error}")))??;
