@@ -37,6 +37,7 @@ impl RestRuntime {
         &self,
         options: &BoxOptions,
         box_name: &str,
+        require_saved_policy: bool,
     ) -> BoxliteResult<LiteBox> {
         let response = self
             .client
@@ -62,6 +63,16 @@ impl RestRuntime {
                 "cannot reuse box {box_name:?}: requested privileged={}, but the \
                              existing box has privileged={actual}; use a different name or recreate it",
                 options.advanced.privileged
+            )));
+        }
+        if let Some(policy) = &response.effective_capabilities {
+            options
+                .advanced
+                .effective_capabilities()
+                .check_compatibility(policy, box_name)?;
+        } else if require_saved_policy || options.advanced.capabilities().is_some() {
+            return Err(BoxliteError::Unsupported(format!(
+                "cannot verify the capability policy for box {box_name:?}; upgrade the REST server"
             )));
         }
         let info = response.to_box_info()?;
@@ -562,7 +573,7 @@ impl RuntimeBackend for RestRuntime {
         }
 
         if let Some(ref box_name) = name {
-            match self.adopt_named_box(&options, box_name).await {
+            match self.adopt_named_box(&options, box_name, false).await {
                 Ok(handle) => return Ok((handle, false)),
                 Err(BoxliteError::NotFound(_)) => {}
                 Err(error) => return Err(error),
@@ -574,7 +585,7 @@ impl RuntimeBackend for RestRuntime {
     }
 
     async fn adopt(&self, options: BoxOptions, box_name: &str) -> BoxliteResult<LiteBox> {
-        self.adopt_named_box(&options, box_name).await
+        self.adopt_named_box(&options, box_name, true).await
     }
 
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {

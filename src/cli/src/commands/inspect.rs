@@ -294,6 +294,7 @@ mod tests {
             cpus: 1.0,
             memory_mib: 512,
             privileged: None,
+            effective_capabilities: None,
             network: None,
             labels: HashMap::new(),
             auto_stop: 0,

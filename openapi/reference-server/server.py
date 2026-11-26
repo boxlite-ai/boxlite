@@ -356,6 +356,9 @@ def box_info_to_dict(info) -> dict:
         box["exit_code"] = info.state.exit_code
     if info.privileged is not None:
         box["privileged"] = info.privileged
+    policy = getattr(info, "effective_capabilities", None)
+    if policy is not None:
+        box["effective_capabilities"] = {"add": policy.add, "drop": policy.drop}
     return box
 
 

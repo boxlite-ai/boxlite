@@ -167,6 +167,8 @@ pub(super) struct BoxResponse {
     pub memory_mib: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privileged: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_capabilities: Option<boxlite::ContainerCapabilities>,
     pub labels: HashMap<String, String>,
     pub auto_stop: u32,
     pub auto_delete: u32,

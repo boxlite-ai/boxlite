@@ -3,6 +3,7 @@ package boxlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -725,7 +726,7 @@ func TestRestAdoptUsesExplicitIDAndChecksPrivilege(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"box_id":"box1","name":"saved","status":"configured","privileged":true,
+		_, _ = io.WriteString(w, `{"box_id":"box1","name":"saved","status":"configured","privileged":true,"effective_capabilities":{"add":["ALL"],"drop":[]},
 			"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z",
 			"image":"alpine:latest","cpus":1,"memory_mib":256}`)
 	}))
@@ -753,5 +754,66 @@ func TestRestAdoptUsesExplicitIDAndChecksPrivilege(t *testing.T) {
 	defer box.Close()
 	if got := box.ID(); got != "box1" {
 		t.Fatalf("adopt returned box %q", got)
+	}
+}
+
+func TestRestAdoptChecksSavedPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, metadata          string
+		requestDrop, wantHandle bool
+	}{
+		{"missing policy", "", false, false},
+		{"stored nondefault", `,"effective_capabilities":{"add":[],"drop":["CHOWN"]}`, false, false},
+		{"requested drop", `,"effective_capabilities":{"add":[],"drop":[]}`, true, false},
+		{"equivalent drop", `,"effective_capabilities":{"add":[],"drop":["CAP_CHOWN"]}`, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/v1/boxes/saved" {
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"box_id":"saved","status":"stopped","privileged":false,"created_at":"2026-07-14T00:00:00Z","updated_at":"2026-07-14T00:00:00Z","image":"alpine","cpus":1,"memory_mib":128%s}`, tc.metadata)
+			}))
+			defer server.Close()
+			rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rt.Close()
+			advanced, err := NewAdvancedBoxOptions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer advanced.Close()
+			if tc.requestDrop {
+				if err := advanced.SetCapabilities(ContainerCapabilities{Drop: []string{"chown"}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			box, err := rt.Adopt(t.Context(), "saved", "alpine", WithAdvancedOptions(advanced))
+			if box != nil {
+				defer box.Close()
+			}
+			if (err == nil) != tc.wantHandle || (box != nil) != tc.wantHandle {
+				t.Fatalf("handle=%t error=%v", box != nil, err)
+			}
+		})
+	}
+}
+
+func TestRestAdoptRejectsCheckpointBeforeLookup(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected lookup %s", r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	if _, err := rt.Adopt(t.Context(), "saved", "", WithCheckpoint("checkpoint-a")); err == nil || !strings.Contains(err.Error(), "checkpoint") {
+		t.Fatalf("expected checkpoint rejection, got %v", err)
 	}
 }

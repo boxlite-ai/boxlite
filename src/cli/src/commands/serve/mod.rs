@@ -1212,6 +1212,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         cpus: info.cpus,
         memory_mib: info.memory_mib,
         privileged: info.privileged,
+        effective_capabilities: info.effective_capabilities.clone(),
         labels: info.labels.clone(),
         auto_stop: info.auto_stop,
         auto_delete: info.auto_delete,
@@ -2807,6 +2808,22 @@ mod tests {
                 assert!(response.get("privileged").is_none());
             }
         }
+    }
+
+    #[test]
+    fn box_response_preserves_known_capability_policy_and_omits_unknown() {
+        let mut info = info_as_the_runtime_reports_it("stopped");
+        let response = serde_json::to_value(box_info_to_response(&info)).unwrap();
+        assert!(response.get("effective_capabilities").is_none());
+        info.effective_capabilities = Some(boxlite::ContainerCapabilities {
+            add: vec![],
+            drop: vec!["CHOWN".into()],
+        });
+        let response = serde_json::to_value(box_info_to_response(&info)).unwrap();
+        assert_eq!(
+            response["effective_capabilities"],
+            serde_json::json!({"add": [], "drop": ["CHOWN"]})
+        );
     }
 
     /// Every box response must report the deadlines `serve` holds, not the

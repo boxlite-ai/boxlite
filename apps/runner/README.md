@@ -833,7 +833,12 @@ reports failure and asks the caller to submit a new create request. This
 also applies if the previous process exited before dispatch. If the target
 disappears before adoption, creation fails. The runtime checks the saved box's
 policy against the request before returning its handle. A privilege mismatch
-fails before start, and adoption cannot create a replacement.
+fails before start, and adoption cannot create a replacement. Adoption returns
+a handle without starting a configured or stopped box. The create job's
+`skipStart` option controls the subsequent start. REST adoption requires both
+the persisted privileged flag and effective Linux capability policy. Older
+servers that omit the policy cannot verify adoption. Checkpoint sources require
+an explicit create because adoption cannot verify an existing box's origin.
 
 Deploy the Jobs API with `afterId` support before upgrading the Runner.
 Startup scans `GET /jobs?status=IN_PROGRESS` in ascending UUID order,
@@ -852,8 +857,9 @@ name or value restrictions. Empty names, duplicate names and empty values retain
 their existing semantics; host and header validation remains in the backend.
 Credential-bearing jobs require unique, nonempty names to match fetched secrets.
 If replay adoption confirms the box is absent, the runner removes the volume
-ownership record written during preparation. Other lookup errors preserve that
-record because the box may still exist. The backend error wraps the lookup cause;
+ownership record written during preparation and reclaims Filestore mounts only
+after checking under the instance lock that no other box references them. Other lookup errors preserve
+the record because the box may still exist. The backend error wraps the lookup cause;
 credential job status retains its sanitized error. For a fetch that returns HTTP
 503, job status preserves the Secret Server code `store_unavailable` for storage
 failures and `attestation_unavailable` for identity verifier outages.

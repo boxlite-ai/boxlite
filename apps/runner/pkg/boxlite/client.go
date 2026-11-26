@@ -658,9 +658,9 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// Never recreate a replay target whose single-use credential was skipped.
 	if boxDto.RequireExisting && bx == nil {
 		if len(volumeMounts) > 0 && boxlite.IsNotFound(err) {
-			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
-				c.logger.WarnContext(ctx, "failed to remove box volume mount record for absent replay target", "box", boxDto.Id, "error", cleanupErr)
-			}
+			// Absence is confirmed. Drop this box's record and rescan
+			// shared Filestore references under the instance lock.
+			c.rollbackVolumeMountRecord(ctx, boxDto.Id, boxDto.Volumes, nil)
 		}
 		return "", "", fmt.Errorf("existing box unavailable: %w", err)
 	}

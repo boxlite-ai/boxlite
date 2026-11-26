@@ -101,6 +101,7 @@ let runtime = BoxliteRuntime::default_runtime();
 | `init_default_runtime` | `fn init_default_runtime(options: BoxliteOptions) -> BoxliteResult<()>` | Initialize global with options |
 | `create` | `async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox>` | Create a new box |
 | `get` | `async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>>` | Get box by ID or name |
+| `adopt` | `async fn adopt(&self, options: BoxOptions, name: &str) -> BoxliteResult<LiteBox>` | Open an existing box by name or ID after checking its policy |
 | `get_info` | `async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>>` | Get box info without handle |
 | `list_info` | `async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>>` | List all boxes |
 | `exists` | `async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool>` | Check if box exists |
@@ -108,6 +109,11 @@ let runtime = BoxliteRuntime::default_runtime();
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
 | `checkpoints` | `fn checkpoints(&self) -> CheckpointHandle` | Get the handle for managed checkpoints |
+
+`adopt()` returns a handle to the saved box. It leaves a configured box unstarted
+and a stopped box stopped. A missing target returns `NotFound`. REST adoption
+requires the server to report the saved privilege mode and effective capability
+policy. A checkpoint source requires an explicit `create()`.
 
 Local `remove()` returns `InvalidState` while a disk operation is busy or the disk
 lock file is missing. Retry busy removal after the operation finishes. For a

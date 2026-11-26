@@ -390,6 +390,8 @@ pub(crate) struct PyBoxInfo {
     #[pyo3(get)]
     pub(crate) privileged: Option<bool>,
     #[pyo3(get)]
+    pub(crate) effective_capabilities: Option<crate::advanced_options::PyContainerCapabilities>,
+    #[pyo3(get)]
     pub(crate) network: Option<PyNetworkInfo>,
     #[pyo3(get)]
     pub(crate) auto_stop: u32,
@@ -456,6 +458,12 @@ impl From<BoxInfo> for PyBoxInfo {
             cpus: info.cpus,
             memory_mib: info.memory_mib,
             privileged: info.privileged,
+            effective_capabilities: info.effective_capabilities.map(|policy| {
+                crate::advanced_options::PyContainerCapabilities {
+                    add: policy.add,
+                    drop: policy.drop,
+                }
+            }),
             network: info.network.map(PyNetworkInfo::from),
             auto_stop: info.auto_stop,
             auto_delete: info.auto_delete,
@@ -490,6 +498,7 @@ mod tests {
             cpus: 2.0,
             memory_mib: 512,
             privileged: None,
+            effective_capabilities: None,
             network,
             labels: HashMap::new(),
             auto_stop: 0,

@@ -3132,6 +3132,11 @@ components:
             Persisted guest privilege mode. Older servers may omit this field;
             absence means unknown, not false. Named get_or_create reuse requires
             a reported mode equal to the requested advanced.privileged value.
+        effective_capabilities:
+          description: Saved Linux capability policy after privileged-mode resolution. Adoption requires a reported policy.
+          readOnly: true
+          allOf:
+            - $ref: "#/components/schemas/CreateContainerCapabilities"
         labels:
           type: object
           additionalProperties:

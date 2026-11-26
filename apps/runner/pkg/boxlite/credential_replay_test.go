@@ -108,7 +108,7 @@ func TestCredentialReplayRequireExisting(t *testing.T) {
 					http.Error(w, "not found", 404)
 					return
 				}
-				fmt.Fprintf(w, `{"privileged":%t,"box_id":"box-1","name":"box-1","status":"configured","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z","image":"alpine:latest","cpus":1,"memory_mib":128}`, scenario == "privilege mismatch")
+				fmt.Fprintf(w, `{"effective_capabilities":{"add":[],"drop":[]},"privileged":%t,"box_id":"box-1","name":"box-1","status":"configured","created_at":"2026-11-01T00:00:00Z","updated_at":"2026-11-01T00:00:00Z","image":"alpine:latest","cpus":1,"memory_mib":128}`, scenario == "privilege mismatch")
 			}))
 			defer server.Close()
 			runtime, err := sdk.NewRest(sdk.BoxliteRestOptions{URL: server.URL})
@@ -154,6 +154,42 @@ func TestCredentialReplayRequireExisting(t *testing.T) {
 				if exists || err != nil {
 					t.Fatalf("absence: exists=%t err=%v", exists, err)
 				}
+			}
+		})
+	}
+}
+
+func TestCredentialReplayFilestoreCleanup(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shared=%t", shared), func(t *testing.T) {
+			useVolumeMountBasePath(t, t.TempDir())
+			client := filestoreTestClient(t)
+			client.homeDir = t.TempDir()
+			installFakeMountpoint(t, 0)
+			fake := installFakeFilestoreMounts(t, client)
+			log := installFakeUmount(t)
+			server := httptest.NewServer(http.NotFoundHandler())
+			defer server.Close()
+			rt, err := sdk.NewRest(sdk.BoxliteRestOptions{URL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rt.Close()
+			client.runtime = rt
+			volumes := []dto.VolumeDTO{{VolumeId: "vol-ok", MountPath: "/data", Filestore: &dto.FilestoreRef{Instance: "ml-scratch", Server: "10.0.0.7", Export: "/vol1"}}}
+			if shared {
+				if _, err := client.getVolumeMounts(t.Context(), "other", volumes); err != nil {
+					t.Fatal(err)
+				}
+			}
+			outbound := true
+			_, _, err = client.Create(t.Context(), dto.CreateBoxDTO{Id: "missing", Image: "alpine", RequireExisting: true, OutboundEnabled: &outbound, Volumes: volumes})
+			if !sdk.IsNotFound(err) || fake.mounts.Load() != 1 {
+				t.Fatalf("Create=%v mounts=%d", err, fake.mounts.Load())
+			}
+			unmounts := commandLog(t, log)
+			if shared && len(unmounts) != 0 || !shared && (len(unmounts) != 1 || unmounts[0] != filepath.Join(getVolumeMountBasePath(), filestoreMountPrefix+"ml-scratch")) {
+				t.Fatalf("unexpected unmounts: %v", unmounts)
 			}
 		})
 	}

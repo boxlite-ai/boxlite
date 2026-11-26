@@ -361,6 +361,11 @@ impl BoxliteRuntime {
                 "adoption requires a box name or ID".into(),
             ));
         }
+        if matches!(options.rootfs, crate::RootfsSpec::Checkpoint(_)) {
+            return Err(BoxliteError::Unsupported(
+                "adopt cannot verify the checkpoint source of an existing box".into(),
+            ));
+        }
         options.sanitize_create()?;
         self.backend.adopt(options, name).await
     }
