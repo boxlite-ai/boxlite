@@ -3,8 +3,14 @@
 //! Builds and caches pure ext4 disk images from OCI images.
 //! These disks contain only image content (no guest binary).
 
+use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::path::PathBuf;
+use std::sync::{Arc, LazyLock, Weak};
+
+use parking_lot::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -26,13 +32,12 @@ use super::ImageObject;
 ///
 /// # Concurrency
 ///
-/// Thread-safety is provided by the caller:
-/// - Multi-process: `RuntimeLock` ensures single-process access per BOXLITE_HOME
-/// - In-process: `OnceCell<GuestRootfs>` serializes all calls to `get_or_create()`
-///
-/// No internal locking is needed.
+/// `RuntimeLock` ensures single-process access per BOXLITE_HOME. Within the
+/// process, cold callers serialize by final disk path (digest and reserve).
+/// Cache hits and builds for unrelated keys do not wait for a build.
 ///
 /// Cache location: `~/.boxlite/images/disk-images/`
+#[derive(Clone)]
 pub struct ImageDiskManager {
     cache_dir: PathBuf,
     temp_dir: PathBuf,
@@ -61,6 +66,9 @@ pub struct ImageDiskManager {
     reserve_bytes: u64,
 }
 
+type BuildFlights = HashMap<PathBuf, Weak<AsyncMutex<()>>>;
+static BUILD_FLIGHTS: LazyLock<Mutex<BuildFlights>> = LazyLock::new(Mutex::default);
+
 impl ImageDiskManager {
     pub fn new(cache_dir: PathBuf, temp_dir: PathBuf, reserve_bytes: u64) -> Self {
         Self {
@@ -77,14 +85,50 @@ impl ImageDiskManager {
     /// Otherwise: extracts layers → creates ext4 → atomically installs to cache.
     pub async fn get_or_create(&self, image: &ImageObject) -> BoxliteResult<Disk> {
         let digest = image.compute_image_digest();
+        self.get_or_build(&digest, |manager, digest| {
+            let image = image.clone();
+            async move {
+                tracing::info!("Building image disk for {} (first time)", digest);
+                manager.build_and_install(&image, &digest).await
+            }
+        })
+        .await
+    }
 
-        if let Some(disk) = self.find(&digest) {
-            tracing::debug!("Found cached image disk for {}", digest);
+    async fn get_or_build<F, Fut>(&self, digest: &str, build: F) -> BoxliteResult<Disk>
+    where
+        F: FnOnce(Self, String) -> Fut,
+        Fut: Future<Output = BoxliteResult<Disk>> + Send + 'static,
+    {
+        if let Some(disk) = self.find(digest) {
             return Ok(disk);
         }
 
-        tracing::info!("Building image disk for {} (first time)", digest);
-        self.build_and_install(image, &digest).await
+        let flight = {
+            let mut flights = BUILD_FLIGHTS.lock();
+            flights.retain(|_, flight| flight.strong_count() != 0);
+            let entry = flights.entry(self.disk_path(digest)).or_default();
+            entry.upgrade().unwrap_or_else(|| {
+                let flight = Arc::new(AsyncMutex::new(()));
+                *entry = Arc::downgrade(&flight);
+                flight
+            })
+        };
+        let guard = flight.lock_owned().await;
+        // A preceding caller may have installed the disk while we waited.
+        if let Some(disk) = self.find(digest) {
+            return Ok(disk);
+        }
+
+        let build = build(self.clone(), digest.to_owned());
+        // Keep both the build (including its staging directory) and the lock
+        // alive if the requesting task is cancelled during mkfs.
+        tokio::spawn(async move {
+            let _guard = guard;
+            build.await
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("Image disk build task failed: {e}")))?
     }
 
     /// Look up a cached disk by image digest.
@@ -177,6 +221,137 @@ impl ImageDiskManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn install_test_disk(manager: &ImageDiskManager, digest: &str) -> BoxliteResult<Disk> {
+        let temp = tempfile::tempdir_in(&manager.temp_dir).unwrap();
+        let path = temp.path().join("test.ext4");
+        fs::write(&path, b"complete").unwrap();
+        manager.install(digest, Disk::new(path, DiskFormat::Ext4, false))
+    }
+
+    #[tokio::test]
+    async fn concurrent_cold_callers_build_once_across_managers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const CALLERS: usize = 20;
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = ImageDiskManager::new(tmp.path().join("cache"), tmp.path().to_owned(), 128);
+        let barrier = Arc::new(tokio::sync::Barrier::new(CALLERS));
+        let builds = Arc::new(AtomicUsize::new(0));
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..CALLERS {
+            let (manager, barrier, builds) = (manager.clone(), barrier.clone(), builds.clone());
+            tasks.spawn(async move {
+                barrier.wait().await;
+                manager
+                    .get_or_build("sha256:cold", |manager, digest| async move {
+                        builds.fetch_add(1, Ordering::Relaxed);
+                        tokio::task::yield_now().await;
+                        install_test_disk(&manager, &digest)
+                    })
+                    .await
+                    .unwrap()
+            });
+        }
+        while let Some(disk) = tasks.join_next().await {
+            assert_eq!(disk.unwrap().path(), manager.disk_path("sha256:cold"));
+        }
+        assert_eq!(builds.load(Ordering::Relaxed), 1);
+        let disk = manager
+            .get_or_build("sha256:cold", |_, _| async {
+                panic!("cache hit must not build")
+            })
+            .await
+            .unwrap();
+        assert_eq!(fs::read(disk.path()).unwrap(), b"complete");
+    }
+
+    #[tokio::test]
+    async fn cancelled_request_keeps_flight_running_without_blocking_unrelated_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = ImageDiskManager::new(tmp.path().join("cache"), tmp.path().to_owned(), 128);
+        let (started, building) = tokio::sync::oneshot::channel();
+        let (finish, wait) = tokio::sync::oneshot::channel();
+        let other = manager.clone();
+        let leader = tokio::spawn(async move {
+            other
+                .get_or_build("sha256:paused", |manager, digest| async move {
+                    started.send(()).unwrap();
+                    wait.await.unwrap();
+                    install_test_disk(&manager, &digest)
+                })
+                .await
+        });
+        building.await.unwrap();
+        leader.abort();
+        assert!(leader.await.err().unwrap().is_cancelled());
+        let waiter = manager.get_or_build("sha256:paused", |_, _| async {
+            panic!("flight must survive cancellation")
+        });
+        tokio::pin!(waiter);
+        assert!(
+            std::future::poll_fn(|cx| std::task::Poll::Ready(
+                waiter.as_mut().poll(cx).is_pending()
+            ))
+            .await
+        );
+
+        let timeout = std::time::Duration::from_secs(5);
+        let different_reserve =
+            ImageDiskManager::new(manager.cache_dir.clone(), manager.temp_dir.clone(), 256);
+        let disk = tokio::time::timeout(
+            timeout,
+            different_reserve.get_or_build("sha256:paused", |manager, digest| async move {
+                install_test_disk(&manager, &digest)
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_ne!(disk.path(), manager.disk_path("sha256:paused"));
+        let disk = tokio::time::timeout(
+            timeout,
+            manager.get_or_build("sha256:other", |manager, digest| async move {
+                install_test_disk(&manager, &digest)
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(disk.path(), manager.disk_path("sha256:other"));
+
+        finish.send(()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(timeout, waiter)
+                .await
+                .unwrap()
+                .unwrap()
+                .path(),
+            manager.disk_path("sha256:paused")
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_build_can_be_retried() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager = ImageDiskManager::new(tmp.path().join("cache"), tmp.path().to_owned(), 0);
+        let digest = "sha256:retry";
+        let err = manager
+            .get_or_build(digest, |_, _| async {
+                Err(BoxliteError::Storage("build failed".into()))
+            })
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(err, BoxliteError::Storage(_)));
+        assert!(manager.find(digest).is_none());
+        let disk = manager
+            .get_or_build(digest, |manager, digest| async move {
+                install_test_disk(&manager, &digest)
+            })
+            .await
+            .unwrap();
+        assert_eq!(fs::read(disk.path()).unwrap(), b"complete");
+    }
 
     #[test]
     fn test_disk_path_replaces_colon() {

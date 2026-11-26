@@ -2,21 +2,24 @@
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use filetime::FileTime;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, Metadata};
-use std::io::{self, Read};
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::io::{self, Read, Seek, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, Weak};
 use std::time::{Duration, SystemTime};
 
 /// Hidden completion marker written after all generation files are copied.
 const STAMP: &str = ".complete";
+/// Lock files and stable digest memos, keyed by logical source path.
+const SOURCES_DIR: &str = ".sources";
+const STAMP_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 /// Hidden namespace for temporary directories outside the published digest names.
 const STAGING_PREFIX: &str = ".staging.";
 /// Give in-progress staging an hour before treating its directory as abandoned.
@@ -50,8 +53,11 @@ const FIRMWARE_MODE: u32 = 0o644;
 pub(crate) const BWRAP_SANDBOX_SHIM_DIR: &str = "/run/boxlite-shim";
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-static MEMO: OnceLock<Mutex<HashMap<PathBuf, Arc<MemoEntry>>>> = OnceLock::new();
-static LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
+static MEMO: LazyLock<RwLock<HashMap<PathBuf, Arc<MemoEntry>>>> = LazyLock::new(RwLock::default);
+static LIFECYCLE_LOCK: RwLock<()> = RwLock::new(());
+type StageFlight = Mutex<Option<Arc<MemoEntry>>>;
+type StageFlights = HashMap<(PathBuf, PathBuf), Weak<StageFlight>>;
+static STAGE_FLIGHTS: LazyLock<Mutex<StageFlights>> = LazyLock::new(Mutex::default);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedRuntimeFile {
@@ -257,21 +263,32 @@ fn collect_sources(shim: &Path, dir: &Path, name: &OsStr) -> io::Result<Vec<File
     Ok(files)
 }
 
+fn memoized_digest(key: &Path, files: &[FileFingerprint]) -> Option<Arc<MemoEntry>> {
+    MEMO.read()
+        .get(key)
+        .filter(|entry| entry.fingerprints == files)
+        .cloned()
+}
+
+fn remember_digest(key: &Path, entry: &Arc<MemoEntry>) {
+    MEMO.write().insert(key.to_path_buf(), Arc::clone(entry));
+}
+
+fn stable_sources(files: &[FileFingerprint], now: SystemTime) -> bool {
+    // Coarse file timestamps can alias writes made close to the hash read.
+    let cutoff = FileTime::from_system_time(now - RACY_STAT_WINDOW);
+    files.iter().all(|f| f.older_than(cutoff))
+}
+
 fn digest_at(
-    shim: &Path,
+    key: &Path,
     dir: &Path,
     files: &[FileFingerprint],
     now: SystemTime,
-) -> io::Result<String> {
-    let key = shim.canonicalize().unwrap_or_else(|_| shim.to_path_buf());
-    let memo = MEMO.get_or_init(|| Mutex::new(HashMap::new()));
-    let cached = memo.lock().get(&key).cloned();
-    if let Some(entry) = cached
-        && entry.fingerprints == files
-    {
-        return Ok(entry.digest.clone());
+) -> io::Result<Arc<MemoEntry>> {
+    if let Some(entry) = memoized_digest(key, files) {
+        return Ok(entry);
     }
-
     let mut hash = Sha256::new();
     let mut buffer = [0; HASH_BUFFER_BYTES];
     for source in files {
@@ -290,25 +307,120 @@ fn digest_at(
         }
         source.check_metadata(&path, &file.metadata()?)?;
     }
-    let digest = hex::encode(&hash.finalize()[..DIGEST_BYTES]);
-    // Coarse file timestamps can alias writes made close to the hash read.
-    let cutoff = FileTime::from_system_time(now - RACY_STAT_WINDOW);
-    if files.iter().all(|f| f.older_than(cutoff)) {
-        let entry = Arc::new(MemoEntry {
-            fingerprints: files.to_vec(),
-            digest: digest.clone(),
-        });
-        let _previous = memo.lock().insert(key, entry);
+    let entry = Arc::new(MemoEntry {
+        fingerprints: files.to_vec(),
+        digest: hex::encode(&hash.finalize()[..DIGEST_BYTES]),
+    });
+    if stable_sources(files, now) {
+        remember_digest(key, &entry);
     }
-    Ok(digest)
+    Ok(entry)
 }
 
-fn is_complete(target: &Path, files: &[FileFingerprint]) -> bool {
-    target.join(STAMP).is_file()
+fn digest_name(bytes: &[u8]) -> bool {
+    bytes.len() == DIGEST_HEX_LEN
+        && bytes
+            .iter()
+            .all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn lock_source(cache_dir: &Path, source_key: &Path) -> io::Result<fs::File> {
+    let locks = cache_dir.join(SOURCES_DIR);
+    fs::create_dir_all(&locks)?;
+    let name = hex::encode(Sha256::digest(source_key.as_os_str().as_encoded_bytes()));
+    // Never unlink lock files: waiters may still have the original inode open.
+    let file = fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(locks.join(name))?;
+    loop {
+        // SAFETY: the descriptor is open for the lifetime of `file`. Closing
+        // it releases the lock, including on errors and process exit.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(file);
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
+}
+
+fn fingerprint_key(files: &[FileFingerprint]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    for f in files {
+        let name = f.name.as_encoded_bytes();
+        hash.update((name.len() as u64).to_le_bytes());
+        hash.update(name);
+        hash.update(f.len.to_le_bytes());
+        for t in [f.mtime, f.ctime] {
+            hash.update(t.unix_seconds().to_le_bytes());
+            hash.update(t.nanoseconds().to_le_bytes());
+        }
+        hash.update(f.inode.0.to_le_bytes());
+        hash.update(f.inode.1.to_le_bytes());
+    }
+    hash.finalize().into()
+}
+
+fn read_digest(mut lock: &fs::File, key: &[u8; 32]) -> Option<String> {
+    let mut record = [0; 32 + DIGEST_HEX_LEN];
+    lock.read_exact(&mut record).ok()?;
+    let (stored_key, digest) = record.split_at(32);
+    (stored_key == key && digest_name(digest)).then(|| String::from_utf8_lossy(digest).into_owned())
+}
+
+fn write_digest(mut lock: &fs::File, key: &[u8; 32], digest: &str) -> io::Result<()> {
+    lock.rewind()?;
+    lock.set_len(0)?;
+    lock.write_all(key)?;
+    lock.write_all(digest.as_bytes())
+}
+
+fn complete_stamp(target: &Path, files: &[FileFingerprint]) -> Option<Metadata> {
+    let stamp = fs::metadata(target.join(STAMP)).ok()?;
+    (stamp.is_file()
         && files.iter().all(|file| {
             fs::metadata(target.join(&file.name))
                 .is_ok_and(|metadata| metadata.is_file() && metadata.len() == file.len)
-        })
+        }))
+    .then_some(stamp)
+}
+
+fn refresh_stamp(path: &Path, stamp: &Metadata, now: SystemTime) {
+    if refresh_due(stamp, now) {
+        let _ = filetime::set_file_mtime(path.join(STAMP), FileTime::from_system_time(now));
+    }
+}
+
+fn refresh_due(stamp: &Metadata, now: SystemTime) -> bool {
+    stamp.modified().is_ok_and(|time| {
+        now.duration_since(time)
+            .is_ok_and(|age| age >= STAMP_REFRESH_INTERVAL)
+    })
+}
+
+fn cache_hit(target: &Path, files: &[FileFingerprint]) -> bool {
+    {
+        let _lock = LIFECYCLE_LOCK.read();
+        let Some(stamp) = complete_stamp(target, files) else {
+            return false;
+        };
+        if !refresh_due(&stamp, SystemTime::now()) {
+            return true;
+        }
+    }
+    // Recheck in case another hit refreshed the stamp or GC retired it.
+    let _lock = LIFECYCLE_LOCK.write();
+    let Some(stamp) = complete_stamp(target, files) else {
+        return false;
+    };
+    refresh_stamp(target, &stamp, SystemTime::now());
+    true
 }
 
 struct StagingGuard {
@@ -318,14 +430,14 @@ struct StagingGuard {
 
 impl StagingGuard {
     fn publish(mut self, target: &Path, files: &[FileFingerprint]) -> io::Result<bool> {
-        let result = fs::rename(&self.path, target);
-        let _lock = LIFECYCLE_LOCK.lock();
-        match result {
+        let _lock = LIFECYCLE_LOCK.write();
+        match fs::rename(&self.path, target) {
             Ok(()) => self.published = true,
-            Err(_) if is_complete(target, files) => {}
-            Err(err) => return Err(err),
+            Err(err) => {
+                let stamp = complete_stamp(target, files).ok_or(err)?;
+                refresh_stamp(target, &stamp, SystemTime::now());
+            }
         }
-        let _ = filetime::set_file_mtime(target.join(STAMP), FileTime::now());
         Ok(self.published)
     }
 }
@@ -349,64 +461,133 @@ pub(crate) fn stage_shim(shim_path: &Path, cache_dir: &Path) -> BoxliteResult<Pa
 }
 
 fn stage(shim_path: &Path, cache_dir: &Path) -> io::Result<PathBuf> {
+    stage_with(shim_path, cache_dir, SystemTime::now(), digest_at)
+}
+
+fn stage_with(
+    shim_path: &Path,
+    cache_dir: &Path,
+    now: SystemTime,
+    digest: impl FnOnce(&Path, &Path, &[FileFingerprint], SystemTime) -> io::Result<Arc<MemoEntry>>,
+) -> io::Result<PathBuf> {
     let name = shim_path
         .file_name()
         .filter(|name| !name.is_empty() && *name != STAMP)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid shim filename"))?;
     let dir = shim_parent_dir(shim_path);
+    // Keep the logical filename and parent (which selects adjacent firmware),
+    // rather than keying by the destination of a shim symlink.
+    let source_key = dir.canonicalize()?.join(name);
     let files = collect_sources(shim_path, dir, name)?;
-    let digest = digest_at(shim_path, dir, &files, SystemTime::now())?;
-    let target = cache_dir.join(&digest);
+    if let Some(entry) = memoized_digest(&source_key, &files)
+        && let Some(path) = cached_path(cache_dir, name, &entry)
+    {
+        return Ok(path);
+    }
 
-    let hit = {
-        let _lock = LIFECYCLE_LOCK.lock();
-        let complete = is_complete(&target, &files);
-        if complete {
-            let _ = filetime::set_file_mtime(target.join(STAMP), FileTime::now());
-        }
-        complete
+    fs::create_dir_all(cache_dir)?;
+    let cache_dir = cache_dir.canonicalize()?;
+    let flight = {
+        let mut flights = STAGE_FLIGHTS.lock();
+        flights.retain(|_, flight| flight.strong_count() != 0);
+        let entry = flights
+            .entry((cache_dir.clone(), source_key.clone()))
+            .or_default();
+        entry.upgrade().unwrap_or_else(|| {
+            let flight = Arc::new(Mutex::new(None));
+            *entry = Arc::downgrade(&flight);
+            flight
+        })
     };
-    if !hit {
-        fs::create_dir_all(cache_dir)?;
-        let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path = cache_dir.join(format!(
-            "{STAGING_PREFIX}{digest}.{}.{seq}",
-            std::process::id()
-        ));
-        fs::create_dir(&path)?;
-        let staging = StagingGuard {
-            path,
-            published: false,
-        };
-        #[cfg(unix)]
-        fs::set_permissions(&staging.path, fs::Permissions::from_mode(EXECUTABLE_MODE))?;
+    let mut recent = flight.lock();
+    if let Some(entry) = recent.as_ref()
+        && entry.fingerprints == collect_sources(shim_path, dir, name)?
+        && let Some(path) = cached_path(&cache_dir, name, entry)
+    {
+        return Ok(path);
+    }
 
-        for source in &files {
-            let path = dir.join(&source.name);
-            let destination = staging.path.join(&source.name);
-            fs::copy(&path, &destination)?;
-            let metadata = fs::metadata(&path)?;
-            source.check_metadata(&path, &metadata)?;
-            #[cfg(unix)]
-            {
-                let mode = if source.name == name {
-                    EXECUTABLE_MODE
-                } else {
-                    FIRMWARE_MODE
-                };
-                fs::set_permissions(&destination, fs::Permissions::from_mode(mode))?;
-            }
-        }
-        fs::write(
-            staging.path.join(STAMP),
-            format!("{}\n{BUILD_PROFILE}\n", crate::VERSION),
-        )?;
-        if staging.publish(&target, &files)? {
-            tracing::info!(path = %target.display(), "Published shared shim");
-            cleanup_stale(cache_dir, Some(&target));
+    let lock = lock_source(&cache_dir, &source_key)?;
+    // The source may have changed while another process held the lock.
+    let files = collect_sources(shim_path, dir, name)?;
+    let key = stable_sources(&files, now).then(|| fingerprint_key(&files));
+    if let Some(key) = &key
+        && let Some(digest) = read_digest(&lock, key)
+    {
+        let entry = Arc::new(MemoEntry {
+            fingerprints: files.clone(),
+            digest,
+        });
+        if let Some(path) = cached_path(&cache_dir, name, &entry) {
+            remember_digest(&source_key, &entry);
+            *recent = Some(entry);
+            return Ok(path);
         }
     }
+    let entry = digest(&source_key, dir, &files, now)?;
+    let target = cache_dir.join(&entry.digest);
+    if !cache_hit(&target, &files) {
+        publish_generation(&cache_dir, &target, name, dir, &entry)?;
+    }
+    if let Some(key) = &key {
+        let _ = write_digest(&lock, key, &entry.digest);
+    }
+    *recent = Some(entry);
     Ok(target.canonicalize().unwrap_or(target).join(name))
+}
+
+fn cached_path(cache_dir: &Path, name: &OsStr, entry: &MemoEntry) -> Option<PathBuf> {
+    let target = cache_dir.join(&entry.digest);
+    cache_hit(&target, &entry.fingerprints)
+        .then(|| target.canonicalize().unwrap_or(target).join(name))
+}
+
+fn publish_generation(
+    cache_dir: &Path,
+    target: &Path,
+    name: &OsStr,
+    dir: &Path,
+    entry: &MemoEntry,
+) -> io::Result<()> {
+    let digest = &entry.digest;
+    let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let path = cache_dir.join(format!(
+        "{STAGING_PREFIX}{digest}.{}.{seq}",
+        std::process::id()
+    ));
+    fs::create_dir(&path)?;
+    let staging = StagingGuard {
+        path,
+        published: false,
+    };
+    #[cfg(unix)]
+    fs::set_permissions(&staging.path, fs::Permissions::from_mode(EXECUTABLE_MODE))?;
+
+    for source in &entry.fingerprints {
+        let path = dir.join(&source.name);
+        let destination = staging.path.join(&source.name);
+        fs::copy(&path, &destination)?;
+        let metadata = fs::metadata(&path)?;
+        source.check_metadata(&path, &metadata)?;
+        #[cfg(unix)]
+        {
+            let mode = if source.name == name {
+                EXECUTABLE_MODE
+            } else {
+                FIRMWARE_MODE
+            };
+            fs::set_permissions(&destination, fs::Permissions::from_mode(mode))?;
+        }
+    }
+    fs::write(
+        staging.path.join(STAMP),
+        format!("{}\n{BUILD_PROFILE}\n", crate::VERSION),
+    )?;
+    if staging.publish(target, &entry.fingerprints)? {
+        tracing::info!(path = %target.display(), "Published shared shim");
+        cleanup_stale(cache_dir, Some(target));
+    }
+    Ok(())
 }
 
 fn published_metadata(path: &Path) -> io::Result<Metadata> {
@@ -425,7 +606,7 @@ fn retire_if_stale(
     now: SystemTime,
     ttl: Duration,
 ) -> io::Result<bool> {
-    let _lock = LIFECYCLE_LOCK.lock();
+    let _lock = LIFECYCLE_LOCK.write();
     if !is_expired(published_metadata(path), now, ttl) {
         return Ok(false);
     }
@@ -452,9 +633,7 @@ pub(crate) fn cleanup_stale(cache_dir: &Path, active_dir: Option<&Path>) {
             }
             continue;
         }
-        if name.len() != DIGEST_HEX_LEN
-            || !name.iter().all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-        {
+        if !digest_name(name) {
             continue;
         }
         if active_dir == Some(path.as_path())
@@ -465,10 +644,11 @@ pub(crate) fn cleanup_stale(cache_dir: &Path, active_dir: Option<&Path>) {
             continue;
         }
         let profile = fs::read_to_string(path.join(STAMP)).unwrap_or_default();
+        // A hit may skip a stamp write for up to one refresh interval.
         let ttl = match profile.lines().nth(1) {
             Some("debug") => STALE_TTL_DEBUG,
             _ => STALE_TTL_RELEASE,
-        };
+        } + STAMP_REFRESH_INTERVAL;
         if !is_expired(published_metadata(&path), now, ttl) {
             continue;
         }
@@ -561,6 +741,29 @@ mod tests {
     }
 
     #[test]
+    fn stage_shim_throttles_stamp_refresh() {
+        let (_root, shim, cache) = fixture();
+        let staged = stage_shim(&shim, &cache).unwrap();
+        let stamp = staged.with_file_name(STAMP);
+        let mtime = || FileTime::from_last_modification_time(&fs::metadata(&stamp).unwrap());
+        set_file_mtime(
+            &stamp,
+            FileTime::from_system_time(SystemTime::now() - STAMP_REFRESH_INTERVAL / 2),
+        )
+        .unwrap();
+        let recent = mtime();
+        assert_eq!(stage_shim(&shim, &cache).unwrap(), staged);
+        assert_eq!(mtime(), recent);
+        set_file_mtime(
+            &stamp,
+            FileTime::from_system_time(SystemTime::now() - 2 * STAMP_REFRESH_INTERVAL),
+        )
+        .unwrap();
+        assert_eq!(stage_shim(&shim, &cache).unwrap(), staged);
+        assert!(mtime() > recent);
+    }
+
+    #[test]
     #[cfg(unix)]
     fn stage_shim_follows_symlinked_sources() {
         use std::os::unix::fs::symlink;
@@ -630,14 +833,13 @@ mod tests {
         let key = shim.canonicalize().unwrap();
         let files = collect_sources(&shim, dir, name).unwrap();
         let now = SystemTime::now() + 2 * RACY_STAT_WINDOW;
-        let first = digest_at(&shim, dir, &files, now).unwrap();
-        let memo = MEMO.get().unwrap();
-        let entry = || memo.lock().get(&key).cloned().unwrap();
-        let first_entry = entry();
-        assert_eq!(first_entry.digest, first);
-
-        assert_eq!(digest_at(&shim, dir, &files, now).unwrap(), first);
-        assert!(Arc::ptr_eq(&first_entry, &entry()));
+        let first = digest_at(&key, dir, &files, now).unwrap();
+        let entry = || MEMO.read().get(&key).cloned().unwrap();
+        assert!(Arc::ptr_eq(&first, &entry()));
+        assert!(Arc::ptr_eq(
+            &first,
+            &digest_at(&key, dir, &files, now).unwrap()
+        ));
 
         let mtime = files[0].mtime;
         let prev_inode = files[0].inode;
@@ -651,9 +853,9 @@ mod tests {
         assert_eq!(files[0].mtime, mtime);
         assert_ne!(files[0].inode, prev_inode);
         let now = SystemTime::now() + 2 * RACY_STAT_WINDOW;
-        let updated = digest_at(&shim, dir, &files, now).unwrap();
-        assert_ne!(updated, first);
-        assert_eq!(entry().digest, updated);
+        let updated = digest_at(&key, dir, &files, now).unwrap();
+        assert_ne!(updated.digest, first.digest);
+        assert!(Arc::ptr_eq(&updated, &entry()));
     }
 
     #[test]
@@ -665,33 +867,118 @@ mod tests {
         let now = SystemTime::now();
         set_file_mtime(&shim, FileTime::from_system_time(now)).unwrap();
         let files = collect_sources(&shim, dir, name).unwrap();
-        digest_at(&shim, dir, &files, now + RACY_STAT_WINDOW / 2).unwrap();
-        assert!(!MEMO.get().unwrap().lock().contains_key(&key));
+        digest_at(&key, dir, &files, now + RACY_STAT_WINDOW / 2).unwrap();
+        assert!(!MEMO.read().contains_key(&key));
+    }
+
+    fn assert_single_generation(cache: &Path) {
+        let entries: Vec<_> = fs::read_dir(cache)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|name| name != SOURCES_DIR)
+            .collect();
+        assert_eq!(entries.len(), 1, "unexpected cache entries: {entries:?}");
+        assert!(digest_name(entries[0].as_encoded_bytes()));
     }
 
     #[test]
-    fn stage_shim_concurrent_threads_atomic_publish() {
+    fn stage_shim_concurrent_threads_hash_once_even_for_recent_sources() {
+        const CALLERS: usize = 20;
         let (_root, shim, cache) = fixture();
-        let barrier = std::sync::Barrier::new(8);
+        let source_key = shim.canonicalize().unwrap();
+        let lock = lock_source(&cache, &source_key).unwrap();
+        let flight_key = (cache.canonicalize().unwrap(), source_key);
+        let now = SystemTime::now();
+        let hashes = AtomicU64::new(0);
         std::thread::scope(|scope| {
-            let threads: Vec<_> = (0..8)
+            let threads: Vec<_> = (0..CALLERS)
                 .map(|_| {
                     scope.spawn(|| {
-                        barrier.wait();
-                        let staged = stage_shim(&shim, &cache).unwrap();
+                        let staged = stage_with(&shim, &cache, now, |key, dir, files, now| {
+                            hashes.fetch_add(1, Ordering::Relaxed);
+                            digest_at(key, dir, files, now)
+                        })
+                        .unwrap();
                         assert_eq!(fs::read(&staged).unwrap(), b"shim");
                         assert!(staged.with_file_name(STAMP).is_file());
                         staged
                     })
                 })
                 .collect();
-            let paths: Vec<_> = threads
-                .into_iter()
-                .map(|thread| thread.join().unwrap())
-                .collect();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            // Hold the flock until every caller has joined the in-process flight.
+            let joined = loop {
+                if STAGE_FLIGHTS
+                    .lock()
+                    .get(&flight_key)
+                    .is_some_and(|f| f.strong_count() == CALLERS)
+                {
+                    break true;
+                }
+                if std::time::Instant::now() > deadline {
+                    break false;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            drop(lock);
+            assert!(joined, "callers did not join the same flight");
+            let paths: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
             assert!(paths.iter().all(|path| path == &paths[0]));
         });
-        assert_eq!(fs::read_dir(cache).unwrap().count(), 1);
+        assert_eq!(hashes.load(Ordering::Relaxed), 1);
+        assert!(!MEMO.read().contains_key(&flight_key.1));
+        assert_single_generation(&cache);
+    }
+
+    #[test]
+    fn stage_shim_subprocess_worker() {
+        let Some(root) = std::env::var_os("BOXLITE_TEST_SHIM_FLIGHT_ROOT").map(PathBuf::from)
+        else {
+            return;
+        };
+        let now = SystemTime::now() + 2 * RACY_STAT_WINDOW;
+        let staged = stage_with(
+            &root.join("source/boxlite-shim"),
+            &root.join("shims"),
+            now,
+            |key, dir, files, now| {
+                let mut counter = fs::File::options()
+                    .create(true)
+                    .append(true)
+                    .open(root.join("hashes"))?;
+                counter.write_all(b"1")?;
+                digest_at(key, dir, files, now)
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read(staged).unwrap(), b"shim");
+    }
+
+    #[test]
+    fn stage_shim_concurrent_processes_hash_stable_source_once() {
+        let (root, shim, cache) = fixture();
+        let key = shim.canonicalize().unwrap();
+        let lock = lock_source(&cache, &key).unwrap();
+        let children: Vec<_> = (0..4)
+            .map(|_| {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "jailer::shim_cache::tests::stage_shim_subprocess_worker",
+                        "--quiet",
+                    ])
+                    .env("BOXLITE_TEST_SHIM_FLIGHT_ROOT", root.path())
+                    .stdout(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        drop(lock);
+        for mut child in children {
+            assert!(child.wait().unwrap().success());
+        }
+        assert_eq!(fs::read(root.path().join("hashes")).unwrap(), b"1");
+        assert_single_generation(&cache);
     }
 
     #[test]
@@ -830,7 +1117,7 @@ mod tests {
             old
         );
         assert!(!staged.exists());
-        assert_eq!(fs::read_dir(cache).unwrap().count(), 1);
+        assert_single_generation(&cache);
     }
 
     #[test]
@@ -861,7 +1148,7 @@ mod tests {
                 old
             );
             assert!(staged.is_file());
-            assert_eq!(fs::read_dir(cache).unwrap().count(), 1);
+            assert_single_generation(&cache);
         }
     }
 
