@@ -26,46 +26,88 @@ var checkpointPlatformEnvKeys = []string{
 	"BOXLITE_REGION_ID", "BOXLITE_TRACEPARENT", "BOXLITE_TRACESTATE",
 }
 
+func openCheckpointArchive(path string) (io.Reader, func(), error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	reader := bufio.NewReader(file)
+	magic, err := reader.Peek(4)
+	if err != nil {
+		file.Close()
+		return nil, nil, err
+	}
+	if bytes.Equal(magic, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
+		decoder, err := zstd.NewReader(reader, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			file.Close()
+			return nil, nil, err
+		}
+		return decoder, func() { decoder.Close(); _ = file.Close() }, nil
+	}
+	return reader, func() { _ = file.Close() }, nil
+}
+
+// Read exactly the manifest member, leaving input positioned at the raw tar tail.
+func readCheckpointManifest(input io.Reader) (*tar.Header, []byte, error) {
+	headerBytes := make([]byte, 512)
+	if _, err := io.ReadFull(input, headerBytes); err != nil {
+		return nil, nil, err
+	}
+	header, err := tar.NewReader(bytes.NewReader(headerBytes)).Next()
+	if err != nil {
+		return nil, nil, err
+	}
+	if header.Name != "manifest.json" || header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > 1<<20 {
+		return nil, nil, fmt.Errorf("native checkpoint must begin with a manifest of at most 1 MiB")
+	}
+	manifest := make([]byte, header.Size)
+	if _, err := io.ReadFull(input, manifest); err != nil {
+		return nil, nil, err
+	}
+	if _, err := io.CopyN(io.Discard, input, (512-header.Size%512)%512); err != nil {
+		return nil, nil, err
+	}
+	return header, manifest, nil
+}
+
+func readCheckpointMemorySizeBytes(path string) (*int64, error) {
+	input, closeArchive, err := openCheckpointArchive(path)
+	if err != nil {
+		return nil, err
+	}
+	defer closeArchive()
+	_, data, err := readCheckpointManifest(input)
+	if err != nil {
+		return nil, err
+	}
+	var manifest struct {
+		MemoryCheckpoint struct {
+			MemorySizeBytes *int64 `json:"memory_size_bytes"`
+		} `json:"memory_checkpoint"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, err
+	}
+	size := manifest.MemoryCheckpoint.MemorySizeBytes
+	if size == nil || *size < 0 {
+		return nil, fmt.Errorf("checkpoint manifest requires a nonnegative memory_checkpoint.memory_size_bytes")
+	}
+	return size, nil
+}
+
 // Native export writes manifest.json first. Replace only that member, then copy
 // the raw tar tail unchanged: decoding/re-encoding disk members with Go's tar
 // writer would lose GNU sparse metadata. Native import owns all disk validation.
 // The plain tar stays beside the download until the restore worker releases it.
 func checkpointImportArchive(source *checkpoint.DownloadedArchive, env map[string]string) (_ string, err error) {
-	file, err := os.Open(source.Path)
+	input, closeArchive, err := openCheckpointArchive(source.Path)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
-	reader := bufio.NewReader(file)
-	magic, err := reader.Peek(4)
+	defer closeArchive()
+	header, manifest, err := readCheckpointManifest(input)
 	if err != nil {
-		return "", err
-	}
-	var input io.Reader = reader
-	if bytes.Equal(magic, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
-		decoder, err := zstd.NewReader(reader, zstd.WithDecoderConcurrency(1))
-		if err != nil {
-			return "", err
-		}
-		defer decoder.Close()
-		input = decoder
-	}
-	headerBytes := make([]byte, 512)
-	if _, err := io.ReadFull(input, headerBytes); err != nil {
-		return "", err
-	}
-	header, err := tar.NewReader(bytes.NewReader(headerBytes)).Next()
-	if err != nil {
-		return "", err
-	}
-	if header.Name != "manifest.json" || header.Typeflag != tar.TypeReg || header.Size < 0 || header.Size > 1<<20 {
-		return "", fmt.Errorf("native checkpoint must begin with a manifest of at most 1 MiB")
-	}
-	manifest := make([]byte, header.Size)
-	if _, err := io.ReadFull(input, manifest); err != nil {
-		return "", err
-	}
-	if _, err := io.CopyN(io.Discard, input, (512-header.Size%512)%512); err != nil {
 		return "", err
 	}
 	manifest, err = checkpointImportManifest(manifest, source.Artifact.PinnedImage, env)

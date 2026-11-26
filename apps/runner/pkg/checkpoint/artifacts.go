@@ -22,26 +22,74 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	KindDisk = "disk"
+	KindFull = "full"
+)
+
+func validKind(kind string) bool {
+	return kind == "" || kind == KindDisk || kind == KindFull
+}
+
 // Reference identifies one capture, independently of subsequent source changes.
 type Reference struct {
 	CheckpointID string `json:"checkpointId"`
 	ExportJobID  string `json:"exportJobId"`
 	SourceBoxID  string `json:"sourceBoxId"`
 	ArcPath      string `json:"arcPath"`
+	Kind         string `json:"kind,omitempty"`
+}
+
+func (r Reference) NormalizedKind() string {
+	if r.Kind == "" {
+		return KindDisk
+	}
+	return r.Kind
 }
 
 type Artifact struct {
 	Reference
-	SizeBytes   int64  `json:"sizeBytes"`
-	SHA256      string `json:"sha256"`
-	PinnedImage string `json:"pinnedImage"`
+	SizeBytes       int64  `json:"sizeBytes"`
+	SHA256          string `json:"sha256"`
+	PinnedImage     string `json:"pinnedImage"`
+	MemorySizeBytes *int64 `json:"memorySizeBytes,omitempty"`
+}
+
+func validateMemorySize(kind string, size *int64) error {
+	if kind == KindFull && (size == nil || *size < 0) {
+		return fmt.Errorf("full checkpoint requires a nonnegative memorySizeBytes")
+	}
+	if kind == KindDisk && size != nil {
+		return fmt.Errorf("disk checkpoint must not include memorySizeBytes")
+	}
+	return nil
+}
+
+func referencesEqual(a, b Reference) bool {
+	a.Kind, b.Kind = a.NormalizedKind(), b.NormalizedKind()
+	return a == b
+}
+
+func artifactsEqual(a, b Artifact) bool {
+	if !referencesEqual(a.Reference, b.Reference) || a.SizeBytes != b.SizeBytes || a.SHA256 != b.SHA256 || a.PinnedImage != b.PinnedImage {
+		return false
+	}
+	if a.MemorySizeBytes == nil || b.MemorySizeBytes == nil {
+		return a.MemorySizeBytes == nil && b.MemorySizeBytes == nil
+	}
+	return *a.MemorySizeBytes == *b.MemorySizeBytes
 }
 
 type Artifacts struct{ Root string }
 
-// Capture writes into its private directory and returns the actual archive
-// path and the digest-pinned image associated with the source disk.
-type Capture func(context.Context, string) (archive, pinnedImage string, err error)
+type CaptureResult struct {
+	ArchivePath     string
+	PinnedImage     string
+	MemorySizeBytes *int64
+}
+
+// Capture writes an archive into its private directory and returns its metadata.
+type Capture func(context.Context, string) (CaptureResult, error)
 
 func (a Artifacts) Export(ctx context.Context, ref Reference, capture Capture) (Artifact, error) {
 	directory, unlock, err := a.lock(ctx, ref)
@@ -79,10 +127,14 @@ func (a Artifacts) Export(ctx context.Context, ref Reference, capture Capture) (
 		return Artifact{}, err
 	}
 	defer os.RemoveAll(stage)
-	archive, image, err := capture(ctx, stage)
+	result, err := capture(ctx, stage)
 	if err != nil {
 		return Artifact{}, err
 	}
+	if err := validateMemorySize(ref.NormalizedKind(), result.MemorySizeBytes); err != nil {
+		return Artifact{}, err
+	}
+	archive, image := result.ArchivePath, result.PinnedImage
 	if !pinnedImage(image) {
 		return Artifact{}, fmt.Errorf("checkpoint capture did not supply a SHA-256 pinned image")
 	}
@@ -111,7 +163,7 @@ func (a Artifacts) Export(ctx context.Context, ref Reference, capture Capture) (
 	if err != nil {
 		return Artifact{}, err
 	}
-	record := Artifact{Reference: ref, SizeBytes: size, SHA256: digest, PinnedImage: image}
+	record := Artifact{Reference: ref, SizeBytes: size, SHA256: digest, PinnedImage: image, MemorySizeBytes: result.MemorySizeBytes}
 	if size == 0 {
 		return Artifact{}, fmt.Errorf("checkpoint archive is empty")
 	}
@@ -133,7 +185,7 @@ func (a Artifacts) Upload(ctx context.Context, expected Artifact, store storage.
 	if err != nil {
 		return Artifact{}, err
 	}
-	if record != expected {
+	if !artifactsEqual(record, expected) {
 		return Artifact{}, fmt.Errorf("checkpoint upload metadata does not match its captured artifact")
 	}
 	if err := a.verify(directory, record); err != nil {
@@ -158,7 +210,7 @@ func (a Artifacts) Acknowledge(ctx context.Context, expected Artifact) error {
 	if err != nil {
 		return err
 	}
-	if record != expected {
+	if !artifactsEqual(record, expected) {
 		return fmt.Errorf("checkpoint cleanup metadata does not match its captured artifact")
 	}
 	if err := os.Remove(filepath.Join(directory, "archive.boxlite")); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -170,6 +222,9 @@ func (a Artifacts) Acknowledge(ctx context.Context, expected Artifact) error {
 }
 
 func validateReference(ref Reference) error {
+	if !validKind(ref.Kind) {
+		return fmt.Errorf("invalid checkpoint kind %q", ref.Kind)
+	}
 	for _, id := range []string{ref.CheckpointID, ref.ExportJobID} {
 		parsed, err := uuid.Parse(id)
 		if err != nil || parsed.String() != id {
@@ -294,8 +349,11 @@ func (a Artifacts) read(directory string, expected Reference) (Artifact, error) 
 	if err := json.Unmarshal(bytes, &record); err != nil {
 		return Artifact{}, err
 	}
-	if record.Reference != expected || record.SizeBytes <= 0 || !sha256Digest(record.SHA256) || !pinnedImage(record.PinnedImage) {
+	if !referencesEqual(record.Reference, expected) || record.SizeBytes <= 0 || !sha256Digest(record.SHA256) || !pinnedImage(record.PinnedImage) {
 		return Artifact{}, fmt.Errorf("checkpoint artifact metadata does not match its owner or format")
+	}
+	if err := validateMemorySize(record.NormalizedKind(), record.MemorySizeBytes); err != nil {
+		return Artifact{}, err
 	}
 	return record, nil
 }

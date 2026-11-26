@@ -140,52 +140,52 @@ func TestCheckpointNativeRestoreKeepsFailedImportAndPersistsReplacement(t *testi
 			artifacts := checkpoint.Artifacts{Root: filepath.Join(home, "work", "archives")}
 			ref := checkpoint.Reference{CheckpointID: uuid.NewString(), ExportJobID: uuid.NewString(), SourceBoxID: target, ArcPath: "gs://archives/" + uuid.NewString() + ".boxlite"}
 			store := &nativeArchiveStore{}
-			artifact, err := artifacts.Export(ctx, ref, func(ctx context.Context, dir string) (string, string, error) {
+			artifact, err := artifacts.Export(ctx, ref, func(ctx context.Context, dir string) (checkpoint.CaptureResult, error) {
 				path, err := original.Export(ctx, dir)
 				if err != nil {
-					return "", "", err
+					return checkpoint.CaptureResult{}, err
 				}
 				data, err := os.ReadFile(path)
 				if err != nil {
-					return "", "", err
+					return checkpoint.CaptureResult{}, err
 				}
 				if corrupt {
 					decoder, err := zstd.NewReader(nil)
 					if err != nil {
-						return "", "", err
+						return checkpoint.CaptureResult{}, err
 					}
 					raw, err := decoder.DecodeAll(data, nil)
 					decoder.Close()
 					if err != nil {
-						return "", "", err
+						return checkpoint.CaptureResult{}, err
 					}
 					reader := tar.NewReader(bytes.NewReader(raw))
 					if _, err := reader.Next(); err != nil {
-						return "", "", err
+						return checkpoint.CaptureResult{}, err
 					}
 					manifest, err := io.ReadAll(reader)
 					if err != nil {
-						return "", "", err
+						return checkpoint.CaptureResult{}, err
 					}
 					var metadata struct {
 						Checksum string `json:"container_disk_checksum"`
 					}
 					if err := json.Unmarshal(manifest, &metadata); err != nil {
-						return "", "", err
+						return checkpoint.CaptureResult{}, err
 					}
 					raw = bytes.Replace(raw, []byte(metadata.Checksum), []byte("sha256:"+strings.Repeat("0", 64)), 1)
 					encoder, err := zstd.NewWriter(nil)
 					if err != nil {
-						return "", "", err
+						return checkpoint.CaptureResult{}, err
 					}
 					data = encoder.EncodeAll(raw, nil)
 					encoder.Close()
 					if err := os.WriteFile(path, data, 0600); err != nil {
-						return "", "", err
+						return checkpoint.CaptureResult{}, err
 					}
 				}
 				store.data = data
-				return path, image, nil
+				return checkpoint.CaptureResult{ArchivePath: path, PinnedImage: image}, nil
 			})
 			original.Close()
 			if err != nil {
