@@ -1,0 +1,79 @@
+---
+name: BoxLite API coverage with four CPUs
+'on':
+  push:
+    branches:
+    - ci/boxlite-runner-trials-2833
+    paths:
+    - ".github/workflows/runner-api-x64.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  api:
+    name: api (linux-x64-gnu)
+    runs-on: boxlite-4vcpu-8gbmem-30gbdisk
+    services:
+      redis:
+        image: redis:7
+        ports:
+        - 6379:6379
+        options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s
+          --health-retries=5
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: boxlite
+        ports:
+        - 5432:5432
+        options: --health-cmd "pg_isready -U postgres" --health-interval 10s --health-timeout
+          5s --health-retries 5
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+      REDIS_HOST: localhost
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: boxlite
+    defaults:
+      run:
+        working-directory: apps
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+        persist-credentials: false
+        ref: 86f3e756eb70de768259454ea98d50612bf9a129
+    - uses: "./.github/actions/setup-boxlite-runner"
+    - name: Install native build prerequisites
+      run: sudo apt-get install -y --no-install-recommends build-essential python3
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Enable Corepack
+      run: corepack enable
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: yarn
+        cache-dependency-path: apps/yarn.lock
+    - name: Install app dependencies
+      run: yarn install --immutable
+      env:
+        YARN_NETWORK_CONCURRENCY: '8'
+    - name: Run API unit tests
+      run: yarn nx run api:test --coverage --skip-nx-cache
+    - name: Run shared and standalone CI Listener tests
+      working-directory: "."
+      run: make coverage:ci-listener coverage:github-ci-runner
+    - name: Verify coverage files for Upload API coverage to Codecov
+      working-directory: "."
+      shell: bash
+      run: |-
+        test -s target/coverage/api/lcov.info
+        test -s target/coverage/ci-listener/lcov.info
+        test -s target/coverage/github-ci-runner/lcov.info
+    timeout-minutes: 100
