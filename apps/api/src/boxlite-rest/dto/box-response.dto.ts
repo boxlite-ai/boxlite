@@ -7,6 +7,14 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { NetworkInfoResponseDto } from '../../box/dto/network-info.dto'
 
+class EffectiveCapabilitiesDto {
+  @ApiProperty({ type: [String] })
+  add: string[]
+
+  @ApiProperty({ type: [String] })
+  drop: string[]
+}
+
 @ApiSchema({ name: 'Box' })
 export class BoxResponseDto {
   @ApiProperty({
@@ -73,6 +81,12 @@ export class BoxResponseDto {
     description: 'Persisted guest privilege mode; absent means unknown, not false',
   })
   privileged?: boolean
+
+  @ApiPropertyOptional({
+    description: 'Effective Linux capability policy derived from the saved Cloud guest privilege mode',
+    type: EffectiveCapabilitiesDto,
+  })
+  effective_capabilities?: EffectiveCapabilitiesDto
 
   @ApiProperty({
     description: 'Labels attached to the box',
