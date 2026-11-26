@@ -37,7 +37,9 @@ If finalization loses the GitHub response after publishing, retry the failed job
 
 A same-version Runner rebuild changes the pinned manifest. Hosts record the installed manifest and archive digests and reapply when either changes.
 
-Each Runtime or CLI tarball sidecar and the installer sidecar `install.sh.sha256` occupies one entry in the release inventory. A retry of an interrupted draft upload compares each existing attachment with the accepted file. A conflicting digest stops publication. Inspect the originating run before replacing an already distributed version.
+Each Runtime or CLI tarball sidecar and the installer sidecar `install.sh.sha256` occupies one entry in the release inventory. The Release attachment job checks all existing selected files before uploading missing files. If a digest conflicts, the job stops before its first upload so the operator can inspect the originating run.
+
+The npm publisher checks all existing platform packages and the main package before its first upload. It publishes missing platform packages before the main package and verifies each new registry digest. A retry reuses matching packages.
 
 ### Roll back to a release that predates the manifest
 

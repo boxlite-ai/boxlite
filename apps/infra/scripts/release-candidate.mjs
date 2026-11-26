@@ -259,11 +259,14 @@ async function publishFiles(candidate, id, scope, finalize = false) {
   const uploadedAssets = () => new Map(releaseAssets(id).map((entry) => [entry.name, entry]))
   if (!finalize) {
     const existing = uploadedAssets()
+    const missing = []
     for (const [name, { digest }] of Object.entries(files)) {
       if (existing.has(name))
         assert.equal(existing.get(name).digest, digest, 'Release already holds different bytes for ' + name)
-      else gh('release', 'upload', candidate.tag, join(bundle, name), '--repo', process.env.GITHUB_REPOSITORY)
+      else missing.push(name)
     }
+    for (const name of missing)
+      gh('release', 'upload', candidate.tag, join(bundle, name), '--repo', process.env.GITHUB_REPOSITORY)
   }
   const uploaded = uploadedAssets()
   for (const [name, { digest }] of Object.entries(files)) {

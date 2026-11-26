@@ -94,6 +94,13 @@ esac
   assert.deepEqual(receipt.images, { api: hash('api') })
   assert.equal(receipt.producers['ghcr-api'].attempt, 1)
   assert.equal(receipt.assets['install.sh.sha256'].group, 'runtime-distribution')
+  const runtimeNames = Object.keys(receipt.assets).filter(name => receipt.assets[name].group === 'runtime-distribution')
+  const conflict = { name: runtimeNames.at(-1), digest: hash('different release bytes'), state: 'uploaded' }
+  const existing = JSON.stringify(conflict) + '\n'
+  writeFileSync(join(dir, 'uploads.jsonl'), existing)
+  const rejected = stage('candidate', 'attach', { CANDIDATE_DIGEST: fingerprint, RELEASE_ID: '7', REPAIR_GROUP: 'runtime-distribution' })
+  assert.match(rejected.stderr, /Release already holds different bytes/)
+  assert.equal(readFileSync(join(dir, 'uploads.jsonl'), 'utf8'), existing, 'a conflicting attachment must block earlier missing uploads')
   writeFileSync(join(dir, 'uploads.jsonl'), '')
   for (let attempt = 0; attempt < 2; attempt++) {
     const attached = stage('candidate', 'attach', { CANDIDATE_DIGEST: fingerprint, RELEASE_ID: '7', REPAIR_GROUP: 'runtime-distribution' })

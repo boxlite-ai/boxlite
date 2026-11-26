@@ -567,17 +567,34 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RELEASE_ASSET_DIR"
+          missing_files=()
+          missing_packages=()
+          missing_integrities=()
           for file in boxlite-ai-boxlite-*-"${TAG#v}.tgz" "boxlite-ai-boxlite-${TAG#v}.tgz"; do
             name=$(tar -xOzf "$file" package/package.json | jq -er .name)
             version=$(tar -xOzf "$file" package/package.json | jq -er .version)
             [[ "$name" == @boxlite-ai/boxlite* && "$version" == "${TAG#v}" ]]
             integrity="sha512-$(openssl dgst -sha512 -binary "$file" | openssl base64 -A)"
-            if existing=$(npm view "$name@$version" dist.integrity --json 2> "$RUNNER_TEMP/npm-view.log"); then
-              [[ "$(jq -r . <<< "$existing")" == "$integrity" ]] || exit 1
+            package="$name@$version"
+            if existing=$(npm view "$package" dist.integrity --json 2> "$RUNNER_TEMP/npm-view.log"); then
+              if [[ "$(jq -r . <<< "$existing")" != "$integrity" ]]; then
+                echo "Conflicting npm integrity for $package" >&2
+                exit 1
+              fi
             else
               grep -q E404 "$RUNNER_TEMP/npm-view.log" || { cat "$RUNNER_TEMP/npm-view.log" >&2; exit 1; }
-              npm publish "./$file" --access public --provenance
-              [[ "$(npm view "$name@$version" dist.integrity)" == "$integrity" ]]
+              missing_files+=("$file")
+              missing_packages+=("$package")
+              missing_integrities+=("$integrity")
+            fi
+          done
+
+          for i in "${!missing_files[@]}"; do
+            npm publish "./${missing_files[i]}" --access public --provenance
+            published=$(npm view "${missing_packages[i]}" dist.integrity)
+            if [[ "$published" != "${missing_integrities[i]}" ]]; then
+              echo "Uploaded npm integrity differs for ${missing_packages[i]}" >&2
+              exit 1
             fi
           done
 

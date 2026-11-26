@@ -190,6 +190,59 @@ test('prod may retry a previous attempt only with the exact dev acceptance recei
   }
 })
 
+test('npm preflights all packages before publishing and verifies missing packages in order', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'boxlite-npm-publication-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const tag = 'v1.2.3'
+  const platform = '@boxlite-ai/boxlite-linux-x64-gnu@1.2.3'
+  const main = '@boxlite-ai/boxlite@1.2.3'
+  const record = join(dir, 'published')
+  mkdirSync(join(dir, 'package'))
+  writeFileSync(record, '')
+  for (const id of [platform, main]) {
+    const name = id.slice(0, id.lastIndexOf('@'))
+    const file = name.slice(1).replace('/', '-') + '-1.2.3.tgz'
+    writeFileSync(join(dir, 'package', 'package.json'), JSON.stringify({ name, version: '1.2.3' }))
+    execFileSync('tar', ['-czf', file, 'package/package.json'], { cwd: dir })
+  }
+  writeFileSync(join(dir, 'npm'), [
+    '#!/bin/bash',
+    'set -euo pipefail',
+    'case "$1" in',
+    '  view)',
+    '    entry="$RUNNER_TEMP/${2##*/}.integrity"',
+    '    if [[ ! -f "$entry" ]]; then echo "npm error code E404" >&2; exit 1; fi',
+    '    if [[ "${4:-}" == --json ]]; then jq -Rs . < "$entry"; else cat "$entry"; fi ;;',
+    '  publish)',
+    "    id=$(tar -xOzf \"$2\" package/package.json | jq -r '.name + \"@\" + .version')",
+    '    echo "$id" >> "$RUNNER_TEMP/published"',
+    '    digest=$(openssl dgst -sha512 -binary "$2" | openssl base64 -A)',
+    '    printf %s "${CORRUPT:-sha512-$digest}" > "$RUNNER_TEMP/${id##*/}.integrity" ;;',
+    '  *) exit 2 ;;',
+    'esac',
+  ].join('\n'), { mode: 0o755 })
+  const script = release.jobs.npm.steps.find(step => step.name === 'Publish platform packages before the main package').run
+  const publish = (extra = {}) => spawnSync('bash', ['-ec', script], {
+    cwd: dir, encoding: 'utf8',
+    env: { ...process.env, PATH: dir + ':' + process.env.PATH, RELEASE_ASSET_DIR: dir, RUNNER_TEMP: dir, TAG: tag, ...extra },
+  })
+  const mainEntry = join(dir, 'boxlite@1.2.3.integrity')
+  writeFileSync(mainEntry, 'sha512-conflict')
+  assert.notEqual(publish().status, 0, 'existing main package conflicts')
+  assert.equal(readFileSync(record, 'utf8'), '', 'a later conflict must block even the first platform upload')
+  rmSync(mainEntry)
+  const first = publish()
+  assert.equal(first.status, 0, first.stderr)
+  assert.deepEqual(readFileSync(record, 'utf8').trim().split('\n'), [platform, main])
+  writeFileSync(record, '')
+  const retry = publish()
+  assert.equal(retry.status, 0, retry.stderr)
+  assert.equal(readFileSync(record, 'utf8'), '', 'matching packages must be reused')
+  rmSync(mainEntry)
+  assert.notEqual(publish({ CORRUPT: 'sha512-wrong' }).status, 0, 'the registry must report the uploaded digest')
+  assert.equal(readFileSync(record, 'utf8').trim(), main)
+})
+
 test('PyPI publication rejects conflicting wheels before the upload action can run', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'pypi-preflight-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
