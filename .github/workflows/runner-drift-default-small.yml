@@ -1,5 +1,5 @@
 ---
-name: BoxLite conservative cold API client build
+name: BoxLite cold API client build with PR validation
 'on':
   push:
     branches:
@@ -10,8 +10,8 @@ permissions:
   contents: read
 jobs:
   drift:
-    name: Full client regeneration on 4 GiB with cold default cache
-    runs-on: boxlite-2vcpu-4gbmem-30gbdisk
+    name: Full client regeneration on 8 GiB with a cold cache and PR validation
+    runs-on: boxlite-2vcpu-8gbmem-30gbdisk
     services:
       redis:
         image: redis:7
@@ -25,7 +25,7 @@ jobs:
     steps:
     - uses: actions/checkout@v5
       with:
-        ref: 4422612e6eeeb7814e66326354c33ca84beeef83
+        ref: d137dce7a2da7988aeeb71d3ceaca3a111ab7e0e
         persist-credentials: false
     - uses: "./.github/actions/setup-boxlite-runner"
     - name: Install native Node build dependencies
@@ -52,6 +52,7 @@ jobs:
     - name: Install dependencies
       run: yarn install --immutable
       env:
+        YARN_ENABLE_HARDENED_MODE: 'true'
         YARN_NETWORK_CONCURRENCY: '4'
     - name: Prepare offline app env
       run: |
