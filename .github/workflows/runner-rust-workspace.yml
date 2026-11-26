@@ -34,6 +34,15 @@ jobs:
       with:
         toolchain: stable
     - uses: "./.github/actions/setup-python"
+    - name: Expose the installed Python library to the native linker
+      shell: bash
+      run: |
+        set -eu
+        libdir="$pythonLocation/lib"
+        test -f "$libdir/$(python3 -c 'import sysconfig; print(sysconfig.get_config_var("LDLIBRARY"))')"
+        export LIBRARY_PATH="$libdir${LIBRARY_PATH:+:$LIBRARY_PATH}"
+        printf 'LIBRARY_PATH=%s\n' "$LIBRARY_PATH" >> "$GITHUB_ENV"
+        printf 'int main(void) { return 0; }\n' | cc -x c - -lpython3.12 -o "$RUNNER_TEMP/python-link-check"
     - name: Install system dependencies (Linux)
       if: runner.os == 'Linux'
       run: sudo apt-get update && sudo apt-get install -y jq libseccomp-dev protobuf-compiler
