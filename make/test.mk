@@ -372,7 +372,7 @@ export VMM_GUEST VMM_GUEST_PROBE
 _guest-boot-probe: $(if $(SETUP_DONE),,runtime\:debug)
 	@bash "$(SCRIPT_DIR)/test/build-guest-boot-probe.sh"
 
-test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe $(VMM_DISK_GROW_INIT)
+test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug) _guest-boot-probe $(VMM_DISK_GROW_INIT) $(VMM_HOTPLUG_INIT)
 	@cargo test -p boxlite --features native --lib --no-run
 	@timeout 300s cargo test -p boxlite --features native --lib vmm::native::tests:: -- --ignored --test-threads=1
 	@timeout 600s cargo test -p boxlite --test native_vmm -- --ignored --test-threads=1 $(CARGOTEST_FILTER)

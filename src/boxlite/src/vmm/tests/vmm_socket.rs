@@ -683,7 +683,7 @@ mod mounts {
     }
 
     #[test]
-    fn another_uid_is_refused_mount_control() {
+    fn another_uid_is_refused_mount_and_memory_control() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let dir = tempfile::tempdir().unwrap();
@@ -699,10 +699,13 @@ mod mounts {
         std::thread::spawn(move || {
             serve_connections(
                 &runtime(),
-                listener.incoming().take(2),
+                listener.incoming().take(4),
                 owner,
                 move |op, directory| {
                     seen.fetch_add(1, Ordering::SeqCst);
+                    if matches!(op, ControlOp::Memory { .. }) {
+                        return Ok(ControlReply::MemoryTargetPublished);
+                    }
                     registry
                         .request(&tag, op, directory)
                         .map_err(|error| ControlError::Mount(error.raw_os_error().unwrap()))
@@ -711,6 +714,13 @@ mod mounts {
             )
         });
         for (op, directory) in [
+            (ControlOp::Memory { target_mib: None }, None),
+            (
+                ControlOp::Memory {
+                    target_mib: Some(128),
+                },
+                None,
+            ),
             (ControlOp::ListMounts, None),
             (registration("/data"), Some(File::open(dir.path()).unwrap())),
         ] {

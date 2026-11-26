@@ -300,9 +300,7 @@ fn check_request(
     if has_fd != register {
         return Err(ControlError::Mount(libc::EINVAL));
     }
-    if !matches!(op, ControlOp::ResizeDisk { .. } | ControlOp::Memory { .. })
-        && !same_user.map_err(ControlError::Mount)?
-    {
+    if !matches!(op, ControlOp::ResizeDisk { .. }) && !same_user.map_err(ControlError::Mount)? {
         return Err(ControlError::Mount(libc::EPERM));
     }
     Ok(())

@@ -328,6 +328,21 @@ fn failed_plug_rollback_reports_the_retained_mapping() {
 }
 
 #[test]
+fn a_published_slot_left_mapped_can_be_replugged() {
+    let (_, view, mut memory) = window(MockVm::failing_at(&[1]), 256);
+    let blocks = memory.blocks(HOTPLUG_START, 1).unwrap();
+    memory.plug(blocks.clone()).unwrap();
+
+    assert!(memory.unplug(blocks.clone()).is_err());
+    assert!(view.memory().address_in_range(GuestAddress(HOTPLUG_START)));
+    assert_eq!(memory.state(blocks.clone()), BlockState::Unplugged);
+
+    memory.plug(blocks.clone()).unwrap();
+    assert_eq!(memory.state(blocks), BlockState::Plugged);
+    assert_eq!(memory.mapped_bytes(), SLOT_SIZE);
+}
+
+#[test]
 fn retained_empty_bytes_exclude_partly_occupied_mappings() {
     let (_, _, mut memory) = window(MockVm::failing_at(&[2]), 256);
     let first = memory.blocks(HOTPLUG_START, 1).unwrap();

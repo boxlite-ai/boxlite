@@ -284,9 +284,11 @@ Design: [#2882](https://github.com/boxlite-ai/boxlite/issues/2882).
 - Unplugging blocks discards them with `MADV_DONTNEED` while other blocks in
   that slot remain plugged. An emptied slot retained after a failed unmap
   retains its contents.
-- A failed slot map unregisters the slots that plug added and leaves every
-  block unplugged. A failed unmap keeps the slot mapped and visible; `Drop`
-  leaks a slot whose unmap fails.
+- A failed slot map rolls back the slots that plug added and leaves every
+  block unplugged. If rollback cannot unregister a slot, the window retains
+  ownership of that unpublished mapping and refuses requests that would reuse it.
+  A still-visible slot can be reused after failed unplug, and `Drop` keeps
+  backing alive while KVM holds its registration.
 
 ### Virtio-mem device and control
 
@@ -304,6 +306,13 @@ Targets are multiples of 128 MiB up to the configured capacity.
 
 Use `memory_status(timeout)` to read the capacity, target, plugged and mapped
 MiB. Shrinking is best effort, so the plugged size may stay above the target.
+
+`memory_status_with_retained_mappings(timeout)` also reports empty slots
+still registered with KVM, sampled in the same operation. Occupied slots
+count toward mapped capacity regardless of how many blocks they contain.
+
+The native shim exposes target and status requests on `/v1/memory`.
+It accepts those requests from peers with the same effective user ID.
 
 `WouldBlock` means the device is inactive or the control queue is full. An
 accepted command can still run after the caller times out.

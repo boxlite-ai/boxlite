@@ -25,7 +25,9 @@ use std::{
 };
 
 use boxlite_hypervisor::{MemoryRegion, Vm};
-use vm_memory::{GuestAddress, GuestAddressSpace, GuestMemoryRegion, GuestRegionMmap};
+use vm_memory::{
+    GuestAddress, GuestAddressSpace, GuestMemoryBackend, GuestMemoryRegion, GuestRegionMmap,
+};
 
 use crate::memory::{GuestMemoryMmap, GuestMemoryView};
 
@@ -181,18 +183,27 @@ impl<V: Vm + ?Sized> HotplugMemory<V> {
         }
     }
 
-    /// Plugs `blocks`, mapping and registering every slot they need. A failure
-    /// unregisters the slots this call added and leaves every block unplugged.
+    /// Plugs `blocks`, mapping and registering every slot they need. If mapping
+    /// fails, rollback retains backing for any slot KVM cannot unregister.
+    /// The block state is unchanged on failure.
     pub(crate) fn plug(&mut self, blocks: Range<usize>) -> io::Result<()> {
+        let slots = slots_of(&blocks);
         // A failed rollback may leave an unpublished but registered slot.
         // Reusing it as a published slot would expose RAM through an incomplete view.
-        if self.retained_empty_mapped_bytes() != 0 {
+        let touches_unpublished_slot = {
+            let view = self.view.memory();
+            slots
+                .clone()
+                .filter_map(|slot| self.slots[slot].as_ref())
+                .any(|region| !view.address_in_range(region.start_addr()))
+        };
+        if touches_unpublished_slot {
             return Err(io::Error::other(
-                "a failed hotplug operation retained a KVM mapping",
+                "a failed hotplug rollback retained an unpublished KVM mapping",
             ));
         }
         let mut added = Vec::new();
-        for slot in slots_of(&blocks) {
+        for slot in slots {
             if self.slots[slot].is_some() {
                 continue;
             }
