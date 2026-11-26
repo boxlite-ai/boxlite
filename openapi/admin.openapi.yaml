@@ -28,8 +28,10 @@ info:
     membership and owner rules without API-key scopes. Invitation acceptance
     remains in the JWT-only Console Cloud API.
 
-    Authentication, pagination parameters, and error schemas are shared with
-    the Box API. This cloud-only API is not served by the local Box runtime.
+    Authentication and pagination parameters are shared with the Box API.
+    Errors keep a nested `error` object; the flat error format of the
+    hosted Box API does not apply here. This cloud-only API is not served
+    by the local Box runtime.
     Dedicated Admin SDK methods are not yet provided; callers may use HTTP.
   license:
     name: Apache 2.0
@@ -81,9 +83,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/UserList"
         "400":
-          $ref: "./box.openapi.yaml#/components/responses/BadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "401":
-          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForbiddenError"
         "429":
@@ -114,11 +116,11 @@ paths:
         "204":
           description: User removed and their organization keys revoked; no response body
         "401":
-          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForbiddenError"
         "404":
-          $ref: "./box.openapi.yaml#/components/responses/NotFoundError"
+          $ref: "#/components/responses/NotFoundError"
         "429":
           $ref: "#/components/responses/RateLimitError"
 
@@ -144,9 +146,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/InviteList"
         "400":
-          $ref: "./box.openapi.yaml#/components/responses/BadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "401":
-          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForbiddenError"
         "429":
@@ -184,18 +186,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/Invite"
         "400":
-          $ref: "./box.openapi.yaml#/components/responses/BadRequestError"
+          $ref: "#/components/responses/BadRequestError"
         "401":
-          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForbiddenError"
         "404":
-          $ref: "./box.openapi.yaml#/components/responses/NotFoundError"
+          $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "./box.openapi.yaml#/components/responses/ConflictError"
+          $ref: "#/components/responses/ConflictError"
           description: Already a member, already invited, or the idempotency key is in progress.
         "422":
-          $ref: "./box.openapi.yaml#/components/responses/UnprocessableEntityError"
+          $ref: "#/components/responses/UnprocessableEntityError"
           description: The idempotency key was used with a different request payload.
         "429":
           $ref: "#/components/responses/RateLimitError"
@@ -224,13 +226,13 @@ paths:
         "204":
           description: Invitation cancelled; no response body
         "401":
-          $ref: "./box.openapi.yaml#/components/responses/UnauthorizedError"
+          $ref: "#/components/responses/UnauthorizedError"
         "403":
           $ref: "#/components/responses/ForbiddenError"
         "404":
-          $ref: "./box.openapi.yaml#/components/responses/NotFoundError"
+          $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "./box.openapi.yaml#/components/responses/ConflictError"
+          $ref: "#/components/responses/ConflictError"
         "429":
           $ref: "#/components/responses/RateLimitError"
 
@@ -249,9 +251,28 @@ components:
         type: string
         format: uuid
       example: c391e52c-fef2-4aae-80ec-a47b7520ce42
+  # These stay local: the shared Box responses also allow the flat hosted error format.
   responses:
+    BadRequestError:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ConflictError:
+      description: Resource state conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
     ForbiddenError:
       description: Missing membership, owner role, or required API-key scope
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFoundError:
+      description: Resource not found
       content:
         application/json:
           schema:
@@ -273,9 +294,25 @@ components:
               message: Too many requests
               type: ResourceExhaustedError
               code: resource_exhausted
+    UnauthorizedError:
+      description: Missing or invalid authentication credentials
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnprocessableEntityError:
+      description: Request understood but cannot be processed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
   schemas:
     ErrorResponse:
-      $ref: "./box.openapi.yaml#/components/schemas/ErrorResponse"
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: "./box.openapi.yaml#/components/schemas/ErrorModel"
     CreateInviteRequest:
       type: object
       additionalProperties: false

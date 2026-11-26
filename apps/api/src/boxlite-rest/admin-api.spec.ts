@@ -294,12 +294,12 @@ describe('Admin API HTTP contract', () => {
     expect((await call('GET', `/organizations/invites?pageToken=${encodeURIComponent(token)}`)).status).toBe(400)
     expect(invites.findPage).not.toHaveBeenCalled()
   })
-  it.each([400, 401, 403, 404, 409, 422, 429, 500, 503])('uses the shared Box error schema for %s', async (status) => {
+  it.each([400, 401, 403, 404, 409, 422, 429, 500, 503])('uses the Admin error schema for %s', async (status) => {
     members.findPage.mockRejectedValueOnce(new HttpException('Request refused', status))
     const response = await call('GET', '/organizations/users')
     expect(response.status).toBe(status)
     const body = await response.json()
-    const validate = ajv.getSchema('https://contract.test/box.openapi.yaml#/components/schemas/ErrorResponse')!
+    const validate = ajv.getSchema(`${specId}#/components/schemas/ErrorResponse`)!
     expect(validate(body) ? [] : validate.errors).toEqual([])
     expect(body.error.message).toBe('Request refused')
   })
