@@ -56,3 +56,7 @@ debug = false
 [profile.debugging]
 inherits = "dev"
 debug = true
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
