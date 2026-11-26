@@ -14,7 +14,6 @@ use std::{path::Path, sync::mpsc};
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use crate::snapshot::{
     export::Request,
-    image::NewFileWriter,
     state::{MachineState, VcpuRecord},
 };
 use crate::{
@@ -278,7 +277,7 @@ impl Lifecycle {
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    pub(crate) fn finish_export(&self, result: Result<[NewFileWriter<'_>; 2]>) -> Result<()> {
+    pub(crate) fn finish_export(&self, result: Result<()>) -> Result<()> {
         let mut state = self.state();
         let terminal = state.is_terminal();
         state.command = None;
@@ -286,7 +285,7 @@ impl Lifecycle {
         if terminal {
             return Err(export_terminated());
         }
-        result.map(|files| files.into_iter().for_each(NewFileWriter::commit))
+        result
     }
 
     pub(crate) fn wait_paused(&self, timeout: Duration) -> Result<()> {

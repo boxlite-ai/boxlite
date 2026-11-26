@@ -59,14 +59,18 @@ impl VmControl {
     /// non-atomic; PIT restore loses sub-tick phase and can re-arm one-shot modes
     /// (0, 1, and 4).
     ///
-    /// Both files are created with mode `0600` (subject to the process `umask`).
+    /// Both files are created exclusively with `create_new` and mode `0600`
+    /// (subject to the process `umask`). An existing target returns `AlreadyExists`
+    /// without changing its contents.
     /// Export skips `fsync`, and dropping the files ignores delayed `close(2)` errors.
     /// `Ok(())` provides no guarantee of power-loss durability.
     ///
     /// `Vm` currently has no public device-less constructor, so `export()` only
     /// applies to device-less VMs. Callers must have exclusive use of both
-    /// target paths during export. Failure cleanup is best-effort and attempts
-    /// to unlink a path only if its device and inode still match the open file.
+    /// target paths during export. If export fails after creating a file,
+    /// `boxlite-vmm` leaves it in place, even if partially written. The caller
+    /// (runtime or runner) is responsible for cleanup, for example by exporting
+    /// into a temporary directory and atomically renaming it on success.
     /// Relative paths are resolved against the current working directory when
     /// the export is admitted.
     pub fn export(

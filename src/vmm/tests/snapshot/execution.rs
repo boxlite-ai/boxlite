@@ -733,17 +733,23 @@ fn file_export_refuses_existing_target_and_unstarted_or_terminal_vm() {
                 release.send(()).unwrap();
             }
         }
-        for (state, memory) in [
-            (&target, &memory_path),
-            (&state_path, &target),
-            (&state_path, &state_path),
+        for (state, memory, creates_state) in [
+            (&target, &memory_path, false),
+            (&state_path, &target, true),
+            (&state_path, &state_path, true),
         ] {
             assert!(
                 matches!(control.export(state, memory), Err(Error::Snapshot(error))
                 if error.kind() == io::ErrorKind::AlreadyExists)
             );
             assert_eq!(control.status(), VmStatus::Paused);
-            assert!(!state_path.exists() && !memory_path.exists());
+            if creates_state {
+                assert_eq!(fs::metadata(&state_path).unwrap().len(), 0);
+                fs::remove_file(&state_path).unwrap();
+            } else {
+                assert!(!state_path.exists());
+            }
+            assert!(!memory_path.exists());
             assert_eq!(fs::read(&target).unwrap(), b"existing");
         }
         control.stop();

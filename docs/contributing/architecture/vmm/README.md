@@ -606,23 +606,24 @@ magic `BXLVMST1`, `u32` version `1`, `u32` vCPU count, `u64` RAM length, and
 state. The memory file contains raw RAM from offset zero in `ram.ranges()`
 order, skipping `[3 GiB, 4 GiB)`. Its length equals the header's RAM length.
 
-The driver creates both files exclusively with mode `0600` (subject to the
-process `umask`), checks for stop between chunks of up to 1 MiB, and releases
-the control slot at the final lifecycle check. Relative paths are resolved
-against the current working directory when the export is admitted. `stop()`
-takes effect at export checkpoints. An in-flight platform `save_state` ioctl
-or file I/O call on the driver delays both `export()` and `run()` until it
-returns. If stop is requested during a vCPU's `save_state`, the driver abandons
+The driver creates both files exclusively with `create_new` and mode `0600`
+(subject to the process `umask`), checks for stop between chunks of up to 1 MiB,
+and releases the control slot at the final lifecycle check. Relative paths
+are resolved against the current working directory when the export is admitted.
+`stop()` takes effect at export checkpoints. An in-flight platform `save_state`
+ioctl or file I/O call on the driver delays both `export()` and `run()` until
+it returns. If stop is requested during a vCPU's `save_state`, the driver abandons
 the capture request so `export()` returns `TerminalOutcome` without waiting, but
 `run()` still waits for the vCPU thread to exit. A terminal state at the final
 lifecycle check yields `TerminalOutcome`. The driver skips `fsync`, and
 dropping the files ignores delayed `close(2)` errors. `Ok(())` provides no
 guarantee of power-loss durability.
 
-Callers must have exclusive use of both target paths during export. Failure
-cleanup is best-effort and attempts to unlink a path only if its device and
-inode still match the open file. Existing targets return `AlreadyExists` and
-retain their contents.
+Callers must have exclusive use of both target paths during export. Existing
+targets return `AlreadyExists` and retain their contents. If export fails
+after creating a file, `boxlite-vmm` leaves it in place, even if partially
+written. The caller (runtime or runner) is responsible for cleanup, for example
+by exporting into a temporary directory and atomically renaming it on success.
 
 ### Where the engine plugs in (M2)
 

@@ -758,21 +758,24 @@ virtualization, Hyper-V SynIC, and guest-debug state. Pausing stops vCPUs but
 not KVM's in-kernel timers, so platform capture is non-atomic; PIT restore
 loses sub-tick phase and can re-arm one-shot modes (0, 1, and 4).
 
-Export creates two files with mode `0600` (subject to the process `umask`). It
-skips `fsync`, and dropping the files ignores delayed `close(2)` errors.
-`Ok(())` provides no guarantee of power-loss durability. An existing target,
-including reuse of the state path for memory, returns `Error::Snapshot` with
-`AlreadyExists`.
+Export creates both files exclusively with `create_new` and mode `0600`
+(subject to the process `umask`). It skips `fsync`, and dropping the files
+ignores delayed `close(2)` errors. `Ok(())` provides no guarantee of power-loss
+durability. An existing target, including reuse of the state path for memory,
+returns `Error::Snapshot` with `AlreadyExists` without changing its contents.
 
-Callers must have exclusive use of both target paths during export. Failure
-cleanup is best-effort and attempts to unlink a path only if its device and
-inode still match the open file. Capture and I/O failures leave a live VM
-paused. `stop()` takes effect at export checkpoints. An in-flight platform
-`save_state` ioctl or file I/O call on the driver delays both `export()` and
-`run()` until it returns. If stop is requested during a vCPU's `save_state`,
-the driver abandons the capture request so `export()` returns `TerminalOutcome`
-without waiting, but `run()` still waits for the vCPU thread to exit. A terminal
-state at the final lifecycle check yields `TerminalOutcome`.
+Callers must have exclusive use of both target paths during export. If export
+fails after creating a file, `boxlite-vmm` leaves it in place, even if partially
+written. The caller (runtime or runner) is responsible for cleanup, for example
+by exporting into a temporary directory and atomically renaming it on success.
+
+Capture and I/O failures leave a live VM paused. `stop()` takes effect at
+export checkpoints. An in-flight platform `save_state` ioctl or file I/O call
+on the driver delays both `export()` and `run()` until it returns. If stop is
+requested during a vCPU's `save_state`, the driver abandons the capture request
+so `export()` returns `TerminalOutcome` without waiting, but `run()` still waits
+for the vCPU thread to exit. A terminal state at the final lifecycle check yields
+`TerminalOutcome`.
 
 The state file starts with a 32-byte little-endian header with the magic
 `BXLVMST1`, followed by Postcard machine state with vCPU records in ID order.

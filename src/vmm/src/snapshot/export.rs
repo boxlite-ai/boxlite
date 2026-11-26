@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::mpsc};
 
 use boxlite_hypervisor::X86Vm;
 
-use super::image::{self, NewFileWriter};
+use super::image;
 use crate::{Result, lifecycle::Lifecycle, memory::GuestRam};
 
 #[derive(Debug)]
@@ -22,8 +22,8 @@ pub(crate) fn drive(lifecycle: &Lifecycle, host: &impl X86Vm, ram: &GuestRam, co
     let result = machine.and_then(|mut state| {
         state.vcpus.sort_unstable_by_key(|record| record.id);
         lifecycle.check_export()?;
-        let mut state_file = NewFileWriter::new(&request.state_path)?;
-        let mut memory_file = NewFileWriter::new(&request.memory_path)?;
+        let mut state_file = image::create_new_file(&request.state_path)?;
+        let mut memory_file = image::create_new_file(&request.memory_path)?;
         image::write_to_checked(
             &mut state_file,
             &mut memory_file,
@@ -31,8 +31,7 @@ pub(crate) fn drive(lifecycle: &Lifecycle, host: &impl X86Vm, ram: &GuestRam, co
             &state.encode()?,
             ram,
             || lifecycle.check_export(),
-        )?;
-        Ok([state_file, memory_file])
+        )
     });
     let _ = request.reply.send(lifecycle.finish_export(result));
 }

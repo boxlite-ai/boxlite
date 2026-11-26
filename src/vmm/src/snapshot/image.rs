@@ -4,9 +4,9 @@
 //! Version 1 pairs a framed machine state file with a raw packed RAM file.
 
 use std::{
-    fs::{self, File},
+    fs::{File, OpenOptions},
     io::{self, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::fs::OpenOptionsExt,
     path::Path,
 };
 
@@ -65,49 +65,13 @@ pub(crate) fn write_to_checked(
     memory_writer.flush().map_err(Error::Snapshot)
 }
 
-pub(crate) struct NewFileWriter<'a> {
-    path: &'a Path,
-    file: File,
-    committed: bool,
-}
-
-impl<'a> NewFileWriter<'a> {
-    pub(crate) fn new(path: &'a Path) -> Result<Self> {
-        let mut options = File::options();
-        options.write(true).create_new(true).mode(0o600);
-        let file = options.open(path).map_err(Error::Snapshot)?;
-        Ok(Self {
-            path,
-            file,
-            committed: false,
-        })
-    }
-
-    pub(crate) fn commit(mut self) {
-        self.committed = true;
-    }
-}
-
-impl Write for NewFileWriter<'_> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.file.write(bytes)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.file.flush()
-    }
-}
-
-impl Drop for NewFileWriter<'_> {
-    fn drop(&mut self) {
-        if !self.committed
-            && let Ok(open) = self.file.metadata()
-            && let Ok(target) = fs::symlink_metadata(self.path)
-            && (target.dev(), target.ino()) == (open.dev(), open.ino())
-        {
-            let _ = fs::remove_file(self.path);
-        }
-    }
+pub(crate) fn create_new_file(path: &Path) -> Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(Error::Snapshot)
 }
 
 #[cfg(test)]
