@@ -265,6 +265,11 @@ gRPC-based communication layer between host and guest.
 - `Connection`: Lazy gRPC channel management
 - Service interfaces: `GuestInterface`, `ContainerInterface`, `ExecutionInterface`
 
+`Connection::reset()` and `GuestSession::reset()` drop the cached tonic gRPC
+channel under an async `Mutex<Option<Channel>>`. Callers can use either method
+to force a clean reconnect on the next RPC after a transport interruption, such
+as a VM pause and resume.
+
 Guest-ready confirms the guest agent's listener, while libkrun initializes the
 host Unix listener asynchronously. The portal attempts to connect immediately,
 then retries missing or refused sockets with asynchronous backoff from 10 ms to
