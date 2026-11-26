@@ -5,6 +5,7 @@ api_api_keys.go
 api_audit.go
 api_auth.go
 api_box.go
+api_boxlite_timing.go
 api_config.go
 api_health.go
 api_images.go

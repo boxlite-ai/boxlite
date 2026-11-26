@@ -166,3 +166,5 @@ func (v *NullableOrganizationAppHostingPermissionsDto) UnmarshalJSON(src []byte)
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
+
+

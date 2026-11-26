@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 )
 
-// RegionType The type of the region
+// RegionType The region type of the runner
 type RegionType string
 
 // List of RegionType

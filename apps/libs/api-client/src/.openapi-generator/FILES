@@ -7,6 +7,7 @@ api/api-keys-api.ts
 api/audit-api.ts
 api/auth-api.ts
 api/box-api.ts
+api/boxlite-timing-api.ts
 api/config-api.ts
 api/health-api.ts
 api/images-api.ts
@@ -80,6 +81,7 @@ docs/BoxState.md
 docs/BoxVolume.md
 docs/BoxVolumeFilestoreRef.md
 docs/BoxliteConfiguration.md
+docs/BoxliteTimingApi.md
 docs/ConfigApi.md
 docs/CpuIncidentListDto.md
 docs/CreateApiKey.md
