@@ -650,6 +650,11 @@ impl BoxBackend for RestBox {
         options: ExportOptions,
         dest: &Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        if options.include_memory {
+            return Err(BoxliteError::Unsupported(
+                "full memory checkpoint export is not supported over REST export".into(),
+            ));
+        }
         self.client.require_export_enabled().await?;
 
         let box_id = self.box_id_str();
@@ -1432,6 +1437,22 @@ mod tests {
         Response as HandshakeResponse,
     };
     use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+
+    #[tokio::test]
+    async fn full_checkpoint_export_is_rejected_before_http() {
+        use futures::FutureExt;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let remote = rest_box_for(listener.local_addr().unwrap().port(), "checkpoint-box");
+        let error = remote
+            .export_box(ExportOptions::full(), Path::new("unused.boxlite"))
+            .now_or_never()
+            .expect("full checkpoint rejection must not wait for HTTP")
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Unsupported(message)
+            if message == "full memory checkpoint export is not supported over REST export"));
+        assert!(listener.accept().now_or_never().is_none());
+    }
 
     /// A tunnel target as SDK callers write it.
     const LOCAL_3000: &str = "127.0.0.1:3000";

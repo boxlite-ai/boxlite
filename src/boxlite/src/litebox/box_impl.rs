@@ -806,6 +806,21 @@ impl BoxImpl {
             .await
     }
 
+    /// Capture memory through an already initialized handler without booting or attaching.
+    pub(super) fn capture_memory_checkpoint(
+        &self,
+        dest_dir: &std::path::Path,
+    ) -> BoxliteResult<()> {
+        let live = self.live.get().ok_or_else(|| {
+            BoxliteError::InvalidState("full checkpoint export requires live VM state".into())
+        })?;
+        let handler = live
+            .handler
+            .lock()
+            .map_err(|e| BoxliteError::Internal(format!("handler lock poisoned: {e}")))?;
+        handler.capture_memory_checkpoint(dest_dir)
+    }
+
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
         // Check if box is stopped before proceeding (via stop() or runtime shutdown)
         if self.shutdown_token.is_cancelled() {
@@ -1953,7 +1968,9 @@ mod tests {
     use crate::litebox::config::ContainerRuntimeConfig;
     use crate::net::{NetworkBackendConfig, NetworkBackendFactory};
     use crate::runtime::id::BoxIDMint;
-    use crate::runtime::options::{BoxOptions, BoxliteOptions, PortProtocol, PortSpec, RootfsSpec};
+    use crate::runtime::options::{
+        BoxOptions, BoxliteOptions, ExportOptions, PortProtocol, PortSpec, RootfsSpec,
+    };
     use crate::runtime::rt_impl::RuntimeImpl;
     use crate::runtime::types::{ContainerID, PublishedPort};
     use crate::util::{PidFileWriter, PidRecord, ShimPidRecord, is_process_alive};
@@ -2018,6 +2035,71 @@ mod tests {
         fn pid(&self) -> u32 {
             self.0
         }
+    }
+
+    #[test]
+    fn default_vmm_memory_checkpoint_is_unsupported() {
+        let error = InfoTestHandler(0)
+            .capture_memory_checkpoint(std::path::Path::new("unused"))
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Unsupported(message)
+            if message == "full memory checkpoint capture is not supported by this VMM backend"));
+    }
+
+    struct CheckpointTestHandler(std::path::PathBuf);
+
+    impl VmmHandler for CheckpointTestHandler {
+        fn stop(&mut self) -> BoxliteResult<()> {
+            Ok(())
+        }
+
+        fn metrics(&self) -> BoxliteResult<VmmMetrics> {
+            Ok(VmmMetrics::default())
+        }
+
+        fn is_running(&self) -> bool {
+            true
+        }
+
+        fn pid(&self) -> u32 {
+            0
+        }
+
+        fn capture_memory_checkpoint(&self, dest_dir: &std::path::Path) -> BoxliteResult<()> {
+            assert_eq!(dest_dir, self.0.as_path());
+            Err(BoxliteError::Unsupported("checkpoint test handler".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn full_checkpoint_export_requires_running_box() {
+        let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        fixture.box_impl.state.write().status = BoxStatus::Stopped;
+        let error = fixture
+            .box_impl
+            .export_box(ExportOptions::full(), fixture._temp_dir.path())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::InvalidState(message)
+            if message == "full checkpoint export requires a running box"));
+    }
+
+    #[tokio::test]
+    async fn full_checkpoint_export_routes_to_vmm_handler() {
+        let dest = std::path::Path::new("unused-checkpoint-dest");
+        let fixture =
+            running_box_for_start_test_with_live(Arc::new(StartGate::default()), |live| {
+                *live.handler.get_mut().unwrap() =
+                    Box::new(CheckpointTestHandler(dest.to_path_buf()));
+            })
+            .await;
+        let error = fixture
+            .box_impl
+            .export_box(ExportOptions::full(), dest)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Unsupported(message)
+            if message == "checkpoint test handler"));
     }
 
     struct StartGate {

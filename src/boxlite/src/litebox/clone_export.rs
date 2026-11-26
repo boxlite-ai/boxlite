@@ -171,9 +171,31 @@ impl BoxImpl {
 
     pub(crate) async fn export_box(
         &self,
-        _options: crate::runtime::options::ExportOptions,
+        options: crate::runtime::options::ExportOptions,
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        if options.include_memory {
+            if self.state.read().status != BoxStatus::Running {
+                return Err(BoxliteError::InvalidState(
+                    "full checkpoint export requires a running box".into(),
+                ));
+            }
+            return self
+                .with_disk_admission(self.with_operation(async {
+                    if self.state.read().status != BoxStatus::Running {
+                        return Err(BoxliteError::InvalidState(
+                            "full checkpoint export requires a running box".into(),
+                        ));
+                    }
+                    self.capture_memory_checkpoint(dest)?;
+                    // A successful capture still cannot be packaged by this placeholder.
+                    Err(BoxliteError::Unsupported(
+                        "full memory checkpoint archive creation is not supported".into(),
+                    ))
+                }))
+                .await;
+        }
+
         let t0 = Instant::now();
         self.with_disk_admission(async {
             let box_home = self.config.box_home.clone();
@@ -307,6 +329,7 @@ fn do_export_finalize(
         box_name: config_name.map(|s| s.to_string()),
         image,
         box_options: Some(config_options.clone()),
+        memory_checkpoint: None,
         guest_disk_checksum: String::new(),
         container_disk_checksum,
         exported_at: chrono::Utc::now().to_rfc3339(),

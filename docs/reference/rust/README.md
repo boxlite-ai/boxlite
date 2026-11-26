@@ -498,6 +498,16 @@ The shim's configured or inherited `RLIMIT_FSIZE` soft limit can restrict growth
 
 Other engines and remote backends return `Unsupported`; this API is not exposed through REST, CLI or other SDKs.
 
+#### ExportOptions
+
+`ExportOptions::default()` exports disks only. Set `include_memory: true` or
+use `ExportOptions::full()` to request a full checkpoint. Local full export
+requires a running box with live VM state; otherwise it returns `InvalidState`.
+The current VMM checkpoint hook is a placeholder and returns `Unsupported`.
+REST export also returns `Unsupported` for full checkpoints without sending a
+request. Import rejects v8 archives and manifests carrying memory checkpoint
+metadata with `Unsupported`; disk-only archives remain supported through v7.
+
 #### ExecutionsHandle
 
 `LiteBox::executions()` returns an owned, cloneable `ExecutionsHandle` without
