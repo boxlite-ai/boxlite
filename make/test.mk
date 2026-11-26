@@ -804,7 +804,7 @@ PHONY_TARGETS += run\:apps\:secret-server
 run\:apps\:secret-server:
 	@cd apps/secret-server && ENVIRONMENT=local SECRET_SERVER_ROLE=$${SECRET_SERVER_ROLE:-write} SECRET_SERVER_AUTH_MODE=dev SECRET_SERVER_ATTESTORS=$${SECRET_SERVER_ATTESTORS:-dev} GOWORK=off go run ./cmd/secret-server
 
-SECRET_SERVER_INTEGRATION_PACKAGES := ./internal/database ./internal/server ./internal/testdb ./cmd/secret-server
+SECRET_SERVER_INTEGRATION_PACKAGES := ./internal/database ./internal/secretstore ./internal/server ./internal/testdb ./cmd/secret-server
 SECRET_SERVER_INTEGRATION_TESTS := ^Test(Integration|MigrateSIGTERM|StartupRejectsWrongPersistentKey|PostgresStartupAndReadiness|WrongKeyDoesNotStartServer|RunRejectsOccupiedPort|StartupClosesPoolWhenValidatorConstructionFails|RunBoundsDatabaseCleanup|FetchRuntimeRequiresAttestation|FetchRuntimeRequiresGCPRunnerRegistry|StartupWaitsForMigrationLock|CreateOverridesDatabaseQuery)$$
 PHONY_TARGETS += _require-secret-test-database test\:apps\:secret-server\:integration
 _require-secret-test-database:

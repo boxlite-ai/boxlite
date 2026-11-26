@@ -154,7 +154,7 @@ func TestGoogleWriteRouteAuthentication(t *testing.T) {
 		for _, role := range []string{"write", "all"} {
 			t.Run(role+"/"+tc.name, func(t *testing.T) {
 				config := Config{Role: role, AuthMode: "google", Audience: audience, AllowedCallers: []string{allowed}}
-				handler := routes(config, nil, v.Validate, nil)
+				handler := routes(config, nil, v.Validate, nil, nil)
 				request := httptest.NewRequest(http.MethodPost, "/internal/v1/write", nil)
 				request.Header.Set("Authorization", "Bearer "+token)
 				response := httptest.NewRecorder()

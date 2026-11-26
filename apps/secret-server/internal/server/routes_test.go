@@ -29,7 +29,7 @@ func TestRoutes(t *testing.T) {
 				runnerVerifier = selector
 				wantFetch = http.StatusUnauthorized
 			}
-			handler := routes(Config{Role: role, AuthMode: "dev", DevToken: "secret"}, func(context.Context) error { return pingErr }, nil, runnerVerifier)
+			handler := routes(Config{Role: role, AuthMode: "dev", DevToken: "secret"}, func(context.Context) error { return pingErr }, nil, runnerVerifier, nil)
 			request := func(path, token string) int {
 				r := httptest.NewRequest(http.MethodGet, path, nil)
 				if token != "" {
@@ -73,7 +73,7 @@ func TestRoutes(t *testing.T) {
 }
 
 func TestHealthAndReadinessRejectOtherMethods(t *testing.T) {
-	handler := routes(Config{}, func(context.Context) error { t.Error("unexpected ping"); return nil }, nil, nil)
+	handler := routes(Config{}, func(context.Context) error { t.Error("unexpected ping"); return nil }, nil, nil, nil)
 	for _, path := range []string{"/health", "/ready"} {
 		t.Run(path, func(t *testing.T) {
 			w := httptest.NewRecorder()
