@@ -31,6 +31,12 @@ jobs:
     - name: Install native build prerequisites
       run: sudo apt-get install -y --no-install-recommends build-essential pkg-config
         libssl-dev patchelf python3
+    - name: Set up the Python interpreter used by cibuildwheel
+      uses: actions/setup-python@v6
+      with:
+        python-version: 3.11 - 3.13
+    - name: Verify the relocated host interpreter
+      run: python -c 'import sys, sysconfig, venv; print(sys.version, sysconfig.get_config_var("LDLIBRARY"))'
     - uses: "./.github/actions/setup-rust"
       with:
         toolchain: stable
