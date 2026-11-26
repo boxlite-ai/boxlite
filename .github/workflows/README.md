@@ -20,8 +20,11 @@ The connection needs permission to register workers and quota for the requested
 | Runner label | Jobs |
 | --- | --- |
 | `boxlite` | Lightweight lint and setup, plugin package validation, Go SDK release configuration, status and selected release artifact uploads |
-| `boxlite-4vcpu-16gbmem-30gbdisk` | Python and Node SDK tests, Go SDK release checks, Node release packaging, Python CodeQL, Dashboard tests, Secret Server PostgreSQL integration and API client drift |
-| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, standalone guest artifacts, Actions CodeQL and the non-publishing multiarch Box image build |
+| `boxlite-2vcpu-4gbmem-30gbdisk` | Python and Node SDK unit tests, Dashboard tests and Secret Server PostgreSQL integration |
+| `boxlite-2vcpu-8gbmem-30gbdisk` | Python CodeQL and API client drift |
+| `boxlite-2vcpu-4gbmem-64gbdisk` | Actions CodeQL |
+| `boxlite-4vcpu-16gbmem-30gbdisk` | Go SDK release checks and Node release packaging |
+| `boxlite-4vcpu-16gbmem-64gbdisk` | Clippy, standalone guest artifacts and the non-publishing multiarch Box image build |
 | GitHub-hosted Ubuntu | API tests, Go SDK coverage, native SDK and runtime packaging, Rust coverage, Nix and REST E2E, Go, C/C++, Rust and TypeScript CodeQL, protected publishing and runner recovery |
 
 Linux ARM64 and macOS matrix jobs use their native platforms. Building an ARM64

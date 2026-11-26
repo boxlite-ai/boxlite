@@ -33,18 +33,18 @@ function matrixRunner(selection: string, os: string) {
 test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native platform routing', () => {
   const { platforms } = JSON.parse(readFileSync(join(REPO_ROOT, '.github/ci-config.json'), 'utf8'))
   const jobs = [
-    ['lint.yml', 'clippy', 64],
-    ['test.yml', 'guest_artifacts', 64],
-    ['test.yml', 'python', 30],
-    ['test.yml', 'node', 30],
-    ['build-go.yml', 'test', 30],
-    ['build-node.yml', 'test', 30],
+    ['lint.yml', 'clippy', 'boxlite-4vcpu-16gbmem-64gbdisk'],
+    ['test.yml', 'guest_artifacts', 'boxlite-4vcpu-16gbmem-64gbdisk'],
+    ['test.yml', 'python', 'boxlite-2vcpu-4gbmem-30gbdisk'],
+    ['test.yml', 'node', 'boxlite-2vcpu-4gbmem-30gbdisk'],
+    ['build-go.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
+    ['build-node.yml', 'test', 'boxlite-4vcpu-16gbmem-30gbdisk'],
   ] as const
 
-  for (const [name, job, disk] of jobs) {
+  for (const [name, job, linuxRunner] of jobs) {
     const selection = workflow(name).jobs[job]['runs-on']
     for (const { os, target } of platforms) {
-      const expected = target === 'linux-x64-gnu' ? `boxlite-4vcpu-16gbmem-${disk}gbdisk` : os
+      const expected = target === 'linux-x64-gnu' ? linuxRunner : os
       assert.equal(matrixRunner(selection, os), expected, `${name} ${job} on ${os}`)
     }
   }
@@ -53,9 +53,9 @@ test('Ubuntu x64 matrix jobs request sized BoxLite workers and preserve native p
 for (const [name, job, runner] of [
   ['build-go.yml', 'config', 'boxlite'],
   ['build-plugins.yml', 'build', 'boxlite'],
-  ['api-client-drift.yml', 'check-generated-clients', 'boxlite-4vcpu-16gbmem-30gbdisk'],
-  ['test.yml', 'dashboard', 'boxlite-4vcpu-16gbmem-30gbdisk'],
-  ['test.yml', 'secret-server-postgres', 'boxlite-4vcpu-16gbmem-30gbdisk'],
+  ['api-client-drift.yml', 'check-generated-clients', 'boxlite-2vcpu-8gbmem-30gbdisk'],
+  ['test.yml', 'dashboard', 'boxlite-2vcpu-4gbmem-30gbdisk'],
+  ['test.yml', 'secret-server-postgres', 'boxlite-2vcpu-4gbmem-30gbdisk'],
   ['build-box-images.yml', 'build', 'boxlite-4vcpu-16gbmem-64gbdisk'],
 ] as const) {
   test(`${name}/${job} requests its qualified BoxLite runner`, () => {
@@ -84,11 +84,11 @@ test('CodeQL places every language on its qualified runner and retains its build
   const job = workflow('codeql.yml').jobs.analyze
   assert.equal(job['runs-on'], '${{ matrix.runner }}')
   assert.deepEqual(job.strategy.matrix.include, [
-    { language: 'actions', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-64gbdisk' },
+    { language: 'actions', 'build-mode': 'none', runner: 'boxlite-2vcpu-4gbmem-64gbdisk' },
     { language: 'c-cpp', 'build-mode': 'none', runner: 'ubuntu-latest' },
     { language: 'go', 'build-mode': 'autobuild', runner: 'ubuntu-latest' },
     { language: 'javascript-typescript', 'build-mode': 'none', runner: 'ubuntu-latest' },
-    { language: 'python', 'build-mode': 'none', runner: 'boxlite-4vcpu-16gbmem-30gbdisk' },
+    { language: 'python', 'build-mode': 'none', runner: 'boxlite-2vcpu-8gbmem-30gbdisk' },
     { language: 'rust', 'build-mode': 'none', runner: 'ubuntu-latest' },
   ])
 })

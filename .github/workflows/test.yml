@@ -559,7 +559,7 @@ jobs:
     name: Python Tests (${{ matrix.platform.target }} / Python ${{ matrix.python-version }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.python == 'true' }}
-    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-30gbdisk' || matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-2vcpu-4gbmem-30gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -596,7 +596,7 @@ jobs:
     name: Node.js Tests (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
     needs: changes
     if: ${{ needs.changes.outputs.sdk-tests-enabled == 'true' && needs.changes.outputs.node == 'true' }}
-    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-4vcpu-16gbmem-30gbdisk' || matrix.platform.os }}
+    runs-on: ${{ matrix.platform.os == 'ubuntu-latest' && 'boxlite-2vcpu-4gbmem-30gbdisk' || matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -656,7 +656,7 @@ jobs:
     name: Secret Server PostgreSQL integration
     needs: changes
     if: ${{ needs.changes.outputs.go == 'true' }}
-    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    runs-on: boxlite-2vcpu-4gbmem-30gbdisk
     timeout-minutes: 10
     permissions:
       contents: read
@@ -977,7 +977,7 @@ jobs:
     name: Dashboard Tests
     needs: changes
     if: ${{ needs.changes.outputs.dashboard == 'true' }}
-    runs-on: boxlite-4vcpu-16gbmem-30gbdisk
+    runs-on: boxlite-2vcpu-4gbmem-30gbdisk
     permissions: # Read source; OIDC authenticates the coverage upload.
       contents: "read"
       id-token: write
