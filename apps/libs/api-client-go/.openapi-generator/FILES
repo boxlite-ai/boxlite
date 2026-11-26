@@ -106,6 +106,7 @@ model_network_mode.go
 model_oidc_config.go
 model_onboarding_dto.go
 model_organization.go
+model_organization_app_hosting_permissions_dto.go
 model_organization_box_default_limited_network_egress.go
 model_organization_invitation.go
 model_organization_role.go

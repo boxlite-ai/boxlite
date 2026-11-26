@@ -32,6 +32,8 @@ type OrganizationUser struct {
 	Email string `json:"email"`
 	// Member role
 	Role string `json:"role"`
+	// Set on the authenticated member when they are a system administrator.
+	IsSystemAdmin *bool `json:"isSystemAdmin,omitempty"`
 	// Whether this organization membership is the user default organization
 	IsDefaultForUser bool `json:"isDefaultForUser"`
 	// Roles assigned to the user
@@ -191,6 +193,38 @@ func (o *OrganizationUser) SetRole(v string) {
 	o.Role = v
 }
 
+// GetIsSystemAdmin returns the IsSystemAdmin field value if set, zero value otherwise.
+func (o *OrganizationUser) GetIsSystemAdmin() bool {
+	if o == nil || IsNil(o.IsSystemAdmin) {
+		var ret bool
+		return ret
+	}
+	return *o.IsSystemAdmin
+}
+
+// GetIsSystemAdminOk returns a tuple with the IsSystemAdmin field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *OrganizationUser) GetIsSystemAdminOk() (*bool, bool) {
+	if o == nil || IsNil(o.IsSystemAdmin) {
+		return nil, false
+	}
+	return o.IsSystemAdmin, true
+}
+
+// HasIsSystemAdmin returns a boolean if a field has been set.
+func (o *OrganizationUser) HasIsSystemAdmin() bool {
+	if o != nil && !IsNil(o.IsSystemAdmin) {
+		return true
+	}
+
+	return false
+}
+
+// SetIsSystemAdmin gets a reference to the given bool and assigns it to the IsSystemAdmin field.
+func (o *OrganizationUser) SetIsSystemAdmin(v bool) {
+	o.IsSystemAdmin = &v
+}
+
 // GetIsDefaultForUser returns the IsDefaultForUser field value
 func (o *OrganizationUser) GetIsDefaultForUser() bool {
 	if o == nil {
@@ -302,6 +336,9 @@ func (o OrganizationUser) ToMap() (map[string]interface{}, error) {
 	toSerialize["name"] = o.Name
 	toSerialize["email"] = o.Email
 	toSerialize["role"] = o.Role
+	if !IsNil(o.IsSystemAdmin) {
+		toSerialize["isSystemAdmin"] = o.IsSystemAdmin
+	}
 	toSerialize["isDefaultForUser"] = o.IsDefaultForUser
 	toSerialize["assignedRoles"] = o.AssignedRoles
 	toSerialize["createdAt"] = o.CreatedAt
@@ -362,6 +399,7 @@ func (o *OrganizationUser) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "email")
 		delete(additionalProperties, "role")
+		delete(additionalProperties, "isSystemAdmin")
 		delete(additionalProperties, "isDefaultForUser")
 		delete(additionalProperties, "assignedRoles")
 		delete(additionalProperties, "createdAt")

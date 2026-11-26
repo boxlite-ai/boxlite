@@ -4202,6 +4202,59 @@ paths:
       summary: Set organization nesting allowlist
       tags:
       - admin
+  /admin/organizations/{organizationId}/app-hosting-permissions:
+    get:
+      operationId: adminGetOrganizationAppHostingPermissions
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationAppHostingPermissionsDto"
+          description: ""
+      security:
+      - bearer: []
+      summary: Read organization App Hosting permissions
+      tags:
+      - admin
+    put:
+      operationId: adminSetOrganizationAppHostingPermissions
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrganizationAppHostingPermissionsDto"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrganizationAppHostingPermissionsDto"
+          description: ""
+      security:
+      - bearer: []
+      summary: Replace organization App Hosting permissions
+      tags:
+      - admin
   /webhooks/organizations/{organizationId}/app-portal-access:
     post:
       operationId: WebhookController_getAppPortalAccess
@@ -4626,8 +4679,9 @@ components:
           example: My API Key
           type: string
         permissions:
-          description: The list of organization resource permissions explicitly assigned
-            to the API key
+          description: "When omitted, requests all non-App permissions and the App\
+            \ Hosting permissions enabled for the organization. The caller must be\
+            \ allowed to grant every requested permission."
           items:
             enum:
             - write:registries
@@ -4651,6 +4705,9 @@ components:
             - write:images
             - read:members
             - write:members
+            - read:apps
+            - write:apps
+            - delete:apps
             type: string
           type: array
         expiresAt:
@@ -4661,7 +4718,6 @@ components:
           type: string
       required:
       - name
-      - permissions
       type: object
     ApiKeyResponse:
       example:
@@ -4712,6 +4768,9 @@ components:
             - write:images
             - read:members
             - write:members
+            - read:apps
+            - write:apps
+            - delete:apps
             type: string
           type: array
         expiresAt:
@@ -4778,6 +4837,9 @@ components:
             - write:images
             - read:members
             - write:members
+            - read:apps
+            - write:apps
+            - delete:apps
             type: string
           type: array
         lastUsedAt:
@@ -4986,6 +5048,9 @@ components:
             - write:images
             - read:members
             - write:members
+            - read:apps
+            - write:apps
+            - delete:apps
             type: string
           type: array
         isGlobal:
@@ -5118,6 +5183,9 @@ components:
       type: object
     Organization:
       example:
+        appHostingPermissions:
+        - read:apps
+        - read:apps
         onboarding: "{}"
         id: id
         name: name
@@ -5144,6 +5212,16 @@ components:
         boxCreateRateLimitTtlSeconds: 3.616076749251911
         boxLifecycleRateLimitTtlSeconds: 2.027123023002322
       properties:
+        appHostingPermissions:
+          description: App Hosting permissions enabled for this organization.
+          items:
+            enum:
+            - read:apps
+            - write:apps
+            - delete:apps
+            type: string
+          readOnly: true
+          type: array
         onboarding:
           allOf:
           - $ref: "#/components/schemas/OnboardingDto"
@@ -5235,6 +5313,7 @@ components:
           nullable: true
           type: number
       required:
+      - appHostingPermissions
       - authenticatedRateLimit
       - authenticatedRateLimitTtlSeconds
       - boxCreateRateLimit
@@ -5382,6 +5461,9 @@ components:
             - write:images
             - read:members
             - write:members
+            - read:apps
+            - write:apps
+            - delete:apps
             type: string
           type: array
       required:
@@ -5430,6 +5512,9 @@ components:
             - write:images
             - read:members
             - write:members
+            - read:apps
+            - write:apps
+            - delete:apps
             type: string
           type: array
       required:
@@ -5444,6 +5529,7 @@ components:
         name: name
         email: email
         role: owner
+        isSystemAdmin: true
         isDefaultForUser: true
         assignedRoles:
         - id: id
@@ -5485,6 +5571,10 @@ components:
           - owner
           - member
           type: string
+        isSystemAdmin:
+          description: Set on the authenticated member when they are a system administrator.
+          readOnly: true
+          type: boolean
         isDefaultForUser:
           description: Whether this organization membership is the user default organization
           type: boolean
@@ -9502,6 +9592,25 @@ components:
           type: boolean
       required:
       - enabled
+      type: object
+    OrganizationAppHostingPermissionsDto:
+      example:
+        appHostingPermissions:
+        - read:apps
+        - read:apps
+      properties:
+        appHostingPermissions:
+          description: App Hosting scopes enabled for the organization. An empty list
+            disables access.
+          items:
+            enum:
+            - read:apps
+            - write:apps
+            - delete:apps
+            type: string
+          type: array
+      required:
+      - appHostingPermissions
       type: object
     WebhookAppPortalAccess:
       example:

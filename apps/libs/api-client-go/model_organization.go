@@ -22,6 +22,8 @@ var _ MappedNullable = &Organization{}
 
 // Organization struct for Organization
 type Organization struct {
+	// App Hosting permissions enabled for this organization.
+	AppHostingPermissions []string `json:"appHostingPermissions"`
 	Onboarding NullableOnboardingDto `json:"onboarding,omitempty"`
 	// Organization ID
 	Id string `json:"id"`
@@ -81,8 +83,9 @@ type _Organization Organization
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrganization(id string, name string, createdBy string, isDefaultForAuthenticatedUser bool, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerBox float32, maxMemoryPerBox float32, maxDiskPerBox float32, boxLimitedNetworkEgress bool, authenticatedRateLimit NullableFloat32, boxCreateRateLimit NullableFloat32, boxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, boxCreateRateLimitTtlSeconds NullableFloat32, boxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
+func NewOrganization(appHostingPermissions []string, id string, name string, createdBy string, isDefaultForAuthenticatedUser bool, personal bool, createdAt time.Time, updatedAt time.Time, suspended bool, suspendedAt time.Time, suspensionReason string, suspendedUntil time.Time, suspensionCleanupGracePeriodHours float32, maxCpuPerBox float32, maxMemoryPerBox float32, maxDiskPerBox float32, boxLimitedNetworkEgress bool, authenticatedRateLimit NullableFloat32, boxCreateRateLimit NullableFloat32, boxLifecycleRateLimit NullableFloat32, experimentalConfig map[string]interface{}, authenticatedRateLimitTtlSeconds NullableFloat32, boxCreateRateLimitTtlSeconds NullableFloat32, boxLifecycleRateLimitTtlSeconds NullableFloat32) *Organization {
 	this := Organization{}
+	this.AppHostingPermissions = appHostingPermissions
 	this.Id = id
 	this.Name = name
 	this.CreatedBy = createdBy
@@ -115,6 +118,30 @@ func NewOrganization(id string, name string, createdBy string, isDefaultForAuthe
 func NewOrganizationWithDefaults() *Organization {
 	this := Organization{}
 	return &this
+}
+
+// GetAppHostingPermissions returns the AppHostingPermissions field value
+func (o *Organization) GetAppHostingPermissions() []string {
+	if o == nil {
+		var ret []string
+		return ret
+	}
+
+	return o.AppHostingPermissions
+}
+
+// GetAppHostingPermissionsOk returns a tuple with the AppHostingPermissions field value
+// and a boolean to check if the value has been set.
+func (o *Organization) GetAppHostingPermissionsOk() ([]string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.AppHostingPermissions, true
+}
+
+// SetAppHostingPermissions sets field value
+func (o *Organization) SetAppHostingPermissions(v []string) {
+	o.AppHostingPermissions = v
 }
 
 // GetOnboarding returns the Onboarding field value if set, zero value otherwise (both if not set or set to explicit null).
@@ -768,6 +795,7 @@ func (o Organization) MarshalJSON() ([]byte, error) {
 
 func (o Organization) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	toSerialize["appHostingPermissions"] = o.AppHostingPermissions
 	if o.Onboarding.IsSet() {
 		toSerialize["onboarding"] = o.Onboarding.Get()
 	}
@@ -810,6 +838,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
+		"appHostingPermissions",
 		"id",
 		"name",
 		"createdBy",
@@ -862,6 +891,7 @@ func (o *Organization) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "appHostingPermissions")
 		delete(additionalProperties, "onboarding")
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "name")
