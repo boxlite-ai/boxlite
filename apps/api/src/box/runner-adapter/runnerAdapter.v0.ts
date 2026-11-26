@@ -266,6 +266,21 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
+  async assertFilestoreVolumeSupport(box: Box): Promise<void> {
+    this.assertNoFilestoreVolumes(box)
+  }
+
+  // A filestore volume needs the runner-side NFS mount support that only the
+  // v2 runner protocol carries. Failing loudly here is the point: stripping
+  // the reference would create a box whose volume silently never mounts.
+  private assertNoFilestoreVolumes(box: Box): void {
+    if (box.volumes?.some((volume) => volume.filestore)) {
+      throw new Error(
+        `Box ${box.id} references a Filestore volume, which requires a v2 runner; runner ${this.runner.id} only speaks the v0 protocol`,
+      )
+    }
+  }
+
   async createBox(
     box: Box,
     image: string,
@@ -273,6 +288,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     nestedVirtualization = false,
   ): Promise<StartBoxResponse | undefined> {
     this.rejectSecretReferences(box)
+    this.assertNoFilestoreVolumes(box)
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
@@ -356,6 +372,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
 
   async recoverBox(box: Box): Promise<void> {
     this.rejectSecretReferences(box)
+    this.assertNoFilestoreVolumes(box)
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }

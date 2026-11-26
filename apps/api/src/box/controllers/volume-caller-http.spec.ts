@@ -60,6 +60,7 @@ describe('Volume HTTP caller attribution', () => {
       { assertOrganizationIsNotSuspended: jest.fn() } as never,
       { get: () => 'gcs' } as never,
       {} as never,
+      {} as never,
     )
     const module = Test.createTestingModule({
       controllers: [VolumeController, BoxliteVolumeController],

@@ -5,8 +5,9 @@
  */
 
 import { Controller, Get, Optional } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
+import { TypedConfigService } from '../config/typed-config.service'
+import { isVolumeStorageConfigured } from '../box/stores/volume-bucket.store'
 import { REPLAY_LIFETIME, RequestReplayPolicy } from './request-replay-policy'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
@@ -15,7 +16,7 @@ import { REPLAY_LIFETIME, RequestReplayPolicy } from './request-replay-policy'
 @Controller('v1')
 export class BoxliteConfigController {
   constructor(
-    @Optional() private readonly config?: ConfigService,
+    @Optional() private readonly config?: TypedConfigService,
     @Optional() private readonly replayPolicy?: RequestReplayPolicy,
   ) {}
 
@@ -26,6 +27,10 @@ export class BoxliteConfigController {
         checkpoints_enabled:
           this.config?.get('checkpoint.enabled') === true && !!this.config?.get('checkpoint.archivePrefix'),
         memory_checkpoints_enabled: false,
+        object_storage_enabled: this.config ? isVolumeStorageConfigured(this.config) : false,
+        filestore_enabled:
+          this.config?.get('volume.filestoreSupported') !== false &&
+          (this.config?.getOrThrow('volume.filestoreInstances').instances.length ?? 0) > 0,
         privileged_enabled: true,
         snapshots_enabled: false,
         clone_enabled: false,

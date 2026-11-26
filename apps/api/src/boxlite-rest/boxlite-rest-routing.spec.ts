@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Reflector } from '@nestjs/core'
 import { ConfigService } from '@nestjs/config'
+import { TypedConfigService } from '../config/typed-config.service'
 import { Test } from '@nestjs/testing'
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
@@ -61,8 +62,13 @@ describe('BoxLite REST routing', () => {
       [BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
       [
         {
-          provide: ConfigService,
-          useValue: new ConfigService({ checkpoint: { archivePrefix: 'gs://checkpoint-test/', enabled: true } }),
+          provide: TypedConfigService,
+          useValue: new TypedConfigService(
+            new ConfigService({
+              checkpoint: { archivePrefix: 'gs://checkpoint-test/', enabled: true },
+              volume: { filestoreInstances: { instances: [] } },
+            }),
+          ),
         },
         {
           provide: BoxService,
