@@ -389,12 +389,40 @@ impl BoxImpl {
         }
     }
 
+    /// A directory cannot go below a file the box was created with: the
+    /// file's mount leaves no path to mount it at.
+    fn require_below_no_file(&self, target: &str) -> BoxliteResult<()> {
+        let options = &self.config.options;
+        let binds = options
+            .volumes
+            .iter()
+            .filter(|volume| volume.managed_volume.is_none())
+            .map(|volume| (volume.host_path.as_str(), volume.guest_path.as_str()))
+            .chain(options.mounts.iter().map(|mount| {
+                (
+                    mount.source.as_deref().unwrap_or_default(),
+                    mount.target.as_str(),
+                )
+            }));
+        for (source, guest) in binds {
+            let file = std::fs::metadata(source).is_ok_and(|metadata| !metadata.is_dir());
+            let below = |key: String| target.starts_with(format!("{key}/").as_str());
+            if file && target_key(Path::new(guest)).is_ok_and(below) {
+                return Err(BoxliteError::InvalidState(format!(
+                    "a file the box was created with is mounted at {guest}; no directory can sit below it"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Deliver a host directory into the container, or save it for the next
     /// start of a stopped box.
     pub(crate) async fn mount_add(&self, request: MountRequest) -> BoxliteResult<MountInfo> {
         self.require_runtime_mounts()?;
         self.require_aggregate_mounts()?;
         let request = checked_request(&request)?;
+        self.require_below_no_file(&request.target)?;
         // Opening reads the host directory, which may sit on slow storage.
         let source = request.source.clone();
         let directory = tokio::task::spawn_blocking(move || open_source(Path::new(&source)))

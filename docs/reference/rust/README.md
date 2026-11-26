@@ -552,9 +552,10 @@ new mount would cover that one. A target below an existing mount is allowed.
 On a stopped or newly created box, `add` returns `Configured` and leaves the
 box idle. The next start delivers each saved directory before the first user
 process runs. A delivery failure identifies the target, and so does a start
-that finds a saved directory covering another mount or covered by a later
-one, or on it through an image link or two spellings of one target. You can
-remove its declaration even if the host directory has disappeared; the
+that finds a saved directory which would cover a mount applied before it or
+which a mount applied after it would cover, or which shares a mount with
+another directory through an image link or two spellings of one target. You
+can remove its declaration even if the host directory has disappeared; the
 target is then free for good. Directory binds from either creation format,
 `BoxOptions.volumes` or `BoxOptions.mounts`, can also be queried and removed on
 a supported box.

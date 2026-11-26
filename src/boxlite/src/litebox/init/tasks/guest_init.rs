@@ -211,23 +211,32 @@ async fn run_guest_init(
     };
     let records = if !bootstrap.container.mounts.iter().any(recorded) {
         true
-    } else if let Err(error) = guest_interface.require_boot_mount_records().await {
-        // A directory added at runtime needs its record.
-        let added = |mount: &crate::volumes::ContainerMount| {
-            matches!(
-                mount.payload,
-                crate::volumes::ContainerMountPayload::RecordedDirectory { added: true, .. }
-            )
-        };
-        if bootstrap.container.mounts.iter().any(added) {
-            return Err(error);
-        }
-        // One created with the box keeps its plain delivery instead: it then
-        // leaves only with the box.
-        unrecord(&mut bootstrap.container.mounts);
-        false
     } else {
-        true
+        match guest_interface.require_boot_mount_records().await {
+            Ok(()) => true,
+            // Only a guest without the capability gets plain binds. Any other
+            // failure is reported, so a retry keeps the records.
+            Err(error) if !matches!(error, BoxliteError::Unsupported(_)) => return Err(error),
+            Err(error) => {
+                // A directory added at runtime needs its record.
+                let added = |mount: &crate::volumes::ContainerMount| {
+                    matches!(
+                        mount.payload,
+                        crate::volumes::ContainerMountPayload::RecordedDirectory {
+                            added: true,
+                            ..
+                        }
+                    )
+                };
+                if bootstrap.container.mounts.iter().any(added) {
+                    return Err(error);
+                }
+                // One created with the box keeps its plain delivery instead: it
+                // then leaves only with the box.
+                unrecord(&mut bootstrap.container.mounts);
+                false
+            }
+        }
     };
     guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");

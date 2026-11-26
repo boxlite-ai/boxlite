@@ -95,6 +95,16 @@ fn hides(index: usize, position: usize, target: &Path, other: &Path) -> bool {
         || (index > position && target.starts_with(other))
 }
 
+/// Where `destination` sits once the mounts before it are in place: below an
+/// earlier one, it is that mount's source with the rest of the path.
+fn effective_target(destination: &Path, earlier: &[(String, PathBuf)]) -> Option<PathBuf> {
+    let (target, source) = earlier
+        .iter()
+        .filter(|(target, _)| destination.starts_with(target.as_str()))
+        .max_by_key(|(target, _)| target.len())?;
+    Some(source.join(destination.strip_prefix(target).unwrap_or(Path::new(""))))
+}
+
 /// Record each mount the runtime made for a declared directory, under the
 /// identity every process of the container will find. Init is created and has
 /// not run, so nothing has touched these mounts since the runtime made them.
@@ -501,6 +511,7 @@ impl ContainerService for GuestServer {
         let mut recorded = Vec::new();
         let mut unrecorded = Vec::new();
         let mut user_mounts = Vec::with_capacity(init_req.mounts.len());
+        let mut earlier: Vec<(String, PathBuf)> = Vec::new();
         for (position, m) in init_req.mounts.iter().enumerate() {
             let volume_dir = container_layout.volume_dir(&m.volume_name);
             let selected = match bind_mount_source(m) {
@@ -593,8 +604,19 @@ impl ContainerService for GuestServer {
                 }
             }
             if m.added {
-                if let Err(error) = require_empty_target(&bundle_rootfs, Path::new(&m.destination))
-                {
+                // Below an earlier mount the target is that mount's source:
+                // the runtime mounts in list order, so that is the directory
+                // the saved one lands in.
+                let checked = match effective_target(Path::new(&m.destination), &earlier) {
+                    Some(below) => require_empty_target(Path::new("/"), &below).map_err(|error| {
+                        BoxliteError::InvalidState(format!(
+                            "{} is below an earlier mount: {error}",
+                            m.destination
+                        ))
+                    }),
+                    None => require_empty_target(&bundle_rootfs, Path::new(&m.destination)),
+                };
+                if let Err(error) = checked {
                     return Ok(Response::new(ContainerInitResponse {
                         result: Some(container_init_response::Result::Error(init_error(
                             "check the target of a saved directory",
@@ -603,6 +625,7 @@ impl ContainerService for GuestServer {
                     }));
                 }
             }
+            earlier.push((m.destination.clone(), source.clone()));
             user_mounts.push(UserMount {
                 source: source.to_string_lossy().to_string(),
                 destination: m.destination.clone(),
@@ -1385,5 +1408,22 @@ mod tests {
         assert!(hides(0, 1, parent, child));
         assert!(hides(1, 0, child, parent));
         assert!(!hides(0, 1, Path::new("/work"), Path::new("/workday")));
+    }
+
+    #[test]
+    fn a_saved_directory_below_an_earlier_mount_is_checked_in_that_mount() {
+        let earlier = [
+            ("/work".to_string(), PathBuf::from("/share/work")),
+            ("/work/nested".to_string(), PathBuf::from("/share/nested")),
+        ];
+        assert_eq!(
+            effective_target(Path::new("/work/nested/deeper"), &earlier),
+            Some(PathBuf::from("/share/nested/deeper"))
+        );
+        assert_eq!(
+            effective_target(Path::new("/work/other"), &earlier),
+            Some(PathBuf::from("/share/work/other"))
+        );
+        assert_eq!(effective_target(Path::new("/data"), &earlier), None);
     }
 }
