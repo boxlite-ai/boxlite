@@ -126,6 +126,10 @@ async def test_managed_proxy_deployment_create_acknowledgement(
             require(len(creates) == count and all(event["delivered"] and event.get("stopped_placeholder") is True
                     and not event["credential_present"] and event["runner_id"] == lab.runner_id for event in creates),
                     "Runner create ingresses differ from the original credential-free stopped allocation")
+            attempt_id = creates[0].get("attempt_id")
+            require(isinstance(attempt_id, str) and str(UUID(attempt_id)) == attempt_id
+                    and all(event.get("attempt_id") == attempt_id for event in creates),
+                    "Runner allocation retries did not carry one exact attempt ID")
             require(post["reply_forwarded"] is (fault != "drop-public-reply"),
                     "public response forwarding did not match the requested fault")
             resets = 1 if fault == "reset-first-runner-reply" else 4 if fault == "reset-all-runner-replies" else 0
@@ -137,7 +141,7 @@ async def test_managed_proxy_deployment_create_acknowledgement(
                 launch = row["control"]["managed"]["launch"]["key"]
                 require(post["status"] == 201 and len(boots) == 1 and boots[0]["delivered"]
                         and boots[0]["runner_id"] == lab.runner_id and creates[-1]["reply_forwarded"]
-                        and boots[0]["credential_present"] and boots[0].get("attempt_id") == launch["attempt_id"],
+                        and boots[0]["credential_present"] and boots[0].get("attempt_id") == launch["attempt_id"] == attempt_id,
                         "creation did not complete exactly one bootstrap for the stored attempt")
                 if fault == "reset-first-runner-reply":
                     require(result.status == 201 and payload.get("box_id") == box_id,
@@ -150,6 +154,7 @@ async def test_managed_proxy_deployment_create_acknowledgement(
             require(result.status in {408, 422} and post["status"] == result.status
                     and payload.get("code") == "outbound_create_admitted" and payload.get("boxId") == box_id
                     and row["runner_id"] == lab.runner_id and not row["control"].get("managed")
+                    and row["control"]["bootstrap"]["key"]["attempt_id"] == attempt_id
                     and not boots and not any(event["credential_present"] or event["operation"] == "start"
                                               for event in events),
                     "failed create did not preserve one unconfirmed allocation without dispatching bootstrap")
@@ -158,8 +163,8 @@ async def test_managed_proxy_deployment_create_acknowledgement(
                         and creates[0].get("reply_fault") == "held" and not creates[0]["reply_forwarded"],
                         "the public deadline was not reached with exactly one Runner request still held")
             placeholder = await http(f"{lab.runner_origin}/boxes/{box_id}", headers=lab.runner_headers())
-            require(placeholder.status == 200 and json.loads(placeholder.body).get("state") == "stopped",
-                    "authenticated Runner did not confirm the same stopped placeholder")
+            require(placeholder.status == 200 and json.loads(placeholder.body).get("state") == "creating",
+                    "authenticated Runner did not confirm the same configured, never-started placeholder")
             require(not await captures.syn.packets(started, time.time_ns()), "unconfirmed create reached the target")
             if fault == "hold-first-runner-reply":
                 await control.step("finish-held-create", box_id=box_id)
@@ -327,11 +332,12 @@ async def test_managed_proxy_deployment_bypasses_matching_warm_box(
             require(not await control.evidence("warm-create", warm_id), "the warm Box received managed dispatch")
 
             control_name = e2e_box_name()
-            options = boxlite.BoxOptions(image=image)
-            bound_box_lifetime(options)
             cleanup.push_async_callback(cleanup_box, rt, control_name)
-            ordinary = await rt.create(options, name=control_name)
-            require(ordinary.id == warm_id, "the ordinary create control could not claim the seeded warm Box")
+            ordinary = await registry_request(isolated_org, "POST", "boxes", with_bounded_lifetime({
+                "image": image, "name": control_name,
+            }))
+            require(ordinary.status == 201 and json.loads(ordinary.body).get("box_id") == warm_id,
+                    "the ordinary create control could not claim the seeded warm Box")
 
 
 async def test_managed_proxy_deployment_refuses_legacy_write_during_apply(

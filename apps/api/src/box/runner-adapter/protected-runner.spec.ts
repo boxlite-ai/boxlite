@@ -36,6 +36,7 @@ describe('Protected Runner TLS and placement', () => {
   const received: { path: string; body: any }[] = []
   const boxId = '597da250-c3f6-4276-a0c2-25657a8fdeda'
   const bootPath = `/v1/boxes/${boxId}/network/outbound/bootstrap`
+  const allocationPath = (attemptId: string) => `${bootPath}/allocation/${attemptId}`
   const createCert = (name: string) => {
     const crt = join(directory, `${name}.crt`)
     const key = join(directory, `${name}.key`)
@@ -113,6 +114,8 @@ describe('Protected Runner TLS and placement', () => {
                 'managed-route',
                 'unbound-start',
                 'remove-retired',
+                'allocate-attempt',
+                'close-allocation',
                 ...(volumeRestarts ? ['restart-volumes'] : []),
               ],
             },
@@ -121,7 +124,7 @@ describe('Protected Runner TLS and placement', () => {
       } else if (
         request.method === 'POST' &&
         request.headers.authorization === 'Bearer test-bearer' &&
-        (request.url === '/boxes' ||
+        ((request.url?.startsWith(`${bootPath}/allocation/`) && request.headers['x-boxlite-runner-id'] === runnerId) ||
           request.url === `/v1/boxes/${boxId}/network/outbound/managed-route` ||
           ['', '/receipt', '/retire', '/release-gate', '/seal-gate'].some(
             (suffix) => request.url === bootPath + suffix,
@@ -135,12 +138,13 @@ describe('Protected Runner TLS and placement', () => {
         request.on('end', () => {
           const body = JSON.parse(incoming)
           received.push({ path: request.url!, body })
-          if (request.url === '/boxes' && dropPlaceholderReplies > 0) {
+          const allocation = request.url!.startsWith(`${bootPath}/allocation/`)
+          if (allocation && dropPlaceholderReplies > 0) {
             dropPlaceholderReplies--
             response.destroy()
             return
           }
-          if (request.url === '/boxes' && holdPlaceholderReply) {
+          if (allocation && holdPlaceholderReply) {
             holdPlaceholderReply(response)
             return
           }
@@ -177,8 +181,8 @@ describe('Protected Runner TLS and placement', () => {
           }
           response.end(
             JSON.stringify(
-              request.url === '/boxes'
-                ? { daemonVersion: 'boxlite' }
+              allocation
+                ? { box_id: boxId, attempt_id: request.url!.split('/').at(-1), state: 'allocated' }
                 : {
                     box_id: boxId,
                     receipt: gate
@@ -466,7 +470,7 @@ describe('Protected Runner TLS and placement', () => {
     const box = { id: boxId, runnerId, mem: 1, outboundEnabled: true } as Box
     const key: ProtectedBootKey = {
       runner_id: runnerId,
-      attempt_id: 'retry-attempt',
+      attempt_id: 'd0ad34d5-7fc4-409b-8b78-69a185967a2c',
       registration_id: 'fixture-registration',
       registration_revision: '1',
       policy: { revision: 'fixture-policy', policy: { mode: 'enabled', allow_net: [] } },
@@ -478,18 +482,19 @@ describe('Protected Runner TLS and placement', () => {
       credential: { username: 'fixture-user', password: 'fixture-proxy-secret' },
     }))
     const creation = chosen.createProtectedBox(box, 'alpine', key, loadRoute)
+    const path = allocationPath(key.attempt_id)
     if (lost === 1) {
       await expect(creation).resolves.toEqual({ key, epoch: 'fixture-epoch', outcome: 'confirmed' })
       expect(loadRoute).toHaveBeenCalledTimes(1)
-      expect(received.map(({ path }) => path)).toEqual(['/boxes', '/boxes', bootPath])
+      expect(received.map(({ path }) => path)).toEqual([path, path, bootPath])
       expect(received.at(-1)?.body.key).toEqual(key)
     } else {
       await expect(creation).rejects.toThrow()
       expect(loadRoute).not.toHaveBeenCalled()
-      expect(received.map(({ path }) => path)).toEqual(['/boxes', '/boxes', '/boxes', '/boxes'])
+      expect(received.map(({ path }) => path)).toEqual([path, path, path, path])
     }
     expect(dropPlaceholderReplies).toBe(0)
-    const placeholders = received.filter(({ path }) => path === '/boxes').map(({ body }) => body)
+    const placeholders = received.filter((entry) => entry.path === path).map(({ body }) => body)
     for (const body of placeholders) {
       expect(body).toEqual(placeholders[0])
       expect(body).toMatchObject({ id: boxId, skipStart: true, outboundEnabled: false })
@@ -506,7 +511,7 @@ describe('Protected Runner TLS and placement', () => {
     const box = { id: boxId, runnerId, mem: 1, state: BoxState.CREATING, outboundEnabled: true } as Box
     const key: ProtectedBootKey = {
       runner_id: runnerId,
-      attempt_id: 'held-reply-attempt',
+      attempt_id: '7595ae75-28aa-4a00-8690-cc66ac7b7daf',
       registration_id: 'fixture-registration',
       registration_revision: '1',
       policy: { revision: 'fixture-policy', policy: { mode: 'enabled', allow_net: [] } },
@@ -545,7 +550,7 @@ describe('Protected Runner TLS and placement', () => {
       expect(performance.now() - started).toBeGreaterThanOrEqual(29_900)
       expect(settled).not.toHaveBeenCalled()
       expect(loadRoute).not.toHaveBeenCalled()
-      expect(received.map(({ path }) => path)).toEqual(['/boxes'])
+      expect(received.map(({ path }) => path)).toEqual([allocationPath(key.attempt_id)])
       expect(received[0].body).toMatchObject({ id: boxId, skipStart: true, outboundEnabled: false })
       expect(boxService.create).toHaveBeenCalledTimes(1)
     } finally {
@@ -554,7 +559,7 @@ describe('Protected Runner TLS and placement', () => {
       await waiter.onModuleDestroy()
     }
     expect(settled).toHaveBeenCalledTimes(1)
-    expect(received.map(({ path }) => path)).toEqual(['/boxes'])
+    expect(received.map(({ path }) => path)).toEqual([allocationPath(key.attempt_id)])
   }, 45_000)
 
   it('requires exact epoch, generation and gate state in the enrolled Runner receipt', async () => {

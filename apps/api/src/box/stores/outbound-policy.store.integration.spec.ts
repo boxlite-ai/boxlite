@@ -29,6 +29,7 @@ import { ProtectedBootKey, ProtectedBootReceipt } from '../runner-adapter/protec
 import { ManagedOutboundBootstrap } from '../services/managed-outbound-bootstrap'
 import { ManagedOutboundCoordinator } from '../services/managed-outbound.coordinator'
 import { RunnerAdapter } from '../runner-adapter/runnerAdapter'
+import { RunnerAdapterV0 } from '../runner-adapter/runnerAdapter.v0'
 import { RunnerAdapterV2 } from '../runner-adapter/runnerAdapter.v2'
 import { BoxService } from '../services/box.service'
 import type { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions'
@@ -224,6 +225,286 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     expect(start).toHaveBeenCalledTimes(1)
     expect(release).toHaveBeenCalledTimes(1)
     expect(outboundRecord(await store.read(box.id, org)).bootstrap).toBeUndefined()
+  })
+
+  it('does not allocate the same protected placeholder again after losing its replies', async () => {
+    const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+    const bootstrap = new ManagedOutboundBootstrap(primary, registry)
+    const name = `proxy-${randomUUID()}`
+    await registry.create(org, { name, url: 'socks5://proxy.example.com' })
+    await primary.transaction(async (manager) => {
+      Object.assign(box, { state: BoxState.UNKNOWN, pending: true })
+      await manager.update(Box, box.id, { state: BoxState.UNKNOWN, pending: true })
+      await bootstrap.seed(manager, box, name)
+    })
+    const prepare = jest.fn().mockRejectedValue(new Error('Runner placeholder replies lost'))
+    const start = jest.fn()
+    const destroy = jest.fn().mockRejectedValueOnce(new Error('Runner destroy reply lost')).mockResolvedValue(undefined)
+    const adapter = {
+      protectedBootstrap: {
+        supportsProtectedBootstrap: async () => true,
+        destroyProtectedPlaceholder: destroy,
+        prepareProtectedBox: prepare,
+        startProtectedBox: start,
+      },
+    } as unknown as RunnerAdapter
+    const placeholder = { image: 'test/image', metadata: {}, nested: false }
+
+    const original = await bootstrap.start(box, adapter, placeholder)
+    // The periodic state reconciler may resume on a different Cloud process.
+    const resumed = await new ManagedOutboundBootstrap(primary, registry).start(box, adapter, placeholder)
+
+    expect(prepare).toHaveBeenCalledTimes(1)
+    expect(start).not.toHaveBeenCalled()
+    expect([original, resumed]).toEqual(['allocation-unconfirmed', 'allocation-unconfirmed'])
+    expect(outboundRecord(await store.read(box.id, org)).managed).toBeUndefined()
+
+    await primary.getRepository(Box).update(box.id, { state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED })
+    expect(await bootstrap.retire(box, adapter, 'destroy')).toBe(false)
+    const attempt = outboundRecord(await store.read(box.id, org)).bootstrap.key.attempt_id
+    await expect(registry.remove(org, name)).rejects.toMatchObject({ status: 409 })
+    expect(await bootstrap.retire(box, adapter, 'destroy')).toBe(true)
+    expect(destroy.mock.calls).toEqual([
+      [box.id, attempt],
+      [box.id, attempt],
+    ])
+    const cleaned = outboundRecord(await store.read(box.id, org))
+    expect(cleaned.bootstrap).toBeUndefined()
+    expect(cleaned.placeholderClosed).toEqual({ runnerId, attemptId: attempt })
+    await registry.remove(org, name)
+  })
+
+  it('bounds the protected placeholder cleanup request', async () => {
+    const adapter = Object.create(RunnerAdapterV0.prototype) as RunnerAdapterV0
+    const attempt = randomUUID()
+    const destroy = jest.fn().mockResolvedValue({ data: { box_id: box.id, attempt_id: attempt, state: 'closed' } })
+    Object.defineProperties(adapter, {
+      bootstrapApi: { value: { delete: destroy } },
+    })
+    await adapter.destroyProtectedPlaceholder(box.id, attempt)
+    expect(destroy).toHaveBeenCalledWith(`/v1/boxes/${box.id}/network/outbound/bootstrap/allocation/${attempt}`, {
+      timeout: 10_000,
+    })
+  })
+
+  it.each([1, 2])('leaves a primary connection available during allocation with pool size %i', async (poolSize) => {
+    const options = primary.options as PostgresConnectionOptions
+    const limited = await new DataSource({
+      ...options,
+      poolSize,
+      extra: { ...options.extra, connectionTimeoutMillis: 500 },
+    }).initialize()
+    const registry = new ProxyRegistryStore(limited, new ProxyCredentialCipher(undefined), true)
+    const bootstrap = new ManagedOutboundBootstrap(limited, registry)
+    const next = Object.assign(new Box('local', randomUUID()), {
+      organizationId: org,
+      osUser: 'boxlite',
+      labels: {},
+      runnerId,
+      state: BoxState.UNKNOWN,
+      desiredState: BoxDesiredState.STARTED,
+      pending: true,
+    })
+    let enterFirst!: () => void
+    let enterNext!: () => void
+    let release!: () => void
+    const allocateFirst = new Promise<void>((resolve) => (enterFirst = resolve))
+    const allocateNext = new Promise<void>((resolve) => (enterNext = resolve))
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const prepare = jest.fn(async (candidate: Box) => {
+      if (candidate.id === box.id) enterFirst()
+      else enterNext()
+      await held
+    })
+    const adapter = {
+      protectedBootstrap: {
+        supportsProtectedBootstrap: async () => true,
+        prepareProtectedBox: prepare,
+        startProtectedBox: async (_id: string, key: ProtectedBootKey): Promise<ProtectedBootReceipt> => ({
+          key,
+          epoch: randomUUID(),
+          outcome: 'confirmed',
+        }),
+        changeProtectedBootGate: async () => undefined,
+      },
+    } as unknown as RunnerAdapter
+    const placeholder = { image: 'test/image', metadata: {}, nested: false }
+    const starts: Promise<unknown>[] = []
+
+    try {
+      await primary.transaction(async (manager) => {
+        Object.assign(box, { state: BoxState.UNKNOWN, pending: true })
+        await manager.update(Box, box.id, { state: BoxState.UNKNOWN, pending: true })
+        await manager.insert(Box, next)
+        await bootstrap.seed(manager, box, null)
+        await bootstrap.seed(manager, next, null)
+      })
+
+      const first = bootstrap.start(box, adapter, placeholder)
+      starts.push(first)
+      await Promise.race([allocateFirst, first])
+      await expect(limited.query('SELECT 1 AS available')).resolves.toEqual([{ available: 1 }])
+      const second = bootstrap.start(next, adapter, placeholder)
+      starts.push(second)
+      await Promise.race([allocateNext, second])
+
+      await expect(limited.query('SELECT 1 AS available')).resolves.toEqual([{ available: 1 }])
+      expect(prepare).toHaveBeenCalledTimes(1)
+      expect(await second).toBe('pending')
+      release()
+      expect(await first).toBe('ready')
+      expect(await bootstrap.start(next, adapter, placeholder)).toBe('ready')
+      expect(prepare.mock.calls.map(([candidate]) => candidate.id)).toEqual([box.id, next.id])
+    } finally {
+      release()
+      await Promise.allSettled(starts)
+      await limited.destroy()
+    }
+  })
+
+  it.each(['allocate', 'handoff'])('recovers a due %s without accepting a delayed startup', async (phase) => {
+    const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+    const bootstrap = new ManagedOutboundBootstrap(primary, registry)
+    const name = `proxy-${randomUUID()}`
+    await registry.create(org, { name, url: 'socks5://proxy.example.com' })
+    await primary.transaction(async (manager) => {
+      Object.assign(box, { state: BoxState.UNKNOWN, pending: true })
+      await manager.update(Box, box.id, { state: BoxState.UNKNOWN, pending: true })
+      await bootstrap.seed(manager, box, name)
+    })
+    const closed = new Set<string>()
+    const nativeCreate = jest.fn()
+    const prepare = jest.fn(
+      async (_box: Box, _image: string, _metadata: unknown, _nested: boolean, attempt: string) => {
+        if (closed.has(attempt)) throw new Error('Runner rejected the closed attempt')
+        nativeCreate()
+      },
+    )
+    const start = jest.fn()
+    const destroy = jest.fn(async (_id: string, attempt: string) => {
+      closed.add(attempt)
+    })
+    const adapter = {
+      protectedBootstrap: {
+        supportsProtectedBootstrap: async () => true,
+        destroyProtectedPlaceholder: destroy,
+        prepareProtectedBox: prepare,
+        startProtectedBox: start,
+        readProtectedBoot: jest.fn().mockRejectedValue(new Error('No Runner boot was published')),
+      },
+    } as unknown as RunnerAdapter
+    const placeholder = { image: 'test/image', metadata: {}, nested: false }
+    const allocationStore = Reflect.get(bootstrap, 'store') as OutboundPolicyStore
+    const locked = allocationStore.locked.bind(allocationStore)
+    let reserved!: () => void
+    let resume!: () => void
+    const reservationCommitted = new Promise<void>((resolve) => (reserved = resolve))
+    const allowDispatch = new Promise<void>((resolve) => (resume = resolve))
+    const pause = jest.spyOn(allocationStore, 'locked').mockImplementation(async (...args) => {
+      const result = await locked(...args)
+      if (
+        (phase === 'allocate' &&
+          result instanceof Box &&
+          outboundRecord(result).bootstrap?.placeholderAllocation?.dispatchOwner) ||
+        (phase === 'handoff' && result === true)
+      ) {
+        reserved()
+        await allowDispatch
+      }
+      return result
+    })
+    const original = bootstrap.start(box, adapter, placeholder)
+    try {
+      await Promise.race([
+        reservationCommitted,
+        original.then(() => {
+          throw new Error('Allocation completed before the reservation barrier')
+        }),
+      ])
+      const allocation = outboundRecord(await store.read(box.id, org)).bootstrap?.placeholderAllocation
+      const deadline = phase === 'handoff' ? allocation?.handoffDeadline : allocation?.deadline
+      expect(deadline).toBeDefined()
+      await primary.query(`UPDATE box SET "outboundControlDueAt" = now() WHERE id = $1`, [box.id])
+      expect(await store.claimManagedWork()).toContainEqual({ id: box.id, organizationId: org })
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(deadline! + 1)
+      try {
+        const replacement = new ManagedOutboundBootstrap(primary, registry)
+        expect(await replacement.reconcileAllocation(box, adapter)).toBe('allocation-unconfirmed')
+        expect((await store.read(box.id, org)).state).toBe(BoxState.ERROR)
+        await primary
+          .getRepository(Box)
+          .update(box.id, { state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED })
+        expect(await replacement.hasClosedAllocation(box)).toBe(true)
+      } finally {
+        clock.mockRestore()
+      }
+      expect(destroy).toHaveBeenCalledWith(box.id, expect.any(String))
+    } finally {
+      resume()
+      await original
+      pause.mockRestore()
+    }
+    expect(prepare).toHaveBeenCalledTimes(1)
+    expect(nativeCreate).toHaveBeenCalledTimes(phase === 'allocate' ? 0 : 1)
+    expect(start).not.toHaveBeenCalled()
+    expect(outboundRecord(await store.read(box.id, org)).bootstrap).toBeUndefined()
+    await registry.remove(org, name)
+  })
+
+  it('retires an expired startup record before closing its exact allocation', async () => {
+    const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
+    const bootstrap = new ManagedOutboundBootstrap(primary, registry)
+    const name = `proxy-${randomUUID()}`
+    await registry.create(org, { name, url: 'socks5://proxy.example.com' })
+    await primary.transaction(async (manager) => {
+      Object.assign(box, { state: BoxState.UNKNOWN, pending: true })
+      await manager.update(Box, box.id, { state: BoxState.UNKNOWN, pending: true })
+      await bootstrap.seed(manager, box, name)
+    })
+    const epoch = 'failed-before-spawn'
+    let removed = false
+    const close = jest.fn(async () => {
+      if (!removed) throw new Error('Runtime boot record still owns the stopped allocation')
+    })
+    const retire = jest.fn(async (_id: string, key: ProtectedBootKey) => ({ key, epoch, outcome: 'retired' }))
+    const remove = jest.fn(async () => {
+      removed = true
+    })
+    const release = jest.fn()
+    const adapter = {
+      protectedBootstrap: {
+        supportsProtectedBootstrap: async () => true,
+        prepareProtectedBox: jest.fn().mockResolvedValue(undefined),
+        startProtectedBox: jest.fn().mockRejectedValue(new Error('Boot failed before spawning the Guest')),
+        readProtectedBoot: jest.fn().mockRejectedValue(new Error('Boot has no confirmation')),
+        destroyProtectedPlaceholder: close,
+        retireProtectedBoot: retire,
+        removeRetiredEpoch: remove,
+        changeProtectedBootGate: release,
+      },
+    } as unknown as RunnerAdapter
+    expect(await bootstrap.start(box, adapter, { image: 'test/image', metadata: {}, nested: false })).toBe('pending')
+    const intent = outboundRecord(await store.read(box.id, org)).bootstrap
+    expect(intent.placeholderAllocation?.handoffDeadline).toBeDefined()
+    await expect(registry.remove(org, name)).rejects.toMatchObject({ status: 409 })
+
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(intent.placeholderAllocation.handoffDeadline + 1)
+    try {
+      expect(await bootstrap.reconcileAllocation(box, adapter)).toBe('allocation-unconfirmed')
+    } finally {
+      clock.mockRestore()
+    }
+    expect(retire).toHaveBeenCalledWith(box.id, intent.key)
+    expect(remove).toHaveBeenCalledWith(box.id, intent.key, epoch)
+    expect(close.mock.calls).toEqual([
+      [box.id, intent.key.attempt_id],
+      [box.id, intent.key.attempt_id],
+    ])
+    expect(release).not.toHaveBeenCalled()
+    const current = await store.read(box.id, org)
+    expect(current.state).toBe(BoxState.ERROR)
+    expect(outboundRecord(current).placeholderClosed).toEqual({ runnerId, attemptId: intent.key.attempt_id })
+    await registry.remove(org, name)
   })
 
   it('resumes a stopped Box action after the managed gate release was committed', async () => {
@@ -691,7 +972,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     }
   })
 
-  it('retains the previous assignment through failed termination proof and restarts with the exact pinned version', async () => {
+  it.each(['restart', 'cleanup'])('checks prior Runner retirement before %s', async (outcome) => {
     const registry = new ProxyRegistryStore(primary, new ProxyCredentialCipher(undefined), true)
     const bootstrap = new ManagedOutboundBootstrap(primary, registry)
     const name = `proxy-${randomUUID()}`
@@ -764,6 +1045,42 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     expect(await bootstrap.retire(box, old, 'previous')).toBe(true)
     expect((await store.read(box.id, org)).prevRunnerId).toBeNull()
     expect(remove).toHaveBeenCalledWith(box.id, key, epoch)
+    if (outcome === 'cleanup') {
+      const destroy = jest.fn().mockRejectedValueOnce(new Error('Lost cleanup reply')).mockResolvedValue(undefined)
+      const start = jest.fn()
+      const adapter = {
+        protectedBootstrap: {
+          supportsProtectedBootstrap: async () => true,
+          destroyProtectedPlaceholder: destroy,
+          prepareProtectedBox: jest.fn().mockRejectedValue(new Error('Lost replacement allocation replies')),
+          startProtectedBox: start,
+        },
+      } as unknown as RunnerAdapter
+      const placeholder = { image: 'test/image', metadata: {}, nested: false }
+      expect(await bootstrap.start(await store.read(box.id, org), adapter, placeholder)).toBe('allocation-unconfirmed')
+      expect(start).not.toHaveBeenCalled()
+      await primary
+        .getRepository(Box)
+        .update(box.id, { state: BoxState.ERROR, desiredState: BoxDesiredState.DESTROYED })
+      const current = await store.read(box.id, org)
+      const pins = () =>
+        primary.query('SELECT kind, runner_id FROM outbound_proxy_reference WHERE box_id = $1 ORDER BY kind', [box.id])
+      expect(await bootstrap.retire(current, adapter, 'destroy')).toBe(false)
+      expect(await pins()).toEqual([
+        { kind: 'committed', runner_id: runnerId },
+        { kind: 'pending', runner_id: replacement },
+      ])
+      expect(await bootstrap.retire(current, adapter, 'destroy')).toBe(true)
+      expect(destroy.mock.calls).toEqual([
+        [box.id, expect.any(String)],
+        [box.id, destroy.mock.calls[0][1]],
+      ])
+      expect(await pins()).toEqual([])
+      const cleared = outboundRecord(await store.read(box.id, org))
+      expect(cleared.bootstrap).toBeUndefined()
+      expect(cleared.managed).toBeUndefined()
+      return
+    }
     const nextEpoch = 'replacement-epoch'
     let allowRelease = false
     let deliveredReleases = 0

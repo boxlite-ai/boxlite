@@ -179,10 +179,13 @@ def discover_path_prefix(url: str, token: str) -> str:
 
 
 def api_key_permissions(url: str, token: str) -> set[str]:
-    permissions = _identity_json(url, token, "/api-keys/current").get("permissions")
-    if not isinstance(permissions, list) or not all(isinstance(p, str) for p in permissions):
-        raise RuntimeError("GET /api-keys/current returned invalid permissions")
-    return set(permissions)
+    metadata = _identity_json(url, token, "/api-keys/current")
+    permissions = metadata.get("permissions")
+    proxy_permissions = metadata.get("proxyPermissions", [])
+    for field, grants in (("permissions", permissions), ("proxyPermissions", proxy_permissions)):
+        if not isinstance(grants, list) or not all(isinstance(grant, str) for grant in grants):
+            raise RuntimeError(f"GET /api-keys/current returned invalid {field}")
+    return set(permissions) | set(proxy_permissions)
 
 
 def request_json(

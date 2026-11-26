@@ -11,6 +11,27 @@ use crate::net::{OutboundReplacement, OutboundRevision, OutboundSnapshot};
 use crate::runtime::options::{NetworkMode, NetworkSpec, OutboundNetworkConfig};
 
 #[tokio::test]
+async fn ordinary_box_name_does_not_require_protected_launch() {
+    let home = TempDir::new_in("/tmp").unwrap();
+    let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+        home_dir: home.path().to_path_buf(),
+        ..Default::default()
+    })
+    .unwrap();
+    let name = "protected-allocation-0123456789abcdef0123456789abcdef";
+    let options = BoxOptions {
+        rootfs: RootfsSpec::RootfsPath(home.path().join("missing-rootfs").display().to_string()),
+        ..Default::default()
+    };
+    let bx = runtime.create(options, Some(name.into())).await.unwrap();
+    let error = bx.start().await.unwrap_err();
+    assert!(
+        error.to_string().contains("missing-rootfs"),
+        "ordinary start should reach its local rootfs selection, got {error}"
+    );
+}
+
+#[tokio::test]
 #[allow(deprecated)]
 async fn protected_boot_removal_keeps_exact_retry_proof_across_runtime_reopen() {
     let home = TempDir::new_in("/tmp").unwrap();
@@ -62,6 +83,7 @@ async fn protected_boot_removal_keeps_exact_retry_proof_across_runtime_reopen() 
         key: key.clone(),
         epoch: Some(OutboundRevision::fresh()),
         runner_box_name: None,
+        exact_native_id: false,
     };
     assert!(runtime.remove_retired_protected(&id, &wrong).is_err());
     assert!(runtime.box_manager.box_by_id(&id).unwrap().is_some());
@@ -69,6 +91,7 @@ async fn protected_boot_removal_keeps_exact_retry_proof_across_runtime_reopen() 
         key,
         epoch: Some(epoch),
         runner_box_name: None,
+        exact_native_id: false,
     };
     assert_eq!(
         runtime.remove_retired_protected(&name, &request).unwrap(),

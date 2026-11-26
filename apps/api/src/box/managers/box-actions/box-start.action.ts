@@ -22,6 +22,7 @@ import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
 
 import { resolveNestedVirtualization } from '../../runner-adapter/nested-virtualization-policy'
 import { ManagedOutboundBootstrap } from '../../services/managed-outbound-bootstrap'
+import { UNCONFIRMED_PROTECTED_PLACEHOLDER } from '../../errors/protected-placeholder.error'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -103,6 +104,10 @@ export class BoxStartAction extends BoxAction {
       this.configService.getOrThrow('runnerHealthTimeout') * 1000,
     )
     const protectedStart = await this.outboundBootstrap?.start(box, runnerAdapter, { image, metadata, nested })
+    if (protectedStart === 'allocation-unconfirmed') {
+      await this.updateBoxState(box, BoxState.ERROR, lockCode, undefined, UNCONFIRMED_PROTECTED_PLACEHOLDER)
+      return DONT_SYNC_AGAIN
+    }
     if (protectedStart === 'pending' || protectedStart === 'managed-stopped') return DONT_SYNC_AGAIN
     if (protectedStart !== 'ready') await runnerAdapter.createBox(box, image, metadata, nested)
 

@@ -99,7 +99,7 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 	protected.GET("/outbound-proxy/bootstrap", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{
 			"runner_id": c.RunnerID, "version": 1,
-			"operations": []string{"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired", "restart-volumes"},
+			"operations": []string{"start", "receipt", "retire", "release-gate", "seal-gate", "managed-route", "unbound-start", "remove-retired", "restart-volumes", "allocate-attempt", "close-allocation"},
 		})
 	})
 	path := "/boxes/:boxId/network/outbound/bootstrap"
@@ -109,6 +109,8 @@ func registerProtectedBoot(group *gin.RouterGroup, c ProtectedBootConfig, versio
 	protected.POST(path+"/release-gate", c.handleBoot(boxlite.ProtectedBootReleaseGate))
 	protected.POST(path+"/seal-gate", c.handleBoot(boxlite.ProtectedBootSealGate))
 	protected.POST(path+"/remove-retired", c.handleBoot(boxlite.ProtectedBootRemove))
+	protected.POST(path+"/allocation/:attemptId", allocateProtectedPlaceholder)
+	protected.DELETE(path+"/allocation/:attemptId", closeProtectedPlaceholder)
 	protected.POST("/boxes/:boxId/network/outbound/managed-route", c.handleBoot(boxlite.ProtectedOutboundControl))
 }
 

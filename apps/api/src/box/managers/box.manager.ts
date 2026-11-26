@@ -13,6 +13,7 @@ import { JobConflictError } from '../errors/job-conflict.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { CANCELLED_CHECKPOINT_TARGET_SQL } from '../constants/checkpoint-deletion'
+import { UNCONFIRMED_PROTECTED_PLACEHOLDER } from '../errors/protected-placeholder.error'
 import { RunnerService } from '../services/runner.service'
 import { BoxActivityService } from '../services/box-activity.service'
 
@@ -253,12 +254,13 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         .where(
           `(box.state NOT IN (:...excludedStates) OR (
           box.state = :errorState AND box."desiredState" = :destroyedState
-          AND ${CANCELLED_CHECKPOINT_TARGET_SQL}
+          AND (${CANCELLED_CHECKPOINT_TARGET_SQL} OR box."errorReason" = :unconfirmedPlaceholder)
         ))`,
           {
             excludedStates: [BoxState.DESTROYED, BoxState.ERROR, BoxState.RESIZING],
             errorState: BoxState.ERROR,
             destroyedState: BoxDesiredState.DESTROYED,
+            unconfirmedPlaceholder: UNCONFIRMED_PROTECTED_PLACEHOLDER,
           },
         )
         .andWhere('box."desiredState"::text != box.state::text')

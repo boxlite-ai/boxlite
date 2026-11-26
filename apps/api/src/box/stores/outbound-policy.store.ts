@@ -21,6 +21,9 @@ export function outboundRecord(box: Box): OutboundControlRecord {
     control.version !== 1 ||
     !validOutboundRevision(control.revision) ||
     (control.bootstrap !== undefined && !validBootstrapIntent(control.bootstrap)) ||
+    (control.placeholderClosed !== undefined &&
+      (!validOutboundRevision(control.placeholderClosed?.runnerId) ||
+        !validOutboundRevision(control.placeholderClosed?.attemptId))) ||
     (control.managed !== undefined && !validManagedControl(control.managed)) ||
     (pending !== undefined &&
       (!pending ||
@@ -63,7 +66,8 @@ export class OutboundPolicyStore {
         `
         WITH due AS (
           SELECT id FROM box WHERE "outboundControlDueAt" <= now()
-            AND ("outboundControl" -> 'managed' ?| ARRAY['pending', 'unbindRelease']
+            AND ("outboundControl" -> 'bootstrap' ? 'placeholderAllocation'
+              OR "outboundControl" -> 'managed' ?| ARRAY['pending', 'unbindRelease']
               OR ("prevRunnerId" IS NOT NULL AND "outboundControl" -> 'managed' IS NOT NULL))
           ORDER BY "outboundControlDueAt", id LIMIT $1 FOR UPDATE SKIP LOCKED
         ), leased AS (

@@ -113,15 +113,18 @@ impl BoxStore {
         &self,
         selector: &str,
         runner_box_name: Option<&str>,
+        exact_native_id: bool,
     ) -> BoxliteResult<Vec<ProtectedBootReceipt>> {
         let conn = self.db.conn();
         let mut query = db_err!(conn.prepare(
             "SELECT receipts FROM protected_boot_retirement
-             WHERE box_id = ?1 OR box_name = ?1 OR box_name = ?2",
+             WHERE box_id = ?1 OR (NOT ?3 AND (box_name = ?1 OR box_name = ?2))",
         ))?;
-        let rows = db_err!(query.query_map(params![selector, runner_box_name], |row| {
-            row.get::<_, String>(0)
-        }))?;
+        let rows = db_err!(
+            query.query_map(params![selector, runner_box_name, exact_native_id], |row| {
+                row.get::<_, String>(0)
+            })
+        )?;
         let mut receipts = Vec::new();
         for row in rows {
             receipts.extend(decode_protected_retirements(&db_err!(row)?)?);

@@ -127,6 +127,14 @@ impl LiteBox {
         self.protected_backend()?.bootstrap_protected(request).await
     }
 
+    /// Read the immutable local Runner allocation identity without starting a Guest.
+    #[doc(hidden)]
+    pub fn runner_allocation(&self) -> Option<crate::net::OutboundRevision> {
+        self.protected_backend()
+            .ok()
+            .and_then(|backend| backend.runner_allocation())
+    }
+
     /// Observe exact durable and live bootstrap evidence without starting a Guest.
     #[doc(hidden)]
     pub async fn protected_boot_receipt(

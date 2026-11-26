@@ -704,7 +704,7 @@ and any suspended reconciliation in `cleanup`.
 | `finish-held-create` | End the held Runner request with HTTP 422 and wait for it to leave the fault relay. Record that status on the same create event. `cleanup` must also release the hold after a failed assertion. |
 | `create-evidence` | Drain the public, Runner and V2 observers for `name` through the current barrier, including the terminal public response. Return `name`, `public_ready`, `public_posts` and cumulative Runner evidence. Include the incompatible candidate in `ready` when present. |
 | `stage-v2-restart` | Move only the isolated Box assignment from the primary to the V2 candidate and return `candidate_runner_id`. Keep the recorded epoch, binding and pins, and restore the original assignment in `cleanup`. |
-| `seed-warm-pool` | Arrange one claimable warm Box matching `image` and the ordinary create shape on the primary Runner. Return its `box_id` and begin recording the managed create for the requested `name`. The subsequent ordinary create must be able to adopt that warm Box. |
+| `seed-warm-pool` | Arrange one claimable warm Box matching `image` and the ordinary create shape on the primary Runner. Return its `box_id` and begin recording the managed create for the requested `name`. The ordinary REST control omits the `network` field so it can claim the warm Box. |
 | `drop-prepare-reply` | For the requested `box_id`, deliver managed `prepare` and discard the successful Runner reply. Return a prompt upstream transport failure on each prepare until resumed. Pass through inspections. |
 | `resume-prepare` | Restore prepare replies for the requested Box so Cloud's reconciliation worker can apply the existing pending update. |
 | `observe-box` | Start a fresh lossless Runner dispatch window immediately before the settled conditional write. |
@@ -741,12 +741,26 @@ sequenceDiagram
 Each Runner event contains `runner_id`, `box_id`, `operation`, and booleans
 `delivered`, `reply_forwarded` and `credential_present`. Use operation names
 `create`, `bootstrap`, `prepare`, `apply`, `retire` and `release-gate` for the
-corresponding V0 requests. Include `attempt_id` on prepare and bootstrap
-events and `epoch` and `generation` on release events.
+corresponding V0 requests.
+
+Protected create is a POST to the enrolled Runner's
+`/v1/boxes/{boxId}/network/outbound/bootstrap/allocation/{attemptId}` route.
+Include `attempt_id` on protected create, prepare and bootstrap events and
+`epoch` and `generation` on release events.
 
 On create, set `stopped_placeholder` only for a credential-free stopped placeholder request
 with a successful upstream allocation. Record `reply_fault` as
 `reset-before-response` or `held` when that fault applies.
+
+The Runner reports a configured placeholder as `creating`. Confirm its ID,
+the `skipStart` allocation, and zero start, credential delivery or target SYN.
+Cloud reserves the allocation before dispatch so a background worker cannot
+open another request after the adapter's four attempts are exhausted.
+
+Cloud records ownership on the Box row and waits for the Runner outside the
+database transaction. The Runner serializes dispatch and cleanup for the same
+Box and remembers closed attempts across restart. The old binding and pending
+reference stay pinned until the Runner confirms exact closure and absence.
 
 The create observer returns redacted `public_posts` entries with `box_id`,
 integer `status`, and `reply_forwarded`. Omit the Box ID when placement failed.
@@ -777,6 +791,50 @@ stale receipt or unconfirmed cleanup fails the case.
 
 ```bash
 make test:rest:e2e PYTEST_FILTER='-k managed_proxy_deployment --managed-outbound-config /absolute/path/managed-outbound.json'
+```
+
+### HTTPS V0 credential cutover
+
+Run this check on the deployed revision during the dev rollout. Local fixtures
+verify request authorization before measuring stage traffic and login handoff.
+
+Before enabling exact allocation for an enrolled Runner, close its legacy
+protected admissions and settle existing placeholders. Give the upgraded API a
+distinct service identity and PostgreSQL login. Verify ordinary V0 and V2 traffic
+on the upgraded revision before moving traffic and draining the old revision and
+its database sessions.
+
+Start continuous ordinary requests on an unaffected V0 Runner before shifting
+traffic. Track ordinary job completion on an unaffected V2 Runner throughout the
+same window. Continue both probes until the enrolled Runner reopens.
+
+With admission still closed, drain accepted work on the enrolled Runner, pin
+the replacement bearer version, and restart the Runner. Update the bearer in the
+existing Runner record by UUID and verify the matching capability and ordinary
+operation before reopening admission. If the host and record are on different
+versions, keep the enrollment closed and complete the update using that same
+version.
+
+Capture old login rejection, absence of old sessions and old bearer rejection
+on both ordinary and protected routes before allowing new allocations. Record
+the success and failure counts of the unaffected V0 and V2 probes for the
+whole interval, including database login revocation and Runner restart. Keep
+bearer values and request payloads out of the evidence.
+
+```mermaid
+sequenceDiagram
+    participant Ops as Rollout operator
+    participant API as Upgraded API
+    participant DB as PostgreSQL
+    participant Runner as Enrolled HTTPS V0 Runner
+    participant Probe as Ordinary V0 and V2 probes
+    Ops->>Probe: Start continuous ordinary checks
+    Ops->>API: Qualify and shift ordinary traffic
+    Ops->>DB: Revoke old login and drain old sessions
+    Ops->>Runner: Drain, rotate bearer and restart
+    Ops->>DB: Update the same Runner registration
+    API->>Runner: Verify enrolled capability with the new bearer
+    Ops->>Probe: Collect results through admission reopening
 ```
 
 ### Network boundary observers

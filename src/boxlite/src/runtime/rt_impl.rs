@@ -547,13 +547,17 @@ impl RuntimeImpl {
 
     /// Reject reuse when the request disagrees with the box's stored options.
     ///
-    /// Only the capability policy is compared: silently adopting a box whose
-    /// privileges differ from the request is the case that matters for safety.
+    /// Allocation ownership and capability policy must match the request.
     fn check_options_compatibility(
         requested: &BoxOptions,
         actual: &BoxConfig,
     ) -> BoxliteResult<()> {
         let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
+        if requested.advanced.runner_allocation() != actual.options.advanced.runner_allocation() {
+            return Err(BoxliteError::InvalidState(format!(
+                "box '{box_name}' belongs to a different allocation"
+            )));
+        }
 
         // One-way: a nested-capable box satisfies any request, but a plain box
         // cannot satisfy one that needs /dev/kvm. Reusing it would look like a
@@ -1132,18 +1136,22 @@ impl RuntimeImpl {
         let runner_name = request.runner_box_name.as_ref().map(BoxID::as_str);
         if let Some(receipt) = self
             .box_manager
-            .protected_retirements(selector, runner_name)?
+            .protected_retirements(selector, runner_name, request.exact_native_id)?
             .into_iter()
             .find(matches)
         {
             return Ok(receipt);
         }
-        let id = self
-            .box_manager
-            .lookup_exact_box_id(selector)?
-            .ok_or_else(|| {
-                BoxliteError::InvalidState("Exact protected retirement is unknown".into())
-            })?;
+        let id = if request.exact_native_id {
+            self.box_manager
+                .box_by_id(selector)?
+                .map(|(config, _)| config.id)
+        } else {
+            self.box_manager.lookup_exact_box_id(selector)?
+        }
+        .ok_or_else(|| {
+            BoxliteError::InvalidState("Exact protected retirement is unknown".into())
+        })?;
         crate::litebox::box_impl::BoxImpl::try_with_operation(self, &id, || {
             let protection = self
                 .box_manager

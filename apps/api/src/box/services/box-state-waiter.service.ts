@@ -5,12 +5,19 @@
  */
 
 import { InjectRedis } from '@nestjs-modules/ioredis'
-import { Injectable, Logger, OnModuleDestroy, RequestTimeoutException } from '@nestjs/common'
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  RequestTimeoutException,
+  UnprocessableEntityException,
+} from '@nestjs/common'
 import Redis from 'ioredis'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { BoxDto } from '../dto/box.dto'
 import { BoxPreparingImageTimeoutError } from '../errors/box-preparing-image-timeout.error'
+import { UNCONFIRMED_PROTECTED_PLACEHOLDER } from '../errors/protected-placeholder.error'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxService } from './box.service'
@@ -168,6 +175,7 @@ export class BoxStateWaiterService implements OnModuleDestroy {
 
   private assertNotFailed(state: BoxState, errorReason?: string | null) {
     if (state === BoxState.ERROR) {
+      if (errorReason === UNCONFIRMED_PROTECTED_PLACEHOLDER) throw new UnprocessableEntityException(errorReason)
       throw new BadRequestError(`Box state transition failed: ${errorReason || 'Unknown error'}`)
     }
     if (state === BoxState.DESTROYED || state === BoxState.DESTROYING) {

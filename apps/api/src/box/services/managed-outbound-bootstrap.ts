@@ -5,30 +5,40 @@ import { Box } from '../entities/box.entity'
 import { BootstrapIntent } from '../entities/outbound-control-record'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxState } from '../enums/box-state.enum'
+import { UNCONFIRMED_PROTECTED_PLACEHOLDER } from '../errors/protected-placeholder.error'
 import { ProxyRegistryStore, ProxyReservation } from '../outbound-proxy/proxy-registry.store'
 import { RunnerAdapter } from '../runner-adapter/runnerAdapter'
-import { ProtectedBootControl, ProtectedBootReceipt } from '../runner-adapter/protected-runner'
+import {
+  PROTECTED_RUNNER_REQUEST_TIMEOUT_MS,
+  ProtectedBootControl,
+  ProtectedBootReceipt,
+} from '../runner-adapter/protected-runner'
 import {
   LockedOutboundBox,
+  OutboundCommitUnknown,
   OutboundPolicyStore,
   outboundRecord,
   persistedOutbound,
 } from '../stores/outbound-policy.store'
 import { settleTerminatedOutbound } from './managed-outbound-reconciliation'
 
-type StartResult = 'ordinary' | 'pending' | 'ready' | 'managed-stopped'
+type StartResult = 'ordinary' | 'pending' | 'ready' | 'managed-stopped' | 'allocation-unconfirmed'
 type Placeholder = { image: string; metadata: Record<string, string>; nested: boolean }
 type Retirement = 'stop' | 'destroy' | 'previous'
 
 @Injectable()
 export class ManagedOutboundBootstrap {
   private readonly store: OutboundPolicyStore
+  private readonly protectedTransitionLimit: number
+  private activeProtectedTransitions = 0
 
   constructor(
     source: DataSource,
     private readonly registry: ProxyRegistryStore,
   ) {
     this.store = new OutboundPolicyStore(source)
+    const primaryPoolSize = Number(source.options.extra?.max ?? source.options.poolSize) || 10
+    this.protectedTransitionLimit = Math.max(1, Math.floor(primaryPoolSize / 2))
   }
 
   async resolveName(org: string, name: string) {
@@ -38,13 +48,32 @@ export class ManagedOutboundBootstrap {
   async isProtected(box: Box): Promise<boolean> {
     return this.store.locked(box.id, box.organizationId, async ({ box: current, manager }) => {
       const record = outboundRecord(current)
-      if (record.bootstrap || record.managed) return true
+      if (
+        record.bootstrap ||
+        record.managed ||
+        record.placeholderClosed ||
+        current.errorReason === UNCONFIRMED_PROTECTED_PLACEHOLDER
+      )
+        return true
       const [reference] = await manager.query(
         'SELECT 1 FROM outbound_proxy_reference WHERE organization_id = $1 AND box_id = $2 LIMIT 1',
         [box.organizationId, box.id],
       )
       return !!reference
     })
+  }
+
+  async hasClosedAllocation(box: Box): Promise<boolean> {
+    const current = await this.store.read(box.id, box.organizationId)
+    const record = outboundRecord(current)
+    return (
+      !!record.placeholderClosed &&
+      !record.bootstrap &&
+      !record.managed &&
+      current.desiredState === BoxDesiredState.DESTROYED &&
+      (this.ownsRetirement(current, record.placeholderClosed.runnerId, 'destroy') ||
+        this.ownsRetirement(current, record.placeholderClosed.runnerId, 'previous'))
+    )
   }
 
   async seed(manager: EntityManager, box: Box, proxyName: string | null) {
@@ -58,7 +87,11 @@ export class ManagedOutboundBootstrap {
   async blocksExternalStart(box: Box): Promise<boolean> {
     const current = await this.store.read(box.id, box.organizationId)
     const record = outboundRecord(current)
-    return !!(record.bootstrap || (record.managed && (record.managed.retirement || current.prevRunnerId)))
+    return !!(
+      record.bootstrap ||
+      record.placeholderClosed ||
+      (record.managed && (record.managed.retirement || current.prevRunnerId))
+    )
   }
 
   async legacyRestartIntent(box: Box) {
@@ -66,6 +99,7 @@ export class ManagedOutboundBootstrap {
     const record = outboundRecord(current)
     if (
       record.bootstrap ||
+      record.placeholderClosed ||
       record.managed ||
       record.pending ||
       current.prevRunnerId ||
@@ -131,7 +165,7 @@ export class ManagedOutboundBootstrap {
     }
     if (!record.bootstrap) {
       const { managed } = record
-      if (!managed) return 'ordinary'
+      if (!managed) return record.placeholderClosed ? 'allocation-unconfirmed' : 'ordinary'
       const assigned = current.runnerId === managed.runnerId && !current.prevRunnerId
       if (current.state !== BoxState.STOPPED) return assigned ? 'ready' : 'pending'
 
@@ -153,15 +187,23 @@ export class ManagedOutboundBootstrap {
     }
     const control = adapter.protectedBootstrap
     if (!control || !this.ownsStart(current, record.bootstrap)) return 'pending'
+    // Protected Runner calls can hold a primary connection. Leave capacity for ordinary API work.
+    if (this.activeProtectedTransitions >= this.protectedTransitionLimit) return 'pending'
+    this.activeProtectedTransitions++
 
     try {
       const volumeRestart = !record.bootstrap.claim && !!record.bootstrap.restart && !!current.volumes?.length
-      if (!(await control.supportsProtectedBootstrap(true, volumeRestart))) return 'pending'
+      const needsAllocation = !record.bootstrap.restart && !record.bootstrap.epoch && !record.bootstrap.claim
+      if (!(await control.supportsProtectedBootstrap(true, volumeRestart, needsAllocation))) return 'pending'
       if (record.bootstrap.epoch) return await this.release(current, control)
-      if (record.bootstrap.claim) return await this.recover(current, control)
+      if (record.bootstrap.claim) {
+        if (record.bootstrap.placeholderAllocation) return await this.reconcileAllocation(current, adapter)
+        return await this.recover(current, control)
+      }
       if (!record.bootstrap.restart) {
         if (!placeholder) return 'pending'
-        await control.prepareProtectedBox(current, placeholder.image, placeholder.metadata, placeholder.nested)
+        const allocation = await this.preparePlaceholder(current, record.bootstrap, placeholder, control)
+        if (allocation !== 'ready') return allocation
       }
       const claim = randomUUID()
       const reserved = await this.store.locked(current.id, current.organizationId, async (locked) => {
@@ -171,14 +213,35 @@ export class ManagedOutboundBootstrap {
           !intent ||
           intent.claim ||
           intent.epoch ||
+          (!intent.restart &&
+            (!intent.placeholderAllocation?.allocated ||
+              intent.placeholderAllocation.unconfirmed ||
+              intent.placeholderAllocation.deadline <= Date.now())) ||
           !this.ownsStart(locked.box, intent) ||
           intent.key.attempt_id !== record.bootstrap.key.attempt_id
         )
           return false
-        await locked.write({ ...currentRecord, bootstrap: { ...intent, claim } })
+        const allocation = intent.placeholderAllocation
+        const handoffDeadline = Date.now() + PROTECTED_RUNNER_REQUEST_TIMEOUT_MS
+        await locked.write(
+          {
+            ...currentRecord,
+            bootstrap: {
+              ...intent,
+              claim,
+              placeholderAllocation: allocation && { ...allocation, handoffDeadline },
+            },
+          },
+          undefined,
+          allocation ? new Date(handoffDeadline) : undefined,
+        )
         return true
       })
       if (!reserved) return 'pending'
+      if (!record.bootstrap.restart) {
+        await this.startReservedAllocation(current, control, claim)
+        return await this.release(current, control)
+      }
       await this.store.locked(current.id, current.organizationId, async (locked) => {
         const intent = outboundRecord(locked.box).bootstrap
         if (!intent || intent.claim !== claim || intent.epoch || !this.ownsStart(locked.box, intent)) return
@@ -203,7 +266,166 @@ export class ManagedOutboundBootstrap {
     } catch {
       // The persisted claim and pin remain the authority after a lost reply.
       return 'pending'
+    } finally {
+      this.activeProtectedTransitions--
     }
+  }
+
+  private async startReservedAllocation(box: Box, control: ProtectedBootControl, claim: string): Promise<void> {
+    const handoff = await this.store.locked(box.id, box.organizationId, async (locked) => {
+      const intent = outboundRecord(locked.box).bootstrap
+      const allocation = intent?.placeholderAllocation
+      if (
+        !intent ||
+        intent.claim !== claim ||
+        intent.epoch ||
+        !allocation?.allocated ||
+        allocation.unconfirmed ||
+        !allocation.handoffDeadline ||
+        allocation.handoffDeadline <= Date.now() ||
+        !this.ownsStart(locked.box, intent)
+      )
+        return
+      const pin = this.pin(locked.box, intent)
+      const route = pin ? await this.registry.loadBootstrapRoute(locked.manager, pin, this.recoveryPin(intent)) : null
+      return { intent, route }
+    })
+    if (!handoff) return
+    const { intent, route } = handoff
+    const receipt = await control.startProtectedBox(box.id, intent.key, route, intent.generation)
+    await this.store.locked(box.id, box.organizationId, async (locked) => {
+      const current = outboundRecord(locked.box).bootstrap
+      if (
+        current?.claim !== claim ||
+        current.key.attempt_id !== intent.key.attempt_id ||
+        current.epoch ||
+        !this.ownsStart(locked.box, current)
+      )
+        return
+      await this.confirm(locked, current, receipt)
+    })
+  }
+
+  private async preparePlaceholder(
+    box: Box,
+    bootstrap: BootstrapIntent,
+    placeholder: Placeholder,
+    control: ProtectedBootControl,
+  ): Promise<'ready' | 'pending' | 'allocation-unconfirmed'> {
+    const dispatchOwner = randomUUID()
+    const reservation = await this.store
+      .locked<Box | 'ready' | 'pending' | 'allocation-unconfirmed'>(box.id, box.organizationId, async (locked) => {
+        const record = outboundRecord(locked.box)
+        const intent = record.bootstrap
+        if (
+          !intent ||
+          intent.key.attempt_id !== bootstrap.key.attempt_id ||
+          intent.claim ||
+          intent.epoch ||
+          !this.ownsStart(locked.box, intent)
+        )
+          return 'pending'
+        const allocation = intent.placeholderAllocation
+        if (allocation) {
+          if (allocation.unconfirmed) return 'allocation-unconfirmed'
+          if (allocation.deadline <= Date.now()) return 'pending'
+          return allocation.allocated ? 'ready' : 'pending'
+        }
+        const deadline = Date.now() + PROTECTED_RUNNER_REQUEST_TIMEOUT_MS
+        await locked.write(
+          { ...record, bootstrap: { ...intent, placeholderAllocation: { deadline, dispatchOwner } } },
+          undefined,
+          new Date(deadline),
+        )
+        return locked.box
+      })
+      .catch(async (error: unknown) => {
+        if (!(error instanceof OutboundCommitUnknown)) throw error
+        const current = await this.store.read(box.id, box.organizationId)
+        const allocation = outboundRecord(current).bootstrap?.placeholderAllocation
+        // An observed reservation remains due for recovery even if it is ours.
+        return allocation?.dispatchOwner === dispatchOwner && allocation.unconfirmed
+          ? 'allocation-unconfirmed'
+          : 'pending'
+      })
+    if (typeof reservation === 'string') return reservation
+    const attemptId = bootstrap.key.attempt_id
+    let allocated = false
+    try {
+      await control.prepareProtectedBox(
+        reservation,
+        placeholder.image,
+        placeholder.metadata,
+        placeholder.nested,
+        attemptId,
+      )
+      allocated = true
+    } catch {
+      // The Runner may still have allocated the placeholder after a lost reply.
+    }
+    return this.store.locked(box.id, box.organizationId, async (locked) => {
+      const record = outboundRecord(locked.box)
+      const intent = record.bootstrap
+      const allocation = intent?.placeholderAllocation
+      if (
+        !allocation ||
+        allocation.dispatchOwner !== dispatchOwner ||
+        intent.key.attempt_id !== attemptId ||
+        intent.claim ||
+        intent.epoch ||
+        !this.ownsStart(locked.box, intent)
+      )
+        return 'pending'
+      if (allocation.unconfirmed) return 'allocation-unconfirmed'
+      if (allocated && allocation.deadline > Date.now()) {
+        await locked.write({
+          ...record,
+          bootstrap: { ...intent, placeholderAllocation: { ...allocation, allocated: true } },
+        })
+        return 'ready'
+      }
+      await locked.write(
+        { ...record, bootstrap: { ...intent, placeholderAllocation: { ...allocation, unconfirmed: true } } },
+        undefined,
+        new Date(allocation.deadline),
+      )
+      return 'allocation-unconfirmed'
+    })
+  }
+
+  async reconcileAllocation(box: Box, adapter: RunnerAdapter): Promise<StartResult> {
+    const control = adapter.protectedBootstrap
+    const current = await this.store.read(box.id, box.organizationId)
+    const intent = outboundRecord(current).bootstrap
+    if (!control || !intent?.placeholderAllocation || intent.key.runner_id !== current.runnerId) return 'pending'
+    if (intent.epoch) return this.release(current, control)
+    if (await this.observeAllocationBoot(current, control, current.runnerId)) return this.release(current, control)
+    const purpose = current.desiredState === BoxDesiredState.DESTROYED ? 'destroy' : 'expire'
+    const closed = await this.closeAllocation(current, control, purpose)
+    return closed ? 'allocation-unconfirmed' : 'pending'
+  }
+
+  private async observeAllocationBoot(box: Box, control: ProtectedBootControl, runnerId: string): Promise<boolean> {
+    const current = await this.store.read(box.id, box.organizationId)
+    const intent = outboundRecord(current).bootstrap
+    if (!intent?.placeholderAllocation || !intent.claim || intent.key.runner_id !== runnerId) return false
+    if (intent.epoch) return true
+    const receipt = await control.readProtectedBoot(box.id, intent.key).catch(() => undefined)
+    if (receipt?.outcome !== 'confirmed') return false
+    return this.store.locked(box.id, box.organizationId, async (locked) => {
+      const expected = outboundRecord(locked.box).bootstrap
+      if (
+        !expected ||
+        expected.claim !== intent.claim ||
+        expected.key.attempt_id !== intent.key.attempt_id ||
+        (!this.ownsStart(locked.box, expected) &&
+          !this.ownsRetirement(locked.box, runnerId, 'previous') &&
+          !this.ownsRetirement(locked.box, runnerId, 'destroy'))
+      )
+        return false
+      if (!expected.epoch) await this.confirm(locked, expected, receipt)
+      return !!outboundRecord(locked.box).bootstrap?.epoch
+    })
   }
 
   private async recover(box: Box, control: ProtectedBootControl): Promise<StartResult> {
@@ -271,16 +493,26 @@ export class ManagedOutboundBootstrap {
         snapshot: persistedOutbound(locked.box),
         binding: managed.binding,
       })
-      await locked.write({ ...record, bootstrap: undefined })
+      await locked.write({ ...record, bootstrap: undefined }, undefined, null)
       return 'ready'
     })
   }
 
   async retire(box: Box, adapter: RunnerAdapter, purpose: Retirement, force = false): Promise<boolean> {
     const control = adapter.protectedBootstrap
-    if (!control) return false
+    if (!control || this.activeProtectedTransitions >= this.protectedTransitionLimit) return false
+    this.activeProtectedTransitions++
     try {
-      if (purpose === 'destroy') await this.abandonUnconfirmed(box, control)
+      if (purpose !== 'stop') {
+        const removed = await this.closeAllocation(box, control, purpose)
+        if (removed) return true
+        if (
+          removed === false &&
+          !(await this.observeAllocationBoot(box, control, purpose === 'previous' ? box.prevRunnerId : box.runnerId))
+        )
+          return false
+        if (purpose === 'destroy' && removed === undefined) await this.abandonUnconfirmed(box, control)
+      }
       const sealed = await this.store.locked(box.id, box.organizationId, async (locked) => {
         const record = outboundRecord(locked.box)
         const managed = record.managed
@@ -363,7 +595,147 @@ export class ManagedOutboundBootstrap {
       })
     } catch {
       return false
+    } finally {
+      this.activeProtectedTransitions--
     }
+  }
+
+  private async closeAllocation(
+    box: Box,
+    control: ProtectedBootControl,
+    purpose: 'destroy' | 'previous' | 'expire',
+  ): Promise<boolean | undefined> {
+    const ownsClose = (current: Box, intent: BootstrapIntent) =>
+      intent.key.runner_id === (purpose === 'previous' ? box.prevRunnerId : box.runnerId) &&
+      (purpose !== 'expire'
+        ? this.ownsRetirement(current, intent.key.runner_id, purpose)
+        : current.runnerId === intent.key.runner_id &&
+          !current.prevRunnerId &&
+          current.desiredState === BoxDesiredState.STARTED)
+    const closing = await this.store.locked(box.id, box.organizationId, async (locked) => {
+      const record = outboundRecord(locked.box)
+      const intent = record.bootstrap
+      const allocation = intent?.placeholderAllocation
+      if (!allocation || intent.epoch || (purpose === 'previous' && intent.key.runner_id !== box.prevRunnerId))
+        return undefined
+      if (!ownsClose(locked.box, intent)) return false
+      if (
+        purpose === 'expire' &&
+        !allocation.unconfirmed &&
+        (allocation.handoffDeadline ?? allocation.deadline) > Date.now()
+      )
+        return false
+      const previous = record.managed
+      if (
+        previous &&
+        (previous.runnerId === intent.key.runner_id ||
+          !previous.retirement?.terminated ||
+          !previous.retirement.resolved ||
+          intent.recovery?.runnerId !== previous.runnerId ||
+          intent.recovery.epoch !== previous.epoch)
+      )
+        return false
+      if (!allocation.unconfirmed)
+        await locked.write({
+          ...record,
+          bootstrap: { ...intent, placeholderAllocation: { ...allocation, unconfirmed: true } },
+        })
+      if (purpose === 'expire' && !intent.claim) await this.markAllocationError(locked)
+      return intent
+    })
+    if (closing === false) return false
+    if (closing === undefined) return undefined
+    const attemptId = closing.key.attempt_id
+    if (!(await this.closeRunnerAllocation(box.id, closing, control))) return false
+    return this.store.locked(box.id, box.organizationId, async (locked) => {
+      const record = outboundRecord(locked.box)
+      const intent = record.bootstrap
+      if (
+        !intent?.placeholderAllocation?.unconfirmed ||
+        intent.epoch ||
+        intent.key.attempt_id !== attemptId ||
+        intent.claim !== closing.claim ||
+        intent.placeholderAllocation.dispatchOwner !== closing.placeholderAllocation?.dispatchOwner ||
+        !ownsClose(locked.box, intent)
+      )
+        return false
+      const pin = this.pin(locked.box, intent)
+      if (pin) await this.registry.retireBootstrapInTransaction(locked.manager, pin)
+      const previous = record.managed
+      if (purpose === 'previous' && locked.box.desiredState === BoxDesiredState.STARTED) {
+        const next = await this.makeIntent(locked.manager, locked.box, intent.proxyName, intent.recovery)
+        await locked.write({ ...record, bootstrap: next }, undefined, null)
+        await locked.manager.update(
+          Box,
+          { id: box.id, organizationId: box.organizationId },
+          {
+            prevRunnerId: null,
+            state: BoxState.UNKNOWN,
+            pending: true,
+          },
+        )
+        box.prevRunnerId = null
+        return true
+      }
+      if (previous)
+        await this.registry.releaseRetiredBinding(
+          locked.manager,
+          box.organizationId,
+          box.id,
+          previous.runnerId,
+          previous.binding,
+        )
+      await locked.write(
+        {
+          ...record,
+          bootstrap: undefined,
+          managed: undefined,
+          placeholderClosed: { runnerId: intent.key.runner_id, attemptId },
+        },
+        undefined,
+        null,
+      )
+      if (purpose === 'expire') await this.markAllocationError(locked)
+      return true
+    })
+  }
+
+  private async closeRunnerAllocation(
+    boxId: string,
+    intent: BootstrapIntent,
+    control: ProtectedBootControl,
+  ): Promise<boolean> {
+    const close = () => control.destroyProtectedPlaceholder(boxId, intent.key.attempt_id)
+    try {
+      await close()
+      return true
+    } catch {
+      if (!intent.claim) return false
+    }
+
+    try {
+      // A recorded start can fail before a child exists. Only Runtime can prove its retirement.
+      const retired = await control.retireProtectedBoot(boxId, intent.key)
+      if (retired.outcome !== 'retired') return false
+      await control.removeRetiredEpoch(boxId, intent.key, retired.epoch)
+      await close()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  private async markAllocationError(locked: LockedOutboundBox): Promise<void> {
+    await locked.manager.update(
+      Box,
+      { id: locked.box.id, organizationId: locked.box.organizationId },
+      {
+        state: BoxState.ERROR,
+        errorReason: UNCONFIRMED_PROTECTED_PLACEHOLDER,
+        pending: false,
+        recoverable: false,
+      },
+    )
   }
 
   private async abandonUnconfirmed(box: Box, control: ProtectedBootControl) {

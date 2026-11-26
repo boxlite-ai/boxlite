@@ -128,6 +128,9 @@ pub struct ProtectedRemoveRequest {
     pub epoch: Option<OutboundRevision>,
     #[serde(default)]
     pub runner_box_name: Option<crate::BoxID>,
+    /// Bind removal and replay to the selected native ID; the logical name is retained for replay.
+    #[serde(default)]
+    pub exact_native_id: bool,
 }
 
 #[derive(Debug, Serialize)]

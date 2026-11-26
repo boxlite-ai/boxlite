@@ -34,6 +34,10 @@ export class BoxDestroyAction extends BoxAction {
       return DONT_SYNC_AGAIN
     }
     if (await this.outboundBootstrap?.isProtected(box)) {
+      if (await this.outboundBootstrap.hasClosedAllocation(box)) {
+        await this.updateBoxState(box, BoxState.DESTROYED, lockCode)
+        return DONT_SYNC_AGAIN
+      }
       const runnerId = box.prevRunnerId ?? box.runnerId
       const runner = runnerId ? await this.runnerService.findOne(runnerId) : undefined
       if (!runner || runner.state !== RunnerState.READY) return DONT_SYNC_AGAIN

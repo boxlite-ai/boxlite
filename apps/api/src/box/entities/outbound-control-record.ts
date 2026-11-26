@@ -9,6 +9,13 @@ export type ManagedBoot = {
 
 export type BootstrapIntent = ManagedBoot & {
   proxyName: string | null
+  placeholderAllocation?: {
+    deadline: number
+    dispatchOwner?: string
+    allocated?: true
+    handoffDeadline?: number
+    unconfirmed?: true
+  }
   claim?: string
   epoch?: string
   retiredEpoch?: string | null
@@ -28,6 +35,7 @@ export type OutboundControlRecord = {
   revision: string
   pending?: OutboundPending
   bootstrap?: BootstrapIntent
+  placeholderClosed?: { runnerId: string; attemptId: string }
   managed?: {
     runnerId: string
     epoch: string

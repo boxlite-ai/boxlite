@@ -339,7 +339,7 @@ export class RunnerService {
       if (protocol === 'http:') return 'runner_proxy_tls_unsupported'
       if (protocol !== 'https:') return 'unverified'
       const adapter = await this.runnerAdapterFactory.create(runner)
-      const capability = await adapter.protectedBootstrapCapability?.(true)
+      const capability = await adapter.protectedBootstrapCapability?.(true, false, true)
       return capability === 'unsupported' ? 'runner_proxy_unsupported' : (capability ?? 'unverified')
     } catch {
       return 'unverified'

@@ -287,7 +287,11 @@ export class ManagedOutboundCoordinator {
     return box
   }
 
-  async poll(control: Control, previous?: (box: Box) => Promise<void>): Promise<number> {
+  async poll(
+    control: Control,
+    previous?: (box: Box) => Promise<void>,
+    allocation?: (box: Box) => Promise<void>,
+  ): Promise<number> {
     const pending = await this.store.claimManagedWork(workBatchSize / 2)
     const rollout = await this.registry.claimRolloutWork(workBatchSize - pending.length)
     pending.push(...(await this.store.claimManagedWork(workBatchSize - pending.length - rollout.length)))
@@ -295,6 +299,7 @@ export class ManagedOutboundCoordinator {
       ...pending.map(async ({ id, organizationId }) => {
         const box = await this.store.read(id, organizationId)
         if (box.prevRunnerId) return previous?.(box)
+        if (outboundRecord(box).bootstrap?.placeholderAllocation) return allocation?.(box)
         return this.advance(id, organizationId, control)
       }),
       ...rollout.map(({ id, organizationId, name, registrationId, revision }) =>
