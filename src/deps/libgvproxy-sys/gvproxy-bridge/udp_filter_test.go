@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -110,10 +111,9 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 			t.Fatal(err)
 		}
 		cfg.guard = guard
-		if cfg.cloudInventoryDirectory == "" {
+		if len(cfg.cloudResolvers) == 0 {
 			// These forwarding-only tests have no upstream DNS service.
-			cfg.cloudInventoryDirectory = t.TempDir()
-			writeCloudInventory(t, cfg.cloudInventoryDirectory, testCloudInventory([]string{"127.0.0.1:1"}))
+			cfg.cloudResolvers = []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:1")}
 			if seams.resolve == nil {
 				seams.resolve = refuseResolve
 			}
@@ -173,7 +173,7 @@ func startNetworkWithSeams(t *testing.T, cfg GvproxyConfig, seams networkSeams) 
 	accepted := make(chan struct{})
 	go func() {
 		defer close(accepted)
-		_ = policy.guard.runGuestLink(ctx, stackSide, 4, cfg.RateLimit, vn.AcceptQemu)
+		_ = runGuestLink(ctx, stackSide, 4, cfg.RateLimit, vn.AcceptQemu)
 	}()
 	nic := policy.nic
 	t.Cleanup(func() {

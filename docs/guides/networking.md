@@ -8,7 +8,7 @@ Create boxes with a network policy, then replace either direction through `box.n
 
 Each `update_*` method replaces one complete direction; it never patches. The other direction is unchanged.
 Enabled outbound with an empty allowlist removes Box-level restrictions.
-Host protection, including the [Cloud platform guard](../concepts/networking.md#cloud-platform-guard), still applies.
+Host protection, including the [Cloud platform destination filtering](../concepts/networking.md#cloud-platform-destination-filtering), still applies.
 Disabled stops network traffic and clears the Box allowlist.
 
 Omitted outbound rules use the default empty list. Each update takes only the supplied rules.

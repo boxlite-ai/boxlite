@@ -108,8 +108,6 @@ func (d *egressDialer) byName(target egressTarget) upstreamDial {
 // the NAT-translated host alias), dialed exactly as the guest addressed it.
 func (d *egressDialer) byAddress(target egressTarget) upstreamDial {
 	return func(ctx context.Context) (net.Conn, error) {
-		ctx, unbind := d.guard.bindContext(ctx)
-		defer unbind()
 		ctx, cancel := context.WithTimeout(ctx, upstreamDialTimeout)
 		defer cancel()
 		return d.dialTarget(ctx, "tcp", target)
@@ -123,21 +121,14 @@ func (d *egressDialer) dialTarget(ctx context.Context, network string, target eg
 	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
 		return nil, context.DeadlineExceeded
 	}
-	if !d.guard.active() || d.guard.denies(target.ConnectionIP) {
+	if d.guard.denies(target.ConnectionIP) {
 		return nil, fmt.Errorf("egress destination denied by platform")
 	}
 	target.Protocol = "tcp"
-	var conn net.Conn
-	var err error
 	if d.connect != nil {
-		conn, err = d.connect(ctx, target)
-	} else {
-		conn, err = d.dial(ctx, network, target.address())
+		return d.connect(ctx, target)
 	}
-	if err != nil {
-		return conn, err
-	}
-	return d.guard.track(conn)
+	return d.dial(ctx, network, target.address())
 }
 
 // DialHost uses the configured resolver and tries permitted IPv4 answers in
@@ -147,11 +138,6 @@ func (d *egressDialer) DialHost(ctx context.Context, target egressTarget) (net.C
 }
 
 func (d *egressDialer) dialHost(ctx context.Context, target egressTarget, check func(netip.Addr) outboundReason) (net.Conn, error) {
-	if !d.guard.active() {
-		return nil, net.ErrClosed
-	}
-	ctx, unbind := d.guard.bindContext(ctx)
-	defer unbind()
 	// One bound for the whole operation: the host lookup plus every candidate
 	// dial. It lives here rather than at the call site because the MITM path
 	// hands this dial to http.Transport, whose DialContext carries only the

@@ -251,7 +251,7 @@ See [Debugging Guide](./guides/debugging.md) for comprehensive troubleshooting.
 ### Does BoxLite support internet access?
 
 Networking is enabled by default with an empty Box allowlist.
-Host protection, including the [Cloud platform guard](./concepts/networking.md#cloud-platform-guard), still applies.
+Host protection, including the [Cloud platform destination filtering](./concepts/networking.md#cloud-platform-destination-filtering), still applies.
 
 **Outbound connections:**
 - HTTP/HTTPS requests

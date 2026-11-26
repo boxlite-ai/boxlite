@@ -1513,12 +1513,12 @@ impl RuntimeImpl {
     }
 
     #[cfg(target_os = "linux")]
-    fn reconcile_cloud_guard(&self) -> BoxliteResult<()> {
-        use crate::net::gvproxy::CloudGuardRuntime;
+    fn reconcile_cloud_scope(&self) -> BoxliteResult<()> {
+        use crate::net::gvproxy::CloudScope;
         use crate::runtime::options::NetworkSpec;
         use crate::util::PidFileReader;
 
-        let Some(profile) = CloudGuardRuntime::from_host()? else {
+        let Some(profile) = CloudScope::from_host()? else {
             return Ok(());
         };
         let persisted = self.box_manager.all_boxes(true)?;
@@ -1530,7 +1530,6 @@ impl RuntimeImpl {
                         .enable_all()
                         .build()?
                         .block_on(async {
-                            profile.check_readiness().await?;
                             let known = persisted.iter().map(|(config, _)| config.id.as_str()).collect();
                             crate::jailer::require_known_box_cgroups(&known)?;
                             for (config, _) in &persisted {
@@ -1543,9 +1542,9 @@ impl RuntimeImpl {
                                     .verify_existing(&config.id, &layout.net_backend_socket_path(), identity)
                                     .await
                                 {
-                                    CloudGuardRuntime::isolate_rejected(&config.id, identity, &error).await?;
+                                    CloudScope::isolate_rejected(&config.id, identity, &error).await?;
                                     if identity != crate::util::ProcessIdentity::Absent {
-                                        tracing::warn!(box_id = %config.id, %error, "Stopped Box without verified Cloud guard");
+                                        tracing::warn!(box_id = %config.id, %error, "Stopped Box without verified Cloud network scope");
                                     }
                                 }
                             }
@@ -1553,7 +1552,7 @@ impl RuntimeImpl {
                         })
                 })
                 .join()
-                .map_err(|_| BoxliteError::Internal("Cloud guard startup worker failed".into()))?
+                .map_err(|_| BoxliteError::Internal("Cloud network scope startup worker failed".into()))?
         })
     }
 
@@ -1562,9 +1561,9 @@ impl RuntimeImpl {
         use crate::util::{PidFileReader, ProcessIdentity};
 
         #[cfg(target_os = "linux")]
-        self.reconcile_cloud_guard()?;
+        self.reconcile_cloud_scope()?;
         #[cfg(not(target_os = "linux"))]
-        crate::net::gvproxy::CloudGuardRuntime::from_host()?;
+        crate::net::gvproxy::CloudScope::from_host()?;
 
         // Check for system reboot and reset active boxes
         self.box_manager.check_and_handle_reboot()?;

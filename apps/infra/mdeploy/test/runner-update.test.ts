@@ -40,7 +40,7 @@ const awsFleet = (calls: string[][] = []): RunCommand => {
   }
 }
 
-const gcpFleet = (calls: string[][] = []): RunCommand => {
+const gcpFleet = (calls: string[][] = [], fleetMissingScope = false): RunCommand => {
   return (file, args) => {
     calls.push([file, ...args])
     if (args[1] === 'instances') {
@@ -70,8 +70,21 @@ const gcpFleet = (calls: string[][] = []): RunCommand => {
             minWaitDuration: fleet ? '0s' : '300s',
           },
           osPolicies: [
-            { id: 'runner-binary', mode: 'ENFORCEMENT' },
-            { id: 'runner-unit-env', mode: 'ENFORCEMENT' },
+            {
+              id: 'runner-binary',
+              mode: 'ENFORCEMENT',
+              resourceGroups: [
+                {
+                  resources: [
+                    ...(fleet && fleetMissingScope
+                      ? []
+                      : [{ id: 'converge-unit-environment', exec: { enforce: { script: '# scope fixture' } } }]),
+                    { id: 'swap-binary' },
+                  ],
+                },
+              ],
+            },
+            { id: 'runner-nfs-client', mode: 'ENFORCEMENT' },
           ],
         }),
       )
@@ -82,7 +95,7 @@ const gcpFleet = (calls: string[][] = []): RunCommand => {
           osPolicyAssignment: `projects/p/locations/z/osPolicyAssignments/${args[4]}@new-revision`,
           osPolicyCompliances: [
             { osPolicyId: 'runner-binary', complianceState: 'COMPLIANT' },
-            { osPolicyId: 'runner-unit-env', complianceState: 'COMPLIANT' },
+            { osPolicyId: 'runner-nfs-client', complianceState: 'COMPLIANT' },
           ],
         }),
       )
@@ -238,8 +251,12 @@ test('on GCP the canary is verified before the remaining fleet is updated', asyn
     const policy = JSON.parse(readFileSync(update.find((arg) => arg.startsWith('--file='))!.slice(7), 'utf8'))
     assert.deepEqual(
       policy.osPolicies.map((item: any) => item.id),
-      ['runner-binary', 'runner-unit-env'],
+      ['runner-binary', 'runner-nfs-client'],
     )
+    const [environment, binary] = policy.osPolicies[0].resourceGroups[0].resources
+    assert.equal(environment.id, 'converge-unit-environment')
+    assert.equal(environment.exec.enforce.script, '# scope fixture')
+    assert.equal(binary.id, 'swap-binary')
   }
 
   assert.ok(
@@ -263,6 +280,12 @@ test('GCP refuses the legacy fleet-wide canary before writing either batch', asy
   }
   await assert.rejects(() => drive(['--stage', 'dev2'], run, 'gcp'), /mdeploy/)
   assert.equal(calls.filter((call) => call[4] === 'update').length, 0)
+})
+
+test('GCP refuses a fleet assignment without ordered scope convergence before updating either batch', async () => {
+  const calls: string[][] = []
+  await assert.rejects(() => drive(['--stage', 'dev2'], gcpFleet(calls, true), 'gcp'), /scope.*run mdeploy/)
+  assert.ok(calls.every((call) => call[4] !== 'update'))
 })
 
 test('GCP never advances past a stale or non-compliant canary report', async () => {

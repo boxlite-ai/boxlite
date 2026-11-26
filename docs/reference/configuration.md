@@ -55,7 +55,7 @@ Structured network configuration for outbound connectivity.
 - `"enabled"` gives the guest outbound connectivity.
 - `"disabled"` removes the guest network interface entirely.
 - Empty or omitted `allow_net` adds no Box-level allowlist. Host-protected ranges
-  and the Cloud platform guard still apply.
+  and the Cloud platform destination filtering still apply.
 - A non-empty `allow_net` restricts both TCP and UDP egress. IP and CIDR rules
   match the destination address and apply to both. Hostname rules are enforced
   by inspecting TLS SNI / HTTP Host, which only TCP carries, so an `allow_net`
@@ -87,7 +87,7 @@ Structured network configuration for outbound connectivity.
   Cloud Runners deny connections to the host alias.
 - Guarded Cloud Runners reject protected platform destinations, private ranges,
   host addresses, and native IPv6 outbound connections. These checks take
-  precedence over Box rules and secrets. See [Cloud platform guard](../concepts/networking.md#cloud-platform-guard).
+  precedence over Box rules and secrets. See [Cloud platform destination filtering](../concepts/networking.md#cloud-platform-destination-filtering).
 
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`

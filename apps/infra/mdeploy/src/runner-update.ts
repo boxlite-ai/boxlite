@@ -371,8 +371,17 @@ export const updateRunners = async ({
       ) {
         throw new RunnerUpdateError(`${batch.name} does not match the canary rollout; run mdeploy before runner:update`)
       }
-      if (!Array.isArray(policy.osPolicies) || !policy.osPolicies.some((item: any) => item.id === 'runner-binary')) {
-        throw new RunnerUpdateError(`${batch.name} has no runner-binary policy; run mdeploy before runner:update`)
+      const binaryPolicy = Array.isArray(policy.osPolicies)
+        ? policy.osPolicies.find((item: { id: string }) => item.id === 'runner-binary')
+        : undefined
+      const groups = binaryPolicy?.resourceGroups
+      const resources = groups?.length === 1 ? groups[0].resources : undefined
+      const ids = Array.isArray(resources) ? resources.map((resource: { id: string }) => resource.id) : []
+      const scopeIndex = ids.indexOf('converge-unit-environment')
+      if (scopeIndex < 0 || scopeIndex >= ids.indexOf('swap-binary')) {
+        throw new RunnerUpdateError(
+          `${batch.name} has no ordered Cloud scope resource; run mdeploy before runner:update`,
+        )
       }
       return policy.osPolicies
     })

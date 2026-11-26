@@ -33,7 +33,7 @@ use crash_capture::CrashCapture;
 #[allow(unused_imports)]
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-use boxlite::net::gvproxy::{CloudGuardBootstrap, GvproxyInstance};
+use boxlite::net::gvproxy::{CloudScope, GvproxyInstance};
 use boxlite::net::{
     NetworkBackendEndpoint, NetworkBackendSpec, OutboundBootstrap, OutboundRevision,
 };
@@ -58,7 +58,7 @@ struct CompleteLaunch {
     outbound_v1: OutboundBootstrap,
     #[serde(default)]
     platform_protected_cidrs: Vec<String>,
-    cloud_guard: Option<CloudGuardBootstrap>,
+    cloud_scope: Option<CloudScope>,
 }
 
 fn parse_complete_launch(value: serde_json::Value) -> BoxliteResult<CompleteLaunch> {
@@ -144,13 +144,13 @@ fn main() -> BoxliteResult<()> {
         println!("{}", GvproxyInstance::supports_platform_cidrs());
         return Ok(());
     }
-    if value.get("cloud_guard_probe").is_some() {
-        if value != serde_json::json!({"cloud_guard_probe": 1}) {
+    if value.get("cloud_scope_probe").is_some() {
+        if value != serde_json::json!({"cloud_scope_probe": 1}) {
             return Err(BoxliteError::InvalidArgument(
-                "invalid Cloud guard capability probe".into(),
+                "invalid Cloud network scope capability probe".into(),
             ));
         }
-        println!("{}", GvproxyInstance::supports_cloud_guard());
+        println!("{}", GvproxyInstance::supports_cloud_scope());
         return Ok(());
     }
     let launch = parse_launch(&config_json, value)?;
@@ -190,7 +190,7 @@ fn main() -> BoxliteResult<()> {
                 launch.revision.as_ref(),
                 launch.outbound.as_ref(),
                 &launch.protected_cidrs,
-                launch.cloud_guard.as_ref(),
+                launch.cloud_scope.as_ref(),
             )
         },
         |config| run_vmm(config, &timing),
@@ -214,10 +214,19 @@ struct ShimLaunch {
     revision: Option<OutboundRevision>,
     outbound: Option<OutboundBootstrap>,
     protected_cidrs: Vec<String>,
-    cloud_guard: Option<CloudGuardBootstrap>,
+    cloud_scope: Option<CloudScope>,
 }
 
 fn parse_launch(json: &str, value: serde_json::Value) -> BoxliteResult<ShimLaunch> {
+    if value.get("cloud_guard").is_some()
+        || value
+            .get("cloud_scope")
+            .is_some_and(serde_json::Value::is_null)
+    {
+        return Err(BoxliteError::InvalidArgument(
+            "managed Cloud scope is required for a Cloud launch".into(),
+        ));
+    }
     if value.get("outbound_v1").is_some() {
         let launch = parse_complete_launch(value)?;
         return Ok(ShimLaunch {
@@ -225,7 +234,7 @@ fn parse_launch(json: &str, value: serde_json::Value) -> BoxliteResult<ShimLaunc
             revision: None,
             outbound: Some(launch.outbound_v1),
             protected_cidrs: launch.platform_protected_cidrs,
-            cloud_guard: launch.cloud_guard,
+            cloud_scope: launch.cloud_scope,
         });
     }
     let (config, revision) = parse_config(json)?;
@@ -236,14 +245,14 @@ fn parse_launch(json: &str, value: serde_json::Value) -> BoxliteResult<ShimLaunc
         .transpose()
         .map_err(|_| BoxliteError::InvalidArgument("invalid platform-protected CIDR list".into()))?
         .unwrap_or_default();
-    let cloud_guard = serde_json::from_value(value.get("cloud_guard").cloned().unwrap_or_default())
-        .map_err(|_| BoxliteError::InvalidArgument("invalid Cloud guard launch".into()))?;
+    let cloud_scope = serde_json::from_value(value.get("cloud_scope").cloned().unwrap_or_default())
+        .map_err(|_| BoxliteError::InvalidArgument("invalid Cloud network scope launch".into()))?;
     Ok(ShimLaunch {
         config,
         revision,
         outbound: None,
         protected_cidrs,
-        cloud_guard,
+        cloud_scope,
     })
 }
 
@@ -260,18 +269,18 @@ fn run_shim<Backend>(
     tracing::debug!(shares = ?config.fs_shares.shares(), "Filesystem shares configured");
     tracing::debug!(entrypoint = ?config.guest_entrypoint.executable, "Guest entrypoint configured");
 
-    let cloud_guard = launch.cloud_guard.as_ref();
-    if cloud_guard.is_some_and(|guard| guard.r#box != config.box_id)
-        || (cloud_guard.is_some()
+    let cloud_scope = launch.cloud_scope.as_ref();
+    if cloud_scope.is_some_and(|guard| guard.box_id != config.box_id)
+        || (cloud_scope.is_some()
             && (config.network_backend_spec.is_none() || config.disable_network))
     {
         return Err(BoxliteError::InvalidArgument(
-            "Cloud guard launch must match the Box and its network backend".into(),
+            "Cloud network scope launch must match the Box and its network backend".into(),
         ));
     }
     if let Some(spec) = &config.network_backend_spec {
         let (gvproxy, endpoint) = start_network(spec, &launch)?;
-        if let Some(guard) = cloud_guard {
+        if let Some(guard) = cloud_scope {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;

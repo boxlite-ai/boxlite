@@ -16,7 +16,6 @@ const cloudDNSLookupTimeout = 4 * time.Second
 // resolvers. No lookup goes through the operating system's resolver.
 type cloudDNSResolver struct {
 	endpoints []netip.AddrPort
-	epoch     *cloudGuardEpoch
 }
 
 func (r *cloudDNSResolver) ResolveDNS(ctx context.Context, question dns.Question) ([]dns.RR, int) {
@@ -79,20 +78,14 @@ func (r *cloudDNSResolver) query(ctx context.Context, question dns.Question) (*d
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if r.epoch != nil && !r.epoch.active() {
-			return nil, net.ErrClosed
-		}
 		attempt, stop := context.WithDeadline(ctx, candidateDeadline(time.Now(), deadline, len(r.endpoints)-i))
 		response, err := exchangeCloudDNS(attempt, request, endpoint, "udp4")
-		if err == nil && response.Truncated && (r.epoch == nil || r.epoch.active()) {
+		if err == nil && response.Truncated {
 			response, err = exchangeCloudDNS(attempt, request, endpoint, "tcp4")
 		}
 		stop()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
-		}
-		if r.epoch != nil && !r.epoch.active() {
-			return nil, net.ErrClosed
 		}
 		if err != nil {
 			lastErr = err
