@@ -49,7 +49,7 @@ jobs:
     - name: Record memory counters
       if: always()
       run: |
-        grep -E '^oom_kill ' /proc/vmstat
+        awk '/^oom_kill / {print}' /proc/vmstat
         for f in /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.peak; do
           if test -r "$f"; then cat "$f"; fi
         done
@@ -141,7 +141,7 @@ jobs:
     - name: Record memory counters
       if: always()
       run: |
-        grep -E '^oom_kill ' /proc/vmstat
+        awk '/^oom_kill / {print}' /proc/vmstat
         for f in /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.peak; do
           if test -r "$f"; then cat "$f"; fi
         done
