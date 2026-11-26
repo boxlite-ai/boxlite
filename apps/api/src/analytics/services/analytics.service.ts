@@ -85,7 +85,7 @@ export class AnalyticsService implements OnApplicationShutdown {
           users: [...new Set([userId, targetUser].filter((id): id is string => !!id))],
           organizations: organizationId ? [organizationId] : [],
         },
-        attributes['ci.runner_allocated_at'] ? new Date(attributes['ci.runner_allocated_at']) : undefined,
+        attributes['ci.job_created_at'] ? new Date(attributes['ci.job_created_at']) : undefined,
       )
     })
   }

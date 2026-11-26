@@ -929,19 +929,19 @@ See PostHog's [aggregations](https://posthog.com/docs/sql/aggregations) and
 ### Cloud feature-use evidence
 
 `cloud.feature.use` reports accepted SSH authentication, successful preview forwarding,
-established tunnels, execution on a managed CI runner, successful starts with tenant-owned images and committed checkpoint use.
+established tunnels, GitHub-reported CI job activity on an assigned BoxLite JIT runner, successful starts with tenant-owned images and committed checkpoint use.
 It uses `cloud_metrics_schema='1'` and the same occurrence UUID/time in PostHog and OTLP logs.
 
 | Feature      | Evidence boundary                                                                                                           | Excluded evidence                                                           |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | SSH          | Accepted signed key or certificate, once per authenticated connection                                                       | Key probes, denied logins, SSH configuration                                |
 | Tunnel       | Accepted CONNECT with a Runner connection, HTTP 101, or guest HTTP 2xx/3xx                                                  | Tunnel preparation, authorization failures, failed upstream requests        |
-| CI           | Each Scale Set `JobStarted` or `JobCompleted` for a managed JIT runner (`runner_started`, `runner_completed`) | Worker creation, queued jobs, external runners, ambiguous assignments       |
+| CI           | Signed `workflow_job.in_progress` or `completed` with a BoxLite label and assigned JIT runner | Worker creation, queued jobs, external runners, unassigned cancellations       |
 | Custom image | Successful create/start job with stored `imageIsOrgOwned=true`                                                              | Admission alone, failed jobs, curated images, unknown historical provenance |
 | Checkpoint | Archive upload committed as ready (`archive_ready`), or an owned import receipt committed as completed (`box_restored`) | Create clicks, queued exports, failed or cancelled imports and replay |
 
 Feature attributes are `feature.name`, `feature.evidence` and `feature.source`.
-`correlation.id` is the Box ID; no login, key, command, URL, repository name or workflow name is emitted.
+`correlation.id` identifies the CI Job for CI events and the Box for other features. Login, key, command, URL, repository and workflow names are omitted.
 Source evidence does not identify customer versus internal/probe traffic; use an authoritative organization cohort.
 
 `POST /api/telemetry/feature-usage` accepts at most 100 observations using existing Runner/Proxy authentication.
@@ -975,14 +975,15 @@ The Cloud reporter uses a dedicated HTTP transport, a one-second flush timer and
 Forwarding and SSH authentication never await uploads; shutdown cancels uploads instead of flushing them synchronously.
 Overflow and collection failures have diagnostics, and failed uploads count observations as delivery-unconfirmed.
 API rejection counts are logged separately. Memory queues are volatile; process/Guest exits, failed drains and resource deletion can lose evidence.
-Each observed CI status has its own event ID, including redeliveries. Count distinct Box correlation IDs for runner adoption.
-Signed BoxLite queued webhook receipts emit `cloud.ci.request` with the original creation time and an opaque request correlation ID.
-Count distinct request correlation IDs for demand. A request does not identify the Box that will execute work.
-The event timestamp is the time the listener observed work. To exclude work predating consent even on delayed messages,
-the organization creator's current grant must predate or coincide with runner allocation (`ci.runner_allocated_at`).
-A missing Scale Set message, a retired allocation, or process exit can lose a runner observation.
+The hosted API records CI activity after accepting a signed GitHub `workflow_job` webhook for a connected organization.
+A BoxLite resource label on `queued` emits `cloud.ci.request` at `created_at`.
+An assigned runner ID and BoxLite JIT name on `in_progress` or `completed` emit `runner_started` at `started_at` or `runner_completed` at `completed_at`.
+Completion counts the reported end of execution for every conclusion, including failure.
+The creator's current analytics grant must cover Job creation (`ci.job_created_at` on usage events), including for delayed deliveries.
+Each accepted receipt has its own event ID. All three phases share an opaque Job correlation ID, derived from installation, repository and Job IDs.
+Count distinct correlation IDs for unique Jobs or event IDs for observations. Missing webhooks and dropped analytics can leave a partial lifecycle.
+These observations identify the receiving API environment and organization. They do not identify the executing Box or Listener.
 
-Count distinct `event.id` for observations. For CI, distinct Box correlation IDs measure used runners across repeated statuses.
 Adoption is the intersection of feature-using organizations with an explicitly eligible, active organization cohort.
 Do not label all organizations eligible, or an absent event as confirmed non-use.
 These events do not supply a capability/entitlement snapshot or a customer/probe organization registry.

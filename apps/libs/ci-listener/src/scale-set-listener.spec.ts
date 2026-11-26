@@ -1586,62 +1586,26 @@ for (const storage of ['sqlite', 'postgres'])
             return
           }
           if (scenario === 'credits work only to the original JIT runner') {
-            fixture.publish(1, 2)
-            await until(() => delivered.size === 2)
-            const [first, second] = [...fixture.runners.values()]
-            const message = (type: string, runner: typeof first) => ({
-              messageType: type,
-              runnerName: runner.name,
-              runnerId: runner.id,
-            })
-            const usage = () =>
-              observe.mock.calls.map(([entry]) => entry).filter((entry) => entry.event === 'ci-runner-status')
+            fixture.publish(1, 1)
+            await until(() => delivered.size === 1)
+            const [runner] = fixture.runners.values()
+            const allocationKey = 'worker/' + runner.name.slice(7)
+            const started = { messageType: 'JobStarted', runnerName: runner.name, runnerId: runner.id }
             fixture.publish(
               2,
-              2,
+              1,
               [],
               [
-                message('JobAssigned', first),
-                message('JobStarted', { ...first, id: first.id + 100 }),
-                message('JobCompleted', { ...first, name: 'ci-jit-' + '0'.repeat(32) }),
+                { ...started, runnerId: runner.id + 1 },
+                { ...started, runnerName: 'ci-jit-' + '0'.repeat(32) },
               ],
             )
             await until(() => fixture.acknowledged.includes(2))
-            expect(usage()).toHaveLength(0)
-            expect(
-              (await journal.allocation(policyOwner!, 'worker/' + first.name.slice(7)))!.value.runner.worked,
-            ).not.toBe(true)
-            observe.mockImplementation((entry) => {
-              if (entry.event === 'ci-runner-status') throw new Error('analytics unavailable')
-            })
-            fixture.publish(3, 2, [], [message('JobStarted', first), message('JobCompleted', first)])
+            expect((await journal.allocation(policyOwner!, allocationKey))!.value.runner.worked).not.toBe(true)
+            fixture.publish(3, 1, [], [started, { ...started, messageType: 'JobCompleted' }])
             await until(() => fixture.acknowledged.includes(3))
-            const allocation = await journal.allocation(policyOwner!, 'worker/' + first.name.slice(7))
-            expect(allocation!.value.runner.worked).toBe(true)
-            expect(usage()).toEqual(
-              ['started', 'completed'].map((status) =>
-                expect.objectContaining({
-                  status,
-                  organization: scope.organization,
-                  boxId: allocation!.value.box.id,
-                  allocatedAt: allocation!.value.createdAt,
-                }),
-              ),
-            )
-            await stop()
-            stop = start()
-            await until(() => fixture.sessions.length === 2)
-            fixture.publish(4, 2, [], [message('JobCompleted', first), message('JobCompleted', second)])
-            await until(() => fixture.acknowledged.includes(4))
-            expect(
-              usage()
-                .slice(2)
-                .map((event) => [event.boxId, event.status]),
-            ).toEqual([
-              [allocation!.value.box.id, 'completed'],
-              [boxes.get(second.name)!.box_id, 'completed'],
-            ])
-            expect(await journal.used('tenant')).toBe(2)
+            expect((await journal.allocation(policyOwner!, allocationKey))!.value.runner.worked).toBe(true)
+            expect(await journal.used('tenant')).toBe(1)
             return
           }
           if (scenario === 'takes over after acquisition before the ledger commit') {

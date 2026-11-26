@@ -1,7 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
-import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
+import { createHash, createHmac, generateKeyPairSync, randomUUID } from 'node:crypto'
 import { DataSource, QueryFailedError } from 'typeorm'
 import { Logger } from '@nestjs/common'
 import {
@@ -9,6 +9,7 @@ import {
   ExecutionJournal,
   GitHubAppSource,
   VerifiedWebhook,
+  verifyWebhook,
   ExecutionLease,
   ExecutionScope,
 } from '@boxlite-ai/ci-listener'
@@ -538,27 +539,61 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
       job: { id: 50, runId: 40 },
     })
   })
-  it('records each queued request receipt with a common request key and no runner lookup', async () => {
+  it('records signed Job phases after admission without a worker allocation', async () => {
+    const secret = Buffer.alloc(32, 1)
+    const created_at = '2026-11-01T10:00:00Z'
+    const started_at = '2026-11-01T10:00:05Z'
+    const completed_at = '2026-11-01T10:01:00Z'
+    const signed = (status: string, fields: Record<string, unknown> = {}) => {
+      const raw = Buffer.from(
+        JSON.stringify({
+          action: status,
+          installation: { id: 10 },
+          repository: { id: 30, owner: { id: 20 } },
+          workflow_job: {
+            id: 50,
+            run_id: 40,
+            status,
+            labels: ['boxlite'],
+            created_at,
+            started_at,
+            completed_at,
+            runner_id: status === 'queued' ? null : 768,
+            runner_name: status === 'queued' ? null : 'ci-jit-' + 'a'.repeat(32),
+            ...fields,
+          },
+        }),
+      )
+      const signature = 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex')
+      return {
+        ...verifyWebhook({ raw, signature, event: 'workflow_job', delivery: randomUUID() }, secret)!,
+        application: 'test-app',
+      }
+    }
     const recorded: Readonly<Record<string, string>>[] = []
     const stop = subscribeBusinessEvents((event) => recorded.push(event))
-    const queued = { ...notification(), queuedAt: '2026-11-01T00:00:00Z' }
     try {
-      await host.accept(queued)
-      await host.accept(queued)
-      await host.accept({
-        ...queued,
-        delivery: randomUUID(),
-        observation: { status: 'completed', runner: 20, labels: ['boxlite'] },
-      })
-      expect(recorded).toHaveLength(2)
-      expect(recorded[0]).toMatchObject({
-        'event.name': 'cloud.ci.request',
-        'event.outcome': 'requested',
+      await host.accept(signed('queued'))
+      await host.accept(signed('in_progress'))
+      const completion = signed('completed')
+      expect(await host.accept(completion)).toBe('stored')
+      expect(await host.accept(completion)).toBe('duplicate')
+      expect(recorded.map((e) => [e['event.name'], e['feature.evidence'], e['event.timestamp']])).toEqual([
+        ['cloud.ci.request', undefined, new Date(created_at).toISOString()],
+        ['cloud.feature.use', 'runner_started', new Date(started_at).toISOString()],
+        ['cloud.feature.use', 'runner_completed', new Date(completed_at).toISOString()],
+        ['cloud.feature.use', 'runner_completed', new Date(completed_at).toISOString()],
+      ])
+      expect(new Set(recorded.map((e) => e['event.id'])).size).toBe(4)
+      expect(new Set(recorded.map((e) => e['correlation.id'])).size).toBe(1)
+      expect(recorded[1]).toMatchObject({
         'organization.id': org,
-        'event.timestamp': new Date(queued.queuedAt).toISOString(),
+        'feature.name': 'ci',
+        'feature.source': 'api',
+        'ci.job_created_at': new Date(created_at).toISOString(),
       })
-      expect(recorded[1]['correlation.id']).toBe(recorded[0]['correlation.id'])
-      expect(recorded[1]['event.id']).not.toBe(recorded[0]['event.id'])
+      expect(JSON.stringify(recorded)).not.toContain('ci-jit-')
+      expect(requests).toEqual([])
     } finally {
       stop()
     }
@@ -795,45 +830,6 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     } finally {
       info.mockRestore()
       warn.mockRestore()
-    }
-  })
-  it('records each runner status separately under its Box without GitHub job identifiers', () => {
-    const recorded: Readonly<Record<string, string>>[] = []
-    const stop = subscribeBusinessEvents((attributes) => recorded.push(attributes))
-    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => {})
-    try {
-      const event = {
-        event: 'ci-runner-status',
-        status: 'started',
-        level: 'info',
-        scope: 'scope/internal',
-        organization: org,
-        installation: 10,
-        label: 'boxlite',
-        scaleSet: 1,
-        messageId: 2,
-        boxId: 'box-1',
-        allocatedAt: 1000,
-      } as const
-      host.observe(event)
-      host.observe({ ...event, messageId: 3 })
-      host.observe({ ...event, status: 'completed' })
-      expect(recorded[0]).toMatchObject({
-        'event.name': 'cloud.feature.use',
-        'event.outcome': 'success',
-        'organization.id': org,
-        'correlation.id': 'box-1',
-        'feature.name': 'ci',
-        'feature.evidence': 'runner_started',
-        'feature.source': 'api',
-        'ci.runner_allocated_at': new Date(event.allocatedAt).toISOString(),
-      })
-      expect(new Set(recorded.map((entry) => entry['event.id'])).size).toBe(3)
-      expect(recorded[2]).toMatchObject({ 'feature.evidence': 'runner_completed', 'correlation.id': 'box-1' })
-      expect(JSON.stringify(recorded)).not.toMatch(/worker\/first|repository|installation|scope\/internal|jobId/)
-    } finally {
-      stop()
-      log.mockRestore()
     }
   })
 })

@@ -68,7 +68,7 @@ describe('scale set protocol boundaries', () => {
     await expect(broker().poll(2)).resolves.toEqual({
       id: 12,
       assigned: undefined,
-      worked: [{ id: runner.id, name: runner.name, status: 'started' }],
+      worked: [{ id: runner.id, name: runner.name }],
       available: [],
       settledRequests: [1, 2, 3, 4, 5],
     })

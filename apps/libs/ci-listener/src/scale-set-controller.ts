@@ -751,21 +751,12 @@ export class ScaleSetController {
               allocation.value.scope === scopeKey(this.scope) &&
               allocation.value.supply?.scaleSet === start.id &&
               allocation.value.runner.id === runner.id &&
-              allocation.value.runner.phase === 'known'
+              allocation.value.runner.phase === 'known' &&
+              !allocation.value.runner.worked
             ) {
-              if (!allocation.value.runner.worked) {
-                await this.journal.advance(this.lease, allocation.record.key, allocation.record.version, {
-                  runner: { ...allocation.value.runner, worked: true },
-                })
-              }
-              if (allocation.value.box.id) {
-                log.emit({
-                  event: 'ci-runner-status',
-                  status: runner.status,
-                  boxId: allocation.value.box.id,
-                  allocatedAt: allocation.value.createdAt,
-                })
-              }
+              await this.journal.advance(this.lease, allocation.record.key, allocation.record.version, {
+                runner: { ...allocation.value.runner, worked: true },
+              })
             }
           }
           await save(assigned, message.id, start.session.id, held)

@@ -28,7 +28,6 @@ type Progress =
   | { event: 'ci-scale-set-session-opened'; assigned: number; acquired?: number }
   | { event: 'ci-scale-set-offers-skipped'; reason: 'capacity' | 'creation-backoff' | 'no-match' | 'no-slot' }
   | { event: 'ci-scale-set-poll-started'; capacity: number }
-  | { event: 'ci-runner-status'; status: 'started' | 'completed'; boxId: string; allocatedAt: number }
   | { event: 'ci-scale-set-message-received'; offered: number; capacity: number; assigned?: number; held: number }
   | { event: 'ci-scale-set-first-reservation'; allocation: string }
   | { event: 'ci-scale-set-acquired'; attempted: number; accepted: number }

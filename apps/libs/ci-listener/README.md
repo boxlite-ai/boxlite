@@ -983,9 +983,10 @@ finish cleanup with the old Listener and start a fresh journal before upgrading.
 
 ## Hosted CI usage
 
-A signed BoxLite `workflow_job.queued` receipt with a valid creation time emits `cloud.ci.request`.
-The hosted listener emits `cloud.feature.use` for each `JobStarted` or `JobCompleted` message recognized by the scheduler for a JIT runner.
-Evidence is `runner_started` or `runner_completed`. Each observation keeps its own event ID, including repeated statuses.
+The hosted API uses GitHub's signed `workflow_job` webhooks after inbox admission for a connected organization.
+A valid BoxLite resource label on `queued` emits `cloud.ci.request`. For an assigned JIT runner,
+`in_progress` and `completed` emit `cloud.feature.use` with `runner_started` and `runner_completed` respectively.
 
-Both observations use data from the existing webhook and scheduling paths. Analytics adds no runner lookup, GitHub request or scheduling write.
-Count distinct request correlation IDs for demand and distinct Box correlation IDs for used runners. The two identifiers are independent.
+The three phases share an opaque Job correlation ID and use GitHub's phase timestamps.
+Each accepted delivery, including a redelivery, generates a separate observation. Count distinct correlation IDs for unique Jobs.
+Analytics uses the existing organization binding and the signed payload without reading worker allocations, polling GitHub, or writing scheduler state.

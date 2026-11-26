@@ -163,7 +163,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
       reads.mockRestore()
     }
   })
-  it('sends confirmed runner usage only when the creator consented before allocation', async () => {
+  it('sends CI webhook usage only when the creator consented before job creation', async () => {
     const received: string[] = []
     const server = createServer((req, res) => {
       let body = ''
@@ -186,7 +186,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
       await delay(5)
       await consent.decide('creator', true)
       await delay(5)
-      for (const [boxId, allocatedAt] of [
+      for (const [correlationId, createdAt] of [
         ['before-grant', before],
         ['after-grant', new Date()],
       ] as const) {
@@ -194,8 +194,8 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
           name: 'cloud.feature.use',
           outcome: 'success',
           organizationId: org,
-          correlationId: boxId,
-          feature: { name: 'ci', evidence: 'runner_started', source: 'api', runnerAllocatedAt: allocatedAt },
+          correlationId,
+          feature: { name: 'ci', evidence: 'runner_started', source: 'api', ciJobCreatedAt: createdAt },
         })
       }
       await analytics.onApplicationShutdown()

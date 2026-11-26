@@ -41,7 +41,7 @@ export interface BusinessEventFeature {
     | 'archive_ready'
     | 'box_restored'
   source: 'runner' | 'proxy' | 'api'
-  runnerAllocatedAt?: Date
+  ciJobCreatedAt?: Date
 }
 
 export interface BusinessEventOperation {
@@ -215,8 +215,7 @@ function toLogAttributes(event: BusinessEvent): Record<string, string> {
     attributes['feature.name'] = event.feature.name
     attributes['feature.evidence'] = event.feature.evidence
     attributes['feature.source'] = event.feature.source
-    if (event.feature.runnerAllocatedAt)
-      attributes['ci.runner_allocated_at'] = event.feature.runnerAllocatedAt.toISOString()
+    if (event.feature.ciJobCreatedAt) attributes['ci.job_created_at'] = event.feature.ciJobCreatedAt.toISOString()
   }
 
   if (event.job) {

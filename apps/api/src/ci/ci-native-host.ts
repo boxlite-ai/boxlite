@@ -359,18 +359,31 @@ export class CiNativeHost implements ListenerHost {
     })
     const result = await new ListenerInbox(new ListenerState(database, this.store.namespace)).receive(captured)
     const { installationId, repositoryId, job } = captured.hint
-    if (organization && captured.queuedAt && job && captured.observation?.status === 'queued') {
-      const requestId = v5(`boxlite:ci-request:${installationId}:${repositoryId}:${job.id}`, v5.URL)
+    const { jobTiming, observation } = captured
+    if (organization && job && jobTiming && observation) {
       try {
-        recordBusinessEvent({
-          name: 'cloud.ci.request',
-          outcome: 'requested',
+        const common = {
           organizationId: organization,
-          correlationId: requestId,
-          occurredAt: new Date(captured.queuedAt),
-        })
+          correlationId: v5(`boxlite:ci-request:${installationId}:${repositoryId}:${job.id}`, v5.URL),
+          occurredAt: new Date(jobTiming.occurredAt),
+        }
+        if (observation.status === 'queued') {
+          recordBusinessEvent({ ...common, name: 'cloud.ci.request', outcome: 'requested' })
+        } else {
+          recordBusinessEvent({
+            ...common,
+            name: 'cloud.feature.use',
+            outcome: 'success',
+            feature: {
+              name: 'ci',
+              evidence: observation.status === 'in_progress' ? 'runner_started' : 'runner_completed',
+              source: 'api',
+              ciJobCreatedAt: new Date(jobTiming.createdAt),
+            },
+          })
+        }
       } catch {
-        this.logger.warn('Could not record CI request')
+        this.logger.warn('Could not record CI webhook analytics')
       }
     }
     return result
@@ -398,21 +411,6 @@ export class CiNativeHost implements ListenerHost {
     })
   }
   observe(event: ListenerEvent): void {
-    if (event.event === 'ci-runner-status') {
-      recordBusinessEvent({
-        name: 'cloud.feature.use',
-        outcome: 'success',
-        organizationId: event.organization,
-        correlationId: event.boxId,
-        feature: {
-          name: 'ci',
-          evidence: event.status === 'started' ? 'runner_started' : 'runner_completed',
-          source: 'api',
-          runnerAllocatedAt: new Date(event.allocatedAt),
-        },
-      })
-      return
-    }
     if (event.level === 'warn') this.logger.warn(event)
     else this.logger.log(event)
   }
