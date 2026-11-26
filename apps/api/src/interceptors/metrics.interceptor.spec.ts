@@ -13,7 +13,7 @@ jest.mock('../analytics/services/consent-bound-posthog', () => ({
 }))
 
 import type { INestApplication } from '@nestjs/common'
-import { ConflictException } from '@nestjs/common'
+import { ConflictException, ValidationPipe } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import type { AddressInfo } from 'net'
 import { request as httpRequest } from 'node:http'
@@ -21,6 +21,9 @@ import { once } from 'node:events'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { TypedConfigService } from '../config/typed-config.service'
+import { VolumeController } from '../box/controllers/volume.controller'
+import { VolumeService } from '../box/services/volume.service'
+import { BoxliteVolumeController } from '../boxlite-rest/boxlite-volume.controller'
 import { BoxliteImageController } from '../boxlite-rest/boxlite-image.controller'
 import { ImageController } from '../image/controllers/image.controller'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
@@ -42,6 +45,7 @@ import { OrGuard } from '../auth/or.guard'
 import { UserService } from '../user/user.service'
 
 const ORGANIZATION = { id: 'org-123', imageCountLimit: 20 }
+const volume = { id: 'volume-1', createdAt: new Date(1), updatedAt: new Date(1) }
 const CONFIG: Record<string, string> = {
   version: '0.0.0-test',
   'posthog.apiKey': 'phc_test',
@@ -64,12 +68,19 @@ describe('MetricsInterceptor', () => {
     catalog = { delete: jest.fn().mockResolvedValue(undefined), deleteAlias: jest.fn().mockResolvedValue(undefined) }
 
     const moduleRef = await Test.createTestingModule({
-      controllers: [ImageController, OrganizationController, BoxliteImageController],
+      controllers: [
+        ImageController,
+        OrganizationController,
+        BoxliteImageController,
+        VolumeController,
+        BoxliteVolumeController,
+      ],
       providers: [
         AnalyticsService,
         { provide: AnalyticsConsentService, useValue: grantedAnalyticsConsent },
         { provide: TypedConfigService, useValue: { get: (key: string) => CONFIG[key] } },
         { provide: ImageCatalogService, useValue: catalog },
+        { provide: VolumeService, useValue: { create: async () => volume, waitForReady: async () => volume } },
         {
           provide: OrganizationService,
           useValue: {
@@ -131,6 +142,7 @@ describe('MetricsInterceptor', () => {
 
     app = moduleRef.createNestApplication()
     app.setGlobalPrefix('api')
+    app.useGlobalPipes(new ValidationPipe({ transform: true }))
     app.useGlobalInterceptors(new MetricsInterceptor(configService, moduleRef.get(AnalyticsService)))
     await app.listen(0)
   })
@@ -157,6 +169,34 @@ describe('MetricsInterceptor', () => {
       })
     },
   )
+
+  it.each([
+    ['/api/volumes', { name: 'workspace' }, 200, 'standard'],
+    ['/api/v1/volumes', { storageBackend: 'standard' }, 201, 'standard'],
+    ['/api/v1/default/volumes', { storageBackend: 'performance', instance: 'private-instance' }, 201, 'performance'],
+    ['/api/volumes', { name: '/invalid', storageBackend: 'performance' }, 400, 'performance'],
+    ['/api/volumes', { storageBackend: 'private-value' }, 400, undefined],
+    ['/api/volumes', { storageBackend: null }, 400, undefined],
+  ] as const)('records only the requested volume class for POST %s %j', async (path, body, status, backend) => {
+    const address = app.getHttpServer().address() as AddressInfo
+    const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-member': '1' },
+      body: JSON.stringify(body),
+    })
+    expect(response.status).toBe(status)
+    const events = mockCapture.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.event === 'cloud.api.operation')
+    expect(events.map((event) => event.properties)).toEqual([
+      {
+        'api.operation': 'volume.create',
+        'client.source': 'unattributed',
+        'http.status_class': status < 400 ? '2xx' : '4xx',
+        ...(backend && { 'volume.storage_backend': backend }),
+      },
+    ])
+  })
 
   it('returns the alias response while its PostHog transfer is pending', async () => {
     let finish!: () => void
@@ -225,7 +265,7 @@ describe('MetricsInterceptor', () => {
     const response = await fetch(`http://127.0.0.1:${address.port}/api/organizations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Example' }),
+      body: JSON.stringify({ name: 'Example', defaultRegionId: 'us' }),
     })
     expect(response.status).toBe(201)
     expect(mockCapture).toHaveBeenCalledWith(

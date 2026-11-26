@@ -1022,6 +1022,8 @@ Use `cloud.api.operation` for finished Cloud API requests. Select `properties['a
 | Onboarding and billing actions | Rename an organization, save onboarding, create/copy a quickstart handoff, submit a coupon claim or cancellation feedback. Only the operation and HTTP result are captured. |
 | Organization infrastructure | Create/update/delete a region, rotate its proxy key, create/delete one's own API key, open the webhook portal |
 
+For `volume.create`, group by `volume.storage_backend` to distinguish standard object storage (`standard`) from GCP Filestore (`performance`). The field reflects the requested class, including the default `standard` when omitted. Filter on `http.status_class=2xx` for successful requests. An unrecognized or null class leaves the field absent. Historical events without the field have an unknown class.
+
 Both v1 route spellings and the equivalent Console routes use the same action where available. The shared native SDK and CLI report `sdk`, the Dashboard reports `dashboard`, and verified in-process tool delegation reports `mcp`. Client source is descriptive; unmarked or unrecognized clients are `unattributed`.
 
 The HTTP response must finish after the guards verify the actor's organization membership. The request admission time anchors the consent check for the member and the org creator. A full queue, disabled analytics or early disconnect drops the measurement. The listener does no network or database work that the handler must await.

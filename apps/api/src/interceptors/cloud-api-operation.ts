@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common'
 import type { Request, Response } from 'express'
 import type { AnalyticsService } from '../analytics/services/analytics.service'
 import { isDelegatedMcpRequest } from '../auth/mcp-delegation'
+import { VOLUME_STORAGE_BACKENDS } from '../box/dto/create-volume.dto'
 import { CustomHeaders } from '../common/constants/header.constants'
 import { AuthContextType, isOrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { SystemRole } from '../user/enums/system-role.enum'
@@ -113,17 +114,22 @@ export function observeCloudApiOperation(
     const status = response.statusCode
     if (status < 200 || (status >= 300 && status < 400) || status >= 600) return
     try {
+      const properties: Record<string, string> = {
+        'api.operation': operation,
+        'http.status_class': Math.floor(status / 100) + 'xx',
+        'client.source': source,
+      }
+      if (operation === 'volume.create') {
+        const { storageBackend = 'standard' } = request.body ?? {}
+        if (VOLUME_STORAGE_BACKENDS.includes(storageBackend)) properties['volume.storage_backend'] = storageBackend
+      }
       analytics.capture(
         {
           event: 'cloud.api.operation',
           distinctId: userId,
           groups: { organization: organizationId },
           timestamp: new Date(startedAt),
-          properties: {
-            'api.operation': operation,
-            'http.status_class': Math.floor(status / 100) + 'xx',
-            'client.source': source,
-          },
+          properties,
         },
         { users: [userId], organizations: [organizationId] },
       )
