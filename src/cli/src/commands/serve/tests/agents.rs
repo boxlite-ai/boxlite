@@ -466,6 +466,10 @@ struct AutoStopFixture {
 
 impl AutoStopFixture {
     async fn new() -> Self {
+        Self::with_upstream(|app| app).await
+    }
+
+    async fn with_upstream(configure: impl FnOnce(Router) -> Router) -> Self {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         let stops = Arc::new(AtomicUsize::new(0));
         let finished = Arc::new(AtomicBool::new(false));
@@ -531,7 +535,20 @@ impl AutoStopFixture {
                     Json(box_info(false, run.load(Ordering::SeqCst)))
                 }}
             }))
-            .route("/v1/boxes/{id}/agents/{agent}", get(|| async { Json(resource()) }))
+            .route("/v1/boxes/{id}/agents/{agent}", get({
+                let running = running.clone();
+                let run = run.clone();
+                let starts = starts.clone();
+                let invalidated = invalidated.clone();
+                move || {
+                    if !running.swap(true, Ordering::SeqCst) {
+                        run.fetch_add(1, Ordering::SeqCst);
+                        starts.fetch_add(1, Ordering::SeqCst);
+                        invalidated.store(false, Ordering::SeqCst);
+                    }
+                    async { Json(resource()) }
+                }
+            }))
             .route("/v1/boxes/{id}/agents/{agent}/turns", post({
                 let started = Arc::clone(&admission_started);
                 let finish = Arc::clone(&finish_admission);
@@ -579,6 +596,7 @@ impl AutoStopFixture {
                     }
                 }
             }));
+        let app = configure(app);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let upstream = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -1341,4 +1359,141 @@ async fn delayed_stop_preserves_new_run_turn() {
     .unwrap();
     f.sweep().await;
     assert_eq!(f.stops(), 2);
+}
+
+#[tokio::test]
+async fn explicit_stop_preserves_an_in_progress_sweep() {
+    use axum::{
+        extract::Request,
+        middleware::{Next, from_fn},
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let pause = AtomicBool::new(true);
+    let lookup = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let f = Arc::new(
+        AutoStopFixture::with_upstream(|app| {
+            let lookup = lookup.clone();
+            let resume = resume.clone();
+            let pause = Arc::new(pause);
+            app.layer(from_fn(move |req: Request, next: Next| {
+                let block = req.uri().path() == format!("/v1/boxes/{STUB_BOX_ID}")
+                    && pause.swap(false, Ordering::SeqCst);
+                let lookup = lookup.clone();
+                let resume = resume.clone();
+                async move {
+                    if block {
+                        lookup.notify_one();
+                        resume.notified().await;
+                    }
+                    next.run(req).await
+                }
+            }))
+        })
+        .await,
+    );
+    let sweep = tokio::spawn({
+        let f = f.clone();
+        async move { f.sweep().await }
+    });
+    let timeout = std::time::Duration::from_secs(5);
+    tokio::time::timeout(timeout, lookup.notified())
+        .await
+        .unwrap();
+    let client = reqwest::Client::new();
+    let path = format!("{}/v1/boxes/{STUB_BOX_ID}", f.url);
+    for operation in ["stop", "start"] {
+        assert_eq!(
+            client
+                .post(format!("{path}/{operation}"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let mut send = tokio::spawn(
+        client
+            .post(format!("{path}/agents/ses_test/turns"))
+            .json(&json!({"text":"new turn"}))
+            .send(),
+    );
+    f.finish_admission.notify_one();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(500), &mut send)
+            .await
+            .is_err(),
+        "new turn admitted while the older sweep can still stop the Box"
+    );
+    resume.notify_one();
+    tokio::time::timeout(timeout, sweep).await.unwrap().unwrap();
+    assert_eq!(send.await.unwrap().unwrap().status(), StatusCode::CREATED);
+    f.wait_for_observations(2).await;
+    f.sweep().await;
+    assert_eq!(f.stops(), 2);
+    f.finished.store(true, Ordering::SeqCst);
+    tokio::time::timeout(timeout, async {
+        while f.state.agent_turns.lock().await.contains_key(STUB_BOX_ID) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    f.sweep().await;
+    assert_eq!(f.stops(), 3);
+}
+
+#[tokio::test]
+async fn disconnecting_events_releases_subscription_and_preserves_active_turn() {
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let f = AutoStopFixture::with_upstream(|app| {
+        let release = Arc::new(std::sync::Mutex::new(Some(release)));
+        app.route(
+            "/v1/boxes/{id}/agents/{agent}/events",
+            get(move || {
+                let guard = release.lock().unwrap().take().unwrap();
+                async move {
+                    let stream = futures::stream::once(async move {
+                        let _subscription = guard;
+                        std::future::pending::<Result<axum::body::Bytes, std::convert::Infallible>>(
+                        )
+                        .await
+                    });
+                    (
+                        [(header::CONTENT_TYPE, "text/event-stream")],
+                        axum::body::Body::from_stream(stream),
+                    )
+                }
+            }),
+        )
+    })
+    .await;
+    f.accept().await;
+    let response = reqwest::get(format!(
+        "{}/v1/boxes/{STUB_BOX_ID}/agents/ses_test/events",
+        f.url
+    ))
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    drop(response);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), released)
+            .await
+            .unwrap()
+            .is_err()
+    );
+    f.sweep().await;
+    assert_eq!(f.stops(), 0);
+    f.finished.store(true, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while f.state.agent_turns.lock().await.contains_key(STUB_BOX_ID) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    f.sweep().await;
+    assert_eq!(f.stops(), 1);
 }

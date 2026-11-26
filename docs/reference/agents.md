@@ -203,7 +203,7 @@ the server retains the protection for five minutes or until the Box is removed.
 After that grace period AutoStop may interrupt work that was admitted but could
 not be observed.
 
-An explicit stop and turn submission are ordered per Box. Stop releases protection for the run it ends. A turn accepted after restart receives fresh protection. Observers read Box metadata
+An explicit stop and turn submission are ordered per Box. Stop releases protection for the run it ends. If an AutoStop sweep is also stopping that Box, new submissions wait until the sweep finishes. A turn accepted after restart receives fresh protection. Observers read Box metadata
 without resuming a stopped Box and exit when its run ends. If OpenCode resumes
 an earlier turn after restart, that resumed turn is not protected from AutoStop;
 only turns admitted through the server in the new run receive protection.

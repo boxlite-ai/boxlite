@@ -203,7 +203,14 @@ pub(in crate::commands::serve) async fn stop_box(
             boxes.remove(&canonical);
         }
     }
-    state.agent_turns.lock().await.remove(&canonical);
+    // Only the sweep can release its marker: it may still be fetching the
+    // handle it will stop, even after this explicit stop has completed.
+    if let std::collections::hash_map::Entry::Occupied(entry) =
+        state.agent_turns.lock().await.entry(canonical)
+        && entry.get().count != super::super::AGENT_STOPPING
+    {
+        entry.remove();
+    }
 
     let info = match litebox.info().await {
         Ok(info) => info,
