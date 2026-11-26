@@ -35,6 +35,7 @@ container image with Buildx exercises a different path from native ARM64 SDK tes
 GitHub starts PostgreSQL and Redis services before checkout. The runner must
 provide a working Docker daemon at registration time. Dashboard tests and
 API client drift install Node 22 before enabling Corepack for the Yarn cache.
+Dashboard caps concurrent Yarn downloads at eight so a cold install fits its 4 GiB worker.
 [Docker startup contract](../../apps/libs/ci-listener/README.md#docker-startup).
 
 Rust, Nix and REST exercise unprivileged user namespaces on hosted Ubuntu.

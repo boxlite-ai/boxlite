@@ -63,6 +63,11 @@ for (const [name, job, runner] of [
   })
 }
 
+test('Dashboard limits parallel Yarn downloads on its 4 GiB worker', () => {
+  const install = workflow('test.yml').jobs.dashboard.steps.find((step: any) => step.run === 'yarn install --immutable')
+  assert.equal(install?.env?.YARN_NETWORK_CONCURRENCY, '8')
+})
+
 for (const [name, job, matrix] of [
   ['release-box-images.yml', 'release', false],
   ['build-c.yml', 'build', true],
