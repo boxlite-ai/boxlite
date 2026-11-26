@@ -56,7 +56,7 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_success_forwards_sdk_options_and_closes_stdin(self):
         status, payload = await self.post({
             "command": "echo", "args": ["hello"], "env": {"LANG": "C"},
-            "working_dir": "/tmp", "user": "1000:1000",
+            "timeout_seconds": 12.0, "working_dir": "/tmp", "user": "1000:1000",
         })
         self.assertEqual(status, 200)
         self.assertEqual(payload, {
@@ -65,7 +65,7 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
         })
         self.box.exec.assert_awaited_once_with(
             "echo", args=["hello"], env=[("LANG", "C")], tty=False,
-            cwd="/tmp", user="1000:1000",
+            cwd="/tmp", user="1000:1000", timeout_secs=17.0,
         )
         self.close_stdin.assert_awaited_once()
         self.assertFalse(SERVER.state.active_executions)
@@ -143,11 +143,12 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
         self.execution.kill.assert_awaited_once()
         self.assertCountEqual(closed, ["stdout", "stderr"])
 
-    async def test_retries_transient_transport_error(self):
+    async def test_does_not_retry_transient_transport_error(self):
         self.box.exec.side_effect = [RuntimeError("gRPC transport error: retry"), self.execution]
-        status, _ = await self.post({"command": "echo"})
-        self.assertEqual(status, 200)
-        self.assertEqual(self.box.exec.await_count, 2)
+        status, payload = await self.post({"command": "echo"})
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"]["code"], "upstream_unavailable")
+        self.assertEqual(self.box.exec.await_count, 1)
 
     async def test_invalid_requests_never_start_execution(self):
         for fields in (

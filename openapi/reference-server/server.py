@@ -1021,14 +1021,14 @@ async def exec_sync(
 
     async def run():
         nonlocal execution
-        execution = await exec_with_transport_retry(
-            box_handle,
+        execution = await box_handle.exec(
             req.command,
             args=req.args,
             env=list(req.env.items()) if req.env is not None else None,
             tty=False,
             cwd=req.working_dir,
             user=req.user,
+            timeout_secs=req.timeout_seconds + 5.0,
         )
         stdout = execution.stdout()
         stderr = execution.stderr()
