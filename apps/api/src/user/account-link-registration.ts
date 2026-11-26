@@ -15,6 +15,15 @@ export class AccountLinkSignupPendingException extends ConflictException {
   }
 }
 
+export class AccountLinkSourceSupersededException extends ConflictException {
+  constructor() {
+    super({
+      code: 'account_link_superseded',
+      message: 'This sign-in predates an account link. Please sign in again.',
+    })
+  }
+}
+
 // An incoming link and first registration must serialize even before the user row exists.
 export async function lockAccountLinkIdentities(em: EntityManager, ...ids: string[]): Promise<void> {
   for (const id of ids.sort()) {
@@ -22,8 +31,21 @@ export async function lockAccountLinkIdentities(em: EntityManager, ...ids: strin
   }
 }
 
-export async function assertNoDefaultOrganizationTransferPending(em: EntityManager, userId: string): Promise<void> {
+export async function assertAccountLinkAllowsSignup(
+  em: EntityManager,
+  userId: string,
+  tokenIssuedAt?: number,
+): Promise<void> {
   await lockAccountLinkIdentities(em, userId)
+  const [completed] = await em.query(
+    `SELECT 1 FROM "account_link_consent_job"
+     WHERE "source_id" = $1 AND "state" = 'done'
+       AND ($2::numeric IS NULL OR EXTRACT(EPOCH FROM "completed_at") >= $2)
+     LIMIT 1`,
+    [userId, Number.isSafeInteger(tokenIssuedAt) ? tokenIssuedAt : null],
+  )
+  if (completed) throw new AccountLinkSourceSupersededException()
+
   const [incoming] = await em.query(
     `SELECT 1
      FROM "account_link_consent_job" AS job

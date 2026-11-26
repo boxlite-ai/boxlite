@@ -61,7 +61,11 @@ export class RegistrationService {
           emailVerified: identity.email_verified === true,
           defaultOrganizationDefaultRegionId: this.config.getOrThrow('defaultRegion.id'),
         },
-        Context.user({ userId: id, authMethod: 'jwt' }),
+        Context.user({
+          userId: id,
+          authMethod: 'jwt',
+          ...(identity.iat === undefined ? {} : { tokenIssuedAt: identity.iat }),
+        }),
         consent,
       )
     } catch (error) {

@@ -99,7 +99,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             emailVerified: payload.email_verified === true,
             defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
           },
-          Context.user({ userId, authMethod: 'jwt' }),
+          Context.user({
+            userId,
+            authMethod: 'jwt',
+            ...(payload.iat === undefined ? {} : { tokenIssuedAt: payload.iat }),
+          }),
         )
       } catch (error) {
         if (!(error instanceof UserAlreadyExistsException)) throw error

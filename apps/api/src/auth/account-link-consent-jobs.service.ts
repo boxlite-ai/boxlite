@@ -6,6 +6,9 @@
 import { randomUUID } from 'node:crypto'
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
 import { DataSource, EntityManager } from 'typeorm'
+import { AuditLog } from '../audit/entities/audit-log.entity'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { TypedConfigService } from '../config/typed-config.service'
 import { LinkedIdentityService } from '../user/linked-identity.service'
 import { RegistrationConsent } from '../user/registration-consent.entity'
@@ -214,6 +217,26 @@ export class AccountLinkConsentJobs {
         `UPDATE "account_link_consent_job"
          SET "state" = $2, "lease_token" = NULL, "lease_expires_at" = NULL WHERE "id" = $1`,
         [job.id, outcome],
+      )
+      await em.insert(
+        AuditLog,
+        new AuditLog({
+          actorId: job.target_id,
+          actorEmail: '',
+          action: AuditAction.LINK_ACCOUNT,
+          targetType: AuditTarget.USER,
+          targetId: job.source_id,
+          source: 'auth0-account-link',
+          statusCode: outcome === 'done' ? 204 : 409,
+          metadata: {
+            scope: 'local_ownership',
+            primaryUserId: job.target_id,
+            secondaryUserId: job.source_id,
+            operationId: job.id,
+            outcome,
+            ...('attemptId' in evidence ? { attemptId: evidence.attemptId } : {}),
+          },
+        }),
       )
       return movedKeys
     })

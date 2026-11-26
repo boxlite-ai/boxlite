@@ -132,9 +132,11 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
     ? 'Review the terms to create your BoxLite account.'
     : 'Complete the security check to create your BoxLite account. Next, we’ll help you set up your organization.'
   const accountRetryMessage =
-    account.error instanceof RegistrationError && account.error.code === 'account_link_pending'
+    account.error instanceof RegistrationError &&
+    (account.error.code === 'account_link_pending' || account.error.code === 'account_link_superseded')
       ? account.error.message
       : 'We couldn’t confirm your account. Try again to continue.'
+  const signInAgain = account.error instanceof RegistrationError && account.error.code === 'account_link_superseded'
 
   return (
     <SetupLayout
@@ -180,6 +182,8 @@ export function RegistrationGate({ children }: { children: ReactNode }) {
             )}
           </div>
         </div>
+      ) : signInAgain ? (
+        <Button onClick={() => navigate(RoutePath.LOGOUT, { replace: true })}>Sign in again</Button>
       ) : (
         <Button onClick={() => void retryAccount()}>Try again</Button>
       )}

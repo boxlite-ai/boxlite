@@ -7,7 +7,10 @@
 import { ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
 import { MCP_DELEGATION_STRATEGY } from './mcp-delegation'
-import { AccountLinkSignupPendingException } from '../user/account-link-registration'
+import {
+  AccountLinkSignupPendingException,
+  AccountLinkSourceSupersededException,
+} from '../user/account-link-registration'
 
 /**
  * Main authentication guard for the application.
@@ -28,7 +31,8 @@ export class CombinedAuthGuard extends AuthGuard([MCP_DELEGATION_STRATEGY, 'api-
   private readonly logger = new Logger(CombinedAuthGuard.name)
 
   handleRequest(err: any, user: any) {
-    if (err instanceof AccountLinkSignupPendingException) throw err
+    if (err instanceof AccountLinkSignupPendingException || err instanceof AccountLinkSourceSupersededException)
+      throw err
     if (
       err instanceof ForbiddenException &&
       (err.getResponse() as { code?: string }).code === 'registration_required'

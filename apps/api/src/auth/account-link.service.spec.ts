@@ -8,7 +8,7 @@ import { SignJWT } from 'jose'
 import { TypedConfigService } from '../config/typed-config.service'
 import { LinkedIdentityService } from '../user/linked-identity.service'
 import { UserService } from '../user/user.service'
-import { ADOPT_AUDIENCE, AccountLinkService, STATUS_AUDIENCE } from './account-link.service'
+import { ADOPT_AUDIENCE, AccountLinkService, PREPARE_AUDIENCE, STATUS_AUDIENCE } from './account-link.service'
 
 const SECRET = 's'.repeat(32)
 const PRIMARY = 'auth0|primary'
@@ -42,6 +42,38 @@ describe('AccountLinkService', () => {
       { createLog: jest.fn().mockResolvedValue({ id: 'audit' }), updateLog: jest.fn().mockResolvedValue({}) } as any,
       {} as import('./account-link-consent-jobs.service').AccountLinkConsentJobs,
     )
+  })
+
+  it('does not record completed ownership migration when preparation returns ready false', async () => {
+    const operationId = 'a227821b-70b4-4761-8b54-52981b71b2c3'
+    const attemptId = '79338e51-d810-484f-bab3-fbb72c57ff27'
+    const audit = {
+      createLog: jest.fn().mockResolvedValue({ id: 'audit' }),
+      updateLog: jest.fn().mockResolvedValue({}),
+    }
+    const prepare = jest.fn().mockResolvedValue({ operationId, ready: false })
+    const accountLink = new AccountLinkService(
+      { getOrThrow: () => SECRET } as never,
+      {} as never,
+      {} as never,
+      audit as never,
+      { prepare } as never,
+    )
+    const token = await sign(
+      { sub: SOCIAL, primary_user_id: PRIMARY, operation_id: attemptId },
+      {
+        audience: PREPARE_AUDIENCE,
+      },
+    )
+    expect(await accountLink.prepare(token)).toEqual({ operationId, ready: false })
+    expect(audit.createLog).toHaveBeenCalledTimes(1)
+    expect(audit.createLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 201,
+        metadata: { scope: 'link_preparation', operationId, attemptId, ready: false },
+      }),
+    )
+    expect(audit.updateLog).not.toHaveBeenCalled()
   })
 
   describe('adopt', () => {

@@ -20,7 +20,7 @@ import { Organization } from '../organization/entities/organization.entity'
 import { OrganizationUser } from '../organization/entities/organization-user.entity'
 import { Context } from '../common/context/context'
 import { ActorKind } from '../common/context/actor-kind.enum'
-import { assertNoDefaultOrganizationTransferPending } from './account-link-registration'
+import { assertAccountLinkAllowsSignup } from './account-link-registration'
 import { normalizeRegistrationEmail } from './registration-email'
 import { AcceptedLegalVersions, RegistrationConsent } from './registration-consent.entity'
 import { UserAlreadyExistsException } from './user-already-exists.exception'
@@ -59,7 +59,7 @@ export class UserService {
       () =>
         this.dataSource.transaction(async (em) => {
           if (ctx.actorKind === ActorKind.USER && ctx.actor?.authMethod === 'jwt' && ctx.actor.userId === user.id) {
-            await assertNoDefaultOrganizationTransferPending(em, user.id)
+            await assertAccountLinkAllowsSignup(em, user.id, ctx.actor.tokenIssuedAt)
           }
           try {
             await em.insert(User, user)

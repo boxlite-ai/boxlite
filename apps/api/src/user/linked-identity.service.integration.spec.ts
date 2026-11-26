@@ -12,7 +12,9 @@ import { randomUUID } from 'node:crypto'
 import axios from 'axios'
 import type Redis from 'ioredis'
 import { DataSource } from 'typeorm'
+import { AuditLog } from '../audit/entities/audit-log.entity'
 import { AccountLinkAuth0Reader } from '../auth/account-link-auth0-reader.service'
+import { AddAccountLinkCompletionTime1795560002000 } from '../migrations/pre-deploy/1795560002000-add-account-link-completion-time-migration'
 import { AddAccountLinkAttempts1795560001000 } from '../migrations/pre-deploy/1795560001000-add-account-link-attempts-migration'
 import { AccountLinkConsentJobs } from '../auth/account-link-consent-jobs.service'
 import { AccountLinkReconciliation } from '../auth/account-link-reconciliation.service'
@@ -66,9 +68,11 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
         OrganizationRole,
         OrganizationUser,
         ApiKey,
+        AuditLog,
         RegistrationConsent,
       ],
       namingStrategy: new CustomNamingStrategy(),
+      entitySkipConstructor: true,
       synchronize: false,
       extra: { options: `-c search_path=${schemaName},public` },
     }).initialize()
@@ -81,6 +85,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     try {
       await new AddAccountLinkConsentJobs1795560000000().up(runner)
       await new AddAccountLinkAttempts1795560001000().up(runner)
+      await new AddAccountLinkCompletionTime1795560002000().up(runner)
     } finally {
       await runner.release()
     }
@@ -104,6 +109,7 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
   beforeEach(async () => {
     auth0.linkExists.mockReset().mockResolvedValue(false)
     await dataSource.query('DELETE FROM "account_link_consent_job"')
+    await dataSource.getRepository(AuditLog).deleteAll()
     await dataSource.getRepository(RegistrationConsent).deleteAll()
     cache.clear()
     redis.del.mockClear()
@@ -422,7 +428,27 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
       expect(await users.findOne(PRIMARY)).toBeNull()
       expect(await dataSource.getRepository(Organization).count()).toBe(1)
 
+      if (outcome === 'done') {
+        auth0.linkExists.mockResolvedValueOnce(true)
+        const workerConfig = {
+          get: (key: string) =>
+            key === 'oidc.accountLink.readClient' ? { id: 'fixture', secret: 'fixture' } : undefined,
+        } as unknown as TypedConfigService
+        const worker = new AccountLinkReconciliation(jobs, workerConfig, auth0 as unknown as AccountLinkAuth0Reader)
+        await dataSource.query('UPDATE "account_link_consent_job" SET "next_check_at" = now() WHERE "id" = $1', [op.id])
+        await worker.reconcile()
+        expect(auth0.linkExists).toHaveBeenCalledWith(expect.objectContaining({ id: op.id }))
+      } else {
+        await jobs.complete(op, outcome)
+      }
       await jobs.complete(op, outcome)
+      const audit = await dataSource.getRepository(AuditLog).find()
+      expect(audit).toEqual([
+        expect.objectContaining({
+          statusCode: outcome === 'done' ? 204 : 409,
+          metadata: expect.objectContaining({ scope: 'local_ownership', operationId: op.id, outcome }),
+        }),
+      ])
       await expect(provision()).resolves.toBeDefined()
       const defaults = (await membershipsOf(PRIMARY)).filter((membership) => membership.isDefaultForUser)
       expect(defaults).toHaveLength(1)
@@ -435,6 +461,87 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
       }
     },
   )
+
+  it('blocks a stale registration for the source after a completed link', async () => {
+    const events = new EventEmitter2()
+    const legal = { tosVersion: 'terms', privacyVersion: 'privacy' }
+    const config = {
+      get: (key: string) => (key === 'legal' ? legal : undefined),
+      getOrThrow: () => undefined,
+    } as unknown as TypedConfigService
+    const organizations = new OrganizationService(
+      dataSource.getRepository(Organization),
+      {} as never,
+      events,
+      config,
+      {} as never,
+      {} as never,
+      {} as never,
+    )
+    events.on(UserEvents.CREATED, (event: UserCreatedEvent) => organizations.handleUserCreatedEvent(event))
+    const users = new UserService(dataSource.getRepository(User), events, dataSource)
+    const loginEvents = { recordFirstUse: async () => undefined } as never
+    const registration = new RegistrationService(users, {} as never, config, loginEvents, {
+      getCurrent: () => legal,
+    } as never)
+    const jwt = new JwtStrategy(
+      { jwksUri: 'https://issuer.example/jwks', audience: 'api', issuer: 'https://issuer.example/' },
+      users,
+      config,
+      loginEvents,
+    )
+    const identity = {
+      sub: SOCIAL,
+      email: 'source@gmail.com',
+      email_verified: true,
+      iat: Math.floor(Date.now() / 1000) - 60,
+    }
+    await expect(jwt.validate({ get: () => undefined } as never, identity)).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'registration_required' },
+    })
+    const operation = { id: randomUUID(), source_id: SOCIAL, target_id: PRIMARY }
+    await jobs.prepare(operation)
+    await jobs.complete(operation, 'done')
+
+    const [job] = await dataSource.query(
+      'SELECT "state", FLOOR(EXTRACT(EPOCH FROM "completed_at")) AS cutoff FROM "account_link_consent_job" WHERE "id" = $1',
+      [operation.id],
+    )
+    expect(job.state).toBe('done')
+    expect(Number(job.cutoff)).toBeGreaterThan(identity.iat)
+
+    const body = { accepted: true, ...legal }
+    for (const iat of [identity.iat, undefined, Number(job.cutoff)]) {
+      await expect(registration.register({ ...identity, iat }, body)).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'account_link_superseded' },
+      })
+    }
+
+    const automaticSignup = new JwtStrategy(
+      { jwksUri: 'https://issuer.example/jwks', audience: 'api', issuer: 'https://issuer.example/' },
+      users,
+      { get: () => undefined, getOrThrow: () => undefined } as never,
+      loginEvents,
+    )
+    await expect(automaticSignup.validate({ get: () => undefined } as never, identity)).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'account_link_superseded' },
+    })
+    expect({
+      userExists: Boolean(await users.findOne(SOCIAL)),
+      defaultOrganizations: (await membershipsOf(SOCIAL)).filter((m) => m.isDefaultForUser).length,
+      consents: await dataSource.getRepository(RegistrationConsent).countBy({ userId: SOCIAL }),
+    }).toEqual({ userExists: false, defaultOrganizations: 0, consents: 0 })
+
+    // After unlink, Auth0 can issue a new token with the source as subject.
+    await expect(registration.register({ ...identity, iat: Number(job.cutoff) + 1 }, body)).resolves.toMatchObject({
+      created: true,
+      user: { id: SOCIAL },
+    })
+    await expect(dataSource.getRepository(RegistrationConsent).countBy({ userId: SOCIAL })).resolves.toBe(1)
+  })
 
   it('does nothing for a social identity BoxLite never saw', async () => {
     await user(PRIMARY)

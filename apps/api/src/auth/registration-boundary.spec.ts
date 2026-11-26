@@ -7,7 +7,10 @@ import { ForbiddenException } from '@nestjs/common'
 import { JwtStrategy } from './jwt.strategy'
 import { CombinedAuthGuard } from './combined-auth.guard'
 import { NotificationGateway } from '../notification/gateways/notification.gateway'
-import { AccountLinkSignupPendingException } from '../user/account-link-registration'
+import {
+  AccountLinkSignupPendingException,
+  AccountLinkSourceSupersededException,
+} from '../user/account-link-registration'
 
 describe('Registration access boundary', () => {
   it('rejects an unknown JWT identity without creating a user', async () => {
@@ -35,10 +38,12 @@ describe('Registration access boundary', () => {
     expect(() => new CombinedAuthGuard().handleRequest(error, false)).toThrow(error)
   })
 
-  it('preserves a pending account-link conflict through the combined guard', () => {
-    const error = new AccountLinkSignupPendingException()
+  it.each([
+    ['account_link_pending', new AccountLinkSignupPendingException()],
+    ['account_link_superseded', new AccountLinkSourceSupersededException()],
+  ])('preserves the %s conflict through the combined guard', (code, error) => {
     expect(() => new CombinedAuthGuard().handleRequest(error, false)).toThrow(error)
-    expect(error.getResponse()).toMatchObject({ code: 'account_link_pending' })
+    expect(error.getResponse()).toMatchObject({ code })
     expect(error.getStatus()).toBe(409)
   })
 

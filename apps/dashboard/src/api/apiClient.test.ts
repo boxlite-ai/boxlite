@@ -259,6 +259,7 @@ describe('ApiClient registration', () => {
   it.each([
     [403, 'registration_required'],
     [409, 'account_link_pending'],
+    [409, 'account_link_superseded'],
     [400, 'turnstile_token_required'],
     [400, 'turnstile_token_invalid'],
     [403, 'turnstile_verification_failed'],

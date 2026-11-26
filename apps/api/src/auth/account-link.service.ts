@@ -42,12 +42,8 @@ function isUserId(value: unknown): value is string {
  * logins into one account.
  *
  * The Post-Login Action proves the person holds both accounts and links them
- * inside Auth0. The step it cannot take is moving BoxLite's rows, so it asks
- * here first, with an HS256 token signed by the shared secret that names both
- * users and lives for a minute. Moving before the link keeps a failed link
- * retryable: the next login asks again, and moving is idempotent. Before it
- * decides which account stays, or what Cancel does, it asks whether BoxLite
- * knows a user already.
+ * inside Auth0. The Action signs both identities and first reserves an attempt.
+ * BoxLite moves its rows once the Action or the reconciler confirms the link.
  */
 @Injectable()
 export class AccountLinkService {
@@ -64,7 +60,23 @@ export class AccountLinkService {
   async prepare(token: string): Promise<AccountLinkPreparation> {
     const payload = await this.readRequest(token, PREPARE_AUDIENCE)
     const operation = this.operation(payload)
-    return this.recordAdoption(operation.target_id, operation.source_id, () => this.consentJobs.prepare(operation))
+    const result = await this.consentJobs.prepare(operation)
+    await this.audit.createLog({
+      actorId: operation.target_id,
+      actorEmail: '',
+      action: AuditAction.LINK_ACCOUNT,
+      targetType: AuditTarget.USER,
+      targetId: operation.source_id,
+      source: 'auth0-account-link',
+      statusCode: 201,
+      metadata: {
+        scope: 'link_preparation',
+        operationId: result.operationId,
+        attemptId: operation.id,
+        ready: result.ready,
+      },
+    })
+    return result
   }
 
   async result(token: string): Promise<void> {

@@ -243,6 +243,18 @@ describe('RegistrationGate', () => {
     expect(api.register).not.toHaveBeenCalled()
   })
 
+  it('sends a superseded sign-in to logout to start a new session', async () => {
+    const message = 'This sign-in predates an account link. Please sign in again.'
+    api.userApi.getAuthenticatedUser.mockRejectedValueOnce(new RegistrationError(message, 'account_link_superseded'))
+    await render()
+
+    expect(document.body.textContent).toContain(message)
+    expect(businessMount).not.toHaveBeenCalled()
+    await click('Sign in again')
+    expect(document.body.textContent).toContain('Sign-out route')
+    expect(api.register).not.toHaveBeenCalled()
+  })
+
   it.each(['reconnect', 'invalidation'])(
     'keeps admitted business mounted during %s and transient failure',
     async (trigger) => {
