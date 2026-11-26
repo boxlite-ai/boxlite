@@ -31,9 +31,10 @@
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::layout::FilesystemLayout;
 use crate::util::{HostDiagnostic, find_binary};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Cached path to the bwrap binary (system or bundled).
 ///
@@ -91,7 +92,9 @@ pub fn is_available() -> bool {
     get_bwrap_path().is_some()
 }
 
-/// Probe whether bwrap can create user namespaces.
+static USERNS_VERIFIED: AtomicBool = AtomicBool::new(false);
+
+/// Probe whether bwrap can create user namespaces, caching only success.
 ///
 /// Performs two checks:
 /// 1. **Chrome-style raw probe** — `clone(CLONE_NEWUSER)` for kernel-level
@@ -105,6 +108,23 @@ pub fn is_available() -> bool {
 ///
 /// Returns `Ok(())` if working, `Err` with diagnostic guidance.
 pub(crate) fn can_create_user_namespace() -> Result<(), HostDiagnostic> {
+    verify_user_namespace(&USERNS_VERIFIED, probe_user_namespace)
+}
+
+fn verify_user_namespace(
+    verified: &AtomicBool,
+    probe: impl FnOnce() -> Result<(), HostDiagnostic>,
+) -> Result<(), HostDiagnostic> {
+    if verified.load(Ordering::Acquire) {
+        return Ok(());
+    }
+
+    probe()?;
+    verified.store(true, Ordering::Release);
+    Ok(())
+}
+
+fn probe_user_namespace() -> Result<(), HostDiagnostic> {
     let bwrap_path = match get_bwrap_path() {
         Some(p) => p,
         None => {
@@ -293,6 +313,44 @@ pub fn version() -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+/// Read-only system directories or their usrmerge aliases.
+#[derive(Debug)]
+enum SystemDir {
+    Bind(PathBuf),
+    UsrAlias { path: PathBuf, target: PathBuf },
+}
+
+static SYSTEM_DIRS: OnceLock<Vec<SystemDir>> = OnceLock::new();
+
+fn inspect_system_dirs(root: &Path) -> Vec<SystemDir> {
+    let usr = root.join("usr");
+    let usr_is_dir = std::fs::symlink_metadata(&usr).is_ok_and(|m| m.is_dir());
+    ["usr", "lib", "lib64", "bin", "sbin"]
+        .into_iter()
+        .filter_map(|name| {
+            let host_path = root.join(name);
+            let path = Path::new("/").join(name);
+            if name != "usr"
+                && usr_is_dir
+                && std::fs::symlink_metadata(&host_path).is_ok_and(|m| m.is_symlink())
+                && let Ok(target) = std::fs::read_link(&host_path)
+                && target.to_str().is_some()
+                && let relative = target.strip_prefix("/").unwrap_or(&target)
+                && relative.starts_with("usr")
+                && relative
+                    .components()
+                    .all(|part| matches!(part, Component::Normal(_)))
+                && let Ok(resolved) = root.join(relative).canonicalize()
+                && resolved == root.join(relative)
+                && resolved.is_dir()
+            {
+                return Some(SystemDir::UsrAlias { path, target });
+            }
+            host_path.exists().then_some(SystemDir::Bind(path))
+        })
+        .collect()
+}
+
 /// Builder for constructing bwrap command arguments.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -347,6 +405,45 @@ impl BwrapCommand {
     // ─────────────────────────────────────────────────────────────────────
     // Bind mounts
     // ─────────────────────────────────────────────────────────────────────
+
+    /// Recreate an alias within the sandbox without adding a mount.
+    pub fn symlink(&mut self, target: &Path, path: &Path) -> &mut Self {
+        self.args.push("--symlink".into());
+        self.args.push(target.to_string_lossy().into_owned());
+        self.args.push(path.to_string_lossy().into_owned());
+        self
+    }
+
+    pub(crate) fn with_system_dirs(&mut self, extra_destinations: &[&Path]) -> &mut Self {
+        let dirs = SYSTEM_DIRS.get_or_init(|| inspect_system_dirs(Path::new("/")));
+        self.add_system_dirs(dirs, extra_destinations)
+    }
+
+    fn add_system_dirs(&mut self, dirs: &[SystemDir], extra_destinations: &[&Path]) -> &mut Self {
+        for dir in dirs {
+            match dir {
+                SystemDir::Bind(path) => self.ro_bind(path, path),
+                SystemDir::UsrAlias { path, target } => {
+                    let absolute_target = Path::new("/").join(target);
+                    // An explicit mount on either side can change one view but not
+                    // the other. Keep independent binds when that is possible.
+                    let conflicts = extra_destinations.iter().any(|dest| {
+                        !dest.is_absolute()
+                            || dest.components().any(|part| part == Component::ParentDir)
+                            || [path.as_path(), &absolute_target]
+                                .iter()
+                                .any(|alias| dest.starts_with(alias) || alias.starts_with(dest))
+                    });
+                    if conflicts {
+                        self.ro_bind(path, path)
+                    } else {
+                        self.symlink(target, path)
+                    }
+                }
+            };
+        }
+        self
+    }
 
     /// Add read-only bind mount.
     pub fn ro_bind(&mut self, src: impl AsRef<Path>, dest: impl AsRef<Path>) -> &mut Self {
@@ -545,12 +642,10 @@ pub fn build_shim_command(
     // =========================================================================
     // Mount system directories (read-only)
     // =========================================================================
-    bwrap
-        .ro_bind_if_exists("/usr", "/usr")
-        .ro_bind_if_exists("/lib", "/lib")
-        .ro_bind_if_exists("/lib64", "/lib64")
-        .ro_bind_if_exists("/bin", "/bin")
-        .ro_bind_if_exists("/sbin", "/sbin");
+    let extra_destinations: Vec<_> = std::iter::once(layout.home_dir())
+        .chain(shim_path.parent())
+        .collect();
+    bwrap.with_system_dirs(&extra_destinations);
 
     // =========================================================================
     // Mount devices
@@ -652,6 +747,84 @@ pub fn build_shim_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_namespace_probe_retries_failures_and_caches_success() {
+        let verified = AtomicBool::new(false);
+        let result = verify_user_namespace(&verified, || {
+            Err(HostDiagnostic::new("unavailable", "probe failed"))
+        });
+        assert!(result.is_err());
+        assert!(!verified.load(Ordering::Acquire));
+
+        verify_user_namespace(&verified, || Ok(())).unwrap();
+        assert!(verified.load(Ordering::Acquire));
+        verify_user_namespace(&verified, || panic!("successful probe must be cached")).unwrap();
+    }
+
+    #[test]
+    fn inspect_system_dirs_distinguishes_usrmerge_aliases_from_binds() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for name in ["usr/lib", "usr/bin", "opt/tools"] {
+            fs::create_dir_all(root.join(name)).unwrap();
+        }
+        symlink("usr/lib", root.join("lib")).unwrap();
+        symlink("/usr/bin", root.join("bin")).unwrap();
+        symlink("opt/tools", root.join("sbin")).unwrap();
+        symlink("usr/lib64", root.join("lib64")).unwrap();
+
+        let dirs = inspect_system_dirs(&root);
+        assert!(
+            matches!(
+                dirs.as_slice(),
+                [SystemDir::Bind(usr), SystemDir::UsrAlias { path: lib, target: lib_target },
+                 SystemDir::UsrAlias { path: bin, target: bin_target }, SystemDir::Bind(sbin)]
+                if usr == Path::new("/usr")
+                    && lib == Path::new("/lib") && lib_target == Path::new("usr/lib")
+                    && bin == Path::new("/bin") && bin_target == Path::new("/usr/bin")
+                    && sbin == Path::new("/sbin")
+            ),
+            "unexpected system directories: {dirs:?}"
+        );
+    }
+
+    #[test]
+    fn add_system_dirs_uses_binds_when_mount_destinations_overlap_aliases() {
+        let dirs = [
+            SystemDir::Bind("/usr".into()),
+            SystemDir::UsrAlias {
+                path: "/lib".into(),
+                target: "usr/lib".into(),
+            },
+        ];
+
+        let mut bwrap = BwrapCommand::new();
+        bwrap.add_system_dirs(&dirs, &[Path::new("/usr/libexec"), Path::new("/lib64")]);
+        assert_eq!(
+            bwrap.get_args(),
+            ["--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib"]
+        );
+
+        for destination in [
+            "/lib/extra",
+            "/usr/lib/extra",
+            "/usr",
+            "relative",
+            "/tmp/../lib",
+        ] {
+            let mut bwrap = BwrapCommand::new();
+            bwrap.add_system_dirs(&dirs, &[Path::new(destination)]);
+            assert_eq!(
+                bwrap.get_args(),
+                ["--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib"],
+                "destination: {destination}"
+            );
+        }
+    }
 
     #[test]
     fn test_bwrap_available() {
