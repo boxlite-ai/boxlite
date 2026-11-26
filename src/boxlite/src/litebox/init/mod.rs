@@ -222,6 +222,13 @@ impl BoxBuilder {
     pub(crate) async fn build(self) -> BoxliteResult<BuiltBox> {
         use std::time::Instant;
 
+        // Do not cold-boot over an imported checkpoint's disk.
+        if self.state.status != BoxStatus::Running && self.state.pending_memory_restore {
+            return Err(BoxliteError::Unsupported(
+                "checkpoint restore pipeline is not yet wired in BoxBuilder".into(),
+            ));
+        }
+
         // Reattach must remain available to stop a legacy shim. Only a new VM
         // consumes stored headers to build its proxy configuration.
         if self.state.status != BoxStatus::Running {
@@ -357,6 +364,56 @@ mod plan_tests {
     use crate::experimental::ExperimentalFeatures;
     use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
     use crate::pipeline::ExecutionMode;
+
+    #[tokio::test]
+    async fn pending_memory_restore_blocks_cold_boot() {
+        use crate::litebox::config::ContainerRuntimeConfig;
+        use crate::runtime::{id::BoxIDMint, options::BoxliteOptions, rt_impl::RuntimeImpl};
+
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let id = BoxIDMint::mint();
+        let disk = runtime
+            .layout
+            .box_layout(id.as_str(), false)
+            .unwrap()
+            .disk_path();
+        let config = BoxConfig {
+            box_home: runtime.layout.boxes_dir().join(id.as_str()),
+            id: id.clone(),
+            name: None,
+            created_at: chrono::Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: crate::runtime::types::ContainerID::new(),
+            },
+            options: crate::BoxOptions {
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+        };
+        std::fs::create_dir_all(disk.parent().unwrap()).unwrap();
+        std::fs::write(&disk, b"imported disk").unwrap();
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Configured;
+        state.pending_memory_restore = true;
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        let result = BoxBuilder::new(runtime.clone(), config, state)
+            .unwrap()
+            .build()
+            .await;
+
+        assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
+        let (_, after) = runtime.box_manager.box_by_id(&id).unwrap().unwrap();
+        assert_eq!(after.status, BoxStatus::Configured);
+        assert!(after.pending_memory_restore);
+        assert_eq!(std::fs::read(&disk).unwrap(), b"imported disk");
+    }
 
     #[tokio::test]
     async fn required_headers_activation_preserves_stored_state() {

@@ -46,6 +46,14 @@ The main entry point for creating and managing Boxes. Holds all runtime state pr
 - Runtime-wide metrics collection
 - Filesystem layout management
 
+For v8 memory checkpoint archives, the runtime requires a trusted import, a matching host
+platform, and a manifest with a container disk checksum before extracting archive payloads.
+It verifies the extracted checksums and VM state size before staging the checkpoint in a
+`Configured` box with `pending_memory_restore = true`. On restart, `recover_boxes` preserves
+pre-spawn checkpoints for retry. If the shim is verified live, recovery adopts it and clears
+the pending flag without deleting its files. If the shim spawned but is no longer alive,
+`clear_aborted_checkpoint` clears the flag and removes the staged checkpoint files.
+
 **State architecture:**
 
 ```text

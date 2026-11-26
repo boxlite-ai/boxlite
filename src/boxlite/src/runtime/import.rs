@@ -8,20 +8,29 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::LiteBox;
 use crate::litebox::archive::{
-    ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, PUBLISHED_PORTS_ARCHIVE_VERSION,
-    extract_archive, move_file, sha256_file,
+    ArchiveManifest, CHECKPOINT_DIRNAME, GUEST_ROOTFS_FILENAME, MAX_SUPPORTED_VERSION,
+    MEMORY_CHECKPOINT_ARCHIVE_VERSION, MemoryCheckpointArchiveMetadata,
+    PUBLISHED_PORTS_ARCHIVE_VERSION, VMSTATE_FILENAME, current_checkpoint_platform,
+    extract_archive_with_manifest, move_file, sha256_file,
 };
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::options::{
-    ArchiveImportPolicy, BoxArchive, BoxOptions, RootfsSpec, normalize_legacy_ports,
+    ArchiveImportPolicy, BoxArchive, BoxOptions, NetworkMode, OutboundNetworkConfig, RootfsSpec,
+    normalize_legacy_ports,
 };
 use crate::runtime::rt_impl::RuntimeImpl;
-use crate::runtime::types::BoxStatus;
+use crate::runtime::types::{BoxStatus, ContainerID};
+use crate::vmm::VmmKind;
+
+#[cfg(test)]
+use crate::litebox::archive::MANIFEST_FILENAME;
 
 /// Import a box from a `.boxlite` archive.
 ///
 /// Creates a new box with a new ID from archived disk images and
-/// configuration. The imported box starts in `Stopped` state.
+/// configuration. Disk-only archives start in `Stopped` state; full memory
+/// checkpoint archives (v8) start in `Configured` state with
+/// `pending_memory_restore = true`.
 pub(crate) async fn import_box(
     runtime: &Arc<RuntimeImpl>,
     archive: BoxArchive,
@@ -36,39 +45,125 @@ pub(crate) async fn import_box(
         )));
     }
 
+    let import_policy = archive.import_policy();
+
     // Phase 1: Extract and validate archive (blocking I/O).
     let layout = runtime.layout.clone();
-    let (manifest, temp_dir) =
-        tokio::task::spawn_blocking(move || extract_and_validate(&archive_path, &layout))
-            .await
-            .map_err(|e| {
-                BoxliteError::Internal(format!("Import extraction task panicked: {}", e))
-            })??;
+    let (manifest, temp_dir) = tokio::task::spawn_blocking(move || {
+        extract_and_validate_with_policy(&archive_path, &layout, import_policy)
+    })
+    .await
+    .map_err(|e| BoxliteError::Internal(format!("Import extraction task panicked: {}", e)))??;
 
-    let options = options_from_manifest(&manifest, archive.import_policy())?;
+    let options = options_from_manifest(&manifest, import_policy)?;
 
-    // Phase 2: Validate disks and install into a staging directory (blocking I/O).
+    let memory_checkpoint = manifest
+        .memory_checkpoint
+        .as_ref()
+        .map(|mem| {
+            let container_id = validate_memory_checkpoint_import(mem, &options)?;
+            let outbound_policy = mem.outbound_disabled.then_some(OutboundNetworkConfig {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            });
+            Ok::<_, BoxliteError>((container_id, outbound_policy))
+        })
+        .transpose()?;
+
+    // Phase 2: Validate disks (and checkpoint artifacts if present) and install
+    // into a staging directory (blocking I/O).
     // The staging dir lives inside temp_dir; provision_box will rename it.
     let staging_dir = temp_dir.path().join("staging");
     let temp_path = temp_dir.path().to_path_buf();
     let staging_clone = staging_dir.clone();
-    tokio::task::spawn_blocking(move || install_disks(&temp_path, &staging_clone))
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
+    let has_memory_checkpoint = memory_checkpoint.is_some();
+    tokio::task::spawn_blocking(move || {
+        install_disks(&temp_path, &staging_clone)?;
+        if has_memory_checkpoint {
+            install_checkpoint_artifacts(&temp_path, &staging_clone)?;
+        }
+        Ok::<(), BoxliteError>(())
+    })
+    .await
+    .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
 
-    let litebox = runtime
-        // An archive carries the box's options but not what its image resolved
-        // to, so an imported box has no record until one is rebuilt.
-        .provision_box(staging_dir, name, options, BoxStatus::Stopped, None, None)
-        .await?;
+    let litebox = if let Some((container_id, outbound_policy)) = memory_checkpoint {
+        runtime
+            .provision_box_with_restore(
+                staging_dir,
+                name,
+                options,
+                BoxStatus::Configured,
+                None,
+                None,
+                Some(container_id),
+                outbound_policy,
+            )
+            .await?
+    } else {
+        runtime
+            // An archive carries the box's options but not what its image resolved
+            // to, so an imported box has no record until one is rebuilt.
+            .provision_box(staging_dir, name, options, BoxStatus::Stopped, None, None)
+            .await?
+    };
 
     tracing::info!(
         box_id = %litebox.id(),
+        has_memory_checkpoint,
         elapsed_ms = t0.elapsed().as_millis() as u64,
         "Imported box from archive"
     );
 
     Ok(litebox)
+}
+
+fn validate_memory_checkpoint_policy_and_platform(
+    mem: &MemoryCheckpointArchiveMetadata,
+    policy: ArchiveImportPolicy,
+) -> BoxliteResult<()> {
+    if policy != ArchiveImportPolicy::Trusted {
+        return Err(BoxliteError::Unsupported(
+            "full memory checkpoint archives cannot be imported from untrusted uploads".into(),
+        ));
+    }
+
+    let current_platform = current_checkpoint_platform().ok_or_else(|| {
+        BoxliteError::Unsupported(
+            "full memory checkpoint restore is only supported on macos-aarch64-hvf and linux-x86_64-kvm".into(),
+        )
+    })?;
+    if mem.platform != current_platform {
+        return Err(BoxliteError::Unsupported(format!(
+            "memory checkpoint platform '{}' is incompatible with host platform '{}'",
+            mem.platform, current_platform
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_memory_checkpoint_import(
+    mem: &MemoryCheckpointArchiveMetadata,
+    options: &BoxOptions,
+) -> BoxliteResult<ContainerID> {
+    if options.advanced.engine.unwrap_or_default() != VmmKind::Libkrun {
+        return Err(BoxliteError::Unsupported(
+            "full memory checkpoint restore requires the libkrun engine".into(),
+        ));
+    }
+    if options.advanced.nested_virtualization {
+        return Err(BoxliteError::Unsupported(
+            "full memory checkpoint restore does not support nested virtualization".into(),
+        ));
+    }
+
+    ContainerID::parse(&mem.container_id).ok_or_else(|| {
+        BoxliteError::Storage(format!(
+            "Invalid container_id in memory checkpoint manifest: {:?}",
+            mem.container_id
+        ))
+    })
 }
 
 /// Read the persisted configuration, falling back to the v1/v2 image field.
@@ -137,32 +232,54 @@ fn rejected_upload(subject: &str) -> BoxliteError {
 }
 
 /// Extract archive, parse manifest, verify checksums.
+#[cfg(test)]
 fn extract_and_validate(
     archive_path: &Path,
     layout: &crate::runtime::layout::FilesystemLayout,
 ) -> BoxliteResult<(ArchiveManifest, tempfile::TempDir)> {
-    let temp_dir = tempfile::tempdir_in(layout.temp_dir())
-        .map_err(|e| BoxliteError::Storage(format!("Failed to create temp directory: {}", e)))?;
+    extract_and_validate_with_policy(archive_path, layout, ArchiveImportPolicy::Trusted)
+}
 
-    extract_archive(archive_path, temp_dir.path())?;
-
-    let manifest_path = temp_dir.path().join(MANIFEST_FILENAME);
-    if !manifest_path.exists() {
-        return Err(BoxliteError::Storage(
-            "Invalid archive: manifest.json not found".to_string(),
-        ));
-    }
-
-    let manifest_json = std::fs::read_to_string(&manifest_path)?;
-    let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
-        .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
-
+fn validate_archive_manifest(
+    manifest: &ArchiveManifest,
+    policy: ArchiveImportPolicy,
+) -> BoxliteResult<()> {
     if manifest.version > MAX_SUPPORTED_VERSION {
         return Err(BoxliteError::Storage(format!(
             "Unsupported archive version {} (max supported: {}). Upgrade boxlite.",
             manifest.version, MAX_SUPPORTED_VERSION
         )));
     }
+
+    if (manifest.version == MEMORY_CHECKPOINT_ARCHIVE_VERSION)
+        != manifest.memory_checkpoint.is_some()
+    {
+        return Err(BoxliteError::Storage(
+            "Invalid manifest: memory_checkpoint is required in v8 and forbidden in older versions"
+                .into(),
+        ));
+    }
+    if let Some(ref mem) = manifest.memory_checkpoint {
+        if manifest.container_disk_checksum.is_empty() {
+            return Err(BoxliteError::Storage(
+                "Invalid manifest: memory checkpoints require a container disk checksum".into(),
+            ));
+        }
+        validate_memory_checkpoint_policy_and_platform(mem, policy)?;
+    }
+    Ok(())
+}
+
+/// Validate the manifest before extracting and hashing the disk members.
+fn extract_and_validate_with_policy(
+    archive_path: &Path,
+    layout: &crate::runtime::layout::FilesystemLayout,
+    policy: ArchiveImportPolicy,
+) -> BoxliteResult<(ArchiveManifest, tempfile::TempDir)> {
+    let (manifest, temp_dir) =
+        extract_archive_with_manifest(archive_path, &layout.temp_dir(), |manifest| {
+            validate_archive_manifest(manifest, policy)
+        })?;
 
     let extracted_container = temp_dir.path().join(disk_filenames::CONTAINER_DISK);
     if !extracted_container.exists() {
@@ -179,6 +296,47 @@ fn extract_and_validate(
             return Err(BoxliteError::Storage(format!(
                 "Container disk checksum mismatch: expected {}, got {}",
                 manifest.container_disk_checksum, actual
+            )));
+        }
+    }
+
+    if let Some(ref mem) = manifest.memory_checkpoint {
+        let extracted_vmstate = temp_dir.path().join(VMSTATE_FILENAME);
+        if !extracted_vmstate.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "Invalid archive: {} not found",
+                VMSTATE_FILENAME
+            )));
+        }
+        ensure_within_extraction_dir(&extracted_vmstate, temp_dir.path())?;
+        let vmstate_size = std::fs::metadata(&extracted_vmstate)?.len();
+        if vmstate_size != mem.vmstate_size_bytes {
+            return Err(BoxliteError::Storage(format!(
+                "VM state size mismatch: expected {}, got {}",
+                mem.vmstate_size_bytes, vmstate_size
+            )));
+        }
+        let actual_vmstate = sha256_file(&extracted_vmstate)?;
+        if actual_vmstate != mem.vmstate_checksum {
+            return Err(BoxliteError::Storage(format!(
+                "VM state checksum mismatch: expected {}, got {}",
+                mem.vmstate_checksum, actual_vmstate
+            )));
+        }
+
+        let extracted_guest_rootfs = temp_dir.path().join(GUEST_ROOTFS_FILENAME);
+        if !extracted_guest_rootfs.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "Invalid archive: {} not found",
+                GUEST_ROOTFS_FILENAME
+            )));
+        }
+        ensure_within_extraction_dir(&extracted_guest_rootfs, temp_dir.path())?;
+        let actual_guest_rootfs = sha256_file(&extracted_guest_rootfs)?;
+        if actual_guest_rootfs != mem.guest_rootfs_checksum {
+            return Err(BoxliteError::Storage(format!(
+                "Guest rootfs checksum mismatch: expected {}, got {}",
+                mem.guest_rootfs_checksum, actual_guest_rootfs
             )));
         }
     }
@@ -209,6 +367,26 @@ fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
         &extracted_container,
         &disks_dir.join(disk_filenames::CONTAINER_DISK),
     )?;
+
+    Ok(())
+}
+
+/// Validate and stage memory checkpoint artifacts into box_home/checkpoint/.
+fn install_checkpoint_artifacts(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
+    let checkpoint_dir = box_home.join(CHECKPOINT_DIRNAME);
+    std::fs::create_dir_all(&checkpoint_dir).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to create checkpoint directory {}: {}",
+            checkpoint_dir.display(),
+            e
+        ))
+    })?;
+
+    for filename in [VMSTATE_FILENAME, GUEST_ROOTFS_FILENAME] {
+        let extracted = temp_dir.join(filename);
+        ensure_within_extraction_dir(&extracted, temp_dir)?;
+        move_file(&extracted, &checkpoint_dir.join(filename))?;
+    }
 
     Ok(())
 }
@@ -268,7 +446,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn v3_manifest(options: BoxOptions) -> ArchiveManifest {
+    pub(super) fn v3_manifest(options: BoxOptions) -> ArchiveManifest {
         ArchiveManifest {
             version: 3,
             box_name: None,
@@ -276,8 +454,8 @@ mod tests {
             box_options: Some(options),
             guest_disk_checksum: String::new(),
             container_disk_checksum: String::new(),
-            exported_at: "2026-07-26T00:00:00Z".to_string(),
             memory_checkpoint: None,
+            exported_at: "2026-07-26T00:00:00Z".to_string(),
         }
     }
 
@@ -546,8 +724,8 @@ mod tests {
             }),
             guest_disk_checksum: String::new(),
             container_disk_checksum: String::new(),
-            exported_at: "2026-01-01T00:00:00Z".into(),
             memory_checkpoint: None,
+            exported_at: "2026-01-01T00:00:00Z".into(),
         };
 
         let error = options_from_manifest(&manifest, ArchiveImportPolicy::Trusted)
@@ -617,7 +795,7 @@ mod tests {
         std::fs::write(&container_path, b"test disk").unwrap();
         let manifest_path = dir.path().join(MANIFEST_FILENAME);
         let archive_path = dir.path().join("box.boxlite");
-        for version in [1, 2, 3, 4, 5, 6, 7, 8] {
+        for version in [1, 2, 3, 4, 5, 6, 7, MAX_SUPPORTED_VERSION + 1] {
             let mut manifest = v3_manifest(BoxOptions {
                 cpus: Some(if version == 6 { 1.5 } else { 2.0 }),
                 ..Default::default()
@@ -626,7 +804,7 @@ mod tests {
             std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
             build_zstd_tar_archive(&archive_path, &manifest_path, &container_path, 1).unwrap();
             let result = extract_and_validate(&archive_path, &layout);
-            if version > crate::litebox::archive::MAX_SUPPORTED_VERSION {
+            if version > MAX_SUPPORTED_VERSION {
                 let error = result.unwrap_err();
                 assert!(error.to_string().contains(&format!("version {version}")));
             } else {
@@ -681,8 +859,8 @@ mod required_import_safety_tests {
                     }),
                     guest_disk_checksum: String::new(),
                     container_disk_checksum: sha256_file(&disk).unwrap(),
-                    exported_at: "2026-11-10T00:00:00Z".into(),
                     memory_checkpoint: None,
+                    exported_at: "2026-11-10T00:00:00Z".into(),
                 };
                 let manifest_path = home.path().join("manifest.json");
                 std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
@@ -779,8 +957,8 @@ mod required_import_safety_tests {
             }),
             guest_disk_checksum: String::new(),
             container_disk_checksum: sha256_file(&disk).unwrap(),
-            exported_at: "2026-11-15T00:00:00Z".into(),
             memory_checkpoint: None,
+            exported_at: "2026-11-15T00:00:00Z".into(),
         };
         let manifest_path = home.path().join("manifest.json");
         std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
@@ -808,3 +986,7 @@ mod required_import_safety_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tests/import_checkpoint.rs"]
+mod import_checkpoint_tests;

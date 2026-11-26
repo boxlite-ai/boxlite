@@ -41,26 +41,21 @@ pub(crate) const FRACTIONAL_CPUS_ARCHIVE_VERSION: u32 = 6;
 pub(crate) const MANAGED_MOUNTS_ARCHIVE_VERSION: u32 = 7;
 
 /// Archive format version carrying full VM memory and device state checkpoint.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const MEMORY_CHECKPOINT_ARCHIVE_VERSION: u32 = 8;
 
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = MANAGED_MOUNTS_ARCHIVE_VERSION;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = MEMORY_CHECKPOINT_ARCHIVE_VERSION;
 
 /// Per-box checkpoint staging directory name under `box_home/`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const CHECKPOINT_DIRNAME: &str = "checkpoint";
 
 /// VM state filename inside v8 archives and `box_home/checkpoint/`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const VMSTATE_FILENAME: &str = "vmstate.krun";
 
 /// Guest rootfs disk filename inside v8 archives and `box_home/checkpoint/`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const GUEST_ROOTFS_FILENAME: &str = "guest-rootfs.ext4";
 
 /// Return the host checkpoint platform identifier if full memory checkpoints are supported.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn current_checkpoint_platform() -> Option<&'static str> {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
@@ -279,7 +274,6 @@ fn append_archive_files<W: Write>(
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Read and validate the leading manifest before creating the extraction directory.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn extract_archive_with_manifest(
     archive_path: &Path,
     temp_root: &Path,
@@ -307,6 +301,7 @@ pub(crate) fn extract_archive_with_manifest(
     Ok((manifest, temp_dir))
 }
 
+#[cfg(test)]
 pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()> {
     unpack_file_members(open_archive(archive_path)?.entries()?, dest_dir)
 }
