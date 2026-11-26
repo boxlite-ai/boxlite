@@ -13,14 +13,24 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/backend"
 	"github.com/boxlite-ai/runner/pkg/common"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func (e *Executor) createBox(ctx context.Context, job *apiclient.Job) (any, error) {
+	ctx, prepareSpan := otel.Tracer("runner").Start(ctx, "job.prepare",
+		trace.WithAttributes(attribute.String("box_id", job.GetResourceId())))
 	var createBoxDto dto.CreateBoxDTO
 	err := e.parsePayload(job.Payload, &createBoxDto)
 	if err != nil {
+		prepareSpan.RecordError(err)
+		prepareSpan.SetStatus(codes.Error, "failed to unmarshal CREATE_BOX payload")
+		prepareSpan.End()
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
+	prepareSpan.End()
 
 	_, daemonVersion, err := e.backend.Create(ctx, createBoxDto)
 	if err != nil {
