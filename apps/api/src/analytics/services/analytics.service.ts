@@ -85,11 +85,12 @@ export class AnalyticsService implements OnApplicationShutdown {
           users: [...new Set([userId, targetUser].filter((id): id is string => !!id))],
           organizations: organizationId ? [organizationId] : [],
         },
+        attributes['ci.runner_allocated_at'] ? new Date(attributes['ci.runner_allocated_at']) : undefined,
       )
     })
   }
 
-  capture(event: Parameters<PostHog['capture']>[0], subjects: AnalyticsSubjects): void {
+  capture(event: Parameters<PostHog['capture']>[0], subjects: AnalyticsSubjects, consentSince?: Date): void {
     const client = this.posthog
     if (
       !client ||
@@ -101,7 +102,7 @@ export class AnalyticsService implements OnApplicationShutdown {
     const occurredAt = event.timestamp ?? new Date()
     this.queue.push(() =>
       this.consent
-        .dispatch(subjects, occurredAt, () =>
+        .dispatch(subjects, consentSince ?? occurredAt, () =>
           client.deliver({
             ...event,
             timestamp: occurredAt,

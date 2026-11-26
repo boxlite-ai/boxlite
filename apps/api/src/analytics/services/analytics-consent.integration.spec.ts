@@ -1,13 +1,15 @@
 /* Copyright 2026 BoxLite AI. SPDX-License-Identifier: AGPL-3.0 */
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { recordBusinessEvent } from '../../common/utils/business-event.util'
 import { AnalyticsService } from './analytics.service'
 import type { TypedConfigService } from '../../config/typed-config.service'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
+import Redis from 'ioredis'
 import { DataSource } from 'typeorm'
 import { ProductAnalyticsConsent1795420800000 } from '../../migrations/pre-deploy/1795420800000-product-analytics-consent-migration'
-import { AnalyticsConsentService } from './analytics-consent.service'
+import { analyticsConsentCacheKey, AnalyticsConsentService } from './analytics-consent.service'
 
 const databaseSuite = process.env.DB_HOST ? describe : describe.skip
 
@@ -15,6 +17,7 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
   const schema = 'analytics_' + randomUUID().replaceAll('-', '')
   const org = randomUUID()
   let observer: DataSource
+  let redis: Redis
   let db: DataSource
   let consent: AnalyticsConsentService
   const options = {
@@ -42,15 +45,30 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     } finally {
       await runner.release()
     }
-    await db.query("INSERT INTO \"user\" VALUES ('creator'), ('member')")
+    await db.query("INSERT INTO \"user\" VALUES ('creator'), ('member'), ('old-notice')")
     await db.query("INSERT INTO organization VALUES ($1,'creator')", [org])
     await db.query("INSERT INTO organization_user VALUES ($1,'member')", [org])
-    consent = new AnalyticsConsentService(db)
+    redis = new Redis({
+      host: process.env.REDIS_HOST ?? '127.0.0.1',
+      port: Number(process.env.REDIS_PORT ?? 6379),
+      keyPrefix: schema + ':',
+      lazyConnect: true,
+      maxRetriesPerRequest: 0,
+      commandTimeout: 1000,
+    })
+    await redis.connect()
+    consent = new AnalyticsConsentService(db, redis)
   })
   beforeEach(async () => {
     await db.query('TRUNCATE product_analytics_consent')
+    await redis.del(
+      analyticsConsentCacheKey('creator', org),
+      analyticsConsentCacheKey('grant', 'creator'),
+      analyticsConsentCacheKey('grant', 'member'),
+    )
   })
   afterAll(async () => {
+    redis?.disconnect()
     if (db?.isInitialized) await db.destroy()
     if (observer?.isInitialized) {
       await observer.query(`DROP SCHEMA "${schema}" CASCADE`)
@@ -69,11 +87,12 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     await delay(3)
     expect(await consent.dispatch(userOnly, new Date(), send)).toBe(true)
     expect(await consent.dispatch(orgOnly, new Date(), send)).toBe(false)
-    expect(await consent.consoleEnabledFrom('member', org)).toBeNull()
+    expect(await consent.consolePreference('member', org)).toMatchObject({ allowed: true, enabledFrom: null })
+    await expect(consent.consolePreference('creator', org)).rejects.toThrow('membership')
     const first = await consent.decide('creator', true)
     expect(await consent.decide('creator', true)).toEqual(first)
     await delay(3)
-    expect(await consent.consoleEnabledFrom('member', org)).toBe(first.decidedAt)
+    expect((await consent.consolePreference('member', org)).enabledFrom).toBe(first.decidedAt)
     expect(await consent.dispatch(both, new Date(), send)).toBe(true)
     expect(await consent.dispatch({ users: ['creator'], organizations: [org, org] }, new Date(), send)).toBe(true)
     expect(await consent.dispatch({ users: [], organizations: [] }, new Date(), send)).toBe(false)
@@ -96,10 +115,97 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     await delay(5)
     await consent.decide('member', true)
     expect(await consent.dispatch(both, during, send)).toBe(false)
-    await db.query("UPDATE product_analytics_consent SET notice_version = 0 WHERE user_id = 'creator'")
-    expect((await consent.preference('creator')).allowed).toBeNull()
-    expect(await consent.dispatch(both, new Date(), send)).toBe(false)
+    await db.query(
+      "INSERT INTO product_analytics_consent (user_id, allowed, notice_version) VALUES ('old-notice',true,0)",
+    )
+    expect((await consent.preference('old-notice')).allowed).toBeNull()
+    expect(await consent.dispatch({ users: ['old-notice'], organizations: [] }, new Date(), send)).toBe(false)
     expect(send).not.toHaveBeenCalled()
+  })
+  it('shares 30-second decisions and coalesces cold reads during concurrent creates', async () => {
+    await consent.decide('creator', true)
+    await consent.decide('member', true)
+    await delay(3)
+    const send = jest.fn(async () => {})
+    const reads = jest.spyOn(db, 'query')
+    try {
+      await Promise.all(Array.from({ length: 32 }, () => consent.dispatch(both, new Date(), send)))
+      expect(reads).toHaveBeenCalledTimes(3)
+      expect(send).toHaveBeenCalledTimes(32)
+      const other = new AnalyticsConsentService(db, redis)
+      await other.dispatch(both, new Date(), send)
+      expect(send).toHaveBeenCalledTimes(33)
+      expect(reads).toHaveBeenCalledTimes(3)
+      const key = analyticsConsentCacheKey('grant', 'creator')
+      expect(await redis.pttl(key)).toBeGreaterThan(0)
+      expect(await redis.pttl(key)).toBeLessThanOrEqual(30_000)
+      await db.query("UPDATE product_analytics_consent SET allowed = false WHERE user_id = 'creator'")
+      await redis.pexpire(key, 1)
+      await delay(5)
+      expect(await other.dispatch(both, new Date(), send)).toBe(false)
+      reads.mockClear()
+      expect(await consent.dispatch(both, new Date(), send)).toBe(false)
+      expect(reads).not.toHaveBeenCalled()
+    } finally {
+      reads.mockRestore()
+    }
+  })
+  it('drops analytics without querying PostgreSQL when Redis is offline', async () => {
+    const offline = redis.duplicate({ lazyConnect: true })
+    const reads = jest.spyOn(db, 'query')
+    const send = jest.fn(async () => {})
+    try {
+      expect(await new AnalyticsConsentService(db, offline).dispatch(both, new Date(), send)).toBe(false)
+      expect(reads).not.toHaveBeenCalled()
+      expect(send).not.toHaveBeenCalled()
+    } finally {
+      offline.disconnect()
+      reads.mockRestore()
+    }
+  })
+  it('sends confirmed runner usage only when the creator consented before allocation', async () => {
+    const received: string[] = []
+    const server = createServer((req, res) => {
+      let body = ''
+      req.on('data', (chunk) => {
+        body += chunk
+      })
+      req.on('end', () => {
+        received.push(body)
+        res.writeHead(200).end('{"status":1}')
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const config: Record<string, string> = {
+      'posthog.apiKey': 'phc_test',
+      'posthog.host': 'http://127.0.0.1:' + (server.address() as AddressInfo).port,
+    }
+    const analytics = new AnalyticsService({ get: (key: string) => config[key] } as TypedConfigService, consent)
+    try {
+      const before = new Date()
+      await delay(5)
+      await consent.decide('creator', true)
+      await delay(5)
+      for (const [boxId, allocatedAt] of [
+        ['before-grant', before],
+        ['after-grant', new Date()],
+      ] as const) {
+        recordBusinessEvent({
+          name: 'cloud.feature.use',
+          outcome: 'success',
+          organizationId: org,
+          correlationId: boxId,
+          feature: { name: 'ci', evidence: 'runner_started', source: 'api', runnerAllocatedAt: allocatedAt },
+        })
+      }
+      await analytics.onApplicationShutdown()
+      expect(received).toHaveLength(1)
+      expect(received[0]).toContain('after-grant')
+      expect(received[0]).not.toContain('before-grant')
+    } finally {
+      await analytics.onApplicationShutdown()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
   it('reserves a database connection during saturation and cancels stalled transfers before later events can send', async () => {
     await consent.decide('member', true)
@@ -137,49 +243,37 @@ databaseSuite('Product analytics consent in PostgreSQL', () => {
     }
   })
 
-  it.each([false, true])('serializes withdrawal with a running transfer (failure %s)', async (fail) => {
+  it('lets withdrawal finish while an already admitted transfer is still running', async () => {
     await consent.decide('creator', true)
     await consent.decide('member', true)
     await delay(3)
     let entered!: () => void
     let finish!: () => void
-    const start = new Promise<void>((resolve) => {
+    const started = new Promise<void>((resolve) => {
       entered = resolve
     })
     const barrier = new Promise<void>((resolve) => {
       finish = resolve
     })
-    const order: string[] = []
-    const delivery = consent
-      .dispatch(both, new Date(), async () => {
-        entered()
-        await barrier
-        order.push('finished')
-        if (fail) throw Error('transport failed')
-      })
-      .catch(() => false)
-    await start
-    const withdrawal = consent.decide('creator', false).then(() => {
-      order.push('withdrawn')
+    const transfer = consent.dispatch(both, new Date(), async () => {
+      entered()
+      await barrier
     })
+    await started
+    const withdrawal = consent.decide('creator', false)
+    let timeout: ReturnType<typeof setTimeout> | undefined
     try {
-      let waiting = false
-      for (let i = 0; i < 100 && !waiting; i++) {
-        const [row] = await observer.query(
-          'SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = $1 AND cardinality(pg_blocking_pids(pid)) > 0) AS waiting',
-          [schema],
-        )
-        waiting = row.waiting
-        if (!waiting) await delay(5)
-      }
-      expect(waiting).toBe(true)
+      await Promise.race([
+        withdrawal,
+        new Promise((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('withdrawal waited for PostHog')), 1500)
+        }),
+      ])
+      expect(await consent.dispatch(both, new Date(), jest.fn())).toBe(false)
     } finally {
+      clearTimeout(timeout)
       finish()
-      await Promise.all([delivery, withdrawal])
+      await Promise.all([transfer, withdrawal])
     }
-    expect(order).toEqual(['finished', 'withdrawn'])
-    const send = jest.fn(async () => {})
-    expect(await consent.dispatch(both, new Date(), send)).toBe(false)
-    expect(send).not.toHaveBeenCalled()
   })
 })

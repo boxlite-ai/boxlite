@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { analyticsConsentCacheKey } from '../analytics/services/analytics-consent.service'
 import { Injectable, Logger } from '@nestjs/common'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
@@ -53,7 +54,7 @@ export class LinkedIdentityService {
       throw new Error(`cannot link ${primaryUserId} to itself`)
     }
 
-    const movedKeyHashes = await this.dataSource.transaction(async (em) => {
+    const movedCacheKeys = await this.dataSource.transaction(async (em) => {
       // Serialise concurrent adoptions of one secondary, so two links
       // racing over the same identity cannot both copy its memberships.
       const secondary = await em
@@ -68,21 +69,20 @@ export class LinkedIdentityService {
       await this.ensurePrimaryUser(em, primaryUserId, secondary)
       const moved = await this.moveMemberships(em, primaryUserId, secondaryUserId)
       const keyHashes = await this.moveApiKeys(em, primaryUserId, secondaryUserId)
-      // Creator changes serialize with in-flight consent checks. Ordinary organization
-      // updates remain compatible with the dispatcher's FOR KEY SHARE lock.
-      await em.query(
-        `UPDATE organization SET "createdBy" = $1 WHERE id IN (
-          SELECT id FROM organization WHERE "createdBy" = $2 ORDER BY id FOR UPDATE
-        )`,
+      const [organizations]: [{ id: string }[], number] = await em.query(
+        'UPDATE organization SET "createdBy" = $1 WHERE "createdBy" = $2 RETURNING id',
         [primaryUserId, secondaryUserId],
       )
 
       this.logger.log(
         `Moved ${moved} membership(s) and ${keyHashes.length} API key(s) from ${secondaryUserId} to ${primaryUserId}`,
       )
-      return keyHashes
+      return [
+        ...keyHashes.map(apiKeyValidationCacheKey),
+        ...organizations.map(({ id }) => analyticsConsentCacheKey('creator', id)),
+      ]
     })
-    await this.forgetCachedOwners(movedKeyHashes)
+    await this.forgetCachedOwners(movedCacheKeys)
   }
 
   /**
@@ -92,15 +92,15 @@ export class LinkedIdentityService {
    * commits: any earlier, a request could read the old owner from the
    * database and cache it again.
    */
-  private async forgetCachedOwners(keyHashes: string[]): Promise<void> {
-    if (keyHashes.length === 0) {
+  private async forgetCachedOwners(keys: string[]): Promise<void> {
+    if (keys.length === 0) {
       return
     }
     try {
-      await this.redis.del(...keyHashes.map(apiKeyValidationCacheKey))
+      await this.redis.del(...keys)
     } catch (error) {
       // The entries expire on their own; the move has committed and stands.
-      this.logger.error('Could not drop moved API keys from the validation cache:', error)
+      this.logger.error('Could not drop cached owners after account link:', error)
     }
   }
 

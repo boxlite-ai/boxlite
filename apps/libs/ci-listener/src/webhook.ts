@@ -5,13 +5,6 @@ import { Json, StateConflict, StateCorrupt } from './state/database'
 import { parseResourceLabels } from './resource-labels'
 import { JobIdentityConflict, JobObservation, recordJobObservation } from './job-observation'
 
-const executionStartedAt = (value: unknown): string | undefined =>
-  typeof value === 'string' &&
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value) &&
-  Number.isFinite(Date.parse(value))
-    ? new Date(value).toISOString()
-    : undefined
-
 export interface WakeHint {
   installationId: number
   accountId: number
@@ -93,7 +86,8 @@ export function ciWakeHint(event: string, value: unknown): WakeHint | null {
   return { installationId: body.installation.id, accountId: body.installation.account.id, repositoryId: 0, job: null }
 }
 export interface VerifiedWebhook {
-  observation?: JobObservation & { startedAt?: string; runnerName?: string }
+  queuedAt?: string
+  observation?: JobObservation
   /** Trusted host provenance; verifyWebhook never reads this field from the body. */
   application?: string
   delivery: string
@@ -123,9 +117,15 @@ export function verifyWebhook(
     throw new WebhookError(400, 'Invalid webhook JSON')
   }
   const hint = ciWakeHint(event, value)
-  const runnerName = (value as { workflow_job?: { runner_name?: unknown } } | null)?.workflow_job?.runner_name
+  const job = record(value) && record(value.workflow_job) ? value.workflow_job : undefined
+  const queuedAt = job?.status === 'queued' && typeof job.created_at === 'string' ? job.created_at : undefined
   return hint
     ? {
+        ...(queuedAt &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(queuedAt) &&
+        Number.isFinite(Date.parse(queuedAt))
+          ? { queuedAt }
+          : {}),
         delivery: input.delivery.toLowerCase(),
         digest: createHash('sha256').update(raw).digest('hex'),
         event,
@@ -135,11 +135,6 @@ export function verifyWebhook(
               observation: {
                 status: (value as { workflow_job: { status: JobObservation['status'] } }).workflow_job.status,
                 labels: [...(value as { workflow_job: { labels: string[] } }).workflow_job.labels],
-                runnerName:
-                  typeof runnerName === 'string' && /^ci-jit-[a-f0-9]{32}$/.test(runnerName) ? runnerName : undefined,
-                startedAt: executionStartedAt(
-                  (value as { workflow_job: { started_at?: unknown } }).workflow_job.started_at,
-                ),
                 runner: (value as { workflow_job: { runner_id?: number | null } }).workflow_job.runner_id || null,
               },
             }
@@ -178,11 +173,7 @@ export class ListenerInbox {
   }
   async receive(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'> {
     const observation = notification.observation
-      ? {
-          status: notification.observation.status,
-          runner: notification.observation.runner,
-          labels: [...notification.observation.labels],
-        }
+      ? { ...notification.observation, labels: [...notification.observation.labels] }
       : undefined
     const { digest, event, delivery } = notification,
       supplied = notification.hint

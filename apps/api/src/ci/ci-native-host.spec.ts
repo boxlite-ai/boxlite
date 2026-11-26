@@ -538,6 +538,31 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
       job: { id: 50, runId: 40 },
     })
   })
+  it('records each queued request receipt with a common request key and no runner lookup', async () => {
+    const recorded: Readonly<Record<string, string>>[] = []
+    const stop = subscribeBusinessEvents((event) => recorded.push(event))
+    const queued = { ...notification(), queuedAt: '2026-11-01T00:00:00Z' }
+    try {
+      await host.accept(queued)
+      await host.accept(queued)
+      await host.accept({
+        ...queued,
+        delivery: randomUUID(),
+        observation: { status: 'completed', runner: 20, labels: ['boxlite'] },
+      })
+      expect(recorded).toHaveLength(2)
+      expect(recorded[0]).toMatchObject({
+        'event.name': 'cloud.ci.request',
+        'event.outcome': 'requested',
+        'organization.id': org,
+        'event.timestamp': new Date(queued.queuedAt).toISOString(),
+      })
+      expect(recorded[1]['correlation.id']).toBe(recorded[0]['correlation.id'])
+      expect(recorded[1]['event.id']).not.toBe(recorded[0]['event.id'])
+    } finally {
+      stop()
+    }
+  })
   it('rejects a conflicting event body without replacing the original receipt', async () => {
     const event = notification()
     await host.accept(event)
@@ -772,103 +797,42 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
       warn.mockRestore()
     }
   })
-  it.each([
-    ['in_progress', 301, 30, true],
-    ['completed', 301, 30, true],
-    ['queued', 301, 30, false],
-    ['in_progress', 302, 30, false],
-    ['completed', 301, 31, false],
-  ] as const)(
-    'attributes signed %s on runner %i in repository %i to its Scale Set Box',
-    async (status, runner, repositoryId, expected) => {
-      const scope = (await discover()).scopes.find(
-        (s) => s.runners.kind === 'repository' && s.runners.repository.id === 30,
-      )!
-      const journal = new ExecutionJournal(store.state)
-      const key = await journal.define(lease, scope)
-      let row = (await journal.reserve(lease, key, null, testCapacity({ account: 1, tenant: 1 }), {
-        labels: ['boxlite'],
-        scaleSet: 9,
-      }))!
-      row = await journal.advance(lease, row.record.key, row.record.version, {
-        box: { phase: 'requested', id: null },
-        effect: { id: randomUUID(), kind: 'box-create' },
-      })
-      row = await journal.advance(lease, row.record.key, row.record.version, {
-        box: { phase: 'known', id: 'execution-box' },
-      })
-      row = await journal.advance(lease, row.record.key, row.record.version, {
-        runner: { phase: 'requested', id: null },
-        effect: { id: randomUUID(), kind: 'runner-register' },
-      })
-      row = await journal.advance(lease, row.record.key, row.record.version, {
-        runner: { phase: 'known', id: 301 },
-      })
-      const recorded = jest.spyOn(host, 'observeExecution')
-      const startedAt = '2026-11-01T00:00:00.000Z'
-      const event = notification()
-      event.observation = { status, labels: ['boxlite'], runner, runnerName: row.value.name, startedAt }
-      event.hint.repositoryId = repositoryId
-      let release!: () => void
-      const resume = new Promise<void>((resolve) => {
-        release = resolve
-      })
-      const read = store.state.read.bind(store.state)
-      const lookup = jest.spyOn(store.state, 'read').mockImplementationOnce(async (...args) => {
-        await resume
-        return read(...args)
-      })
-      try {
-        expect(await host.accept(event)).toBe('stored')
-        expect(await host.accept(event)).toBe('duplicate')
-        expect(lookup).toHaveBeenCalledTimes(status === 'queued' ? 0 : 1)
-        expect(recorded).not.toHaveBeenCalled()
-      } finally {
-        release()
-        await host.close()
-        lookup.mockRestore()
-      }
-      expect(recorded).toHaveBeenCalledTimes(expected ? 1 : 0)
-      if (expected)
-        expect(recorded).toHaveBeenCalledWith({
-          organization: org,
-          installation: 10,
-          boxId: 'execution-box',
-          startedAt,
-          job: { repository: repositoryId, run: 40, job: 50 },
-        })
-    },
-  )
-
-  it('maps actual execution evidence to replay-stable Cloud events without repository metadata', () => {
-    const observed: Readonly<Record<string, string>>[] = []
-    const dispose = subscribeBusinessEvents((event) => observed.push(event))
+  it('records each runner status separately under its Box without GitHub job identifiers', () => {
+    const recorded: Readonly<Record<string, string>>[] = []
+    const stop = subscribeBusinessEvents((attributes) => recorded.push(attributes))
     const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => {})
     try {
-      const evidence = {
+      const event = {
+        event: 'ci-runner-status',
+        status: 'started',
+        level: 'info',
+        scope: 'scope/internal',
         organization: org,
         installation: 10,
-        boxId: 'CloudBox1234',
-        job: { repository: 30, run: 40, job: 50 },
-        startedAt: '2026-11-01T00:00:00.000Z',
-      }
-      host.observeExecution(evidence)
-      host.observeExecution(evidence)
-      host.observeExecution({ ...evidence, job: { ...evidence.job, job: 51 } })
-      expect(observed[0]).toMatchObject({
+        label: 'boxlite',
+        scaleSet: 1,
+        messageId: 2,
+        boxId: 'box-1',
+        allocatedAt: 1000,
+      } as const
+      host.observe(event)
+      host.observe({ ...event, messageId: 3 })
+      host.observe({ ...event, status: 'completed' })
+      expect(recorded[0]).toMatchObject({
         'event.name': 'cloud.feature.use',
         'event.outcome': 'success',
         'organization.id': org,
-        'correlation.id': evidence.boxId,
-        'event.timestamp': evidence.startedAt,
+        'correlation.id': 'box-1',
         'feature.name': 'ci',
-        'feature.evidence': 'executed_job',
+        'feature.evidence': 'runner_started',
+        'feature.source': 'api',
+        'ci.runner_allocated_at': new Date(event.allocatedAt).toISOString(),
       })
-      expect(observed[1]['event.id']).toBe(observed[0]['event.id'])
-      expect(observed[2]['event.id']).not.toBe(observed[0]['event.id'])
-      expect(JSON.stringify(observed)).not.toMatch(/repository|installation|binding|actor/)
+      expect(new Set(recorded.map((entry) => entry['event.id'])).size).toBe(3)
+      expect(recorded[2]).toMatchObject({ 'feature.evidence': 'runner_completed', 'correlation.id': 'box-1' })
+      expect(JSON.stringify(recorded)).not.toMatch(/worker\/first|repository|installation|scope\/internal|jobId/)
     } finally {
-      dispose()
+      stop()
       log.mockRestore()
     }
   })

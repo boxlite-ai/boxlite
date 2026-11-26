@@ -936,7 +936,7 @@ It uses `cloud_metrics_schema='1'` and the same occurrence UUID/time in PostHog 
 | ------------ | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | SSH          | Accepted signed key or certificate, once per authenticated connection                                                       | Key probes, denied logins, SSH configuration                                |
 | Tunnel       | Accepted CONNECT with a Runner connection, HTTP 101, or guest HTTP 2xx/3xx                                                  | Tunnel preparation, authorization failures, failed upstream requests        |
-| CI           | Signed GitHub running/completed observation with `started_at`, matched to its scoped JIT allocation by Runner ID and name | Worker creation, queued jobs, external runners, ambiguous assignments       |
+| CI           | Each Scale Set `JobStarted` or `JobCompleted` for a managed JIT runner (`runner_started`, `runner_completed`) | Worker creation, queued jobs, external runners, ambiguous assignments       |
 | Custom image | Successful create/start job with stored `imageIsOrgOwned=true`                                                              | Admission alone, failed jobs, curated images, unknown historical provenance |
 | Checkpoint | Archive upload committed as ready (`archive_ready`), or an owned import receipt committed as completed (`box_restored`) | Create clicks, queued exports, failed or cancelled imports and replay |
 
@@ -975,10 +975,14 @@ The Cloud reporter uses a dedicated HTTP transport, a one-second flush timer and
 Forwarding and SSH authentication never await uploads; shutdown cancels uploads instead of flushing them synchronously.
 Overflow and collection failures have diagnostics, and failed uploads count observations as delivery-unconfirmed.
 API rejection counts are logged separately. Memory queues are volatile; process/Guest exits, failed drains and resource deletion can lose evidence.
-CI execution can be missed if no valid source timestamp arrives before its worker retires.
-CI observers run during existing reconciliation and cannot propagate telemetry errors into worker control.
+Each observed CI status has its own event ID, including redeliveries. Count distinct Box correlation IDs for runner adoption.
+Signed BoxLite queued webhook receipts emit `cloud.ci.request` with the original creation time and an opaque request correlation ID.
+Count distinct request correlation IDs for demand. A request does not identify the Box that will execute work.
+The event timestamp is the time the listener observed work. To exclude work predating consent even on delayed messages,
+the organization creator's current grant must predate or coincide with runner allocation (`ci.runner_allocated_at`).
+A missing Scale Set message, a retired allocation, or process exit can lose a runner observation.
 
-Count distinct `event.id`, because job/CI recovery can observe the same occurrence again.
+Count distinct `event.id` for observations. For CI, distinct Box correlation IDs measure used runners across repeated statuses.
 Adoption is the intersection of feature-using organizations with an explicitly eligible, active organization cohort.
 Do not label all organizations eligible, or an absent event as confirmed non-use.
 These events do not supply a capability/entitlement snapshot or a customer/probe organization registry.
@@ -997,6 +1001,7 @@ WHERE event = 'cloud.feature.use'
   AND properties.cloud_metrics_schema = '1'
   AND properties.environment = '<producer-environment>'
   AND properties['event.outcome'] = 'success'
+  AND (feature != 'ci' OR properties['feature.evidence'] IN ('runner_started', 'runner_completed'))
   AND timestamp >= toDateTime('2026-11-01 00:00:00', 'UTC')
   AND timestamp < toDateTime('2026-11-08 00:00:00', 'UTC')
 GROUP BY organization_id, feature
@@ -1039,7 +1044,10 @@ Cloud deployments set `POSTHOG_ENVIRONMENT` to the deployed stage name on both A
 Without the key or host, analytics is disabled while business operations and operational logs continue.
 Product analytics requires a current, explicit personal grant. An organization inherits its recorded creator’s choice. An event that identifies both a person and an organization needs both grants. An unknown subject, an unavailable decision, or an event predating the most recent grant produces no PostHog event. Dashboard activity and Cloud metrics therefore describe the consenting population. Operational logging, metering and functional flag evaluation run independently.
 
-Eligible deliveries use a bounded in-memory queue and one HTTP attempt. Dispatch checks all relevant decisions under shared PostgreSQL row locks that cover the HTTP transfer. Withdrawal updates the same decision, so a successful withdrawal prevents further transfers until a new grant. Saturation and transport failures drop optional events. Retention follows the PostHog project.
+Delivery uses a bounded background queue and one HTTP attempt. An API instance shares concurrent reads for the same subject.
+Redis caches each organization creator and each user's grant time or denial for 30 seconds. A cache miss reads PostgreSQL without an explicit lock; the read finishes before the PostHog transfer.
+Saving a choice invalidates that user's cache entry, and linking accounts invalidates the moved organizations' cached creators. An in-flight transfer may finish after withdrawal. A stale cache entry expires within 30 seconds.
+The Console reads membership and effective consent together when loading organization preferences. A full queue or unavailable Redis, database or transport drops optional analytics. Retention follows the PostHog project.
 
 An Activity consumer needs the PostHog **API origin** (for example `https://us.posthog.com`, distinct
 from an ingestion origin such as `https://us.i.posthog.com`), project ID and a backend-only personal

@@ -61,11 +61,7 @@ export class ConsoleAnalyticsController {
     @AuthContext() actor: Principal,
     @Param('organizationId', ParseUUIDPipe) organizationId: string,
   ) {
-    await this.consent.requireMember(actor.userId, organizationId)
-    return {
-      ...(await this.consent.preference(actor.userId)),
-      enabledFrom: await this.consent.consoleEnabledFrom(actor.userId, organizationId),
-    }
+    return this.consent.consolePreference(actor.userId, organizationId)
   }
 
   @Put('consent')

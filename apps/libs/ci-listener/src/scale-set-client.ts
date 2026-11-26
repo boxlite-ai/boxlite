@@ -82,7 +82,7 @@ function pollMessage(raw: unknown): SetMessage {
   }
   if (!Array.isArray(events)) throw new PollMessageError('message-body', events)
   const available: SetMessage['available'] = []
-  const worked: RunnerIdentity[] = []
+  const worked: SetMessage['worked'] = []
   const settledRequests: RequestId[] = []
   for (const event of events) {
     if (!object(event) || typeof event.messageType !== 'string')
@@ -95,7 +95,11 @@ function pollMessage(raw: unknown): SetMessage {
         typeof event.runnerName === 'string' &&
         /^ci-jit-[a-f0-9]{32}$/.test(event.runnerName)
       )
-        worked.push({ id: event.runnerId, name: event.runnerName })
+        worked.push({
+          id: event.runnerId,
+          name: event.runnerName,
+          status: event.messageType === 'JobStarted' ? 'started' : 'completed',
+        })
       continue
     }
     if (event.messageType !== 'JobAvailable') continue
@@ -220,7 +224,7 @@ export interface SetIdentity {
 export interface SetMessage {
   id: number
   assigned?: number
-  worked: RunnerIdentity[]
+  worked: (RunnerIdentity & { status: 'started' | 'completed' })[]
   settledRequests: RequestId[]
   available: { id: RequestId; owner: string; repository: string; labels: string[] }[]
 }

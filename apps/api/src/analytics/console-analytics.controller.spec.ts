@@ -16,7 +16,7 @@ describe('Console analytics HTTP boundary', () => {
   const consent = {
     decide,
     preference: jest.fn(async () => ({ allowed: true })),
-    consoleEnabledFrom: jest.fn(async () => null),
+    consolePreference: jest.fn(async () => ({ allowed: true, enabledFrom: null })),
     requireMember: jest.fn(async (id, organization) => {
       if (id !== 'member' || organization !== org) throw new ForbiddenException()
     }),

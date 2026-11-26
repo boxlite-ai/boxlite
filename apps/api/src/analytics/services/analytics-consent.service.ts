@@ -1,7 +1,8 @@
 /* Copyright 2026 BoxLite AI. SPDX-License-Identifier: AGPL-3.0 */
+import { InjectRedis } from '@nestjs-modules/ioredis'
 import { ForbiddenException, Injectable } from '@nestjs/common'
-import { DataSource, EntityManager } from 'typeorm'
-
+import Redis from 'ioredis'
+import { DataSource } from 'typeorm'
 import { analyticsNoticeVersion } from '../../../../shared/console-analytics'
 
 export interface AnalyticsSubjects {
@@ -9,41 +10,53 @@ export interface AnalyticsSubjects {
   organizations: string[]
 }
 
-type Decision = { allowed: boolean; notice_version: number; decided_at: Date }
+type Decision = { allowed: boolean | null; notice_version: number | null; decided_at: Date | null }
+type Subject = 'creator' | 'grant'
+const ttlMs = 30_000
+export const analyticsConsentCacheKey = (kind: Subject, id: string) =>
+  `analytics:consent:v${analyticsNoticeVersion}:${kind}:${id}`
+
+function preference(row?: Decision) {
+  const current = row?.allowed === false || (row?.allowed === true && row.notice_version === analyticsNoticeVersion)
+  return {
+    allowed: current ? row.allowed : null,
+    version: analyticsNoticeVersion,
+    decidedAt: current ? row.decided_at!.toISOString() : null,
+  }
+}
 
 @Injectable()
 export class AnalyticsConsentService {
-  constructor(private readonly db: DataSource) {}
+  private readonly pendingReads = new Map<string, Promise<string>>()
+
+  constructor(
+    private readonly db: DataSource,
+    @InjectRedis() private readonly redis: Redis,
+  ) {}
 
   async preference(userId: string) {
     const [row]: Decision[] = await this.db.query(
       'SELECT allowed, notice_version, decided_at FROM product_analytics_consent WHERE user_id = $1',
       [userId],
     )
-    const current = row && (!row.allowed || row.notice_version === analyticsNoticeVersion)
-    return {
-      allowed: current ? row.allowed : null,
-      version: analyticsNoticeVersion,
-      decidedAt: current ? row.decided_at.toISOString() : null,
-    }
+    return preference(row)
   }
 
   async decide(userId: string, allowed: boolean) {
-    await this.db.transaction(async (manager) => {
-      // Announce a pending decision to other dispatchers before waiting for active sends.
-      await manager.query("SELECT pg_advisory_xact_lock(hashtextextended('product_analytics_consent:' || $1, 0))", [
-        userId,
-      ])
-      await manager.query(
-        `INSERT INTO product_analytics_consent AS existing (user_id, allowed, notice_version)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (user_id) DO UPDATE SET allowed = excluded.allowed, notice_version = excluded.notice_version,
-        decided_at = clock_timestamp()
-      WHERE (existing.allowed, existing.notice_version) IS DISTINCT FROM (excluded.allowed, excluded.notice_version)`,
-        [userId, allowed, analyticsNoticeVersion],
-      )
-    })
-    return this.preference(userId)
+    const [row]: Decision[] = await this.db.query(
+      `INSERT INTO product_analytics_consent AS existing (user_id, allowed, notice_version)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id) DO UPDATE SET allowed = excluded.allowed, notice_version = excluded.notice_version,
+         decided_at = clock_timestamp()
+       WHERE (existing.allowed, existing.notice_version) IS DISTINCT FROM (excluded.allowed, excluded.notice_version)
+       RETURNING allowed, notice_version, decided_at`,
+      [userId, allowed, analyticsNoticeVersion],
+    )
+    // A saved preference stands even when best-effort cache invalidation fails.
+    if (this.redis.status === 'ready') {
+      void this.redis.del(analyticsConsentCacheKey('grant', userId)).catch(() => {})
+    }
+    return row ? preference(row) : this.preference(userId)
   }
 
   async requireMember(userId: string, organizationId: string) {
@@ -54,53 +67,60 @@ export class AnalyticsConsentService {
     if (!rows.length) throw new ForbiddenException('Organization membership required')
   }
 
-  async consoleEnabledFrom(userId: string, organizationId: string): Promise<string | null> {
-    const [row] = await this.db.query(
-      `SELECT greatest(person.decided_at, creator.decided_at) AS since
-      FROM organization o JOIN product_analytics_consent creator ON creator.user_id = o."createdBy"
-      JOIN product_analytics_consent person ON person.user_id = $1
-      WHERE o.id = $2 AND person.allowed AND creator.allowed AND person.notice_version = $3 AND creator.notice_version = $3`,
+  async consolePreference(userId: string, organizationId: string) {
+    const [row]: (Decision & { since: Date | null })[] = await this.db.query(
+      `SELECT person.allowed, person.notice_version, person.decided_at,
+         CASE WHEN person.allowed AND creator.allowed AND person.notice_version = $3 AND creator.notice_version = $3
+              THEN greatest(person.decided_at, creator.decided_at) END AS since
+       FROM organization_user member JOIN organization o ON o.id = member."organizationId"
+       LEFT JOIN product_analytics_consent person ON person.user_id = member."userId"
+       LEFT JOIN product_analytics_consent creator ON creator.user_id = o."createdBy"
+       WHERE member."userId" = $1 AND member."organizationId" = $2`,
       [userId, organizationId, analyticsNoticeVersion],
     )
-    return row?.since.toISOString() ?? null
+    if (!row) throw new ForbiddenException('Organization membership required')
+    return { ...preference(row), enabledFrom: row.since?.toISOString() ?? null }
   }
 
-  private async requiredUsers(manager: EntityManager, subjects: AnalyticsSubjects) {
-    const organizations = [...new Set(subjects.organizations)]
-    const users = new Set(subjects.users)
-    if (organizations.length) {
-      const rows: { createdBy: string }[] = await manager.query(
-        'SELECT "createdBy" FROM organization WHERE id = ANY($1::uuid[]) ORDER BY id FOR KEY SHARE',
-        [organizations],
-      )
-      if (rows.length !== organizations.length) return []
-      for (const row of rows) users.add(row.createdBy)
+  private cached(kind: Subject, id: string): Promise<string> {
+    const key = analyticsConsentCacheKey(kind, id)
+    let pending = this.pendingReads.get(key)
+    if (!pending) {
+      pending = this.readSubject(kind, id, key).finally(() => this.pendingReads.delete(key))
+      this.pendingReads.set(key, pending)
     }
-    return [...users].sort()
+    return pending
   }
 
-  /** Hold the same decision rows that withdrawal updates until the bounded send finishes. */
+  private async readSubject(kind: Subject, id: string, key: string): Promise<string> {
+    const cached = await this.redis.get(key)
+    if (cached !== null) return cached
+    const expiresAt = Date.now() + ttlMs
+    const [row]: { value: string }[] =
+      kind === 'creator'
+        ? await this.db.query('SELECT "createdBy" AS value FROM organization WHERE id = $1', [id])
+        : await this.db.query(
+            `SELECT ceil(extract(epoch FROM decided_at) * 1000)::bigint::text AS value
+           FROM product_analytics_consent WHERE user_id = $1 AND allowed AND notice_version = $2`,
+            [id, analyticsNoticeVersion],
+          )
+    const value = row?.value ?? ''
+    // Cache misses and denials, too. Slow reads must not extend a stale decision's lifetime.
+    if (Date.now() >= expiresAt) return ''
+    await this.redis.set(key, value, 'PXAT', expiresAt, 'NX')
+    return value
+  }
+
   async dispatch(subjects: AnalyticsSubjects, occurredAt: Date, send: () => Promise<void>): Promise<boolean> {
-    if (!Number.isFinite(occurredAt.getTime()) || occurredAt.getTime() > Date.now()) return false
-    return this.db.transaction(async (manager) => {
-      await manager.query("SET LOCAL lock_timeout = '250ms'")
-      await manager.query("SET LOCAL statement_timeout = '1s'")
-      const users = await this.requiredUsers(manager, subjects)
-      if (!users.length) return false
-      const rows: Decision[] = await manager.query(
-        `SELECT allowed, notice_version, decided_at FROM product_analytics_consent
-        WHERE user_id = ANY($1::varchar[]) AND decided_at <= $2::timestamptz
-          AND pg_try_advisory_xact_lock_shared(hashtextextended('product_analytics_consent:' || user_id, 0))
-        ORDER BY user_id FOR SHARE`,
-        [users, occurredAt],
-      )
-      if (
-        rows.length !== users.length ||
-        rows.some((row) => !row.allowed || row.notice_version !== analyticsNoticeVersion)
-      )
-        return false
-      await send()
-      return true
-    })
+    const at = occurredAt.getTime()
+    if (!Number.isFinite(at) || at > Date.now() || this.redis.status !== 'ready') return false
+    const creators = await Promise.all([...new Set(subjects.organizations)].map((id) => this.cached('creator', id)))
+    if (creators.includes('')) return false
+    const users = new Set([...subjects.users, ...creators])
+    if (!users.size) return false
+    const grants = await Promise.all([...users].map((id) => this.cached('grant', id)))
+    if (!grants.every((since) => /^\d+$/.test(since) && Number(since) <= at)) return false
+    await send()
+    return true
   }
 }

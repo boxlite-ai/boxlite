@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { AnalyticsConsentService } from '../analytics/services/analytics-consent.service'
 import { ProductAnalyticsConsent1795420800000 } from '../migrations/pre-deploy/1795420800000-product-analytics-consent-migration'
-import type Redis from 'ioredis'
+import Redis from 'ioredis'
 import { DataSource } from 'typeorm'
 import { ApiKey } from '../api-key/api-key.entity'
 import { apiKeyValidationCacheKey } from '../common/utils/api-key'
@@ -139,51 +139,34 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     return rows.map((row) => row.roleId)
   }
 
-  it('changes the creator used for analytics only after an earlier transfer finishes', async () => {
+  it('rechecks the new creator after moving an organization with cached analytics consent', async () => {
     await user(PRIMARY)
     await user(SOCIAL)
     const org = await organization(SOCIAL, 'Example')
-    const consent = new AnalyticsConsentService(dataSource)
+    const client = new Redis({
+      host: process.env.REDIS_HOST ?? '127.0.0.1',
+      port: Number(process.env.REDIS_PORT ?? 6379),
+      keyPrefix: schemaName + ':',
+      lazyConnect: true,
+      maxRetriesPerRequest: 0,
+      commandTimeout: 1000,
+    })
     const runner = dataSource.createQueryRunner()
     const migration = new ProductAnalyticsConsent1795420800000()
     try {
+      await client.connect()
       await migration.up(runner)
+      const consent = new AnalyticsConsentService(dataSource, client)
       await consent.decide(SOCIAL, true)
       await delay(3)
-      let unlock!: () => void
-      let started!: () => void
-      const held = new Promise<void>((r) => {
-        started = r
-      })
-      const barrier = new Promise<void>((r) => {
-        unlock = r
-      })
       const subjects = { users: [], organizations: [org] }
-      const sending = consent.dispatch(subjects, new Date(), async () => {
-        started()
-        await barrier
-      })
-      await held
-      const adoption = service.adopt(PRIMARY, SOCIAL)
-      try {
-        let waiting = false
-        for (let i = 0; i < 60 && !waiting; i++) {
-          const [row] = await dataSource.query(
-            'SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND cardinality(pg_blocking_pids(pid))>0) AS waiting',
-            [schemaName],
-          )
-          waiting = row.waiting
-          if (!waiting) await delay(5)
-        }
-        expect(waiting).toBe(true)
-      } finally {
-        unlock()
-        await Promise.all([adoption, sending])
-      }
       const send = jest.fn(async () => {})
+      expect(await consent.dispatch(subjects, new Date(), send)).toBe(true)
+      await new LinkedIdentityService(dataSource, client).adopt(PRIMARY, SOCIAL)
       expect(await consent.dispatch(subjects, new Date(), send)).toBe(false)
-      expect(send).not.toHaveBeenCalled()
+      expect(send).toHaveBeenCalledTimes(1)
     } finally {
+      client.disconnect()
       await migration.down(runner)
       await runner.release()
     }

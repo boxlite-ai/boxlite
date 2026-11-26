@@ -981,12 +981,11 @@ its Public switch and always permits Private, while hosted policy always permits
 Public and requires explicit Private consent. Existing scope hashes are incompatible:
 finish cleanup with the old Listener and start a fresh journal before upgrading.
 
-## Observed CI execution
+## Hosted CI usage
 
-The hosted API observes a signed GitHub running or completed job with a valid `started_at`.
-It matches the Runner ID and JIT name to a registered Scale Set allocation, its Cloud Box, repository and tenant.
-A queued job, worker creation or acquisition alone provides no execution evidence.
+A signed BoxLite `workflow_job.queued` receipt with a valid creation time emits `cloud.ci.request`.
+The hosted listener emits `cloud.feature.use` for each `JobStarted` or `JobCompleted` message recognized by the scheduler for a JIT runner.
+Evidence is `runner_started` or `runner_completed`. Each observation keeps its own event ID, including repeated statuses.
 
-The host checks the existing journal in the background after webhook ingress commits. Saturation, a released
-allocation or a missing observation can drop the measurement. No GitHub inventory request is needed.
-Repeated observations of the same job carry the same occurrence UUID and original GitHub start time.
+Both observations use data from the existing webhook and scheduling paths. Analytics adds no runner lookup, GitHub request or scheduling write.
+Count distinct request correlation IDs for demand and distinct Box correlation IDs for used runners. The two identifiers are independent.
