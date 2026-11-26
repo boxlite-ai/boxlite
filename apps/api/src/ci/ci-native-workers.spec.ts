@@ -38,6 +38,7 @@ import { BoxManager } from '../box/managers/box.manager'
 import { BoxCheckpointState } from '../box/entities/box-checkpoint-state.entity'
 import { BoxLastActivity } from '../box/entities/box-last-activity.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
+import { BoxUsagePeriod } from '../usage/entities/box-usage-period.entity'
 import { BoxService } from '../box/services/box.service'
 import { BoxCreationLimitExceededError } from '../box/errors/box-creation-limit.error'
 import { ImageAdmissionService } from '../image/services/image-admission.service'
@@ -95,7 +96,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema,
-      entities: [Box, BoxLastActivity, BoxCheckpointState, CheckpointOperation, Job],
+      entities: [Box, BoxLastActivity, BoxCheckpointState, CheckpointOperation, Job, BoxUsagePeriod],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       extra: { options: `-c search_path=${schema},public` },

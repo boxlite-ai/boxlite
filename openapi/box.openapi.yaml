@@ -3959,8 +3959,10 @@ components:
           type: string
           enum: [accruing, final]
           description: |
-            `final` once the box has been deleted and all of its usage is priced.
-            Stopping a box does not end it: its disk still accrues.
+            `final` once deletion has been requested and all of the box's usage
+            is priced; the runner may still be deleting the box. Billing ends
+            with that request. Stopping a box does not end it: its disk still
+            accrues.
         source:
           type: string
           enum: [calculated]

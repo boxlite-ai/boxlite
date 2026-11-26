@@ -15,6 +15,7 @@ import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { BoxRepository } from '../repositories/box.repository'
+import { BoxUsagePeriod } from '../../usage/entities/box-usage-period.entity'
 import { Context } from '../../common/context/context'
 ;(process.env.DB_HOST ? describe : describe.skip)('Credential lifecycle transactions', () => {
   let db: DataSource
@@ -37,7 +38,7 @@ import { Context } from '../../common/context/context'
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema,
-      entities: [Job, Box, BoxLastActivity, BoxCheckpointState],
+      entities: [Job, Box, BoxLastActivity, BoxCheckpointState, BoxUsagePeriod],
       entitySkipConstructor: true,
       extra: { application_name: schema, options: `-c search_path=${schema},public` },
     }).initialize()

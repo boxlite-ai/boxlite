@@ -997,6 +997,8 @@ A box ends when its deletion is requested (desired state `destroyed`), whether t
 is pending, failed or retried. A stopped box has not ended.
 Example: a box deleted at 10:00 whose last period is delivered at 10:02 reads `final` from 10:02.
 
+The request closes the box's open period in its own transaction, at the request time, so billing
+stops then even if the usage event handler runs late or never.
 `final` holds because no period opens after that request. Period writers are asynchronous, so
 [`UsageService`](../../../../apps/api/src/usage/services/usage.service.ts) locks the box row in every
 transaction that opens one. The request updates the same row: it either commits after the period,
