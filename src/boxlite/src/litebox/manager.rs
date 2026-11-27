@@ -35,7 +35,6 @@ impl BoxManager {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn store(&self) -> &BoxStore {
         &self.store
     }

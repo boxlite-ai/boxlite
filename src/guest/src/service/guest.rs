@@ -89,6 +89,7 @@ impl GuestService for GuestServer {
         Ok(Response::new(PingResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
             safe_managed_volume_sub_path: true,
+            records_boot_mounts: crate::storage::attach::identifies_namespaces(),
         }))
     }
 

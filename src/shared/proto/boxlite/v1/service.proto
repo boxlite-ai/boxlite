@@ -238,6 +238,9 @@ message PingRequest {}
 message PingResponse {
   string version = 1;  // Guest agent version
   bool safe_managed_volume_sub_path = 2;  // Supports pinned managed-volume subdirectories
+  // Records the mounts Container.Init makes for declared directories, so the
+  // host can detach them with Container.Detach while the container runs.
+  bool records_boot_mounts = 3;
 }
 
 message ShutdownRequest {}
@@ -477,6 +480,12 @@ message BindMount {
   string subpath = 6;
   // Explicit payload interpretation. Old hosts omit this field.
   BindMountKind kind = 7;
+  // When set, the guest records the mount it just made under this key, so the
+  // host can detach it later with Container.Detach (export_key).
+  string record_key = 8;
+  // The directory was saved while the box was stopped: its target must be
+  // empty and reached through no symbolic link, and its owner is not remapped.
+  bool added = 9;
 }
 
 message ContainerInitResponse {

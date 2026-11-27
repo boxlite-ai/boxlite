@@ -6,6 +6,8 @@
 //!
 //! Each table has queryable columns for filtering + JSON blob for full struct.
 
+pub(crate) mod mounts;
+
 use chrono::Utc;
 use rusqlite::{OptionalExtension, params};
 #[cfg(any(test, feature = "test-support"))]
@@ -143,8 +145,19 @@ impl BoxStore {
     /// Updates queryable columns and JSON while preserving runtime overrides from the row.
     /// Returns error if box doesn't exist (Podman pattern: verify RowsAffected).
     pub fn update_state(&self, box_id: &str, state: &BoxState) -> BoxliteResult<()> {
-        let conn = self.db.conn();
+        Self::write_state(&self.db.conn(), box_id, state, None)
+    }
 
+    /// Write the lifecycle state, keeping what the row holds besides it: the
+    /// runtime overrides, and the directory mounts unless `mounts` replaces
+    /// them. A handle that read an older state cannot replace them with its
+    /// copy.
+    fn write_state(
+        conn: &rusqlite::Connection,
+        box_id: &str,
+        state: &BoxState,
+        mounts: Option<&str>,
+    ) -> BoxliteResult<()> {
         let json = serde_json::to_string(state)
             .map_err(|e| BoxliteError::Database(format!("Failed to serialize state: {}", e)))?;
 
@@ -152,9 +165,10 @@ impl BoxStore {
             "UPDATE box_state SET status = ?1, pid = ?2, \
              json = json_set(?3, \
                  '$.outbound_policy', json_extract(json, '$.outbound_policy'), \
-                 '$.disk_size_gb', json_extract(json, '$.disk_size_gb')) \
+                 '$.disk_size_gb', json_extract(json, '$.disk_size_gb'), \
+                 '$.mounts', coalesce(json(?5), json(coalesce(json_extract(json, '$.mounts'), '{}')))) \
              WHERE id = ?4",
-            params![state.status.as_str(), state.pid, json, box_id],
+            params![state.status.as_str(), state.pid, json, box_id, mounts],
         ))?;
 
         // Podman pattern: verify rows were actually updated
@@ -465,6 +479,138 @@ mod tests {
     use crate::vmm::VmmKind;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    #[test]
+    fn stale_lifecycle_writer_preserves_directory_mounts() {
+        let (store, dir) = create_test_db();
+        store
+            .save(&create_test_config(TEST_ID_1), &BoxState::new())
+            .unwrap();
+        let path = dir.path().join("test.db");
+        let mut stale = store.load_state(TEST_ID_1).unwrap().unwrap();
+        let other = BoxStore::new(Database::open(&path).unwrap());
+        // Two clients, two targets, one row: each write lands.
+        for (client, target) in [(&store, "/work"), (&other, "/second")] {
+            client
+                .update_mounts(TEST_ID_1, |mounts| {
+                    mounts.declare(crate::MountRequest {
+                        source: "/srv/data".into(),
+                        target: target.into(),
+                        read_only: true,
+                    });
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        // The handle stops the box with the state it read before both writes.
+        stale.status = BoxStatus::Stopped;
+        store.update_state(TEST_ID_1, &stale).unwrap();
+        let mounts = BoxStore::new(Database::open(&path).unwrap())
+            .mounts(TEST_ID_1)
+            .unwrap();
+        let declared: Vec<_> = mounts
+            .visible()
+            .into_iter()
+            .map(|mount| (mount.target.to_string_lossy().into_owned(), mount.read_only))
+            .collect();
+        assert_eq!(
+            declared,
+            [("/second".to_owned(), true), ("/work".to_owned(), true)]
+        );
+        assert_eq!(mounts.state.status, BoxStatus::Stopped);
+    }
+
+    #[test]
+    fn creation_binds_merge_with_committed_changes_across_reopen() {
+        use crate::runtime::options::{MountSpec, VolumeSpec};
+
+        for typed in [false, true] {
+            let (store, dir) = create_test_db();
+            let path = dir.path().join("test.db");
+            let mut config = create_test_config(TEST_ID_1);
+            let file = dir.path().join("a-file");
+            std::fs::write(&file, b"static").unwrap();
+            if typed {
+                let mut mount = MountSpec::bind_mount(dir.path().to_str().unwrap(), "//work/./");
+                mount.read_only = true;
+                config.options.mounts = vec![
+                    mount,
+                    MountSpec::bind_mount(file.to_str().unwrap(), "/file"),
+                    MountSpec::volume_mount("volume-id", "/managed"),
+                ];
+            } else {
+                let mut volume = VolumeSpec::bind_mount(dir.path().to_str().unwrap(), "//work/./");
+                volume.read_only = true;
+                config.options.volumes = vec![
+                    volume,
+                    VolumeSpec::bind_mount(file.to_str().unwrap(), "/file"),
+                    VolumeSpec::managed_volume("volume-id", "/managed"),
+                ];
+            }
+            store.save(&config, &BoxState::new()).unwrap();
+
+            // A row without the mounts field reads as its creation options.
+            let reopened = BoxStore::new(Database::open(&path).unwrap());
+            let mounts = reopened.mounts(TEST_ID_1).unwrap();
+            assert_eq!(
+                mounts.visible(),
+                vec![crate::MountInfo {
+                    source: dir.path().into(),
+                    target: "/work".into(),
+                    read_only: true,
+                    state: crate::MountState::Configured,
+                }]
+            );
+            assert!(mounts.occupied("/managed") && mounts.occupied("/file"));
+            reopened
+                .update_mounts(TEST_ID_1, |mounts| {
+                    mounts.forget("/work");
+                    mounts.declare(crate::MountRequest {
+                        source: "/srv/data".into(),
+                        target: "/late".into(),
+                        read_only: false,
+                    });
+                    Ok(())
+                })
+                .unwrap();
+
+            let reopened = BoxStore::new(Database::open(&path).unwrap());
+            let mounts = reopened.mounts(TEST_ID_1).unwrap();
+            let mut options = reopened.load_config(TEST_ID_1).unwrap().unwrap().options;
+            mounts.apply_to_boot(&mut options);
+            let targets: Vec<_> = options
+                .volumes
+                .iter()
+                .map(|volume| volume.guest_path.as_str())
+                .chain(options.mounts.iter().map(|mount| mount.target.as_str()))
+                .collect();
+            assert_eq!(targets, ["/file", "/managed", "/late"]);
+            assert!(!mounts.occupied("/work") && mounts.is_added("/late"));
+
+            // A file bind whose file is gone reads as a directory, so the box
+            // can be made bootable again by removing it.
+            std::fs::remove_file(&file).unwrap();
+            assert!(
+                reopened
+                    .mounts(TEST_ID_1)
+                    .unwrap()
+                    .lookup("/file")
+                    .is_some()
+            );
+            // A removed file bind stays removed: its target is free again
+            // when the file comes back.
+            reopened
+                .update_mounts(TEST_ID_1, |mounts| {
+                    mounts.forget("/file");
+                    Ok(())
+                })
+                .unwrap();
+            std::fs::write(&file, b"static").unwrap();
+            let mounts = reopened.mounts(TEST_ID_1).unwrap();
+            assert!(!mounts.occupied("/file") && mounts.lookup("/file").is_none());
+        }
+    }
 
     fn create_test_db() -> (BoxStore, tempfile::TempDir) {
         let dir = tempdir().unwrap();

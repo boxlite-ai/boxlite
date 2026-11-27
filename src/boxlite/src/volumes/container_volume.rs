@@ -20,6 +20,10 @@ pub(crate) enum ContainerMountPayload {
     SingleFile { file_name: String },
     /// Pin one relative directory from a managed volume payload.
     ManagedSubDirectory { sub_path: String },
+    /// Mount the shared directory itself. The guest records the mount under
+    /// `key`, so the host can detach it while the container runs. `added`
+    /// marks a directory saved while the box was stopped.
+    RecordedDirectory { key: String, added: bool },
 }
 
 /// Container bind mount entry.

@@ -5,7 +5,7 @@
 mod common;
 
 use boxlite::runtime::options::{BoxliteOptions, NetworkSpec};
-use boxlite::vmm::controller::mount_control::{MountControlClient, MountState};
+use boxlite::vmm::controller::mount_control::MountControlClient;
 use boxlite::{BoxCommand, LiteBox};
 use boxlite_shared::{ContainerClient, ContainerDetachRequest, ContainerMountRequest};
 use futures::StreamExt;
@@ -88,13 +88,6 @@ async fn detached(client: &mut ContainerClient<Channel>, container: &str, export
         .unwrap();
 }
 
-async fn state(socket: &Path, export: &str, state: MountState) {
-    let export = export.to_owned();
-    control(socket, move |client| client.set_state(&export, state))
-        .await
-        .unwrap();
-}
-
 async fn retire(socket: &Path, export: &str) {
     let export = export.to_owned();
     control(socket, move |client| client.remove(&export))
@@ -148,17 +141,16 @@ async fn descriptor_delivery_mounts_and_detaches_in_an_existing_container() {
             "/workspace".into(),
             File::open(&path)?,
             false,
+            uuid::Uuid::new_v4().into_bytes(),
         )
     })
     .await
     .unwrap();
-    assert_eq!(mount.state, MountState::Preparing);
     assert_eq!(
         control(&socket, |client| client.list()).await.unwrap(),
         vec![mount.clone()]
     );
     mounted(&mut rpc, &container, &mount.export, false).await;
-    state(&socket, &mount.export, MountState::Mounted).await;
     assert_eq!(run(&bx, "cat /workspace/value").await, (0, "host".into()));
     assert_eq!(run(&bx, "printf guest > /workspace/from-guest").await.0, 0);
     assert_eq!(
@@ -166,7 +158,6 @@ async fn descriptor_delivery_mounts_and_detaches_in_an_existing_container() {
         "guest"
     );
 
-    state(&socket, &mount.export, MountState::Detaching).await;
     detached(&mut rpc, &container, &mount.export).await;
     retire(&socket, &mount.export).await;
     assert_eq!(run(&bx, "test ! -e /workspace/value").await.0, 0);

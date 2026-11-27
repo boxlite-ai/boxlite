@@ -449,6 +449,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
 | `executions` | `fn executions(&self) -> ExecutionsHandle` | Live session inventory and control recovery; never boots a box |
+| `mount` | `fn mount(&self) -> MountHandle` | Manage persistent host directory mounts on a local native box |
 | `attach` | `async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution>` | Attach to init or a named live session; only one output reader is allowed |
 
 #### Online disk growth
@@ -541,6 +542,95 @@ owns output.
 To recover streams after a client process exits, call
 `attach(AttachOptions::execution(id))`; an existing reader is reported as a
 conflict rather than silently returning no output.
+
+#### MountHandle
+
+`LiteBox::mount()` returns an owned, cloneable `MountHandle`. Directory mounts
+require the `native-vmm` experimental feature and the local Linux x86_64 native
+engine. Changes require a container configured without `CAP_SYS_ADMIN`.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `add` | `async fn add(&self, request: MountRequest) -> BoxliteResult<MountInfo>` | Save a directory and deliver it immediately if the container is running |
+| `remove` | `async fn remove(&self, target: impl AsRef<Path>) -> BoxliteResult<()>` | Remove a declaration and lazily detach its live mount |
+| `list` | `async fn list(&self) -> BoxliteResult<Vec<MountInfo>>` | Read saved directories and current delivery progress |
+| `get` | `async fn get(&self, target: impl AsRef<Path>) -> BoxliteResult<Option<MountInfo>>` | Read one entry by normalized container path, or `None` if absent |
+
+A `MountRequest` takes an absolute host directory, a UTF-8 target below `/`,
+and `read_only`. The target may omit intermediate directories and must exclude
+`..`. A directory added at runtime, and a saved one at its next start, lands
+on a target the guest creates when missing; a target with entries, or one
+reached through a symbolic link, is refused. Adding at an occupied target
+returns `InvalidState`, and so does a target with another mount below it: the
+new mount would cover that one. A target below an existing mount is allowed.
+A target at, below or above `/proc`, `/dev`, `/sys` or `/tmp` returns
+`InvalidArgument`: the container mounts those itself. A source that is, holds
+or lies inside a delivered directory returns `InvalidState`: the next start
+delivers each directory as its own share, and refuses overlapping ones.
+
+On a stopped or newly created box, `add` returns `Configured` and leaves the
+box idle. The next start delivers each saved directory before the first user
+process runs. A delivery failure identifies the target, and so does a start
+that finds a saved directory which would cover a mount applied before it or
+which a mount applied after it would cover, or which shares a mount with
+another directory through an image link or two spellings of one target. You
+can remove its declaration even if the host directory has disappeared; the
+target is then free for good. Directory binds from either creation format,
+`BoxOptions.volumes` or `BoxOptions.mounts`, can also be queried and removed on
+a supported box. A clone or an export carries every committed `add` and
+`remove`.
+
+A guest agent or kernel that cannot record mounts still starts a box whose
+directories were all created with it: they stay plain binds, so `remove` asks
+for a stop. A box with a directory added at runtime does not start there
+until that declaration is removed while the box is stopped.
+
+On a running box, `add` returns `Mounted` after guest confirmation and the
+SQLite commit. `remove` returns `()` after the guest detaches the mount, the
+shim retires its export and the runtime commits the removal. Open file and
+directory descriptors stay usable. Remove nested mounts deepest first: while
+one sits below the target, `remove` returns `InvalidState` and the entry is
+again what the removal found: `Mounted`, or `Preparing` for an interrupted
+add. A mount the box was created with below the target, such as a file bind,
+keeps the directory mounted until the box stops. After success `get(target)`
+returns `None` and a second `remove(target)` returns `NotFound`.
+
+`list` and `get` read the last SQLite commit while delivery is in flight.
+`Preparing` identifies a pending add and `Detaching` identifies pending cleanup.
+You can retry incomplete cleanup by target while the same VM is running.
+
+An admitted running change finishes independently of its caller's wait.
+Dropping its future neither undoes a commit nor proves that an unconfirmed
+guest operation was cancelled.
+
+Once that VM stops, only committed declarations determine the next boot. If a
+reply was lost, a fresh handle's `get` returns `Configured` for a committed
+add or an uncommitted removal. It returns `None` for an uncommitted add or a
+committed removal. Each new VM confirms the mounts it actually delivered.
+
+A running change starts the container first, as any live operation does. A
+paused box returns `InvalidState` on a change.
+
+#### Example
+
+With an existing host directory `/srv/project` and a newly created native box
+configured with `auto_delete: Some(0)`, save a read-only workspace and start it.
+
+```rust
+let mounts = litebox.mount();
+let info = mounts
+    .add(MountRequest {
+        source: "/srv/project".into(),
+        target: "/workspace".into(),
+        read_only: true,
+    })
+    .await?;
+assert_eq!(info.state, MountState::Configured);
+litebox.start().await?;
+assert_eq!(mounts.get("/workspace").await?.unwrap().state, MountState::Mounted);
+mounts.remove("/workspace").await?;
+assert!(mounts.get("/workspace").await?.is_none());
+```
 
 #### Lifecycle
 

@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
-    AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox, SshConfig, SshStatus,
+    AttachOptions, BoxCommand, BoxTunnel, Execution, LiteBox, MountInfo, MountRequest, SshConfig,
+    SshStatus,
 };
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
@@ -70,6 +71,10 @@ pub(crate) trait RuntimeBackend: Send + Sync {
     /// Synchronous shutdown for atexit/Drop contexts.
     /// Default no-op (REST backend doesn't manage local processes).
     fn shutdown_sync(&self) {}
+}
+
+fn unsupported_mounts() -> BoxliteError {
+    BoxliteError::Unsupported("runtime directory mounts need a local Linux x86_64 native VM".into())
 }
 
 /// Backend abstraction for individual box operations.
@@ -133,6 +138,26 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
         Err(BoxliteError::Unsupported(
             "this backend does not support attaching to sessions".into(),
         ))
+    }
+
+    /// Save a directory declaration and deliver it if the box is running.
+    async fn mount_add(&self, _request: MountRequest) -> BoxliteResult<MountInfo> {
+        Err(unsupported_mounts())
+    }
+
+    /// Remove a declaration, detaching a live mount before committing the removal.
+    async fn mount_remove(&self, _target: &Path) -> BoxliteResult<()> {
+        Err(unsupported_mounts())
+    }
+
+    /// List effective declarations and current delivery progress.
+    async fn mount_list(&self) -> BoxliteResult<Vec<MountInfo>> {
+        Err(unsupported_mounts())
+    }
+
+    /// Read the latest mount entry at `target`.
+    async fn mount_get(&self, _target: &Path) -> BoxliteResult<Option<MountInfo>> {
+        Err(unsupported_mounts())
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics>;

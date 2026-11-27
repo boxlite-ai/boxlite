@@ -20,7 +20,7 @@
 //! past that the agent kills it, so a late child never mounts.
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString, OsStr};
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::File;
 use std::io;
 use std::num::NonZeroU64;
@@ -30,6 +30,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use boxlite_shared::constants::{path_is_below, reserved_mount_target};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::fcntl::OFlag;
 use nix::libc;
@@ -50,6 +51,8 @@ const NR_PIDFD_SEND_SIGNAL: libc::c_long = 424;
 const NR_CLONE3: libc::c_long = 435;
 const NR_CLOSE_RANGE: libc::c_long = 436;
 const NR_STATMOUNT: libc::c_long = 457;
+/// Symbolic links one destination may resolve through, the kernel's own limit.
+const MAX_SYMLINKS: usize = 40;
 const P_PIDFD: libc::idtype_t = 3;
 
 /// Accept only an absolute path of normal components other than `/`, shorter
@@ -93,12 +96,18 @@ pub(crate) struct Attacher {
     /// Pidfd of a killed child that had not exited yet.
     straggler: Option<OwnedFd>,
     runtime: HashMap<String, RuntimeMount>,
+    /// Where the mounts the runtime made for files and volumes sit, links
+    /// resolved. Detaching a recorded directory above one would take it along.
+    unrecorded: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
 struct RuntimeMount {
     source: PathBuf,
     destination: PathBuf,
+    /// Where the mount sits in the container, links resolved. It differs from
+    /// `destination` only for a mount the container runtime made at creation.
+    mount_point: PathBuf,
     read_only: bool,
     namespace_id: Option<NonZeroU64>,
     // Retain the tree while it may still be published, even if confirmation was lost.
@@ -193,10 +202,105 @@ impl Target {
         Ok(id)
     }
 
-    fn check_current_namespace(&self, id: NonZeroU64) -> BoxliteResult<()> {
-        Self::open(self.pid)?.check_namespace(Some(id))?;
-        Ok(())
+    /// Confirm, once the mount changed, that the process is still in the
+    /// namespace `expected`: the held descriptor can outlive the process's
+    /// membership in it. A failure here leaves the outcome unknown, so it is
+    /// no refusal: the caller undoes the mount or retries.
+    fn check_after_change(&self, step: &'static str, expected: NonZeroU64) -> BoxliteResult<()> {
+        Self::open(self.pid)
+            .and_then(|current| current.check_namespace(Some(expected)))
+            .map(|_| ())
+            .map_err(|error| {
+                BoxliteError::Internal(format!(
+                    "{step}, but the container's mount namespace could not be confirmed: {error}"
+                ))
+            })
     }
+}
+
+/// Whether this kernel identifies a mount namespace, which recording a
+/// mount needs. The guest advertises it per ping: one read of its own
+/// namespace says whether the container's can be read.
+pub(crate) fn identifies_namespaces() -> bool {
+    Target::open(nix::unistd::getpid())
+        .and_then(|own| own.namespace_id())
+        .is_ok()
+}
+
+/// Resolve an OCI destination against the created container's held root.
+/// Detach needs its absolute in-container path even when the image uses links.
+fn resolve_in_root(root: &File, destination: &Path) -> BoxliteResult<PathBuf> {
+    // Components to walk, innermost last: the next one is popped from the end.
+    let queue = |pending: &mut Vec<OsString>, path: &Path| {
+        pending.extend(
+            path.components()
+                .filter_map(|component| match component {
+                    Component::Normal(name) => Some(name.to_os_string()),
+                    Component::ParentDir => Some("..".into()),
+                    Component::RootDir | Component::CurDir | Component::Prefix(_) => None,
+                })
+                .rev(),
+        );
+    };
+    let unreachable = |error: std::io::Error| {
+        BoxliteError::InvalidState(format!(
+            "{} is not reachable in the container: {error}",
+            destination.display()
+        ))
+    };
+    let root = PathBuf::from(format!("/proc/self/fd/{}", root.as_raw_fd()));
+    let mut resolved = PathBuf::new();
+    let mut pending = Vec::new();
+    queue(&mut pending, destination);
+    let mut links = 0;
+    while let Some(component) = pending.pop() {
+        if component == ".." {
+            resolved.pop();
+            continue;
+        }
+        resolved.push(component);
+        let path = root.join(&resolved);
+        let metadata = std::fs::symlink_metadata(&path).map_err(unreachable)?;
+        if !metadata.file_type().is_symlink() {
+            continue;
+        }
+        links += 1;
+        if links > MAX_SYMLINKS {
+            return Err(BoxliteError::InvalidState(format!(
+                "{} resolves through more than {MAX_SYMLINKS} symbolic links",
+                destination.display()
+            )));
+        }
+        let link = std::fs::read_link(&path).map_err(unreachable)?;
+        resolved.pop();
+        if link.is_absolute() {
+            resolved.clear();
+        }
+        queue(&mut pending, &link);
+    }
+    if resolved.as_os_str().is_empty() {
+        return Err(BoxliteError::InvalidState(format!(
+            "{} resolves to the container root",
+            destination.display()
+        )));
+    }
+    Ok(resolved)
+}
+
+/// Open the resolved target under the same root. A concurrent change to a
+/// path component must fail before the guest records an unrelated mount.
+fn open_mounted(root: &File, relative: &Path) -> BoxliteResult<File> {
+    use rustix::fs::{openat2, Mode, OFlags, ResolveFlags};
+
+    openat2(
+        root,
+        relative,
+        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
+    )
+    .map(File::from)
+    .map_err(|error| BoxliteError::Storage(format!("open boot mount {relative:?}: {error}")))
 }
 
 impl Attacher {
@@ -205,6 +309,12 @@ impl Attacher {
             .get(key)
             .is_some_and(|record| record.tree.is_some())
     }
+
+    #[cfg(test)]
+    pub(crate) fn unrecorded(&self) -> &[PathBuf] {
+        &self.unrecorded
+    }
+
     /// The caller holds the container's attacher write lock across the syscall
     /// and its metadata update. Tombstones outlive canceled RPC callers.
     pub(crate) fn attach_runtime(
@@ -215,6 +325,13 @@ impl Attacher {
         destination: &Path,
         read_only: bool,
     ) -> BoxliteResult<RuntimeAttach> {
+        // The runtime mounts its own filesystems before any user mount applies.
+        if let Some(root) = reserved_mount_target(destination) {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "{} is reserved for the container's own mount at {root}",
+                destination.display()
+            )));
+        }
         if let Some(record) = self.runtime.get(key) {
             if record.destination != destination
                 || (record.tree.is_some()
@@ -231,7 +348,7 @@ impl Attacher {
             };
             let namespace_id = target.check_namespace(record.namespace_id)?;
             self.check_runtime(target, destination, Mode::Verify(tree.id))?;
-            target.check_current_namespace(namespace_id)?;
+            target.check_after_change("the mount is still in place", namespace_id)?;
             return Ok(RuntimeAttach {
                 added: false,
                 confirmation: Ok(()),
@@ -240,7 +357,9 @@ impl Attacher {
         if self
             .runtime
             .values()
-            .any(|record| record.tree.is_some() && record.destination == destination)
+            // A mount sits where its destination resolves, so that is what a
+            // new destination is compared with.
+            .any(|record| record.tree.is_some() && record.mount_point == destination)
         {
             return Err(BoxliteError::InvalidState(
                 "destination already has a runtime mount".into(),
@@ -255,6 +374,7 @@ impl Attacher {
             RuntimeMount {
                 source: source.to_owned(),
                 destination: destination.to_owned(),
+                mount_point: destination.to_owned(),
                 read_only,
                 namespace_id: Some(namespace_id),
                 tree: Some(tree),
@@ -262,8 +382,77 @@ impl Attacher {
         );
         Ok(RuntimeAttach {
             added: true,
-            confirmation: confirmation.and_then(|()| target.check_current_namespace(namespace_id)),
+            confirmation: confirmation
+                .and_then(|()| target.check_after_change("the mount was attached", namespace_id)),
         })
+    }
+
+    /// Record the mount the container runtime installed for `key` at
+    /// `destination`, under the identity the container's first process finds.
+    /// The container is created and nothing in it has run, so no process has
+    /// touched the mount since the runtime made it.
+    /// The caller holds the container's attacher write lock.
+    pub(crate) fn adopt_runtime(
+        &mut self,
+        key: &str,
+        source: &Path,
+        target: &Target,
+        destination: &Path,
+        read_only: bool,
+    ) -> BoxliteResult<()> {
+        target.check_runtime_owner()?;
+        let namespace_id = target.namespace_id()?;
+        let root = File::open(format!("/proc/{}/root", target.pid))?;
+        let relative = resolve_in_root(&root, destination)?;
+        let fd = open_mounted(&root, &relative)?;
+        let id = mount_identity(fd.as_raw_fd()).map_err(|code| {
+            BoxliteError::Storage(format!(
+                "statx the mount at {}: {}",
+                destination.display(),
+                io::Error::from_raw_os_error(code)
+            ))
+        })?;
+        // Two declared directories can land on one mount: an image link
+        // between their destinations, or two spellings of one target. Neither
+        // could be detached alone, so the container does not start.
+        if self
+            .runtime
+            .values()
+            .any(|record| record.tree.as_ref().is_some_and(|tree| tree.id == id))
+        {
+            return Err(BoxliteError::InvalidState(format!(
+                "{} is mounted where another declared directory already is",
+                destination.display()
+            )));
+        }
+        self.runtime.insert(
+            key.to_owned(),
+            RuntimeMount {
+                source: source.to_owned(),
+                destination: destination.to_owned(),
+                mount_point: Path::new("/").join(relative),
+                read_only,
+                namespace_id: Some(namespace_id),
+                tree: Some(MountedTree { fd: fd.into(), id }),
+            },
+        );
+        Ok(())
+    }
+
+    /// Note where the runtime's other mounts sit, links resolved, so that a
+    /// recorded directory above one of them is not detached from under it.
+    /// The caller holds the container's attacher write lock.
+    pub(crate) fn note_unrecorded(
+        &mut self,
+        target: &Target,
+        destinations: &[PathBuf],
+    ) -> BoxliteResult<()> {
+        let root = File::open(format!("/proc/{}/root", target.pid))?;
+        for destination in destinations {
+            self.unrecorded
+                .push(Path::new("/").join(resolve_in_root(&root, destination)?));
+        }
+        Ok(())
     }
 
     pub(crate) fn detach_runtime(
@@ -287,6 +476,7 @@ impl Attacher {
                 RuntimeMount {
                     source: PathBuf::new(),
                     destination: destination.to_owned(),
+                    mount_point: destination.to_owned(),
                     read_only: false,
                     namespace_id: None,
                     tree: None,
@@ -294,11 +484,26 @@ impl Attacher {
             );
             return Ok(false);
         }
-        if self.runtime.values().any(|record| {
-            record.tree.is_some()
-                && record.destination != destination
-                && record.destination.starts_with(destination)
-        }) {
+        // `mount_point` is where each mount sits with links resolved, so two
+        // spellings of one directory still compare as parent and child.
+        let mount_point = self.runtime[key].mount_point.clone();
+        // A mount the runtime made for a file or a volume leaves only with the
+        // container, so a recorded directory above it stays too.
+        if self
+            .unrecorded
+            .iter()
+            .any(|path| path.starts_with(&mount_point))
+        {
+            return Err(BoxliteError::InvalidState(format!(
+                "a mount the box was created with sits at or below {}; stop the box to remove this directory",
+                mount_point.display()
+            )));
+        }
+        if self
+            .runtime
+            .values()
+            .any(|record| record.tree.is_some() && path_is_below(&record.mount_point, &mount_point))
+        {
             return Err(BoxliteError::InvalidState(
                 "detach runtime descendants first".into(),
             ));
@@ -306,7 +511,7 @@ impl Attacher {
         let record = &self.runtime[key];
         let namespace_id = target.check_namespace(record.namespace_id)?;
         let id = record.tree.as_ref().expect("attached tree").id;
-        if let Err(error) = self.check_runtime(target, destination, Mode::Detach(id)) {
+        if let Err(error) = self.check_runtime(target, &mount_point, Mode::Detach(id)) {
             let tree = self.runtime[key].tree.as_ref().expect("attached tree");
             // A different tree at the path does not prove the original was detached.
             let absent = matches!(tree.is_mounted_in(namespace_id.get()), Ok(false));
@@ -314,8 +519,7 @@ impl Attacher {
                 return Err(error);
             }
         }
-        // The helper's namespace FD can outlive init's membership in it.
-        target.check_current_namespace(namespace_id)?;
+        target.check_after_change("the mount was detached", namespace_id)?;
         let record = self.runtime.get_mut(key).expect("checked incarnation");
         record.tree = None;
         Ok(true)
@@ -346,10 +550,15 @@ impl Attacher {
         runtime_namespace: Option<NonZeroU64>,
     ) -> BoxliteResult<(MountedTree, BoxliteResult<()>)> {
         validate_destination(destination)?;
+        // A mount applied here comes last, so where it overlaps an existing
+        // one it covers it: the runtime's recorded directories and its other
+        // mounts alike. Either could then no longer leave on its own.
+        let covers = |mount_point: &Path| mount_point.starts_with(destination);
         if self
             .runtime
             .values()
-            .any(|record| record.tree.is_some() && record.destination.starts_with(destination))
+            .any(|record| record.tree.is_some() && covers(&record.mount_point))
+            || self.unrecorded.iter().any(|path| covers(path))
         {
             return Err(BoxliteError::InvalidState(
                 "destination would cover a runtime mount".into(),
@@ -1248,6 +1457,17 @@ mod tests {
         }
     }
 
+    /// A stand-in for the root of a container that takes runtime mounts.
+    /// `attach_runtime` refuses a destination at, below or above a mount the
+    /// container provides itself, and the system temporary directory is `/tmp`
+    /// on CI and on most hosts.
+    fn runtime_mount_root() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("boxlite-guest-runtime-mount.")
+            .tempdir_in("/var/tmp")
+            .expect("a root outside the container's own mounts")
+    }
+
     #[test]
     fn canceled_incarnation_never_attaches_or_detaches_another_mount() {
         let target = Target::open(nix::unistd::getpid()).unwrap();
@@ -1274,11 +1494,44 @@ mod tests {
     }
 
     #[test]
+    fn a_mount_of_the_box_below_a_directory_keeps_it_attached() {
+        let target = Target::open(nix::unistd::getpid()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("data");
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("config.yml"), b"kept").unwrap();
+        let mut attacher = Attacher::default();
+        attacher
+            .note_unrecorded(&target, &[directory.join("config.yml")])
+            .unwrap();
+        // The record of a directory the runtime mounted. The guard reads only
+        // where it sits, before any namespace is entered.
+        attacher.runtime.insert(
+            "data".into(),
+            RuntimeMount {
+                source: PathBuf::new(),
+                destination: directory.clone(),
+                mount_point: directory.clone(),
+                read_only: false,
+                namespace_id: None,
+                tree: Some(MountedTree {
+                    fd: OwnedFd::from(File::open("/").unwrap()),
+                    id: 0,
+                }),
+            },
+        );
+        let error = attacher
+            .detach_runtime("data", &target, &directory)
+            .unwrap_err();
+        assert!(error.to_string().contains("sits at or below"), "{error}");
+    }
+
+    #[test]
     #[ignore = "needs root in a private mount namespace: make test:guest-perms"]
     fn privileged_detach_can_recover_an_unconfirmed_attachment() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"mounted").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mount");
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
@@ -1304,7 +1557,7 @@ mod tests {
     fn privileged_detach_confirms_absence_after_its_result_is_lost() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"mounted").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mount");
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
@@ -1338,7 +1591,7 @@ mod tests {
     fn privileged_detach_refuses_a_different_namespace() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"original").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mount");
         let mut attacher = Attacher::default();
         {
@@ -1369,7 +1622,7 @@ mod tests {
     fn privileged_incarnation_replay_and_replacement_are_safe() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"runtime").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mount");
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
@@ -1544,7 +1797,7 @@ mod tests {
     fn privileged_writable_attach_allows_writes_until_detached() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("agent"), b"agent-bytes").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("opt/boxlite/late");
         let holder = NamespaceHolder::spawn();
         let mut attacher = Attacher::default();
@@ -1607,7 +1860,7 @@ mod tests {
         use std::io::Read as _;
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("payload"), b"still readable").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mounted");
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
@@ -1639,7 +1892,7 @@ mod tests {
         let replacement = tempfile::tempdir().unwrap();
         fs::write(original.path().join("marker"), b"original").unwrap();
         fs::write(replacement.path().join("marker"), b"replacement").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let ancestor = root.path().join("parent");
         let renamed = root.path().join("renamed");
         let destination = ancestor.join("mount");
@@ -1744,5 +1997,69 @@ mod tests {
             panic!("opened the namespace of a process that has exited");
         };
         assert!(matches!(error, BoxliteError::NotFound(_)), "{error}");
+    }
+
+    /// The target of a container whose init already exited.
+    fn gone_target(namespace: File) -> Target {
+        let mut exited = std::process::Command::new("true").spawn().unwrap();
+        let pid = Pid::from_raw(i32::try_from(exited.id()).unwrap());
+        exited.wait().unwrap();
+        Target { pid, namespace }
+    }
+
+    #[test]
+    fn a_runtime_mount_never_covers_a_mount_the_container_needs() {
+        let target = Target::open(nix::unistd::getpid()).unwrap();
+        let mut attacher = Attacher::default();
+        // Below one root the runtime mounts itself, and at another.
+        for destination in ["/dev/null", "/tmp"] {
+            let error = attacher
+                .attach_runtime(
+                    "reserved",
+                    Path::new("/missing"),
+                    &target,
+                    Path::new(destination),
+                    false,
+                )
+                .unwrap_err();
+            assert!(
+                matches!(error, BoxliteError::InvalidArgument(_)),
+                "{destination}: {error}"
+            );
+        }
+        assert!(attacher.runtime.is_empty());
+        // A path that only shares the spelling is another directory: the attach goes on.
+        let error = attacher
+            .attach_runtime(
+                "inside",
+                Path::new("/missing"),
+                &target,
+                Path::new("/tmpwork"),
+                false,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&error, BoxliteError::Storage(message) if message.contains("clone")),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_namespace_check_after_the_mount_changed_is_no_refusal() {
+        let own = Target::open(nix::unistd::getpid()).unwrap();
+        let namespace_id = own.namespace_id().unwrap();
+        own.check_after_change("the mount was attached", namespace_id)
+            .unwrap();
+
+        // Init is gone, so whether the mount reached the container stays
+        // unknown. The caller must undo it, not read a refusal.
+        let error = gone_target(File::open("/proc/self/ns/mnt").unwrap())
+            .check_after_change("the mount was detached", namespace_id)
+            .unwrap_err();
+        assert!(
+            matches!(&error, BoxliteError::Internal(message)
+                if message.contains("the mount was detached") && message.contains("gone")),
+            "{error}"
+        );
     }
 }

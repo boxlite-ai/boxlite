@@ -87,15 +87,15 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        // Gather all inputs from previous tasks
-        let inputs = {
-            let ctx = ctx.lock().await;
-            VmmSpawnInputs::from_context(&ctx)?
+        // Gather all inputs from previous tasks, and the declared directories of this start
+        let (inputs, declared) = {
+            let mut ctx = ctx.lock().await;
+            (VmmSpawnInputs::from_context(&ctx)?, ctx.declared.take())
         };
 
         // Build config and get outputs
-        let (instance_spec, volume_mgr, rootfs_init, container_mounts, network_backend) =
-            build_config(&box_id, &inputs)
+        let (instance_spec, volume_mgr, rootfs_init, container_mounts, network_backend, confirmed) =
+            build_config(&box_id, &inputs, declared)
                 .await
                 .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
@@ -109,6 +109,8 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
         ctx.container_mounts = Some(container_mounts);
+        // What the guest records for the declared directories, published once the box is up.
+        ctx.confirmed = confirmed;
         // Hand the box's one network backend to LiveState assembly (init/mod.rs).
         ctx.network_backend = network_backend;
         // Store CA cert PEM for Container.Init gRPC (passed as CACert proto field)
@@ -128,12 +130,14 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
 async fn build_config(
     box_id: &BoxID,
     inputs: &VmmSpawnInputs,
+    declared: Option<crate::db::Mounts>,
 ) -> BoxliteResult<(
     InstanceSpec,
     GuestVolumeManager,
     crate::portal::interfaces::ContainerRootfsInitConfig,
     Vec<ContainerMount>,
     Option<Box<dyn NetworkBackend>>,
+    std::collections::BTreeMap<String, crate::litebox::mounts::MountProgress>,
 )> {
     let VmmSpawnInputs {
         outbound_policy,
@@ -154,14 +158,20 @@ async fn build_config(
 
     let local_volume_store = runtime.local_volume_store.clone();
     let volume_options = options.clone();
-    // Volume resolution does file IO and takes filesystem locks, so keep it
-    // off Tokio's async worker threads.
-    let user_volumes = tokio::task::spawn_blocking(move || {
+    // Declared sources are checked before the resolver runs: it would mount a
+    // file where a declared directory used to be, or fail without naming the
+    // target. Both read the host filesystem, and the resolution takes
+    // filesystem locks, so keep them off Tokio's async worker threads.
+    let (declared, user_volumes) = tokio::task::spawn_blocking(move || {
+        if let Some(declared) = &declared {
+            declared.check_sources()?;
+        }
         resolve_user_volumes(
             &volume_options.volumes,
             &volume_options.mounts,
             &local_volume_store,
         )
+        .map(|volumes| (declared, volumes))
     })
     .await
     .map_err(|error| BoxliteError::Internal(format!("volume resolution task failed: {error}")))??;
@@ -245,7 +255,11 @@ async fn build_config(
             payload,
         );
     }
-    let container_mounts = container_mgr.build_container_mounts();
+    let mut container_mounts = container_mgr.build_container_mounts();
+    let confirmed = declared
+        .as_ref()
+        .map(|declared| declared.record(&mut container_mounts, &options.advanced))
+        .unwrap_or_default();
 
     // Get guest rootfs from runtime cache and configure with disk
     let guest_rootfs = runtime
@@ -321,6 +335,7 @@ async fn build_config(
         rootfs_init,
         container_mounts,
         network_backend,
+        confirmed,
     ))
 }
 

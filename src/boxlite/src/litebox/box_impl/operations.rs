@@ -35,6 +35,14 @@ impl BoxImpl {
         })?;
         let locker = self.runtime.lock_manager.retrieve(lock_id)?;
         let _guard = LockGuard::new_async(locker.as_ref()).await;
+        self.refresh_state()?;
+        operation.await
+    }
+
+    /// Bring this handle's state in line with the persisted one. The caller
+    /// holds the box's lifecycle lock, so nothing can move the lifecycle on
+    /// between this read and the operation that follows it.
+    pub(super) fn refresh_state(&self) -> BoxliteResult<crate::runtime::types::BoxState> {
         let current = self.runtime.box_manager.update_box(self.id())?;
         {
             let mut state = self.state.write();
@@ -48,9 +56,9 @@ impl BoxImpl {
                     "Box handle belongs to an earlier VM; use runtime.get()".into(),
                 ));
             }
-            *state = current;
+            *state = current.clone();
         }
-        operation.await
+        Ok(current)
     }
 
     pub(crate) fn try_with_operation<F, R>(

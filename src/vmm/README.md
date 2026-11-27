@@ -106,16 +106,17 @@ sequenceDiagram
     participant Guest as Guest agent on box.sock
     Host->>Shim: Register with directory FD
     Shim->>FS: Publish directory export
-    Shim-->>Host: Preparing record
+    Shim-->>Host: Export identity
     Host->>Guest: Mount(export key, device tag, destination, mode)
     Guest-->>Host: Mount complete
-    Host->>Shim: Set state Mounted
 ```
 
-Registration reserves a target, allocates an export identity, and publishes a
-`Preparing` record before replying. A new connection can query the record if
-the reply is lost. List admission accounts for serialized JSON bytes,
-including escaping and later state changes.
+Registration allocates an export identity and publishes the export before
+replying. The shim keeps no state beyond that table: delivery progress is the
+caller's. A new connection can find the export by request ID if the reply is
+lost. A request ID, like a target, names at most one export: a repeated
+request, or a second export for one target, is refused with `EBUSY`. List
+admission accounts for serialized JSON bytes, including escaping.
 
 The kernel queues connections for the serial control thread. The client has
 one deadline for connect, queue wait, and I/O, including time behind a disk
@@ -138,10 +139,10 @@ Run `make test:integration:vmm:mount-delivery` with a compatible `VMM_KERNEL`
 to register, attach, and retire a directory through the native shim and guest.
 
 The host control client is blocking and belongs in `spawn_blocking` when used
-from async code. Its caller must mark an incarnation `Detaching` before requesting
-guest detach, acknowledge that detach before retiring the export, and retain recovery ownership when outcomes
-are uncertain. The public `box.mounts()` facade and runtime transaction
-coordinator are a separate layer above these delivery primitives.
+from async code. Its caller owns the delivery state: it asks the guest to
+detach before retiring the export, and keeps recovery ownership when outcomes
+are uncertain. `BoxImpl` coordinates these steps for the public `bx.mount()`
+handle.
 
 ## Virtio network device
 

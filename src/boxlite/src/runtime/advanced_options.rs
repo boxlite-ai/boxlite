@@ -971,6 +971,22 @@ impl AdvancedBoxOptions {
         }
     }
 
+    /// Aggregate delivery needs a mount namespace the workload cannot modify.
+    /// Match the guest's capability resolution: with `add=ALL`, named drops win.
+    pub(crate) fn permits_aggregate_mounts(&self) -> bool {
+        let caps = self.effective_capabilities();
+        let has = |names: &[String], capability: &str| {
+            names
+                .iter()
+                .any(|name| canonical_capability_name(name) == capability)
+        };
+        if has(&caps.add, "ALL") {
+            has(&caps.drop, "SYS_ADMIN")
+        } else {
+            !has(&caps.add, "SYS_ADMIN")
+        }
+    }
+
     /// Resolve the container security request before it crosses into the guest.
     ///
     /// The host owns the public option semantics *and* the literal OCI values

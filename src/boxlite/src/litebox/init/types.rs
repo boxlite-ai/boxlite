@@ -425,6 +425,11 @@ pub struct InitPipelineContext {
     pub volume_mgr: Option<GuestVolumeManager>,
     pub rootfs_init: Option<ContainerRootfsInitConfig>,
     pub container_mounts: Option<Vec<ContainerMount>>,
+    /// The effective directory declarations of a new VM, read under the
+    /// lifecycle admission of its start.
+    pub declared: Option<crate::db::Mounts>,
+    /// The mounts a new VM confirmed at start, published with its live state.
+    pub confirmed: std::collections::BTreeMap<String, crate::litebox::mounts::MountProgress>,
     pub guest_session: Option<GuestSession>,
     /// The box's one network backend (set by vmm_spawn on first start/restart, or
     /// by vmm_attach on reattach; moved into LiveState for runtime control).
@@ -466,6 +471,8 @@ impl InitPipelineContext {
             volume_mgr: None,
             rootfs_init: None,
             container_mounts: None,
+            declared: None,
+            confirmed: std::collections::BTreeMap::new(),
             guest_session: None,
             network_backend: None,
             published_ports: None,

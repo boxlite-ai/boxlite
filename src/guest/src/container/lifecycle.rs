@@ -163,7 +163,7 @@ impl Container {
         // Auto-idmap: remap volume UIDs when host owner differs from container user.
         // Uses a full-range swap mapping so all UIDs remain valid (no overflow).
         for mount in &user_mounts {
-            if mount.read_only || mount.owner_uid == uid {
+            if mount.read_only || mount.added || mount.owner_uid == uid {
                 continue;
             }
             let uid_mappings =

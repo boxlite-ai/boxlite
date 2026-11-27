@@ -174,16 +174,23 @@ impl ContainerInterface {
         let proto_mounts: Vec<BindMount> = mounts
             .into_iter()
             .map(|m| {
-                let (kind, subpath) = match m.payload {
+                let (kind, subpath, record) = match m.payload {
                     crate::volumes::ContainerMountPayload::WholeDirectory => {
-                        (BindMountKind::WholeDirectory, String::new())
+                        (BindMountKind::WholeDirectory, String::new(), None)
                     }
                     crate::volumes::ContainerMountPayload::SingleFile { file_name } => {
-                        (BindMountKind::SingleFile, file_name)
+                        (BindMountKind::SingleFile, file_name, None)
                     }
                     crate::volumes::ContainerMountPayload::ManagedSubDirectory { sub_path } => {
-                        (BindMountKind::ManagedSubDirectory, sub_path)
+                        (BindMountKind::ManagedSubDirectory, sub_path, None)
                     }
+                    // The runtime mounts the directory as it mounts a whole
+                    // directory; the guest records that mount under the key.
+                    crate::volumes::ContainerMountPayload::RecordedDirectory { key, added } => (
+                        BindMountKind::WholeDirectory,
+                        String::new(),
+                        Some((key, added)),
+                    ),
                 };
                 BindMount {
                     volume_name: m.volume_name,
@@ -193,6 +200,11 @@ impl ContainerInterface {
                     owner_gid: m.owner_gid,
                     kind: kind as i32,
                     subpath,
+                    record_key: record
+                        .as_ref()
+                        .map(|(key, _)| key.clone())
+                        .unwrap_or_default(),
+                    added: record.is_some_and(|(_, added)| added),
                 }
             })
             .collect();
@@ -387,11 +399,15 @@ fn map_container_init_status(status: tonic::Status) -> BoxliteError {
     status.into()
 }
 
+/// Keep the categories the guest refuses a mount or a detach with. Anything
+/// else is a transport or guest failure, whose outcome is unknown.
 fn map_mount_status(status: tonic::Status) -> BoxliteError {
-    if status.code() == tonic::Code::Unimplemented {
-        return BoxliteError::Unsupported(status.message().to_owned());
+    match status.code() {
+        tonic::Code::Unimplemented => BoxliteError::Unsupported(status.message().to_owned()),
+        tonic::Code::FailedPrecondition => BoxliteError::InvalidState(status.message().to_owned()),
+        tonic::Code::InvalidArgument => BoxliteError::InvalidArgument(status.message().to_owned()),
+        _ => status.into(),
     }
-    status.into()
 }
 
 #[cfg(test)]
@@ -408,13 +424,26 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     #[test]
-    fn unsupported_mounts_preserve_the_capability_error_category() {
+    fn guest_refusals_keep_their_error_category() {
         assert!(
             matches!(map_mount_status(tonic::Status::unimplemented("CAP_SYS_ADMIN")),
             BoxliteError::Unsupported(message) if message == "CAP_SYS_ADMIN")
         );
         assert!(matches!(
+            map_mount_status(Status::failed_precondition("detach runtime descendants first")),
+            BoxliteError::InvalidState(message) if message == "detach runtime descendants first"
+        ));
+        assert!(matches!(
+            map_mount_status(Status::invalid_argument("destination mismatch")),
+            BoxliteError::InvalidArgument(_)
+        ));
+        assert!(matches!(
             map_mount_status(tonic::Status::unavailable("guest disconnected")),
+            BoxliteError::Rpc(_)
+        ));
+        // A check the guest ran after it acted: the caller undoes the mount, it does not skip it.
+        assert!(matches!(
+            map_mount_status(Status::internal("the mount was attached, but unverified")),
             BoxliteError::Rpc(_)
         ));
     }

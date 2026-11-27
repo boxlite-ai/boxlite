@@ -16,14 +16,31 @@ use crate::runtime::types::BoxStatus;
 // ============================================================================
 
 impl BoxImpl {
-    fn options_for_copy(&self) -> BoxliteResult<crate::runtime::options::BoxOptions> {
+    /// The options a copy of this box boots with: the ones it was created
+    /// with, the state's overrides, and its committed mount changes. The store
+    /// reads SQLite and the host filesystem.
+    async fn options_for_copy(&self) -> BoxliteResult<crate::runtime::options::BoxOptions> {
+        let runtime = Arc::clone(&self.runtime);
+        let id = self.id().clone();
         let mut options = self.config.options.clone();
-        let state = self.runtime.box_manager.update_box(self.id())?;
-        options.disk_size_gb = state.disk_size_gb.or(options.disk_size_gb);
-        if let Some(policy) = state.outbound_policy {
-            options.network = policy.try_into()?;
-        }
-        Ok(options)
+        let native = self.config.engine_kind == crate::vmm::VmmKind::Native;
+        tokio::task::spawn_blocking(move || {
+            let state = runtime.box_manager.update_box(&id)?;
+            options.disk_size_gb = state.disk_size_gb.or(options.disk_size_gb);
+            if let Some(policy) = state.outbound_policy {
+                options.network = policy.try_into()?;
+            }
+            if native {
+                runtime
+                    .box_manager
+                    .store()
+                    .mounts(id.as_str())?
+                    .apply_to_boot(&mut options);
+            }
+            Ok(options)
+        })
+        .await
+        .map_err(|error| BoxliteError::Internal(format!("copy options task: {error}")))?
     }
 
     pub(crate) async fn clone_box(
@@ -103,6 +120,10 @@ impl BoxImpl {
 
             // Read virtual size from the shared base for overlay creation.
             let container_vsize = Qcow2Helper::qcow2_virtual_size(&shared_container)?;
+            // Before any staging directory exists: once one does, a caller that
+            // gives up must still get its clone, so nothing may await between
+            // staging and provisioning.
+            let copy_options = self.options_for_copy().await?;
 
             // Phase B: Create N container overlay headers (VM is resumed, fast).
             // Guest rootfs is NOT cloned — each clone creates its own on first start.
@@ -134,7 +155,6 @@ impl BoxImpl {
             // Each clone's disk is a copy of this one, so it runs the same build.
             // Read before the loop: the state lock must not be held across an await.
             let resolved_image = self.state.read().resolved_image.clone();
-            let copy_options = self.options_for_copy()?;
             let mut clones = Vec::with_capacity(count);
             for (i, staging) in staging_dirs.into_iter().enumerate() {
                 // Keep the TempDir alive until provisioning moves it to the final box home.
@@ -223,7 +243,7 @@ impl BoxImpl {
             // Phase 2: Checksum + manifest + archive run with VM resumed.
             // These only read static temp files, no disk consistency needed.
             let config_name = self.config.name.clone();
-            let config_options = self.options_for_copy()?;
+            let config_options = self.options_for_copy().await?;
             let box_id_str = self.id().to_string();
             let dest = dest.to_path_buf();
 
@@ -359,4 +379,56 @@ fn do_export_finalize(
     );
 
     Ok(crate::runtime::options::BoxArchive::new(output_path))
+}
+
+#[cfg(all(test, feature = "native", target_os = "linux", target_arch = "x86_64"))]
+mod tests {
+    use crate::litebox::mounts::MountRequest;
+    use crate::litebox::mounts::tests::Fixture;
+    use crate::litebox::state::BoxStatus;
+    use crate::runtime::options::MountSpec;
+
+    #[tokio::test]
+    async fn a_copy_boots_with_the_mounts_the_box_boots_with() {
+        let (orig, added) = (
+            tempfile::tempdir_in("/tmp").unwrap(),
+            tempfile::tempdir_in("/tmp").unwrap(),
+        );
+        let fx = Fixture::with_mounts(
+            BoxStatus::Stopped,
+            vec![MountSpec::bind_mount(
+                orig.path().to_str().unwrap(),
+                "/orig",
+            )],
+        );
+        let bx = fx.handle();
+        fx.runtime
+            .box_manager
+            .store()
+            .update_mounts(fx.id.as_str(), |mounts| {
+                mounts.forget("/orig");
+                mounts.declare(MountRequest {
+                    source: added.path().into(),
+                    target: "/added".into(),
+                    read_only: true,
+                });
+                Ok(())
+            })
+            .unwrap();
+
+        let copied = bx.options_for_copy().await.unwrap();
+        assert_eq!(
+            copied
+                .mounts
+                .iter()
+                .map(|mount| mount.target.as_str())
+                .collect::<Vec<_>>(),
+            ["/added"]
+        );
+        assert_eq!(
+            bx.config.options.mounts.len(),
+            1,
+            "the box's own configuration stays as created"
+        );
+    }
 }

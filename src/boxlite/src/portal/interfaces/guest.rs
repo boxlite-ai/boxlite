@@ -91,6 +91,21 @@ impl GuestInterface {
         ))
     }
 
+    /// Fail before initialization if the guest cannot record the mounts the
+    /// container runtime makes for declared directories. A directory added at
+    /// runtime needs its record, or an online removal could not select it.
+    pub async fn require_boot_mount_records(&mut self) -> BoxliteResult<()> {
+        let response = self.client.ping(PingRequest {}).await?.into_inner();
+        if response.records_boot_mounts {
+            return Ok(());
+        }
+        Err(BoxliteError::Unsupported(
+            "the guest cannot record the mounts of declared directories, which a directory added at runtime \
+             needs; update the box's guest agent and kernel, or remove those directories"
+                .into(),
+        ))
+    }
+
     /// Shutdown the guest agent.
     pub async fn shutdown(&mut self) -> BoxliteResult<()> {
         let _response = self.client.shutdown(ShutdownRequest {}).await?;

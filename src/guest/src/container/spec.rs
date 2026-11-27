@@ -76,6 +76,8 @@ pub struct UserMount {
     pub owner_uid: u32,
     /// Owner GID of host directory (for auto-idmap)
     pub owner_gid: u32,
+    /// Saved while the box was stopped: its owner is never remapped.
+    pub added: bool,
 }
 
 /// Device nodes the host asked to republish inside the container, resolved
@@ -1736,6 +1738,7 @@ mod tests {
             read_only: false,
             owner_uid: 0,
             owner_gid: 0,
+            added: false,
         }];
 
         let spec = create_oci_spec(
@@ -1776,6 +1779,48 @@ mod tests {
                 mount_destinations(&spec).contains(&PathBuf::from(expected)),
                 "{expected} missing from {:?}",
                 mount_destinations(&spec)
+            );
+        }
+    }
+
+    #[test]
+    fn standard_mounts_stay_under_their_reserved_roots() {
+        use boxlite_shared::constants::STANDARD_MOUNT_TARGETS;
+
+        let mounts = build_standard_mounts(
+            Path::new("/bundle"),
+            MountOverride {
+                source: "none".into(),
+                options: vec!["ro".into()],
+            },
+            true,
+        )
+        .unwrap();
+        let destinations: Vec<_> = mounts
+            .iter()
+            .map(|mount| mount.destination().as_path())
+            .collect();
+
+        // A directory delivered at runtime is refused around each of these
+        // roots, so every standard mount has to be under one, except the
+        // `/etc` files: a directory cannot land on a file.
+        for destination in destinations
+            .iter()
+            .filter(|destination| !destination.starts_with("/etc"))
+        {
+            assert!(
+                STANDARD_MOUNT_TARGETS
+                    .iter()
+                    .any(|root| destination.starts_with(root)),
+                "{destination:?} is not under a reserved root"
+            );
+        }
+        for root in STANDARD_MOUNT_TARGETS {
+            assert!(
+                destinations
+                    .iter()
+                    .any(|destination| destination.starts_with(root)),
+                "no standard mount under {root}"
             );
         }
     }

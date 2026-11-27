@@ -36,6 +36,8 @@ use crate::runtime::types::BoxStatus;
 use crate::vmm::controller::VmmHandler;
 use crate::{BoxID, BoxInfo};
 
+#[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+pub(super) mod mounts;
 mod operations;
 pub(crate) use operations::{BoxEvent, BoxRun};
 use operations::{StopCommit, StopReason};
@@ -1475,6 +1477,7 @@ impl BoxImpl {
             live: live_state,
             guard: mut cleanup_guard,
             resolved_image,
+            mounts,
         } = builder.build().await?;
 
         // The box is up. If we adopted one whose init was already running, that
@@ -1553,8 +1556,21 @@ impl BoxImpl {
                 state.init_health_status();
             }
 
-            // Save to DB (cache for queries and recovery)
-            self.runtime.box_manager.save_box(&self.config.id, &state)?;
+            // Save to DB (cache for queries and recovery). A new native VM
+            // writes the mounts its start confirmed in the same transaction;
+            // every other start only saves the state.
+            if adopting_running || self.config.engine_kind != crate::vmm::VmmKind::Native {
+                self.runtime.box_manager.save_box(&self.config.id, &state)?;
+            } else {
+                self.runtime.box_manager.store().update_mounts(
+                    self.config.id.as_str(),
+                    |recorded| {
+                        recorded.state = state.clone();
+                        recorded.progress = mounts;
+                        Ok(())
+                    },
+                )?;
+            }
 
             // Arm the watcher under the *same* lock that publishes Running+pid.
             // A concurrent handout runs `arm_watcher(None)`, which reads the state
@@ -1817,6 +1833,32 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
         self.attach(options).await
+    }
+
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    async fn mount_add(
+        &self,
+        request: crate::litebox::mounts::MountRequest,
+    ) -> BoxliteResult<crate::litebox::mounts::MountInfo> {
+        BoxImpl::mount_add(self, request).await
+    }
+
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    async fn mount_remove(&self, target: &std::path::Path) -> BoxliteResult<()> {
+        BoxImpl::mount_remove(self, target).await
+    }
+
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    async fn mount_list(&self) -> BoxliteResult<Vec<crate::litebox::mounts::MountInfo>> {
+        BoxImpl::mount_list(self).await
+    }
+
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    async fn mount_get(
+        &self,
+        target: &std::path::Path,
+    ) -> BoxliteResult<Option<crate::litebox::mounts::MountInfo>> {
+        BoxImpl::mount_get(self, target).await
     }
 
     async fn metrics(&self) -> BoxliteResult<BoxMetrics> {

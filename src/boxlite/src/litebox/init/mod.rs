@@ -49,6 +49,8 @@ pub(crate) struct BuiltBox {
     /// Present when this build made a new disk from a registry image; see
     /// [`crate::litebox::state::BoxState::resolved_image`].
     pub(crate) resolved_image: Option<crate::images::ResolvedImage>,
+    /// The directory mounts a new VM confirmed at start.
+    pub(crate) mounts: std::collections::BTreeMap<String, crate::litebox::mounts::MountProgress>,
 }
 
 use crate::litebox::BoxStatus;
@@ -232,13 +234,24 @@ impl BoxBuilder {
 
         let BoxBuilder {
             runtime,
-            config,
+            mut config,
             state,
         } = self;
 
         let status = state.status;
         let reuse_rootfs = status == BoxStatus::Stopped;
         let skip_guest_wait = status == BoxStatus::Running;
+        // A new VM boots under the effective directory declarations. They are
+        // read here, under the lifecycle admission of this start, and every
+        // task of the pipeline then sees the same options.
+        let declared =
+            if status != BoxStatus::Running && config.engine_kind == crate::vmm::VmmKind::Native {
+                let declared = runtime.box_manager.store().mounts(config.id.as_str())?;
+                declared.apply_to_boot(&mut config.options);
+                Some(declared)
+            } else {
+                None
+            };
 
         let mut ctx = InitPipelineContext::new(
             config,
@@ -247,6 +260,7 @@ impl BoxBuilder {
             skip_guest_wait,
             state.resolved_image.clone(),
         );
+        ctx.declared = declared;
         if status == BoxStatus::Running {
             // Adoption borrows an existing VM; a reconnect failure must not stop it
             // or replace its Running state with an initialization failure.
@@ -337,6 +351,7 @@ impl BoxBuilder {
                 live: live_state,
                 guard,
                 resolved_image: ctx.resolved_image.take(),
+                mounts: std::mem::take(&mut ctx.confirmed),
             })
         };
 

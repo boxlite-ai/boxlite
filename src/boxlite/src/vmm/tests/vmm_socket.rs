@@ -456,13 +456,14 @@ fn http_runs_under_the_production_vmm_filter() {
 #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
 mod mounts {
     use super::*;
-    use crate::vmm::controller::mount_control::{MountControlClient, MountState, Registry};
+    use crate::vmm::controller::mount_control::{MountControlClient, MountRequestId, Registry};
     use boxlite_vmm::AggregateFs;
     use std::os::fd::AsRawFd;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
+    const REQUEST_ID: MountRequestId = [7; 16];
 
     fn fixture() -> (tempfile::TempDir, Arc<AggregateFs>, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -480,11 +481,12 @@ mod mounts {
         (dir, fs, path)
     }
 
-    fn registration(target: &str) -> ControlOp {
+    fn registration(target: &str, request_id: MountRequestId) -> ControlOp {
         ControlOp::RegisterMount {
             source: "/source".into(),
             target: target.into(),
             read_only: false,
+            request_id,
         }
     }
 
@@ -511,7 +513,7 @@ mod mounts {
         let directory = File::open(dir.path()).unwrap();
         let mut stream = UnixStream::connect(&path).unwrap();
         stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-        let body = serde_json::to_vec(&registration("/data")).unwrap();
+        let body = serde_json::to_vec(&registration("/data", REQUEST_ID)).unwrap();
         let request = http_request("POST", MOUNT_PATH, &body);
         assert_eq!(
             transport::send_with_file(stream.as_raw_fd(), &request[..1], directory.as_raw_fd())
@@ -528,14 +530,12 @@ mod mounts {
             panic!("expected one recoverable registration, got {records:?}");
         };
         assert_eq!(mount.target, "/data");
-        assert_eq!(mount.state, MountState::Preparing);
-        client
-            .set_state(&mount.export, MountState::Mounted)
-            .unwrap();
-        assert_eq!(client.list().unwrap()[0].state, MountState::Mounted);
-        client
-            .set_state(&mount.export, MountState::Detaching)
-            .unwrap();
+        // The reply never arrived: only the request's ID finds the export.
+        assert_eq!(
+            client.find_registered(REQUEST_ID).unwrap().as_ref(),
+            Some(mount)
+        );
+        assert!(client.find_registered([8; 16]).unwrap().is_none());
         client.remove(&mount.export).unwrap();
         assert!(client.list().unwrap().is_empty());
     }
@@ -545,7 +545,7 @@ mod mounts {
         let (dir, _fs, path) = fixture();
         let directory = File::open(dir.path()).unwrap();
         assert_eq!(
-            exchange(&path, registration("/data"), None, TIMEOUT).unwrap(),
+            exchange(&path, registration("/data", REQUEST_ID), None, TIMEOUT).unwrap(),
             Err(ControlError::Mount(libc::EINVAL))
         );
         assert_eq!(
@@ -554,10 +554,16 @@ mod mounts {
         );
         let file = tempfile::tempfile().unwrap();
         assert_eq!(
-            exchange(&path, registration("/data"), Some(&file), TIMEOUT).unwrap(),
+            exchange(
+                &path,
+                registration("/data", REQUEST_ID),
+                Some(&file),
+                TIMEOUT
+            )
+            .unwrap(),
             Err(ControlError::Mount(libc::ENOTDIR))
         );
-        let body = serde_json::to_vec(&registration("/data")).unwrap();
+        let body = serde_json::to_vec(&registration("/data", REQUEST_ID)).unwrap();
         let request = http_request("POST", MOUNT_PATH, &body);
         let mut stream = UnixStream::connect(&path).unwrap();
         stream.set_read_timeout(Some(TIMEOUT)).unwrap();
@@ -582,7 +588,13 @@ mod mounts {
         let client = MountControlClient::new(path);
         assert!(client.list().unwrap().is_empty());
         client
-            .register("/source".into(), "/data".into(), directory, false)
+            .register(
+                "/source".into(),
+                "/data".into(),
+                directory,
+                false,
+                REQUEST_ID,
+            )
             .unwrap();
     }
 
@@ -593,7 +605,7 @@ mod mounts {
         let filesystem = Arc::new(AggregateFs::new(vec![]).unwrap());
         boxlite_vmm::insert_aggregate(tag, filesystem);
         let directory = File::open(dir.path()).unwrap();
-        let body = serde_json::to_vec(&registration("/data")).unwrap();
+        let body = serde_json::to_vec(&registration("/data", REQUEST_ID)).unwrap();
         let (mut client, stream) = UnixStream::pair().unwrap();
 
         // Queue the complete HTTP request before the byte carrying the descriptor.
@@ -633,14 +645,10 @@ mod mounts {
                 format!("/{admitted}{}", "\"".repeat(2000)),
                 File::open(dir.path()).unwrap(),
                 true,
+                (admitted as u128).to_be_bytes(),
             );
             match result {
-                Ok(mount) => {
-                    client
-                        .set_state(&mount.export, MountState::Mounted)
-                        .unwrap();
-                    admitted += 1;
-                }
+                Ok(_) => admitted += 1,
                 Err(error) => {
                     assert_eq!(error.raw_os_error(), Some(libc::ENOSPC));
                     break;
@@ -651,11 +659,9 @@ mod mounts {
         assert!(admitted > 0);
         assert_eq!(mounts.len(), admitted);
         for mount in mounts {
-            client
-                .set_state(&mount.export, MountState::Detaching)
-                .unwrap();
+            client.remove(&mount.export).unwrap();
         }
-        assert_eq!(client.list().unwrap().len(), admitted);
+        assert!(client.list().unwrap().is_empty());
     }
 
     #[test]
@@ -712,7 +718,10 @@ mod mounts {
         });
         for (op, directory) in [
             (ControlOp::ListMounts, None),
-            (registration("/data"), Some(File::open(dir.path()).unwrap())),
+            (
+                registration("/data", REQUEST_ID),
+                Some(File::open(dir.path()).unwrap()),
+            ),
         ] {
             assert_eq!(
                 exchange(&path, op, directory.as_ref(), TIMEOUT).unwrap(),
