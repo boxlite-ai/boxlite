@@ -159,6 +159,15 @@ test('Cloud Run receives instance limits only when a stage specifies them', () =
   assert.deepEqual(service.scaling, { minInstanceCount: 5 })
 })
 
+test('the API liveness probe tolerates transient burst latency without hiding deadlock', () => {
+  const { service } = capture(false)
+  const container = service.template.containers[0]
+  assert.equal(container.livenessProbe.httpGet.path, '/api/health')
+  assert.equal(container.livenessProbe.timeoutSeconds, 5)
+  assert.equal(container.livenessProbe.periodSeconds, 10)
+  assert.equal(container.livenessProbe.failureThreshold, 3)
+})
+
 test('API targeting includes newly configured secret grants absent from the previous state', () => {
   const { records } = capture(true)
   const service = records.find((record) => record.type === 'gcp.cloudrunv2.Service' && record.name === 'Api')!

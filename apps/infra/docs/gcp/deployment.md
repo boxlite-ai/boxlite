@@ -85,6 +85,12 @@ Refresh the Pulumi checkpoint before the first update to an existing instance an
 
 Subsequent updates reuse the flags recorded in that checkpoint.
 
+## API health probes
+
+The API startup probe allows up to thirty failures at Cloud Run's default ten-second cadence. After startup, the liveness probe requests `/api/health` every ten seconds with a five-second timeout and three-failure threshold. The timeout tolerates short burst latency without treating dependency readiness as liveness; a persistently unresponsive instance is still restarted.
+
+Changing these settings creates a new Cloud Run revision.
+
 ## Customer domain HTTPS
 
 The GCP deployment automatically supplies the certificate project and the existing proxy certificate map to the API.

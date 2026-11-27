@@ -555,7 +555,12 @@ export const gcpApiProvider =
                 { name: CACHE_CA_VOLUME, mountPath: dirname(CACHE_CA_PATH) },
               ],
               startupProbe: { httpGet: { path: '/api/health', port: request.port }, failureThreshold: 30 },
-              livenessProbe: { httpGet: { path: '/api/health', port: request.port } },
+              livenessProbe: {
+                httpGet: { path: '/api/health', port: request.port },
+                timeoutSeconds: 5,
+                periodSeconds: 10,
+                failureThreshold: 3,
+              },
               envs: containerEnvironment({
                 values: {
                   ...request.environment,
