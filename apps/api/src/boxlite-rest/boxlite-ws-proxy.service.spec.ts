@@ -64,7 +64,7 @@ describe('BoxliteWsProxyService', () => {
       updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     }
     const runnerService = {
-      findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
+      findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
     }
     const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
     const userService = {
@@ -150,7 +150,7 @@ describe('BoxliteWsProxyService', () => {
       autoResume: true,
     })
     autoResume.ensureReady.mockRejectedValue(new Error('start failed'))
-    const socket = { write: jest.fn(), destroy: jest.fn() }
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn() })
     const proxyHandler = jest.mocked(createProxyMiddleware).mock.results.at(-1)?.value
 
     await (service as unknown as BoxliteWsProxyService).upgrade(

@@ -18,6 +18,7 @@ import { UsageExportPublisherService } from './services/usage-export-publisher.s
 import { UsageAllocationSnapshotService } from './services/usage-allocation-snapshot.service'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
+import { TypedConfigService } from '../config/typed-config.service'
 import { Box } from '../box/entities/box.entity'
 import { Runner } from '../box/entities/runner.entity'
 import { UsageConcurrencyService } from './services/usage-concurrency.service'
@@ -34,12 +35,13 @@ import { UsageConcurrencyService } from './services/usage-concurrency.service'
     BoxLookupCacheInvalidationService,
     {
       provide: BoxRepository,
-      inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService],
+      inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService, TypedConfigService],
       useFactory: (
         dataSource: DataSource,
         eventEmitter: EventEmitter2,
         boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
-      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
+        configService: TypedConfigService,
+      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService, configService),
     },
   ],
   exports: [UsageService, UsageConcurrencyService],

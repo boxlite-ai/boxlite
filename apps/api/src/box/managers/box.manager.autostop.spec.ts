@@ -79,10 +79,11 @@ function makeHarness(lastActivityAt: Date) {
   )
   jest.spyOn(manager, 'syncInstanceState').mockResolvedValue(undefined)
 
-  return { manager, updateWhere: boxRepository.updateWhere }
+  return { manager, updateWhere: boxRepository.updateWhere, boxActivityService }
 }
 
 beforeEach(() => jest.mocked(recordBoxRequested).mockClear())
+afterEach(() => jest.useRealTimers())
 
 describe('BoxManager.autostopCheck', () => {
   it('stops a box whose last activity is older than autoStop', async () => {
@@ -104,6 +105,24 @@ describe('BoxManager.autostopCheck', () => {
       expect.objectContaining({ id: BOX_ID, organizationId: ORGANIZATION_ID }),
       Context.platform(PlatformReason.AUTO_STOP),
     )
+  })
+
+  it('waits 30ms and rechecks before stopping a stale candidate', async () => {
+    jest.useFakeTimers()
+    const stale = new Date(Date.now() - (AUTO_STOP_SECONDS + 1) * 1000)
+    const { manager, updateWhere, boxActivityService } = makeHarness(stale)
+    boxActivityService.getLastActivityAt.mockResolvedValueOnce(stale).mockResolvedValueOnce(new Date())
+
+    const pending = manager.autostopCheck()
+    await jest.advanceTimersByTimeAsync(0)
+    expect(boxActivityService.getLastActivityAt).toHaveBeenCalledTimes(1)
+    await jest.advanceTimersByTimeAsync(29)
+    expect(boxActivityService.getLastActivityAt).toHaveBeenCalledTimes(1)
+    await jest.advanceTimersByTimeAsync(1)
+    await pending
+
+    expect(boxActivityService.getLastActivityAt).toHaveBeenCalledTimes(2)
+    expect(updateWhere).not.toHaveBeenCalled()
   })
 
   it('leaves a box running while its activity is fresh', async () => {

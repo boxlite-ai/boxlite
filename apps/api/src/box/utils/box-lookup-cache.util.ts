@@ -4,7 +4,7 @@
  */
 
 export const BOX_LOOKUP_CACHE_TTL_MS = 10_000
-export const BOX_ORG_ID_CACHE_TTL_MS = 60_000
+export const BOX_ORG_ID_CACHE_TTL_MS = 120_000
 
 type BoxLookupCacheKeyArgs = {
   organizationId?: string | null

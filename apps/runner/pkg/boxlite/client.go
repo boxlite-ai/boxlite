@@ -26,6 +26,9 @@ import (
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
 	"github.com/containerd/errdefs"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 )
 
@@ -465,6 +468,17 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (_ string,
 	started := time.Now()
 	ids := timing.IDs{BoxID: boxDto.Id, JobID: timing.JobID(ctx)}
 	defer func() { timing.Emit("create", "create.client", timing.Status(createErr), started, ids) }()
+	parentCtx := ctx
+	ctx, prepareSpan := otel.Tracer("runner").Start(ctx, "box.create_prepare")
+	prepareSpan.SetAttributes(attribute.String("box_id", boxDto.Id))
+	prepareOpen := true
+	defer func() {
+		if prepareOpen {
+			prepareSpan.SetStatus(codes.Error, "box preparation failed")
+			prepareSpan.End()
+		}
+	}()
+
 	cpus, err := dto.CPUAllocation(boxDto.CpuQuota)
 	if err != nil {
 		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
@@ -635,7 +649,10 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (_ string,
 	}
 	// Native creation cannot be cancelled after admission. Keep the target
 	// lease until it finishes; preparation above still obeys caller cancellation.
-	ctx = context.WithoutCancel(ctx)
+	ctx = context.WithoutCancel(parentCtx)
+
+	prepareOpen = false
+	prepareSpan.End()
 
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if
@@ -668,8 +685,15 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (_ string,
 			return "", "", err
 		}
 		runtimeStart := time.Now()
+		ctx, getOrCreateSpan := otel.Tracer("runner").Start(ctx, "box.get_or_create")
+		getOrCreateSpan.SetAttributes(attribute.String("box_id", boxDto.Id))
 		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
 		timing.Emit("create", "create.runtime_getorcreate", timing.Status(err), runtimeStart, ids)
+		if err != nil {
+			getOrCreateSpan.RecordError(err)
+			getOrCreateSpan.SetStatus(codes.Error, "GetOrCreate failed")
+		}
+		getOrCreateSpan.End()
 	}
 	if err != nil {
 		if len(volumeMounts) > 0 {
@@ -705,11 +729,17 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (_ string,
 	skipStart := boxDto.SkipStart != nil && *boxDto.SkipStart
 	startPhase := time.Now()
 	if !skipStart {
-		if err := bx.Start(ctx); err != nil {
+		startSpanCtx, startSpan := otel.Tracer("runner").Start(ctx, "box.start")
+		startSpan.SetAttributes(attribute.String("box_id", boxDto.Id))
+		if err := bx.Start(startSpanCtx); err != nil {
 			timing.Emit("create", "create.started", timing.Error, startPhase, ids)
+			startSpan.RecordError(err)
+			startSpan.SetStatus(codes.Error, "box start failed")
+			startSpan.End()
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
 		}
 		timing.Emit("create", "create.started", timing.OK, startPhase, ids)
+		startSpan.End()
 		c.recordPulledImage(ctx, boxDto.Id, bx)
 	} else {
 		timing.Emit("create", "create.started", timing.Skipped, startPhase, ids)

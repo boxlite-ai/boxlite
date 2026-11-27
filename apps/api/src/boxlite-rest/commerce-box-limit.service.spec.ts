@@ -11,6 +11,8 @@ jest.mock('axios', () => ({
 import axios from 'axios'
 import { HttpStatus } from '@nestjs/common'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import * as commercePlanModule from './commerce-box-limit.service'
+import { OrganizationBoxLimitsService } from '../organization/services/organization-box-limits.service'
 import {
   BOX_CREATION_ADMISSION_UNAVAILABLE_CODE,
   BoxCreationAdmissionUnavailableError,
@@ -92,8 +94,7 @@ describe('CommerceBoxLimitService', () => {
     const { service, redis } = makeService()
     const resolving = service.resolveMaxCreatedBoxes('org/with space')
 
-    await Promise.resolve()
-    await Promise.resolve()
+    await new Promise(setImmediate)
     expect(get).toHaveBeenCalledTimes(2)
     expect(get).toHaveBeenNthCalledWith(
       1,
@@ -140,6 +141,35 @@ describe('CommerceBoxLimitService', () => {
     expect(redis.get).toHaveBeenCalledTimes(1)
     expect(get).toHaveBeenCalledTimes(2)
     expect(redis.set).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares the organization plan response with per-box limits in one create scope', async () => {
+    get.mockImplementation(async (url: string) =>
+      url.includes('/organization/')
+        ? {
+            data: {
+              plan: {
+                planId: 'pro',
+                perBoxLimits: { maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 },
+              },
+            },
+          }
+        : { data: catalog },
+    )
+    const { service, configService, redis } = makeService()
+    const perBox = new OrganizationBoxLimitsService(configService as never, redis as never)
+
+    await (commercePlanModule as any).withCommerceOrganizationPlanScope(async () => {
+      const [maxCreatedBoxes, limits] = await Promise.all([
+        service.resolveMaxCreatedBoxes('org-1'),
+        perBox.resolve({ id: 'org-1', maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 }),
+      ])
+      expect(maxCreatedBoxes).toBe(8)
+      expect(limits).toEqual({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })
+    })
+
+    expect(get).toHaveBeenCalledTimes(2)
+    expect(get.mock.calls.filter(([url]) => String(url).includes('/organization/'))).toHaveLength(1)
   })
 
   it('falls back to Commerce when Redis reads or writes fail', async () => {

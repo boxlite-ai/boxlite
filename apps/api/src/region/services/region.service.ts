@@ -27,9 +27,14 @@ import { RegionEvents } from '../constants/region-events.constant'
 import { RegionCreatedEvent } from '../events/region-created.event'
 import { RegionDeletedEvent } from '../events/region-deleted.event'
 import { UpdateRegionDto } from '../dto/update-region.dto'
+import { isEnableApiModuleCache } from '../../common/utils/api-module-cache.util'
+import { Singleflight } from '../../common/utils/singleflight.util'
+import { copyEntity } from '../../common/utils/entity-copy.util'
 
 @Injectable()
 export class RegionService {
+  private readonly lookupSingleflight = new Singleflight()
+
   constructor(
     @InjectRepository(Region)
     private readonly regionRepository: Repository<Region>,
@@ -100,18 +105,21 @@ export class RegionService {
    * @param id - The ID of the region.
    * @returns The region if found, or null otherwise.
    */
-  async findOne(id: string, cache = false): Promise<Region | null> {
-    return await this.regionRepository.findOne({
-      where: {
-        id,
-      },
-      cache: cache
-        ? {
-            id: `region:${id}`,
-            milliseconds: 30000,
-          }
-        : undefined,
-    })
+  async findOne(id: string, cache?: boolean): Promise<Region | null> {
+    const cacheEnabled = cache ?? isEnableApiModuleCache(this.configService.get('apiModuleCache.enabled'))
+    if (!cacheEnabled) {
+      return this.regionRepository.findOne({ where: { id } })
+    }
+
+    const milliseconds = cache === true ? 30000 : 60000
+    const cacheKey = `region:${cache === true ? '30s' : '60s'}:${id}`
+    const region = await this.lookupSingleflight.run(cacheKey, () =>
+      this.regionRepository.findOne({
+        where: { id },
+        cache: { id: cacheKey, milliseconds },
+      }),
+    )
+    return region ? copyEntity(region) : null
   }
 
   /**

@@ -19,6 +19,9 @@ import { RunnerService } from '../box/services/runner.service'
 import { apiKeyValidationCacheKey, generateApiKeyHash } from '../common/utils/api-key'
 import { RegionService } from '../region/services/region.service'
 import { JWT_REGEX } from './constants/jwt-regex.constant'
+import { TtlLruCache } from '../common/utils/ttl-lru-cache.util'
+import { recordApiModuleCacheAccess } from '../common/utils/cache-metrics.util'
+import { Singleflight } from '../common/utils/singleflight.util'
 
 type UserCache = {
   userId: string
@@ -29,6 +32,8 @@ type UserCache = {
 @Injectable()
 export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implements OnModuleInit {
   private readonly logger = new Logger(ApiKeyStrategy.name)
+  private readonly runnerAuthCache = new TtlLruCache<string, AuthContextType>(10_000, 60_000)
+  private readonly validationSingleflight = new Singleflight()
 
   constructor(
     @InjectRedis() private readonly redis: Redis,
@@ -47,8 +52,11 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
   }
 
   async validate(token: string): Promise<AuthContextType | null> {
+    return this.validationSingleflight.run(generateApiKeyHash(token), () => this.validateUncached(token))
+  }
+
+  private async validateUncached(token: string): Promise<AuthContextType | null> {
     this.logger.debug('Validate method called')
-    this.logger.debug(`Validating API key: ${token.substring(0, 8)}...`)
 
     // Tokens matching JWT structure are not API keys. Return null so Passport can continue with the JWT strategy.
     if (JWT_REGEX.test(token)) {
@@ -83,6 +91,14 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       }
     }
 
+    const runnerCacheEnabled = this.isRunnerAuthCacheEnabled()
+    const cachedRunner = runnerCacheEnabled ? this.runnerAuthCache.get(generateApiKeyHash(token)) : undefined
+    if (cachedRunner) {
+      recordApiModuleCacheAccess('runner_auth', 'hit')
+      return cachedRunner
+    }
+    recordApiModuleCacheAccess('runner_auth', runnerCacheEnabled ? 'miss' : 'bypass')
+
     try {
       let apiKey = await this.getApiKeyCache(token)
       if (!apiKey) {
@@ -103,7 +119,6 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
         throw new UnauthorizedException('This API key has expired')
       }
 
-      this.logger.debug(`Updating last used timestamp for API key: ${token.substring(0, 8)}...`)
       await this.apiKeyService.updateLastUsedAt(apiKey.organizationId, apiKey.userId, apiKey.name, new Date())
 
       let userCache = await this.getUserCache(apiKey.userId)
@@ -141,11 +156,13 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
       const runner = await this.runnerService.findByApiKey(token)
       if (runner) {
         this.logger.debug(`Runner API key found for runner: ${runner.id}`)
-        return {
+        const context: AuthContextType = {
           role: 'runner',
           runnerId: runner.id,
           runner,
         }
+        if (this.isRunnerAuthCacheEnabled()) this.runnerAuthCache.set(generateApiKeyHash(token), context)
+        return context
       }
     } catch (error) {
       this.logger.debug('Error checking runner API key:', error)
@@ -165,6 +182,10 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
     }
 
     return null
+  }
+
+  private isRunnerAuthCacheEnabled(): boolean {
+    return this.configService.get('runnerAuthCache.enabled') !== false
   }
 
   private async getUserCache(userId: string): Promise<UserCache | null> {

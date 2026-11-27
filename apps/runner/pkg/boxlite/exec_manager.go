@@ -14,6 +14,10 @@ import (
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/internal/timing"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Reaping policy defaults (Phase 4.1). Operators override via env vars
@@ -71,6 +75,10 @@ func (s sdkExec) ResizeTTY(ctx context.Context, rows, cols int) error {
 func (s sdkExec) Close() error                          { return s.inner.Close() }
 func (s sdkExec) Wait(ctx context.Context) (int, error) { return s.inner.Wait(ctx) }
 
+type executionStarter interface {
+	start(context.Context, StartOptions, io.Writer, io.Writer) (execHandle, io.Writer, string, error)
+}
+
 type executionSource interface {
 	list(context.Context) ([]boxlite.ExecutionInfo, error)
 	get(context.Context, string) (execHandle, error)
@@ -78,6 +86,22 @@ type executionSource interface {
 }
 
 type sdkExecutionSource struct{ box *boxlite.Box }
+
+func (s sdkExecutionSource) start(ctx context.Context, opts StartOptions, stdout, stderr io.Writer) (execHandle, io.Writer, string, error) {
+	execution, err := s.box.StartExecution(ctx, opts.Command, opts.Args, &boxlite.ExecutionOptions{
+		TTY:        opts.TTY,
+		Stdout:     stdout,
+		Stderr:     stderr,
+		Env:        opts.Env,
+		WorkingDir: opts.WorkingDir,
+		User:       opts.User,
+		Timeout:    opts.Timeout,
+	})
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return sdkExec{inner: execution}, execution.Stdin, execution.ID(), nil
+}
 
 func (s sdkExecutionSource) list(ctx context.Context) ([]boxlite.ExecutionInfo, error) {
 	return s.box.Executions().List(ctx)
@@ -377,6 +401,10 @@ type StartOptions struct {
 }
 
 func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, opts StartOptions) (string, error) {
+	return m.start(ctx, sdkExecutionSource{box: bx}, boxID, opts)
+}
+
+func (m *ExecManager) start(ctx context.Context, source executionStarter, boxID string, opts StartOptions) (string, error) {
 	now := time.Now()
 	exec := &ManagedExec{
 		ID:        "",
@@ -393,32 +421,27 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 		LastDisconnectAt: now,
 	}
 
-	// Pass the streamBus sinks directly to the SDK — no io.Pipe between
-	// the producer and the fan-out. The SDK's pump calls bus.Write, which
-	// captures into the bounded backlog AND fans out to live subscribers
-	// in one mutex-guarded operation. Subscribers attached before any
-	// Write observe the backlog snapshot on Subscribe.
+	parentSpan := trace.SpanFromContext(ctx)
+	ctx, startSpan := otel.Tracer("runner").Start(ctx, "box.exec.start_execution",
+		trace.WithAttributes(attribute.String("box_id", boxID)))
 	startPhase := time.Now()
-	execution, err := bx.StartExecution(ctx, opts.Command, opts.Args, &boxlite.ExecutionOptions{
-		TTY:        opts.TTY,
-		Stdout:     exec.stdoutBus,
-		Stderr:     exec.stderrBus,
-		Env:        opts.Env,
-		WorkingDir: opts.WorkingDir,
-		User:       opts.User,
-		Timeout:    opts.Timeout,
-	})
+	handle, stdin, id, err := source.start(ctx, opts, exec.stdoutBus, exec.stderrBus)
 	if err != nil {
 		timing.Emit("exec", "exec.started", timing.Error, startPhase, timing.IDs{BoxID: boxID})
+		startSpan.RecordError(err)
+		startSpan.SetStatus(codes.Error, "StartExecution failed")
+		startSpan.End()
 		return "", fmt.Errorf("failed to start execution: %w", err)
 	}
-	id := execution.ID()
 	ids := timing.IDs{BoxID: boxID, ExecID: id}
 	timing.Emit("exec", "exec.started", timing.OK, startPhase, ids)
+	startSpan.SetAttributes(attribute.String("execution_id", id))
+	startSpan.SetStatus(codes.Ok, "")
+	startSpan.End()
 	exec.ID = id
-	handle := sdkExec{inner: execution}
 	exec.execution = handle
-	exec.stdinW = execution.Stdin
+	exec.stdinW = stdin
+	waitCtx := trace.ContextWithSpan(context.Background(), parentSpan)
 
 	go func() {
 		defer close(exec.Done)
@@ -432,7 +455,9 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 		}()
 
 		waitStart := time.Now()
-		exitCode, err := handle.Wait(context.Background())
+		waitCtx, waitSpan := otel.Tracer("runner").Start(waitCtx, "box.exec.wait",
+			trace.WithAttributes(attribute.String("box_id", boxID), attribute.String("execution_id", id)))
+		exitCode, err := handle.Wait(waitCtx)
 		status := timing.Status(err)
 		if exitCode != 0 {
 			status = timing.Error
@@ -440,6 +465,14 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 		timing.Emit("exec", "exec.exited", status, waitStart, ids)
 		exec.ExitCode = exitCode
 		exec.Err = err
+		waitSpan.SetAttributes(attribute.Int("exit_code", exitCode))
+		if err != nil {
+			waitSpan.RecordError(err)
+			waitSpan.SetStatus(codes.Error, "execution Wait failed")
+		} else {
+			waitSpan.SetStatus(codes.Ok, "")
+		}
+		waitSpan.End()
 	}()
 
 	m.mu.Lock()
@@ -564,10 +597,17 @@ func (m *ExecManager) attach(ctx context.Context, source executionSource, execut
 	if execution.closed {
 		return nil, fmt.Errorf("%w: %s", ErrExecClosed, execution.ID)
 	}
+	ctx, attachSpan := otel.Tracer("runner").Start(ctx, "box.exec.attach_output",
+		trace.WithAttributes(attribute.String("box_id", execution.BoxID), attribute.String("execution_id", execution.ID)))
 	stream, stdin, err := source.attach(ctx, execution.ID, execution.stdoutBus, execution.stderrBus)
 	if err != nil {
+		attachSpan.RecordError(err)
+		attachSpan.SetStatus(codes.Error, "execution output attach failed")
+		attachSpan.End()
 		return nil, err
 	}
+	attachSpan.SetStatus(codes.Ok, "")
+	attachSpan.End()
 	execution.streamExecution = stream
 	execution.stdinW = stdin
 	return execution, nil

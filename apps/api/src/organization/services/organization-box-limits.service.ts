@@ -3,7 +3,7 @@
 
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Injectable, Logger } from '@nestjs/common'
-import axios from 'axios'
+import { fetchCommerceOrganizationPlan } from '../../common/utils/commerce-organization-plan.util'
 import { Redis } from 'ioredis'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { PerBoxLimits } from '../../box/services/per-box-limits'
@@ -73,10 +73,7 @@ export class OrganizationBoxLimitsService {
     const cached = await this.getCachedLimits(cacheKey)
     if (cached) return cached
 
-    const { data } = await axios.get<unknown>(
-      `${baseUrl.replace(/\/+$/, '')}/organization/${encodeURIComponent(organizationId)}/plan`,
-      { timeout: 2_000, maxRedirects: 0, headers: { authorization: `Bearer ${token}` } },
-    )
+    const { data } = await fetchCommerceOrganizationPlan(baseUrl, organizationId, token)
     const limits = this.parseLimits(data) ?? { ...DEFAULT_LIMITS }
     await this.cacheLimits(cacheKey, limits)
     return limits

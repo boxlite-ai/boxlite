@@ -22,6 +22,7 @@ import { JobService } from '../services/job.service'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerState } from '../enums/runner-state.enum'
 import { boxVolumeForDispatch } from '../utils/box-volume.util'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -169,6 +170,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     throw error
   }
 
+  @WithInstrumentation('box.runner_create_dispatch')
   async createBox(
     box: Box,
     image: string,

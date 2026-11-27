@@ -22,6 +22,7 @@ import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { Context } from '../../common/context/context'
 import { OrganizationService } from '../../organization/services/organization.service'
+import { Singleflight } from '../../common/utils/singleflight.util'
 import { SecretServerClient } from './secret-server-client'
 import { createServer } from 'node:http'
 import { AddressInfo } from 'node:net'
@@ -236,6 +237,23 @@ function makeNetworkTunnelService() {
   return service
 }
 
+describe('BoxService uncached runner ownership lookup', () => {
+  it('bypasses the lookup cache while preserving id-first resolution', async () => {
+    const service = Object.create(BoxService.prototype) as BoxService
+    const box = { id: 'box-1', runnerId: 'runner-new', state: BoxState.STARTED }
+    const boxRepository = { findOne: jest.fn().mockResolvedValue(box) }
+    Object.assign(service as any, { boxRepository })
+
+    await expect((service.findOneByIdOrName as any)('box-1', undefined, true, undefined, false)).resolves.toBe(box)
+
+    expect(boxRepository.findOne).toHaveBeenCalledWith({
+      lockTimeoutMs: undefined,
+      where: { id: 'box-1' },
+      cache: undefined,
+    })
+  })
+})
+
 describe('BoxService network tunnel URLs', () => {
   it('creates a case-safe endpoint for an SDK tunnel', async () => {
     const service = makeNetworkTunnelService()
@@ -273,6 +291,16 @@ describe('BoxService image reporting', () => {
   }
 
   const reported = { digest: `sha256:${'a'.repeat(64)}`, sizeBytes: 4096 }
+
+  it('reuses the access-guard snapshot without dropping image registration', async () => {
+    const { service, registrar } = makeService(BoxState.STARTED)
+    const snapshot = await (service as any).boxRepository.findOne()
+
+    await (service.updateState as any)('box-1', BoxState.STARTED, false, undefined, reported, snapshot)
+
+    expect((service as any).boxRepository.findOne).toHaveBeenCalledTimes(1)
+    expect(registrar.onBoxStarted).toHaveBeenCalledTimes(1)
+  })
 
   /**
    * The report arrives on a state the control plane usually already has: it
@@ -439,6 +467,73 @@ describe('BoxService inbound defaults', () => {
     })
     return { service, boxRepository, runnerService, warmPoolService }
   }
+
+  it('starts nested-policy, region and per-box-limit reads together', async () => {
+    let resolveNested!: (value: boolean) => void
+    const organizationService = {
+      assertOrganizationIsNotSuspended: jest.fn(),
+      isNestedVirtualizationEnabled: jest.fn().mockReturnValue(
+        new Promise<boolean>((resolve) => {
+          resolveNested = resolve
+        }),
+      ),
+    }
+    const organizationBoxLimits = {
+      resolve: jest.fn().mockResolvedValue({ maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 }),
+    }
+    const regionService = { findOne: jest.fn().mockRejectedValue(new Error('stop after parallel reads')) }
+    const { service } = makeCreateService({ organizationService, organizationBoxLimits, regionService })
+    ;(service as any).getValidatedOrDefaultRegion = BoxService.prototype['getValidatedOrDefaultRegion']
+
+    const creating = service.create(
+      { image: 'alpine:latest' } as any,
+      { ...activeOrg, defaultRegionId: 'region-1' },
+      Context.user(),
+    )
+    await new Promise(setImmediate)
+    const regionStarted = regionService.findOne.mock.calls.length > 0
+    const limitsStarted = organizationBoxLimits.resolve.mock.calls.length > 0
+    resolveNested(false)
+    await expect(creating).rejects.toThrow('stop after parallel reads')
+
+    expect(regionStarted).toBe(true)
+    expect(limitsStarted).toBe(true)
+  })
+
+  it('preserves admission, nested, region and limits error priority after parallel reads', async () => {
+    for (const expected of ['admission', 'nested', 'region', 'limits']) {
+      const organizationService = {
+        assertOrganizationIsNotSuspended: jest.fn(),
+        isNestedVirtualizationEnabled: jest.fn().mockImplementation(async () => {
+          if (expected === 'nested') throw new Error('nested')
+          return false
+        }),
+      }
+      const organizationBoxLimits = {
+        resolve: jest.fn().mockImplementation(async () => {
+          if (expected === 'limits') throw new Error('limits')
+          return { maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 }
+        }),
+      }
+      const getValidatedOrDefaultRegion = jest.fn().mockImplementation(async () => {
+        if (expected === 'region') throw new Error('region')
+        return { id: 'region-1' }
+      })
+      const { service, boxRepository } = makeCreateService({
+        organizationService,
+        organizationBoxLimits,
+        getValidatedOrDefaultRegion,
+      })
+
+      await expect(
+        service.create({ image: 'alpine:latest' } as any, activeOrg, Context.user(), {
+          maxCreatedBoxesPromise:
+            expected === 'admission' ? Promise.reject(new Error('admission')) : Promise.resolve(10),
+        }),
+      ).rejects.toThrow(expected)
+      expect(boxRepository.insert).not.toHaveBeenCalled()
+    }
+  })
 
   it('CI platform ownership forces fresh creation and forwards the transaction callback', async () => {
     const { service, boxRepository, warmPoolService } = makeCreateService({
@@ -829,7 +924,12 @@ describe('BoxService inbound defaults', () => {
           findOne: failure instanceof Error ? jest.fn().mockRejectedValue(failure) : jest.fn().mockResolvedValue(null),
         }
         const organizationService = Object.create(OrganizationService.prototype)
-        Object.assign(organizationService, { organizationRepository, assertOrganizationIsNotSuspended: jest.fn() })
+        Object.assign(organizationService, {
+          organizationRepository,
+          assertOrganizationIsNotSuspended: jest.fn(),
+          configService: { get: () => undefined },
+          nestedVirtualizationSingleflight: new Singleflight(),
+        })
         const { service, boxRepository } = makeCreateService({ organizationService })
         await expect(
           service.create({ name: 'missing-policy', image: 'alpine' } as any, { id: 'org-1' } as any, Context.user()),
@@ -846,7 +946,12 @@ describe('BoxService inbound defaults', () => {
           findOne: jest.fn().mockResolvedValue({ id: organization.id, nestedVirtualizationEnabled: enabled }),
         }
         const organizationService = Object.create(OrganizationService.prototype)
-        Object.assign(organizationService, { organizationRepository, assertOrganizationIsNotSuspended: jest.fn() })
+        Object.assign(organizationService, {
+          organizationRepository,
+          assertOrganizationIsNotSuspended: jest.fn(),
+          configService: { get: () => undefined },
+          nestedVirtualizationSingleflight: new Singleflight(),
+        })
         const { service, boxRepository, warmPoolService } = makeCreateService({
           organizationService,
           runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue({ id: 'runner-1', apiVersion: '0' }) },

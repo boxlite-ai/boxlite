@@ -28,7 +28,7 @@ import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { BoxCreatedEvent } from '../events/box-create.event'
 import { Box } from '../entities/box.entity'
 
-import { WithInstrumentation, WithSpan } from '../../common/decorators/otel.decorator'
+import { WithInstrumentation, WithMetric, WithSpan } from '../../common/decorators/otel.decorator'
 
 import { BoxStartAction } from './box-actions/box-start.action'
 import { BoxStopAction } from './box-actions/box-stop.action'
@@ -121,9 +121,15 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
 
               try {
                 // Activity is buffered in Redis before the periodic DB flush.
-                // Recheck after taking the state lock so a recent Exec/Files
-                // call cannot be stopped based on a stale SQL timestamp.
-                const lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
+                // Recheck under the state lock, then debounce briefly so an
+                // asynchronous Exec/Files activity write can reach Redis.
+                let lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
+                if (lastActivityAt && Date.now() - lastActivityAt.getTime() < box.autoStop * 1000) {
+                  return
+                }
+
+                await setTimeout(30)
+                lastActivityAt = await this.boxActivityService.getLastActivityAt(box.id)
                 if (lastActivityAt && Date.now() - lastActivityAt.getTime() < box.autoStop * 1000) {
                   return
                 }
@@ -236,7 +242,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     }
   }
 
-  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'sync-states' })
+  @Cron(process.env.BOX_SYNC_STATES_CRON || CronExpression.EVERY_MINUTE, { name: 'sync-states' })
   @TrackJobExecution()
   @WithInstrumentation()
   @LogExecution('sync-states')
@@ -478,6 +484,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
     event: BoxEvents.CREATED,
   })
   @TrackJobExecution()
+  @WithMetric('box.created_event')
   @WithSpan()
   private async handleBoxCreatedEvent(event: BoxCreatedEvent) {
     await this.syncInstanceState(event.box.id)

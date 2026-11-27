@@ -136,6 +136,7 @@ const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
+  maxCreatedBoxesPromise?: Promise<number | undefined>
   /** Authenticated creator, supplied by the caller rather than the request DTO. */
   createdBy?: string
   /** Internal transactional admission/ownership; never accepted from a public DTO. */
@@ -262,6 +263,7 @@ export class BoxService {
    * and resets its counter while any remain, so the runner keeps draining and
    * the box keeps running.
    */
+  @WithInstrumentation('box.persist_available_runner')
   private async persistOnAvailableRunner(
     box: Box,
     runnerParams: GetRunnerParams,
@@ -320,23 +322,37 @@ export class BoxService {
     )
   }
 
+  @WithInstrumentation('box.service_create')
   async create(
     createBoxDto: CreateBoxDto,
     organization: Organization,
     ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
-    // Authentication caches organizations; admission must use the current policy.
-    const nestedVirtualizationEnabled = await this.organizationService.isNestedVirtualizationEnabled(organization.id)
+    const admissionPromise = Promise.resolve(options.maxCreatedBoxesPromise ?? options.maxCreatedBoxes)
+    const nestedPromise = this.organizationService.isNestedVirtualizationEnabled(organization.id)
+    const regionPromise = this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
+    const limitsPromise = this.organizationBoxLimits.resolve(organization)
+    const [admission, nested, regionResult, limitsResult] = await Promise.allSettled([
+      admissionPromise,
+      nestedPromise,
+      regionPromise,
+      limitsPromise,
+    ])
+
+    if (admission.status === 'rejected') throw admission.reason
+    const maxCreatedBoxes = admission.value
+    if (nested.status === 'rejected') throw nested.reason
     organization = Object.assign(Object.create(Object.getPrototypeOf(organization)) as Organization, organization, {
-      nestedVirtualizationEnabled,
+      nestedVirtualizationEnabled: nested.value,
     })
     validateSecrets(createBoxDto.secrets)
     const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
     }
-    const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
+    if (regionResult.status === 'rejected') throw regionResult.reason
+    const region = regionResult.value
 
     try {
       const boxClass = this.getValidatedOrDefaultClass(createBoxDto.class)
@@ -348,8 +364,8 @@ export class BoxService {
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
       // Reject over-limit requests at the boundary (the "security option"
       // per-box ceilings) rather than persisting out-of-range values.
-      const limits = await this.organizationBoxLimits.resolve(organization)
-      assertWithinPerBoxLimits(cpu, mem, disk, limits)
+      if (limitsResult.status === 'rejected') throw limitsResult.reason
+      assertWithinPerBoxLimits(cpu, mem, disk, limitsResult.value)
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
       // Admission decides whether this organization may boot from this image at
@@ -434,7 +450,7 @@ export class BoxService {
           })
 
           if (warmPoolBox) {
-            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, options.maxCreatedBoxes)
+            return await this.assignWarmPoolBox(warmPoolBox, createBoxDto, organization, ctx, maxCreatedBoxes)
           }
         }
       }
@@ -518,8 +534,8 @@ export class BoxService {
         await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
         const insert = () =>
           options.onPersist
-            ? this.boxRepository.insert(box, options.maxCreatedBoxes, options.onPersist)
-            : this.boxRepository.insert(box, options.maxCreatedBoxes)
+            ? this.boxRepository.insert(box, maxCreatedBoxes, options.onPersist)
+            : this.boxRepository.insert(box, maxCreatedBoxes)
         return createBoxDto.name
           ? insert()
           : persistWithGeneratedBoxName(box.id, (name) => {
@@ -908,11 +924,13 @@ export class BoxService {
     return boxes
   }
 
+  @WithInstrumentation('box.lookup')
   async findOneByIdOrName(
     boxIdOrName: string,
     organizationId?: string,
     returnDestroyed?: boolean,
     lockTimeoutMs?: number,
+    useCache = true,
   ): Promise<Box> {
     const stateFilter = returnDestroyed ? {} : { state: Not(BoxState.DESTROYED) }
     const organizationFilter = organizationId ? { organizationId } : {}
@@ -925,10 +943,12 @@ export class BoxService {
         ...organizationFilter,
         ...stateFilter,
       },
-      cache: {
-        id: boxLookupCacheKeyById({ organizationId, returnDestroyed, id: boxIdOrName }),
-        milliseconds: BOX_LOOKUP_CACHE_TTL_MS,
-      },
+      cache: useCache
+        ? {
+            id: boxLookupCacheKeyById({ organizationId, returnDestroyed, id: boxIdOrName }),
+            milliseconds: BOX_LOOKUP_CACHE_TTL_MS,
+          }
+        : undefined,
     })
 
     if (!box) {
@@ -939,10 +959,12 @@ export class BoxService {
           ...organizationFilter,
           ...stateFilter,
         },
-        cache: {
-          id: boxLookupCacheKeyByName({ organizationId, returnDestroyed, boxName: boxIdOrName }),
-          milliseconds: BOX_LOOKUP_CACHE_TTL_MS,
-        },
+        cache: useCache
+          ? {
+              id: boxLookupCacheKeyByName({ organizationId, returnDestroyed, boxName: boxIdOrName }),
+              milliseconds: BOX_LOOKUP_CACHE_TTL_MS,
+            }
+          : undefined,
       })
     }
 
@@ -981,39 +1003,51 @@ export class BoxService {
   }
 
   async getOrganizationId(boxIdOrName: string, organizationId?: string): Promise<string> {
-    const organizationFilter = organizationId ? { organizationId: organizationId } : {}
+    const organizationFilter = organizationId ? { organizationId } : {}
+    const nameCacheKey = organizationId ? boxOrgIdCacheKeyByName({ organizationId, boxName: boxIdOrName }) : undefined
+    if (nameCacheKey) {
+      const cachedName = this.boxLookupCacheInvalidationService.getCachedOrganizationId(nameCacheKey)
+      if (cachedName) return cachedName
+    }
 
-    let box = await this.boxRepository.findOne({
-      where: {
-        id: boxIdOrName,
-        ...organizationFilter,
-      },
-      select: ['organizationId'],
-      cache: {
-        id: boxOrgIdCacheKeyById({ organizationId, id: boxIdOrName }),
-        milliseconds: BOX_ORG_ID_CACHE_TTL_MS,
-      },
-    })
-
-    if (!box && organizationId) {
-      box = await this.boxRepository.findOne({
+    const idCacheKey = boxOrgIdCacheKeyById({ organizationId, id: boxIdOrName })
+    let resolvedOrganizationId = await this.boxLookupCacheInvalidationService.getOrganizationId(idCacheKey, async () => {
+      const box = await this.boxRepository.findOne({
         where: {
-          name: boxIdOrName,
-          organizationId: organizationId,
+          id: boxIdOrName,
+          ...organizationFilter,
         },
         select: ['organizationId'],
         cache: {
-          id: boxOrgIdCacheKeyByName({ organizationId, boxName: boxIdOrName }),
+          id: idCacheKey,
           milliseconds: BOX_ORG_ID_CACHE_TTL_MS,
         },
       })
+      return box?.organizationId ?? null
+    })
+
+    if (!resolvedOrganizationId && organizationId && nameCacheKey) {
+      resolvedOrganizationId = await this.boxLookupCacheInvalidationService.getOrganizationId(nameCacheKey, async () => {
+        const box = await this.boxRepository.findOne({
+          where: {
+            name: boxIdOrName,
+            organizationId,
+          },
+          select: ['organizationId'],
+          cache: {
+            id: nameCacheKey,
+            milliseconds: BOX_ORG_ID_CACHE_TTL_MS,
+          },
+        })
+        return box?.organizationId ?? null
+      })
     }
 
-    if (!box || !box.organizationId) {
+    if (!resolvedOrganizationId) {
       throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
     }
 
-    return box.organizationId
+    return resolvedOrganizationId
   }
 
   async getRunnerId(boxIdOrName: string): Promise<string | null> {
@@ -1081,10 +1115,10 @@ export class BoxService {
     ctx: Context,
     lookup: 'id' | 'id-or-name' = 'id-or-name',
   ): Promise<Box> {
-    const selected = await this.lifecycleBox(boxIdOrName, organizationId, lookup)
-    const { box, checkpointState } = await this.boxRepository.findWithCheckpointState(
-      selected.id,
-      selected.organizationId,
+    const { box, checkpointState } = await this.boxRepository.findWithCheckpointStateForLifecycle(
+      boxIdOrName,
+      organizationId,
+      lookup,
     )
 
     const waitingFilestoreRestart =
@@ -1171,8 +1205,13 @@ export class BoxService {
    * states are returned unchanged so the caller can wait and retry. Unexpected
    * database errors propagate; AutoResume must never proxy before readiness.
    */
-  async ensureStartedForProxy(boxIdOrName: string, organization: Organization, admit?: ProxyAdmission): Promise<Box> {
+  assertOrganizationIsNotSuspended(organization: Organization): void {
     this.organizationService.assertOrganizationIsNotSuspended(organization)
+  }
+
+  @WithInstrumentation('box.proxy_start')
+  async ensureStartedForProxy(boxIdOrName: string, organization: Organization, admit?: ProxyAdmission): Promise<Box> {
+    this.assertOrganizationIsNotSuspended(organization)
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
 
     // Check the freshly read state inside the caller's lifecycle lock.
@@ -1303,6 +1342,7 @@ export class BoxService {
     })
   }
 
+  @WithInstrumentation('box.activity_update')
   async updateLastActivityAt(boxId: string, lastActivityAt: Date, previewOpen = false): Promise<void> {
     if (!previewOpen) return this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
     const controller = new AbortController()
@@ -1563,10 +1603,14 @@ export class BoxService {
     recoverable = false,
     errorReason?: string,
     reportedImage?: ReportedImage,
+    snapshot?: Box,
   ): Promise<void> {
-    const box = await this.boxRepository.findOne({
-      where: { id: boxId },
-    })
+    if (snapshot && snapshot.id !== boxId) throw new NotFoundException(`Box with ID ${boxId} not found`)
+    const box =
+      snapshot ??
+      (await this.boxRepository.findOne({
+        where: { id: boxId },
+      }))
 
     if (!box) {
       throw new NotFoundException(`Box with ID ${boxId} not found`)

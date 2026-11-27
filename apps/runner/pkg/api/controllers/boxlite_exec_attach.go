@@ -15,6 +15,9 @@ import (
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // wsKeepaliveInterval is how often the server sends a WebSocket Ping on
@@ -361,15 +364,27 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 		}
 		timing.Emit("exec", "exec.output_drained", drainStatus, drainStart, ids)
 		if drained {
+			_, exitSpan := otel.Tracer("runner").Start(parentCtx, "box.exec.exit_frame")
+			exitCode := exec.ExitCodeValue()
+			exitSpan.SetAttributes(
+				attribute.Int("exit_code", exitCode),
+				attribute.String("execution_id", ids.ExecID),
+				attribute.String("box_id", ids.BoxID),
+			)
 			frameErr := writeJSONFrame(conn, &writeMu, map[string]any{
 				"type":      "exit",
-				"exit_code": exec.ExitCodeValue(),
+				"exit_code": exitCode,
 			})
 			status := drainStatus
 			if frameErr != nil {
 				status = timing.Error
+				exitSpan.RecordError(frameErr)
+				exitSpan.SetStatus(codes.Error, "failed to write exit frame")
+			} else {
+				exitSpan.SetStatus(codes.Ok, "")
 			}
 			attachDone(status)
+			exitSpan.End()
 			closeWS(websocket.CloseNormalClosure, "")
 		} else {
 			attachDone(timing.Error)

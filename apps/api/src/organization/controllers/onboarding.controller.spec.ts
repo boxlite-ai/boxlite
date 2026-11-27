@@ -116,7 +116,9 @@ describe('onboarding route access', () => {
       { findOne: jest.fn().mockResolvedValue(role ? { role } : null) } as never,
       new Reflector(),
     )
-    Object.assign(guard, { redis: { get: jest.fn().mockResolvedValue(null), set: jest.fn() } })
+    Object.assign(guard, {
+      redis: { get: jest.fn().mockResolvedValue(null), set: jest.fn(), eval: jest.fn().mockResolvedValue(1) },
+    })
     const request = { params: { organizationId: 'org' }, user: { userId: 'user', role: 'user' } }
     const context = {
       switchToHttp: () => ({ getRequest: () => request }),

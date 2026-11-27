@@ -101,8 +101,10 @@ visible in role listings and reject update or delete with 403.
 
 For example, an OWNER of A can edit A's custom role, but using B's role ID through
 A's route returns 404. A MEMBER of A receives 403 on all four role routes.
-Updated permissions apply to assigned members when their membership is reloaded;
-OrganizationAccessGuard caches memberships for up to ten seconds.
+Updated permissions apply to assigned members when their membership is reloaded.
+OrganizationAccessGuard caches memberships for up to ten seconds. Member access changes,
+removals, account-link membership moves, and custom-role updates invalidate the affected
+entries after their database writes commit. Failed invalidation falls back to the TTL.
 
 Run `make test:apps:api TEST_FILES='organization-action.guard.spec|organization-role.authorization'`
 with `DB_HOST=127.0.0.1`, `DB_PORT`, `DB_USERNAME`, `DB_DATABASE`, and any required
@@ -113,9 +115,12 @@ JWT identity setup, rate limiting, and Redis transport use test doubles.
 
 ## Organization suspension
 
-Organization access caches organization records as JSON for 10 seconds. On cache reads,
-`suspendedUntil` is restored to a `Date` so temporary suspensions are enforced until their
-deadline on both cached and database reads. A null deadline keeps a suspension indefinite.
+Organization access caches organization records as JSON for 60 seconds. Suspension,
+unsuspension, email-verification unsuspension, and deletion invalidate the entry after their
+transactions commit. Cache backfills carry a Redis generation: an in-flight query that started
+before invalidation cannot write its old result back afterward. On cache reads, organization
+timestamps are restored to `Date` values, including `suspendedUntil`; a null deadline keeps a
+suspension indefinite. Failed invalidation falls back to the 60-second TTL.
 
 ## Registration configuration
 
@@ -1276,11 +1281,115 @@ coverage. To test real compatible/new Go decoders, install Go 1.23+ and set
 `COMPAT_API_CLIENT_ROOT` to an exported compatibility-release `apps/libs/api-client-go`
 directory. Decoder tests consume unmodified responses from the current Box producer.
 
+## Hot-path I/O and consistency controls
+
+`ENABLE_API_MODULE_CACHE` controls the organization nested-virtualization and region metadata
+caches and defaults to true. Set it to false to bypass their reads and writes. Both use a
+60-second TTL; the nested-policy cache is an in-process LRU, while region lookup uses the
+existing TypeORM query cache. Administrator changes can therefore take up to 60 seconds to
+reach every API instance. The switch does not disable other existing caches.
+`isEnableApiModuleCache` also accepts an organization ID so a future organization-specific
+override can supersede the global default.
+
+Runner bearer-token authentication has a separate in-process, 60-second LRU keyed by the
+SHA-256 token hash. A hit bypasses both the user-key miss and Runner lookup; revocation or
+rotation can take up to 60 seconds and each API instance has its own cache. Set
+`ENABLE_RUNNER_AUTH_CACHE=false` to bypass both cache reads and writes independently of the
+metadata-cache switch. Existing explicit `findOne(id, true)` region lookups retain their
+original 30-second TTL and use cache keys separate from the switch-enabled 60-second path.
+Runner IDs, region lookups and organization policy must not be used as a substitute for the
+required organization-suspension check on proxy execution.
+
+HTTP runner proxying and WebSocket attach use `RunnerService.findProxyTarget`, which caches only
+`id`, `apiUrl`, `proxyUrl`, and `apiKey` for 60 seconds. The positive-result LRU holds 10,000
+entries per API process and has a separate TypeORM cache key from full Runner entities. CPU,
+memory, disk, Box-count, availability, and health updates do not invalidate this narrow cache;
+endpoint or key changes and Runner deletion do. Other API instances expire their local entries
+within the same 60-second bound. Full Runner lookups retain their existing cache and dynamic
+fields for scheduling and lifecycle callers.
+
+API-key validation, nested-policy reads, Region lookups, Runner lookups, and organization or
+membership cache misses share one in-flight Promise per resource key within each API process.
+This coalesces concurrent cold reads without a Redis distributed lock. Completed loads are
+removed from the in-flight map and failures are not memoized, so later requests can retry.
+Runner and Region callers receive independent entity objects rather than a shared mutable ORM
+instance. Cache hits do not require singleflight and multiple API instances can still each
+perform one backfill.
+
+Box organization lookups use a 10,000-entry, 120-second positive-result LRU in each API process.
+ID and name entries are separate, and name keys include the organization ID. Missing Boxes are
+not cached. Rename, deletion, destruction, and warm-pool organization assignment clear the local
+and shared query-cache variants; other API instances age out local entries within 120 seconds.
+This cache does not contain `runnerId` or mutable runtime state. Complete Box lookups retain
+their separate 10-second cache.
+
+`BOX_SYNC_STATES_CRON` controls the compensating state scan and defaults to one minute.
+Set it to `*/10 * * * * *` to restore the previous ten-second interval. Ordinary runner
+callbacks and events still update state immediately; the interval only bounds recovery of
+missed work, subject to backlog and lock contention.
+
+`BOX_ORGANIZATION_ACTIVITY_ASYNC` defaults to true. Organization activation-fact writes
+run after the Box transaction without delaying its caller, with at most three attempts and
+jittered exponential backoff. `GREATEST` keeps timestamps monotonic. A final failure or
+process exit can lose an activity update; set the variable to false to wait for one
+best-effort upsert synchronously without retries.
+
+Proxy execution starts its initial Redis activity write without awaiting it. A valid request
+counts as activity even if runner forwarding later fails, and activity failure is logged without
+changing the exec response; there is no retry. The write still uses the same throttle and
+10-second PostgreSQL batch flush. AutoResume and runner readiness remain awaited. AutoStop
+rechecks activity under the Box state lock and, if the first read is stale, waits 30ms before a
+second read. This debounce reduces the chance of stopping during an unobserved asynchronous
+write but is not a strict barrier: Redis failure or process exit can still lose activity.
+
+### Redis Box creation quota POC
+
+`BOX_CREATION_QUOTA_REDIS_ENABLED=true` selects Redis admission for organization Box
+creation limits. The default is false and retains the PostgreSQL advisory-lock and COUNT
+path. Redis mode initializes an organization from its counted PostgreSQL Box IDs, then uses
+one atomic Lua operation to reserve a Box ID with INCR. Over-limit reservations are
+immediately decremented and never enter the Box persistence transaction. Successful creates
+remain counted; definite rollback releases the reservation. A duplicate Box ID conflicts
+without releasing the existing owner's reservation. Existing Box transactions, related
+writes, and row locks are unchanged.
+
+Each organization has a count, a Box-ID hash, and a ready marker. These keys have no TTL.
+Missing count/ready metadata, or a positive count without its Box hash, revokes ready until
+rebuild completion rather than exposing partially backfilled counts. Unlimited creates use
+the ordinary persistence path and are tracked asynchronously so a later plan limit starts
+with existing Boxes included. Counted-to-excluded state transitions
+release a reservation, while excluded-to-counted transitions such as ERROR recovery count it
+again. Repeated events cannot decrement or increment the same Box twice.
+
+A limited create returns 503 when Redis admission is unavailable or initialization fails.
+Unlimited creates remain available and rely on later tracking. Running Redis and legacy
+PostgreSQL admission together during a mixed-version rollout can overshoot because their
+checks do not coordinate.
+
+Every API process runs best-effort reconciliation each minute for dirty and initialized
+organizations. It uses idempotent per-Box corrections and aligns the count with the Redis
+hash; it never assigns a PostgreSQL COUNT directly. Recent reservations are preserved for up
+to five minutes unless their persisted Box is already excluded. Reconciliation repairs the
+counter and blocks further overshoot, but never deletes an excess Box.
+
+This POC has no distributed scheduler lease. API replicas can scan the same organization,
+process exit can lose local dirty work, and zero API replicas means no reconciliation. Event
+reordering can require another pass. A distributed lease or dedicated worker is the future
+direction when bounded recovery time and continuous repair are required.
+
+Run `make test:apps:api TEST_FILES='box-creation-quota'` with `DB_*` and `REDIS_*` set for the
+real PostgreSQL/Redis admission, concurrency, rollback, recovery, and reconciliation tests.
+
 ## Mutation auditing
 
-Business writes use `@Audit` to insert a pending `audit_log` row before the handler runs.
-If insertion fails, the mutation is refused. Completion failures leave a pending row
-for reconciliation; audit status is the HTTP outcome, not an execution's exit code.
+By default, business writes construct the pending `audit_log` identity and start its INSERT
+without waiting for that write before invoking the handler. Audit insertion or completion
+failures do not roll back the business mutation and can leave a missing or unknown (`0`)
+record. Each request serializes its own pending INSERT, response lease and completion write.
+Response listeners are registered synchronously before forwarding, so a fast response is
+still captured. Set `AUDIT_ASYNC_WRITES_ENABLED=false` to restore synchronous pre-handler
+insertion and lease acquisition; in that mode an initial audit failure refuses the mutation.
+Audit status remains the HTTP outcome, not an execution's exit code.
 
 The portable REST aliases share auditing for volume creation/deletion, image deletion,
 domain claim/bind/unbind, execution start/signal/termination, file upload, SSH
@@ -1300,20 +1409,21 @@ targets the secondary `provider|userId`. Invalid identity fields leave the targe
 
 Proxy operations use response completion: `finish` records the response status;
 `close` before completion or a response error records unknown (`0`). Completion is
-claimed once before persisting, and its listeners are removed. A client disconnect
-while the initial insert is pending prevents forwarding once that insert returns.
-`finish` confirms server-side transmission, not client receipt.
+claimed once before persisting, and its listeners are removed. A client disconnect is
+captured by those listeners even while the initial insert is pending. `finish` confirms
+server-side transmission, not client receipt.
 
-Before forwarding, response-completion audits acquire a five-minute database lease,
+Response-completion audits acquire a five-minute database lease after the pending INSERT,
 renewed every minute. Active uploads and streaming responses remain pending beyond
-30 minutes. A failed renewal closes the response; a crashed owner's expired lease
-allows the usual age-based reconciliation. Completion stops renewal and conditionally
-updates only the still-pending, unexpired row, so a late response cannot overwrite an
-unknown result or recreate a published record. Initial audit insertion and lease acquisition
-share one five-second deadline before the handler is called. Later renewals and result
-writes each have their own five-second deadline. Pre-handler acquisition failures and
-database timeouts return 503 without invoking the handler; unexpected audit failures return
-500. Result-write failures log their cause and preserve the handler's result.
+30 minutes. In the default asynchronous mode a failed renewal records unknown without
+destroying the business response; the synchronous fallback retains the close-on-lease-loss
+behavior. A crashed owner's expired lease allows the usual age-based reconciliation.
+Completion stops renewal and conditionally updates only the still-pending, unexpired row,
+so a late response cannot overwrite an unknown result or recreate a published record.
+Each write has a five-second deadline. Only the synchronous fallback shares the initial
+INSERT and lease deadline before invoking the handler, returning 503 on acquisition timeout
+and 500 on unexpected initial failure. Result-write failures always log their cause and
+preserve the handler's result.
 Deploy the additive lease-column migration before the API; all reconcilers must be
 upgraded before this protection applies. Remove new API writers before rolling back
 the column.
@@ -1369,13 +1479,16 @@ Late acquisitions are released without executing SQL. Time limits bound waiting 
 not the number of queued requests under arbitrary load.
 
 For example, 100 audit requests can reuse a smaller connection pool; requests wait for
-available connections within their deadlines. If initial insertion takes four seconds,
-the response lease has about one second left before forwarding must be refused.
+available connections within their deadlines. Asynchronous auditing moves that pool wait
+off the caller's critical path but does not reduce total database work. With synchronous
+auditing, initial insertion taking four seconds leaves about one second for its lease.
 
 ```text
-HTTP request -> audit insert -> initial lease -> handler -> result audit
-               <--- shared five seconds --->              < five seconds >
-                     expiry -> 503, no handler
+default:       HTTP request -> start audit chain -> handler -> response
+                              pending insert -> initial lease -> result audit
+
+sync fallback: HTTP request -> audit insert -> initial lease -> handler -> result audit
+                              expiry -> 503, no handler
 ```
 
 Closed attach sessions remove listeners and socket/request references without waiting
@@ -1850,3 +1963,42 @@ Feedback is not a cancellation receipt or subscription history. Writing it never
 Deploy the additive pre-deploy migration and API before the updated Console. Billing requires no deployment for this feature. Reverting the schema migration drops saved feedback, so retain the column during an application rollback if data must be preserved.
 
 Run `make test:apps:api TEST_FILES=cancellation-feedback` with `CANCELLATION_TEST_DATABASE_URL` pointing at a disposable loopback PostgreSQL database. The integration suite creates an isolated schema and exercises real JWT verification, organization guards, validation and latest-value replacement. It verifies independent reads and persistence after restarting the API and its database connection.
+
+## Create and exec timing metrics
+
+The API records millisecond OpenTelemetry histograms for Box creation and exec request lifecycles, creation orchestration, startup waits, job dispatch and completion, notifications, Commerce, audit writes, and the external services used by image, volume and secret handling. These metrics use the existing OTLP exporter and 30-second metric reader; no additional collector or ClickHouse configuration is required. Successful operations do not emit additional logs, and existing logs are unchanged.
+
+| Area                            | Histogram names                                                                                                                                                                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP interfaces                 | `box_create_http_duration`, `box_exec_http_duration`                                                                                                                                                              |
+| Create orchestration            | `box_service_create_duration`, `box_persist_available_runner_duration`, `box_runner_select_duration`, `box_created_event_duration`, `box_start_action_duration`, `box_runner_create_dispatch_duration`            |
+| Exec proxy and readiness        | `box_runner_proxy_setup_duration`, `box_lookup_duration`, `box_activity_update_duration`, `box_auto_resume_duration`, `box_auto_resume_start_duration`, `box_proxy_start_duration`, `box_runner_lookup_duration` |
+| Runner HTTP upstream            | `box_runner_proxy_ttfb_duration`, `box_runner_proxy_upstream_duration` |
+| WebSocket attach                | `box_exec_ws_duration`, `box_exec_ws_auth_duration`, `box_exec_ws_lookup_duration`, `box_exec_ws_handshake_duration` |
+| Startup wait                    | `box_state_wait_duration`, `box_state_subscription_duration`, `box_state_wait_dto_duration`                                                                                                                       |
+| Job dispatch and completion     | `box_job_create_duration`, `box_job_notify_duration`, `box_job_status_update_duration`, `box_create_job_completion_duration`, `box_create_job_completion_update_duration`                                         |
+| State notification              | `box_state_notification_duration`, `box_state_notification_dto_duration`, `box_state_notification_publish_duration`                                                                                               |
+| Commerce and audit              | `commerce_box_limit_resolve_duration`, `commerce_box_limit_cache_read_duration`, `commerce_box_limit_fetch_duration`, `commerce_box_limit_cache_write_duration`, `audit_create_duration`, `audit_update_duration`, `audit_pending_lease_duration`, `audit_pending_lease_complete_duration` |
+| Secret and Filestore boundaries | `secret_store_transfer_duration`, `secret_store_auth_duration`, `secret_store_http_duration`, `secret_credential_issue_duration`, `filestore_lookup_duration`                                                     |
+| Image and volume resolution     | `image_admission_duration`, `image_resolve_duration`, `image_curated_pin_duration`, `volume_validate_duration`                                                                                                    |
+
+The histogram labels are the existing decorator's `component`, `method`, and `status` (`success` or `error`); Box, job, organization, and secret values are not metric labels. Most methods also emit a same-named OpenTelemetry span without the `_duration` suffix. `BoxManager.handleBoxCreatedEvent` and `BoxStartAction.run` retain their existing spans and add only these histograms.
+
+Timing boundaries matter:
+
+- `box.create_http` covers the create controller handler. Middleware and guards remain covered by the existing HTTP/Nest spans; `box.service_create`, persistence, and runner selection are nested below it.
+- `box.exec.http` starts when a POST exec enters the controller and ends when the runner's execution-acceptance response finishes, closes, errors, or rejects during setup. It measures acceptance, not process completion; the runner's `box.exec.wait` span measures the process lifetime. `box.runner_proxy_setup` measures only forwarding setup and is nested below it. Finish/close/event duplication records only once.
+- `box.runner_proxy_ttfb` starts at `http-proxy-middleware`'s `proxyReq` event and ends at `proxyRes`. `box.runner_proxy_upstream` starts at the same event and ends at the upstream response's `end`, early `close`, request/response `error`, or `timeout`. These are direct upstream measurements, not estimates derived from `box.runner_proxy_setup`. Their histogram status is `success`, `error`, or `timeout`.
+- `box.exec.ws` covers the actual Node `upgrade` path through client socket close/error. Its `box.exec.ws_auth`, `box.exec.ws_lookup`, and `box.exec.ws_handshake` children measure authentication, box/runner resolution (including auto-resume), and the runner's successful `open` event or terminal failure. These paths do not pass through the Nest controller.
+- HTTP `proxyReq` and WS `proxyReqWs` inject W3C `traceparent` from their captured operation contexts. Event callbacks retain those contexts explicitly instead of depending on a later `context.active()`. Span attributes include `box_id` and `execution_id` where known; these identifiers never become histogram labels. No output/data frame creates a span, metric, or additional log.
+- `box.state_wait_dto` remains a child of `box.state_wait` when a Redis message or timeout invokes the waiter callback.
+- `audit_pending_lease_complete_duration` includes an in-flight renewal wait and the terminal audit write.
+- `box_job_status_update_duration` ends after the status update schedules asynchronous completion handling; use the completion histograms for that later work.
+- `box_state_notification_publish_duration` records when the Redis publish Promise settles, although the notification handler does not await it.
+- `secret_store_auth_duration` applies only to Google identity acquisition, not a configured development token.
+- `filestore_lookup_duration` covers the actual Filestore lookup, rather than a cache hit.
+- `secret_credential_issue_duration` records one issuance once, including when the public method opens its own transaction.
+
+Run `make test:apps:api TEST_FILES='create-box-instrumentation|api-timing-traces|proxy-telemetry|boxlite-proxy.controller|boxlite-ws-proxy.service'` to verify the real in-memory OpenTelemetry histogram contracts, including asynchronous publish, transaction recursion, create/exec parentage, response completion, upstream TTFB/error/timeout, WebSocket denial/handshake/socket termination, trace propagation, client disconnects, and setup failures.
+
+The Backoffice OpenAPI reader is intentionally restricted to `otel_logs`; the added spans and histograms do not become queryable through that account. Querying them requires Backoffice support and a separately approved least-privilege reader for `otel_traces` and `otel_metrics_histogram`. See [the ClickHouse access guide](../infra/docs/clickhouse.md#query-scope-for-latency-measurements). A `503` from `/v1/telemetry/query` is an external Backoffice capability/configuration issue, not something the API's OTLP exporter can enable.

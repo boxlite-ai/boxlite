@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { InjectRepository } from '@nestjs/typeorm'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -24,11 +24,13 @@ import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { UserService } from '../../user/user.service'
 import { UserEvents } from '../../user/constants/user-events.constant'
 import { UserDeletedEvent } from '../../user/events/user-deleted.event'
+import {
+  invalidateMembershipAccessCache,
+  organizationMembershipCacheKey,
+} from './organization-access-cache.service'
 
 @Injectable()
 export class OrganizationUserService {
-  private readonly logger = new Logger(OrganizationUserService.name)
-
   constructor(
     @InjectRepository(OrganizationUser)
     private readonly organizationUserRepository: Repository<OrganizationUser>,
@@ -41,7 +43,7 @@ export class OrganizationUserService {
 
   /** Redis key under which OrganizationAccessGuard caches a membership. */
   static membershipCacheKey(organizationId: string, userId: string): string {
-    return `organization-user:${organizationId}:${userId}`
+    return organizationMembershipCacheKey(organizationId, userId)
   }
 
   async findAll(organizationId: string): Promise<OrganizationUserDto[]> {
@@ -192,6 +194,8 @@ export class OrganizationUserService {
       organizationUser = await this.organizationUserRepository.save(organizationUser)
     }
 
+    await invalidateMembershipAccessCache(this.redis, organizationId, userId)
+
     const user = await this.userService.findOne(userId)
 
     return OrganizationUserDto.fromEntities(organizationUser, user)
@@ -227,12 +231,7 @@ export class OrganizationUserService {
   @OnAsyncEvent({ event: OrganizationEvents.USER_REMOVED })
   async handleOrganizationUserRemovedEvent(event: OrganizationUserRemovedEvent): Promise<void> {
     event.afterCommit(async () => {
-      const cacheKey = OrganizationUserService.membershipCacheKey(event.organizationId, event.userId)
-      try {
-        await this.redis.del(cacheKey)
-      } catch (error) {
-        this.logger.error(`Failed to invalidate membership cache ${cacheKey}:`, error)
-      }
+      await invalidateMembershipAccessCache(this.redis, event.organizationId, event.userId)
     })
   }
 

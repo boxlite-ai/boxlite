@@ -31,7 +31,7 @@ describe('custom domain HTTP authorization', () => {
       { findOne: async () => (member ? { role: 'member', assignedRoles: [{ permissions }] } : null) } as never,
       new Reflector(),
     )
-    Object.assign(guard, { redis: { get: async () => null, set: async () => undefined } })
+    Object.assign(guard, { redis: { get: async () => null, set: async () => undefined, eval: async () => 1 } })
     const module = await Test.createTestingModule({
       controllers: [CustomDomainController],
       providers: [{ provide: CustomDomainService, useValue: service }],

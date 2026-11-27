@@ -5,6 +5,7 @@ import { GoogleAuth } from 'google-auth-library'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { BoxSecret } from '../dto/box.dto'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 const TRANSFER_TIMEOUT_MS = 6000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -70,6 +71,7 @@ export class SecretServerClient {
     }
   }
 
+  @WithInstrumentation('secret.store_transfer')
   private async transfer(
     boxId: string,
     orgId: string,
@@ -80,9 +82,7 @@ export class SecretServerClient {
     if (!createdBy) throw new Error('Creator identity required')
     const url = this.config.get('secretServer.url')
     const devToken = this.config.get('secretServer.devToken')
-    const authorization = devToken
-      ? `Bearer ${devToken}`
-      : (await (await this.auth.getIdTokenClient(url)).getRequestHeaders()).get('authorization')
+    const authorization = devToken ? `Bearer ${devToken}` : await this.googleAuthorization(url)
     // Identity acquisition cannot be cancelled by the library. Never start a late POST.
     signal.throwIfAborted()
     if (!authorization) throw new Error('Caller identity unavailable')
@@ -93,13 +93,7 @@ export class SecretServerClient {
       headers,
       placeholder: placeholder ?? `<BOXLITE_SECRET:${name}>`,
     }))
-    const response = await fetch(`${url}/internal/v1/boxes/${encodeURIComponent(boxId)}/secrets`, {
-      method: 'POST',
-      headers: { authorization, 'content-type': 'application/json' },
-      body: JSON.stringify({ org_id: orgId, created_by: createdBy, secrets: payload }),
-      redirect: 'error',
-      signal,
-    })
+    const response = await this.postSecrets(url, boxId, orgId, createdBy, payload, authorization, signal)
     if (response.status !== 200 && response.status !== 201) {
       await response.body?.cancel()
       throw new Error('Secret transfer rejected')
@@ -139,5 +133,29 @@ export class SecretServerClient {
       placeholder,
       secretId: idsByName.get(name),
     }))
+  }
+
+  @WithInstrumentation('secret.store_auth')
+  private async googleAuthorization(url: string): Promise<string | undefined> {
+    return (await (await this.auth.getIdTokenClient(url)).getRequestHeaders()).get('authorization')
+  }
+
+  @WithInstrumentation('secret.store_http')
+  private async postSecrets(
+    url: string,
+    boxId: string,
+    orgId: string,
+    createdBy: string,
+    payload: unknown,
+    authorization: string,
+    signal: AbortSignal,
+  ): Promise<Response> {
+    return fetch(`${url}/internal/v1/boxes/${encodeURIComponent(boxId)}/secrets`, {
+      method: 'POST',
+      headers: { authorization, 'content-type': 'application/json' },
+      body: JSON.stringify({ org_id: orgId, created_by: createdBy, secrets: payload }),
+      redirect: 'error',
+      signal,
+    })
   }
 }

@@ -100,7 +100,7 @@ describe('Admin API HTTP contract', () => {
         { provide: OrganizationUserService, useValue: members },
         { provide: OrganizationInvitationService, useValue: invites },
         { provide: OrganizationService, useValue: { findOne: async (id: string) => ({ id }) } },
-        { provide: getRedisConnectionToken(), useValue: { get: async () => null, set: async () => 'OK' } },
+        { provide: getRedisConnectionToken(), useValue: { get: async () => null, set: async () => 'OK', eval: async () => 1 } },
       ],
     })
       .overrideGuard(CombinedAuthGuard)

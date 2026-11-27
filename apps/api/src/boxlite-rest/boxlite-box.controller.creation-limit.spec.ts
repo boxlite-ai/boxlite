@@ -55,8 +55,9 @@ describe('BoxliteBoxController creation limit', () => {
       expect.objectContaining({ image: 'boxlite/base' }),
       organization,
       expect.anything(),
-      { maxCreatedBoxes: 3, createdBy: authContext.userId },
+      { maxCreatedBoxesPromise: expect.any(Promise), createdBy: authContext.userId },
     )
+    await expect(boxService.create.mock.calls[0][3].maxCreatedBoxesPromise).resolves.toBe(3)
     expect(boxStateWaiter.waitForStarted).not.toHaveBeenCalled()
     expect(response).toEqual(expect.objectContaining({ box_id: 'box-1', status: 'running' }))
 
@@ -68,11 +69,15 @@ describe('BoxliteBoxController creation limit', () => {
   it('does not persist or wait for startup when Commerce admission fails', async () => {
     const { controller, boxService, boxStateWaiter, commerceBoxLimitService } = makeController()
     commerceBoxLimitService.resolveMaxCreatedBoxes.mockRejectedValue(new Error('commerce unavailable'))
+    boxService.create.mockImplementation(async (_dto, _organization, _ctx, options) => {
+      await options.maxCreatedBoxesPromise
+      return startedBox
+    })
 
     await expect(controller.createBox(authContext as never, {} as never, Context.user())).rejects.toThrow(
       'commerce unavailable',
     )
-    expect(boxService.create).not.toHaveBeenCalled()
+    expect(boxService.create).toHaveBeenCalledTimes(1)
     expect(boxStateWaiter.waitForStarted).not.toHaveBeenCalled()
   })
 

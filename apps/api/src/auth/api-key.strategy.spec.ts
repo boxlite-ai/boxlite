@@ -81,6 +81,72 @@ describe('ApiKeyStrategy', () => {
     expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledWith('cached-key')
   })
 
+  it('caches runner authentication before the user API-key lookup', async () => {
+    const { strategy, mocks } = createStrategy()
+    mocks.runnerService.findByApiKey.mockResolvedValue({ id: 'runner-1', apiKey: 'runner-token' })
+
+    const first = await strategy.validate('runner-token')
+    const second = await strategy.validate('runner-token')
+
+    expect(first).toMatchObject({ role: 'runner', runnerId: 'runner-1' })
+    expect(second).toEqual(first)
+    expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledTimes(1)
+    expect(mocks.runnerService.findByApiKey).toHaveBeenCalledTimes(1)
+    expect(mocks.regionService.findOneByProxyApiKey).not.toHaveBeenCalled()
+  })
+
+  it('refreshes runner authentication after the 60-second TTL', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000)
+    const { strategy, mocks } = createStrategy()
+    mocks.runnerService.findByApiKey.mockResolvedValue({ id: 'runner-1', apiKey: 'runner-token' })
+    try {
+      await strategy.validate('runner-token')
+      now.mockReturnValue(61_000)
+      await strategy.validate('runner-token')
+
+      expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledTimes(2)
+      expect(mocks.runnerService.findByApiKey).toHaveBeenCalledTimes(2)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('does not cache an invalid runner token', async () => {
+    const { strategy, mocks } = createStrategy()
+
+    await expect(strategy.validate('invalid-runner')).resolves.toBeNull()
+    await expect(strategy.validate('invalid-runner')).resolves.toBeNull()
+
+    expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledTimes(2)
+    expect(mocks.runnerService.findByApiKey).toHaveBeenCalledTimes(2)
+    expect(mocks.regionService.findOneByProxyApiKey).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not share runner authentication between strategy instances', async () => {
+    const first = createStrategy()
+    const second = createStrategy()
+    first.mocks.runnerService.findByApiKey.mockResolvedValue({ id: 'runner-1', apiKey: 'runner-token' })
+    second.mocks.runnerService.findByApiKey.mockResolvedValue({ id: 'runner-1', apiKey: 'runner-token' })
+
+    await first.strategy.validate('runner-token')
+    await second.strategy.validate('runner-token')
+
+    expect(first.mocks.runnerService.findByApiKey).toHaveBeenCalledTimes(1)
+    expect(second.mocks.runnerService.findByApiKey).toHaveBeenCalledTimes(1)
+  })
+
+  it('bypasses the runner authentication cache when its independent switch is off', async () => {
+    const { strategy, mocks } = createStrategy()
+    mocks.configService.get.mockImplementation((key: string) => (key === 'runnerAuthCache.enabled' ? false : undefined))
+    mocks.runnerService.findByApiKey.mockResolvedValue({ id: 'runner-1', apiKey: 'runner-token' })
+
+    await strategy.validate('runner-token')
+    await strategy.validate('runner-token')
+
+    expect(mocks.apiKeyService.getApiKeyByValue).toHaveBeenCalledTimes(2)
+    expect(mocks.runnerService.findByApiKey).toHaveBeenCalledTimes(2)
+  })
+
   it('delegates JWT-shaped bearer tokens to the JWT strategy before reading API-key config', async () => {
     const { strategy, mocks } = createStrategy()
 

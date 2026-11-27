@@ -31,6 +31,7 @@ jest.mock('http-proxy-middleware', () =>
 )
 
 describe('audit refinement contracts', () => {
+  const originalAsyncWrites = process.env.AUDIT_ASYNC_WRITES_ENABLED
   let app: INestApplication
   let upstream: Server
   let base: string
@@ -42,6 +43,7 @@ describe('audit refinement contracts', () => {
   let serverResponse: ServerResponse
 
   beforeEach(async () => {
+    process.env.AUDIT_ASYNC_WRITES_ENABLED = 'false'
     upstreamStarted = new Promise((resolve) => (started = resolve))
     upstream = createServer((req, res) => {
       req.resume()
@@ -152,6 +154,8 @@ describe('audit refinement contracts', () => {
   })
 
   afterEach(async () => {
+    if (originalAsyncWrites === undefined) delete process.env.AUDIT_ASYNC_WRITES_ENABLED
+    else process.env.AUDIT_ASYNC_WRITES_ENABLED = originalAsyncWrites
     releaseResponse?.()
     releaseResponse = undefined
     await app?.close()

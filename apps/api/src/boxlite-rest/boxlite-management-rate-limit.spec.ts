@@ -68,7 +68,11 @@ describe('BoxLite management rate limits', () => {
       delete: jest.fn().mockResolvedValue(undefined),
     }
     services = [...Object.values(images), ...Object.values(registries)]
-    const redis = { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK') }
+    const redis = {
+      get: jest.fn().mockResolvedValue(null),
+      set: jest.fn().mockResolvedValue('OK'),
+      eval: jest.fn().mockResolvedValue(1),
+    }
     const organizations = {
       findOne: jest.fn(async (id: string) => ({
         id,

@@ -47,7 +47,7 @@ describe('API key authorization', () => {
           provide: OrganizationUserService,
           useValue: { findOne: async (organizationId: string) => (organizationId === 'org-1' ? membership : null) },
         },
-        { provide: getRedisConnectionToken(), useValue: { get: async () => null, set: async () => 'OK' } },
+        { provide: getRedisConnectionToken(), useValue: { get: async () => null, set: async () => 'OK', eval: async () => 1 } },
       ],
     })
       .overrideGuard(CombinedAuthGuard)

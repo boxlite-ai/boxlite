@@ -15,7 +15,7 @@ import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { OrganizationService } from '../../../organization/services/organization.service'
 import { TypedConfigService } from '../../../config/typed-config.service'
 import { LockCode, RedisLockProvider } from '../../common/redis-lock.provider'
-import { WithSpan } from '../../../common/decorators/otel.decorator'
+import { WithMetric, WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
 import { CuratedImagePinService } from '../../../image/services/curated-image-pin.service'
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
@@ -41,6 +41,7 @@ export class BoxStartAction extends BoxAction {
     super(runnerService, runnerAdapterFactory, boxRepository, redisLockProvider)
   }
 
+  @WithMetric('box.start_action')
   @WithSpan()
   async run(box: Box, lockCode: LockCode): Promise<SyncState> {
     switch (box.state) {

@@ -14,8 +14,14 @@ function deferred() {
 }
 
 describe('audit write deadlines', () => {
-  beforeEach(() => jest.useFakeTimers())
+  const originalAsyncWrites = process.env.AUDIT_ASYNC_WRITES_ENABLED
+  beforeEach(() => {
+    process.env.AUDIT_ASYNC_WRITES_ENABLED = 'false'
+    jest.useFakeTimers()
+  })
   afterEach(() => {
+    if (originalAsyncWrites === undefined) delete process.env.AUDIT_ASYNC_WRITES_ENABLED
+    else process.env.AUDIT_ASYNC_WRITES_ENABLED = originalAsyncWrites
     jest.useRealTimers()
     jest.restoreAllMocks()
   })

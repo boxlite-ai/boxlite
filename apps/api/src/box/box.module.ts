@@ -45,6 +45,7 @@ import { JobService } from './services/job.service'
 import { JobStateHandlerService } from './services/job-state-handler.service'
 import { Job } from './entities/job.entity'
 import { BoxLookupCacheInvalidationService } from './services/box-lookup-cache-invalidation.service'
+import { TypedConfigService } from '../config/typed-config.service'
 import { BoxAccessGuard } from './guards/box-access.guard'
 import { RunnerAccessGuard } from './guards/runner-access.guard'
 import { RegionRunnerAccessGuard } from './guards/region-runner-access.guard'
@@ -81,6 +82,7 @@ import { CheckpointOperation } from './entities/checkpoint-operation.entity'
 import { BoxCheckpointState } from './entities/box-checkpoint-state.entity'
 import { CheckpointRecoverService } from './services/checkpoint-recover.service'
 import { CheckpointArchiveStore } from './stores/checkpoint-archive.store'
+import { BoxCreationQuotaService } from './services/box-creation-quota.service'
 import { RunnerDiskExpansion } from './entities/runner-disk-expansion.entity'
 import { RunnerDiskUsageSample } from './entities/runner-disk-usage-sample.entity'
 import { RunnerDiskExpansionService } from './services/runner-disk-expansion.service'
@@ -134,6 +136,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     BoxWarmPoolService,
     RunnerService,
     BoxLookupCacheInvalidationService,
+    BoxCreationQuotaService,
     RedisLockProvider,
     VolumeService,
     FilestoreInstanceResolver,
@@ -172,12 +175,20 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     ProxyGuard,
     {
       provide: BoxRepository,
-      inject: [DataSource, EventEmitter2, BoxLookupCacheInvalidationService],
+      inject: [
+        DataSource,
+        EventEmitter2,
+        BoxLookupCacheInvalidationService,
+        TypedConfigService,
+        BoxCreationQuotaService,
+      ],
       useFactory: (
         dataSource: DataSource,
         eventEmitter: EventEmitter2,
         boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
-      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
+        configService: TypedConfigService,
+        creationQuota: BoxCreationQuotaService,
+      ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService, configService, creationQuota),
     },
   ],
   exports: [
