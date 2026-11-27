@@ -205,6 +205,7 @@ class ExecCommandRequest(BaseModel):
     working_dir: Optional[str] = None
     tty: bool = False
     sync: bool = False
+    stdin: Optional[str] = None
     max_output_bytes: Optional[Any] = None
     user: Optional[str] = None
 
@@ -644,6 +645,7 @@ async def get_config():
             "exec_timeout_max_seconds": 3600,
             "tty_enabled": True,
             "streaming_enabled": True,
+            "sync_exec_enabled": True,
             "snapshots_enabled": True,
             "clone_enabled": True,
             "export_enabled": True,
@@ -1005,6 +1007,13 @@ async def collect_exec_output(stream, limit: int) -> tuple[str, bool]:
 def _validate_sync_exec_request(
     req: ExecCommandRequest,
 ) -> tuple[float, int] | JSONResponse:
+    if req.stdin is not None:
+        return error_response(
+            400,
+            "stdin is not supported for synchronous exec",
+            "InvalidArgumentError",
+            "invalid_argument",
+        )
     if not req.command:
         return error_response(
             400, "command must not be empty", "InvalidArgumentError", "invalid_argument"

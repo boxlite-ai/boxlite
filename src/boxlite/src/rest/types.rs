@@ -107,6 +107,7 @@ pub(crate) struct ServerCapabilities {
     pub import_enabled: Option<bool>,
     pub private_tunnels_enabled: Option<bool>,
     pub exec_user_enabled: Option<bool>,
+    pub sync_exec_enabled: Option<bool>,
     pub volume_read_only_enabled: Option<bool>,
     pub typed_mounts_enabled: Option<bool>,
 }

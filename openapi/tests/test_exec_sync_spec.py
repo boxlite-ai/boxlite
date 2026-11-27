@@ -50,11 +50,22 @@ class ExecSyncSpecTests(unittest.TestCase):
         self.assertEqual(fields["sync"]["type"], "boolean")
         self.assertIs(fields["sync"]["default"], False)
 
+        timeout = fields["timeout_seconds"]
+        self.assertEqual(timeout["minimum"], 0.1)
+        self.assertIn("`sync: true`", timeout["description"])
+        self.assertIn("0.1 to 300 seconds", timeout["description"])
+        self.assertIn("return HTTP 400", timeout["description"])
+
         max_output = fields["max_output_bytes"]
         self.assertEqual(
             tuple(max_output[k] for k in ("type", "minimum", "maximum", "default")),
             ("integer", 1024, 10485760, 1048576),
         )
+
+    def test_config_advertises_optional_sync_exec_capability(self):
+        capabilities = SCHEMAS["ServerConfig"]["properties"]["capabilities"]
+        self.assertEqual(capabilities["properties"]["sync_exec_enabled"]["type"], "boolean")
+        self.assertNotIn("sync_exec_enabled", capabilities.get("required", []))
 
     def test_response_required_fields(self):
         response = SCHEMAS["SyncExecResponse"]

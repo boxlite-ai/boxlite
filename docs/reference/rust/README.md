@@ -451,6 +451,21 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `executions` | `fn executions(&self) -> ExecutionsHandle` | Live session inventory and control recovery; never boots a box |
 | `attach` | `async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution>` | Attach to init or a named live session; only one output reader is allowed |
 
+#### Synchronous exec
+
+`LiteBox::exec_sync(command)` waits for the command to finish and returns its
+exit code and bounded stdout/stderr. Use `exec_sync_with_limit(command, bytes)`
+to change the capture limit per stream (default 1 MiB). The timeout defaults to
+30 seconds and must be between 0.1 and 300 seconds inclusive. Sync exec does not
+support TTY or stdin input: the command receives EOF on stdin. Over HTTP, an
+out-of-range timeout or non-null inline `stdin` returns `400`.
+
+For REST boxes, the SDK requires `capabilities.sync_exec_enabled: true` from
+`GET /v1/config` and caches that configuration per API client. If the flag or
+capabilities object is absent, or the flag is false, the SDK returns
+`BoxliteError::Unsupported` without sending the exec request. A command that
+specifies a `user` still checks `exec_user_enabled` against the live server.
+
 #### Online disk growth
 
 `ResizeOptions::disk_size_gb` is an absolute capacity in binary GiB, from 1 through 1024.

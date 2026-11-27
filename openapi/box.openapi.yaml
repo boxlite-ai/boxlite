@@ -2902,6 +2902,10 @@ components:
               type: boolean
               description: Server honors `ExecRequest.user`.
               example: true
+            sync_exec_enabled:
+              type: boolean
+              description: "Whether the server supports synchronous execution (`sync: true`)."
+              example: true
             volume_read_only_enabled:
               type: boolean
               description: "Whether managed-volume mounts may set `read_only: true`."
@@ -3966,7 +3970,9 @@ components:
         timeout_seconds:
           type: number
           minimum: 0.1
-          description: Execution timeout in seconds
+          description: >-
+            Execution timeout in seconds. With `sync: true`, the timeout must be 0.1 to 300 seconds
+            inclusive (default 30 seconds). Values outside that range return HTTP 400.
         working_dir:
           type: string
           description: Working directory override for this execution
@@ -3985,7 +3991,8 @@ components:
           default: false
           description: >-
             When `true`, wait synchronously for the command to complete and return `200` with
-            `SyncExecResponse` instead of `201` with `ExecResponse`. Mutually exclusive with `tty: true`.
+            `SyncExecResponse` instead of `201` with `ExecResponse`. Requires the server to advertise
+            `sync_exec_enabled: true`. Rejects `tty: true` and non-null inline `stdin` with HTTP 400.
         max_output_bytes:
           type: integer
           minimum: 1024

@@ -60,6 +60,16 @@ async fn sync_exec_times_out_and_kills_the_execution() {
 }
 
 #[tokio::test]
+async fn config_advertises_sync_exec() {
+    let (url, server) = serve_router(Arc::new(lifecycle_state())).await;
+    let response = reqwest::get(format!("{url}/v1/config")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["capabilities"]["sync_exec_enabled"], true);
+    server.abort();
+}
+
+#[tokio::test]
 async fn sync_exec_route_rejects_invalid_arguments() {
     let (url, server) = serve_router(Arc::new(lifecycle_state())).await;
     let client = reqwest::Client::new();

@@ -14,7 +14,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use super::credential::{AccessToken, Credential};
 use super::error::{map_http_body, map_plain_reply};
 use super::options::BoxliteRestOptions;
-use super::types::{BoxResponse, CreateBoxRequest, ServerConfig};
+use super::types::{BoxResponse, CreateBoxRequest, ServerCapabilities, ServerConfig};
 use crate::runtime::auth::Principal;
 use crate::runtime::cpu_count::CpuCount;
 
@@ -763,14 +763,18 @@ impl ApiClient {
         self.get_root("/me").await
     }
 
+    async fn capabilities(&self) -> BoxliteResult<ServerCapabilities> {
+        Ok(self.get_config().await?.capabilities.unwrap_or_default())
+    }
+
     pub async fn require_snapshots_enabled(&self) -> BoxliteResult<()> {
-        let config = self.get_config().await?;
-        let capabilities = config.capabilities.ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "Remote server did not advertise snapshots capability".to_string(),
-            )
-        })?;
+        let capabilities = self.capabilities().await?;
         ensure_capability("snapshots", capabilities.snapshots_enabled)
+    }
+
+    pub async fn require_sync_exec_enabled(&self) -> BoxliteResult<()> {
+        let capabilities = self.capabilities().await?;
+        ensure_capability("sync exec", capabilities.sync_exec_enabled)
     }
 
     pub async fn require_linux_capabilities_enabled(&self) -> BoxliteResult<()> {

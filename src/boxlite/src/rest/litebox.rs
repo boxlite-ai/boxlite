@@ -396,6 +396,7 @@ impl BoxBackend for RestBox {
         max_output_bytes: Option<usize>,
     ) -> BoxliteResult<SyncExecResult> {
         let (timeout, _) = command.sync_exec_limits(max_output_bytes)?;
+        self.client.require_sync_exec_enabled().await?;
         if command.user.is_some() {
             self.client.require_exec_user_enabled().await?;
         }
@@ -3152,11 +3153,26 @@ mod tests {
         })
     }
 
+    const SYNC_EXEC_CONFIG: &str = r#"{"capabilities":{"sync_exec_enabled":true}}"#;
+    const SYNC_EXEC_RESULT: &str = r#"{"exit_code":0,"stdout":"","stderr":"","stdout_truncated":false,"stderr_truncated":false}"#;
+
+    async fn serve_sync_exec_config(listener: &TcpListener, config: &str) {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let head = read_request_head(&mut socket).await;
+        assert!(
+            head.starts_with(b"GET /v1/config HTTP/1.1\r\n"),
+            "expected the config request first, got {}",
+            String::from_utf8_lossy(&head),
+        );
+        write_status_response(&mut socket, config).await;
+    }
+
     async fn serve_sync_exec_once(
         listener: TcpListener,
         status: u16,
         response: &'static str,
     ) -> serde_json::Value {
+        serve_sync_exec_config(&listener, SYNC_EXEC_CONFIG).await;
         let (mut socket, _) = listener.accept().await.unwrap();
         serve_sync_exec_request(&mut socket, status, response).await
     }
@@ -3225,18 +3241,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_exec_reuses_the_connection_across_request_timeouts() {
+    async fn sync_exec_requires_server_advertisement() {
+        for config in [
+            r#"{"capabilities":{}}"#,
+            "{}",
+            r#"{"capabilities":{"sync_exec_enabled":false}}"#,
+        ] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let bx = rest_box_for(listener.local_addr().unwrap().port(), "sync-box");
+            let (result, posts) = tokio::time::timeout(Duration::from_secs(5), async {
+                let exec = bx.exec_sync(BoxCommand::new("true"), None);
+                tokio::pin!(exec);
+                tokio::select! {
+                    (mut socket, _) = async {
+                        serve_sync_exec_config(&listener, config).await;
+                        // Config closes its socket, so any POST needs a new connection.
+                        listener.accept().await.unwrap()
+                    } => {
+                        serve_sync_exec_request(&mut socket, 200, SYNC_EXEC_RESULT).await;
+                        (exec.await, 1)
+                    }
+                    result = &mut exec => (result, 0),
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(posts, 0, "config: {config}");
+            assert!(
+                matches!(result, Err(BoxliteError::Unsupported(_))),
+                "config: {config}, result: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_exec_caches_config_and_reuses_the_connection_across_request_timeouts() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let bx = rest_box_for(listener.local_addr().unwrap().port(), "sync-box");
         let server = tokio::spawn(async move {
+            // Expect exactly one GET /v1/config followed by two POSTs on the same socket.
+            serve_sync_exec_config(&listener, SYNC_EXEC_CONFIG).await;
             let (mut socket, _) = listener.accept().await.unwrap();
             for seconds in [300, 1] {
-                let request = serve_sync_exec_request(
-                    &mut socket,
-                    200,
-                    r#"{"exit_code":0,"stdout":"","stderr":"","stdout_truncated":false,"stderr_truncated":false}"#,
-                )
-                .await;
+                let request = serve_sync_exec_request(&mut socket, 200, SYNC_EXEC_RESULT).await;
                 assert_eq!(
                     request["timeout_seconds"].as_f64(),
                     Some(f64::from(seconds))
@@ -3251,7 +3298,9 @@ mod tests {
             server.await.unwrap();
         })
         .await;
-        result.expect("both requests must complete on the same connection");
+        result.expect(
+            "both exec requests must complete on the same connection after one config request",
+        );
     }
 
     #[tokio::test]

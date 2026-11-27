@@ -47,14 +47,21 @@ implementation currently serves all 49 paths:
 
 Use `POST /{prefix}/boxes/{box_id}/exec` with `"sync": true` (`sync` defaults
 to `false`) for a non-interactive command that should return its exit code and
-bounded stdout/stderr in one HTTP response. It needs no WebSocket, sends EOF on
-stdin, and returns `408` on timeout. For streaming or TTY, omit `sync` (or set
-`"sync": false`) and use WebSocket `/attach` on servers that support attachment.
+bounded stdout/stderr in one HTTP response. First check that `GET /v1/config`
+advertises `capabilities.sync_exec_enabled: true`; if the flag is missing or
+false, don't send a synchronous request. Sync exec needs no WebSocket and
+sends EOF on stdin. Non-null inline `stdin` (including an empty string) and
+`tty: true` return HTTP `400`. `timeout_seconds` defaults to 30 and must be
+between 0.1 and 300 seconds inclusive; an out-of-range value returns `400`,
+while an execution that exceeds its deadline returns `408`. For streaming or
+TTY, omit `sync` (or set `"sync": false`) and use WebSocket `/attach` on servers
+that support attachment.
 
 Read each server's routes rather than either README — both under-report.
 `GET /config` does not close this gap: its feature flags (`tty_enabled`,
 `streaming_enabled`, `snapshots_enabled`, `clone_enabled`, `export_enabled`,
-`import_enabled`, `inbound_update_enabled`, `exec_user_enabled`) cover only some routes, there is no
+`import_enabled`, `inbound_update_enabled`, `exec_user_enabled`,
+`sync_exec_enabled`) cover only some routes. There is no
 flag at all for volumes, images or tunnel, and a flag can disagree with the
 routes — the reference server advertises `streaming_enabled: true` while
 serving no attach route.

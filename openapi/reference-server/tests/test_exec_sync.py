@@ -38,21 +38,38 @@ class ExecSyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def post(self, payload, box_id="test-box"):
         # Call the ASGI app directly to exercise routing and validation without httpx.
-        path = f"/v1/demo/boxes/{box_id}/exec"
+        return await self.request("POST", f"/v1/demo/boxes/{box_id}/exec", payload)
+
+    async def request(self, method, path, payload=None):
         messages = []
 
         async def receive():
-            return {"type": "http.request", "body": json.dumps(payload).encode()}
+            body = b"" if payload is None else json.dumps(payload).encode()
+            return {"type": "http.request", "body": body}
 
         async def send(message):
             messages.append(message)
 
         await SERVER.app({
-            "type": "http", "method": "POST", "path": path,
+            "type": "http", "method": method, "path": path,
             "headers": [(b"content-type", b"application/json")],
             "query_string": b"",
         }, receive, send)
         return messages[0]["status"], json.loads(messages[1]["body"])
+
+    async def test_config_advertises_sync_exec(self):
+        status, payload = await self.request("GET", "/v1/config")
+        self.assertEqual(status, 200)
+        self.assertIs(payload["capabilities"]["sync_exec_enabled"], True)
+
+    async def test_sync_rejects_stdin_even_when_empty(self):
+        for stdin in ("input", ""):
+            with self.subTest(stdin=stdin):
+                status, payload = await self.post({"command": "echo", "sync": True, "stdin": stdin})
+                self.assertEqual(status, 400)
+                self.assertEqual(payload["error"]["type"], "InvalidArgumentError")
+                self.assertEqual(payload["error"]["code"], "invalid_argument")
+        self.box.exec.assert_not_awaited()
 
     async def test_async_backward_compatible_when_sync_omitted_or_false(self):
         for extra in ({}, {"sync": False}):

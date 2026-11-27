@@ -414,6 +414,7 @@ pub(super) struct ServerCapabilities {
     pub export_enabled: bool,
     pub import_enabled: bool,
     pub exec_user_enabled: bool,
+    pub sync_exec_enabled: bool,
     pub volume_read_only_enabled: bool,
     pub typed_mounts_enabled: bool,
 }
