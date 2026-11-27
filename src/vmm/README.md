@@ -37,12 +37,12 @@ boxlite-vmm
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `build` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam |
 | `control` | `VmControl` provides runtime controls for VM status, pause, resume, export, stop, and `resize_disk` by configured ID |
 | `lifecycle` | `Lifecycle` coordinates the one-shot run, pause epochs, the control mailbox, and the shared stop latch |
-| `snapshot` | Captures and exports machine state and raw guest RAM for paused device-less VMs on Linux x86_64 |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of low RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig`: CPU, RAM, kernel and initramfs, disks, optional filesystem/vsock/network, and virtio console; 1..=64 vCPUs, nonzero `u32` MiB of RAM whose layout must pass host and boot address checks, a printable-ASCII command line under 2048 bytes, and at most 8 disks |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `hotplug` | `HotplugMemory` places a window after boot RAM, plugs 2 MiB blocks and maps 128 MiB slots |
+| `snapshot` | Linux x86_64 device-less snapshot export and restore, including machine state and packed boot RAM |
 | `cpu_features` | x86_64 guest-memory capability preflight, CPUID for each vCPU, and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers create and configure each vCPU, hold them at a start gate, check for pause or stop before guest entry, and dispatch guest exits |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
@@ -689,12 +689,14 @@ it registers any RAM, `Vm::with_backend` builds the `Chipset` from the
 devices it is given, so a conflict fails with `ChipsetConflicts` and leaves
 nothing mapped.
 
-1. It starts one scoped thread per vCPU, named `vcpuN`. Each creates its vCPU,
-   sets its CPUID from `vcpu_cpuid` and the boot MSRs, and on vCPU 0 the entry
-   registers, then waits at a start gate until every vCPU is configured. A
-   vCPU that fails setup sends `VcpuFailed` before it arrives, so the latch
-   keeps every vCPU out of the guest, and a thread that fails to start aborts
-   the gate, so no worker waits forever.
+1. It starts one scoped thread per vCPU, named `vcpuN`. On boot each thread
+   sets its CPUID and boot MSRs, and vCPU 0 also sets the entry registers.
+   On restore the thread installs the saved state. Each waits at the start
+   gate until the driver allows guest entry. The driver handles pause, stop,
+   and kick retries in the event loop during setup. The last ready vCPU wakes
+   the loop, and the driver handles queued terminal events and pending pause
+   requests before opening the gate. A spawn or setup failure sets the stop
+   latch and aborts the gate.
 2. Before each guest entry, the worker calls `checkpoint` and checks the stop
    latch. To park, it calls `complete_pending_io` and dispatches each
    `Ok(IoCompletion::Exit(exit))` until completion returns `Ok(IoCompletion::Done)`.
@@ -708,7 +710,7 @@ nothing mapped.
    drains pending I/O and preserves the latched outcome.
 3. `EventSender::send` sets the stop latch before it queues, so the vCPU
    that sends, such as the one whose `0xFE` reached the i8042, never enters
-   the guest again. `run` takes the first event from the `EventLoop`, opens
+   the guest again. `run` takes the first event from the `EventLoop`, aborts
    the start gate for teardown, releases and kicks the vCPUs, and joins them
    all before it returns. Before joining, shutdown retries kicks that fail
    with `WouldBlock` or `Interrupted`, including when the terminal event
@@ -783,6 +785,33 @@ The memory file contains exactly the header's declared RAM byte count.
 Raw RAM starts at offset zero and follows guest physical address order,
 skipping the `[3 GiB, 4 GiB)` PCI hole. Machine state targets the same host
 and KVM environment.
+
+### Restoring a snapshot
+
+On Linux x86_64, `Vm::from_state(state_path, memory_path)` imports the files
+written by `control.export(state_path, memory_path)`. The constructor checks
+the exact file boundaries, machine state, and KVM GPA limit. It loads and
+registers RAM and returns a device-less VM in `Created`. Image I/O, host VM
+creation, and RAM registration errors are returned by the constructor.
+
+During `vm.run()`, the driver calls `restore_before_vcpus` before starting
+the vCPU threads. Each vCPU calls `restore_state` and `notify_guest_stopped`
+on its owning thread. The event loop calls `restore_after_vcpus` when all vCPUs
+are ready at the start gate and no stop is pending. Only success opens the gate.
+A setup error keeps the guest from entering, and `run()` returns the error
+after joining every started vCPU and publishing `Exited`.
+
+To inspect or re-export the restored state before guest entry, reserve a
+pause with `control.request_pause()` while the VM is in `Created`. Start `vm.run()`
+on the VM owner thread and use `control.wait_paused(timeout)` from a control
+thread. Call `control.resume()` when the guest can enter.
+
+On Linux x86_64 with read/write `/dev/kvm`, run
+`make test:integration:vmm:kvm` for flat-guest round trips, including the
+3073 MiB split-RAM case, which writes the full 3073 MiB RAM file and state
+file under the temporary directory and requires matching free temporary disk
+space. Run `make test:integration:vmm:linux` with `VMM_KERNEL` set to a readable
+`vmlinux` for the Linux round trip.
 
 ## Long-mode entry
 

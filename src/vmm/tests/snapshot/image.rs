@@ -5,50 +5,21 @@
 mod linux {
     use std::{
         fs::{self, File},
-        io::{self, Read, Write},
+        io::{self, Write},
     };
 
     use vm_memory::{Bytes, GuestAddress};
 
     use crate::{
-        ControlReason, Error, Result,
+        ControlReason, Error,
         events::EventLoop,
         lifecycle::Lifecycle,
         memory::{GuestRam, MMIO_HOLE_START, X86_LAYOUT},
-        snapshot::image::{HEADER_LEN, Header, MAGIC, VERSION, create_new_file, write_to},
+        snapshot::image::{Header, MAX_MACHINE_STATE_LEN, create_new_file, write_to},
     };
 
     const MIB: usize = 1 << 20;
     const PAGE: usize = 4096;
-
-    impl Header {
-        pub(crate) fn read_from(
-            reader: &mut impl Read,
-            state_len: u64,
-            memory_len: u64,
-        ) -> Result<Self> {
-            let mut bytes = [0; HEADER_LEN];
-            reader.read_exact(&mut bytes).map_err(Error::Snapshot)?;
-            let invalid =
-                |reason| Error::Snapshot(io::Error::new(io::ErrorKind::InvalidData, reason));
-            if &bytes[..8] != MAGIC
-                || u32::from_le_bytes(bytes[8..12].try_into().unwrap()) != VERSION
-            {
-                return Err(invalid("unknown snapshot magic or version"));
-            }
-            let header = Self {
-                vcpus: u32::from_le_bytes(bytes[12..16].try_into().unwrap()),
-                ram_len: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
-                machine_len: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
-            };
-            if (HEADER_LEN as u64).checked_add(header.machine_len) != Some(state_len)
-                || header.ram_len != memory_len
-            {
-                return Err(invalid("snapshot lengths do not match the files"));
-            }
-            Ok(header)
-        }
-    }
 
     #[derive(Default)]
     struct RecordingWriter {
@@ -122,31 +93,45 @@ mod linux {
         let mut state = Vec::new();
         let mut memory = Vec::new();
         write_to(&mut state, &mut memory, 2, b"state", &ram).unwrap();
-        let state_len = state.len() as u64;
-        let memory_len = memory.len() as u64;
-        let header = Header::read_from(&mut state.as_slice(), state_len, memory_len).unwrap();
+        let header = Header::read(&mut state.as_slice()).unwrap();
         assert_eq!(
             (header.vcpus, header.ram_len, header.machine_len),
             (2, PAGE as u64, 5)
         );
 
         assert!(matches!(
-            Header::read_from(&mut &state[..31], 31, memory_len),
+            Header::read(&mut &state[..31]),
             Err(Error::Snapshot(error)) if error.kind() == io::ErrorKind::UnexpectedEof
         ));
-        for len in [state_len - 1, state_len + 1] {
-            assert!(Header::read_from(&mut state.as_slice(), len, memory_len).is_err());
-        }
-        for len in [memory_len - 1, memory_len + 1] {
-            assert!(Header::read_from(&mut state.as_slice(), state_len, len).is_err());
-        }
-        for offset in [0, 8] {
+        for (field, value) in [
+            (0..1, &[0][..]), // magic
+            (8..9, &[2]),     // version
+            (12..13, &[0]),   // zero vCPUs
+            (12..13, &[65]),
+            (16..24, &0u64.to_le_bytes()), // RAM length
+            (24..32, &0u64.to_le_bytes()), // machine state length
+            (24..32, &(MAX_MACHINE_STATE_LEN + 1).to_le_bytes()),
+        ] {
             let mut corrupt = state.clone();
-            corrupt[offset] ^= 0xff;
-            assert!(Header::read_from(&mut corrupt.as_slice(), state_len, memory_len).is_err());
+            corrupt[field].copy_from_slice(value);
+            assert!(matches!(
+                Header::read(&mut corrupt.as_slice()),
+                Err(Error::Snapshot(error)) if error.kind() == io::ErrorKind::InvalidData
+            ));
         }
-        state[24..32].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert!(Header::read_from(&mut state.as_slice(), state_len, memory_len).is_err());
+
+        let mut truncated = &state[..state.len() - 1];
+        assert!(matches!(
+            Header::read(&mut truncated).unwrap().read_machine(&mut truncated),
+            Err(Error::Snapshot(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
+        state.push(0);
+        let mut trailing = state.as_slice();
+        assert!(matches!(
+            Header::read(&mut trailing).unwrap().read_machine(&mut trailing),
+            Err(Error::Snapshot(error)) if error.kind() == io::ErrorKind::InvalidData
+                && error.to_string() == "trailing bytes in snapshot state file"
+        ));
     }
 
     #[test]

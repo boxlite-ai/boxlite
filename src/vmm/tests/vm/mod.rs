@@ -2377,3 +2377,51 @@ fn a_hotplug_capacity_adds_virtio_mem_and_registers_its_control() {
         console.finish();
     }
 }
+
+#[test]
+#[cfg_attr(
+    not(target_arch = "x86_64"),
+    expect(clippy::unit_arg, reason = "arm64 has no boot registers yet.")
+)]
+fn devices_updated_vcpu_count_controls_run_vcpu_count() {
+    #[cfg(target_arch = "x86_64")]
+    let (backend, log) = {
+        use crate::mock_vm::Step;
+        let backend = MockVm::with_scripts(vec![vec![Step::Shutdown], vec![Step::Shutdown]]);
+        let log = backend.log();
+        (backend, log)
+    };
+    #[cfg(not(target_arch = "x86_64"))]
+    let backend = MockVm::new();
+
+    let mut vm = Vm::with_devices(
+        config(1, 16),
+        || Ok(backend),
+        |_, _| Ok(BootRegisters::default()),
+        |_, _, config, _| {
+            config.vcpu_count = 2;
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(vm.vcpu_count, 2);
+    #[cfg(target_arch = "x86_64")]
+    {
+        assert_eq!(vm.run().unwrap(), crate::VmExit::GuestShutdown);
+        let calls = log.lock().unwrap();
+        let feature_calls: Vec<_> = calls
+            .iter()
+            .filter(|call| matches!(call, Call::SetCpuFeatures { .. }))
+            .copied()
+            .collect();
+        assert_eq!(feature_calls.len(), 2, "got {calls:?}");
+        assert!(
+            feature_calls.contains(&Call::SetCpuFeatures { id: 0 })
+                && feature_calls.contains(&Call::SetCpuFeatures { id: 1 }),
+            "expected both vCPUs to start after devices updated vcpu_count, got {calls:?}"
+        );
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = &mut vm;
+}

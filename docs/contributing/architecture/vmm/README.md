@@ -436,8 +436,8 @@ worker slot synchronously.
 
 - **vCPU threads.**
   - `run()` spawns one per vCPU, named `vcpuN`. Each creates and configures its
-    vCPU and waits at a start gate until every vCPU is configured; a thread
-    that fails to start aborts the gate.
+    vCPU and waits at a start gate until the driver allows guest entry.
+    A spawn or setup failure aborts the gate.
   - Before each guest entry, a vCPU checks the pause and stop state. It waits
     on a condition variable while parked.
   - When the VM is running, idle vCPUs wait inside the host. KVM's in-kernel
@@ -471,8 +471,12 @@ worker slot synchronously.
     buffered network traffic.
 - **The `run()` thread.**
   - It waits on one `EventLoop` poller for control wakeups, stop requests,
-    vCPU outcomes and device failures. The `RECHECK` interval is one second,
-    so the mailbox and terminal queue are revisited even if a wakeup is lost.
+    vCPU outcomes and device failures. During vCPU setup, the same loop
+    processes control requests and retries kicks. The last ready vCPU wakes
+    the poller; the loop checks terminal events and processes pending pause
+    requests before opening the start gate. The `RECHECK` interval is one
+    second, so the mailbox and terminal queue are revisited even if a wakeup
+    is lost.
   - The poller is `mio`, which uses epoll on Linux and kqueue on macOS and is
     already in `Cargo.lock` through tokio. rust-vmm's event-manager and crosvm's
     `WaitContext` are epoll-only.
@@ -625,6 +629,36 @@ targets return `AlreadyExists` and retain their contents. If export fails
 after creating a file, `boxlite-vmm` leaves it in place, even if partially
 written. The caller (runtime or runner) is responsible for cleanup, for example
 by exporting into a temporary directory and atomically renaming it on success.
+
+### Snapshot restore
+
+On Linux x86_64, `Vm::from_state(state_path, memory_path)` opens the two files
+produced by `VmControl::export`. It validates the v1 header, vCPU and IRQ chip
+order, RAM layout, and KVM GPA limit. Each file must end at its declared
+payload boundary. The constructor streams the RAM image into anonymous
+mappings, creates the host VM, and registers the mappings. A successful
+import returns a device-less VM in `Created`.
+
+`Vm::run` installs the saved machine state in order.
+
+1. The driver calls `restore_before_vcpus` to restore the VM clock before it
+   starts the vCPU threads.
+2. Each vCPU owner creates its vCPU, calls `restore_state` with the saved CPU
+   state, and calls `notify_guest_stopped` to notify the guest clock. It then
+   waits at the start gate.
+3. The driver handles queued terminal events first. Once every vCPU is ready,
+   if the stop latch is clear, the driver calls `restore_after_vcpus` to restore
+   the IRQ chips and PIT. Only success opens the gate for guest entry.
+
+A setup failure aborts guest entry. The driver joins every started vCPU and
+publishes `Exited`. A `control.request_pause()` reservation made in `Created` keeps
+guest entry closed through `Paused` until `control.resume()`.
+
+On Linux x86_64 with read/write `/dev/kvm`, `make test:integration:vmm:kvm`
+exercises flat-guest restore, including a 3073 MiB snapshot across the
+32-bit MMIO hole. `make test:integration:vmm:linux` uses `VMM_KERNEL` for the
+Linux restore round trip. `make coverage:vmm:kvm` and `make coverage:vmm:boot`
+exercise the same restore paths under coverage.
 
 ### Where the engine plugs in (M2)
 
@@ -829,7 +863,8 @@ The kernel then boots itself (Linux v6.12):
   - vCPU registers, interrupt-controller state (`hv_gic_state_*` on HVF, vgic
     attributes on KVM) and device state are plain data. They are serialised
     with serde, as in all four surveyed VMMs that take snapshots.
-  - A restore maps the memory file copy-on-write through `map_memory`.
+  - Device snapshots plan to map the memory file copy-on-write through
+    `map_memory`.
 - **M9, GPU.**
   - BoxLite's own devices stay on virtio-mmio.
   - A PCI transport serves only passed-through devices, in the ECAM and BAR

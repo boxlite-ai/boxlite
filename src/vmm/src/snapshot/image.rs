@@ -5,24 +5,72 @@
 
 use std::{
     fs::{File, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Write},
     os::unix::fs::OpenOptionsExt,
     path::Path,
 };
 
 use vm_memory::{Bytes, GuestAddress};
 
-use crate::{Error, Result, memory::GuestRam};
+use super::state::MachineState;
+use crate::{Error, Result, config::MAX_VCPUS, memory::GuestRam};
 
 pub(super) const MAGIC: &[u8; 8] = b"BXLVMST1";
 pub(super) const VERSION: u32 = 1;
 pub(super) const HEADER_LEN: usize = 32;
 pub(super) const CHUNK: usize = 1 << 20;
+// Bound allocation before decoding, with room for 64 vCPUs at the decoder's
+// XSAVE, MSR and CPUID limits, including Postcard's varint overhead.
+pub(super) const MAX_MACHINE_STATE_LEN: u64 = 32 << 20;
 
 pub(super) struct Header {
     pub(super) vcpus: u32,
     pub(super) ram_len: u64,
     machine_len: u64,
+}
+
+impl Header {
+    pub(super) fn read(reader: &mut impl Read) -> Result<Self> {
+        let mut bytes = [0; HEADER_LEN];
+        reader.read_exact(&mut bytes).map_err(Error::Snapshot)?;
+        if &bytes[..8] != MAGIC || u32::from_le_bytes(bytes[8..12].try_into().unwrap()) != VERSION {
+            return Err(invalid_data("unknown snapshot magic or version"));
+        }
+        let header = Self {
+            vcpus: u32::from_le_bytes(bytes[12..16].try_into().unwrap()),
+            ram_len: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
+            machine_len: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+        };
+        if !(1..=u32::from(MAX_VCPUS)).contains(&header.vcpus) {
+            return Err(invalid_data("invalid snapshot vCPU count"));
+        }
+        if header.ram_len == 0 {
+            return Err(invalid_data("empty snapshot RAM"));
+        }
+        if !(1..=MAX_MACHINE_STATE_LEN).contains(&header.machine_len) {
+            return Err(invalid_data("invalid machine state length"));
+        }
+        Ok(header)
+    }
+
+    pub(super) fn read_machine(&self, reader: &mut impl Read) -> Result<MachineState> {
+        let mut bytes = vec![0; self.machine_len as usize];
+        reader.read_exact(&mut bytes).map_err(Error::Snapshot)?;
+        expect_eof(reader, "trailing bytes in snapshot state file")?;
+        MachineState::decode(&bytes, self.vcpus)
+    }
+}
+
+pub(super) fn expect_eof(reader: &mut impl Read, message: &'static str) -> Result<()> {
+    match reader.read_exact(&mut [0]) {
+        Ok(()) => Err(invalid_data(message)),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+        Err(error) => Err(Error::Snapshot(error)),
+    }
+}
+
+fn invalid_data(message: &'static str) -> Error {
+    Error::Snapshot(io::Error::new(io::ErrorKind::InvalidData, message))
 }
 
 pub(crate) fn write_to(
