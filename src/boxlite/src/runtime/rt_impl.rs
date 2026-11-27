@@ -2046,6 +2046,18 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         self.0.get_or_create(options, name).await
     }
 
+    async fn adopt(&self, options: BoxOptions, name: &str) -> BoxliteResult<LiteBox> {
+        let options = sanitize_local_options(&self.0.experimental_features, options).await?;
+        let (config, state) = self
+            .0
+            .box_manager
+            .lookup_box(name)?
+            .ok_or_else(|| BoxliteError::NotFound(name.to_owned()))?;
+        self.0
+            .adopt_existing_box(&options, config, state)
+            .map(|(handle, _)| handle)
+    }
+
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
         self.0.get(id_or_name).await
     }

@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
-import { IsEnum, IsObject, IsOptional, IsString } from 'class-validator'
+import { ApiHideProperty, ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { IsEnum, IsObject, IsOptional, IsString, Matches } from 'class-validator'
 import { JobType } from '../enums/job-type.enum'
 import { JobStatus } from '../enums/job-status.enum'
 import { ResourceType } from '../enums/resource-type.enum'
@@ -151,6 +151,11 @@ export class PaginatedJobsDto {
 
 @ApiSchema({ name: 'ListJobsQuery' })
 export class ListJobsQueryDto {
+  @ApiHideProperty() // Documented on listJobs after its existing positional parameters.
+  @IsOptional()
+  @Matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+  afterId?: string
+
   @PageNumber(1)
   page = 1
 

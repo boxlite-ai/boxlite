@@ -33,6 +33,53 @@ pub(crate) struct RestRuntime {
 }
 
 impl RestRuntime {
+    async fn adopt_named_box(
+        &self,
+        options: &BoxOptions,
+        box_name: &str,
+        require_saved_policy: bool,
+    ) -> BoxliteResult<LiteBox> {
+        let response = self
+            .client
+            .get::<BoxResponse>(&format!("/boxes/{box_name}"))
+            .await?;
+        options.sanitize_remote()?;
+        // Legacy read-write volumes allow name-based reuse. For explicit mounts or
+        // read-only volumes, the response lacks the metadata needed to verify reuse.
+        if !options.mounts.is_empty() || options.volumes.iter().any(|volume| volume.read_only) {
+            return Err(BoxliteError::Unsupported(format!(
+                "cannot reuse box {box_name:?}: the REST response does not expose its \
+                 existing mount configuration; use a different name or recreate the box"
+            )));
+        }
+        let actual = response.privileged.ok_or_else(|| {
+            BoxliteError::Unsupported(format!(
+                "cannot reuse box {box_name:?}: the server did not report its \
+                             privileged mode; upgrade the server to expose privilege metadata"
+            ))
+        })?;
+        if actual != options.advanced.privileged {
+            return Err(BoxliteError::Unsupported(format!(
+                "cannot reuse box {box_name:?}: requested privileged={}, but the \
+                             existing box has privileged={actual}; use a different name or recreate it",
+                options.advanced.privileged
+            )));
+        }
+        if let Some(policy) = &response.effective_capabilities {
+            options
+                .advanced
+                .effective_capabilities()
+                .check_compatibility(policy, box_name)?;
+        } else if require_saved_policy || options.advanced.capabilities().is_some() {
+            return Err(BoxliteError::Unsupported(format!(
+                "cannot verify the capability policy for box {box_name:?}; upgrade the REST server"
+            )));
+        }
+        let info = response.to_box_info()?;
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        Ok(litebox_from_rest(rest_box))
+    }
+
     pub fn new(config: &BoxliteRestOptions) -> BoxliteResult<Self> {
         let client = ApiClient::new(config)?;
         Ok(Self { client })
@@ -526,34 +573,8 @@ impl RuntimeBackend for RestRuntime {
         }
 
         if let Some(ref box_name) = name {
-            let path = format!("/boxes/{box_name}");
-            match self.client.get::<BoxResponse>(&path).await {
-                Ok(response) => {
-                    // TODO DISCUSS: Legacy read-write volumes retain name-based reuse without
-                    // verifying mount metadata; decide whether tighter protection is preferable.
-                    if uses_mounts_field_for_new_mountspec || has_read_only_mounts {
-                        return Err(BoxliteError::Unsupported(format!(
-                            "cannot reuse box {box_name:?}: the REST response does not expose its \
-                             existing mount configuration; use a different name or recreate the box"
-                        )));
-                    }
-                    let actual = response.privileged.ok_or_else(|| {
-                        BoxliteError::Unsupported(format!(
-                            "cannot reuse box {box_name:?}: the server did not report its \
-                             privileged mode; upgrade the server to expose privilege metadata"
-                        ))
-                    })?;
-                    if actual != options.advanced.privileged {
-                        return Err(BoxliteError::Unsupported(format!(
-                            "cannot reuse box {box_name:?}: requested privileged={}, but the \
-                             existing box has privileged={actual}; use a different name or recreate it",
-                            options.advanced.privileged
-                        )));
-                    }
-                    let info = response.to_box_info()?;
-                    let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
-                    return Ok((litebox_from_rest(rest_box), false));
-                }
+            match self.adopt_named_box(&options, box_name, false).await {
+                Ok(handle) => return Ok((handle, false)),
                 Err(BoxliteError::NotFound(_)) => {}
                 Err(error) => return Err(error),
             }
@@ -561,6 +582,10 @@ impl RuntimeBackend for RestRuntime {
         // Create new box
         let litebox = self.create(options, name).await?;
         Ok((litebox, true))
+    }
+
+    async fn adopt(&self, options: BoxOptions, box_name: &str) -> BoxliteResult<LiteBox> {
+        self.adopt_named_box(&options, box_name, true).await
     }
 
     async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {

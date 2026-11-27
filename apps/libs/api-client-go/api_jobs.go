@@ -189,6 +189,7 @@ type JobsAPIListJobsRequest struct {
 	limit *float32
 	status *JobStatus
 	offset *float32
+	afterId *string
 }
 
 // Page number of the results
@@ -212,6 +213,12 @@ func (r JobsAPIListJobsRequest) Status(status JobStatus) JobsAPIListJobsRequest 
 // Number of jobs to skip for pagination (default: 0)
 func (r JobsAPIListJobsRequest) Offset(offset float32) JobsAPIListJobsRequest {
 	r.offset = &offset
+	return r
+}
+
+// List jobs in ascending ID order after this UUID. Start with the nil UUID.
+func (r JobsAPIListJobsRequest) AfterId(afterId string) JobsAPIListJobsRequest {
+	r.afterId = &afterId
 	return r
 }
 
@@ -274,6 +281,9 @@ func (a *JobsAPIService) ListJobsExecute(r JobsAPIListJobsRequest) (*PaginatedJo
 	}
 	if r.offset != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "offset", r.offset, "form", "")
+	}
+	if r.afterId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "afterId", r.afterId, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}

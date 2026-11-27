@@ -485,6 +485,11 @@ pub struct BoxInfo {
     #[serde(default)]
     pub privileged: Option<bool>,
 
+    /// Effective guest capability policy from the saved configuration.
+    /// Older remote servers may omit the policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_capabilities: Option<crate::ContainerCapabilities>,
+
     /// Network configuration and current runtime publication metadata.
     ///
     /// Local producers always populate this field. `None` indicates metadata
@@ -575,6 +580,7 @@ impl BoxInfo {
             cpus: config.options.cpus.unwrap_or(f64::from(DEFAULT_CPUS)),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             privileged: Some(config.options.advanced.privileged),
+            effective_capabilities: Some(config.options.advanced.effective_capabilities()),
             network: Some(NetworkInfo::new(
                 OutboundNetworkInfo {
                     mode: network_config.outbound.mode,

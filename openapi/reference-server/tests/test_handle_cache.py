@@ -167,6 +167,15 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     self.assertIs(response["privileged"], privileged)
 
+    def test_box_response_distinguishes_known_capabilities_from_missing_metadata(self):
+        info = _make_box_info("stopped-box", status="stopped")
+        self.assertNotIn("effective_capabilities", SERVER.box_info_to_dict(info))
+        info.effective_capabilities = SimpleNamespace(add=[], drop=["CHOWN"])
+        self.assertEqual(
+            SERVER.box_info_to_dict(info)["effective_capabilities"],
+            {"add": [], "drop": ["CHOWN"]},
+        )
+
     async def asyncSetUp(self) -> None:
         SERVER.state.runtime = None
         SERVER.state.server_config = None

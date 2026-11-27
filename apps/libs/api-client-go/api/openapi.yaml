@@ -2675,6 +2675,16 @@ paths:
         schema:
           type: number
         style: form
+      - description: List jobs in ascending ID order after this UUID. Start with the
+          nil UUID.
+        explode: true
+        in: query
+        name: afterId
+        required: false
+        schema:
+          format: uuid
+          type: string
+        style: form
       responses:
         "200":
           content:

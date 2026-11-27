@@ -7,7 +7,7 @@
 import { ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository, LessThan, In, EntityManager } from 'typeorm'
+import { Repository, LessThan, MoreThan, In, EntityManager } from 'typeorm'
 import { Job } from '../entities/job.entity'
 import { JobDto, JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { ResourceTypeForJobType } from '../dto/job-type-map.dto'
@@ -306,19 +306,17 @@ export class JobService {
     })
   }
 
-  async findJobsForRunner(runnerId: string, status?: JobStatus, page = 1, limit = 100): Promise<PaginatedList<JobDto>> {
-    const whereCondition: { runnerId: string; status?: JobStatus } = { runnerId }
-
-    if (status) {
-      whereCondition.status = status
-    }
-
+  async findJobsForRunner(
+    runnerId: string,
+    status?: JobStatus,
+    page = 1,
+    limit = 100,
+    afterId?: string,
+  ): Promise<PaginatedList<JobDto>> {
     const [jobs, total] = await this.jobRepository.findAndCount({
-      where: whereCondition,
-      order: {
-        createdAt: 'DESC',
-      },
-      skip: (page - 1) * limit,
+      where: { runnerId, ...(status && { status }), ...(afterId && { id: MoreThan(afterId) }) },
+      order: afterId ? { id: 'ASC' } : { createdAt: 'DESC' },
+      skip: afterId ? 0 : (page - 1) * limit,
       take: limit,
     })
 

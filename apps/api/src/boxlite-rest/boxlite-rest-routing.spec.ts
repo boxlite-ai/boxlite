@@ -16,6 +16,8 @@ import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
+import { BoxDto } from '../box/dto/box.dto'
+import { Box } from '../box/entities/box.entity'
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
@@ -212,6 +214,35 @@ describe('BoxLite REST routing', () => {
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteBoxController)).toEqual(['v1/boxes', 'v1/:prefix/boxes'])
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteProxyController)).toEqual(['v1/boxes', 'v1/:prefix/boxes'])
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteVolumeController)).toEqual(['v1/volumes', 'v1/:prefix/volumes'])
+  })
+
+  it.each([
+    [false, { add: [], drop: [] }],
+    [true, { add: ['ALL'], drop: [] }],
+    [undefined, undefined],
+  ] as const)('GET box reports the saved capability policy for privileged=%s', async (privileged, policy) => {
+    const box = new Box('us', 'worker')
+    box.id = 'box-1'
+    const dto = BoxDto.fromBox(box)
+    dto.privileged = privileged
+    await startApp(
+      [BoxliteBoxController],
+      [
+        {
+          provide: BoxService,
+          useValue: {
+            findOneByIdOrName: jest.fn().mockResolvedValue(box),
+            toBoxDtoWithExitCode: jest.fn().mockResolvedValue(dto),
+          },
+        },
+      ],
+    )
+
+    const response = await get('/api/v1/boxes/box-1')
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.privileged).toBe(privileged)
+    expect(body.effective_capabilities).toEqual(policy)
   })
 
   it('registers canonical and legacy default-prefix routes in the Nest HTTP router', async () => {

@@ -27,6 +27,9 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
     privileged: box.privileged,
+    // Cloud rejects custom capability policies, so the persisted mode determines both lists.
+    effective_capabilities:
+      typeof box.privileged === 'boolean' ? { add: box.privileged ? ['ALL'] : [], drop: [] } : undefined,
     labels: box.labels || {},
     auto_stop: box.autoStop ?? DEFAULT_AUTO_STOP_SECONDS,
     auto_delete: box.autoDelete ?? AUTO_DELETE_DISABLED,

@@ -10,6 +10,7 @@ use std::ptr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod adoption;
 mod checkpoint_options;
 mod kernel;
 mod nested_virtualization;

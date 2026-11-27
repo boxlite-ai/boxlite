@@ -163,6 +163,35 @@ if (existsSync(adminPath)) {
   writeFileSync(adminPath, admin)
 }
 
+// listJobs previously took Axios options in position five. Accept either those
+// options or the new cursor there, across all four generated call surfaces.
+const jobsPath = `${srcDir}/api/jobs-api.ts`
+if (existsSync(jobsPath)) {
+  const jobs = readFileSync(jobsPath, 'utf8')
+  const signature = 'offset?: number, afterId?: string, options'
+  const entry = /(listJobs: async \([^\n]+\): Promise<RequestArgs> => \{\n)/g
+  if (jobs.split(signature).length !== 5 || [...jobs.matchAll(entry)].length !== 1) {
+    throw new Error(`Unexpected listJobs signatures in ${jobsPath}; check positional compatibility`)
+  }
+  writeFileSync(
+    jobsPath,
+    jobs
+      .replaceAll(signature, 'offset?: number, afterId?: string | RawAxiosRequestConfig, options')
+      .replaceAll(
+        '@param {string} [afterId]',
+        '@param {string | RawAxiosRequestConfig} [afterId] Legacy Axios options, or:',
+      )
+      .replace(
+        entry,
+        `$1            if (typeof afterId === 'object' && afterId !== null) {
+                options = afterId;
+                afterId = undefined;
+            }
+`,
+      ),
+  )
+}
+
 const apiDir = `${srcDir}/api`
 if (existsSync(apiDir)) {
   for (const fileName of readdirSync(apiDir).filter((fileName) => fileName.endsWith('.ts'))) {

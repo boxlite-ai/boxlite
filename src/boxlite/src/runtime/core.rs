@@ -354,6 +354,22 @@ impl BoxliteRuntime {
         self.backend.get_or_create(options, name).await
     }
 
+    /// Open an existing box only if its stored policy satisfies the request.
+    pub async fn adopt(&self, options: BoxOptions, name: &str) -> BoxliteResult<LiteBox> {
+        if name.is_empty() {
+            return Err(BoxliteError::InvalidArgument(
+                "adoption requires a box name or ID".into(),
+            ));
+        }
+        if matches!(options.rootfs, crate::RootfsSpec::Checkpoint(_)) {
+            return Err(BoxliteError::Unsupported(
+                "adopt cannot verify the checkpoint source of an existing box".into(),
+            ));
+        }
+        options.sanitize_create()?;
+        self.backend.adopt(options, name).await
+    }
+
     /// Get a handle to an existing box by ID or name.
     ///
     /// The `id_or_name` parameter can be either:

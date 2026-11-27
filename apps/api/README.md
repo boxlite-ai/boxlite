@@ -543,6 +543,11 @@ settings remain independent; REST rejects host security options and explicit
 capability policies. Operators must supply a Docker-capable guest kernel as
 described in the [DinD guide](../../docs/guides/docker-in-docker.md).
 
+Cloud box responses include `effective_capabilities` so REST clients can verify
+the saved policy before adopting a box. An ordinary box reports empty `add`
+and `drop` lists. A privileged box reports `add: ["ALL"]` and an empty `drop`
+list. An unknown privilege mode leaves the policy absent.
+
 Migration-backed integration suites that query `Box`, including usage accounting,
 run `AddGuestPrivileged1792540800000` so their schema includes the persisted field.
 The organization nesting migration adds only the Admin allowlist switch; nesting

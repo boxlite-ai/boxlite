@@ -79,12 +79,14 @@ let page: number; //Page number of the results (optional) (default to 1)
 let limit: number; //Maximum number of jobs to return (default: 100, max: 500) (optional) (default to 100)
 let status: JobStatus; //Filter jobs by status (optional) (default to undefined)
 let offset: number; //Number of jobs to skip for pagination (default: 0) (optional) (default to undefined)
+let afterId: string; //List jobs in ascending ID order after this UUID. Start with the nil UUID. (optional) (default to undefined)
 
 const { status, data } = await apiInstance.listJobs(
     page,
     limit,
     status,
-    offset
+    offset,
+    afterId
 );
 ```
 
@@ -96,6 +98,7 @@ const { status, data } = await apiInstance.listJobs(
 | **limit** | [**number**] | Maximum number of jobs to return (default: 100, max: 500) | (optional) defaults to 100|
 | **status** | **JobStatus** | Filter jobs by status | (optional) defaults to undefined|
 | **offset** | [**number**] | Number of jobs to skip for pagination (default: 0) | (optional) defaults to undefined|
+| **afterId** | [**string**] | List jobs in ascending ID order after this UUID. Start with the nil UUID. | (optional) defaults to undefined|
 
 
 ### Return type

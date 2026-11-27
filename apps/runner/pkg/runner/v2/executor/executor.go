@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -50,6 +51,7 @@ type Executor struct {
 	checkpointWorkDir string
 	operationMu       sync.Mutex
 	boxOperations     map[string]*boxOperation
+	secretFetcher     *secretFetcher
 }
 
 type boxOperation struct {
@@ -96,10 +98,19 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 		archiveStore:      cfg.ArchiveStore,
 		migrateWorkDir:    cfg.MigrateWorkDir,
 		checkpointWorkDir: cfg.CheckpointWorkDir,
+		secretFetcher:     newSecretFetcher(os.Getenv("SECRET_SERVER_URL"), os.Getenv("BOXLITE_RUNNER_ATTESTOR")),
 	}, nil
 }
 
-// Execute processes a job and updates its status
+type startupRecoveryKey struct{}
+
+// Recover executes a job listed as in progress on runner startup.
+// The job may have run before the previous process exited.
+func (e *Executor) Recover(ctx context.Context, job *apiclient.Job) {
+	e.Execute(context.WithValue(ctx, startupRecoveryKey{}, true), job)
+}
+
+// Execute processes a job and updates its status.
 func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 	if job.Type == apiclient.JOBTYPE_EXPORT_CHECKPOINT || job.Type == apiclient.JOBTYPE_UPLOAD_CHECKPOINT || job.Type == apiclient.JOBTYPE_IMPORT_CHECKPOINT {
 		// Native export cancellation stops waiting, not capture. The accepted

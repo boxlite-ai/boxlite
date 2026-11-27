@@ -16,15 +16,31 @@ import (
 )
 
 func (e *Executor) createBox(ctx context.Context, job *apiclient.Job) (any, error) {
-	var createBoxDto dto.CreateBoxDTO
-	err := e.parsePayload(job.Payload, &createBoxDto)
+	// Terminal status callbacks need only the job ID. Drop the wire payload on
+	// every exit, including malformed credentials, without retaining its token.
+	defer func() { job.Payload = nil }()
+	var payload createBoxJobPayload
+	err := e.parsePayload(job.Payload, &payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+		// JSON/type errors can include credential or policy contents.
+		return nil, fmt.Errorf("invalid create payload")
+	}
+	if err := validateCreateSecrets(job, payload); err != nil {
+		return nil, err
+	}
+	createBoxDto := payload.CreateBoxDTO
+	if payload.SecretCredential != nil {
+		if err := e.resolveCreateSecrets(ctx, &createBoxDto, payload.SecretCredential.Token); err != nil {
+			return nil, err
+		}
 	}
 
 	_, daemonVersion, err := e.backend.Create(ctx, createBoxDto)
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("create", string(common.PrometheusOperationStatusFailure)).Inc()
+		if payload.SecretCredential != nil {
+			return nil, fmt.Errorf("box creation failed after secret credential processing")
+		}
 		return nil, common.FormatRecoverableError(err)
 	}
 
