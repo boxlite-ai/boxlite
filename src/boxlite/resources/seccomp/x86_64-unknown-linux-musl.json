@@ -547,6 +547,10 @@
         "comment": "libkrun: modern unlink (glibc uses unlinkat)"
       },
       {
+        "syscall": "renameat2",
+        "comment": "libkrun virtio-fs passthrough: guest file renames use SYS_renameat2. A blocked rename SIGSYS-kills the VMM."
+      },
+      {
         "syscall": "clone3",
         "comment": "libkrun: modern thread creation (glibc 2.34+, used for vCPU threads)"
       },

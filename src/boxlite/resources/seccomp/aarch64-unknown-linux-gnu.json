@@ -51,6 +51,10 @@
         "syscall": "fremovexattr",
         "comment": "virtiofs xattr passthrough (e.g. dropping security.capability on write); a blocked xattr syscall SIGSYS-kills the VMM"
       },
+      {
+        "syscall": "renameat2",
+        "comment": "libkrun virtio-fs passthrough: guest file renames use SYS_renameat2. A blocked rename SIGSYS-kills the VMM."
+      },
             {
                 "syscall": "newfstatat",
                 "comment": "Used when creating snapshots in vmm:persist::snapshot_memory_to_file through std::fs::File::metadata"

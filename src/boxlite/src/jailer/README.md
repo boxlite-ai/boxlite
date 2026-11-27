@@ -125,6 +125,11 @@ others continue to provide protection.
 | Privilege dropping | Run as unprivileged uid/gid |
 | cgroups v2 | Limit CPU, memory, PIDs |
 
+Linux seccomp profiles are allowlists, so any syscall used by the VMM must be
+listed explicitly. The x86_64 and ARM64 GNU/musl profiles allow `renameat2`
+because libkrun's virtio-fs passthrough uses it when a guest renames a file on
+a writable shared filesystem; trapping that syscall kills the VMM.
+
 #### macOS Implementation
 
 | Mechanism | Purpose |
