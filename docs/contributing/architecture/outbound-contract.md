@@ -996,7 +996,9 @@ The GCP deployment must start the compatible API on its private route to run mig
 
 The release workflow must use the existing API login and deployment identity. Runner startup and compatible upgrades must use the same verified binary and lease, including after reboot. Release acceptance covers initial registration of extra Runners and rollback to the last verified compatible artifact.
 
-API startup and the migration CLI use the same exclusive PostgreSQL session advisory lock. Startup refuses superseded admission schema or journal entries before running pending migrations. An incompatible downgrade requires drained writers and exclusive checks for protected policy, generation floors, unfinished jobs, and current leases.
+API startup and the migration CLI use the same exclusive PostgreSQL session advisory lock. Applying or reverting migrations checks for superseded admission schema and journal entries before DDL.
+
+Restore a superseded migration baseline with its matching release. An incompatible downgrade requires drained writers and exclusive checks for protected policy, generation floors, unfinished jobs, and current leases.
 
 ### Public Cloud control resources
 

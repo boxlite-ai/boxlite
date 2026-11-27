@@ -46,7 +46,7 @@ async function waitForActivity(observer: DataSource, name: string, patterns: str
 const databaseTest = process.env.DB_HOST ? it : it.skip
 
 databaseTest.each(['journal', 'schema'] as const)(
-  'refuses superseded complete outbound $0 before running DDL',
+  'refuses superseded complete outbound %s before applying or reverting DDL',
   async (kind) => {
     const schema = `migration_outbound_${randomUUID().replaceAll('-', '')}`
     const observer = await new DataSource({ ...baseDataSourceOptions, entities: [] }).initialize()
@@ -61,11 +61,19 @@ databaseTest.each(['journal', 'schema'] as const)(
     try {
       await observer.query(`CREATE SCHEMA "${schema}"`)
       await source.initialize()
+      await source.query(`
+        CREATE TABLE "runner" (id uuid PRIMARY KEY);
+        CREATE TABLE "box" ("completeOutboundControl" jsonb, "completeOutboundGeneration" integer);
+        CREATE TABLE "job" (type text, "completedAt" timestamptz);
+        CREATE TABLE complete_outbound_runner_enrollment (expires_at timestamptz);
+      `)
+      const runner = source.createQueryRunner()
+      try {
+        await new AddCompleteOutboundReleaseControl1795096806000().up(runner)
+      } finally {
+        await runner.release()
+      }
       await source.showMigrations()
-      await source.query('INSERT INTO migrations (timestamp, name) VALUES ($1, $2)', [
-        1795096806000,
-        'AddCompleteOutboundReleaseControl1795096806000',
-      ])
       if (kind === 'journal') {
         await source.query('INSERT INTO migrations (timestamp, name) VALUES ($1, $2)', [
           1795096802000,
@@ -74,11 +82,19 @@ databaseTest.each(['journal', 'schema'] as const)(
       } else {
         await source.query('CREATE TABLE complete_outbound_admission (id integer)')
       }
+      await source.query('INSERT INTO migrations (timestamp, name) VALUES ($1, $2)', [
+        1795096806000,
+        'AddCompleteOutboundReleaseControl1795096806000',
+      ])
 
       const journal = await source.query('SELECT timestamp FROM migrations ORDER BY timestamp')
       await expect(source.runMigrations()).rejects.toThrow('Restore the complete outbound migration baseline')
+      await expect(source.undoLastMigration()).rejects.toThrow('Restore the complete outbound migration baseline')
       expect(await source.query('SELECT timestamp FROM migrations ORDER BY timestamp')).toEqual(journal)
       expect(await source.query("SELECT to_regclass('migration_probe') AS probe")).toEqual([{ probe: null }])
+      expect(
+        await source.query("SELECT to_regprocedure('complete_outbound_protect_owned_lease()') IS NOT NULL AS present"),
+      ).toEqual([{ present: true }])
     } finally {
       if (source.isInitialized) await source.destroy()
       await observer.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)

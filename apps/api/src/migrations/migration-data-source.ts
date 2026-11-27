@@ -75,7 +75,8 @@ export class MigrationDataSource extends DataSource {
   }
 
   override undoLastMigration(options?: MigrationOptions) {
-    return this.withMigrationLock((executor) => {
+    return this.withMigrationLock(async (executor, runner) => {
+      await this.assertCompleteOutboundSchema(executor, runner)
       executor.transaction = options?.transaction ?? 'all'
       executor.fake = options?.fake ?? false
       return executor.undoLastMigration()
@@ -105,7 +106,9 @@ export class MigrationDataSource extends DataSource {
       [this.driver.schema ?? null],
     )
     if (obsolete.present || executed.some((migration) => migration.timestamp === 1795096802000)) {
-      throw new Error('Restore the complete outbound migration baseline before applying startup migrations')
+      throw new Error(
+        'Restore the complete outbound migration baseline with its matching release before applying or reverting migrations',
+      )
     }
   }
 
