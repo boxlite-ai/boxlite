@@ -799,6 +799,9 @@ const configuration = {
   apiModuleCache: {
     enabled: process.env.ENABLE_API_MODULE_CACHE === 'true',
   },
+  boxCreationQuota: {
+    redisEnabled: process.env.BOX_CREATION_QUOTA_REDIS_ENABLED === 'true',
+  },
   runnerAuthCache: {
     enabled: process.env.ENABLE_RUNNER_AUTH_CACHE !== 'false',
   },

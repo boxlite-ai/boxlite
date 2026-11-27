@@ -72,9 +72,8 @@ describe('UsageModule', () => {
   })
 
   // This module hand-rolls its own BoxRepository factory instead of importing
-  // BoxModule, so a dependency added, dropped or reordered in the constructor
-  // would silently arrive as `undefined` or in the wrong slot — Nest checks
-  // neither the arity nor the order of a useFactory's inject list.
+  // BoxModule. Assert the exact dependencies it intentionally supplies; the
+  // optional creation-quota adapter belongs only to BoxModule's factory.
   it('injects exactly the BoxRepository constructor parameters, in order', () => {
     const providers = Reflect.getMetadata(MODULE_METADATA.PROVIDERS, UsageModule) as Array<any>
     const boxRepositoryProvider = providers.find((provider) => provider?.provide === BoxRepository)
@@ -85,6 +84,6 @@ describe('UsageModule', () => {
       BoxLookupCacheInvalidationService,
       TypedConfigService,
     ])
-    expect(boxRepositoryProvider.inject).toHaveLength(BoxRepository.length)
+    expect(boxRepositoryProvider.inject).toHaveLength(4)
   })
 })

@@ -1294,6 +1294,41 @@ jittered exponential backoff. `GREATEST` keeps timestamps monotonic. A final fai
 process exit can lose an activity update; set the variable to false to wait for one
 best-effort upsert synchronously without retries.
 
+### Redis Box creation quota POC
+
+`BOX_CREATION_QUOTA_REDIS_ENABLED=true` selects Redis admission for organization Box
+creation limits. The default is false and retains the PostgreSQL advisory-lock and COUNT
+path. Redis mode initializes an organization from its counted PostgreSQL Box IDs, then uses
+one atomic Lua operation to reserve a Box ID with INCR. Over-limit reservations are
+immediately decremented and never enter the Box persistence transaction. Successful creates
+remain counted; definite rollback releases the reservation. Existing Box transactions,
+related writes, and row locks are unchanged.
+
+Each organization has a count, a Box-ID hash, and a ready marker. These keys have no TTL.
+Unlimited creates use the ordinary persistence path and are tracked asynchronously so a
+later plan limit starts with existing Boxes included. Counted-to-excluded state transitions
+release a reservation, while excluded-to-counted transitions such as ERROR recovery count it
+again. Repeated events cannot decrement or increment the same Box twice.
+
+A limited create returns 503 when Redis admission is unavailable or initialization fails.
+Unlimited creates remain available and rely on later tracking. Running Redis and legacy
+PostgreSQL admission together during a mixed-version rollout can overshoot because their
+checks do not coordinate.
+
+Every API process runs best-effort reconciliation each minute for dirty and initialized
+organizations. It uses idempotent per-Box corrections and aligns the count with the Redis
+hash; it never assigns a PostgreSQL COUNT directly. Recent reservations are preserved for up
+to five minutes unless their persisted Box is already excluded. Reconciliation repairs the
+counter and blocks further overshoot, but never deletes an excess Box.
+
+This POC has no distributed scheduler lease. API replicas can scan the same organization,
+process exit can lose local dirty work, and zero API replicas means no reconciliation. Event
+reordering can require another pass. A distributed lease or dedicated worker is the future
+direction when bounded recovery time and continuous repair are required.
+
+Run `make test:apps:api TEST_FILES='box-creation-quota'` with `DB_*` and `REDIS_*` set for the
+real PostgreSQL/Redis admission, concurrency, rollback, recovery, and reconciliation tests.
+
 ## Mutation auditing
 
 By default, business writes construct the pending `audit_log` identity and start its INSERT

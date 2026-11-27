@@ -35,6 +35,7 @@ import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
 import { OutboundPolicy } from '../runner-adapter/network-policy'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { TypedConfigService } from '../../config/typed-config.service'
+import type { BoxCreationQuotaService } from '../services/box-creation-quota.service'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
@@ -161,6 +162,7 @@ export class BoxRepository extends BaseRepository<Box> {
     eventEmitter: EventEmitter2,
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
     @Optional() private readonly configService?: TypedConfigService,
+    private readonly creationQuota?: BoxCreationQuotaService,
   ) {
     super(dataSource, eventEmitter, Box)
   }
@@ -185,6 +187,7 @@ export class BoxRepository extends BaseRepository<Box> {
 
     await this.withCreationAdmission(
       box.organizationId,
+      box.id,
       maxCreatedBoxes,
       async (entityManager) => {
         // Provisioning work and ownership must commit with the new Box. Run
@@ -199,6 +202,9 @@ export class BoxRepository extends BaseRepository<Box> {
       },
       onPersist === undefined && initialize === undefined && afterInsert === undefined,
     )
+    if (maxCreatedBoxes === undefined && this.creationQuota?.enabled) {
+      void this.creationQuota.trackCommitted(box.organizationId, box.id)
+    }
 
     this.invalidateLookupCacheOnInsert(box)
     await this.afterBoxWrite(box)
@@ -275,7 +281,7 @@ export class BoxRepository extends BaseRepository<Box> {
     box.assertValid()
     const invariantChanges = box.enforceInvariants()
 
-    await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
+    await this.withCreationAdmission(box.organizationId, box.id, maxCreatedBoxes, async (entityManager) => {
       const result = await entityManager.update(
         Box,
         {
@@ -306,12 +312,16 @@ export class BoxRepository extends BaseRepository<Box> {
 
   private async withCreationAdmission(
     organizationId: string,
+    boxId: string,
     maxCreatedBoxes: number | undefined,
     persist: (entityManager: EntityManager) => Promise<void>,
     singleInsertWithoutCallbacks = false,
   ): Promise<void> {
     if (maxCreatedBoxes === undefined) {
       return this.dataSource.transaction(persist)
+    }
+    if (this.creationQuota?.enabled) {
+      return this.creationQuota.run(organizationId, boxId, maxCreatedBoxes, persist)
     }
 
     const budget = { remainingMs: CREATION_ADMISSION_LOCK_TIMEOUT_MS }
