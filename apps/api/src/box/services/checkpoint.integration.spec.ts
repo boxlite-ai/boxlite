@@ -45,6 +45,7 @@ import { BoxManager } from '../managers/box.manager'
 import { BoxEvents } from '../constants/box-events.constants'
 import { BoxCreatedEvent } from '../events/box-create.event'
 import { subscribeBusinessEvents } from '../../common/utils/business-event.util'
+import { BoxUsagePeriod } from '../../usage/entities/box-usage-period.entity'
 
 const describeWithDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `checkpoint_api_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -96,6 +97,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
         ImageAlias,
         ImageAliasEvent,
         RegistryCredential,
+        BoxUsagePeriod,
       ],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
@@ -170,7 +172,7 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     jobNotifications.length = 0
     uploadNotifications.lpush.mockReset().mockResolvedValue(1)
     await dataSource.query(
-      `TRUNCATE TABLE "${schema}"."checkpoint_operation", "${schema}"."checkpoint", "${schema}"."job", "${schema}"."box", "${schema}"."runner", "${schema}"."image", "${schema}"."registry_credential" CASCADE`,
+      `TRUNCATE TABLE "${schema}"."checkpoint_operation", "${schema}"."checkpoint", "${schema}"."job", "${schema}"."box", "${schema}"."runner", "${schema}"."image", "${schema}"."registry_credential", "${schema}"."box_usage_periods" CASCADE`,
     )
     settings = { archivePrefix: 'gs://checkpoint-tests/checkpoints/', maxPerOrganization: 10, enabled: true }
     runner = new Runner({
@@ -480,6 +482,35 @@ describeWithDatabase('checkpoint create/export/upload (real PostgreSQL)', () => 
     const deleted = await lifecycleService().destroy(box.id, organizationId, Context.user())
     expect(deleted).toMatchObject({ desiredState: BoxDesiredState.DESTROYED, pending: true })
     expect(await states.count()).toBe(0)
+  })
+
+  it.each<[string, () => Promise<Box>]>([
+    ['an ordinary Box', () => source()],
+    [
+      'a checkpoint target',
+      async () => recovery.createBox(organization, (await readyCheckpoint()).id, 'billed-target', undefined),
+    ],
+  ])('closes the open usage period of %s in the deletion transaction', async (_name, create) => {
+    const box = await create()
+    const usagePeriods = dataSource.getRepository(BoxUsagePeriod)
+    await usagePeriods.save(
+      usagePeriods.create({
+        boxId: box.id,
+        organizationId,
+        region: box.region,
+        startAt: new Date(),
+        endAt: null,
+        cpu: 1,
+        gpu: 0,
+        mem: 1,
+        disk: 1,
+      }),
+    )
+
+    // The event emitter is a stub, so no usage handler ever sees this deletion.
+    await lifecycleService().destroy(box.id, organizationId, Context.user())
+
+    expect(await usagePeriods.findOneByOrFail({ boxId: box.id })).toMatchObject({ endAt: expect.any(Date) })
   })
 
   it('blocks deletion and proxy start during export, then allows start after release', async () => {

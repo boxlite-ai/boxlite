@@ -29,7 +29,7 @@ describe('BoxliteBoxController existing box lookup', () => {
       findOneByIdOrName: jest.fn().mockResolvedValue(box),
       toBoxDtoWithExitCode: jest.fn().mockResolvedValue({ id: box.id, name: box.name, state: 'started' }),
     }
-    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, {} as any)
+    const controller = new BoxliteBoxController(boxService as any, {} as any, {} as any, {} as any, {} as any)
     const response = await controller.getBox({ organizationId: organization.id, organization } as any, box.name)
     expect(response.box_id).toBe(box.id)
     expect(response).not.toHaveProperty('reuse_error')
@@ -208,6 +208,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       boxStateWaiter as any,
       commerceBoxLimitService as any,
       {} as any,
+      {} as any,
     )
     return { controller, boxService }
   }
@@ -344,6 +345,7 @@ describe('BoxliteBoxController creation diagnostics', () => {
       boxStateWaiter as any,
       { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(10) } as any,
       {} as any,
+      {} as any,
     )
     const log = jest.spyOn((controller as any).logger, 'error').mockImplementation(() => undefined)
     const auth = { role: 'admin', organization: { id: 'org-1' }, organizationId: 'org-1' } as any
@@ -381,6 +383,7 @@ describe('BoxliteBoxController creation diagnostics', () => {
       { create: jest.fn().mockRejectedValue(failure) } as any,
       {} as any,
       { resolveMaxCreatedBoxes: jest.fn().mockResolvedValue(10) } as any,
+      {} as any,
       {} as any,
     )
     const log = jest.spyOn((controller as any).logger, 'error').mockImplementation(() => undefined)

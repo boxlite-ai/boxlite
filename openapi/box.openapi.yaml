@@ -445,6 +445,55 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/cost:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+
+    get:
+      operationId: getBoxCost
+      summary: Get what one box cost
+      description: |
+        Returns priced usage in every box state, including after the box is
+        deleted. Accepts a box ID only: a name can be reused by another box.
+        Served by the hosted service only.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Cost of the box's recorded usage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BoxCost"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+        "403":
+          description: The caller cannot access the organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "429":
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              description: Seconds to wait before the next request
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Pricing is unavailable, or the deployment does not export usage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   # -------------------------------------------------------------------------
   # Box Lifecycle
   # -------------------------------------------------------------------------
@@ -3899,6 +3948,63 @@ components:
           minimum: 0
           description: Graceful shutdown timeout in seconds. After expiry, force-kill.
           default: 30
+
+    BoxCost:
+      type: object
+      required: [box_id, status, source, total_usd, lines, as_of]
+      properties:
+        box_id:
+          type: string
+        status:
+          type: string
+          enum: [accruing, final]
+          description: |
+            `final` once deletion has been requested and all of the box's usage
+            is priced; the runner may still be deleting the box. Billing ends
+            with that request. Stopping a box does not end it: its disk still
+            accrues.
+        source:
+          type: string
+          enum: [calculated]
+        total_usd:
+          type: [string, "null"]
+          description: |
+            Sum of the lines in US dollars, as a decimal string. Null while
+            accruing with nothing priced yet; "0" states that nothing was billed.
+        lines:
+          type: array
+          description: |
+            Empty while accruing with nothing priced yet. A final cost without
+            usage has one line with amount "0".
+          items:
+            $ref: "#/components/schemas/BoxCostLine"
+        as_of:
+          type: string
+          format: date-time
+          description: Usage that ended by this time is counted.
+
+    BoxCostLine:
+      type: object
+      required: [item, quantity, unit, amount_usd, start, end]
+      properties:
+        item:
+          type: string
+          enum: [cpu, gpu, memory, disk]
+        quantity:
+          type: string
+          description: Decimal string, in `unit`.
+        unit:
+          type: string
+          enum: [vcpu_second, gpu_second, gib_second]
+        amount_usd:
+          type: string
+          description: Decimal string with at most 24 decimal places.
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
 
     ListBoxesResponse:
       type: object

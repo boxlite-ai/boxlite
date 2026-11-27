@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { ExpectedOpenPeriod, expectedOpenPeriod, sameShape } from './expected-usage-period'
 
@@ -45,6 +46,10 @@ describe('expectedOpenPeriod', () => {
     // reopened, or it accrues forever with nothing left to reconcile against
     expect(expectedOpenPeriod(null)).toBeNull()
     expect(expectedOpenPeriod(undefined)).toBeNull()
+  })
+
+  it.each(Object.values(BoxState))('charges nothing in %s once deletion is requested', (state) => {
+    expect(expectedOpenPeriod({ ...box, state, desiredState: BoxDesiredState.DESTROYED })).toBeNull()
   })
 
   it('charges a stopped box for disk but not for compute', () => {

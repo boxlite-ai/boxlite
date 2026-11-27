@@ -718,7 +718,7 @@ organization membership.
 </details>
 
 <details>
-<summary><b>Box lifecycle</b> · 7 routes</summary>
+<summary><b>Box lifecycle</b> · 8 routes</summary>
 
 | Method   | Path                                     | What it does                                |
 | -------- | ---------------------------------------- | ------------------------------------------- |
@@ -726,6 +726,7 @@ organization membership.
 | `GET`    | `/v1[/{prefix}]/boxes`               | Lists boxes in the organization.            |
 | `GET`    | `/v1[/{prefix}]/boxes/{boxId}`       | Gets a box by ID or name.                   |
 | `HEAD`   | `/v1[/{prefix}]/boxes/{boxId}`       | Checks whether a box exists.                |
+| `GET`    | `/v1[/{prefix}]/boxes/{boxId}/cost`  | Gets one box's [cost](#box-cost) by ID.     |
 | `DELETE` | `/v1[/{prefix}]/boxes/{boxId}`       | Destroys a box.                             |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/start` | Starts a box and waits until it is running. |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/stop`  | Stops a box.                                |
@@ -974,6 +975,44 @@ resolve `/dashboard/user/invitations` against `DASHBOARD_URL` and accept after
 sign-in. See [invitation link lifetime](../../../../apps/infra/docs/configuration.md#invitation-link-lifetime).
 
 </details>
+
+### Box cost
+
+[`BoxCostService`](../../../../apps/api/src/usage/services/box-cost.service.ts) decides whether a cost
+is complete; the billing service prices it.
+
+1. One SQL statement reads the box row and its undelivered usage: every row in `box_usage_periods`,
+   and every outbox row that is not `delivered`. One statement is one snapshot, so a period that
+   archiving moves between those tables is never missed.
+2. `as_of` is the earliest undelivered start, or the time of the check when there is none.
+3. Only then is the price read, for usage that ended by `as_of`. Amounts stay decimal strings.
+
+| Condition | `status` |
+| --- | --- |
+| Any open, unarchived, `pending` or `blocked` usage | `accruing` |
+| Deletion not requested | `accruing` |
+| Deletion requested, or the box row removed, and all usage delivered | `final` |
+
+A box ends when its deletion is requested (desired state `destroyed`), whether the runner's deletion
+is pending, failed or retried. A stopped box has not ended.
+Example: a box deleted at 10:00 whose last period is delivered at 10:02 reads `final` from 10:02.
+
+The request closes the box's open period in its own transaction, at the request time, so billing
+stops then even if the usage event handler runs late or never.
+`final` holds because no period opens after that request. Period writers are asynchronous, so
+[`UsageService`](../../../../apps/api/src/usage/services/usage.service.ts) locks the box row in every
+transaction that opens one. The request updates the same row: it either commits after the period,
+which the read then sees, or stops it from opening.
+
+- With nothing priced, an accruing cost is `total_usd: null` and a final one has one `"0"` line.
+- Once the row is removed, a box without undelivered or priced usage in the organization answers 404.
+- Upstream timeouts, refusals and malformed responses answer 503. Upstream 400 answers 500. A failed
+  read never reports zero.
+- Usage recorded while export was off is never priced, and the read cannot detect it.
+- The route uses its own `box-cost` throttle, not the `authenticated` one. Set
+  `RATE_LIMIT_BOX_COST_TTL` (seconds) and `RATE_LIMIT_BOX_COST_LIMIT`; with either unset it is unlimited.
+- `reportOverdue` runs every 5 minutes, logs ended boxes with undelivered usage 15 minutes after their last update,
+  and adds their number to the `box_cost_overdue` counter. `blocked` rows need an operator.
 
 ### Runner CPU incidents
 
@@ -1509,6 +1548,7 @@ is unset; the same document carries PostHog's key and host to the browser.
 | Billing API   | [`billingApiClient.ts`](../../../../apps/dashboard/src/billing-api/billingApiClient.ts), hand-written  | `billingApiUrl`                  | 22 routes: wallet and top-ups, signup credit delivery, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
 | Box admission | [`commerce-box-limit.service.ts`](../../../../apps/api/src/boxlite-rest/commerce-box-limit.service.ts) | `billingApiUrl`                  | 2 server-side reads on Commerce: `GET /plan` and `GET /organization/{organizationId}/plan`, bearer `USAGE_EXPORT_TOKEN`, used by hosted CREATE BOX.                                                        |
 | Usage export  | [`api/src/usage/services`](../../../../apps/api/src/usage/services/), hand-written                     | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
+| Box cost | [`box-pricing.client.ts`](../../../../apps/api/src/usage/services/box-pricing.client.ts) | `usageExport.url` | `GET /internal/organizations/{organizationId}/boxes/{boxId}/cost`, server-side bearer `USAGE_EXPORT_TOKEN`; see [box cost](#box-cost). |
 | Internal state reads | [`box-billing-state.service.ts`](../../../../apps/api/src/box/services/box-billing-state.service.ts) | `usageExport.url` | `GET /internal/billing-states`, server-side bearer `USAGE_EXPORT_TOKEN`. |
 | PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                                | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
 | Pylon         | [`App.tsx`](../../../../apps/dashboard/src/App.tsx) widget, production builds only                     | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |

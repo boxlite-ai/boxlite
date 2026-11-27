@@ -1159,7 +1159,9 @@ failure direction billing cannot tolerate. Claiming instead pushes
 `availableAt` forward, so a crashed worker's row simply becomes claimable
 again, and the duplicate delivery that may cause is absorbed downstream.
 
-**Partial index:** `(status, availableAt)` where `status = 'pending'`.
+**Partial indexes:** `(status, availableAt)` where `status = 'pending'`;
+`(payload->>'boxId')` where `status <> 'delivered'`, which the
+[box cost](api.md#box-cost) read uses to find a box's undelivered usage.
 **Checks:** `attempts >= 0`; `status` restricted to the three values above.
 
 ## Satellite stores

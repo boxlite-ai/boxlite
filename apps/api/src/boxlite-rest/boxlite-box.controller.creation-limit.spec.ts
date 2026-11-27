@@ -36,6 +36,7 @@ function makeController() {
     boxStateWaiter as never,
     commerceBoxLimitService as never,
     {} as never,
+    {} as never,
   )
   return { controller, boxService, boxStateWaiter, commerceBoxLimitService }
 }

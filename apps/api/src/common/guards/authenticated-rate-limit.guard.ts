@@ -5,7 +5,13 @@
  */
 
 import { Injectable, Logger, Inject, ExecutionContext, Optional } from '@nestjs/common'
-import { ThrottlerGuard, ThrottlerRequest, ThrottlerModuleOptions, ThrottlerStorage } from '@nestjs/throttler'
+import {
+  ThrottlerGuard,
+  ThrottlerLimitDetail,
+  ThrottlerRequest,
+  ThrottlerModuleOptions,
+  ThrottlerStorage,
+} from '@nestjs/throttler'
 import { Reflector } from '@nestjs/core'
 import { Request } from 'express'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
@@ -57,8 +63,15 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
 
   protected generateKey(context: ExecutionContext, suffix: string, name: string): string {
     // Override to make rate limiting per-rate-limit-type, not per-route
-    // This ensures all routes share the same counter per rate limit type (authenticated, box-create, box-lifecycle)
+    // This ensures all routes share the same counter per rate limit type (authenticated, box-create, box-lifecycle, box-cost)
     return `${name}-${suffix}`
+  }
+
+  // The base guard suffixes Retry-After with the throttler name, which standard clients do not read.
+  protected async throwThrottlingException(context: ExecutionContext, detail: ThrottlerLimitDetail): Promise<void> {
+    const { res } = this.getRequestResponse(context)
+    res.header('Retry-After', String(detail.timeToBlockExpire))
+    return super.throwThrottlingException(context, detail)
   }
 
   async handleRequest(requestProps: ThrottlerRequest): Promise<boolean> {
@@ -82,15 +95,15 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
     }
 
     // Check authenticated throttlers
-    const authenticatedThrottlers = ['authenticated', 'box-create', 'box-lifecycle']
+    const authenticatedThrottlers = ['authenticated', 'box-create', 'box-lifecycle', 'box-cost']
     if (authenticatedThrottlers.includes(throttler.name)) {
       if (isAuthenticated) {
         // Only 'authenticated' applies to all routes by default
-        // 'box-create' and 'box-lifecycle' only apply if explicitly configured via @SkipThrottle or @Throttle
+        // 'box-create', 'box-lifecycle' and 'box-cost' only apply if explicitly configured via @SkipThrottle or @Throttle
         const isDefaultThrottler = throttler.name === 'authenticated'
 
         if (!isDefaultThrottler) {
-          // Box throttlers (box-create, box-lifecycle) are opt-in only
+          // Box throttlers (box-create, box-lifecycle, box-cost) are opt-in only
           // Check if this route declares this throttler scope via @ThrottlerScope() decorator
           const scopes = this.reflector.getAllAndOverride<string[]>(THROTTLER_SCOPE_KEY, [
             context.getHandler(),

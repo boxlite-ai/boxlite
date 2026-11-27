@@ -27,6 +27,8 @@ import { OrganizationResourceActionGuard } from '../organization/guards/organiza
 import { McpCatalog } from '../mcp/mcp-catalog'
 import { McpDispatcher } from '../mcp/mcp-dispatcher'
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
+import { BoxCostService } from '../usage/services/box-cost.service'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { boxToBoxResponse } from './mappers/box-to-box.mapper'
 
@@ -81,6 +83,7 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
         { provide: BoxStateWaiterService, useValue: {} },
         { provide: CommerceBoxLimitService, useValue: {} },
         { provide: CheckpointRecoverService, useValue: {} },
+        { provide: BoxCostService, useValue: {} },
       ],
     })
       .overrideGuard(CombinedAuthGuard)
@@ -95,6 +98,8 @@ describeDatabase('Box inventory real PostgreSQL and HTTP', () => {
           return true
         },
       })
+      .overrideGuard(AuthenticatedRateLimitGuard)
+      .useValue({ canActivate: () => true })
       .overrideGuard(OrganizationResourceActionGuard)
       .useValue({
         async canActivate(context: any) {

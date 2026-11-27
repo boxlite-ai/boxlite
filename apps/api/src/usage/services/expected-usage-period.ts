@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxState } from '../../box/enums/box-state.enum'
 import { memoryGiBOf } from '../../box/utils/memory-allocation'
 
@@ -17,6 +18,7 @@ export interface UsagePeriodShape {
 /** The box fields that decide what its open period should charge. */
 export interface BillableBox extends UsagePeriodShape {
   state: BoxState
+  desiredState?: BoxDesiredState
   memoryMib?: number | null
 }
 
@@ -59,10 +61,11 @@ const RESOURCE_EPSILON = 1e-6
  * This is the single source of truth for the state -> period rule, shared by
  * the event handler, the daily roll-over and the reconcile pass. Transitional
  * states do not open a period because billing does not charge for a box the
- * tenant cannot use yet.
+ * tenant cannot use yet. Billing ends when deletion is requested, whatever state
+ * the box is still in.
  */
 export function expectedOpenPeriod(box: BillableBox | null | undefined): ExpectedOpenPeriod {
-  if (!box) {
+  if (!box || box.desiredState === BoxDesiredState.DESTROYED) {
     return null
   }
   if (box.state === BoxState.STARTED) {

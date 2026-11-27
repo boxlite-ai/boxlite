@@ -51,10 +51,12 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
   const transactionalEntityManager = {
     find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn(
-      async (_entity, { where }: any): Promise<any> =>
-        stored.find((period) =>
-          Object.entries(where).every(([column, condition]) => satisfies((period as any)[column], condition)),
-        ),
+      async (entity, { where }: any): Promise<any> =>
+        entity === Box
+          ? box
+          : stored.find((period) =>
+              Object.entries(where).every(([column, condition]) => satisfies((period as any)[column], condition)),
+            ),
     ),
     delete: jest.fn().mockResolvedValue(undefined),
     save: jest.fn().mockImplementation(async (value) => usagePeriodRepository.save(value)),
