@@ -29,7 +29,7 @@ async def main():
     server_code = {{SERVER_PY}}
     # Start the server without waiting for it to exit.
     server = await box.exec("python3", args=["-u", "-c", server_code])
-    preview = await box.network.tunnel(3000)
+    preview = await box.network.tunnel(("127.0.0.1", 3000))
     url = preview.uri()
     if not url:
         raise RuntimeError("Cloud did not return a preview URL")

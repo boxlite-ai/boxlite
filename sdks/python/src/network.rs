@@ -516,6 +516,30 @@ mod tests {
     /// `is_public` is a new optional request field: omitted or at its default
     /// it stays off the wire; only a private tunnel sends it.
     #[test]
+    fn quickstart_tunnel_call_matches_the_binding() {
+        let template =
+            include_str!("../../../apps/dashboard/src/lib/quickstart/templates/python.py");
+        let call = template
+            .lines()
+            .find(|line| line.contains("await box.network.tunnel("))
+            .unwrap();
+        let script = format!(
+            "async def main():\n{}\n    return preview.uri()\n",
+            call.replace("box.network", "network")
+        );
+        let (url, bodies) = tunnel_cloud();
+        let (_runtime, result) = run_with_network(&url, &script);
+        let uri: String = Python::attach(|py| result.extract(py).unwrap());
+        assert!(!uri.is_empty());
+        assert_eq!(
+            bodies
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            ""
+        );
+    }
+
+    #[test]
     fn tunnel_sends_is_public_only_when_private() {
         let (url, bodies) = tunnel_cloud();
         run_with_network(

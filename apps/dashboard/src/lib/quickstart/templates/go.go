@@ -4,6 +4,7 @@ import (
     "context"
     "errors"
     "fmt"
+    "net"
     "os"
     "time"
     boxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -41,7 +42,7 @@ func run() error {
     if started.ExitCode != 0 { return fmt.Errorf("server launch exited with %d", started.ExitCode) }
     network, err := box.Network()
     if err != nil { return err }
-    preview, err := network.Tunnel(ctx, 3000)
+    preview, err := network.Tunnel(ctx, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 3000}, boxlite.DefaultTunnelOptions())
     if err != nil { return err }
     defer preview.Close()
     url, err := preview.URI()
