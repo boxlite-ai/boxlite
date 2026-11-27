@@ -1228,6 +1228,53 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/files/ws:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: uploadFilesWebSocket
+      summary: Stream files into the box over WebSocket
+      tags: [Files]
+      description: |
+        Available when `GET /v1/config` advertises `file_upload_ws_enabled`.
+        Authenticate with Bearer credentials that have `write:boxes`.
+        Request the `boxlite-file-upload.v1` WebSocket subprotocol.
+
+        Send ordered binary tar messages of at most 256 KiB, then send the
+        text message `finish`. The server sends one JSON text result containing
+        `type: "result"`, an HTTP `status`, and an optional BoxLite `error`
+        object. Only a `204` result after `finish` confirms success. A Runner
+        rejection can arrive before `finish`. Stop sending when it arrives.
+
+        An interrupted upload can leave partial files. If the connection
+        closes after `finish` without a result, the outcome is unknown.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Destination path inside the container
+        - name: overwrite
+          in: query
+          schema:
+            type: boolean
+          description: Overwrite existing files at destination. Omitted means true.
+      responses:
+        "101":
+          description: Upload WebSocket established
+        "400":
+          description: Invalid path, overwrite value, or subprotocol
+        "401":
+          description: Bearer credentials missing or invalid
+        "403":
+          description: Organization or box write permission denied
+        "404":
+          description: Upload disabled, or box or Runner missing
+        "429":
+          description: Too many authentication failures from the client address
+
   # -------------------------------------------------------------------------
   # Network
   # -------------------------------------------------------------------------
@@ -2795,6 +2842,10 @@ components:
           type: object
           description: Server capability limits and feature flags
           properties:
+            file_upload_ws_enabled:
+              type: boolean
+              description: Whether the server accepts file upload WebSockets
+              example: true
             linux_capabilities_enabled:
               type: boolean
               description: Whether Docker-style Linux capability add/drop policy is supported

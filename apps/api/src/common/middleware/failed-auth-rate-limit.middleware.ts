@@ -5,7 +5,8 @@
  */
 
 import { Injectable, NestMiddleware, Inject, Logger } from '@nestjs/common'
-import { Request, Response, NextFunction } from 'express'
+import type { Request, NextFunction } from 'express'
+import type { ServerResponse } from 'node:http'
 import { ThrottlerException } from '@nestjs/throttler'
 import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
@@ -31,7 +32,7 @@ export class FailedAuthRateLimitMiddleware implements NestMiddleware {
     private readonly configService: TypedConfigService,
   ) {}
 
-  async use(req: Request, res: Response, next: NextFunction) {
+  async use(req: Pick<Request, 'ip' | 'ips'>, res: Pick<ServerResponse, 'setHeader'>, next: NextFunction) {
     const ip = req.ips.length ? req.ips[0] : req.ip
     const throttlerName = 'failed-auth'
     const tracker = `${throttlerName}:${ip}`

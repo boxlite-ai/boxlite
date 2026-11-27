@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Response } from 'express'
+import type { ServerResponse } from 'node:http'
 
 /**
  * Utility functions for setting rate limit headers consistently across middleware and services
@@ -22,7 +22,10 @@ export interface RateLimitHeadersOptions {
  * Sets standard rate limit headers on a response
  * Follows the pattern: X-RateLimit-{Limit|Remaining|Reset}-{throttlerName}
  */
-export function setRateLimitHeaders(response: Response, options: RateLimitHeadersOptions): void {
+export function setRateLimitHeaders(
+  response: Pick<ServerResponse, 'setHeader'>,
+  options: RateLimitHeadersOptions,
+): void {
   const { throttlerName, limit, remaining, resetSeconds, retryAfterSeconds } = options
 
   response.setHeader(`X-RateLimit-Limit-${throttlerName}`, limit.toString())

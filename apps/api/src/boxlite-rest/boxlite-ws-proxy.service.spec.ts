@@ -7,6 +7,7 @@
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import type { IncomingMessage } from 'http'
 import { EventEmitter } from 'node:events'
+import { HttpException } from '@nestjs/common'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AttachTicketService } from '../box/services/attach-ticket.service'
@@ -37,6 +38,41 @@ function fakeRedis() {
 describe('BoxliteWsProxyService', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  it.each(['another-org', 'another%2Dorg'])('refuses an upload with a mismatched tenant %s', async (tenant) => {
+    const { service, apiKeyService, boxService } = buildAuthHarness()
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      permissions: [OrganizationResourcePermission.WRITE_BOXES],
+    })
+    const request = authRequest('valid-key', `/api/v1/${tenant}/boxes/public-box/files/ws?path=%2Fdst`)
+    request.headers['sec-websocket-protocol'] = 'boxlite-file-upload.v1'
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn() })
+
+    await (service as unknown as BoxliteWsProxyService).upgradeUpload(request, socket as never, Buffer.alloc(0))
+
+    expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('HTTP/1.1 403'))
+    expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
+  })
+
+  it('rejects a rate-limited upload before looking up credentials', async () => {
+    const { service, apiKeyService } = buildAuthHarness()
+    const request = authRequest('some-token', '/api/v1/boxes/public-box/files/ws?path=%2Fdst')
+    request.headers['sec-websocket-protocol'] = 'boxlite-file-upload.v1'
+    const socket = Object.assign(new EventEmitter(), { write: jest.fn(), destroy: jest.fn() })
+    const trackFailure = jest.fn()
+
+    await (service as unknown as BoxliteWsProxyService).upgradeUpload(request, socket as never, Buffer.alloc(0), {
+      check: jest.fn().mockRejectedValue(new HttpException('Too many requests', 429)),
+      trackFailure,
+      headers: () => ({ 'Retry-After': '60' }),
+    })
+
+    expect(socket.write).toHaveBeenCalledWith(expect.stringMatching(/HTTP\/1.1 429[^\n]*\nRetry-After: 60\r\n/))
+    expect(apiKeyService.getApiKeyByValue).not.toHaveBeenCalled()
+    expect(trackFailure).not.toHaveBeenCalled()
   })
 
   function authRequest(token: string, url = '/api/v1/org-1/boxes/public-box/executions/exec-1/attach') {
