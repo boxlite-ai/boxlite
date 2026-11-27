@@ -1503,8 +1503,8 @@ impl NetworkConfig {
 ///   the name. With a non-empty allowlist, Local hostname routing requires
 ///   a matching IP or CIDR rule for private, loopback, or CGNAT answers.
 ///
-/// Host protection applies to all egress. Gateway DNS and DHCP operate
-/// independently of the Box allowlist and stop when the Cloud guard expires.
+/// Host protection applies to all egress. With networking enabled, gateway DNS
+/// and DHCP operate independently of the Box allowlist.
 /// Guest egress policy. Untouched by the outbound/inbound split — same
 /// name, same variants, same wire form — so existing literals, match arms
 /// and persisted box configs keep working. It is the outbound half of

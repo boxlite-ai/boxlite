@@ -22,7 +22,7 @@ import (
 )
 
 // resolveFunc resolves hostnames through the selected profile. Local uses
-// systemResolve and Cloud uses its operator-approved endpoints.
+// systemResolve and managed Cloud Runners use the GCP resolver.
 type resolveFunc func(ctx context.Context, host string) ([]net.IP, error)
 
 // dialFunc is the socket seam, shaped like net.Dialer.DialContext.

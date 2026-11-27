@@ -272,7 +272,7 @@ async with boxlite.SimpleBox(image="alpine:latest") as box:
 
 On Local, `host.boxlite.internal` reaches host loopback when the host rules
 permit the alias. A non-empty `allow_net` must also cover `"192.168.127.254"`
-with an IP or CIDR rule. Guarded Cloud Runners deny connections to the alias.
+with an IP or CIDR rule. Managed Cloud Runners deny connections to the alias.
 
 ## Network metrics
 

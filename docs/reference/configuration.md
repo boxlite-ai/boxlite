@@ -74,18 +74,17 @@ Structured network configuration for outbound connectivity.
   gateway refuses resolved link-local and Box-subnet addresses.
 - `allow_net` controls connections. Guest DNS queries go to the gateway at
   `192.168.127.1`, including queries for destinations the Box cannot connect to.
-  The gateway uses the host resolver on Local and the operator's approved
-  endpoints on a guarded Cloud Runner.
+  The gateway uses the host resolver on Local and the GCP resolver on managed
+  Cloud Runners.
 - A secret can permit guest connections to TCP port 443 without a matching
   `allow_net` rule. The gateway resolves that name using the same resolver and
   address checks. Host protection still applies.
-- Guest DNS and DHCP stay available while the network backend is active.
-  On a guarded Cloud Runner, an expired inventory suspends those services and
-  forwarding.
+- When networking is enabled, gateway DNS and DHCP operate independently of the
+  Box allowlist.
 - The gateway serves `host.boxlite.internal` at `192.168.127.254`. Local can
-  reach host loopback there when the Box and host rules allow it. Guarded
-  Cloud Runners deny connections to the host alias.
-- Guarded Cloud Runners reject protected platform destinations, private ranges,
+  reach host loopback there when the Box and host rules allow it. Managed Cloud
+  Runners deny connections to the host alias.
+- Managed Cloud Runners reject protected platform destinations, private ranges,
   host addresses, and native IPv6 outbound connections. These checks take
   precedence over Box rules and secrets. See [Cloud platform destination filtering](../concepts/networking.md#cloud-platform-destination-filtering).
 

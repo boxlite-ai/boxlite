@@ -309,7 +309,7 @@ See [Configuring Networking](./guides/networking.md) for details.
    - The host rules must permit the alias. A non-empty `allow_net` must
      list `"192.168.127.254"` or a CIDR covering it.
 
-   Guarded Cloud Runners deny connections to the alias.
+   Managed Cloud Runners deny connections to the alias.
 
 3. **External service:**
    - Both boxes connect to Redis/database on host or network

@@ -167,8 +167,8 @@ type DNSRecord struct {
 
 // DNSZone represents a local DNS zone configuration
 // These are local DNS records served by the gateway's embedded DNS server.
-// Local forwards non-zone queries through the host resolver. Cloud uses
-// the resolver endpoints approved by the operator inventory.
+// Local forwards non-zone queries through the host resolver. Managed Cloud
+// Runners use the GCP resolver.
 type DNSZone struct {
 	Name      string      `json:"name"`              // Zone name (e.g., "myapp.local.", "." for root)
 	Records   []DNSRecord `json:"records,omitempty"` // Exact A records within the zone
