@@ -15,6 +15,7 @@ import { getLocalStorageItem } from '@/lib/local-storage'
 import FirstBoxAtmosphere from './FirstBoxAtmosphere'
 import WelcomeJourneyArtwork from './WelcomeJourneyArtwork'
 import WelcomeCreditsStep from './WelcomeCreditsStep'
+import WelcomePlanOptions from './WelcomePlanOptions'
 
 const trialPreviewEnabled =
   import.meta.env.DEV &&
@@ -337,6 +338,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
           ) : (
             <WelcomeCreditsStep
               onContinue={complete}
+              planOptions={<WelcomePlanOptions />}
               illustrationRef={setIllustrationAnchor}
               useCase={welcome.useCase}
               onBack={() => {

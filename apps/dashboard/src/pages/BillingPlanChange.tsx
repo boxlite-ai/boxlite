@@ -12,16 +12,25 @@ import { Spinner } from '@/components/ui/spinner'
 import { RoutePath } from '@/enums/RoutePath'
 import { useDowngradePlanMutation } from '@/hooks/mutations/useDowngradePlanMutation'
 import { useUpgradePlanMutation } from '@/hooks/mutations/useUpgradePlanMutation'
-import { useOwnerPlanQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
+import { useOwnerPlanQuery, useOwnerTrialEligibilityQuery, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { usePlansQuery } from '@/hooks/queries/usePlansQuery'
+import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
+import {
+  isActivePlan,
+  isPaidSelfServePlan,
+  recordWelcomeCompletion,
+  type WelcomeSubscriptionScope,
+} from '@/lib/first-run'
 import { clearPendingPlanUpgrade, rememberPlanUpgrade } from '@/lib/pending-plan-upgrade'
+import { trialDuration } from '@/lib/trial-offer'
+import { formatAmount } from '@/lib/utils'
 import { OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { format } from 'date-fns'
-import { useEffect, useState } from 'react'
-import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/usePageTitle'
 
@@ -34,8 +43,12 @@ import { usePageTitle } from '@/hooks/usePageTitle'
 function BillingPlanChange() {
   const { planId = '' } = useParams<{ planId: string }>()
   const navigate = useNavigate()
+  const welcomeSubscription = useLocation().state?.welcomeSubscription as WelcomeSubscriptionScope | undefined
+  const backTo = welcomeSubscription ? RoutePath.WELCOME : RoutePath.BILLING
   const config = useConfig()
-  const { selectedOrganization, organizationMembers, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const { billingApi } = useApi()
+  const { selectedOrganization, organizationMembers, organizationMembersStatus, authenticatedUserOrganizationMember } =
+    useSelectedOrganization()
 
   const planQuery = useOwnerPlanQuery()
   const walletQuery = useOwnerWalletQuery()
@@ -43,6 +56,19 @@ function BillingPlanChange() {
   const upgradePlan = useUpgradePlanMutation()
   const downgradePlan = useDowngradePlanMutation()
   const [submission, setSubmission] = useState<'idle' | 'confirming' | 'redirecting'>('idle')
+  const checkoutScope = useRef<AbortController | null>(null)
+  useEffect(() => {
+    const scope = new AbortController()
+    checkoutScope.current = scope
+    if (welcomeSubscription) setSubmission('idle')
+    return () => scope.abort()
+  }, [
+    selectedOrganization?.id,
+    authenticatedUserOrganizationMember?.userId,
+    authenticatedUserOrganizationMember?.role,
+    organizationMembersStatus,
+    welcomeSubscription,
+  ])
   useEffect(() => {
     // Back from Stripe abandons this checkout, including when the browser
     // restores the confirmation page from its back/forward cache.
@@ -67,12 +93,20 @@ function BillingPlanChange() {
   if (!config.billingApiUrl) {
     return <Navigate to={RoutePath.BILLING} replace />
   }
-  if (!selectedOrganization || !membersResolved) {
-    return <PlanChangeShell>{<Skeleton className="h-[320px] w-full" />}</PlanChangeShell>
+  if (!selectedOrganization || (welcomeSubscription ? organizationMembersStatus === 'loading' : !membersResolved)) {
+    return <PlanChangeShell backTo={backTo}>{<Skeleton className="h-[320px] w-full" />}</PlanChangeShell>
   }
-  if (!isOwner) {
+  if (
+    welcomeSubscription &&
+    (welcomeSubscription.organizationId !== selectedOrganization.id ||
+      (organizationMembersStatus === 'ready' &&
+        welcomeSubscription.userId !== authenticatedUserOrganizationMember?.userId))
+  ) {
+    return <Navigate to={backTo} replace />
+  }
+  if (!isOwner || (welcomeSubscription && organizationMembersStatus !== 'ready')) {
     return (
-      <PlanChangeShell>
+      <PlanChangeShell backTo={backTo}>
         <Notice title="Plan changes are owner-only">
           Ask an owner of {selectedOrganization.name} to change the subscription.
         </Notice>
@@ -83,7 +117,7 @@ function BillingPlanChange() {
   const isError = planQuery.isError || plansQuery.isError || walletQuery.isError
   if (isError) {
     return (
-      <PlanChangeShell>
+      <PlanChangeShell backTo={backTo}>
         <Panel className="flex flex-col items-center gap-3 px-[22px] py-10">
           <span className="font-sans text-body text-foreground">Oops, something went wrong</span>
           <span className="font-sans text-meta text-muted-foreground">There was an error loading billing data.</span>
@@ -108,7 +142,7 @@ function BillingPlanChange() {
   // states nothing, so nothing renders until both the catalog and the live plan
   // have actually landed — no zero-value fallbacks.
   if (!plansQuery.isSuccess || !planQuery.isSuccess) {
-    return <PlanChangeShell>{<Skeleton className="h-[320px] w-full" />}</PlanChangeShell>
+    return <PlanChangeShell backTo={backTo}>{<Skeleton className="h-[320px] w-full" />}</PlanChangeShell>
   }
 
   const summary = planChangeSummary({
@@ -117,11 +151,22 @@ function BillingPlanChange() {
     plan: planQuery.data,
     wallet: walletQuery.data,
   })
+  const welcomePlan =
+    welcomeSubscription && summary.direction === 'subscribe' && summary.target && isPaidSelfServePlan(summary.target)
+      ? summary.target
+      : null
 
   // An unknown plan id, or one the viewer already has, has no confirmation to
   // show. `replace` keeps Back from bouncing straight back into the redirect.
-  if (summary.blocked?.redirect) {
-    return <Navigate to={RoutePath.BILLING} replace />
+  if (summary.blocked?.redirect || (welcomeSubscription && !welcomePlan)) {
+    if (welcomeSubscription && submission !== 'idle') {
+      return (
+        <PlanChangeShell backTo={backTo}>
+          <p role="status">Checking your subscription…</p>
+        </PlanChangeShell>
+      )
+    }
+    return <Navigate to={backTo} replace />
   }
 
   const pending = submission !== 'idle' || upgradePlan.isPending || downgradePlan.isPending
@@ -131,16 +176,46 @@ function BillingPlanChange() {
 
   const handleConfirm = async () => {
     setSubmission('confirming')
+    const scope = checkoutScope.current
+    const organizationId = selectedOrganization.id
     try {
       if (summary.action === 'upgrade') {
-        const { data: wallet } = await walletQuery.refetch({ throwOnError: true })
-        const checkoutUrl = await upgradePlan.mutateAsync({ organizationId: selectedOrganization.id, planId })
+        const [{ data: wallet }, current, catalog] = await Promise.all([
+          walletQuery.refetch({ throwOnError: true }),
+          welcomePlan ? planQuery.refetch({ throwOnError: true }) : undefined,
+          welcomePlan ? plansQuery.refetch({ throwOnError: true }) : undefined,
+        ])
+        if (welcomePlan) {
+          if (scope?.signal.aborted) return
+          if (typeof wallet?.creditCardConnected !== 'boolean') throw new Error('Could not check your payment method.')
+          if (
+            (current?.data && current.data.status !== 'canceled') ||
+            !catalog?.data?.some(
+              (plan) =>
+                plan.id === planId && plan.selfServe && plan.priceMonthlyCents === welcomePlan.priceMonthlyCents,
+            )
+          ) {
+            toast.info('Your billing details changed. Review the subscription again.')
+            setSubmission('idle')
+            return
+          }
+        }
+        // This endpoint proves the redirect is for card setup. An upgrade URL only
+        // authorizes checking the resulting plan, even if the wallet changes meanwhile.
+        const setup = Boolean(welcomePlan && wallet?.creditCardConnected === false)
+        const checkoutUrl = setup
+          ? await billingApi.getOrganizationCheckoutUrl(organizationId)
+          : await upgradePlan.mutateAsync({ organizationId, planId })
+        if (welcomePlan && scope?.signal.aborted) return
         if (checkoutUrl) {
-          if (wallet?.creditCardConnected === false && authenticatedUserOrganizationMember?.userId) {
+          if ((welcomePlan || wallet?.creditCardConnected === false) && authenticatedUserOrganizationMember?.userId) {
             const saved = rememberPlanUpgrade({
               userId: authenticatedUserOrganizationMember.userId,
-              organizationId: selectedOrganization.id,
+              organizationId,
               planId,
+              ...(welcomePlan && {
+                welcome: { priceMonthlyCents: welcomePlan.priceMonthlyCents, phase: setup ? 'setup' : 'payment' },
+              }),
             })
             if (!saved) toast.info('After verifying your card, return to Plans to finish subscribing.')
           }
@@ -148,7 +223,18 @@ function BillingPlanChange() {
           window.location.href = checkoutUrl
           return
         }
-        toast.success('Plan upgraded successfully')
+        if (welcomeSubscription) {
+          const plan = await billingApi.getOrganizationPlan(organizationId)
+          if (scope?.signal.aborted) return
+          if (isActivePlan(plan, planId)) {
+            recordWelcomeCompletion(welcomeSubscription.userId, organizationId)
+            navigate(RoutePath.QUICKSTART, { replace: true })
+            return
+          }
+          toast.info('Check Billing for your subscription status.')
+        } else {
+          toast.success('Plan upgraded successfully')
+        }
       } else {
         await downgradePlan.mutateAsync({ organizationId: selectedOrganization.id, planId })
         // Name the plan and the day: "at the next billing cycle" left the user
@@ -159,24 +245,33 @@ function BillingPlanChange() {
       // organization now holds.
       navigate(RoutePath.BILLING, { replace: true })
     } catch (error) {
+      if (welcomePlan && scope?.signal.aborted) return
       setSubmission('idle')
       handleApiError(error, `Failed to ${summary.action} organization plan`)
     }
   }
 
   return (
-    <PlanChangeShell title={summary.title}>
+    <PlanChangeShell title={summary.title} backTo={backTo}>
       <div className="flex flex-col gap-6">
         <section>
           <SectionTitle title={summary.target?.name ?? planId} />
           <Panel className="px-[22px] py-2">
             {summary.comparisons.map((comparison) => (
-              <ComparisonRow key={comparison.label} comparison={comparison} />
+              <ComparisonRow
+                key={comparison.label}
+                comparison={
+                  welcomePlan && comparison.label === 'Price'
+                    ? { ...comparison, to: `${formatAmount(welcomePlan.priceMonthlyCents)}/mo` }
+                    : comparison
+                }
+              />
             ))}
           </Panel>
-          <PanelNote>{summary.effect}</PanelNote>
+          {welcomePlan ? <WelcomeSubscriptionTerms plan={welcomePlan} /> : <PanelNote>{summary.effect}</PanelNote>}
           {summary.action === 'upgrade' && walletQuery.data?.creditCardConnected === false && (
             <PanelNote>
+              {welcomePlan && 'Stripe places a temporary $0.50 hold to verify your card and releases it afterward. '}
               After you verify your card, we’ll continue your subscription to {summary.target?.name ?? planId}{' '}
               automatically.
             </PanelNote>
@@ -208,7 +303,7 @@ function BillingPlanChange() {
             </AsciiButton>
             {/* Cancelling mid-request would leave the user unsure whether the
                 change went through, so it waits with the confirm button. */}
-            <AsciiButton disabled={pending} onClick={() => navigate(RoutePath.BILLING)}>
+            <AsciiButton disabled={pending} onClick={() => navigate(backTo)}>
               Cancel
             </AsciiButton>
           </div>
@@ -218,9 +313,34 @@ function BillingPlanChange() {
   )
 }
 
-function PlanChangeShell({ title = 'Change plan', children }: { title?: string; children: React.ReactNode }) {
+function WelcomeSubscriptionTerms({ plan }: { plan: { name: string; priceMonthlyCents: number } }) {
+  const eligibility = useOwnerTrialEligibilityQuery()
+  const duration =
+    eligibility.isSuccess && !eligibility.isFetching
+      ? trialDuration(eligibility.data.find((offer) => offer.name === plan.name))
+      : undefined
+  const amount = formatAmount(plan.priceMonthlyCents)
+  return (
+    <PanelNote>
+      {duration && `If you qualify at activation, you pay $0 in subscription fees for ${duration.toLowerCase()}. `}
+      You’ll pay {amount} when the trial ends, or {amount} at activation if a trial does not apply. The subscription
+      renews monthly at {amount}. Cancel in Billing before the trial ends to avoid the first subscription fee.
+    </PanelNote>
+  )
+}
+
+function PlanChangeShell({
+  title = 'Change plan',
+  backTo = RoutePath.BILLING,
+  children,
+}: {
+  title?: string
+  backTo?: RoutePath
+  children: React.ReactNode
+}) {
   usePageTitle(title)
   const navigate = useNavigate()
+  const backLabel = backTo === RoutePath.WELCOME ? 'Back to Welcome' : 'Back to Billing'
 
   return (
     <div className="page-container">
@@ -230,9 +350,9 @@ function PlanChangeShell({ title = 'Change plan', children }: { title?: string; 
             variant="ghost"
             size="icon-sm"
             className="shrink-0"
-            aria-label="Back to Billing"
-            title="Back to Billing"
-            onClick={() => navigate(RoutePath.BILLING)}
+            aria-label={backLabel}
+            title={backLabel}
+            onClick={() => navigate(backTo)}
           >
             <ArrowLeft className="size-4" />
           </Button>
