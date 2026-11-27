@@ -712,11 +712,12 @@ BoxliteErrorCode code = boxlite_box_export_with_options(
 
 `NULL` options or `include_memory = 0` selects disk-only export. Any nonzero
 value requests a full checkpoint with guest memory and VM state. Local full
-export requires a running box with live VM state. A stopped box or a handle
-obtained via `boxlite_get` without live VM state returns `InvalidState`. With
-live VM state, the VMM's full checkpoint hook is still a placeholder and
-returns `Unsupported`. REST returns `Unsupported` without sending an HTTP
-request.
+export requires a running box, including when a new handle from `boxlite_get`
+reconnects to a running detached VM. In either case, the VMM's full checkpoint
+hook is still a placeholder and reports `Unsupported`. A valid handle to a box
+that is not running reports `InvalidState`; a handle invalidated by
+`boxlite_stop_box` reports `Stopped`. The REST client reports `Unsupported`
+without sending an HTTP request.
 
 The SDK copies the options before returning. After a successful submission,
 completion (including runtime errors) is delivered through the callback. On

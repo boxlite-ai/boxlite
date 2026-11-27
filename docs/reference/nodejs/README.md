@@ -344,9 +344,13 @@ Handle to a running or stopped box.
 
 `JsExportOptions` has one optional field, `includeMemory?: boolean`. Exports
 are disk-only by default. On an embedded runtime, `{ includeMemory: true }`
-requires a running box with live VM state; otherwise `errorCode(err)` returns
-`invalid_state`. The current VMM placeholder rejects with `unsupported`.
-The REST client also rejects with `unsupported` without sending an export request.
+requires a running box, including when a new handle from `get()` reconnects to
+a running detached VM. The VMM's full checkpoint hook is still a placeholder,
+so `export()` rejects with code `unsupported` in either case. Use
+`errorCode(err)` to read the code: `invalid_state` means the handle is valid but
+the box is not running, and `stopped` means `stop()` invalidated the handle.
+The REST client rejects `{ includeMemory: true }` with `unsupported` without
+sending an HTTP request.
 
 ---
 

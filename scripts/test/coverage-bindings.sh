@@ -35,7 +35,7 @@ CGO_LDFLAGS="\"$CARGO_TARGET_DIR/debug/libboxlite.a\" \"${profile_runtime[0]}\"$
 # absent or broken module into a collection failure, not a silent skip.
 BOXLITE_REQUIRE_NATIVE=1 make coverage:python
 # These suites use loopback HTTP and an empty local cache; they never boot a VM.
-make test:integration:node FILTER='image catalog|registry logins|ssh over a REST transport|native box privilege metadata|checkpoint native'
+make test:integration:node FILTER='image catalog|registry logins|ssh over a REST transport|native box privilege metadata|checkpoint native|public box\.export over REST'
 
 mkdir -p "$root/target/coverage/native-sdk"
 # napi builds under the explicit host triple; also scan it alongside debug/.

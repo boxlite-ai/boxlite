@@ -373,12 +373,12 @@ Handle to a running or stopped box.
 
 `await box.export(dest="backup.boxlite", options=ExportOptions(include_memory=False))`
 exports disks only, as does omitting `options`. On a local runtime,
-`include_memory=True` requires a running box with live VM state. A stopped box
-or a handle obtained via `get()` without live VM state raises
-`InvalidStateError`. With live VM state, `export()` raises `UnsupportedError`
-because the VMM's full checkpoint hook is still a placeholder. The REST client
-raises `UnsupportedError` for `include_memory=True` without sending an export
-request.
+`include_memory=True` requires a running box, including when a new handle from
+`get()` reconnects to a running detached VM. In either case, `export()` raises
+`UnsupportedError` because the VMM's full checkpoint hook is still a placeholder.
+A valid handle to a box that is not running raises `InvalidStateError`; a handle
+invalidated by `stop()` raises `StoppedError`. The REST client raises
+`UnsupportedError` for `include_memory=True` without sending an HTTP request.
 
 `executions().list()` returns the box's live sessions, so an execution whose
 handle was lost — a crashed client, a dropped connection — can be named again
