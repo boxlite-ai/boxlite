@@ -576,6 +576,13 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
     unsafe {
         match event {
             RuntimeEvent::AgentCompletion(dispatch) => dispatch(),
+            RuntimeEvent::Mounts {
+                cb,
+                user_data,
+                result,
+            } => {
+                crate::mounts::dispatch_mounts(result, cb, user_data);
+            }
             RuntimeEvent::AgentCreate {
                 callback,
                 user_data,

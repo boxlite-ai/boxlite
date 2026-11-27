@@ -65,16 +65,17 @@ class SyncBoxlite:
         - When task completes, callback switches back to user fiber
     """
 
-    def __init__(self, options: "Options") -> None:
+    def __init__(self, options: "Options", *, experimental_features: str = "") -> None:
         """Create a new SyncBoxlite instance.
 
         Args:
             options: Runtime options (e.g., custom home_dir).
                      Use SyncBoxlite.default() for default runtime.
+            experimental_features: Comma-separated opt-ins for the local runtime.
         """
         from ..boxlite import Boxlite
 
-        self._adopt(Boxlite(options))
+        self._adopt(Boxlite(options, experimental_features=experimental_features))
 
     def _adopt(self, boxlite: "Boxlite") -> None:
         """Wrap an async runtime; the dispatcher starts on __enter__/start()."""

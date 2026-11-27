@@ -8,6 +8,7 @@ use crate::copy::{JsCopyOptions, into_copy_options};
 use crate::exec::JsExecution;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsBoxMetrics;
+use crate::mounts::JsMountHandle;
 use crate::network::JsNetworkHandle;
 use crate::snapshot_options::{JsCloneOptions, JsExportOptions};
 use crate::snapshots::JsSnapshotHandle;
@@ -135,6 +136,12 @@ impl JsBox {
     #[napi(getter)]
     pub fn ssh(&self) -> JsSshHandle {
         JsSshHandle::from(self.handle.as_ref())
+    }
+
+    /// Get runtime directory mounts without starting the box.
+    #[napi(getter)]
+    pub fn mount(&self) -> JsMountHandle {
+        JsMountHandle(self.handle.mount())
     }
 
     /// Get the network handle for this box.

@@ -876,6 +876,18 @@ impl ApiClient {
         ensure_capability("import", capabilities.import_enabled)
     }
 
+    pub async fn require_runtime_mounts_enabled(&self) -> BoxliteResult<()> {
+        let capabilities = match self.fetch_config().await {
+            Ok(config) => config.capabilities,
+            Err(BoxliteError::NotFound(_)) => None,
+            Err(error) => return Err(error),
+        };
+        ensure_capability(
+            "runtime directory mounts",
+            capabilities.and_then(|caps| caps.runtime_mounts_enabled),
+        )
+    }
+
     /// POST binary data with query params, parse JSON response.
     pub async fn post_bytes_for_json<T: DeserializeOwned>(
         &self,

@@ -95,6 +95,19 @@ static void test_runtime_shutdown_null_cb(CBoxliteRuntime *rt) {
   assert_null_cb_rejected(code, &err, "boxlite_runtime_shutdown(cb=NULL)");
 }
 
+static void test_mounts_null_cb(void) {
+  CBoxliteError err = (CBoxliteError){0};
+  BoxliteErrorCode code =
+      boxlite_box_mount_add(NULL, "/host", "/target", false, NULL, NULL, &err);
+  assert_null_cb_rejected(code, &err, "boxlite_box_mount_add(cb=NULL)");
+  code = boxlite_box_mount_remove(NULL, "/target", NULL, NULL, &err);
+  assert_null_cb_rejected(code, &err, "boxlite_box_mount_remove(cb=NULL)");
+  code = boxlite_box_mount_list(NULL, NULL, NULL, &err);
+  assert_null_cb_rejected(code, &err, "boxlite_box_mount_list(cb=NULL)");
+  code = boxlite_box_mount_get(NULL, "/target", NULL, NULL, &err);
+  assert_null_cb_rejected(code, &err, "boxlite_box_mount_get(cb=NULL)");
+}
+
 int main(void) {
   printf("\n═══════════════════════════════════════\n");
   printf("  BoxLite C SDK - NULL callback rejection\n");
@@ -106,11 +119,12 @@ int main(void) {
   test_runtime_metrics_null_cb(rt);
   test_list_info_null_cb(rt);
   test_runtime_shutdown_null_cb(rt);
+  test_mounts_null_cb();
 
   boxlite_runtime_free(rt);
 
   printf("\n═══════════════════════════════════════\n");
-  printf("  ✅ ALL NULL-CB TESTS PASSED (4 tests)\n");
+  printf("  ✅ ALL NULL-CB TESTS PASSED\n");
   printf("═══════════════════════════════════════\n");
   return 0;
 }

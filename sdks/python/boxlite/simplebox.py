@@ -18,6 +18,7 @@ if TYPE_CHECKING:
         Execution,
         ExecutionInfo,
         InboundNetworkSpec,
+        MountHandle,
         OutboundNetworkSpec,
         TunnelForwarder,
         TunnelOptions,
@@ -157,6 +158,13 @@ class SimpleBox:
             return self._box.agents
 
         return Agents(resolve=resolve)
+
+    @property
+    def mount(self) -> "MountHandle":
+        """Access the existing box's runtime mounts without starting it."""
+        if self._box is None:
+            raise RuntimeError("Box has not been created")
+        return self._box.mount
 
     def __init__(
         self,

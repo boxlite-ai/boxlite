@@ -5,6 +5,7 @@ use crate::exec::PyExecution;
 use crate::executions::PyExecutions;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyBoxMetrics;
+use crate::mounts::PyMountHandle;
 use crate::network::PyNetworkHandle;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
@@ -78,6 +79,12 @@ impl PyBox {
     #[getter]
     fn ssh(&self) -> PySshHandle {
         PySshHandle::new(self.handle.ssh())
+    }
+
+    /// Get runtime directory mounts without starting the box.
+    #[getter]
+    fn mount(&self) -> PyMountHandle {
+        PyMountHandle(self.handle.mount())
     }
 
     #[pyo3(signature = (command, args=None, env=None, tty=false, user=None, timeout_secs=None, cwd=None))]

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use boxlite::experimental::{ExperimentalFeatures, RuntimeBuilder};
 use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -29,17 +30,24 @@ impl JsBoxlite {
     ///
     /// # Arguments
     /// * `options` - Runtime configuration (e.g., custom home directory)
+    /// * `experimental_features` - Comma-separated opt-ins for the local runtime
     ///
     /// # Example
     /// ```javascript
     /// const runtime = new Boxlite({ homeDir: '/custom/path' });
     /// ```
     #[napi(constructor)]
-    pub fn new(options: JsOptions) -> Result<Self> {
+    pub fn new(options: JsOptions, experimental_features: Option<String>) -> Result<Self> {
+        let features =
+            ExperimentalFeatures::parse(experimental_features.as_deref().unwrap_or_default())
+                .map_err(map_err)?;
         let core_opts = js_options_into_core(options)?;
         // Executable-owned logging init (the library no longer auto-installs a subscriber).
         let _ = boxlite::init_logging_for(&core_opts.home_dir);
-        let runtime = BoxliteRuntime::new(core_opts).map_err(map_err)?;
+        let runtime = RuntimeBuilder::new(core_opts)
+            .with_features(features)
+            .build()
+            .map_err(map_err)?;
 
         Ok(Self {
             runtime: Arc::new(runtime),

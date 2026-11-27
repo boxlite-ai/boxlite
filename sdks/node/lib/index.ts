@@ -47,6 +47,10 @@ export type {
   ImageAliasEvent,
   ImageUsage,
   ImageVersion,
+  MountHandle,
+  MountInfo,
+  MountRequest,
+  MountState,
   NewRegistryCredential,
   RegistryCredential,
   RegistryHandle,
@@ -75,7 +79,7 @@ export type BoxliteConstructor = Omit<
   JsBoxliteConstructor,
   "rest" | "withDefaultConfig"
 > & {
-  new (options: JsOptions): Boxlite;
+  new (options: JsOptions, experimentalFeatures?: string): Boxlite;
   withDefaultConfig(): Boxlite;
   rest(options: BoxliteRestOptions): Boxlite;
 };
@@ -84,7 +88,7 @@ const nativeBoxlite = getJsBoxlite();
 const NativeBoxliteRestOptions = getNativeBoxliteRestOptions();
 
 class BoxliteWithBagRest extends (nativeBoxlite as unknown as {
-  new (options: JsOptions): JsBoxliteInstance;
+  new (options: JsOptions, experimentalFeatures?: string): JsBoxliteInstance;
 }) {
   static rest(options: BoxliteRestOptions): Boxlite {
     return nativeBoxlite.rest(

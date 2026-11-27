@@ -136,6 +136,48 @@ main();
 
 ## API Reference
 
+### Runtime directory mounts (release candidate)
+
+Directory mounts require a Linux x86_64 native Box and the `native-vmm` experimental feature.
+Reopen an existing Box after its creator releases the runtime home, or connect through REST when `boxlite serve` owns that home.
+The example also enables `custom-kernel` for a Box with a configured kernel; see [creating a native Box](../../docs/guides/native-vmm.md).
+
+```typescript
+import { JsBoxlite } from "@boxlite-ai/boxlite";
+
+const runtime = new JsBoxlite({}, "native-vmm,custom-kernel");
+const box = await runtime.get("dev");
+if (!box) throw new Error("Native Box 'dev' was not found");
+
+const mounted = await box.mount.add({
+  source: "/srv/projects/demo",
+  target: "/workspace",
+  readOnly: true,
+});
+const current = await box.mount.get("/workspace"); // null when absent
+const mounts = await box.mount.list();
+await box.mount.remove("/workspace");
+```
+
+No mount operation starts the Box: `add` saves a stopped Box's mount for its next start and returns `configured`.
+On a running Box, `add` returns `mounted` after guest confirmation and commit.
+`get` and `list` include saved mounts; `remove` drops a saved declaration or lazily detaches a live mount, preserving open descriptors.
+Removing an absent target fails with error code `not_found`.
+
+`SimpleBox.mount` forwards to its existing Box and throws before that Box exists.
+For REST, enable the feature on the server; source paths refer to that server's filesystem.
+
+| `MountInfo.state` | Meaning |
+|-------------------|---------|
+| `configured` | Saved for the Box's next start |
+| `preparing` | Delivery has not been confirmed |
+| `mounted` | Visible in the container at the target path |
+| `detaching` | Removal is incomplete; repeat `remove` to finish it |
+
+Mount methods do not accept an `AbortSignal`; abandoning a Promise does not cancel the operation.
+A timeout or lost REST response does not guarantee rollback: an admitted live operation can continue until completion or Box shutdown.
+Use `get` or `list` to inspect the committed state before retrying an uncertain add or removal.
+
 ### Remote BoxLite server (REST)
 
 Connect to a remote BoxLite server instead of the local runtime.

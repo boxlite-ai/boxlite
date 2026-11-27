@@ -549,6 +549,12 @@ conflict rather than silently returning no output.
 require the `native-vmm` experimental feature and the local Linux x86_64 native
 engine. Changes require a container configured without `CAP_SYS_ADMIN`.
 
+REST runtimes expose the same four methods against a local `boxlite serve`
+with `runtime_mounts_enabled`. `source` names a directory on the server host.
+See the [local REST contract](../../../src/cli/src/commands/serve/README.md#runtime-directory-mounts).
+JSON mount details use lowercase state names, while SQLite keeps its existing
+state representation.
+
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `add` | `async fn add(&self, request: MountRequest) -> BoxliteResult<MountInfo>` | Save a directory and deliver it immediately if the container is running |

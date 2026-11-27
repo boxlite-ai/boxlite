@@ -300,6 +300,37 @@ Inbound accepts no list; disabled outbound accepts no `--allow-net`. Each comman
 one direction without retaining earlier rules. See [networking](../../docs/guides/networking.md#updating-a-running-box)
 for runtime support, connection lifetime and persistence.
 
+### Runtime directory mounts (release candidate)
+
+Manage host directory mounts on a Linux x86_64 native Box. Enable `native-vmm`
+for mounts and `custom-kernel` when reopening a Box that uses a custom kernel:
+
+```bash
+export BOXLITE_EXPERIMENTAL=native-vmm,custom-kernel
+boxlite mount add dev --source /srv/projects/demo --box-path /workspace --read-only
+boxlite mount ls dev
+boxlite mount inspect dev --box-path /workspace --format json
+boxlite mount rm dev --box-path /workspace
+```
+
+Omit `--read-only` for a writable mount. `ls` and `inspect` accept `--format`
+`table`, `json`, or `yaml`. Inspecting a missing target returns `null` in JSON;
+removing it returns `NotFound`. None of these commands starts a stopped Box.
+
+- A stopped Box saves an added mount as `configured`. Each subsequent start
+  delivers the directory before the first process runs, until `rm` removes it.
+- A running Box reports `mounted` after guest confirmation. Removal detaches
+  the path lazily, preserving existing open file and directory references.
+- `STATE` reports `configured`, or the current run's last committed progress:
+  `preparing`, `mounted`, or `detaching`.
+
+With `--url`, `--source` names a directory on the server host, and the server
+must enable `native-vmm`. A directory that cannot be delivered makes
+`boxlite start` fail; its saved declaration can still be listed and removed.
+The `mount` command appears in help and completion only when `native-vmm`
+is enabled.
+
+
 ### Guest SSH
 
 ```bash

@@ -8,7 +8,7 @@ use gtmpl_value::{FuncError, Value as GtmplValue};
 use serde::Serialize;
 use tabled::{Table, Tabled, settings::Style};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
     Table,
     Json,

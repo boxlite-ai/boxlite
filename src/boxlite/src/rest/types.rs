@@ -109,6 +109,12 @@ pub(crate) struct ServerCapabilities {
     pub exec_user_enabled: Option<bool>,
     pub volume_read_only_enabled: Option<bool>,
     pub typed_mounts_enabled: Option<bool>,
+    pub runtime_mounts_enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListMountsResponse {
+    pub mounts: Vec<crate::MountInfo>,
 }
 
 // ============================================================================

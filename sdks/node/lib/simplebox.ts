@@ -22,6 +22,7 @@ import type {
   JsSshCaConfig,
   JsSshConfig,
   JsSshStatus,
+  MountHandle,
   JsVolumeSpec,
   NativeBoxConnection,
   NativeBoxTunnel,
@@ -619,6 +620,12 @@ export class SimpleBox {
         (await this._ensureBox()).agents.create(agent, options),
       get: async (id) => (await this._ensureBox()).agents.get(id),
     };
+  }
+
+  /** Access the existing box's runtime mounts without starting it. */
+  get mount(): MountHandle {
+    if (!this._box) throw new Error("Box has not been created");
+    return this._box.mount;
   }
 
   protected _runtime: BoxRuntime;

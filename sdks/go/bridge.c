@@ -41,6 +41,7 @@ extern void goBoxliteOnRegistryRemove(CBoxliteError *err, void *ud);
 extern void goBoxliteOnInfo(CBoxInfo *info, CBoxliteError *err, void *ud);
 extern void goBoxliteOnInfoList(CBoxInfoList *list, CBoxliteError *err, void *ud);
 extern void goBoxliteOnExecutionInfoList(CExecutionInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnMount(char *json, CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnBoxMetrics(CBoxMetrics *m, CBoxliteError *err, void *ud);
 extern void goBoxliteOnRuntimeMetrics(CRuntimeMetrics *m, CBoxliteError *err, void *ud);
@@ -97,6 +98,10 @@ CBoxRegistryRemoveCb cbRegistryRemove(void) { return (CBoxRegistryRemoveCb)goBox
 CBoxInfoCb cbInfo(void) { return (CBoxInfoCb)goBoxliteOnInfo; }
 CBoxInfoListCb cbInfoList(void) { return (CBoxInfoListCb)goBoxliteOnInfoList; }
 CExecutionInfoListCb cbExecutionInfoList(void) { return (CExecutionInfoListCb)goBoxliteOnExecutionInfoList; }
+static void onMount(const char *json, const CBoxliteError *err, void *ud) {
+    goBoxliteOnMount((char *)json, (CBoxliteError *)err, ud);
+}
+CBoxMountCb cbMount(void) { return onMount; }
 
 CBoxMetricsCb cbBoxMetrics(void) { return (CBoxMetricsCb)goBoxliteOnBoxMetrics; }
 CRuntimeMetricsCb cbRuntimeMetrics(void) { return (CRuntimeMetricsCb)goBoxliteOnRuntimeMetrics; }

@@ -375,6 +375,35 @@ A macOS REST client can request fractional CPUs from a supporting Linux server.
 Rebuild against the matching C header/library because CPU fields and parameters now use `double`.
 See [fractional CPUs](../../docs/guides/resource-limits.md#fractional-cpus-linux) for validation, cgroup delegation, and REST support.
 
+## Runtime directory mounts (release candidate)
+
+`box.Mount()` exposes `Add`, `Remove`, `List`, and `Get` for a Linux x86_64
+native Box. For a local Box with a custom kernel, use
+`WithExperimentalFeatures("native-vmm", "custom-kernel")`. For REST, grant the
+source directory on the server host.
+
+```go
+mount := box.Mount()
+info, err := mount.Add(ctx, boxlite.MountRequest{
+    Source: "/srv/projects/demo", Target: "/workspace", ReadOnly: true,
+})
+```
+
+The four states are `MountConfigured` (`configured`), `MountPreparing` (`preparing`),
+`MountMounted` (`mounted`), and `MountDetaching` (`detaching`). `Add` returns the mount
+for that operation, confirming `MountMounted` on a running Box. A stopped Box saves
+the mount as `MountConfigured` for its next start, which `Get` and `List` expose.
+`Remove` lazily detaches a running mount or discards a saved mount; an absent target
+returns an error recognized by `IsNotFound`. `Get` returns `nil` for an absent target.
+These calls never start a Box.
+
+Cancelling the Go context only ends the wait. An admitted operation can still
+complete, so use `Get` or `List` to inspect its state. After `Runtime.Close`, mount
+calls return `ErrRuntimeClosed` before submission. After `Runtime.Shutdown`, they
+return an error recognized by `IsStopped`.
+
+Use the C SDK library and header shipped with the matching Go SDK version.
+
 ## Service Tunnels
 
 The same route workflow works with local and remote runtimes:

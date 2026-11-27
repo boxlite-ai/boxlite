@@ -34,6 +34,7 @@ pub struct MountRequest {
     /// link, is refused.
     pub target: PathBuf,
     /// Whether the container sees the directory read-only.
+    #[serde(default)]
     pub read_only: bool,
 }
 
@@ -50,6 +51,27 @@ pub enum MountState {
     Detaching,
 }
 
+impl fmt::Display for MountState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Configured => "configured",
+            Self::Preparing => "preparing",
+            Self::Mounted => "mounted",
+            Self::Detaching => "detaching",
+        })
+    }
+}
+
+// SQLite retains the variant names; public mount details use lowercase states.
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "MountState", rename_all = "snake_case")]
+enum PublicMountState {
+    Configured,
+    Preparing,
+    Mounted,
+    Detaching,
+}
+
 /// A mount as callers see it. The identities the shim and the guest record stay internal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MountInfo {
@@ -60,6 +82,7 @@ pub struct MountInfo {
     /// Whether the container sees the directory read-only.
     pub read_only: bool,
     /// Where the mount is in its lifecycle.
+    #[serde(with = "PublicMountState")]
     pub state: MountState,
 }
 

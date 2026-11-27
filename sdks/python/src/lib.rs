@@ -10,6 +10,7 @@ mod executions;
 mod images;
 mod info;
 mod metrics;
+mod mounts;
 mod network;
 mod options;
 mod registries;
@@ -67,6 +68,9 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyContainerCapabilities>()?;
     m.add_class::<PyBoxlite>()?;
     m.add_class::<PyBox>()?;
+    m.add_class::<mounts::PyMountHandle>()?;
+    m.add_class::<mounts::PyMountRequest>()?;
+    m.add_class::<mounts::PyMountInfo>()?;
     m.add_class::<PyExecution>()?;
     m.add_class::<PyExecutions>()?;
     m.add_class::<PyExecutionInfo>()?;

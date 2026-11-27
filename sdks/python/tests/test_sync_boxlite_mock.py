@@ -54,9 +54,16 @@ class _NativeImages:
 class _NativeBoxlite:
     """Stands in for the native Boxlite and records which factory made it."""
 
-    def __init__(self, options=None, made_by: str = "Boxlite(options)") -> None:
+    def __init__(
+        self,
+        options=None,
+        made_by: str = "Boxlite(options)",
+        *,
+        experimental_features="",
+    ) -> None:
         self.options = options
         self.made_by = made_by
+        self.experimental_features = experimental_features
         self.images = _NativeImages()
 
     @classmethod
@@ -76,13 +83,15 @@ def _native_stand_in(monkeypatch):
 
 
 class TestFactories:
-    def test_the_constructor_wraps_a_runtime_built_from_its_options(self):
+    @pytest.mark.parametrize("features", ["", "native-vmm,custom-kernel"])
+    def test_the_constructor_wraps_a_runtime_built_from_its_options(self, features):
         options = object()
 
-        runtime = SyncBoxlite(options)
+        runtime = SyncBoxlite(options, experimental_features=features)
 
         assert runtime.runtime.made_by == "Boxlite(options)"
         assert runtime.runtime.options is options
+        assert runtime.runtime.experimental_features == features
 
     def test_rest_wraps_the_runtime_boxlite_rest_made(self):
         options = object()

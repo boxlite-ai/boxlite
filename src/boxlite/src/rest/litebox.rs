@@ -18,7 +18,7 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
     AttachOptions, BoxCommand, BoxConnection, BoxTunnel, ExecResult, ExecStderr, ExecStdin,
-    ExecStdout, Execution, SshConfig, SshStatus, TunnelOptions,
+    ExecStdout, Execution, MountInfo, MountRequest, SshConfig, SshStatus, TunnelOptions,
 };
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
@@ -32,8 +32,8 @@ use super::error::map_http_body;
 use super::exec::RestExecControl;
 use super::types::{
     BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
-    ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
-    SnapshotResponse,
+    ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListMountsResponse,
+    ListSnapshotsResponse, SnapshotResponse,
 };
 
 /// REST-backed box handle.
@@ -690,6 +690,44 @@ impl BoxBackend for RestBox {
         Ok(crate::runtime::options::BoxArchive::new(output_path))
     }
 
+    async fn mount_add(&self, request: MountRequest) -> BoxliteResult<MountInfo> {
+        self.client.require_runtime_mounts_enabled().await?;
+        mount_path(&request.source, "source")?;
+        mount_path(&request.target, "target")?;
+        self.client
+            .post(&format!("/boxes/{}/mounts", self.id), &request)
+            .await
+    }
+
+    async fn mount_remove(&self, target: &Path) -> BoxliteResult<()> {
+        self.client.require_runtime_mounts_enabled().await?;
+        self.client
+            .delete_with_query(
+                &format!("/boxes/{}/mounts/by-target", self.id),
+                &[("target", mount_path(target, "target")?)],
+            )
+            .await
+    }
+
+    async fn mount_list(&self) -> BoxliteResult<Vec<MountInfo>> {
+        self.client.require_runtime_mounts_enabled().await?;
+        let response: ListMountsResponse = self
+            .client
+            .get(&format!("/boxes/{}/mounts", self.id))
+            .await?;
+        Ok(response.mounts)
+    }
+
+    async fn mount_get(&self, target: &Path) -> BoxliteResult<Option<MountInfo>> {
+        self.client.require_runtime_mounts_enabled().await?;
+        self.client
+            .get_with_query(
+                &format!("/boxes/{}/mounts/by-target", self.id),
+                &[("target", mount_path(target, "target")?)],
+            )
+            .await
+    }
+
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
         // One request per call: the guest restarts SSH on every configure.
         let request = SshConfigRequest::new(&config);
@@ -715,6 +753,11 @@ impl BoxBackend for RestBox {
             .delete_json(&format!("/boxes/{}/ssh", self.box_id_str()))
             .await
     }
+}
+
+fn mount_path<'a>(path: &'a Path, field: &str) -> BoxliteResult<&'a str> {
+    path.to_str()
+        .ok_or_else(|| BoxliteError::InvalidArgument(format!("mount {field} must be UTF-8")))
 }
 
 #[async_trait]

@@ -50,6 +50,7 @@ from ._domains import SyncDomainHandle
 from ._execution import SyncExecStderr, SyncExecStdout, SyncExecution
 from ._executions import SyncExecutions
 from ._images import SyncImageHandle
+from ._mounts import SyncMountHandle
 from ._network import SyncNetworkHandle, SyncTunnelForwarder
 from ._registries import SyncRegistryHandle
 from ._simplebox import SyncSimpleBox
@@ -72,6 +73,7 @@ __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     "SyncCheckpointHandle",
     "SyncDomainHandle",
     "SyncImageHandle",
+    "SyncMountHandle",
     "SyncNetworkHandle",
     "SyncSshHandle",
     "SyncRegistryHandle",

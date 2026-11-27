@@ -401,6 +401,12 @@ pub(super) struct ServerCapabilities {
     pub exec_user_enabled: bool,
     pub volume_read_only_enabled: bool,
     pub typed_mounts_enabled: bool,
+    pub runtime_mounts_enabled: bool,
+}
+
+#[derive(Serialize)]
+pub(super) struct ListMountsResponse {
+    pub mounts: Vec<boxlite::MountInfo>,
 }
 
 // ============================================================================

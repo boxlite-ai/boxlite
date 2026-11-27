@@ -400,6 +400,11 @@ impl<T> Drop for OwnedFfiPtr<T> {
 
 pub enum RuntimeEvent {
     AgentCompletion(Box<dyn FnOnce() + Send>),
+    Mounts {
+        cb: crate::mounts::MountsFn,
+        user_data: usize,
+        result: Result<CString, BoxliteError>,
+    },
     AgentCreate {
         callback: unsafe extern "C" fn(
             *mut crate::agents::CAgent,

@@ -717,6 +717,10 @@ typedef struct CRuntimeMetrics {
 // Runtime metrics completion.
 typedef void (*CRuntimeMetricsCb)(struct CRuntimeMetrics*, CBoxliteError*, void*);
 
+// Mount completion on the drain thread. Both pointers are borrowed for the
+// duration of the callback. Copy the JSON to keep it beyond that call.
+typedef void (*CBoxMountCb)(const char*, const CBoxliteError*, void*);
+
 typedef struct BoxNetworkHandle CBoxNetworkHandle;
 
 typedef struct TunnelForwarderHandle CTunnelForwarderHandle;
@@ -1697,6 +1701,42 @@ enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
                                               CRuntimeMetricsCb cb,
                                               void *user_data,
                                               CBoxliteError *out_error);
+
+// Deliver a host directory to a Box. The callback receives the resulting
+// mount as JSON with source, target, read_only and state fields. A running
+// Box reports `mounted`; a stopped one saves the mount and reports
+// `configured` for its next start. The Box is never started.
+// Input strings are required and copied before returning.
+enum BoxliteErrorCode boxlite_box_mount_add(CBoxHandle *handle,
+                                            const char *source,
+                                            const char *target,
+                                            bool read_only,
+                                            CBoxMountCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+// Lazily detach the mount at target, or discard one a stopped Box saved as
+// `configured`. On success the callback receives JSON null. The Box is never
+// started.
+enum BoxliteErrorCode boxlite_box_mount_remove(CBoxHandle *handle,
+                                               const char *target,
+                                               CBoxMountCb cb,
+                                               void *user_data,
+                                               CBoxliteError *out_error);
+
+// Read the mounts of the Box as a JSON array, including any saved as
+// `configured` for its next start. The Box is never started.
+enum BoxliteErrorCode boxlite_box_mount_list(CBoxHandle *handle,
+                                             CBoxMountCb cb,
+                                             void *user_data,
+                                             CBoxliteError *out_error);
+
+// Read the mount at target as JSON. An absent target returns JSON null.
+enum BoxliteErrorCode boxlite_box_mount_get(CBoxHandle *handle,
+                                            const char *target,
+                                            CBoxMountCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
 
 // Replace inbound policy from {"mode":"enabled","allow_net":[]}.
 // Blocks until applied or rejected. Strings are borrowed for the call.

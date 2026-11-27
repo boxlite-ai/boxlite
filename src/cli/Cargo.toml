@@ -79,6 +79,9 @@ gtmpl = "0.7"
 gtmpl_value = "0.5"
 [build-dependencies]
 
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+boxlite = { workspace = true, features = ["native"] }
+
 [dev-dependencies]
 boxlite = { workspace = true, features = ["rest", "test-support"] }
 boxlite-test-utils = { path = "../test-utils" }

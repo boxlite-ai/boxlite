@@ -26,8 +26,20 @@ impl ServeChild {
     /// Start `boxlite serve` with extra `serve` arguments, e.g. `["--api-key",
     /// "k"]`; pass the same key as `api_key` when it authenticates clients.
     pub fn start_with(extra: &[&str], api_key: Option<&str>) -> Self {
-        let home = boxlite_test_utils::home::PerTestBoxHome::new();
+        Self::start_with_home(
+            boxlite_test_utils::home::PerTestBoxHome::new(),
+            extra,
+            api_key,
+            None,
+        )
+    }
 
+    pub fn start_with_home(
+        home: boxlite_test_utils::home::PerTestBoxHome,
+        extra: &[&str],
+        api_key: Option<&str>,
+        experimental_features: Option<&str>,
+    ) -> Self {
         // Ask the OS for a free port, then release it — a small race with
         // whatever binds next, but the standard trick and good enough here.
         let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -37,6 +49,9 @@ impl ServeChild {
             .port();
 
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_boxlite"));
+        if let Some(features) = experimental_features {
+            cmd.env("BOXLITE_EXPERIMENTAL", features);
+        }
         cmd.arg("--home").arg(&home.path);
         cmd.arg("--config")
             .arg(super::write_registry_config(&home.path));
