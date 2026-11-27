@@ -10,20 +10,23 @@ import (
 // from its own configuration; the API has no write path to it.
 type Registry map[string]map[string]RunnerID
 
-// ParseRegistry rejects unknown modes and empty IDs. An empty string is an
-// empty registry, which a dev-only local run needs.
+// ParseRegistry requires JSON objects for the registry and each mode.
+// It rejects unknown modes and empty IDs. An empty string supports dev-only runs.
 func ParseRegistry(raw string) (Registry, error) {
 	if raw == "" {
 		return Registry{}, nil
 	}
 	var reg Registry
-	if err := json.Unmarshal([]byte(raw), &reg); err != nil {
+	if err := json.Unmarshal([]byte(raw), &reg); err != nil || reg == nil {
 		// The decoder's message can quote registry content; keep only the kind.
 		return nil, fmt.Errorf("attest: registry is not valid JSON of the form {mode: {machine: runner}}")
 	}
 	for mode, machines := range reg {
 		if _, ok := knownAttestors[mode]; !ok {
 			return nil, fmt.Errorf("attest: registry mode %q is not a known attestor", mode)
+		}
+		if machines == nil {
+			return nil, fmt.Errorf("attest: registry mode %q must be a JSON object", mode)
 		}
 		for machine, runner := range machines {
 			if machine == "" || runner == "" {

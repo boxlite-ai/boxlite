@@ -87,11 +87,21 @@ export class JobService {
         }
         throw new JobConflictError()
       }
+      this.logger.error(
+        {
+          event: 'job.create.failed',
+          jobType: type,
+          runnerId,
+          resourceType,
+          resourceId,
+          code: (error as { code?: string | number } | null)?.code,
+          errorName: error instanceof Error ? error.name : typeof error,
+        },
+        'Job creation failed',
+      )
       if (type === JobType.CREATE_BOX) {
-        this.logger.error(`Could not create job for box ${resourceId} on runner ${runnerId}`)
         throw new ServiceUnavailableException('Could not create box job')
       }
-      this.logger.error(`Error creating job: ${error}`)
       throw error
     }
   }

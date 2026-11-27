@@ -342,7 +342,11 @@ fn native_vmlinux_bytes_are_visible_to_a_kvm_vcpu() {
         "guest checksum of the loaded kernel"
     );
     // Finish the OUT without executing HLT, which would wait in the kernel.
-    vcpu.complete_pending_io().expect("complete pending I/O");
+    assert!(
+        vcpu.complete_pending_io()
+            .expect("complete pending I/O")
+            .is_done()
+    );
 
     fn parse_hex(field: &str) -> u64 {
         u64::from_str_radix(field.trim_start_matches("0x"), 16).expect("hex field")

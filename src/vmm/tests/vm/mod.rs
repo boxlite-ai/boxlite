@@ -879,7 +879,7 @@ fn a_kvm_guest_reads_the_last_byte_of_the_mapped_layout() {
         exit => panic!("unexpected exit: {exit:?}"),
     }
     // Complete the OUT without reaching HLT, which would wait inside KVM.
-    vcpu.complete_pending_io().unwrap();
+    assert!(vcpu.complete_pending_io().unwrap().is_done());
     drop(vcpu);
 
     let weak = Arc::downgrade(&memory);
@@ -1002,7 +1002,7 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
         VcpuExit::IoOut { port, bytes } => assert_eq!((port, bytes), (0x3f8, &b"L"[..])),
         exit => panic!("unexpected exit: {exit:?}"),
     }
-    vcpu.complete_pending_io().unwrap();
+    assert!(vcpu.complete_pending_io().unwrap().is_done());
     let results: [u64; 7] = memory.read_obj(GuestAddress(RESULTS)).unwrap();
     assert_eq!(
         results,

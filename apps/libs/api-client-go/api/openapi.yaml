@@ -590,39 +590,6 @@ paths:
       summary: Set default region for organization
       tags:
       - organizations
-  /organizations/{organizationId}/referral-code:
-    get:
-      operationId: getOrganizationReferralCode
-      parameters:
-      - description: Organization ID
-        explode: false
-        in: path
-        name: organizationId
-        required: true
-        schema:
-          format: uuid
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OrganizationReferralCode"
-          description: ""
-        "403":
-          description: Organization access denied or invitation unavailable
-        "503":
-          description: Invitation code generation unavailable
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get or initialize an organization invitation code
-      tags:
-      - organizations
   /organizations/{organizationId}:
     delete:
       operationId: deleteOrganization
@@ -5324,24 +5291,6 @@ components:
       required:
       - defaultRegionId
       type: object
-    OrganizationReferralCode:
-      example:
-        organizationId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
-        referralCode: 7KMNP4XZQ2
-      properties:
-        organizationId:
-          format: uuid
-          type: string
-        referralCode:
-          example: 7KMNP4XZQ2
-          maxLength: 10
-          minLength: 10
-          pattern: "^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$"
-          type: string
-      required:
-      - organizationId
-      - referralCode
-      type: object
     OrganizationSuspension:
       example:
         reason: reason
@@ -6012,20 +5961,35 @@ components:
       - stopped
       - resized
       type: string
+    BoxVolumeFilestoreRef:
+      properties:
+        instance:
+          description: Filestore instance logical name selected from the API configuration
+          example: boxlite-dev-shared
+          type: string
+      required:
+      - instance
+      type: object
     BoxVolume:
       example:
         volumeId: volume123
         mountPath: /data
+        filestore: ""
         subpath: users/alice
       properties:
         volumeId:
-          description: The ID of the volume
+          description: The ID of the volume (bucket-backed or Filestore-backed)
           example: volume123
           type: string
         mountPath:
           description: The mount path for the volume
           example: /data
           type: string
+        filestore:
+          allOf:
+          - $ref: "#/components/schemas/BoxVolumeFilestoreRef"
+          description: The Filestore instance reference; absent for bucket-backed
+            volumes
         subpath:
           description: "Optional subpath within the volume to mount. When specified,\
             \ only this S3 prefix will be accessible. When omitted, the entire volume\
@@ -6085,9 +6049,11 @@ components:
         volumes:
         - volumeId: volume123
           mountPath: /data
+          filestore: ""
           subpath: users/alice
         - volumeId: volume123
           mountPath: /data
+          filestore: ""
           subpath: users/alice
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
@@ -6283,9 +6249,11 @@ components:
           volumes:
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
@@ -6321,9 +6289,11 @@ components:
           volumes:
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           - volumeId: volume123
             mountPath: /data
+            filestore: ""
             subpath: users/alice
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
@@ -7008,6 +6978,8 @@ components:
         name: my-volume
         organizationId: 123e4567-e89b-12d3-a456-426614174000
         state: ready
+        storageBackend: standard
+        instance: boxlite-dev-shared
         createdAt: 2023-01-01T00:00:00.000Z
         updatedAt: 2023-01-01T00:00:00.000Z
         lastUsedAt: 2023-01-01T00:00:00.000Z
@@ -7030,6 +7002,17 @@ components:
           - $ref: "#/components/schemas/VolumeState"
           description: Volume state
           example: ready
+        storageBackend:
+          description: The storage class of the volume
+          enum:
+          - standard
+          - performance
+          example: standard
+          type: string
+        instance:
+          description: Filestore instance name; filestore volumes only
+          example: boxlite-dev-shared
+          type: string
         createdAt:
           description: Creation timestamp
           example: 2023-01-01T00:00:00.000Z
@@ -7055,14 +7038,29 @@ components:
       - name
       - organizationId
       - state
+      - storageBackend
       - updatedAt
       type: object
     CreateVolume:
       example:
         name: my-data
+        storageBackend: performance
+        instance: boxlite-dev-shared
       properties:
         name:
           example: my-data
+          type: string
+        storageBackend:
+          description: The storage class of the volume; defaults to standard
+          enum:
+          - standard
+          - performance
+          example: performance
+          type: string
+        instance:
+          description: The Filestore instance the volume stores its data on; filestore
+            volumes only. Omit to assign from configured instances.
+          example: boxlite-dev-shared
           type: string
       type: object
     JobStatus:

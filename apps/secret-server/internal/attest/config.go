@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 )
 
 // knownAttestors lists every mode name configuration and the registry accept.
@@ -22,6 +24,9 @@ type Config struct {
 func New(cfg Config, tokens TokenVerifier, logger *slog.Logger) (*Selector, error) {
 	if len(cfg.Attestors) == 0 {
 		return nil, errors.New("attest: SECRET_SERVER_ATTESTORS lists no attestor")
+	}
+	if slices.Contains(cfg.Attestors, GCPIITName) && strings.TrimSpace(cfg.Registry) == "" {
+		return nil, errors.New("attest: gcp_iit requires SECRET_SERVER_RUNNER_REGISTRY")
 	}
 	reg, err := ParseRegistry(cfg.Registry)
 	if err != nil {

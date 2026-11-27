@@ -5,6 +5,7 @@
  */
 
 import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
+import { VolumeState } from '../enums/volume-state.enum'
 import { VolumeManager } from './volume.manager'
 
 const mockSend = jest.fn()
@@ -86,5 +87,81 @@ describe('VolumeManager S3 client setup', () => {
     expect(() => buildManager({ 's3.endpoint': 'http://minio:9000', 's3.region': 'us-east-1' })).toThrow(
       /MinIO requires S3_ACCESS_KEY and S3_SECRET_KEY/,
     )
+  })
+})
+
+describe('VolumeManager pending volume selection', () => {
+  it('leaves object-storage rows pending when this instance has no bucket store', async () => {
+    const objectStorage = { id: 'object-1', state: VolumeState.PENDING_DELETE }
+    const filestore = { id: 'filestore-1', state: VolumeState.PENDING_DELETE, instance: 'ml-scratch' }
+    const volumeRepository = { find: jest.fn().mockResolvedValue([objectStorage, filestore]) }
+    const configService = { get: jest.fn().mockReturnValue(undefined) }
+    const redisLockProvider = {
+      lock: jest.fn().mockResolvedValue(true),
+      unlock: jest.fn().mockResolvedValue(undefined),
+    }
+    const manager = new VolumeManager(
+      volumeRepository as any,
+      configService as any,
+      {} as any,
+      redisLockProvider as any,
+      {} as any,
+    )
+    const processVolumeState = jest.spyOn(manager as any, 'processVolumeState').mockResolvedValue(undefined)
+
+    await manager.processPendingVolumes()
+
+    expect(processVolumeState).toHaveBeenCalledTimes(1)
+    expect(processVolumeState).toHaveBeenCalledWith(filestore)
+  })
+})
+
+describe('VolumeManager filestore volume deletion', () => {
+  function buildManagerForDeletion() {
+    const configService = {
+      get: jest.fn(() => undefined),
+      getOrThrow: jest.fn(() => {
+        throw new Error('Missing config')
+      }),
+    }
+    const volumeRepository = {
+      save: jest.fn().mockImplementation(async (v) => v),
+      delete: jest.fn().mockResolvedValue({}),
+    }
+    const redis = { setex: jest.fn().mockResolvedValue(1) }
+    return {
+      manager: new VolumeManager(volumeRepository as any, configService as any, redis as any, {} as any, {} as any),
+      volumeRepository,
+    }
+  }
+
+  it('lands a filestore volume DELETED without any bucket operation', async () => {
+    // No storage backend is configured at all (bucketStore is null): the
+    // filestore branch must not need one, and the DELETED landing is the same
+    // tombstone + rename the bucket path uses.
+    const { manager, volumeRepository } = buildManagerForDeletion()
+    const volume = {
+      id: 'volume-1',
+      organizationId: 'org-1',
+      name: 'nfs-data',
+      state: VolumeState.PENDING_DELETE,
+      instance: 'ml-scratch',
+    } as any
+
+    await (manager as any).handlePendingDelete(volume, 'lock-key')
+
+    expect(volumeRepository.save).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        id: 'volume-1',
+        state: VolumeState.DELETED,
+        name: 'nfs-data-deleted',
+      }),
+    )
+    expect(volumeRepository.delete).toHaveBeenCalledWith({
+      organizationId: 'org-1',
+      name: 'nfs-data-deleted',
+      state: VolumeState.DELETED,
+    })
   })
 })

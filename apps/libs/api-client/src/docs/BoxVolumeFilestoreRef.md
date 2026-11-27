@@ -1,21 +1,19 @@
-# OrganizationReferralCode
+# BoxVolumeFilestoreRef
 
 
 ## Properties
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**organizationId** | **string** |  | [default to undefined]
-**referralCode** | **string** |  | [default to undefined]
+**instance** | **string** | Filestore instance logical name selected from the API configuration | [default to undefined]
 
 ## Example
 
 ```typescript
-import { OrganizationReferralCode } from './api';
+import { BoxVolumeFilestoreRef } from './api';
 
-const instance: OrganizationReferralCode = {
-    organizationId,
-    referralCode,
+const instance: BoxVolumeFilestoreRef = {
+    instance,
 };
 ```
 

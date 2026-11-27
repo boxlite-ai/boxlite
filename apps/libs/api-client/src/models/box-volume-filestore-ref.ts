@@ -14,8 +14,10 @@
 
 
 
-export interface OrganizationReferralCode {
-    'organizationId': string;
-    'referralCode': string;
+export interface BoxVolumeFilestoreRef {
+    /**
+     * Filestore instance logical name selected from the API configuration
+     */
+    'instance': string;
 }
 

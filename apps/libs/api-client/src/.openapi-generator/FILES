@@ -78,6 +78,7 @@ docs/BoxProgress.md
 docs/BoxProgressPhase.md
 docs/BoxState.md
 docs/BoxVolume.md
+docs/BoxVolumeFilestoreRef.md
 docs/BoxliteConfiguration.md
 docs/ConfigApi.md
 docs/CpuIncidentListDto.md
@@ -118,7 +119,6 @@ docs/OnboardingDto.md
 docs/Organization.md
 docs/OrganizationBoxDefaultLimitedNetworkEgress.md
 docs/OrganizationInvitation.md
-docs/OrganizationReferralCode.md
 docs/OrganizationRole.md
 docs/OrganizationSuspension.md
 docs/OrganizationUnsuspension.md
@@ -230,6 +230,7 @@ models/box-memory-usage-dto.ts
 models/box-progress-phase.ts
 models/box-progress.ts
 models/box-state.ts
+models/box-volume-filestore-ref.ts
 models/box-volume.ts
 models/box.ts
 models/boxlite-configuration.ts
@@ -268,7 +269,6 @@ models/oidc-config.ts
 models/onboarding-dto.ts
 models/organization-box-default-limited-network-egress.ts
 models/organization-invitation.ts
-models/organization-referral-code.ts
 models/organization-role.ts
 models/organization-suspension.ts
 models/organization-unsuspension.ts

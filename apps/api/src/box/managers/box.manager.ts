@@ -398,9 +398,16 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
             break
           }
 
-          this.logger.error(`Error processing desired state for box ${boxId}:`, error)
-
           const { recoverable, errorReason } = sanitizeBoxError(error)
+          this.logger.error(
+            {
+              event: 'box.sync.failed',
+              boxId,
+              code: (error as { code?: string | number } | null)?.code,
+              errorName: error instanceof Error ? error.name : typeof error,
+            },
+            'Error processing desired state',
+          )
 
           const updateData: Partial<Box> = {
             state: BoxState.ERROR,

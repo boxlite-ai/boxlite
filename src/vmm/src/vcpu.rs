@@ -6,30 +6,40 @@
 //! dispatches its exits until the VM ends. Every way a worker ends sends one
 //! event, except a stop it observed, which some other sender already caused.
 
+#[cfg(target_arch = "x86_64")]
 use std::{
     panic::{self, AssertUnwindSafe},
     sync::{Condvar, Mutex, PoisonError},
 };
 
-use boxlite_hypervisor::{Vcpu, VcpuExit, X86BootRegisters, X86Vcpu, X86Vm};
+use boxlite_hypervisor::{IoCompletion, Vcpu, VcpuExit};
+#[cfg(target_arch = "x86_64")]
+use boxlite_hypervisor::{X86BootRegisters, X86Vcpu, X86Vm};
 
 use crate::{
     chipset::Chipset,
-    cpu_features::{BOOT_MSRS, vcpu_cpuid},
     error::{Error, Result},
-    events::{Event, EventSender},
+    events::Event,
+};
+#[cfg(target_arch = "x86_64")]
+use crate::{
+    cpu_features::{BOOT_MSRS, vcpu_cpuid},
+    events::EventSender,
+    lifecycle::Lifecycle,
 };
 
 /// Holds the workers until every vCPU is configured, so no vCPU runs before
 /// all exist. Unlike `std::sync::Barrier`, [`abort`](Self::abort) releases
 /// them when a worker thread fails to start.
 #[derive(Default)]
+#[cfg(target_arch = "x86_64")]
 pub(crate) struct StartGate {
     /// Workers that arrived, and whether the gate was aborted.
     state: Mutex<(u8, bool)>,
     changed: Condvar,
 }
 
+#[cfg(target_arch = "x86_64")]
 impl StartGate {
     fn arrive_and_wait(&self, count: u8) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -49,17 +59,20 @@ impl StartGate {
 }
 
 /// What every worker of one VM shares.
+#[cfg(target_arch = "x86_64")]
 pub(crate) struct Workers<'a, H: X86Vm> {
     pub(crate) host_vm: &'a H,
     pub(crate) vcpu_count: u8,
     pub(crate) boot_regs: &'a X86BootRegisters,
     pub(crate) chipset: &'a Chipset,
     pub(crate) sender: &'a EventSender,
-    /// The kick handle of every configured vCPU, for the thread that stops them.
+    pub(crate) lifecycle: &'a Lifecycle,
+    /// The configured vCPUs' kick handles, used for pause and stop.
     pub(crate) kicks: &'a Mutex<Vec<<H::Vcpu as Vcpu>::Handle>>,
     pub(crate) gate: &'a StartGate,
 }
 
+#[cfg(target_arch = "x86_64")]
 impl<H: X86Vm> Workers<'_, H> {
     /// The body of the thread of vCPU `id`. A panic in it, such as a device
     /// whose lock an earlier panic poisoned, ends the VM with
@@ -103,31 +116,67 @@ impl<H: X86Vm> Workers<'_, H> {
 
     /// Runs the guest until it asks to end, which returns the event, or until
     /// another sender ends the VM, which returns `None` after completing the
-    /// pending access.
+    /// pending I/O.
     fn run_guest(&self, vcpu: &mut H::Vcpu, id: u8) -> Result<Option<Event>> {
         loop {
-            // Checked before every entry: a stop that lands earlier still
-            // returns from the next entry at once, since its kick is pending.
+            if let Some(event) = self
+                .lifecycle
+                .checkpoint(id, || park_vcpu(self.chipset, vcpu, id))?
+            {
+                return Ok(Some(event));
+            }
+            // A stop may have released this worker from its checkpoint.
             if self.sender.is_stopping() {
-                vcpu.complete_pending_io()?;
+                let _ = complete_pending_io(self.chipset, vcpu, id)?;
                 return Ok(None);
             }
-            match self.chipset.dispatch(vcpu.run()?) {
-                None | Some(VcpuExit::Interrupted) => {}
-                Some(VcpuExit::Shutdown) => return Ok(Some(Event::GuestShutdown)),
-                Some(VcpuExit::Reset) => return Ok(Some(Event::GuestReset)),
-                Some(exit) => {
-                    return Err(Error::UnexpectedExit {
-                        vcpu: id.into(),
-                        exit: format!("{exit:?}"),
-                    });
-                }
+            let exit = vcpu.run()?;
+            if let Some(event) = handle_exit(self.chipset, id, exit)? {
+                return Ok(Some(event));
             }
         }
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 fn catch_panic<T>(id: u8, f: impl FnOnce() -> Result<T>) -> Result<T> {
     panic::catch_unwind(AssertUnwindSafe(f))
         .unwrap_or_else(|_| Err(Error::VcpuPanicked { vcpu: id.into() }))
+}
+
+pub(crate) fn handle_exit(chipset: &Chipset, id: u8, exit: VcpuExit<'_>) -> Result<Option<Event>> {
+    match chipset.dispatch(exit) {
+        None | Some(VcpuExit::Interrupted) => Ok(None),
+        Some(VcpuExit::Shutdown) => Ok(Some(Event::GuestShutdown)),
+        Some(VcpuExit::Reset) => Ok(Some(Event::GuestReset)),
+        Some(exit) => Err(Error::UnexpectedExit {
+            vcpu: id.into(),
+            exit: format!("{exit:?}"),
+        }),
+    }
+}
+
+pub(crate) fn complete_pending_io(
+    chipset: &Chipset,
+    vcpu: &mut impl Vcpu,
+    id: u8,
+) -> Result<Option<Event>> {
+    while let IoCompletion::Exit(exit) = vcpu.complete_pending_io()? {
+        if let Some(event) = handle_exit(chipset, id, exit)? {
+            return Ok(Some(event));
+        }
+    }
+    Ok(None)
+}
+
+pub(crate) fn park_vcpu(chipset: &Chipset, vcpu: &mut impl Vcpu, id: u8) -> Result<Option<Event>> {
+    if let Some(event) = complete_pending_io(chipset, vcpu, id)? {
+        return Ok(Some(event));
+    }
+    match vcpu.notify_guest_stopped() {
+        Err(boxlite_hypervisor::Error::ConfigureVcpu { source, .. })
+            if source.kind() == std::io::ErrorKind::Unsupported => {}
+        result => result?,
+    }
+    Ok(None)
 }

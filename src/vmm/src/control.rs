@@ -7,6 +7,7 @@ use std::{collections::HashMap, io, sync::Arc, time::Duration};
 
 use crate::{
     MemoryStatus,
+    error::Result,
     lifecycle::{Lifecycle, VmStatus},
     virtio::blk::control::{self, Controls, DiskSender},
 };
@@ -32,6 +33,28 @@ impl VmControl {
     /// Requests a stop, including before execution starts, without waiting for exit.
     pub fn stop(&self) {
         self.lifecycle.stop();
+    }
+
+    /// Reserves an initial pause in `Created`, or posts a pause request for a
+    /// running device-less VM and wakes the run driver without waiting. Callers
+    /// can observe completion with [`Self::wait_paused`].
+    pub fn request_pause(&self) -> Result<()> {
+        self.lifecycle.request_pause()
+    }
+
+    /// Reopens guest entry for a paused VM after the run driver accepts it.
+    pub fn resume(&self) -> Result<()> {
+        self.lifecycle.resume()
+    }
+
+    /// Waits for the current pause epoch, including a reserved or queued pause.
+    /// A zero timeout checks the current condition while holding the lock.
+    ///
+    /// `Ok(())` confirms that the target pause epoch completed; callers that
+    /// need the VM to stay quiescent must serialize against concurrent
+    /// [`Self::resume`] calls on cloned handles.
+    pub fn wait_paused(&self, timeout: Duration) -> Result<()> {
+        self.lifecycle.wait_paused(timeout)
     }
 
     /// Grows the named writable disk to `bytes`, returning its capacity.
