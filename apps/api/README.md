@@ -1301,12 +1301,15 @@ creation limits. The default is false and retains the PostgreSQL advisory-lock a
 path. Redis mode initializes an organization from its counted PostgreSQL Box IDs, then uses
 one atomic Lua operation to reserve a Box ID with INCR. Over-limit reservations are
 immediately decremented and never enter the Box persistence transaction. Successful creates
-remain counted; definite rollback releases the reservation. Existing Box transactions,
-related writes, and row locks are unchanged.
+remain counted; definite rollback releases the reservation. A duplicate Box ID conflicts
+without releasing the existing owner's reservation. Existing Box transactions, related
+writes, and row locks are unchanged.
 
 Each organization has a count, a Box-ID hash, and a ready marker. These keys have no TTL.
-Unlimited creates use the ordinary persistence path and are tracked asynchronously so a
-later plan limit starts with existing Boxes included. Counted-to-excluded state transitions
+Missing count/ready metadata, or a positive count without its Box hash, revokes ready until
+rebuild completion rather than exposing partially backfilled counts. Unlimited creates use
+the ordinary persistence path and are tracked asynchronously so a later plan limit starts
+with existing Boxes included. Counted-to-excluded state transitions
 release a reservation, while excluded-to-counted transitions such as ERROR recovery count it
 again. Repeated events cannot decrement or increment the same Box twice.
 

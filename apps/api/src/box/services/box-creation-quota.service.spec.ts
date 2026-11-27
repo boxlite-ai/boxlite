@@ -5,6 +5,7 @@
 
 import { EntityManager } from 'typeorm'
 import { BoxCreationAdmissionUnavailableError, BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
+import { BoxConflictError } from '../errors/box-conflict.error'
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
@@ -45,6 +46,18 @@ describe('BoxCreationQuotaService', () => {
     )
     expect(persist).not.toHaveBeenCalled()
     expect(dataSource.transaction).not.toHaveBeenCalled()
+  })
+
+  it('rejects a duplicate Box ID without releasing the existing reservation', async () => {
+    const { service, redis, dataSource } = makeService()
+    redis.eval.mockResolvedValue([2, 1])
+    const persist = jest.fn()
+
+    await expect(service.run(organizationId, 'box-1', 10, persist)).rejects.toBeInstanceOf(BoxConflictError)
+
+    expect(persist).not.toHaveBeenCalled()
+    expect(dataSource.transaction).not.toHaveBeenCalled()
+    expect(redis.eval).toHaveBeenCalledTimes(1)
   })
 
   it('initializes an organization once and retries admission after a not-ready result', async () => {
