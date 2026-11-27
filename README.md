@@ -113,6 +113,8 @@ curl -fsSL https://sh.boxlite.ai | sh
 boxlite run python:slim python -c 'print("Hello from BoxLite!")'
 ```
 
+Interactive bash treats `!` inside double quotes as a history event.
+
 Installs to `$HOME/.local/bin/boxlite`, runtime embedded — no extra setup. Alternatives (`cargo install boxlite-cli`, version pinning, verification) → [CLI reference](./docs/reference/cli/README.md#installation--verification).
 
 ### 3 · Deploy it — a standalone server
