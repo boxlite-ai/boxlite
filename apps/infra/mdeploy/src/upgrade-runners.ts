@@ -300,24 +300,24 @@ export const upgradeFleetOverPolicy = ({
   log: (line: string) => void
   writeFile: (contents: string) => string
 }): number => {
+  const swapBinary = {
+    id: 'swap-binary',
+    exec: {
+      validate: { interpreter: 'NONE', script: scripts.validate },
+      enforce: { interpreter: 'NONE', script: scripts.enforce },
+    },
+  }
+  const existing = existingPolicies.find((policy) => policy.id === 'runner-binary')
+  const groups = existing?.resourceGroups as { resources: { id: string }[] }[] | undefined
   const policy = {
     osPolicies: [
       {
         id: 'runner-binary',
         mode: 'ENFORCEMENT',
-        resourceGroups: [
-          {
-            resources: [
-              {
-                id: 'swap-binary',
-                exec: {
-                  validate: { interpreter: 'NONE', script: scripts.validate },
-                  enforce: { interpreter: 'NONE', script: scripts.enforce },
-                },
-              },
-            ],
-          },
-        ],
+        resourceGroups: groups?.map((group) => ({
+          ...group,
+          resources: group.resources.map((resource) => (resource.id === swapBinary.id ? swapBinary : resource)),
+        })) ?? [{ resources: [swapBinary] }],
       },
       ...existingPolicies.filter((policy) => policy.id !== 'runner-binary'),
     ],

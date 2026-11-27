@@ -79,7 +79,7 @@ type outboundModeTarget struct {
 }
 
 func (t *outboundModeTarget) Action(pkt *stack.PacketBuffer, _ stack.Hook, _ *stack.Route, _ stack.AddressableEndpoint) (stack.RuleVerdict, int) {
-	if !t.guard.active() || t.snapshot().policy.Mode == "disabled" || (t.guard.cloud && !t.permitsGuestDHCP(pkt)) {
+	if t.snapshot().policy.Mode == "disabled" || (t.guard.cloud && !t.permitsGuestDHCP(pkt)) {
 		return stack.RuleDrop, 0
 	}
 	return stack.RuleJump, t.next

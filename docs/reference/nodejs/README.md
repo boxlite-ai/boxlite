@@ -226,7 +226,7 @@ removes the guest network interface.
 A configured secret can permit TCP port 443 without a Box allow rule. Local
 hostname routing requires an IP or CIDR rule for private, loopback, and CGNAT
 answers when the allowlist is non-empty. The
-[Cloud platform guard](../../concepts/networking.md#cloud-platform-guard)
+[Cloud platform destination filtering](../../concepts/networking.md#cloud-platform-destination-filtering)
 applies its protected destination checks to these connections.
 
 #### `JsEnvVar`

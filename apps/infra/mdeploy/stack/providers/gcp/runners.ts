@@ -428,7 +428,8 @@ udevadm trigger --name-match=kvm || true`,
         $resolve(Object.values(request.environment)),
         token,
         request.registryProxyHost ?? '',
-      ]).apply(([apiUrl, otlpUrl, references, resolved, hostToken, proxyHost]) => {
+        placement.cloudScope,
+      ]).apply(([apiUrl, otlpUrl, references, resolved, hostToken, proxyHost, cloudScope]) => {
         const secrets = Object.keys(request.secrets).map((name, index) => ({
           name,
           ...splitSecretRef((references as string[])[index] as string),
@@ -445,6 +446,8 @@ udevadm trigger --name-match=kvm || true`,
               Object.keys(request.environment).map((name, index) => [name, String((resolved as string[])[index])]),
             ),
             BOXLITE_RUNNER_NAME: slot.controlPlaneRunnerName,
+            BOXLITE_CLOUD_STAGE: $app.stage,
+            BOXLITE_CLOUD_SCOPE: cloudScope as string,
             /*
              * This host's own data disk, by the same rule the disk resource
              * above creates it under. The control plane grows the disk the
@@ -605,13 +608,15 @@ udevadm trigger --name-match=kvm || true`,
       request.otlpUrl,
       request.registryProxyHost ?? '',
       request.environment.BOXLITE_RUNNER_ENV ?? '',
-    ]).apply(([apiUrl, otlpUrl, proxyHost, runnerEnv]) =>
+      placement.cloudScope,
+    ]).apply(([apiUrl, otlpUrl, proxyHost, runnerEnv, cloudScope]) =>
       renderUnitEnvironmentPolicyScripts({
         apiUrl: apiUrl as string,
         otlpUrl: otlpUrl as string,
         volumeBackend: VOLUME_BACKEND,
         registryProxyHost: (proxyHost as string) || null,
         runnerEnv: runnerEnv as string,
+        cloudScope: cloudScope as string,
         // The disks the control plane grows online are named here and
         // nowhere else: the policy derives each host's from the same
         // function the disk resource below creates under, so a grant or a
@@ -659,6 +664,13 @@ udevadm trigger --name-match=kvm || true`,
                 {
                   resources: [
                     {
+                      id: 'converge-unit-environment',
+                      exec: {
+                        validate: { interpreter: 'NONE', script: unitEnvScripts.validate },
+                        enforce: { interpreter: 'NONE', script: unitEnvScripts.enforce },
+                      },
+                    },
+                    {
                       id: 'swap-binary',
                       exec: {
                         validate: { interpreter: 'NONE', script: scripts.validate },
@@ -678,25 +690,6 @@ udevadm trigger --name-match=kvm || true`,
                     {
                       id: 'install-nfs-common',
                       pkg: { desiredState: 'INSTALLED', apt: { name: 'nfs-common' } },
-                    },
-                  ],
-                },
-              ],
-            },
-            // The binary and environment policies can restart the runner; the NFS package
-            // is independent so a current binary cannot skip installation on an older host.
-            {
-              id: 'runner-unit-env',
-              mode: 'ENFORCEMENT',
-              resourceGroups: [
-                {
-                  resources: [
-                    {
-                      id: 'converge-unit-environment',
-                      exec: {
-                        validate: { interpreter: 'NONE', script: unitEnvScripts.validate },
-                        enforce: { interpreter: 'NONE', script: unitEnvScripts.enforce },
-                      },
                     },
                   ],
                 },

@@ -46,31 +46,24 @@ installed host ranges in force.
 Restart the backend to pick up changes to the host list. A backend with these
 ranges applies the 256-flow UDP limit in legacy admission as well.
 
-### Cloud platform guard
+### Cloud platform destination filtering
 
-A guarded Cloud Runner also protects its platform networks and host addresses.
-Guests can use the gateway's built-in DNS and DHCP. The gateway sends upstream
-DNS only to the operator's validated resolver endpoints.
+A managed Cloud Runner gets protected ranges from the stage's GCP resources.
+It adds the host's interface addresses at launch.
 
-Static host CIDRs and the operator inventory continue to apply when a Box
-replaces its own rules.
+gvproxy checks the original, translated and resolved destination in both
+outbound modes. Platform protections take precedence over Box allow rules
+after policy updates and backend restarts.
 
-The host guard and the network backend independently watch the inventory. A
-changed, invalid, or expired inventory stops guest networking for that backend.
-A cold restart takes a fresh inventory sample before enabling networking.
+The guest gateway supplies DNS and DHCP. It sends upstream DNS queries only to
+the GCP resolver. TCP and UDP connections from guest workloads to the resolver
+address are subject to the platform address filter.
 
-The Linux host enforces the deadline on socket admission, the Box's guest Unix
-socket, and at its cgroup packet hook. IP packets that cleared the hook before
-the deadline can still drain through a device queue. The private management
-socket remains available for status and stop operations.
+Runner startup verifies the network scope for detached backends against the
+current deployment. It stops any backend that cannot prove its scope and
+withholds readiness when it cannot confirm the stop.
 
-| When | Guard state | Traffic |
-| --- | --- | --- |
-| Inventory is valid | The host and gvproxy sample the same operator revision independently. | Approved traffic can pass the kernel and gvproxy. |
-| A matching sample reaches the kernel before the current cutoff | The kernel verifies the prior lease and publishes the extension. | Existing flows can continue. |
-| The inventory or freshness lease expires | The kernel refuses late renewal and gvproxy closes retired flows. | New socket admission and packets evaluated at the hook are denied. Packets already downstream of the hook can still arrive. |
-
-See [GCP guarded Runner setup](../../apps/infra/docs/gcp/runners.md#guarded-runner-pool).
+See [GCP Runner network scope](../../apps/infra/docs/gcp/runners.md#cloud-network-scope).
 
 ### Secret injection certificates
 
@@ -315,5 +308,5 @@ Boxes receive network configuration via DHCP:
 - Default gateway
 - Gateway DNS endpoint
 
-The Local gateway uses the host resolver. On a guarded Cloud Runner, the
-gateway uses the approved resolver endpoints in the operator inventory.
+The Local gateway uses the host resolver. On GCP, the managed Cloud gateway
+uses the provider's DNS endpoint.

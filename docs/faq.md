@@ -251,7 +251,7 @@ See [Debugging Guide](./guides/debugging.md) for comprehensive troubleshooting.
 ### Does BoxLite support internet access?
 
 Networking is enabled by default with an empty Box allowlist.
-Host protection, including the [Cloud platform guard](./concepts/networking.md#cloud-platform-guard), still applies.
+Host protection, including the [Cloud platform destination filtering](./concepts/networking.md#cloud-platform-destination-filtering), still applies.
 
 **Outbound connections:**
 - HTTP/HTTPS requests
@@ -309,7 +309,7 @@ See [Configuring Networking](./guides/networking.md) for details.
    - The host rules must permit the alias. A non-empty `allow_net` must
      list `"192.168.127.254"` or a CIDR covering it.
 
-   Guarded Cloud Runners deny connections to the alias.
+   Managed Cloud Runners deny connections to the alias.
 
 3. **External service:**
    - Both boxes connect to Redis/database on host or network

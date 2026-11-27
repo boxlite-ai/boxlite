@@ -46,7 +46,6 @@ pub struct ShimSpawner<'a> {
     box_id: &'a str,
     options: &'a BoxOptions,
     nested_virtualization: bool,
-    cloud_paths: Vec<PathBuf>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -62,7 +61,6 @@ impl<'a> ShimSpawner<'a> {
             box_id,
             options,
             nested_virtualization: false,
-            cloud_paths: Vec::new(),
         }
     }
 
@@ -98,17 +96,6 @@ impl<'a> ShimSpawner<'a> {
         self
     }
 
-    pub(crate) fn with_cloud_paths(
-        mut self,
-        guard: &crate::net::gvproxy::CloudGuardBootstrap,
-    ) -> Self {
-        self.cloud_paths.push(guard.inventory_directory.clone());
-        // Mount the endpoint directory so service restarts can replace the socket.
-        self.cloud_paths
-            .extend(guard.shim_socket.parent().map(Path::to_path_buf));
-        self
-    }
-
     /// Host files this shim's VM request needs to read. Empty unless the box
     /// asked for nesting, so an ordinary box widens its sandbox by nothing.
     fn required_probe_paths(&self) -> &'static [&'static str] {
@@ -126,7 +113,6 @@ impl<'a> ShimSpawner<'a> {
             .iter()
             .map(PathBuf::from)
             .filter(|path| path.exists())
-            .chain(self.cloud_paths.iter().cloned())
             .map(|path| PathAccess {
                 path,
                 writable: false,
