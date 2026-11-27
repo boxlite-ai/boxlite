@@ -1115,6 +1115,16 @@ impl RuntimeImpl {
 
     /// Caller holds the box's entity lock, if the box has one.
     pub(crate) fn remove_box_locked(&self, id: &BoxID, force: bool) -> BoxliteResult<()> {
+        self.remove_box_with_retirement(id, force, None)
+    }
+
+    /// The Runner journals the receipt before requesting exact native removal.
+    pub(crate) fn remove_box_with_retirement(
+        &self,
+        id: &BoxID,
+        force: bool,
+        receipt: Option<&crate::litebox::protected_boot::ProtectedBootReceipt>,
+    ) -> BoxliteResult<()> {
         tracing::debug!(box_id = %id, force = force, "RuntimeInnerImpl::remove_box called");
 
         // Try to get box from database first
@@ -1137,7 +1147,11 @@ impl RuntimeImpl {
                     "box {id} has a disk operation in progress; retry removal"
                 ))
             })?;
-            return self.remove_box_holding_admissions(id, force, config, state, lock_id);
+            return self.remove_box_holding_admissions(id, force, config, state, lock_id, receipt);
+        }
+
+        if receipt.is_some() {
+            return Err(BoxliteError::NotFound(id.to_string()));
         }
 
         // Box not in database - check in-memory cache
@@ -1214,11 +1228,17 @@ impl RuntimeImpl {
         config: BoxConfig,
         state: BoxState,
         lock_id: crate::lock::LockId,
+        receipt: Option<&crate::litebox::protected_boot::ProtectedBootReceipt>,
     ) -> BoxliteResult<()> {
-        if self.box_manager.protected_boot(id)?.is_some() {
-            return Err(BoxliteError::InvalidState(
-                "Protected bootstrap records require coordinated removal".into(),
-            ));
+        match (self.box_manager.protected_boot(id)?, receipt) {
+            (None, None) => {}
+            (Some(record), Some(receipt))
+                if !force && record.active.is_none() && record.retired.last() == Some(receipt) => {}
+            _ => {
+                return Err(BoxliteError::InvalidState(
+                    "Protected bootstrap records require exact coordinated removal".into(),
+                ));
+            }
         }
         let mut state = state;
         if state.status.is_active() || state.pid.is_some() {

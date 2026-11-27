@@ -282,7 +282,6 @@ export const gcpProgram =
         userDomain: stackEnvironment.userDomain,
         runnerBinary,
         runnerFleet: stackEnvironment.runnerFleet,
-        protectedRunnerTokens: stackEnvironment.protectedRunnerTokens,
         apiEnvironment: stackEnvironment.apiEnvironment,
         apiSecrets: stackEnvironment.apiSecrets,
         proxyEnvironment: stackEnvironment.proxyEnvironment,

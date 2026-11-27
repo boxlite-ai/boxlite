@@ -313,6 +313,7 @@ impl BoxImpl {
                 self.config.clone(),
                 state,
                 locker.id(),
+                None,
             )?;
             self.auto_removed.store(true, Ordering::Release);
             Ok(())
@@ -1488,13 +1489,21 @@ impl BoxImpl {
         let adopting_running = state.status == BoxStatus::Running;
 
         let protection = self.runtime.box_manager.protected_boot(self.id())?;
+        if protection.is_none() && self.config.options.advanced.runner_allocation().is_some() {
+            return Err(BoxliteError::InvalidState(
+                "Protected allocation requires an exact protected launch".into(),
+            ));
+        }
         let protected_box = protection.is_some();
         match (protection, &protected) {
             (None, None) => {}
             (Some(record), None) if adopting_running => {
-                let active = record.active.ok_or_else(|| {
-                    BoxliteError::InvalidState("Missing protected bootstrap attempt".into())
-                })?;
+                let active = record
+                    .active
+                    .filter(|active| active.confirmed)
+                    .ok_or_else(|| {
+                        BoxliteError::InvalidState("Missing protected bootstrap attempt".into())
+                    })?;
                 self.verify_protected_boot(&active).await?;
             }
             (Some(record), Some(network))

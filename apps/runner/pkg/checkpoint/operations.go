@@ -258,6 +258,10 @@ func (l *TargetLease) read() (*restoreRecord, error) {
 }
 
 func (l *TargetLease) write(record restoreRecord) error {
+	return writeOperationRecord(l.path, record)
+}
+
+func writeOperationRecord(path string, record any) error {
 	data, err := json.Marshal(record)
 	if err != nil {
 		return err
@@ -265,7 +269,7 @@ func (l *TargetLease) write(record restoreRecord) error {
 	if len(data) > 64*1024 {
 		return fmt.Errorf("checkpoint operation record exceeds 64 KiB")
 	}
-	file, err := os.CreateTemp(filepath.Dir(l.path), ".operation-")
+	file, err := os.CreateTemp(filepath.Dir(path), ".operation-")
 	if err != nil {
 		return err
 	}
@@ -278,8 +282,8 @@ func (l *TargetLease) write(record restoreRecord) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(file.Name(), l.path); err != nil {
+	if err := os.Rename(file.Name(), path); err != nil {
 		return err
 	}
-	return syncDirectory(filepath.Dir(l.path))
+	return syncDirectory(filepath.Dir(path))
 }

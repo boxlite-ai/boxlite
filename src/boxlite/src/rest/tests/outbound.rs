@@ -67,6 +67,20 @@ fn replacement() -> OutboundReplacement {
 }
 
 #[tokio::test]
+async fn outbound_rest_legacy_update_omits_the_conditional_header() {
+    let (handle, server) = peer(204, "", "").await;
+    let policy = OutboundNetworkConfig::default();
+    handle.update_outbound(policy.clone()).await.unwrap();
+    let (head, body) = server.await.unwrap();
+    assert!(head.starts_with("PUT /v1/boxes/policy-box/network/outbound HTTP/1.1\r\n"));
+    assert!(!head.to_ascii_lowercase().contains("\r\nif-match:"));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+        serde_json::to_value(policy).unwrap()
+    );
+}
+
+#[tokio::test]
 async fn outbound_rest_total_timeout_includes_a_stalled_acknowledgement_body() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let handle = network_at(format!("http://{}", listener.local_addr().unwrap()));

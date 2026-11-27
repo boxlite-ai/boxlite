@@ -13,7 +13,7 @@ import (
 )
 
 // TestCreateHasNoFallibleStepAfterStart guards the coupling documented at the
-// bx.Start call in Create.
+// bx.Start call in the shared creation path.
 //
 // A successful bx.Start publishes StartedAt when BoxLite moves the box to Running, which
 // BoxSync reads as evidence that this whole job body succeeded. That only holds
@@ -28,9 +28,9 @@ func TestCreateHasNoFallibleStepAfterStart(t *testing.T) {
 		t.Fatalf("parse client.go: %v", err)
 	}
 
-	create := findMethod(parsed, "Client", "Create")
+	create := findMethod(parsed, "Client", "createBox")
 	if create == nil {
-		t.Fatal("Client.Create not found in client.go; update this guard if it was renamed")
+		t.Fatal("Client.createBox not found in client.go")
 	}
 
 	violations, err := fallibleReturnsAfterStart(fileSet, create)

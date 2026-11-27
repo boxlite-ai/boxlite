@@ -8,6 +8,7 @@ package boxlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/checkpoint"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/models/enums"
 	"github.com/containerd/errdefs"
@@ -46,17 +48,19 @@ type Client struct {
 	// What each freshly created box's image resolved to, until it has been
 	// reported once. Held in memory only: an entry lost to a runner restart is
 	// simply gone, and the control plane re-resolves on the next create.
-	pendingImageReports map[string]PulledImage
-	awsRegion           string
-	awsEndpointUrl      string
-	awsAccessKeyId      string
-	awsSecretAccessKey  string
-	volumeBackend       string
-	volumeMutexes       map[string]*sync.Mutex
-	volumeMutexesMutex  sync.Mutex
-	volumeCleanupMutex  sync.Mutex
-	lastVolumeCleanup   time.Time
-	volumeCleanup       volumeCleanupConfig
+	pendingImageReports         map[string]PulledImage
+	awsRegion                   string
+	awsEndpointUrl              string
+	awsAccessKeyId              string
+	awsSecretAccessKey          string
+	volumeBackend               string
+	volumeMutexes               map[string]*sync.Mutex
+	volumeMutexesMutex          sync.Mutex
+	volumeCleanupMutex          sync.Mutex
+	lastVolumeCleanup           time.Time
+	volumeCleanup               volumeCleanupConfig
+	protectedAllocationShutdown sync.RWMutex
+	protectedAllocationStopping bool
 
 	nestedVirtualizationAllowed bool
 
@@ -414,12 +418,14 @@ func (c *Client) HomeDir() string {
 // `timeout=0` means "use the runtime default (10s)". Negative values are
 // clamped by the SDK.
 func (c *Client) Shutdown(ctx context.Context, timeout time.Duration) error {
+	c.drainProtectedAllocations()
 	return c.runtime.Shutdown(ctx, timeout)
 }
 
 // Close releases the BoxLite runtime handle. Prefer calling `Shutdown` first
 // so boxes get a graceful stop before the C handle is freed.
 func (c *Client) Close() error {
+	c.drainProtectedAllocations()
 	c.mu.Lock()
 	boxes := make([]*boxlite.Box, 0, len(c.boxes))
 	for id, bx := range c.boxes {
@@ -444,6 +450,14 @@ func (c *Client) NestedVirtualizationEnabled() bool {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	return c.createBox(ctx, boxDto, nil)
+}
+
+func (c *Client) createBox(ctx context.Context, boxDto dto.CreateBoxDTO, preparation *ProtectedPreparation) (string, string, error) {
+	reservedName := strings.HasPrefix(boxDto.Id, checkpoint.ProtectedAllocationPrefix)
+	if reservedName && preparation != nil {
+		return "", "", errdefs.ErrInvalidArgument.WithMessage("reserved protected allocation name")
+	}
 	cpus, err := dto.CPUAllocation(boxDto.CpuQuota)
 	if err != nil {
 		return "", "", errdefs.ErrInvalidArgument.WithMessage(err.Error())
@@ -469,6 +483,37 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if err := operation.CheckIdle(); err != nil {
 		return "", "", err
 	}
+	nativeName := boxDto.Id
+	var allocation *checkpoint.ProtectedAllocation
+	if preparation != nil {
+		var existing bool
+		allocation, existing, err = c.reserveProtectedAllocation(ctx, operation, boxDto.Id, *preparation)
+		if err != nil {
+			return "", "", err
+		}
+		if existing {
+			return allocation.NativeID, "boxlite", nil
+		}
+		nativeName = allocation.NativeName()
+	} else if err := c.requireOrdinaryLifecycle(ctx, operation, boxDto.Id); err != nil {
+		return "", "", err
+	}
+	if reservedName {
+		nativeID, err := c.nativeBoxID(boxDto.Id)
+		if err != nil {
+			return "", "", err
+		}
+		attempt, err := c.nativeRunnerAllocation(ctx, nativeID)
+		if boxlite.IsNotFound(err) {
+			return "", "", errdefs.ErrInvalidArgument.WithMessage("reserved protected allocation name")
+		}
+		if err != nil {
+			return "", "", err
+		}
+		if attempt != "" {
+			return "", "", errProtectedBox
+		}
+	}
 	candidate, err := operation.UnpublishedCandidate()
 	if err != nil {
 		return "", "", err
@@ -483,7 +528,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	}
 
 	opts := []boxlite.BoxOption{
-		boxlite.WithName(boxDto.Id),
+		boxlite.WithName(nativeName),
 		boxlite.WithCPUs(cpus),
 		boxlite.WithMemory(memoryMiB),
 		boxlite.WithAutoRemove(false),
@@ -552,7 +597,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
 	}
 
-	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
+	volumeMounts, err := c.prepareBoxVolumeMounts(ctx, nativeName, boxDto.Volumes, allocation != nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -562,18 +607,15 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithBindMount(vol.hostPath, vol.mountPath))
 	}
 
-	if len(volumeMounts) > 0 {
-		if err := c.recordBoxVolumeMounts(ctx, boxDto.Id, volumeMounts); err != nil {
-			return "", "", err
-		}
-	}
-
 	opts = append(opts, boxlite.WithNetwork(network))
+	if allocation != nil {
+		opts = append(opts, boxlite.WithRunnerProtectedAllocation(allocation.AttemptID))
+	}
 	if err := ctx.Err(); err != nil {
 		if len(volumeMounts) > 0 {
 			cleanupCtx, cancel := cleanupContext(ctx)
 			defer cancel()
-			if cleanupErr := c.removeBoxVolumeMountRecord(cleanupCtx, boxDto.Id); cleanupErr != nil {
+			if cleanupErr := c.removeBoxVolumeMountRecord(cleanupCtx, nativeName); cleanupErr != nil {
 				c.logger.WarnContext(cleanupCtx, "failed to remove cancelled box volume mount record", "box", boxDto.Id, "error", cleanupErr)
 			}
 		}
@@ -582,6 +624,12 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// Native creation cannot be cancelled after admission. Keep the target
 	// lease until it finishes; preparation above still obeys caller cancellation.
 	ctx = context.WithoutCancel(ctx)
+	if allocation != nil {
+		allocation.InFlight = true
+		if err := operation.SaveProtectedAllocation(*allocation); err != nil {
+			return "", "", err
+		}
+	}
 
 	// GetOrCreate (not Create) so a CREATE_BOX replay is idempotent. The local
 	// box name is boxDto.Id — the control plane's globally-unique box id — so if
@@ -591,27 +639,54 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	// failing with "already exists", which the API would surface as a 400.
 	// The created flag (new vs adopted) is irrelevant here: either way the box
 	// now exists locally and the job can proceed, so it is discarded.
-	id, err := c.nativeBoxID(boxDto.Id)
-	if err != nil {
-		return "", "", err
-	}
 	var bx *boxlite.Box
-	if id != boxDto.Id {
-		bx, err = c.runtime.Get(ctx, id)
+	if allocation == nil {
+		id, err := c.nativeBoxID(boxDto.Id)
+		if err != nil {
+			return "", "", err
+		}
+		if id != boxDto.Id || reservedName {
+			bx, err = c.runtime.Get(ctx, id)
+			if err != nil && (reservedName || !boxlite.IsNotFound(err)) {
+				return "", "", err
+			}
+		}
 	}
-	if bx == nil && (err == nil || boxlite.IsNotFound(err)) {
+	if bx == nil {
 		if err := operation.ClearPublished(); err != nil {
 			return "", "", err
 		}
 		bx, _, err = c.runtime.GetOrCreate(ctx, boxDto.Image, opts...)
 	}
 	if err != nil {
-		if len(volumeMounts) > 0 {
+		if allocation != nil && !errors.Is(err, boxlite.ErrRuntimeClosed) {
+			allocation.InFlight = false
+			if persistErr := operation.SaveProtectedAllocation(*allocation); persistErr != nil {
+				return "", "", errors.Join(err, persistErr)
+			}
+		}
+		if allocation == nil && len(volumeMounts) > 0 {
 			if cleanupErr := c.removeBoxVolumeMountRecord(ctx, boxDto.Id); cleanupErr != nil {
 				c.logger.WarnContext(ctx, "failed to remove box volume mount record after create failure", "box", boxDto.Id, "error", cleanupErr)
 			}
 		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
+	}
+	if allocation != nil {
+		defer bx.Close()
+		info, err := bx.Info(ctx)
+		if err != nil {
+			return "", "", err
+		}
+		if err := c.checkConfiguredAllocation(ctx, info, *allocation, false); err != nil {
+			return "", "", err
+		}
+		allocation.NativeID = bx.ID()
+		allocation.InFlight = false
+		if err := operation.SaveProtectedAllocation(*allocation); err != nil {
+			return "", "", err
+		}
+		return allocation.NativeID, "boxlite", nil
 	}
 
 	c.mu.Lock()
@@ -694,14 +769,14 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 	}
 	defer operation.Close()
 	ctx = context.WithoutCancel(ctx)
-	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
-		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
-	}
-
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return "", err
 	}
+	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
+		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
+	}
+
 	if err := bx.Start(ctx); err != nil {
 		return "", err
 	}
@@ -738,9 +813,19 @@ func (c *Client) Destroy(ctx context.Context, boxId string) error {
 		return err
 	}
 	defer operation.Close()
+	if err := c.requireOrdinaryLifecycle(ctx, operation, boxId); err != nil {
+		return err
+	}
 	ids, err := operation.NativeTargets()
 	if err != nil {
 		return err
+	}
+	nativeID, err := c.nativeBoxID(boxId)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(ids, nativeID) {
+		ids = append(ids, nativeID)
 	}
 	if err := c.refuseProtectedRemoval(ctx, ids); err != nil {
 		return err
@@ -946,6 +1031,9 @@ func (c *Client) GetBox(ctx context.Context, boxId string) (*boxlite.Box, error)
 // That is the auto-restart the control plane depends on: its reaper stops idle
 // boxes and the next call is expected to bring them back.
 func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box, error) {
+	if err := c.ordinaryAllocationAllowed(boxId); err != nil {
+		return nil, err
+	}
 	c.mu.RLock()
 	cached, ok := c.boxes[boxId]
 	c.mu.RUnlock()
@@ -973,6 +1061,16 @@ func (c *Client) getOrFetchBox(ctx context.Context, boxId string) (*boxlite.Box,
 	bx, err := c.runtime.Get(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("box %s not found: %w", boxId, err)
+	}
+	if bx.ID() == boxId || strings.HasPrefix(boxId, checkpoint.ProtectedAllocationPrefix) {
+		attempt, err := bx.RunnerAllocation(ctx)
+		if err != nil || attempt != "" {
+			bx.Close()
+			if err != nil {
+				return nil, err
+			}
+			return nil, errProtectedBox
+		}
 	}
 
 	c.mu.Lock()

@@ -1,5 +1,3 @@
-import { runnerHealthProbe } from './runner-health-probe.ts'
-
 /** Cloud boot policy, independent of runner/SDK package identity. */
 export const CLOUD_RUNNER_KERNEL = {
   url: 'https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/libkrunfw-kernel-dind-x86_64.bin',
@@ -20,7 +18,7 @@ export const kernelDeployment = (kernel = CLOUD_RUNNER_KERNEL, port = 3003) => {
   const setup = `KERNEL_PATH='/opt/boxlite/kernels/${kernel.sha256}/kernel.bin'
 KERNEL_ENV='/etc/boxlite/kernel.env'
 KERNEL_DROPIN='/etc/systemd/system/boxlite-runner.service.d/kernel.conf'
-${runnerHealthProbe}
+KERNEL_HEALTH='http://127.0.0.1:${port}/'
 
 lock_runner_kernel() {
   exec 9>/run/lock/boxlite-runner-kernel.lock || return 1
@@ -46,7 +44,7 @@ runner_kernel_healthy() {
   tr '\\0' '\\n' < "/proc/$main_pid/environ" | grep -qxF "BOXLITE_KERNEL_PATH=$KERNEL_PATH" || return 1
   listeners=$(ss -H -ltnp 'sport = :${port}') || return 1
   [[ "$listeners" == *"pid=$main_pid,"* ]] || return 1
-  response=$(runner_http_health ${port} --fail --silent --show-error --max-time 3 --write-out '\\n%{http_code}') || return 1
+  response=$(curl --fail --silent --show-error --max-time 3 --write-out '\\n%{http_code}' "$KERNEL_HEALTH") || return 1
   [ "\${response##*$'\\n'}" = 200 ] &&
     [ -n "$(printf '%s\\n' "$response" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')" ] &&
     printf '%s\\n' "$response" | grep -qE '"custom_kernel"[[:space:]]*:[[:space:]]*"supported"'

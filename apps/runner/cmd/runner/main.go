@@ -267,19 +267,15 @@ func run() int {
 	}
 
 	apiServer := api.NewApiServer(api.ApiServerConfig{
-		Logger:      logger,
-		ApiPort:     cfg.ApiPort,
-		ApiToken:    cfg.ApiToken,
-		TLSCertFile: cfg.TLSCertFile,
-		TLSKeyFile:  cfg.TLSKeyFile,
-		EnableTLS:   cfg.EnableTLS,
-		LogRequests: cfg.ApiLogRequests,
-		ApiVersion:  cfg.ApiVersion,
-		ProtectedBoot: api.ProtectedBootConfig{
-			RunnerID:   cfg.ProtectedProxyRunnerID,
-			DoHURL:     cfg.ProtectedProxyDoHURL,
-			DoHAddress: cfg.ProtectedProxyDoHAddress,
-		},
+		Logger:        logger,
+		ApiPort:       cfg.ApiPort,
+		ApiToken:      cfg.ApiToken,
+		TLSCertFile:   cfg.TLSCertFile,
+		TLSKeyFile:    cfg.TLSKeyFile,
+		EnableTLS:     cfg.EnableTLS,
+		LogRequests:   cfg.ApiLogRequests,
+		ApiVersion:    cfg.ApiVersion,
+		ProtectedBoot: api.NewProtectedBootConfig(cfg.BoxliteApiUrl, cfg.ApiToken),
 	})
 
 	apiServerErrChan := make(chan error)

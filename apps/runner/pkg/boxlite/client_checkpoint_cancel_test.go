@@ -139,7 +139,22 @@ func TestCheckpointCreateCancellationReleasesLeaseDuringVolumePreparation(t *tes
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("CHECKPOINT_PROBE_SIGNAL", signal)
-	client := &Client{homeDir: t.TempDir(), logger: slog.Default(), volumeMutexes: make(map[string]*sync.Mutex)}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/config" {
+			_, _ = io.WriteString(w, `{"capabilities":{}}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":{"message":"missing","code":"not_found"}}`)
+	}))
+	defer server.Close()
+	runtime, err := sdk.NewRest(sdk.BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{runtime: runtime, homeDir: t.TempDir(), logger: slog.Default(), volumeMutexes: make(map[string]*sync.Mutex)}
+	defer client.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)

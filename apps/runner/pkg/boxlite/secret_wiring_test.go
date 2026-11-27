@@ -27,9 +27,9 @@ func TestCreateAppliesSecrets(t *testing.T) {
 		t.Fatalf("parse client.go: %v", err)
 	}
 
-	create := findMethod(parsed, "Client", "Create")
+	create := findMethod(parsed, "Client", "createBox")
 	if create == nil {
-		t.Fatal("Client.Create not found in client.go")
+		t.Fatal("Client.createBox not found in client.go")
 	}
 
 	if findCall(create.Body, "boxlite", "WithSecret") == nil {

@@ -58,7 +58,6 @@ import {
 import { runnerApiUrl } from './runner-boot.ts'
 import type { RunnerAssignment, RunnerProvider, RunnerSlot, Runners } from './runners.ts'
 import { API_RUNNER_TOKEN_VARIABLE } from './runners.ts'
-import { protectedRunnerCloudEnvironment } from './runner-protected-proxy.ts'
 import type { Storage, StorageProvider } from './storage.ts'
 import type { DeployConfig } from '../src/config.ts'
 
@@ -113,7 +112,6 @@ export type StackInputs = {
   runnerBinary: import('./runners.ts').RunnerBinary
   /** The hosts to create, and the names the control plane registers them under. */
   runnerFleet: readonly RunnerSlot[]
-  protectedRunnerTokens?: Readonly<Record<string, string>>
   /** Each workload's own environment and addresses, split by the store's groups. */
   apiEnvironment: Record<string, $util.Input<string>>
   apiSecrets: Record<string, $util.Input<string>>
@@ -378,12 +376,10 @@ export const deployStack = ({
    * the fleet mints a new token instead of renumbering the existing ones and
    * invalidating every row already registered.
    */
-  const fleet: RunnerAssignment[] = inputs.runnerFleet.map((slot) => {
-    if (!slot.protectedProxy) return { slot, token: providers.mintRunnerToken(`RunnerToken-${slot.controlPlaneRunnerName}`) }
-    const token = inputs.protectedRunnerTokens?.[slot.resourceName]
-    if (!token) throw new Error('Protected Runner enrollment requires its pre-registered token')
-    return { slot, token: $util.secret(token) }
-  })
+  const fleet: RunnerAssignment[] = inputs.runnerFleet.map((slot) => ({
+    slot,
+    token: providers.mintRunnerToken(`RunnerToken-${slot.controlPlaneRunnerName}`),
+  }))
   const defaultRunnerToken = fleet[0]?.token
   if (defaultRunnerToken === undefined) {
     throw new Error('the fleet is empty; a stage runs at least one runner, which the API seeds its row from')
@@ -442,7 +438,6 @@ export const deployStack = ({
 
   const apiEnvironment = {
     ...inputs.apiEnvironment,
-    ...protectedRunnerCloudEnvironment(inputs.runnerFleet),
     // The first host's token, which is the one row the API seeds itself. Every
     // later host is registered explicitly — see `runner-registration.ts`.
     [API_RUNNER_TOKEN_VARIABLE]: defaultRunnerToken,

@@ -22,6 +22,9 @@ const (
 	ProtectedBootRead
 	ProtectedBootRetire
 	protectedBootCheck
+	ProtectedRemoveRetiredAllocation ProtectedBootOperation = 7
+	protectedAllocationRead          ProtectedBootOperation = 8
+	ProtectedStopAndRetire           ProtectedBootOperation = 9
 )
 
 // RunnerProtectedBoot invokes the local bootstrap ABI. Transport authority and
@@ -67,4 +70,15 @@ func (b *Box) HasRunnerProtection(ctx context.Context) (bool, error) {
 	var protected bool
 	err = json.Unmarshal(result, &protected)
 	return protected, err
+}
+
+// RunnerAllocation reads the immutable allocation attempt without opening the guest.
+func (b *Box) RunnerAllocation(ctx context.Context) (string, error) {
+	result, err := b.RunnerProtectedBoot(ctx, protectedAllocationRead, nil)
+	if err != nil {
+		return "", err
+	}
+	var attempt string
+	err = json.Unmarshal(result, &attempt)
+	return attempt, err
 }

@@ -1151,7 +1151,8 @@ void boxlite_box_free(CBoxHandle *handle);
 
 // Internal Runner ABI. Protected credential input is borrowed for this call.
 // Release the output JSON with boxlite_free_string. Operations are 0 (start),
-// 1 (receipt), 2 (retire) and 3 (check protection for legacy recovery).
+// 1 (receipt), 2 (retire), 3 (check protection), 7 (remove retired allocation),
+// 8 (exact allocation identity) and 9 (stop and retire owned allocation).
 enum BoxliteErrorCode boxlite_runner_protected_boot(CBoxHandle *handle,
                                                     uint8_t operation,
                                                     const char *input_json,
@@ -1770,6 +1771,11 @@ void boxlite_options_set_rootfs_path(CBoxliteOptions *opts, const char *path);
 void boxlite_options_set_checkpoint(CBoxliteOptions *opts, const char *checkpoint);
 
 void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
+
+// Internal Runner ABI. Persist the exact attempt with the configured Box.
+enum BoxliteErrorCode boxlite_options_set_runner_allocation(CBoxliteOptions *opts,
+                                                            const char *attempt_id,
+                                                            CBoxliteError *out_error);
 
 void boxlite_options_set_cpus(CBoxliteOptions *opts, double cpus);
 

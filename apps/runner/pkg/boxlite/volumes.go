@@ -72,7 +72,7 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 
 	for _, vol := range volumes {
 		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
-		baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeIdPrefixed)
+		baseMountPath := volumeRootPath(vol.VolumeId)
 
 		subpathStr := ""
 		if vol.Subpath != nil {
@@ -110,6 +110,10 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 	return volumeMounts, nil
 }
 
+func volumeRootPath(volumeID string) string {
+	return filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+volumeID)
+}
+
 func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {
 	if metadata == nil {
 		return nil
@@ -124,16 +128,38 @@ func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID strin
 	if err := json.Unmarshal([]byte(volumesJSON), &volumes); err != nil {
 		return nil
 	}
+	_, err := c.prepareBoxVolumeMounts(ctx, boxID, volumes, false)
+	return err
+}
+
+func (c *Client) prepareBoxVolumeMounts(ctx context.Context, boxID string, volumes []dto.VolumeDTO, protectedAllocation bool) ([]volumeMount, error) {
 	if len(volumes) == 0 {
-		return nil
+		return nil, nil
 	}
 
+	// Register the attempt's volume ownership before mounting so orphan cleanup
+	// can distinguish partial preparation from an unreferenced mount.
+	c.volumeCleanupMutex.Lock()
+	defer c.volumeCleanupMutex.Unlock()
+	if protectedAllocation {
+		references := make([]volumeMount, 0, len(volumes))
+		for _, volume := range volumes {
+			references = append(references, volumeMount{rootPath: volumeRootPath(volume.VolumeId)})
+		}
+		if err := c.recordBoxVolumeMounts(ctx, boxID, references); err != nil {
+			return nil, err
+		}
+		return c.getVolumeMounts(ctx, volumes)
+	}
 	volumeMounts, err := c.getVolumeMounts(ctx, volumes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return c.recordBoxVolumeMounts(ctx, boxID, volumeMounts)
+	if err := c.recordBoxVolumeMounts(ctx, boxID, volumeMounts); err != nil {
+		return nil, err
+	}
+	return volumeMounts, nil
 }
 
 func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, mountPath string) error {

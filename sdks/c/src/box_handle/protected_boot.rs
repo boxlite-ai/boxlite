@@ -1,9 +1,12 @@
 use super::*;
-use boxlite::litebox::protected_boot::{ProtectedBootKey, ProtectedBootRequest};
+use boxlite::litebox::protected_boot::{
+    ProtectedBootKey, ProtectedBootReceipt, ProtectedBootRequest,
+};
 
 /// Internal Runner ABI. Protected credential input is borrowed for this call.
 /// Release the output JSON with boxlite_free_string. Operations are 0 (start),
-/// 1 (receipt), 2 (retire) and 3 (check protection for legacy recovery).
+/// 1 (receipt), 2 (retire), 3 (check protection), 7 (remove retired allocation),
+/// 8 (exact allocation identity) and 9 (stop and retire owned allocation).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runner_protected_boot(
     handle: *mut CBoxHandle,
@@ -47,6 +50,23 @@ pub unsafe extern "C" fn boxlite_runner_protected_boot(
                         .tokio_rt
                         .block_on(handle.handle.has_protected_boot())?
                         .to_string()),
+                    7 => {
+                        let receipt = unsafe { parse::<ProtectedBootReceipt>(input_json) }?;
+                        handle
+                            .tokio_rt
+                            .block_on(handle.handle.remove_retired_allocation(&receipt))?;
+                        Ok("true".into())
+                    }
+                    8 => serde_json::to_string(&handle.handle.runner_allocation()).map_err(|_| {
+                        BoxliteError::Internal(
+                            "Failed to encode protected allocation identity".into(),
+                        )
+                    }),
+                    9 => encode(handle.tokio_rt.block_on(
+                        handle.handle.stop_and_retire_protected(unsafe {
+                            parse::<ProtectedBootKey>(input_json)
+                        }?),
+                    )?),
                     _ => Err(BoxliteError::InvalidArgument(
                         "Invalid protected boot operation".into(),
                     )),

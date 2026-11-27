@@ -33,9 +33,7 @@
 
 import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
 import { CLOUD_RUNNER_KERNEL, kernelDeployment } from './runner-kernel.ts'
-import { runnerHealthProbe } from './runner-health-probe.ts'
 import { renderRunnerEnvironment, RUNNER_ENV_BEGIN, RUNNER_ENV_END } from './runner-environment.ts'
-import { protectedRunnerServiceEnvironment, type RunnerProtectedProxy } from './runner-protected-proxy.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
@@ -176,8 +174,6 @@ export type UpgradeTarget = {
   registryProxyHost?: string | null
   /** JSON map of additional Runner process settings, owned by stage configuration. */
   runnerEnv?: string
-  /** Enrollment owns its service environment throughout host convergence. */
-  protectedProxy?: RunnerProtectedProxy
   /** Force an older binary over a newer one. A real rollback, asked for. */
   allowDowngrade?: boolean
 }
@@ -383,15 +379,15 @@ const preamble = (target: UpgradeTarget): string => `set -euo pipefail
 echo "${ON_HOST}"
 
 TARGET="${target.identity}"
+HEALTH="http://127.0.0.1:${target.port}/"
 ALLOW_DOWNGRADE="${target.allowDowngrade ? '1' : ''}"
-${runnerHealthProbe}
 
 # The binary parses no CLI arguments, so there is no --version to ask. Of the
 # places that do report one, this health route is the only one reachable here
 # without a token: /info is auth-gated and the healthcheck service only pushes
 # to the control plane. Empty output means the runner is not serving.
 probe_identity() {
-  runner_http_health ${target.port} -fsS --max-time 3 | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'
+  curl -fsS --max-time 3 "$HEALTH" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p'
 }
 
 `
@@ -552,10 +548,14 @@ exit 101
  * restart is the cost and it is not hidden: boxes on the host take it, which is
  * why nothing runs until the two checks above say the file actually disagrees.
  */
-type UnitEnvironmentInput = Pick<
-  UpgradeTarget,
-  'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv' | 'protectedProxy'
-> & {
+export const unitEnvironmentBlock = ({
+  apiUrl,
+  otlpUrl,
+  volumeBackend,
+  registryProxyHost,
+  runnerEnv,
+  dataDiskIdentity = null,
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv'> & {
   apiUrl: string
   /**
    * The fleet's data-disk identity, or null where the cloud's runners keep box
@@ -564,20 +564,10 @@ type UnitEnvironmentInput = Pick<
    * environment, so a host payload has nothing to select the row with.
    */
   dataDiskIdentity?: RunnerDataDiskIdentity | null
-}
-
-export const unitEnvironmentBlock = ({
-  apiUrl,
-  otlpUrl,
-  volumeBackend,
-  registryProxyHost,
-  runnerEnv,
-  protectedProxy,
-  dataDiskIdentity = null,
-}: UnitEnvironmentInput): string => {
+}): string => {
   assertUnitEnvironment({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })
   if (dataDiskIdentity) assertDataDiskIdentity(dataDiskIdentity)
-  const custom = renderRunnerEnvironment(runnerEnv, Object.keys(protectedRunnerServiceEnvironment(protectedProxy)))
+  const custom = renderRunnerEnvironment(runnerEnv)
   // An array, so an optional key is absent rather than empty: an AWS host's
   // boot script writes no backend, a caller that supplied no collector has no
   // endpoint to enforce, and a stage without a registry proxy has no host to
@@ -751,9 +741,20 @@ converge_unit_environment() {
  * instance's organization cannot be granted. What it converges, and why a host
  * cannot be told any other way, is above `unitEnvironmentBlock`.
  */
-export const renderUnitEnvironmentPolicyScripts = (input: UnitEnvironmentInput): UpgradePolicyScripts => {
+export const renderUnitEnvironmentPolicyScripts = ({
+  apiUrl,
+  otlpUrl,
+  volumeBackend,
+  registryProxyHost,
+  runnerEnv,
+  dataDiskIdentity = null,
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv'> & {
+  apiUrl: string
+  /** See `unitEnvironmentBlock`. The GCP policy names one; nothing else does. */
+  dataDiskIdentity?: RunnerDataDiskIdentity | null
+}): UpgradePolicyScripts => {
   const block = `set -euo pipefail
-${unitEnvironmentBlock(input)}`
+${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost, runnerEnv, dataDiskIdentity })}`
   return {
     validate: `${SHEBANG}${block}
 if unit_environment_settled; then exit 100; fi
@@ -797,7 +798,6 @@ ${guards('return 0')}${swapSequence(target, 'return 0')}}
         volumeBackend: target.volumeBackend,
         registryProxyHost: target.registryProxyHost,
         runnerEnv: target.runnerEnv,
-        protectedProxy: target.protectedProxy,
       })}
 converge_unit_environment
 `

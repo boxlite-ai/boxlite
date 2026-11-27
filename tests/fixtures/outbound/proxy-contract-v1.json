@@ -16,7 +16,7 @@
   "binding_cases": [
     {"id": "create-omitted-is-unbound", "operation": "create", "input": {"mode": "enabled"}, "expected": "unbound"},
     {"id": "create-null-is-unbound", "operation": "create", "input": {"mode": "enabled", "proxy": null}, "expected": "unbound"},
-    {"id": "eligible-create-binds-fresh-box", "operation": "create", "input": {"mode": "enabled", "proxy": "build-egress"}, "runner": "enrolled_https_v0", "expected": {"route": "build-egress", "claim_warm_box": false}},
+    {"id": "eligible-create-binds-fresh-box", "operation": "create", "input": {"mode": "enabled", "proxy": "build-egress"}, "runner": "https_v0_with_bootstrap", "expected": {"route": "build-egress", "claim_warm_box": false}},
     {"id": "unknown-registration", "operation": "create", "input": {"mode": "enabled", "proxy": "missing"}, "expected": {"http_status": 404, "dispatch": false}},
     {"id": "cross-organization-registration", "operation": "create", "input": {"mode": "enabled", "proxy": "other-organization"}, "expected": {"http_status": 404, "dispatch": false}},
     {"id": "reject-omission-on-bound-replacement", "operation": "replace", "current_proxy": "build-egress", "input": {"mode": "disabled"}, "expected": {"outcome": "incomplete_replacement", "mutation": false}},

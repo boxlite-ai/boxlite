@@ -9,6 +9,7 @@ use crate::net::{NetworkBackendConfig, OutboundApplicationState, OutboundRevisio
 use crate::runtime::options::NetworkSpec;
 use crate::util::{PidFileReader, PidRecord, process_start_time};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use std::time::Duration;
 
 impl BoxImpl {
     pub(crate) async fn has_protected_boot(&self) -> BoxliteResult<bool> {
@@ -27,6 +28,15 @@ impl BoxImpl {
         request: ProtectedBootRequest,
     ) -> BoxliteResult<ProtectedBootReceipt> {
         request.key.policy.policy.validate()?;
+        if self
+            .config
+            .options
+            .advanced
+            .runner_allocation()
+            .is_some_and(|allocation| allocation != &request.key.attempt_id)
+        {
+            return Err(conflict("Protected boot does not match the allocation"));
+        }
         self.with_operation(async {
             let manager = &self.runtime.box_manager;
             let mut record = manager.protected_boot(self.id())?.unwrap_or_default();
@@ -73,6 +83,10 @@ impl BoxImpl {
         .await
     }
 
+    pub(crate) fn runner_allocation(&self) -> Option<crate::net::OutboundRevision> {
+        self.config.options.advanced.runner_allocation().cloned()
+    }
+
     pub(crate) async fn protected_boot_receipt(
         &self,
         key: &ProtectedBootKey,
@@ -104,6 +118,26 @@ impl BoxImpl {
         &self,
         key: ProtectedBootKey,
     ) -> BoxliteResult<ProtectedBootReceipt> {
+        self.retire_protected_boot_inner(key, false).await
+    }
+
+    pub(crate) async fn stop_and_retire_protected(
+        &self,
+        key: ProtectedBootKey,
+    ) -> BoxliteResult<ProtectedBootReceipt> {
+        if self.config.options.advanced.runner_allocation() != Some(&key.attempt_id) {
+            return Err(conflict(
+                "Protected retirement does not match the allocation",
+            ));
+        }
+        self.retire_protected_boot_inner(key, true).await
+    }
+
+    async fn retire_protected_boot_inner(
+        &self,
+        key: ProtectedBootKey,
+        stop_owned: bool,
+    ) -> BoxliteResult<ProtectedBootReceipt> {
         key.policy.policy.validate()?;
         self.with_operation(async {
             let manager = &self.runtime.box_manager;
@@ -118,6 +152,34 @@ impl BoxImpl {
                 } else {
                     Err(conflict("Retired attempt identity differs"))
                 };
+            }
+            if stop_owned && let Some(attempt) = record.active.as_ref() {
+                if attempt.key != key {
+                    return Err(conflict("Protected stop does not match its attempt"));
+                }
+                let pid_file = self.layout.pid_file_path();
+                if self.state.read().status.is_active() {
+                    if !attempt.owner.is_some_and(owns_shim)
+                        && (attempt.owner.is_none() || has_shim(&pid_file))
+                    {
+                        return Err(conflict("Protected stop has no exact process owner"));
+                    }
+                    self.stop_inner().await?;
+                }
+                // An admitted owner proves membership in this Box's cgroup.
+                // The remaining tree can outlive the launcher after a crash.
+                if attempt.owner.is_some()
+                    && !has_shim(&pid_file)
+                    && !termination_confirmed(self.id(), attempt)
+                    && crate::jailer::reap_box(self.id())
+                {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                        while !termination_confirmed(self.id(), attempt) {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                        }
+                    })
+                    .await;
+                }
             }
             let state = self.state.read();
             if record.active.is_none()
@@ -150,6 +212,23 @@ impl BoxImpl {
             record.retired.push(receipt.clone());
             manager.save_protected_boot(self.id(), &record)?;
             Ok(receipt)
+        })
+        .await
+    }
+
+    pub(crate) async fn remove_retired_allocation(
+        &self,
+        receipt: &ProtectedBootReceipt,
+    ) -> BoxliteResult<()> {
+        if self.config.options.advanced.runner_allocation() != Some(&receipt.key.attempt_id) {
+            return Err(conflict("Protected removal does not match the allocation"));
+        }
+        self.with_operation(async {
+            if has_shim(&self.layout.pid_file_path()) {
+                return Err(conflict("Protected removal may still have a live shim"));
+            }
+            self.runtime
+                .remove_box_with_retirement(self.id(), false, Some(receipt))
         })
         .await
     }

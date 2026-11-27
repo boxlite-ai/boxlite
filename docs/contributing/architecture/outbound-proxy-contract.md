@@ -61,7 +61,7 @@ exports omit it.
 For example, `{"mode":"enabled","allow_net":["packages.example.com"],"proxy":"build-egress"}`
 selects `build-egress` for allowed traffic. Failure to use the proxy ends the attempt.
 
-The first release requires enrolled HTTPS Runner V0 with proxy bootstrap, staging, and
+The first release requires an HTTPS V0 Runner with proxy bootstrap, staging, and
 readback support for every binding. Bound create skips the warm pool. Ineligible placements
 fail before dispatch or credential delivery, including HTTP-only and V2 Runners.
 
@@ -246,38 +246,45 @@ Guest applications receive native network failures.
 
 ## Protected Runner bootstrap
 
-An operator enrolls a fresh, non-default mdeploy Runner slot with an admin-registered V0 UUID and HTTPS API URL. Set `STACK_RUNNER_PROTECTED_PROXY_SLOTS` to a JSON object keyed by the slot's resource name, such as `Runner-runner-2`. The registered URL must use the enrolled DNS name and the Runner service port.
+Register a service-managed V0 Runner using its ordinary HTTPS API URL, such as
+`https://runner-2.example.com:3003/`, and its unique Runner token. Configure the
+service with `API_VERSION=0`, `ENABLE_TLS=true`, `TLS_CERT_FILE`, and `TLS_KEY_FILE`.
+Cloud uses its normal trust store and verifies the registered hostname.
 
-Each entry contains `runnerId`, `url`, `caPem`, `caFile`, `certFile`, `keyFile`, `dohUrl`, and `dohAddress`. Provision the certificate, key, and CA files at those absolute host paths. The CA stays scoped to that Runner in Cloud, and both upgrade probes verify the DNS name and CA over loopback HTTPS.
-
-For `Runner-runner-2`, provide the pre-registered slot token through the deployment secret `STACK_RUNNER_PROTECTED_PROXY_TOKEN_RUNNER_RUNNER_2`. Cloud uses the same token saved by the admin registration, and the deployment renders it only for that Runner slot.
-
-`BOXLITE_RUNNER_ENV` cannot override the enrolled identity, TLS, or resolver settings during boot or managed updates.
-
-For example, an enrolled slot can listen at `https://runner-2.example.com:3003/` with a deployment CA and use a pinned DoH endpoint at `1.1.1.1:443`. Ordinary extra slots use automatic V2 registration and loopback HTTP readiness. Cloud checks the enrolled Runner's authenticated bootstrap capability before scoring and truncating candidates for a protected placement.
+Use the same registration and TLS configuration after upgrading the Runner.
+Verify health and authenticated bootstrap capability on the registered URL.
+Default and extra `mdeploy` slots use ordinary V2 configuration and registration.
 
 ```mermaid
 flowchart LR
     operator[Operator]
-    deployment[mdeploy slot enrollment]
     cloud[Cloud Runner adapter]
-    subgraph host[Enrolled Runner host]
-        readiness[Upgrade readiness probe]
-        runner[V0 Runner HTTPS listener]
-    end
-    operator -->|Register UUID, endpoint and CA| cloud
-    operator -->|Provide slot identity, token and TLS files| deployment
-    deployment -->|Render service environment| runner
-    deployment -->|Render CA and DNS name checks| readiness
-    readiness -->|Verified loopback HTTPS| runner
-    cloud -->|Enrolled TLS and capability before ranking| runner
+    runner[V0 Runner HTTPS listener]
+    operator -->|Register HTTPS URL and unique token| cloud
+    operator -->|Configure normal server TLS| runner
+    cloud -->|Verified HTTPS and Bearer token| runner
+    runner -->|Exact attempt authorization over HTTPS| cloud
 ```
 
-Cloud prepares the selected Box with ordinary startup skipped and no network interface configured. The enrolled Runner checks TLS, bearer authorization, and the assigned UUID before decoding the host-only request. Runtime stores the attempt and its epoch, then sends the route and effective policy to the shim on a versioned, single-use stdin record.
+Cloud reserves the exact attempt before sending its preparation and launch requests.
+The Runner checks TLS and Bearer authentication, then authorizes each request with
+Cloud under the Box's local admission lease. Cloud checks the assigned Runner,
+attempt and request fingerprint against the primary Box record.
+
+Preparation persists the allocation owner before creating the native Box with
+startup and networking disabled. Runtime rejects ordinary or implicit startup
+of that Box until the exact protected launch is authorized. Runtime sends the
+route and effective policy to the shim through a versioned, single-use stdin record.
 
 On Linux, the Runner needs a cgroup v2 that can contain the shim and its namespace descendants. Runtime checks membership before sending credentials and keeps the attempt unresolved until it can establish that the exact child and its process tree have exited. A delayed request for a retired attempt is refused even after the Runner reopens the Box.
 
-Protected bootstrap requires automatic removal to be disabled. Runtime retains protected attempt and retirement records during restart recovery, including when the Box directory is missing.
+Protected bootstrap requires automatic removal to be disabled. Only exact
+confirmed receipt settlement can publish `STARTED`. Ordinary Runner state
+observations cannot publish a protected launch, including after retirement.
+
+The original Runner writes the retired receipt outside the native Box row before
+removing the exact allocation and its volume records. It verifies absence before
+reporting closure. A restart can resume cleanup and return the original evidence.
 
 Runtime gives the private pipe five seconds to transmit the launch record. A timeout or cancellation closes stdin and signals the pending shim to terminate.
 
@@ -286,11 +293,11 @@ The protected receipt requires Guest readiness and exact installed policy, regis
 ```mermaid
 sequenceDiagram
     participant Cloud
-    participant Runner as Enrolled Runner
+    participant Runner as V0 Runner
     participant Runtime
     participant Shim as Shim and gvproxy
     Cloud->>Runner: Prepare Box with startup and network disabled
-    Cloud->>Runner: Send exact attempt over enrolled HTTPS
+    Cloud->>Runner: Send exact attempt over registered HTTPS
     Runner->>Runtime: Admit attempt under Box lock
     Runtime->>Runtime: Store attempt and epoch
     opt Preparation succeeds
@@ -313,7 +320,8 @@ sequenceDiagram
         Runner->>Runtime: Serialize retirement with startup
         alt No child was created or exact termination is proved
             Runtime-->>Runner: Persist and return retired receipt
-            Runner-->>Cloud: Authenticated retired receipt
+            Runner->>Runner: Journal receipt and verify allocation cleanup
+            Runner-->>Cloud: Authenticated retired and closed receipt
         else Child termination is unconfirmed
             Runtime-->>Runner: Leave attempt unresolved
         end
@@ -324,9 +332,23 @@ The Registry integration pins the exact registration revision to the Box, assign
 
 Once known, the epoch also has to match readback or retirement evidence. An exact retirement receipt can omit the epoch when Runtime retired the attempt before allocation. Any uncertain result keeps the pending reference in place.
 
-On a disposable Linux KVM host, add loopback aliases `11.23.0.1` through `11.23.0.5` as `/32` addresses. Set `BOXLITE_TEST_PROTECTED_BOOT_TLS` to the directory containing `host.pem` and `host.key`. Trust the certificate issuer on the host and include `resolver.test` and `protected.test` in the certificate.
+On a disposable Linux KVM host, add loopback aliases `11.23.0.1` through `11.23.0.5` as `/32` addresses. Set `BOXLITE_TEST_PROTECTED_BOOT_TLS` to the directory containing `host.pem` and `host.key`. Trust the certificate issuer on the host and include `cloudflare-dns.com`, `protected.test`, and the IP SAN `127.0.0.1` in the fixture certificate.
 
-Run `make test:integration:runner FILTER=TestIntegrationProtectedBootTCPPaths`. The test runs `curl --noproxy '*'` in the Guest and checks the CONNECT requests and application traffic received by the fixtures.
+Run `make test:integration:runner FILTER=TestIntegrationProtectedBootTCPPaths`. The fixture proxy forwards the pinned DoH CONNECT to the local fixture resolver.
+
+The test runs `curl --noproxy '*'` in the Guest and verifies CONNECT requests and application traffic.
+It terminates the fixture shim and reopens the Runner to retire the allocation.
+A fresh Runner process replays the same startup epoch after cleanup.
+
+With a loopback PostgreSQL test database and the native Runner test tools,
+set `BOXLITE_TEST_REAL_RUNNER=1 NX_SKIP_NX_CACHE=true` for `outbound-policy.store.integration.spec.ts`.
+The HTTPS controller test then follows the adapter through Runner preparation and
+exact cleanup when the Box's desired state changes before start.
+
+On a disposable Linux/KVM host, `BOXLITE_TEST_PREVIOUS_RUNNER_ROOT` selects
+the separately built previous Runner checkout with the same test listener.
+The fixture reuses its registered endpoint and data directory, then starts and retires
+a proxy-bound Guest through the upgraded Runner.
 
 ## Acceptance and ownership
 
@@ -340,7 +362,7 @@ missing.
 | 01 Contract | Public fields, support matrix, visible errors, and fixture scenarios. |
 | 02 Connector | Controlled tunneling, authentication, address checks, timeouts, cancellation, socket cleanup, and zero direct fallback. |
 | 03 DNS and UDP | Both gateway listeners, host business resolution, bootstrap exceptions, and UDP cutover during bind and unbind. |
-| 04 Runtime and Runner | Host-only credential authorization and delivery, enrolled Runner identity, and a common route for ordinary, inspected, and MITM TCP. |
+| 04 Runtime and Runner | Ordinary V0 HTTPS, exact startup and cleanup evidence, host-only credential delivery, and a common route for ordinary, inspected, and MITM TCP. |
 | 05 Registry | Organization authorization, authenticated encryption and key retention, redaction, and reference protection in deletion races. |
 | 06 Runtime update | Complete snapshots and route evidence, stale writes, rotation, loss of acknowledgement, exact-epoch recovery, and deletion or legacy control safety. |
 | 07 SDK and CLI | OpenAPI parity, actual requests, and write-only credential handling. |

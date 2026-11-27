@@ -125,6 +125,14 @@ impl LiteBox {
         self.protected_backend()?.bootstrap_protected(request).await
     }
 
+    /// Read the immutable local Runner allocation identity without starting a Guest.
+    #[doc(hidden)]
+    pub fn runner_allocation(&self) -> Option<crate::net::OutboundRevision> {
+        self.protected_backend()
+            .ok()
+            .and_then(|backend| backend.runner_allocation())
+    }
+
     /// Observe exact durable and live bootstrap evidence without starting a Guest.
     #[doc(hidden)]
     pub async fn protected_boot_receipt(
@@ -141,6 +149,28 @@ impl LiteBox {
         key: protected_boot::ProtectedBootKey,
     ) -> BoxliteResult<protected_boot::ProtectedBootReceipt> {
         self.protected_backend()?.retire_protected_boot(key).await
+    }
+
+    /// Stop and retire only the exact locally owned protected allocation.
+    #[doc(hidden)]
+    pub async fn stop_and_retire_protected(
+        &self,
+        key: protected_boot::ProtectedBootKey,
+    ) -> BoxliteResult<protected_boot::ProtectedBootReceipt> {
+        self.protected_backend()?
+            .stop_and_retire_protected(key)
+            .await
+    }
+
+    /// Remove the native allocation after the Runner journals this receipt.
+    #[doc(hidden)]
+    pub async fn remove_retired_allocation(
+        &self,
+        receipt: &protected_boot::ProtectedBootReceipt,
+    ) -> BoxliteResult<()> {
+        self.protected_backend()?
+            .remove_retired_allocation(receipt)
+            .await
     }
 
     /// Check whether legacy destructive entry points must defer to the coordinator.
