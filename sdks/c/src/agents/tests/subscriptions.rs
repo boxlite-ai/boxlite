@@ -593,3 +593,36 @@ fn single_drainer_serializes_open_events_and_terminal() {
         crate::boxlite_runtime_free(runtime);
     }
 }
+
+#[test]
+fn go_shutdown_drains_terminal_without_dispatching_stdout() {
+    extern "C" fn stdout(_: *const u8, _: usize, data: *mut c_void) {
+        unsafe { *data.cast::<bool>() = true };
+    }
+    unsafe {
+        let (rt, agent, queue) = fixture();
+        let mut seen = EventsSeen::default();
+        assert_eq!(
+            open(agent, Some("pending"), &mut seen),
+            BoxliteErrorCode::Ok
+        );
+        drain_until(rt, &mut seen, |s| s.opened);
+        let mut wrote = false;
+        queue.inner.lock().unwrap().push_back(RuntimeEvent::Stdout {
+            cb: stdout,
+            user_data: (&raw mut wrote) as usize,
+            data: vec![1],
+        });
+        boxlite_agent_events_free(seen.handle);
+        for _ in 0..100 {
+            crate::runtime::boxlite_go_drain_subscription(rt, 50);
+            if seen.terminal == 1 {
+                break;
+            }
+        }
+        assert_eq!(seen.terminal, 1);
+        assert!(!wrote, "shutdown dispatched queued stdout");
+        boxlite_agent_free(agent);
+        crate::boxlite_runtime_free(rt);
+    }
+}

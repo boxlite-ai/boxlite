@@ -197,10 +197,3 @@ type AgentTurn struct{ native *agentTurnHandle }
 
 // Agents obtains the namespace without starting the Box.
 func (b *Box) Agents() *Agents { return &Agents{box: b} }
-
-func (a *Agent) Events(context.Context, AgentEventsOptions) (AgentEventStream, error) {
-	return nil, &Error{Code: ErrUnsupported, Message: "agent.events is not implemented"}
-}
-func (t *AgentTurn) Events(context.Context, AgentEventsOptions) (AgentEventStream, error) {
-	return nil, &Error{Code: ErrUnsupported, Message: "turn.events is not implemented"}
-}

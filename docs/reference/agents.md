@@ -253,7 +253,7 @@ snapshots of those results contain `data: null`, including after an answer.
 
 Go calls and getters use the C SDK and these converters. One runtime drainer
 dispatches asynchronous completions; getters copy their JSON synchronously.
-Both event methods return `Unsupported`; subscriptions are a separate delivery step.
+Both event methods return a stream after the native subscription connects.
 
 Agent namespaces are acquired lazily. Closing a Box releases its local Box handle;
 an acquired namespace, agent or turn remains usable until `Runtime.Close`.
@@ -264,6 +264,41 @@ local handles as a fallback, and `Runtime.Close` deterministically releases them
 Cancellation stops the Go wait, not submitted agent work. Late native handles
 are released, including results already buffered when cancellation wins.
 `Runtime.Close` wakes pending calls with `ErrRuntimeClosed` and rejects new calls.
+
+### Go event streams
+
+Open events before sending work: `agent.Events(ctx, AgentEventsOptions{})` waits
+for native `on_open`. Opening errors return a nil stream. The opening context
+also controls the subscription after connection.
+
+`Next(ctx)` permits one reader; concurrent reads return `ErrInvalidState`.
+Canceling that read returns its context error without consuming an event or
+canceling the subscription. A stream retains at most 64 events and 4 MiB of
+copied JSON. Oversized records are rejected before copying. Count or byte overflow
+cancels the subscription with `ErrResourceExhausted`, preserving its accepted prefix.
+Callbacks never wait for a reader, so a slow stream cannot block other calls.
+
+An invalid event record is consumed once. `Next` returns a nil event and
+an `*AgentEventDecodeError` identifiable with `errors.As`. Missing or mistyped
+fields are named in the error without including the payload. All five outer
+fields are required. Cursor and turn ID accept null, unfamiliar string kinds
+are accepted, and `data` preserves any JSON value, including null. Call
+`Next` again to read the following event, or close the stream.
+
+A native end returns buffered events followed by sticky `io.EOF` or the native
+error. Canceling the subscription context preserves buffered events, followed by
+its context error. The first recorded error wins; completed native EOF is final.
+`Close` discards unread events, wakes readers and requests native cancellation
+without waiting. It preserves an earlier error and otherwise produces `io.EOF`.
+Closing a stream does not interrupt agent work.
+
+`Runtime.Close` discards buffers and makes reads return `ErrRuntimeClosed`, including when
+the read context is also canceled at the read decision.
+It cancels connected subscriptions before joining the ordinary drainer, then
+dispatches only subscription callbacks until their terminals arrive. Other queued callbacks are discarded during teardown. Pending connects do not hold shutdown
+open; their callback state is released after native runtime destruction.
+Garbage collection requests stream closure as a fallback; deterministic cleanup
+uses stream or runtime `Close`.
 
 ### Example: handle operation errors
 

@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -473,5 +474,41 @@ func TestAgentFutureStatusesAndFields(t *testing.T) {
 	receipt, err := parseAgentReceipt(agentField(t, agentFixture(t, "receipt"), "status", json.RawMessage(`"future"`)))
 	if err != nil || receipt.Status != AgentSteeringUnknown {
 		t.Fatalf("future steering status: %+v, %v", receipt, err)
+	}
+}
+
+func TestAgentEventRequiredFields(t *testing.T) {
+	for _, field := range []string{"cursor", "turn_id", "agent_id", "kind", "data"} {
+		t.Run(field, func(t *testing.T) {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(agentFixture(t, "event"), &fields); err != nil {
+				t.Fatal(err)
+			}
+			delete(fields, field)
+			wire, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decode *AgentEventDecodeError
+			if event, err := parseAgentEvent(wire); !errors.As(err, &decode) || event != nil || !strings.Contains(err.Error(), "missing required field "+field) {
+				t.Fatalf("accepted event missing %s", field)
+			}
+		})
+	}
+}
+
+func TestAgentEventMistypedMetadata(t *testing.T) {
+	for _, field := range []string{"kind", "agent_id", "cursor", "turn_id"} {
+		for _, value := range []string{`{"sensitive-payload":true}`, "null"} {
+			if value == "null" && (field == "turn_id" || field == "cursor") {
+				continue
+			}
+			wire := agentField(t, agentFixture(t, "event_null"), field, json.RawMessage(value))
+			var decode *AgentEventDecodeError
+			event, err := parseAgentEvent(wire)
+			if event != nil || !errors.As(err, &decode) || !strings.Contains(err.Error(), field+" must be a string") || strings.Contains(err.Error(), "sensitive-payload") {
+				t.Fatalf("unexpected error for %s: %v", field, err)
+			}
+		}
 	}
 }

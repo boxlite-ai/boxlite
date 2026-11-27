@@ -1,9 +1,9 @@
-//go:build boxlite_dev && boxlite_coverage
+//go:build boxlite_dev && (boxlite_coverage || boxlite_external_archive)
 
 package boxlite
 
-// The coverage collector supplies the instrumented library and its matching
-// LLVM profile runtime through CGO_LDFLAGS instead of the fixed dev archive.
+// External builds supply the archive through CGO_LDFLAGS. Coverage builds
+// also supply the matching LLVM profile runtime.
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../c/include

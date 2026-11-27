@@ -400,6 +400,7 @@ impl<T> Drop for OwnedFfiPtr<T> {
 
 pub enum RuntimeEvent {
     AgentCompletion(Box<dyn FnOnce() + Send>),
+    AgentSubscription(Box<dyn FnOnce() + Send>),
     AgentCreate {
         callback: unsafe extern "C" fn(
             *mut crate::agents::CAgent,

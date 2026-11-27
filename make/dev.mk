@@ -49,12 +49,19 @@ dev\:node: $(if $(SETUP_DONE),,runtime\:debug)
 	@cd examples/node && npm install --silent
 	@echo "✅ Node.js SDK built and linked to examples"
 
+GO_DEBUG_DIR = $(abspath $(or $(CARGO_TARGET_DIR),$(PROJECT_ROOT)/target))/debug
+GO_DEV_TAGS = boxlite_dev
+ifneq ($(strip $(CARGO_TARGET_DIR)),)
+GO_DEV_TAGS = boxlite_dev,boxlite_external_archive
+GO_DEV_ENV = CGO_LDFLAGS='$(CGO_LDFLAGS) "$(GO_DEBUG_DIR)/libboxlite.a"'
+endif
+
 # Build Go SDK locally (debug mode, static linking)
 dev\:go: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🔨 Building Go SDK (debug)..."
 	@cargo build -p boxlite-c $(GO_CARGO_FEATURES)
-	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/debug/libboxlite.a
-	@cd sdks/go && go build -tags boxlite_dev ./...
+	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh "$(GO_DEBUG_DIR)/libboxlite.a"
+	@cd sdks/go && $(GO_DEV_ENV) go build -tags $(GO_DEV_TAGS) ./...
 	@echo "✅ Go SDK built. You can now run: cd sdks/go && go test -tags boxlite_dev -v ./..."
 
 # Native REST acceptance clients. SETUP_DONE=1 with BOXLITE_DEPS_STUB=1
@@ -62,7 +69,7 @@ dev\:go: $(if $(SETUP_DONE),,runtime\:debug)
 build\:e2e\:drivers: dev\:go
 	@mkdir -p target/e2e
 	$(CC) -std=c11 -Wall -Wextra -Werror -Isdks/c/include apps/e2e/sdks/c/e2e_domains.c -Ltarget/debug -lboxlite -Wl,-rpath,$(PROJECT_ROOT)/target/debug -o target/e2e/domain-c
-	@cd sdks/go && go build -tags boxlite_dev -o ../../target/e2e/domain-go ../../apps/e2e/sdks/go/e2e_domains.go
+	@cd sdks/go && $(GO_DEV_ENV) go build -tags $(GO_DEV_TAGS) -o ../../target/e2e/domain-go ../../apps/e2e/sdks/go/e2e_domains.go
 	@cargo build --locked -p boxlite-e2e-rust --bin domain-rust
 
 # The workflow checks out the selected release separately. Driver sources stay

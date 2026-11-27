@@ -162,20 +162,55 @@ func parseAgentRequests(data []byte) ([]AgentRequest, error) {
 	return agentRequests(records)
 }
 
+// AgentEventDecodeError reports an invalid outer event record. Next consumes
+// the record; callers may continue reading from the same subscription.
+type AgentEventDecodeError struct {
+	cause Error
+}
+
+func (e *AgentEventDecodeError) Error() string { return e.cause.Error() }
+func (e *AgentEventDecodeError) Unwrap() error { return &e.cause }
+
+func eventDecodeError(reason string) error {
+	return &AgentEventDecodeError{cause: Error{Code: ErrInternal, Message: "agent event: " + reason}}
+}
+
 func parseAgentEvent(data []byte) (*AgentEvent, error) {
-	var record struct {
-		Cursor  string          `json:"cursor"`
-		AgentID string          `json:"agent_id"`
-		TurnID  string          `json:"turn_id"`
-		Kind    string          `json:"kind"`
-		Data    json.RawMessage `json:"data"`
+	var fields map[string]json.RawMessage
+	if !utf8.Valid(data) || json.Unmarshal(data, &fields) != nil || fields == nil {
+		return nil, eventDecodeError("expected a valid UTF-8 JSON object")
 	}
-	if err := decodeAgentRecord(data, &record); err != nil {
-		return nil, err
+	event := &AgentEvent{}
+	for _, field := range []struct {
+		name     string
+		dest     *string
+		nullable bool
+	}{
+		{"cursor", &event.Cursor, true},
+		{"agent_id", &event.AgentID, false},
+		{"turn_id", &event.TurnID, true},
+		{"kind", &event.Kind, false},
+	} {
+		raw, ok := fields[field.name]
+		if !ok {
+			return nil, eventDecodeError("missing required field " + field.name)
+		}
+		if field.nullable && bytes.Equal(raw, []byte("null")) {
+			continue
+		}
+		if raw[0] != '"' || json.Unmarshal(raw, field.dest) != nil {
+			reason := " must be a string"
+			if field.nullable {
+				reason += " or null"
+			}
+			return nil, eventDecodeError(field.name + reason)
+		}
 	}
-	return &AgentEvent{
-		Cursor: record.Cursor, AgentID: record.AgentID, TurnID: record.TurnID, Kind: record.Kind, Data: record.Data,
-	}, nil
+	event.Data = fields["data"]
+	if event.Data == nil {
+		return nil, eventDecodeError("missing required field data")
+	}
+	return event, nil
 }
 
 func agentTurnStatus(value string) AgentTurnStatus {
