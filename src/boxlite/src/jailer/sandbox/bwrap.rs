@@ -3,9 +3,10 @@
 //! Implements the [`Sandbox`] trait using bubblewrap (bwrap) for
 //! namespace isolation, bind mounts, and environment sanitization.
 
-use super::{Sandbox, SandboxContext};
+use super::{PathAccess, Sandbox, SandboxContext};
 use crate::jailer::{bwrap, cgroup};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use std::path::Path;
 use std::process::Command;
 
 /// Linux sandbox using bubblewrap for namespace isolation.
@@ -65,8 +66,7 @@ impl Sandbox for BwrapSandbox {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        let shim_plan =
-            crate::jailer::shim_cache::plan_bwrap_shim_mounts(std::path::Path::new(&binary));
+        let shim_plan = crate::jailer::shim_cache::plan_bwrap_shim_mounts(Path::new(&binary));
 
         let mut bwrap_cmd = bwrap::BwrapCommand::new();
 
@@ -86,12 +86,14 @@ impl Sandbox for BwrapSandbox {
         // =====================================================================
         // System directories (read-only)
         // =====================================================================
+        let extra_destinations: Vec<_> = ctx
+            .paths
+            .iter()
+            .map(|pa| pa.path.as_path())
+            .chain(shim_plan.ro_binds.iter().map(|(_, dest)| dest.as_path()))
+            .collect();
         bwrap_cmd
-            .ro_bind_if_exists("/usr", "/usr")
-            .ro_bind_if_exists("/lib", "/lib")
-            .ro_bind_if_exists("/lib64", "/lib64")
-            .ro_bind_if_exists("/bin", "/bin")
-            .ro_bind_if_exists("/sbin", "/sbin")
+            .with_system_dirs(&extra_destinations)
             // DNS resolver config: gvproxy runs in this shim. It forwards the
             // guest's DNS queries to the host resolver, and it re-resolves
             // every `allow_net` hostname at connect time to decide where to
@@ -117,13 +119,14 @@ impl Sandbox for BwrapSandbox {
         // =====================================================================
         // Bind all pre-computed paths (system dirs + user volumes)
         // =====================================================================
-        for pa in ctx.writable_paths() {
-            bwrap_cmd.bind(&pa.path, &pa.path);
-            tracing::debug!(path = %pa.path.display(), "bwrap: bind (rw)");
-        }
-        for pa in ctx.readonly_paths() {
-            bwrap_cmd.ro_bind(&pa.path, &pa.path);
-            tracing::debug!(path = %pa.path.display(), "bwrap: ro-bind");
+        for pa in bind_mounts(ctx) {
+            if pa.writable {
+                bwrap_cmd.bind(&pa.path, &pa.path);
+                tracing::debug!(path = %pa.path.display(), "bwrap: bind (rw)");
+            } else {
+                bwrap_cmd.ro_bind(&pa.path, &pa.path);
+                tracing::debug!(path = %pa.path.display(), "bwrap: ro-bind");
+            }
         }
         for (src, dest) in &shim_plan.ro_binds {
             bwrap_cmd.ro_bind(src, dest);
@@ -181,6 +184,60 @@ impl Sandbox for BwrapSandbox {
     }
 }
 
+fn paths_overlap(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+/// Collapse same-mode mounts only when the child's nearest explicit ancestor
+/// supplies the same view. Emit parents before permission overrides.
+fn bind_mounts<'a>(ctx: &'a SandboxContext<'_>) -> Vec<&'a PathAccess> {
+    let paths: Vec<_> = ctx.writable_paths().chain(ctx.readonly_paths()).collect();
+    let resolved: Vec<_> = paths.iter().map(|pa| pa.path.canonicalize().ok()).collect();
+    let plain = |i: usize| resolved[i].as_deref() == Some(paths[i].path.as_path());
+
+    // Keep alias-dependent mounts (such as the short socket path) in their
+    // existing order. A host symlink can resolve differently in the sandbox.
+    let mut plain_indices: Vec<_> = (0..paths.len())
+        .filter(|&i| {
+            plain(i)
+                && !(0..paths.len()).any(|j| {
+                    !plain(j)
+                        && (paths_overlap(&paths[i].path, &paths[j].path)
+                            || resolved[j]
+                                .as_deref()
+                                .is_some_and(|target| paths_overlap(&paths[i].path, target)))
+                })
+        })
+        .collect();
+    let opaque_slots: Vec<_> = (0..paths.len())
+        .map(|i| !plain_indices.contains(&i))
+        .collect();
+    plain_indices.sort_by_key(|&i| (paths[i].path.components().count(), &paths[i].path));
+
+    let mut kept: Vec<&PathAccess> = Vec::new();
+    for i in plain_indices {
+        let pa = paths[i];
+        if kept.last().is_some_and(|last| last.path == pa.path) {
+            // Exact ties keep the last rule: read-only wins over writable.
+            kept.pop();
+        }
+        if kept
+            .iter()
+            .rfind(|parent| pa.path.starts_with(&parent.path))
+            .is_none_or(|parent| parent.writable != pa.writable)
+        {
+            kept.push(pa);
+        }
+    }
+
+    let mut kept = kept.into_iter();
+    opaque_slots
+        .into_iter()
+        .zip(paths)
+        .filter_map(|(opaque, pa)| if opaque { Some(pa) } else { kept.next() })
+        .collect()
+}
+
 /// Forward `KRUN_USE_THP=1` into the sanitized sandbox environment only when
 /// explicitly enabled on the host, avoiding unvalidated values inside bwrap.
 fn apply_thp_env(bwrap_cmd: &mut bwrap::BwrapCommand, krun_use_thp: Option<&std::ffi::OsStr>) {
@@ -193,6 +250,98 @@ fn apply_thp_env(bwrap_cmd: &mut bwrap::BwrapCommand, krun_use_thp: Option<&std:
 mod tests {
     use super::*;
     use crate::runtime::advanced_options::ResourceLimits;
+
+    fn mount_plan(root: &Path, paths: &[(&str, bool)]) -> Vec<(std::path::PathBuf, bool)> {
+        let limits = ResourceLimits::default();
+        let ctx = SandboxContext {
+            id: "test-mounts",
+            paths: paths
+                .iter()
+                .map(|(name, writable)| PathAccess {
+                    path: root.join(name),
+                    writable: *writable,
+                })
+                .collect(),
+            unix_sockets: Default::default(),
+            resource_limits: &limits,
+            network_enabled: false,
+            sandbox_profile: None,
+            shim_cache_dir: None,
+            detached: false,
+        };
+        bind_mounts(&ctx)
+            .into_iter()
+            .map(|pa| (pa.path.strip_prefix(root).unwrap().to_owned(), pa.writable))
+            .collect()
+    }
+
+    #[test]
+    fn bind_mounts_collapse_descendants_but_preserve_permission_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for name in [
+            "bases/writable/protected/redundant",
+            "bases/writable/redundant",
+            "bases-sibling",
+        ] {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+        }
+        std::fs::write(root.join("bases/image.ext4"), []).unwrap();
+        let mounts = mount_plan(
+            &root,
+            &[
+                ("bases/writable/protected", false),
+                ("bases/writable/protected", true),
+                ("bases/writable/redundant", true),
+                ("bases/writable", true),
+                ("bases/image.ext4", false),
+                ("bases", false),
+                ("bases/writable/protected/redundant", false),
+                ("bases-sibling", false),
+            ],
+        );
+        assert_eq!(
+            mounts,
+            [
+                ("bases".into(), false),
+                ("bases-sibling".into(), false),
+                ("bases/writable".into(), true),
+                ("bases/writable/protected".into(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn bind_mounts_preserve_mounts_overlapping_symlink_names_and_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("aliases")).unwrap();
+        std::fs::create_dir_all(root.join("real/target/nested")).unwrap();
+        std::fs::create_dir_all(root.join("unrelated/nested")).unwrap();
+        std::os::unix::fs::symlink("../real/target", root.join("aliases/link")).unwrap();
+
+        let mounts = mount_plan(
+            &root,
+            &[
+                ("aliases/link", false),
+                ("real/target/nested", true),
+                ("unrelated/nested", false),
+                ("aliases", false),
+                ("real", true),
+                ("unrelated", false),
+            ],
+        );
+        assert_eq!(
+            mounts,
+            [
+                ("real/target/nested".into(), true),
+                ("real".into(), true),
+                ("aliases/link".into(), false),
+                ("unrelated".into(), false),
+                ("aliases".into(), false),
+            ]
+        );
+    }
 
     /// The shim is statically linked, so libkrun's `dlopen` of `libkrunfw.so.5`
     /// can only be satisfied via `LD_LIBRARY_PATH` inside the `--clearenv`
@@ -282,7 +431,6 @@ mod tests {
 
     #[test]
     fn apply_mounts_symlinked_runtime_into_synthetic_shim_dir() {
-        use crate::jailer::sandbox::PathAccess;
         use crate::jailer::shim_cache::BWRAP_SANDBOX_SHIM_DIR;
         use std::os::unix::fs::{PermissionsExt, symlink};
 

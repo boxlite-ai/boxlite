@@ -1,20 +1,8 @@
-//! OCI container creation and startup
-//!
-//! Provides setup, validation, and execution functions for starting containers.
-//! Separated from container.rs to group by lifecycle phase (Prepare → Execute).
+//! Prepare container inputs and trusted bind-mounted files.
 
-use super::capabilities::CapabilitySet;
-use super::spec;
-use super::zygote;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use libcontainer::container::Container as LibContainer;
 use std::fs;
-use std::os::fd::AsRawFd;
-use std::path::{Path, PathBuf};
-
-// ====================
-// Setup Functions (Prepare Phase)
-// ====================
+use std::path::Path;
 
 /// Validate container creation inputs
 pub(crate) fn validate_container_inputs(
@@ -35,7 +23,7 @@ pub(crate) fn validate_container_inputs(
     }
 
     if workdir.as_os_str().is_empty() {
-        tracing::info!("Container working directory is empty, defaulting to '/'");
+        tracing::debug!("Container working directory is empty, defaulting to '/'");
     }
 
     Ok(())
@@ -93,261 +81,16 @@ pub(crate) fn create_container_etc_files(
     Ok(())
 }
 
-/// An OCI bundle on disk, plus the part of its spec callers keep asking for.
-pub(crate) struct OciBundle {
-    /// Directory holding `config.json` and the rootfs reference.
-    pub path: PathBuf,
-    /// Destinations of every mount the saved spec declares.
-    ///
-    /// Handed back rather than left to be re-read: `config.json` is written
-    /// once, here, and never rewritten, so parsing it again later costs a file
-    /// read and a deserialize for an answer that cannot have changed.
-    pub mount_destinations: Vec<PathBuf>,
-}
-
-/// Create OCI bundle (config.json + rootfs reference)
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn create_oci_bundle(
-    container_id: &str,
-    rootfs: &Path,
-    entrypoint: &[String],
-    env: &[String],
-    workdir: &Path,
-    uid: u32,
-    gid: u32,
-    capabilities: &CapabilitySet,
-    readonly_paths: &[String],
-    mount_override: &spec::MountOverride,
-    bundle_root: &Path,
-    user_mounts: &[spec::UserMount],
-    tty: bool,
-    devices: &spec::ContainerDevices,
-    cgroup: spec::ContainerCgroup,
-) -> BoxliteResult<OciBundle> {
-    let bundle_path = bundle_root.join(container_id);
-
-    fs::create_dir_all(&bundle_path).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "Failed to create OCI bundle directory {}: {}",
-            bundle_path.display(),
-            e
-        ))
-    })?;
-
-    // Create /etc/hosts, /etc/hostname and /etc/resolv.conf files
-    // These will be bind-mounted into the container to provide hostname and DNS resolution
-    create_container_etc_files(&bundle_path, container_id)?;
-
-    let spec = spec::create_oci_spec(
-        container_id,
-        rootfs
-            .to_str()
-            .ok_or_else(|| BoxliteError::Internal("Invalid rootfs path".to_string()))?,
-        entrypoint,
-        env,
-        workdir
-            .to_str()
-            .ok_or_else(|| BoxliteError::Internal("Invalid workdir path".to_string()))?,
-        uid,
-        gid,
-        capabilities,
-        readonly_paths,
-        mount_override,
-        &bundle_path,
-        user_mounts,
-        tty,
-        devices,
-        cgroup,
-    )?;
-    let config_path = bundle_path.join("config.json");
-
-    spec.save(&config_path).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "Failed to save OCI spec to {}: {}",
-            config_path.display(),
-            e
-        ))
-    })?;
-
-    tracing::info!(
-        container_id,
-        bundle_path = %bundle_path.display(),
-        user_mounts_count = user_mounts.len(),
-        device_count = devices.len(),
-        "Created OCI bundle"
-    );
-
-    Ok(OciBundle {
-        path: bundle_path,
-        mount_destinations: spec::mount_destinations(&spec),
-    })
-}
-
-// ====================
-// Execution Functions (Execute Phase)
-// ====================
-
-/// How the container's init process gets its stdio.
-pub(crate) enum InitIoSetup {
-    /// Pipes controlled by boxlite-guest, which keep interactive entrypoints
-    /// (like `/bin/sh`) alive by holding stdin open.
-    Pipes(super::stdio::InitStdioFds),
-
-    /// libcontainer allocates a PTY for init (OCI `process.terminal`, docker
-    /// `run -t`) and hands the master back over this console socket. Init gets
-    /// the replica as all three of its fds — so no stdio fds are passed here.
-    Console(String),
-}
-
-/// Create container with custom stdio, via the zygote.
-///
-/// The build — libcontainer's clone3 dance, main → intermediate → init — runs
-/// in the zygote's single-threaded context, like every tenant build: clone3
-/// from the multi-threaded guest can inherit a locked musl `__malloc_lock`
-/// and hang forever, and libcontainer's own wait for its intermediate would
-/// race the guest reaper's `waitpid(-1)` sweep. In the zygote neither exists.
-///
-/// Blocking IPC, deliberately not offloaded: the callers are the synchronous
-/// box-start path, which previously blocked right here for the in-place build
-/// — same latency, now spent waiting instead of forking. At box start no
-/// execs exist yet, so serializing on the zygote socket costs nothing.
-///
-/// # Arguments
-///
-/// * `container_id` - Unique container identifier
-/// * `state_root` - Directory for libcontainer state
-/// * `bundle_path` - OCI bundle directory with config.json
-/// * `io` - How init's stdio is wired (pipes, or a PTY via console socket)
-pub(crate) fn create_container_with_stdio(
-    container_id: &str,
-    state_root: &Path,
-    bundle_path: &Path,
-    io: InitIoSetup,
-) -> BoxliteResult<()> {
-    let (console_socket, init_fds) = match io {
-        InitIoSetup::Pipes(fds) => (None, Some(fds)),
-        InitIoSetup::Console(socket_path) => (Some(socket_path), None),
-    };
-    let spec = zygote::InitBuildSpec {
-        container_id: container_id.to_string(),
-        state_root: state_root.to_path_buf(),
-        bundle_path: bundle_path.to_path_buf(),
-        console_socket,
-    };
-
-    // init_fds must live until sendmsg duplicates them via SCM_RIGHTS, then
-    // drop to close the guest's copies — init's ends belong to the zygote and
-    // to init now, and a lingering write-end here would rob init's readers of
-    // EOF.
-    let raw_fds = init_fds.as_ref().map(|fds| {
-        [
-            fds.stdin.as_raw_fd(),
-            fds.stdout.as_raw_fd(),
-            fds.stderr.as_raw_fd(),
-        ]
-    });
-    let init_pid = zygote::ZYGOTE
-        .get()
-        .expect("zygote not started")
-        .build_init(spec, raw_fds)
-        .map_err(|e| match e {
-            // The image cannot run the command: the caller's own mistake, which
-            // our ids and paths would only bury.
-            BoxliteError::InvalidArgument(_) => e,
-            e => BoxliteError::Internal(format!(
-                "Failed to create container {} at bundle {}: {}",
-                container_id,
-                bundle_path.display(),
-                e
-            )),
-        })?;
-    drop(init_fds);
-
-    tracing::info!(
-        container_id,
-        init_pid = init_pid.as_raw(),
-        "Created OCI container with custom stdio via zygote"
-    );
-    Ok(())
-}
-
-/// Start the container (executes entrypoint)
-pub(crate) fn start_container(container_id: &str, state_root: &Path) -> BoxliteResult<()> {
-    let container_state_path = state_root.join(container_id);
-
-    let mut container = LibContainer::load(container_state_path.clone()).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "Failed to load container {} from {}: {}",
-            container_id,
-            container_state_path.display(),
-            e
-        ))
-    })?;
-
-    container.start().map_err(|e| {
-        BoxliteError::Internal(format!("Failed to start container {}: {}", container_id, e))
-    })?;
-
-    tracing::info!(container_id, "Started OCI container");
-    Ok(())
-}
-
-// ====================
-// Cleanup Functions
-// ====================
-
 /// Remove bundle directory
 pub(crate) fn cleanup_bundle_directory(bundle_path: &std::path::Path) {
     if let Err(e) = std::fs::remove_dir_all(bundle_path) {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            return;
+        }
         tracing::warn!(
             bundle_path = %bundle_path.display(),
             error = %e,
             "Failed to remove bundle directory"
         );
-    }
-}
-
-/// Load container status from libcontainer
-pub(crate) fn load_container_status(
-    container_state_path: &Path,
-) -> BoxliteResult<libcontainer::container::ContainerStatus> {
-    let mut container = LibContainer::load(container_state_path.to_path_buf()).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "Failed to load container from {}: {}",
-            container_state_path.display(),
-            e
-        ))
-    })?;
-
-    container.refresh_status().map_err(|e| {
-        BoxliteError::Internal(format!(
-            "Failed to refresh container status from {}: {}",
-            container_state_path.display(),
-            e
-        ))
-    })?;
-
-    Ok(container.status())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use libcontainer::container::{ContainerStatus, State};
-
-    #[test]
-    fn load_container_status_refreshes_stale_persisted_status() {
-        let dir = tempfile::TempDir::new().expect("create temp dir");
-        let state = State::new(
-            "test-container",
-            ContainerStatus::Stopped,
-            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
-            dir.path().to_path_buf(),
-        );
-        state.save(dir.path()).expect("save libcontainer state");
-
-        let status = load_container_status(dir.path()).expect("load container status");
-
-        assert_eq!(status, ContainerStatus::Running);
     }
 }

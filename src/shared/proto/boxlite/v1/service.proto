@@ -41,6 +41,11 @@ service Guest {
   // MUST be called first after connection, before Container.Init
   rpc Init(GuestInitRequest) returns (GuestInitResponse);
 
+  // Initialize the guest and create its container, optionally starting init.
+  // Implementations support safe managed-volume subpaths and the container
+  // security and device fields of ContainerInitRequest.
+  rpc Bootstrap(GuestBootstrapRequest) returns (GuestBootstrapResponse);
+
   // Health check
   rpc Ping(PingRequest) returns (PingResponse);
 
@@ -149,6 +154,20 @@ message GuestInitSuccess {}
 
 message GuestInitError {
   string reason = 1;
+}
+
+message GuestBootstrapRequest {
+  GuestInitRequest guest_init = 1;
+  ContainerInitRequest container_init = 2;
+  bool auto_start = 3;
+}
+
+message GuestBootstrapResponse {
+  string guest_version = 1;
+  bool safe_volume_sub_path = 2;
+  ContainerInitResponse container_init = 3;
+  bool started = 4;
+  string error = 5;
 }
 
 // Unified volume mount specification

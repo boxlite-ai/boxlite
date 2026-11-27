@@ -2,6 +2,15 @@ use nix::errno::Errno;
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::{getpgid, Pid};
 
+/// Fields from `/proc/{pid}/stat` after `comm`, starting with process state.
+pub(crate) fn stat_fields(stat: &[u8]) -> Option<std::str::SplitAsciiWhitespace<'_>> {
+    // The process name can contain spaces, parentheses, and non-UTF-8 bytes.
+    // Decode only the fields after the last closing parenthesis.
+    let end = stat.iter().rposition(|&byte| byte == b')')?;
+    let fields = std::str::from_utf8(&stat[end + 1..]).ok()?;
+    Some(fields.split_ascii_whitespace())
+}
+
 /// A process instance distinguished from a prior process that used the same
 /// PID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,11 +54,10 @@ impl ProcessInstance {
     }
 
     fn start_time_for(pid: Pid) -> Option<u64> {
-        procfs::process::Process::new(pid.as_raw())
-            .ok()?
-            .stat()
-            .ok()
-            .map(|stat| stat.starttime)
+        let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+        // starttime is field 22; the iterator starts at field 3.
+        let start_time = stat_fields(&stat)?.nth(19)?;
+        start_time.parse().ok()
     }
 
     #[cfg(test)]

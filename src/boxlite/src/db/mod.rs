@@ -59,13 +59,13 @@ impl Database {
 
         // SQLite configuration (matches Podman patterns)
         // - WAL mode: Better concurrent read performance
-        // - FULL sync: Maximum durability (fsync after each transaction)
+        // - NORMAL sync: Avoid sync on each WAL commit; recent commits may be lost on power failure
         // - Foreign keys: Referential integrity
         // - Busy timeout: 100s to handle long operations (Podman uses 100s)
         db_err!(conn.execute_batch(
             "
             PRAGMA journal_mode=WAL;
-            PRAGMA synchronous=FULL;
+            PRAGMA synchronous=NORMAL;
             PRAGMA foreign_keys=ON;
             PRAGMA busy_timeout=100000;
             "
@@ -168,7 +168,16 @@ mod tests {
     fn test_db_open() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let _db = Database::open(&db_path).unwrap();
+        let db = Database::open(&db_path).unwrap();
+        let conn = db.conn();
+        let journal_mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        let synchronous: i32 = conn
+            .pragma_query_value(None, "synchronous", |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode, "wal");
+        assert_eq!(synchronous, 1); // NORMAL
     }
 
     #[test]

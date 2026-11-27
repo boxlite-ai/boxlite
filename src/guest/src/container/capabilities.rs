@@ -6,9 +6,11 @@
 //! - Tenant process spawning (exec capabilities)
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use oci_spec::runtime::{Capability, LinuxCapabilities, LinuxCapabilitiesBuilder};
+use nix::libc;
+use oci_spec::runtime::Capability;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::io;
 
 // Linux UAPI capability numbers, in order from 0 through CAP_LAST_CAP.
 const CAPABILITIES_BY_NUMBER: [Capability; 41] = [
@@ -136,29 +138,51 @@ impl CapabilitySet {
         Ok(Self(resolved))
     }
 
-    /// Build the exact OCI sets used by BoxLite's high-level add/drop policy.
-    ///
-    /// Docker/containerd apply ordinary container capabilities to bounding,
-    /// effective, and permitted. Inheritable and ambient are deliberately
-    /// absent: they require a separate security contract and implicitly
-    /// populating them has caused runtime vulnerabilities during exec.
-    pub(crate) fn to_oci(&self) -> BoxliteResult<LinuxCapabilities> {
-        let mut capabilities = LinuxCapabilitiesBuilder::default()
-            .bounding(self.0.clone())
-            .effective(self.0.clone())
-            .permitted(self.0.clone())
-            .build()
-            .map_err(|error| {
-                BoxliteError::Internal(format!("failed to build Linux capabilities: {error}"))
-            })?;
-
-        // oci-spec 0.6's builder defaults these sets to three capabilities.
-        capabilities.set_inheritable(None);
-        capabilities.set_ambient(None);
-        Ok(capabilities)
+    /// Keep the bounding ceiling for later execs (including setuid programs),
+    /// but do not populate ambient or inheritable privileges.
+    pub(super) fn apply(&self, uid: u32, gid: u32) -> io::Result<()> {
+        use nix::unistd::{setgroups, setresgid, setresuid, Gid, Uid};
+        let mut mask = 0u64;
+        for (number, capability) in CAPABILITIES_BY_NUMBER.iter().enumerate() {
+            if self.0.contains(capability) {
+                mask |= 1 << number;
+            } else if unsafe {
+                libc::prctl(libc::PR_CAPBSET_DROP, number as libc::c_ulong, 0, 0, 0)
+            } < 0
+            {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::EINVAL) {
+                    return Err(error);
+                }
+            }
+        }
+        if unsafe {
+            libc::prctl(
+                libc::PR_CAP_AMBIENT,
+                libc::PR_CAP_AMBIENT_CLEAR_ALL,
+                0,
+                0,
+                0,
+            )
+        } < 0
+        {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::EINVAL) {
+                return Err(error);
+            }
+        }
+        setgroups(&[])?;
+        let gid = Gid::from_raw(gid);
+        let uid = Uid::from_raw(uid);
+        setresgid(gid, gid, gid)?;
+        setresuid(uid, uid, uid)?;
+        // UID transitions clear permitted/effective sets for ordinary users.
+        // Apply the exact ceiling as effective/permitted only for root, and
+        // clear both words of the inheritable set even for non-root helpers.
+        set_capabilities(if uid.is_root() { mask } else { 0 })
     }
 
-    /// Canonical names accepted by libcontainer's tenant builder.
+    #[cfg(test)]
     pub(crate) fn names(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .0
@@ -182,6 +206,35 @@ impl CapabilitySet {
     fn iter(&self) -> impl Iterator<Item = &Capability> {
         self.0.iter()
     }
+}
+
+#[repr(C)]
+struct CapHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[repr(C)]
+struct CapData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
+}
+
+fn set_capabilities(mask: u64) -> io::Result<()> {
+    let header = CapHeader {
+        version: 0x2008_0522,
+        pid: 0,
+    }; // _LINUX_CAPABILITY_VERSION_3
+    let data = [mask as u32, (mask >> 32) as u32].map(|bits| CapData {
+        effective: bits,
+        permitted: bits,
+        inheritable: 0,
+    });
+    if unsafe { libc::syscall(libc::SYS_capset, &header, data.as_ptr()) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn parse_capabilities(names: &[String]) -> BoxliteResult<HashSet<Capability>> {

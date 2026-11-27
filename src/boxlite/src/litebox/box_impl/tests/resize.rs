@@ -57,6 +57,13 @@ struct ResizeGuest(Arc<GuestGate>);
 
 #[tonic::async_trait]
 impl Guest for ResizeGuest {
+    async fn bootstrap(
+        &self,
+        _: Request<GuestBootstrapRequest>,
+    ) -> Result<Response<GuestBootstrapResponse>, Status> {
+        Err(Status::unimplemented("fixture is already initialized"))
+    }
+
     async fn init(
         &self,
         _: Request<GuestInitRequest>,

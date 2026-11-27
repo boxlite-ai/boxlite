@@ -38,48 +38,74 @@ mod test_syscalls;
 #[cfg(target_os = "linux")]
 use boxlite_shared::errors::BoxliteResult;
 #[cfg(target_os = "linux")]
-use clap::Parser;
-#[cfg(target_os = "linux")]
 use service::server::GuestServer;
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
 #[cfg(target_os = "linux")]
 use std::time::Instant;
 #[cfg(target_os = "linux")]
-use tracing::info;
+use tracing::debug;
 
-/// Boot timestamp, set once at guest agent startup.
+/// Boot timestamp, recorded only when console timing is enabled.
 #[cfg(target_os = "linux")]
 static BOOT_T0: OnceLock<Instant> = OnceLock::new();
 
-/// Milliseconds elapsed since guest agent startup.
 #[cfg(target_os = "linux")]
-pub(crate) fn boot_elapsed_ms() -> u128 {
-    BOOT_T0.get().map(|t| t.elapsed().as_millis()).unwrap_or(0)
+pub(crate) fn boot_timing_enabled() -> bool {
+    BOOT_T0.get().is_some()
 }
 
-/// BoxLite Guest Agent - runs inside the isolated Box to execute containers
 #[cfg(target_os = "linux")]
-#[derive(Parser, Debug)]
-#[command(author, version, about = "BoxLite Guest Agent - Box-side agent")]
-struct GuestArgs {
-    /// Listen URI for host communication
-    ///
-    /// Examples:
-    ///   --listen vsock://2695
-    ///   --listen unix:///var/run/boxlite.sock
-    ///   --listen tcp://127.0.0.1:8080
-    #[arg(short, long)]
-    listen: String,
+pub(crate) fn boot_timing_log(msg: impl std::fmt::Display) {
+    if let Some(t0) = BOOT_T0.get() {
+        eprintln!("[guest] T+{}ms: {msg}", t0.elapsed().as_millis());
+    }
+}
 
-    /// Notify URI to signal host when ready
-    ///
-    /// Guest connects to this URI after gRPC server is ready to serve.
-    /// Examples:
-    ///   --notify vsock://2696
-    ///   --notify unix:///var/run/boxlite-ready.sock
-    #[arg(short, long)]
+#[cfg(target_os = "linux")]
+struct GuestArgs {
+    listen: String,
     notify: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl GuestArgs {
+    fn parse() -> Result<Self, String> {
+        let mut args = std::env::args().skip(1).peekable();
+        let (mut listen, mut notify) = (None, None);
+        while let Some(arg) = args.next() {
+            let (flag, value) = arg
+                .split_once('=')
+                .map_or((arg.as_str(), None), |(k, v)| (k, Some(v)));
+            let slot = match (flag, value) {
+                ("--help" | "-h", None) => {
+                    println!("Usage: boxlite-guest -l|--listen URI [-n|--notify URI]");
+                    lifecycle::exit(0);
+                }
+                ("--version" | "-V", None) => {
+                    println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+                    lifecycle::exit(0);
+                }
+                ("--listen" | "-l", _) => &mut listen,
+                ("--notify" | "-n", _) => &mut notify,
+                _ => return Err(format!("unknown argument: {arg}")),
+            };
+            if slot.is_some() {
+                return Err(format!("duplicate argument: {flag}"));
+            }
+            *slot = Some(
+                value
+                    .map(str::to_owned)
+                    .or_else(|| args.next_if(|arg| !arg.starts_with('-')))
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| format!("{flag} requires a URI"))?,
+            );
+        }
+        Ok(Self {
+            listen: listen.ok_or("--listen is required")?,
+            notify,
+        })
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -100,38 +126,46 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn run() -> BoxliteResult<()> {
-    let t0 = Instant::now();
-    BOOT_T0.set(t0).expect("BOOT_T0 already initialized");
-
-    // Early diagnostic - visible even if tracing fails
-    eprintln!("[guest] T+0ms: agent starting");
-
-    // Initialize tracing subscriber - respects RUST_LOG env var
-    // Default to "info" level if RUST_LOG is not set (for visibility)
-    if let Err(e) = tracing_subscriber::fmt()
-        .with_target(true) // Show module names
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .try_init()
-    {
-        eprintln!("[ERROR] Failed to initialize tracing: {}", e);
-        // Continue anyway - logging failure shouldn't stop the server
+    if std::env::var_os("BOXLITE_GUEST_BOOT_TIMING").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        BOOT_T0
+            .set(Instant::now())
+            .expect("BOOT_T0 already initialized");
+        eprintln!("[guest] T+0ms: agent starting");
     }
-    eprintln!("[guest] T+{}ms: tracing initialized", boot_elapsed_ms());
 
-    info!("BoxLite Guest Agent starting");
+    let args = GuestArgs::parse().unwrap_or_else(|error| {
+        eprintln!("Error: {error}. See --help for usage.");
+        lifecycle::exit(2);
+    });
+    let subscriber = tracing_subscriber::fmt()
+        .with_target(true)
+        .with_writer(std::io::stderr);
+    let tracing_init = if std::env::var_os("RUST_LOG").is_some() {
+        subscriber
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .try_init()
+    } else {
+        subscriber
+            .with_max_level(tracing::level_filters::LevelFilter::WARN)
+            .try_init()
+    };
+    if let Err(e) = tracing_init {
+        eprintln!("[ERROR] Failed to initialize tracing: {e}");
+    }
+    boot_timing_log("tracing initialized");
+
+    debug!("BoxLite Guest Agent starting");
+    debug!(
+        "Arguments parsed: listen={}, notify={:?}",
+        args.listen, args.notify
+    );
 
     // Native init supplies the mounts and defaults that init.krun provides
     // when the same binary runs as an ordinary process under libkrun.
     bootstrap::prepare()?;
-    sysctl::apply_boot_hardening()?;
-    eprintln!(
-        "[guest] T+{}ms: kernel hardening applied",
-        boot_elapsed_ms()
-    );
 
     // Start zygote BEFORE tokio creates any threads.
     // The zygote builds container processes in a single-threaded context,
@@ -139,21 +173,29 @@ fn run() -> BoxliteResult<()> {
     use container::zygote::{Zygote, ZYGOTE};
     let zygote = Zygote::start()?;
     ZYGOTE.set(zygote).expect("zygote already initialized");
-    eprintln!("[guest] T+{}ms: zygote started", boot_elapsed_ms());
+    boot_timing_log("zygote started");
 
-    // Now start tokio runtime — threads are safe since the zygote builds container processes
-    let rt = tokio::runtime::Runtime::new().map_err(|e| {
+    // With one schedulable CPU there is no parallelism to gain from a worker
+    // pool. Blocking work can still use spawn_blocking on either runtime.
+    let mut builder = if std::thread::available_parallelism().is_ok_and(|cpus| cpus.get() == 1) {
+        tokio::runtime::Builder::new_current_thread()
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+    };
+    let rt = builder.enable_all().build().map_err(|e| {
         boxlite_shared::errors::BoxliteError::Internal(format!("tokio runtime: {e}"))
     })?;
-    rt.block_on(async_main())
+    rt.block_on(async_main(args))
 }
 
 #[cfg(target_os = "linux")]
-async fn async_main() -> BoxliteResult<()> {
-    // Mount essential tmpfs directories early
-    // Needed because virtio-fs doesn't support open-unlink-fstat pattern
-    mounts::mount_essential_tmpfs()?;
-    eprintln!("[guest] T+{}ms: tmpfs mounted", boot_elapsed_ms());
+async fn async_main(args: GuestArgs) -> BoxliteResult<()> {
+    // PID 1 already mounted these in bootstrap::prepare. Under libkrun,
+    // ensure virtio-fs paths that need open-unlink-fstat are backed by tmpfs.
+    if std::process::id() != 1 {
+        mounts::mount_essential_tmpfs()?;
+    }
+    boot_timing_log("tmpfs mounted");
 
     // Install the child-reaper before serving: one waitpid(-1) loop reaps the
     // container init, exec tenants (both reparent to us via as_sibling), and
@@ -161,29 +203,12 @@ async fn async_main() -> BoxliteResult<()> {
     // itself. See the reaper module.
     let _ = reaper::REAPER.set(reaper::Reaper::install());
 
-    // Parse command-line arguments with clap
-    let args = GuestArgs::try_parse().unwrap_or_else(|error| {
-        let _ = error.print();
-        lifecycle::exit(error.exit_code());
-    });
-    info!(
-        "Arguments parsed: listen={}, notify={:?}",
-        args.listen, args.notify
-    );
-
-    network::configure_loopback().await?;
-    eprintln!("[guest] T+{}ms: loopback ready", boot_elapsed_ms());
-
-    // Prepare guest layout directories
-    let layout = layout::GuestLayout::new();
-    info!("Preparing guest layout at {}", layout.base().display());
-    layout.prepare_base()?;
-
-    // Start server in uninitialized state
-    // Shared storage and external networking are configured by Guest.Init.
-    info!("Starting guest server on: {}", args.listen);
-    let server = GuestServer::new(layout);
-    server.run(args.listen, args.notify).await
+    // Bind and notify the host before completing boot preparation.
+    // The server starts serving RPCs only after boot preparation finishes.
+    debug!("Starting guest server on: {}", args.listen);
+    GuestServer::new(layout::GuestLayout::new())
+        .run(args.listen, args.notify)
+        .await
 }
 
 #[cfg(all(test, target_os = "linux"))]

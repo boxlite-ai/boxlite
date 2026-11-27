@@ -5,6 +5,7 @@
 //! layer access, inspection).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::blob_source::BlobSource;
 use super::manager::ImageManifest;
@@ -131,9 +132,13 @@ impl ImageObject {
     ///
     /// Use `ContainerConfig::from_oci_config()` if you need extracted container
     /// runtime configuration (entrypoint, env, workdir).
-    pub async fn load_config(&self) -> BoxliteResult<oci_spec::image::ImageConfiguration> {
+    pub async fn load_config(&self) -> BoxliteResult<Arc<oci_spec::image::ImageConfiguration>> {
+        if let Some(config) = &self.manifest.verified_config {
+            return Ok(Arc::clone(config));
+        }
+
         let config_path = self.blob_source.config_path(&self.manifest.config_digest);
-        let config_json = std::fs::read_to_string(&config_path).map_err(|e| {
+        let config_json = tokio::fs::read_to_string(&config_path).await.map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to read config from {}: {}",
                 config_path.display(),
@@ -142,6 +147,7 @@ impl ImageObject {
         })?;
 
         serde_json::from_str(&config_json)
+            .map(Arc::new)
             .map_err(|e| BoxliteError::Storage(format!("Failed to parse image config: {}", e)))
     }
 
@@ -427,6 +433,7 @@ mod tests {
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_string(),
             diff_ids,
+            verified_config: None,
         };
         ImageObject::new("test:image".to_string(), manifest, blob_source)
     }

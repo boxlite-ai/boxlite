@@ -34,8 +34,12 @@ use super::common;
 use super::error::JailerError;
 use crate::runtime::advanced_options::ResourceLimits;
 use crate::runtime::id::BoxID;
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 /// Base path for cgroup v2 filesystem.
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
@@ -196,35 +200,21 @@ pub fn setup_cgroup(box_id: &str, config: &CgroupConfig) -> Result<PathBuf, Jail
         "Using cgroup base path"
     );
 
-    // Create boxlite parent cgroup if needed, then (idempotently) delegate the
-    // controllers to its children. Running enable_controllers every time — not
-    // only on creation — repairs a parent left behind by an earlier build that
-    // failed to delegate, so box children always end up with the controller
-    // files.
-    if !boxlite_cgroup.exists() {
-        fs::create_dir(&boxlite_cgroup).map_err(|e| {
-            JailerError::Cgroup(format!(
-                "Failed to create boxlite cgroup at {}: {}",
-                boxlite_cgroup.display(),
-                e
-            ))
-        })?;
-    }
-    enable_controllers(&boxlite_cgroup)?;
-
-    // Create box cgroup
-    if !box_cgroup.exists() {
-        fs::create_dir(&box_cgroup).map_err(|e| {
-            JailerError::Cgroup(format!(
-                "Failed to create box cgroup at {}: {}",
-                box_cgroup.display(),
-                e
-            ))
-        })?;
-    }
-
-    // Apply limits
-    apply_limits(&box_cgroup, config)?;
+    let mut generation = Some(DELEGATION.ensure(&boxlite_cgroup, None)?);
+    DELEGATION.retry_missing(
+        &boxlite_cgroup,
+        &mut generation,
+        || create_cgroup_dir(&box_cgroup),
+        |e| create_error(&box_cgroup, e),
+    )?;
+    apply_limits(config, |file, value| {
+        DELEGATION.write_child_file(
+            &boxlite_cgroup,
+            &mut generation,
+            &box_cgroup.join(file),
+            value,
+        )
+    })?;
 
     tracing::debug!(
         box_id = %box_id,
@@ -233,6 +223,88 @@ pub fn setup_cgroup(box_id: &str, config: &CgroupConfig) -> Result<PathBuf, Jail
     );
 
     Ok(box_cgroup)
+}
+
+static DELEGATION: LazyLock<DelegationCache> = LazyLock::new(DelegationCache::default);
+
+#[derive(Default)]
+struct DelegationCache(RwLock<HashMap<PathBuf, u64>>);
+
+impl DelegationCache {
+    fn generation(&self, parent: &Path) -> Option<u64> {
+        self.0.read().get(parent).copied()
+    }
+
+    // A refresh only invalidates the generation the failed writer observed.
+    // Concurrent failures on that generation can share the refreshed state.
+    fn ensure(&self, parent: &Path, stale: Option<u64>) -> Result<u64, JailerError> {
+        if let Some(current) = self.generation(parent)
+            && Some(current) != stale
+        {
+            return Ok(current);
+        }
+        let mut cache = self.0.write();
+        let current = cache.get(parent).copied();
+        if let Some(current) = current
+            && Some(current) != stale
+        {
+            return Ok(current);
+        }
+        create_cgroup_dir(parent).map_err(|e| create_error(parent, e))?;
+        enable_controllers(parent)?;
+        let next = current.unwrap_or_default() + 1;
+        cache.insert(parent.to_path_buf(), next);
+        Ok(next)
+    }
+
+    fn write_child_file(
+        &self,
+        parent: &Path,
+        generation: &mut Option<u64>,
+        path: &Path,
+        value: &str,
+    ) -> Result<(), JailerError> {
+        // Do not use O_CREAT: a missing controller file must surface as ENOENT.
+        let write = || {
+            fs::File::options()
+                .write(true)
+                .open(path)?
+                .write_all(value.as_bytes())
+        };
+        self.retry_missing(parent, generation, write, |e| write_error(path, e))
+    }
+
+    fn retry_missing(
+        &self,
+        parent: &Path,
+        generation: &mut Option<u64>,
+        mut operation: impl FnMut() -> io::Result<()>,
+        map_error: impl FnOnce(io::Error) -> JailerError,
+    ) -> Result<(), JailerError> {
+        match operation() {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                *generation = Some(self.ensure(parent, *generation)?);
+                operation()
+            }
+            result => result,
+        }
+        .map_err(map_error)
+    }
+}
+
+fn create_cgroup_dir(path: &Path) -> io::Result<()> {
+    match fs::create_dir(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn create_error(path: &Path, e: io::Error) -> JailerError {
+    JailerError::Cgroup(format!(
+        "Failed to create cgroup at {}: {e}",
+        path.display()
+    ))
 }
 
 /// Delegate controllers to child cgroups — but only those actually available
@@ -253,13 +325,12 @@ fn enable_controllers(cgroup_path: &Path) -> Result<(), JailerError> {
         ))
     })?;
 
-    let enable: Vec<String> = ["cpu", "memory", "pids"]
-        .iter()
-        .filter(|want| available.split_whitespace().any(|have| have == **want))
-        .map(|want| format!("+{want}"))
+    let wanted: Vec<_> = ["cpu", "memory", "pids"]
+        .into_iter()
+        .filter(|want| available.split_whitespace().any(|have| have == *want))
         .collect();
 
-    if enable.is_empty() {
+    if wanted.is_empty() {
         return Err(JailerError::Cgroup(format!(
             "none of cpu/memory/pids are delegated to {} (available: [{}])",
             cgroup_path.display(),
@@ -267,10 +338,17 @@ fn enable_controllers(cgroup_path: &Path) -> Result<(), JailerError> {
         )));
     }
 
-    write_file(
-        &cgroup_path.join("cgroup.subtree_control"),
-        &enable.join(" "),
-    )?;
+    let control = cgroup_path.join("cgroup.subtree_control");
+    let enabled = fs::read_to_string(&control)
+        .map_err(|e| JailerError::Cgroup(format!("Failed to read {}: {e}", control.display())))?;
+    let missing: Vec<_> = wanted
+        .into_iter()
+        .filter(|want| !enabled.split_whitespace().any(|have| have == *want))
+        .map(|want| format!("+{want}"))
+        .collect();
+    if !missing.is_empty() {
+        write_file(&control, &missing.join(" "))?;
+    }
     Ok(())
 }
 
@@ -283,8 +361,12 @@ pub(crate) fn set_cpu_max(
     limits: &ResourceLimits,
 ) -> Result<(), JailerError> {
     let quota = cpu_quota_us(cpus, limits);
-    write_file(
-        &cgroup_path(box_id).join("cpu.max"),
+    let parent = get_cgroup_base().join(BOXLITE_CGROUP);
+    let mut generation = DELEGATION.generation(&parent);
+    DELEGATION.write_child_file(
+        &parent,
+        &mut generation,
+        &parent.join(box_id).join("cpu.max"),
         &format!("{quota} {CPU_PERIOD_US}"),
     )
 }
@@ -294,33 +376,33 @@ fn cpu_quota_us(cpus: crate::runtime::cpu_count::CpuCount, limits: &ResourceLimi
 }
 
 /// Apply resource limits to a cgroup.
-fn apply_limits(cgroup_path: &Path, config: &CgroupConfig) -> Result<(), JailerError> {
+fn apply_limits(
+    config: &CgroupConfig,
+    mut write: impl FnMut(&str, &str) -> Result<(), JailerError>,
+) -> Result<(), JailerError> {
     // Memory limit
     if let Some(memory_max) = config.memory_max {
-        write_file(&cgroup_path.join("memory.max"), &memory_max.to_string())?;
+        write("memory.max", &memory_max.to_string())?;
     }
 
     // Memory high (throttle threshold)
     if let Some(memory_high) = config.memory_high {
-        write_file(&cgroup_path.join("memory.high"), &memory_high.to_string())?;
+        write("memory.high", &memory_high.to_string())?;
     }
 
     // CPU weight
     if let Some(cpu_weight) = config.cpu_weight {
-        write_file(&cgroup_path.join("cpu.weight"), &cpu_weight.to_string())?;
+        write("cpu.weight", &cpu_weight.to_string())?;
     }
 
     // CPU max (quota period)
     if let Some((quota, period)) = config.cpu_max {
-        write_file(
-            &cgroup_path.join("cpu.max"),
-            &format!("{} {}", quota, period),
-        )?;
+        write("cpu.max", &format!("{quota} {period}"))?;
     }
 
     // Pids max
     if let Some(pids_max) = config.pids_max {
-        write_file(&cgroup_path.join("pids.max"), &pids_max.to_string())?;
+        write("pids.max", &pids_max.to_string())?;
     }
 
     Ok(())
@@ -372,8 +454,11 @@ pub fn remove_cgroup(box_id: &str) -> Result<(), JailerError> {
 
 /// Helper to write to a cgroup file.
 fn write_file(path: &Path, content: &str) -> Result<(), JailerError> {
-    fs::write(path, content)
-        .map_err(|e| JailerError::Cgroup(format!("Failed to write to {}: {}", path.display(), e)))
+    fs::write(path, content).map_err(|e| write_error(path, e))
+}
+
+fn write_error(path: &Path, e: io::Error) -> JailerError {
+    JailerError::Cgroup(format!("Failed to write to {}: {e}", path.display()))
 }
 
 /// Convert ResourceLimits to CgroupConfig.
@@ -572,6 +657,120 @@ mod tests {
     }
 
     /// The whole point of the rootless fix in this PR: when the parent's
+    fn delegation_fixture() -> tempfile::TempDir {
+        let parent = tempfile::tempdir().unwrap();
+        fs::write(parent.path().join("cgroup.controllers"), "memory pids\n").unwrap();
+        fs::write(parent.path().join("cgroup.subtree_control"), "").unwrap();
+        parent
+    }
+
+    #[test]
+    fn delegation_cache_shares_cold_start_and_skips_warm_writes() {
+        const CALLERS: usize = 20;
+        let parent = delegation_fixture();
+        let cache = DelegationCache::default();
+        let barrier = std::sync::Barrier::new(CALLERS);
+        std::thread::scope(|s| {
+            let callers: Vec<_> = (0..CALLERS)
+                .map(|_| {
+                    s.spawn(|| {
+                        barrier.wait();
+                        cache.ensure(parent.path(), None).unwrap()
+                    })
+                })
+                .collect();
+            for caller in callers {
+                assert_eq!(caller.join().unwrap(), 1);
+            }
+        });
+        let control = parent.path().join("cgroup.subtree_control");
+        assert_eq!(fs::read_to_string(&control).unwrap(), "+memory +pids");
+        fs::write(&control, "sentinel").unwrap();
+        assert_eq!(cache.ensure(parent.path(), None).unwrap(), 1);
+        assert_eq!(fs::read_to_string(&control).unwrap(), "sentinel");
+        let other_parent = delegation_fixture();
+        cache.ensure(other_parent.path(), None).unwrap();
+        assert_eq!(
+            fs::read_to_string(other_parent.path().join("cgroup.subtree_control")).unwrap(),
+            "+memory +pids"
+        );
+    }
+
+    #[test]
+    fn missing_child_controller_refreshes_and_retries_once_per_observed_generation() {
+        let parent = delegation_fixture();
+        let cache = DelegationCache::default();
+        let control = parent.path().join("cgroup.subtree_control");
+        let old = cache.ensure(parent.path(), None).unwrap();
+        // Simulate the kernel having lost delegation, then repopulating the
+        // child's controller file after a successful delegation write.
+        fs::write(&control, "").unwrap();
+        let mut attempts = 0;
+        let mut generation = Some(old);
+        let mut concurrent_generation = generation;
+        cache
+            .retry_missing(
+                parent.path(),
+                &mut generation,
+                || {
+                    attempts += 1;
+                    if attempts == 1 {
+                        return Err(io::Error::from_raw_os_error(libc::ENOENT));
+                    }
+                    assert_eq!(fs::read_to_string(&control).unwrap(), "+memory +pids");
+                    Ok(())
+                },
+                |e| write_error(&control, e),
+            )
+            .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(generation, Some(old + 1));
+
+        // A concurrent caller with the old generation doesn't write again.
+        fs::write(&control, "sentinel").unwrap();
+        let missing = parent.path().join("box/cpu.max");
+        let error = cache
+            .write_child_file(
+                parent.path(),
+                &mut concurrent_generation,
+                &missing,
+                "123 100000",
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("cpu.max"));
+        assert_eq!(concurrent_generation, generation);
+        assert_eq!(fs::read_to_string(&control).unwrap(), "sentinel");
+        assert!(!missing.exists());
+
+        let mut calls = 0;
+        cache
+            .retry_missing(
+                parent.path(),
+                &mut generation,
+                || {
+                    calls += 1;
+                    Err(io::Error::from_raw_os_error(libc::EACCES))
+                },
+                |e| write_error(&missing, e),
+            )
+            .unwrap_err();
+        assert_eq!(calls, 1);
+        assert_eq!(fs::read_to_string(&control).unwrap(), "sentinel");
+    }
+
+    #[test]
+    fn delegation_skips_enabled_controllers_and_does_not_cache_failures() {
+        let parent = delegation_fixture();
+        let cache = DelegationCache::default();
+        let control = parent.path().join("cgroup.subtree_control");
+        fs::remove_file(&control).unwrap();
+        assert!(cache.ensure(parent.path(), None).is_err());
+        assert_eq!(cache.generation(parent.path()), None);
+        fs::write(&control, "memory pids\n").unwrap();
+        assert_eq!(cache.ensure(parent.path(), None).unwrap(), 1);
+        assert_eq!(fs::read_to_string(&control).unwrap(), "memory pids\n");
+    }
+
     /// `cgroup.controllers` doesn't list `cpu` (the common rootless case),
     /// the atomic `+cpu +memory +pids` write fails and takes memory+pids
     /// down with it. `enable_controllers` must intersect what we want with

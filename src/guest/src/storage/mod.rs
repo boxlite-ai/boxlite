@@ -7,8 +7,6 @@
 mod aggregate;
 pub(crate) mod attach;
 pub mod block_device;
-#[allow(dead_code)]
-mod copy;
 pub mod fsfreeze;
 pub mod idmap;
 pub(crate) mod resolved_mount;

@@ -1,15 +1,19 @@
 //! Guest service interface.
 
+use super::container::{ContainerInterface, map_container_init_status};
 use boxlite_shared::{
-    BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestClient, GuestInitRequest,
-    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, SyncClockRequest, ThawRequest,
-    VirtiofsSource, Volume, guest_init_response,
+    BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestBootstrapRequest,
+    GuestBootstrapResponse, GuestClient, GuestInitRequest, NetworkInit, PingRequest, PingResponse,
+    QuiesceRequest, ShutdownRequest, SyncClockRequest, ThawRequest, VirtiofsSource, Volume,
+    guest_init_response,
 };
 use tonic::transport::Channel;
 
 /// Guest service interface.
 pub struct GuestInterface {
     client: GuestClient<Channel>,
+    // Only used during bootstrap; health checks always issue a fresh RPC.
+    bootstrap_info: Option<PingResponse>,
 }
 
 impl GuestInterface {
@@ -17,6 +21,7 @@ impl GuestInterface {
     pub fn new(channel: Channel) -> Self {
         Self {
             client: GuestClient::new(channel),
+            bootstrap_info: None,
         }
     }
 
@@ -24,23 +29,8 @@ impl GuestInterface {
     ///
     /// This must be called first after connection, before Container.Init.
     /// Sets up volumes (virtiofs + block devices) and network.
-    pub async fn init(&mut self, config: GuestInitConfig) -> BoxliteResult<()> {
+    pub async fn init(&mut self, request: GuestInitRequest) -> BoxliteResult<()> {
         tracing::debug!("Sending GuestInit request");
-        tracing::trace!(
-            volumes = config.volumes.len(),
-            network = ?config.network,
-            "Guest init configuration"
-        );
-
-        let request = GuestInitRequest {
-            volumes: config.volumes.into_iter().map(|v| v.into_proto()).collect(),
-            network: config.network.map(|n| NetworkInit {
-                interface: n.interface,
-                ip: n.ip,
-                gateway: n.gateway,
-            }),
-        };
-
         let response = self.client.init(request).await?.into_inner();
 
         match response.result {
@@ -61,11 +51,62 @@ impl GuestInterface {
         }
     }
 
+    /// `None` means the peer predates Bootstrap; no initialization was performed.
+    pub async fn bootstrap(
+        &mut self,
+        request: GuestBootstrapRequest,
+    ) -> BoxliteResult<Option<bool>> {
+        let container_id = request
+            .container_init
+            .as_ref()
+            .map(|init| init.container_id.clone())
+            .unwrap_or_default();
+        match self.client.bootstrap(request).await {
+            Ok(response) => {
+                let response = response.into_inner();
+                self.bootstrap_info = Some(PingResponse {
+                    version: response.guest_version.clone(),
+                    safe_managed_volume_sub_path: response.safe_volume_sub_path,
+                });
+                Self::decode_bootstrap_response(&container_id, response).map(Some)
+            }
+            Err(status) if status.code() == tonic::Code::Unimplemented => Ok(None),
+            Err(status) => Err(map_container_init_status(status)),
+        }
+    }
+
+    fn decode_bootstrap_response(
+        container_id: &str,
+        response: GuestBootstrapResponse,
+    ) -> BoxliteResult<bool> {
+        if let Some(init) = response.container_init {
+            ContainerInterface::decode_init_response(container_id, init)?;
+        } else if response.error.is_empty() {
+            return Err(BoxliteError::Internal(
+                "Guest.Bootstrap response missing container_init".into(),
+            ));
+        }
+        if !response.error.is_empty() {
+            return Err(BoxliteError::Internal(response.error));
+        }
+        Ok(response.started)
+    }
+
     /// Ping the guest (health check).
     #[allow(dead_code)] // API method for future health checks
     pub async fn ping(&mut self) -> BoxliteResult<()> {
         let _response = self.client.ping(PingRequest {}).await?;
         Ok(())
+    }
+
+    pub(crate) async fn bootstrap_info(&mut self) -> BoxliteResult<&PingResponse> {
+        if self.bootstrap_info.is_none() {
+            self.bootstrap_info = Some(self.client.ping(PingRequest {}).await?.into_inner());
+        }
+        Ok(self
+            .bootstrap_info
+            .as_ref()
+            .expect("bootstrap info populated"))
     }
 
     /// Fail before initialization if the guest predates a required field.
@@ -75,14 +116,12 @@ impl GuestInterface {
     /// setting was never applied. The guest reports its own build version;
     /// gate on that instead of letting the request through.
     pub async fn require_min_version(&mut self, minimum: GuestVersion) -> BoxliteResult<()> {
-        let response = self.client.ping(PingRequest {}).await?.into_inner();
-        ensure_guest_version(&response.version, minimum)
+        ensure_guest_version(&self.bootstrap_info().await?.version, minimum)
     }
 
     /// Fail before initialization if the guest cannot pin managed-volume subdirectories.
     pub async fn require_safe_volume_sub_path(&mut self) -> BoxliteResult<()> {
-        let response = self.client.ping(PingRequest {}).await?.into_inner();
-        if response.safe_managed_volume_sub_path {
+        if self.bootstrap_info().await?.safe_managed_volume_sub_path {
             return Ok(());
         }
         Err(BoxliteError::Unsupported(
@@ -153,6 +192,19 @@ impl GuestInterface {
                 }
             })?;
         Ok(())
+    }
+}
+
+impl From<GuestInitConfig> for GuestInitRequest {
+    fn from(config: GuestInitConfig) -> Self {
+        Self {
+            volumes: config.volumes.into_iter().map(|v| v.into_proto()).collect(),
+            network: config.network.map(|n| NetworkInit {
+                interface: n.interface,
+                ip: n.ip,
+                gateway: n.gateway,
+            }),
+        }
     }
 }
 

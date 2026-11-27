@@ -28,34 +28,54 @@ impl CaInstaller {
             .bundle_path
             .parent()
             .ok_or_else(|| io::Error::other("CA bundle has no parent"))?;
-        let mut file = tempfile::NamedTempFile::new_in(parent)?;
-        for block in certificate_blocks(&bundle) {
-            let begin = b"-----BEGIN CERTIFICATE-----";
-            let Some(start) = block.windows(begin.len()).rposition(|part| part == begin) else {
-                file.write_all(block)?;
-                continue;
-            };
-            let matches = x509_cert::Certificate::from_pem(&block[start..]).is_ok_and(|cert| {
-                let existing = cert.tbs_certificate;
-                existing.subject == incoming.subject
-                    && existing.subject_public_key_info == incoming.subject_public_key_info
-            });
-            if matches {
-                file.write_all(&block[..start])?;
-            } else {
-                file.write_all(block)?;
+        atomic_replace(&self.bundle_path, |file| {
+            for block in certificate_blocks(&bundle) {
+                let begin = b"-----BEGIN CERTIFICATE-----";
+                let Some(start) = block.windows(begin.len()).rposition(|part| part == begin) else {
+                    file.write_all(block)?;
+                    continue;
+                };
+                let matches = x509_cert::Certificate::from_pem(&block[start..]).is_ok_and(|cert| {
+                    let existing = cert.tbs_certificate;
+                    existing.subject == incoming.subject
+                        && existing.subject_public_key_info == incoming.subject_public_key_info
+                });
+                file.write_all(if matches { &block[..start] } else { block })?;
             }
-        }
-        file.write_all(b"\n")?;
-        file.write_all(pem)?;
-        file.write_all(b"\n")?;
-        file.as_file()
-            .set_permissions(std::fs::metadata(&self.bundle_path)?.permissions())?;
-        file.as_file().sync_all()?;
-        file.persist(&self.bundle_path)?;
-        std::fs::File::open(parent)?.sync_all()?;
-        Ok(())
+            file.write_all(b"\n")?;
+            file.write_all(pem)?;
+            file.write_all(b"\n")?;
+            file.set_permissions(std::fs::metadata(&self.bundle_path)?.permissions())?;
+            file.sync_all()
+        })?;
+        std::fs::File::open(parent)?.sync_all()
     }
+}
+
+/// Write and replace a file using a private temporary file on the same filesystem.
+/// The callback prepares and syncs the file; callers can sync the parent after rename.
+#[cfg(unix)]
+pub(crate) fn atomic_replace(
+    dest: &std::path::Path,
+    write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
+) -> io::Result<()> {
+    use std::fs::{self, OpenOptions};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let parent = dest
+        .parent()
+        .ok_or_else(|| io::Error::other("destination has no parent"))?;
+    let temp = parent.join(format!(".boxlite-{}", uuid::Uuid::new_v4()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temp)?;
+    let result = write(&mut file).and_then(|()| fs::rename(&temp, dest));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
 }
 
 /// Reject unusable incoming issuers before any replacement file is created.

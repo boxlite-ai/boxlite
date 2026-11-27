@@ -10,7 +10,6 @@ use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::constants::images;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
-use crate::vmm::guest_artifacts::GuestArtifacts;
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -58,11 +57,15 @@ async fn run_guest_rootfs(
         .get_or_try_init(|| async {
             tracing::info!("Initializing minimal guest rootfs (first time only)");
 
-            let artifacts = GuestArtifacts::get()?;
-            let guest_rootfs = runtime
-                .guest_rootfs_mgr
-                .get_or_create_minimal(artifacts)
-                .await?;
+            let runtime = runtime.clone();
+            let span = tracing::Span::current();
+            let guest_rootfs = tokio::task::spawn_blocking(move || {
+                span.in_scope(|| runtime.guest_rootfs_mgr.get_or_create_minimal())
+            })
+            .await
+            .map_err(|e| {
+                BoxliteError::Storage(format!("minimal rootfs init task failed: {e}"))
+            })??;
 
             tracing::info!("Minimal guest rootfs ready: {:?}", guest_rootfs.strategy);
 

@@ -9,7 +9,6 @@ use boxlite_shared::{
     ExecutionClient, KillRequest, WaitRequest, WaitResponse, exec_output,
 };
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
@@ -22,8 +21,7 @@ pub struct ExecutionInterface {
 /// Components for building an Execution.
 pub struct ExecComponents {
     pub execution_id: String,
-    /// `None` for a read-only attach: no stdin pump was spawned, so there is
-    /// no sender for the caller to write into.
+    /// `None` for a read-only attach, which has no stdin writer.
     pub stdin_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     pub stdout_rx: mpsc::UnboundedReceiver<String>,
     pub stderr_rx: mpsc::UnboundedReceiver<String>,
@@ -81,7 +79,13 @@ impl ExecutionInterface {
         shutdown: CancellationToken,
     ) -> mpsc::UnboundedReceiver<ExecResult> {
         let (tx, rx) = mpsc::unbounded_channel();
-        ExecProtocol::spawn_wait(self.client.clone(), execution_id.to_owned(), tx, shutdown);
+        ExecProtocol::spawn_wait(
+            self.client.clone(),
+            execution_id.to_owned(),
+            tx,
+            shutdown,
+            None,
+        );
         rx
     }
 
@@ -116,14 +120,6 @@ impl ExecutionInterface {
 
         tracing::debug!(execution_id = %execution_id, "spawning background streams");
 
-        // Spawn stdin pump (cancellable — exits cleanly during shutdown)
-        ExecProtocol::spawn_stdin(
-            self.client.clone(),
-            execution_id.clone(),
-            stdin_rx,
-            shutdown_token.clone(),
-        );
-
         // Spawn attach fanout (cancellable)
         ExecProtocol::spawn_attach(
             self.client.clone(),
@@ -134,12 +130,13 @@ impl ExecutionInterface {
             None,
         );
 
-        // Spawn wait task for terminal status (cancellable)
+        // Drive optional stdin from the existing wait task.
         ExecProtocol::spawn_wait(
             self.client.clone(),
             execution_id.clone(),
             result_tx,
             shutdown_token,
+            Some(stdin_rx),
         );
 
         Ok(ExecComponents {
@@ -190,17 +187,11 @@ impl ExecutionInterface {
             })?
             .into_inner();
 
-        let stdin_tx = if wire_stdin {
-            let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-            ExecProtocol::spawn_stdin(
-                self.client.clone(),
-                execution_id.clone(),
-                stdin_rx,
-                shutdown_token.clone(),
-            );
-            Some(stdin_tx)
+        let (stdin_tx, stdin_rx) = if wire_stdin {
+            let (tx, rx) = mpsc::unbounded_channel();
+            (Some(tx), Some(rx))
         } else {
-            None
+            (None, None)
         };
 
         ExecProtocol::spawn_attach(
@@ -216,6 +207,7 @@ impl ExecutionInterface {
             execution_id.clone(),
             result_tx,
             shutdown_token,
+            stdin_rx,
         );
 
         Ok(ExecComponents {
@@ -557,102 +549,84 @@ impl ExecProtocol {
     }
 
     fn spawn_wait(
-        mut client: ExecutionClient<Channel>,
+        client: ExecutionClient<Channel>,
         execution_id: String,
         result_tx: mpsc::UnboundedSender<ExecResult>,
         shutdown_token: CancellationToken,
+        stdin_rx: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
     ) {
         tokio::spawn(async move {
-            let request = WaitRequest {
-                execution_id: execution_id.clone(),
-            };
-
-            tracing::debug!(execution_id = %execution_id, "wait: sending request");
-
-            // Use select! to handle cancellation during wait
-            let result = tokio::select! {
-                biased;
-                _ = shutdown_token.cancelled() => {
-                    tracing::debug!(execution_id = %execution_id, "Wait cancelled during shutdown");
-                    // Preserve the shutdown sentinel used by the main-session
-                    // exit-file fallback when the guest connection closes.
-                    let _ = result_tx.send(ExecResult { exit_code: -1, error_message: None });
-                    return;
-                }
-                _ = result_tx.closed() => {
-                    tracing::debug!(execution_id = %execution_id, "Wait cancelled after last receiver dropped");
-                    return;
-                }
-                result = client.wait(request) => result,
-            };
-
-            match result {
-                Ok(resp) => {
-                    let mapped = Self::map_wait_response(resp.into_inner());
-                    let _ = result_tx.send(mapped);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        execution_id = %execution_id,
-                        error = %e,
-                        "Wait failed"
-                    );
-                }
+            let wait =
+                Self::wait_for_exit(client.clone(), &execution_id, result_tx, &shutdown_token);
+            if let Some(stdin_rx) = stdin_rx {
+                let stdin = Self::send_stdin(client, &execution_id, stdin_rx, &shutdown_token);
+                // Wait reports the first process's exit, not that its
+                // descendants have closed stdin. Keep serving the input
+                // handle so dropping it can still deliver EOF after Wait.
+                tokio::join!(biased; wait, stdin);
+            } else {
+                wait.await;
             }
         });
     }
 
-    fn spawn_stdin(
+    async fn wait_for_exit(
         mut client: ExecutionClient<Channel>,
-        execution_id: String,
-        mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
-        shutdown_token: CancellationToken,
+        execution_id: &str,
+        result_tx: mpsc::UnboundedSender<ExecResult>,
+        shutdown_token: &CancellationToken,
     ) {
-        tokio::spawn(async move {
-            tracing::debug!(execution_id = %execution_id, "stdin: starting stream");
-            let (tx, rx) = mpsc::channel::<ExecStdin>(8);
+        let result = tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled() => {
+                // Preserve the shutdown sentinel used by the main-session
+                // exit-file fallback when the guest connection closes.
+                let _ = result_tx.send(ExecResult { exit_code: -1, error_message: None });
+                return;
+            }
+            _ = result_tx.closed() => return,
+            result = client.wait(WaitRequest { execution_id: execution_id.to_owned() }) => result,
+        };
 
-            // Producer: forward stdin channel into tonic stream
-            let exec_id_clone = execution_id.clone();
-            tokio::spawn(async move {
-                while let Some(data) = stdin_rx.recv().await {
-                    let msg = ExecStdin {
-                        execution_id: exec_id_clone.clone(),
-                        data,
-                        close: false,
-                    };
-                    if tx.send(msg).await.is_err() {
-                        return;
+        match result {
+            Ok(resp) => {
+                let _ = result_tx.send(Self::map_wait_response(resp.into_inner()));
+            }
+            Err(error) => {
+                tracing::warn!(%execution_id, %error, "Wait failed");
+            }
+        }
+    }
+
+    async fn send_stdin(
+        mut client: ExecutionClient<Channel>,
+        execution_id: &str,
+        mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        shutdown_token: &CancellationToken,
+    ) {
+        tokio::select! {
+            biased;
+            _ = shutdown_token.cancelled() => {}
+            result = async {
+                // Wait for data or EOF before opening the HTTP/2 stream. A
+                // sender closed before any write still needs a close frame.
+                let first = stdin_rx.recv().await;
+                let id = execution_id.to_owned();
+                let stream = async_stream::stream! {
+                    let mut next = first;
+                    while let Some(data) = next {
+                        yield ExecStdin { execution_id: id.clone(), data, close: false };
+                        next = stdin_rx.recv().await;
                     }
-                }
-
-                // Signal stdin close
-                let _ = tx
-                    .send(ExecStdin {
-                        execution_id: exec_id_clone,
-                        data: Vec::new(),
-                        close: true,
-                    })
-                    .await;
-            });
-
-            let stream = ReceiverStream::new(rx);
-            tokio::select! {
-                biased;
-                _ = shutdown_token.cancelled() => {
-                    tracing::debug!(execution_id = %execution_id, "SendInput cancelled during shutdown");
-                }
-                result = client.send_input(stream) => {
-                    if let Err(e) = result {
-                        tracing::warn!(
-                            execution_id = %execution_id,
-                            error = %e,
-                            "SendInput failed"
-                        );
-                    }
+                    yield ExecStdin { execution_id: id, data: Vec::new(), close: true };
+                };
+                client.send_input(stream).await
+            } => {
+                if let Err(error) = result {
+                    tracing::warn!(%execution_id, %error, "SendInput failed");
                 }
             }
-        });
+        }
     }
 }
 

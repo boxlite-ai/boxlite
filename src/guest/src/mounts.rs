@@ -5,6 +5,8 @@
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::mount::{mount, MsFlags};
+use nix::sys::statfs::{statfs, PROC_SUPER_MAGIC, TMPFS_MAGIC};
+use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
@@ -12,7 +14,6 @@ use std::path::Path;
 /// Mount the filesystems normally supplied by init.krun. Only guest PID 1 calls
 /// this, before the zygote forks, so its descendants inherit the writable paths.
 pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
-    use nix::sys::statfs::{statfs, PROC_SUPER_MAGIC};
     let restricted =
         MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV | MsFlags::MS_RELATIME;
     let mut directories = fs::DirBuilder::new();
@@ -25,7 +26,7 @@ pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
         .map_err(|e| BoxliteError::Internal(format!("statfs /proc: {e}")))?
         .filesystem_type();
     if proc_type != PROC_SUPER_MAGIC {
-        if mount_id("/proc")? != mount_id("/")? {
+        if mount_id(Path::new("/proc"))? != mount_id(Path::new("/"))? {
             return Err(BoxliteError::Internal(format!(
                 "/proc has an unexpected filesystem: {proc_type:?}"
             )));
@@ -38,6 +39,18 @@ pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
             None::<&str>,
         )
         .map_err(|e| BoxliteError::Internal(format!("mount proc on /proc: {e}")))?;
+    }
+
+    // Check the live mount ID against one snapshot. Record our new mounts
+    // as we go because /dev and /sys can change the IDs seen by their children.
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo")
+        .map_err(|e| BoxliteError::Internal(format!("read mountinfo: {e}")))?;
+    let mut mounts = HashMap::new();
+    for (index, line) in mountinfo.lines().enumerate() {
+        let (id, mount) = parse_mountinfo_line(line).ok_or_else(|| {
+            BoxliteError::Internal(format!("invalid mountinfo line {}", index + 1))
+        })?;
+        mounts.insert(id, mount);
     }
 
     for (path, filesystem, flags) in [
@@ -56,7 +69,7 @@ pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
         ),
     ] {
         directories.create(path)?;
-        if !mounted_as(path, filesystem)? {
+        if !mounted_as(&mounts, path, filesystem)? {
             mount(
                 Some(filesystem),
                 path,
@@ -65,6 +78,7 @@ pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
                 None::<&str>,
             )
             .map_err(|e| BoxliteError::Internal(format!("mount {filesystem} on {path}: {e}")))?;
+            mounts.insert(mount_id(Path::new(path))?, (path, filesystem));
         }
     }
 
@@ -76,7 +90,7 @@ pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
         Err(e) => {
             return Err(BoxliteError::Internal(format!(
                 "create /dev/fd symlink: {e}"
-            )))
+            )));
         }
     }
     mount(
@@ -92,41 +106,53 @@ pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
     // unexpected mount rather than hiding it under another filesystem.
     for cfg in TMPFS_MOUNTS {
         directories.create(cfg.path)?;
-        mounted_as(cfg.path, "tmpfs")?;
+        if !mounted_as(&mounts, cfg.path, "tmpfs")? {
+            mount_tmpfs(cfg)?;
+        }
     }
-    mount_essential_tmpfs()
+    Ok(())
 }
 
-fn mounted_as(path: &str, expected: &str) -> BoxliteResult<bool> {
-    let id = mount_id(path)?;
-    let mounts = procfs::process::Process::myself()
-        .and_then(|p| p.mountinfo())
-        .map_err(|e| BoxliteError::Internal(format!("read mountinfo for {path}: {e}")))?;
-    let mounted = mounts
-        .iter()
-        .find(|m| m.mnt_id as u64 == id)
-        .ok_or_else(|| {
-            BoxliteError::Internal(format!("mount {id} for {path} missing from mountinfo"))
-        })?;
-    if mounted.mount_point != Path::new(path) {
+fn parse_mountinfo_line(line: &str) -> Option<(u64, (&str, &str))> {
+    let mut fields = line.split_ascii_whitespace();
+    let id = fields.next()?.parse().ok()?;
+    let mount_point = fields.nth(3)?;
+    fields.next()?; // mount options
+    fields.find(|field| *field == "-")?;
+    let fs_type = fields.next()?;
+    Some((id, (mount_point, fs_type)))
+}
+
+fn mounted_as(
+    mounts: &HashMap<u64, (&str, &str)>,
+    path: &str,
+    expected: &str,
+) -> BoxliteResult<bool> {
+    let id = mount_id(Path::new(path))?;
+    let (mount_point, fs_type) = mounts.get(&id).ok_or_else(|| {
+        BoxliteError::Internal(format!("mount {id} for {path} missing from mountinfo"))
+    })?;
+    // All paths checked here are fixed ASCII paths that mountinfo never escapes.
+    if *mount_point != path {
         return Ok(false);
     }
-    if mounted.fs_type != expected {
+    if *fs_type != expected {
         return Err(BoxliteError::Internal(format!(
-            "{path} is mounted as {}, expected {expected}",
-            mounted.fs_type
+            "{path} is mounted as {fs_type}, expected {expected}"
         )));
     }
     Ok(true)
 }
 
-fn mount_id(path: &str) -> BoxliteResult<u64> {
+fn mount_id(path: &Path) -> BoxliteResult<u64> {
     use rustix::fs::{statx, AtFlags, StatxFlags, CWD};
-    let stat = statx(CWD, path, AtFlags::empty(), StatxFlags::MNT_ID)
-        .map_err(|e| BoxliteError::Internal(format!("statx mount ID for {path}: {e}")))?;
+    let stat = statx(CWD, path, AtFlags::empty(), StatxFlags::MNT_ID).map_err(|e| {
+        BoxliteError::Internal(format!("statx mount ID for {}: {e}", path.display()))
+    })?;
     if !StatxFlags::from_bits_retain(stat.stx_mask).contains(StatxFlags::MNT_ID) {
         return Err(BoxliteError::Internal(format!(
-            "kernel did not return a mount ID for {path}"
+            "kernel did not return a mount ID for {}",
+            path.display()
         )));
     }
     Ok(stat.stx_mnt_id)
@@ -160,10 +186,12 @@ const TMPFS_MOUNTS: &[TmpfsMount] = &[
 /// These mounts are needed because virtio-fs doesn't support the
 /// open-unlink-fstat pattern used by apt and other tools.
 pub fn mount_essential_tmpfs() -> BoxliteResult<()> {
-    tracing::info!("Mounting essential tmpfs directories");
+    tracing::debug!("Mounting essential tmpfs directories");
 
-    for mount_cfg in TMPFS_MOUNTS {
-        mount_tmpfs(mount_cfg)?;
+    for cfg in TMPFS_MOUNTS {
+        if !is_tmpfs(Path::new(cfg.path))? {
+            mount_tmpfs(cfg)?;
+        }
     }
 
     Ok(())
@@ -171,12 +199,6 @@ pub fn mount_essential_tmpfs() -> BoxliteResult<()> {
 
 fn mount_tmpfs(cfg: &TmpfsMount) -> BoxliteResult<()> {
     let path = Path::new(cfg.path);
-
-    // Skip if already mounted as tmpfs
-    if is_tmpfs(path)? {
-        tracing::debug!("{} is already tmpfs, skipping", cfg.path);
-        return Ok(());
-    }
 
     // Create directory if it doesn't exist
     if !path.exists() {
@@ -214,24 +236,21 @@ fn mount_tmpfs(cfg: &TmpfsMount) -> BoxliteResult<()> {
         BoxliteError::Internal(format!("Failed to set permissions on {}: {}", cfg.path, e))
     })?;
 
-    tracing::info!("Mounted tmpfs on {}", cfg.path);
+    tracing::debug!("Mounted tmpfs on {}", cfg.path);
     Ok(())
 }
 
 fn is_tmpfs(path: &Path) -> BoxliteResult<bool> {
-    let mounts = match fs::read_to_string("/proc/mounts") {
-        Ok(content) => content,
-        Err(_) => return Ok(false), // /proc may not be mounted yet
-    };
-
-    let path_str = path.to_string_lossy();
-
-    for line in mounts.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 3 && parts[1] == path_str && parts[2] == "tmpfs" {
-            return Ok(true);
+    match statfs(path) {
+        // An inherited tmpfs is not a mount at this path; the new mount
+        // still needs its own permissions. All callers use non-root paths.
+        Ok(stat) if stat.filesystem_type() == TMPFS_MAGIC => {
+            Ok(mount_id(path)? != mount_id(path.parent().expect("tmpfs mount has a parent"))?)
         }
+        Ok(_) | Err(nix::errno::Errno::ENOENT) => Ok(false),
+        Err(e) => Err(BoxliteError::Internal(format!(
+            "statfs {}: {e}",
+            path.display()
+        ))),
     }
-
-    Ok(false)
 }

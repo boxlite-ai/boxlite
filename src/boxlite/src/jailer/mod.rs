@@ -442,9 +442,8 @@ impl<S: Sandbox> Jail for Jailer<S> {
             return Ok(());
         }
 
-        // Socket paths are part of the sandbox policy itself. Prepare them
-        // before building SandboxContext so failures stop the spawn instead of
-        // producing a profile with missing AF_UNIX grants.
+        // Prepare socket paths before command() builds the sandbox policy, so
+        // failures stop the spawn instead of dropping AF_UNIX grants.
         std::fs::create_dir_all(self.layout.sockets_dir()).map_err(|e| {
             boxlite_shared::errors::BoxliteError::Storage(format!(
                 "failed to create sockets dir: {e}"
@@ -452,7 +451,9 @@ impl<S: Sandbox> Jail for Jailer<S> {
         })?;
         self.layout.sockets().ensure()?;
 
-        self.sandbox.setup(&self.context())
+        // Setup only needs launch metadata (e.g. cgroup limits). Compute the
+        // filesystem policy in command(), after the writable files exist.
+        self.sandbox.setup(&self.setup_context())
     }
 
     fn command(&self, binary: &Path, args: &[String]) -> Command {
@@ -469,7 +470,11 @@ impl<S: Sandbox> Jail for Jailer<S> {
             }
         }
 
-        let mut ctx = self.context();
+        let mut ctx = if self.security.jailer_enabled {
+            self.context()
+        } else {
+            self.setup_context()
+        };
 
         let mut effective_binary = binary.to_path_buf();
         if self.security.jailer_enabled {
@@ -665,9 +670,17 @@ impl<S: Sandbox> Jailer<S> {
         }
 
         SandboxContext {
-            id: &self.box_id,
             paths,
             unix_sockets,
+            ..self.setup_context()
+        }
+    }
+
+    fn setup_context(&self) -> SandboxContext<'_> {
+        SandboxContext {
+            id: &self.box_id,
+            paths: Vec::new(),
+            unix_sockets: UnixSocketAccess::default(),
             resource_limits: &self.security.resource_limits,
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),
@@ -1519,6 +1532,71 @@ mod tests {
             socket_names(&ctx.unix_sockets.connect),
             ["ready.sock", "ready.sock"]
         );
+    }
+
+    #[test]
+    fn prepare_passes_only_setup_metadata_and_command_builds_policy_after_precreation() {
+        struct InspectSandbox {
+            exit_path: PathBuf,
+            setup_calls: std::sync::atomic::AtomicUsize,
+            apply_calls: std::sync::atomic::AtomicUsize,
+        }
+        use std::sync::atomic::Ordering;
+
+        impl Sandbox for InspectSandbox {
+            fn is_available(&self) -> bool {
+                true
+            }
+
+            fn name(&self) -> &'static str {
+                "inspect"
+            }
+
+            fn setup(&self, ctx: &SandboxContext) -> BoxliteResult<()> {
+                assert_eq!(ctx.id, "metadata-only");
+                assert_eq!(ctx.resource_limits.max_open_files, Some(1024));
+                assert!(ctx.paths.is_empty());
+                assert!(ctx.unix_sockets.bind.is_empty());
+                assert!(!self.exit_path.exists());
+                self.setup_calls.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+
+            fn apply(&self, ctx: &SandboxContext, _: &mut Command) {
+                assert!(self.exit_path.is_file());
+                assert!(
+                    ctx.writable_paths()
+                        .any(|entry| entry.path == self.exit_path)
+                );
+                assert!(
+                    ctx.unix_sockets
+                        .bind
+                        .iter()
+                        .any(|path| path.ends_with("box.sock"))
+                );
+                self.apply_calls.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+        let sandbox = InspectSandbox {
+            exit_path: layout.exit_file_path(),
+            setup_calls: 0.into(),
+            apply_calls: 0.into(),
+        };
+        let mut security = SecurityOptions::enabled();
+        security.resource_limits.max_open_files = Some(1024);
+        let jail = JailerBuilder::new()
+            .with_box_id("metadata-only")
+            .with_layout(layout)
+            .with_security(security)
+            .build_with(sandbox)
+            .unwrap();
+        jail.prepare().unwrap();
+        let _command = jail.command(Path::new("boxlite-shim"), &[]);
+        assert_eq!(jail.sandbox.setup_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(jail.sandbox.apply_calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]

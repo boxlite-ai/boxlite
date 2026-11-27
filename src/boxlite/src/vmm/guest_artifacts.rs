@@ -6,29 +6,26 @@
 //! `guest-resize2fs`) so they never shadow the *host* `mke2fs` bundled by
 //! `e2fsprogs-sys` (resolved by `disk/ext4.rs` to build images).
 //!
-//! [`GuestArtifacts`] is the single place all three are resolved, and the one
-//! value that binds the three host paths to their identity. The combined
+//! [`GuestArtifacts`] binds the three host paths to their identity. The combined
 //! content identity (`id()`) keys the minimal-rootfs cache, so a rebuild of any
 //! one artifact moves the key — the same "path and identity from the same value"
 //! contract [`GuestBinary`] documents.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use sha2::{Digest, Sha256};
 
 use super::guest_binary::GuestBinary;
 use super::guest_check::validate_guest_bytes;
-use crate::util::find_binary;
 
 /// Hex characters of the content digest used as the identity.
 const ID_LEN: usize = 12;
 
 /// Host-side name the guest `mke2fs` is embedded under.
-const HOST_GUEST_MKE2FS: &str = "guest-mke2fs";
+pub(crate) const HOST_GUEST_MKE2FS: &str = "guest-mke2fs";
 /// Host-side name the guest `resize2fs` is embedded under.
-const HOST_GUEST_RESIZE2FS: &str = "guest-resize2fs";
+pub(crate) const HOST_GUEST_RESIZE2FS: &str = "guest-resize2fs";
 
 /// A resolved guest tool, identified by its host path.
 pub struct GuestTool {
@@ -51,22 +48,6 @@ pub struct GuestArtifacts {
 }
 
 impl GuestArtifacts {
-    /// Resolve the guest artifacts once per process.
-    ///
-    /// Only success is memoised, mirroring [`GuestBinary::get`]: a failure here
-    /// (e.g. the guest tools were not built) must not be cached as a rendered
-    /// string that hides the actionable error. Callers run this in a background
-    /// best-effort task, so a retry on a later boot costs nothing that matters.
-    pub fn get() -> BoxliteResult<&'static Self> {
-        static INSTANCE: OnceLock<GuestArtifacts> = OnceLock::new();
-
-        if let Some(artifacts) = INSTANCE.get() {
-            return Ok(artifacts);
-        }
-        let resolved = Self::resolve()?;
-        Ok(INSTANCE.get_or_init(|| resolved))
-    }
-
     /// Host path to the `boxlite-guest` binary.
     pub fn guest_path(&self) -> &Path {
         &self.guest_path
@@ -87,18 +68,7 @@ impl GuestArtifacts {
         &self.combined_id
     }
 
-    fn resolve() -> BoxliteResult<Self> {
-        let guest = GuestBinary::get()?;
-        let mke2fs = find_binary(HOST_GUEST_MKE2FS)?;
-        let resize2fs = find_binary(HOST_GUEST_RESIZE2FS)?;
-        Self::resolve_at(guest, mke2fs, resize2fs)
-    }
-
     /// Resolve and identify the artifacts from explicit paths.
-    ///
-    /// Split from [`Self::resolve`] so the read-hash-identify step can be
-    /// exercised against known files without touching `BOXLITE_RUNTIME_DIR` or
-    /// the process-wide cache.
     pub(crate) fn resolve_at(
         guest: &GuestBinary,
         mke2fs: PathBuf,

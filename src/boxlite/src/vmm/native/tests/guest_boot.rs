@@ -93,8 +93,8 @@ async fn init_reuses_existing_mounts_and_applies_hostname() {
 #[ignore = "requires native shim, KVM, VMM_KERNEL, VMM_GUEST and VMM_GUEST_PROBE"]
 async fn init_restarts_on_argument_and_startup_errors() {
     for (scenario, diagnostic, status) in [
-        ("bad-args", "unexpected argument", 2),
-        ("help", "BoxLite Guest Agent", 0),
+        ("bad-args", "unknown argument: --unknown-option", 2),
+        ("help", "Usage: boxlite-guest -l|--listen URI", 0),
         ("bad-uri", "Invalid listen URI", 1),
     ] {
         let console = boot(scenario, DEFAULT_MEMORY_MIB).await;

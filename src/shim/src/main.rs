@@ -63,11 +63,19 @@ fn init_logging(box_dir: &Path) -> tracing_appender::non_blocking::WorkerGuard {
 }
 
 fn main() -> BoxliteResult<()> {
-    let t0 = Instant::now();
-    let timing = |msg: &str| eprintln!("[shim] T+{}ms: {msg}", t0.elapsed().as_millis());
+    let t0 = std::env::var_os("BOXLITE_SHIM_TIMING")
+        .is_some()
+        .then(Instant::now);
+    let timing = |msg: &str| {
+        if let Some(t0) = t0 {
+            eprintln!("[shim] T+{}ms: {msg}", t0.elapsed().as_millis());
+        }
+    };
 
-    let wall = chrono::Utc::now().format("%H:%M:%S%.6f");
-    eprintln!("[shim] {wall} T+0ms: main() entered");
+    if t0.is_some() {
+        let wall = chrono::Utc::now().format("%H:%M:%S%.6f");
+        eprintln!("[shim] {wall} T+0ms: main() entered");
+    }
 
     // Read config from stdin (piped by parent process).
     // Stdin avoids /proc/<pid>/cmdline exposure — CLI args are world-readable

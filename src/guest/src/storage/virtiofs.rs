@@ -10,7 +10,7 @@ pub struct VirtiofsMount;
 impl VirtiofsMount {
     /// Mount virtiofs tag to mount point.
     pub fn mount(tag: &str, mount_point: &Path, read_only: bool) -> BoxliteResult<()> {
-        tracing::info!(
+        tracing::debug!(
             "Mounting virtiofs: {} → {} ({})",
             tag,
             mount_point.display(),
@@ -47,7 +47,7 @@ impl VirtiofsMount {
             ))
         })?;
 
-        tracing::info!(
+        tracing::debug!(
             "Mounted virtiofs: {} → {} ({})",
             tag,
             mount_point.display(),

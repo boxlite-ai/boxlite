@@ -1,22 +1,13 @@
 //! Preserve init's pre-start terminal setup and failure cleanup.
 
 use super::*;
-use libcontainer::container::{ContainerStatus, State};
 use nix::pty::{openpty, Winsize};
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, SetArg};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 fn container_with_stdio(root: &Path, pid: i32, master: OwnedFd) -> Container {
     let mut container = Container::for_unit_test("pty-init", root.into(), root.join("bundle"));
-    std::fs::create_dir(root.join("pty-init")).unwrap();
-    State::new(
-        "pty-init",
-        ContainerStatus::Created,
-        Some(pid),
-        root.join("bundle"),
-    )
-    .save(&root.join("pty-init"))
-    .unwrap();
+    container.init_pid = Some(nix::unistd::Pid::from_raw(pid));
     container.stdio = ContainerStdio::pty(master);
     container
 }

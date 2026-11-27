@@ -152,19 +152,25 @@ async fn build_config(
     let transport = BoxTransport::unix(layout.socket_path());
     let ready_transport = BoxTransport::unix(layout.ready_socket_path());
 
-    let local_volume_store = runtime.local_volume_store.clone();
-    let volume_options = options.clone();
-    // Volume resolution does file IO and takes filesystem locks, so keep it
-    // off Tokio's async worker threads.
-    let user_volumes = tokio::task::spawn_blocking(move || {
-        resolve_user_volumes(
-            &volume_options.volumes,
-            &volume_options.mounts,
-            &local_volume_store,
-        )
-    })
-    .await
-    .map_err(|error| BoxliteError::Internal(format!("volume resolution task failed: {error}")))??;
+    let user_volumes = if options.volumes.is_empty() && options.mounts.is_empty() {
+        Vec::new()
+    } else {
+        let local_volume_store = runtime.local_volume_store.clone();
+        let volume_options = options.clone();
+        // Volume resolution does file IO and takes filesystem locks, so keep it
+        // off Tokio's async worker threads.
+        tokio::task::spawn_blocking(move || {
+            resolve_user_volumes(
+                &volume_options.volumes,
+                &volume_options.mounts,
+                &local_volume_store,
+            )
+        })
+        .await
+        .map_err(|error| {
+            BoxliteError::Internal(format!("volume resolution task failed: {error}"))
+        })??
+    };
 
     // Prepare container directories (image/, rw/, rootfs/)
     let container_layout = layout.shared_layout().container(container_id.as_str());

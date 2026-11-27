@@ -32,7 +32,7 @@ impl BlockDeviceMount {
     ) -> BoxliteResult<()> {
         let fs_name = filesystem_to_str(filesystem);
 
-        tracing::info!(
+        tracing::debug!(
             "Mounting block device: {} → {} (filesystem={:?}, format={}, resize={})",
             device.display(),
             mount_point.display(),
@@ -53,7 +53,7 @@ impl BlockDeviceMount {
         if need_format {
             Self::format(device, fs_name)?;
         } else {
-            tracing::info!("Skipping format - using existing filesystem");
+            tracing::debug!("Skipping format - using existing filesystem");
         }
 
         // Create mount point
@@ -94,7 +94,7 @@ impl BlockDeviceMount {
             Self::resize_filesystem(device, filesystem)?;
         }
 
-        tracing::info!(
+        tracing::debug!(
             "Mounted block device: {} → {}",
             device.display(),
             mount_point.display()
@@ -188,7 +188,7 @@ impl BlockDeviceMount {
             )));
         }
 
-        tracing::info!(
+        tracing::debug!(
             "Resizing ext4 filesystem on {} to fill disk",
             device.display()
         );
@@ -213,34 +213,34 @@ impl BlockDeviceMount {
             )));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        tracing::info!("Filesystem resize completed: {}", stdout.trim());
+        tracing::debug!(
+            "Filesystem resize completed: {}",
+            String::from_utf8_lossy(&output.stdout).trim()
+        );
         Ok(())
     }
 
     /// Format device with specified filesystem.
     fn format(device: &Path, filesystem: &str) -> BoxliteResult<()> {
-        // Debug: log user info and device status
-        let uid = unsafe { libc::getuid() };
-        let euid = unsafe { libc::geteuid() };
-        tracing::info!(
+        tracing::debug!(
             "Formatting {} with {} (uid={}, euid={})",
             device.display(),
             filesystem,
-            uid,
-            euid
+            unsafe { libc::getuid() },
+            unsafe { libc::geteuid() }
         );
 
-        // Debug: check device permissions
-        if let Ok(metadata) = std::fs::metadata(device) {
-            use std::os::unix::fs::MetadataExt;
-            tracing::info!(
-                "Device {} mode={:o}, uid={}, gid={}",
-                device.display(),
-                metadata.mode(),
-                metadata.uid(),
-                metadata.gid()
-            );
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            if let Ok(metadata) = std::fs::metadata(device) {
+                use std::os::unix::fs::MetadataExt;
+                tracing::debug!(
+                    "Device {} mode={:o}, uid={}, gid={}",
+                    device.display(),
+                    metadata.mode(),
+                    metadata.uid(),
+                    metadata.gid()
+                );
+            }
         }
 
         let mkfs_cmd = format!("{BIN_DIR}/mkfs.{}", filesystem);
@@ -264,7 +264,7 @@ impl BlockDeviceMount {
             )));
         }
 
-        tracing::info!("Formatted {} successfully", device.display());
+        tracing::debug!("Formatted {} successfully", device.display());
         Ok(())
     }
 }

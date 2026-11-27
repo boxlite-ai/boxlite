@@ -69,7 +69,7 @@ impl GuestServer {
         &self,
         exec_id: &str,
     ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, ExecutionError> {
-        info!(execution_id = %exec_id, "attach request");
+        debug!(execution_id = %exec_id, "attach request");
         match self.execution_lookup(exec_id).await? {
             ExecutionLookup::Live(state) => match state.attach(exec_id).await {
                 Ok(output) => Ok(output),
@@ -633,9 +633,8 @@ async fn spawn_with_executor(
                     format!("Invalid {}: missing container_id", executor_const::ENV_VAR),
                 ));
             }
-            // Caller-controllable (a client can override BOXLITE_EXECUTOR in its
-            // exec env) and joined into a filesystem path below, so require a
-            // single normal component — `..`/`/…` must not escape containers/.
+            // BOXLITE_EXECUTOR can be overridden by the caller. Require the
+            // same single-component ID shape as the container's state paths.
             if !is_single_path_component(container_id) {
                 return Err(spawn_error(
                     execution_id,
@@ -650,26 +649,6 @@ async fn spawn_with_executor(
                 container_id = %container_id,
                 "Using ContainerExecutor"
             );
-            // Refuse cleanly when the container's init has already exited
-            // (docker semantics: no exec in a stopped container). Without
-            // this, the tenant build reaches libcontainer against a dead
-            // init and surfaces an opaque procfs internal error.
-            //
-            // Presence is the signal, not parseability: a torn record still
-            // means init is gone, and letting a bad parse fall through here
-            // would hand the exec straight back to the panic.
-            let exit_file = server.layout.shared().container(container_id).exit_file();
-            if exit_file.exists() {
-                let how = boxlite_shared::layout::ExitRecord::read(&exit_file).map_or_else(
-                    || "init exited".to_string(),
-                    |record| format!("init exited with code {}", record.exit_code),
-                );
-                return Err(spawn_error(
-                    execution_id,
-                    format!("container is not running: {how}"),
-                ));
-            }
-
             // Look up container from registry
             let container_arc = {
                 let containers_guard = server.containers.lock().await;
@@ -680,6 +659,14 @@ async fn spawn_with_executor(
                     )
                 })?
             };
+            // The reaper fills the slot before the exit action writes to
+            // virtiofs. No exec in a container whose init has exited.
+            if let Some(code) = server.init_exit_code(container_id).await {
+                return Err(spawn_error(
+                    execution_id,
+                    format!("container is not running: init exited with code {code}"),
+                ));
+            }
             let executor = ContainerExecutor::new(container_arc);
             let container_ref = executor.container_ref();
             let spawn = match ssh_workload.as_ref() {
@@ -760,11 +747,10 @@ async fn spawn_with_executor(
 /// One revival attempt for a failed exec spawn.
 ///
 /// Retries via `spawn_again` only when the container is provably not running:
-/// a non-running container can never have spawned the command (libcontainer
-/// refuses to build into Created), so the first failure was the Created-window
+/// a Created container can never have spawned the command (the runner refuses
+/// to build into Created), so the first failure was the Created-window
 /// build error and one retry after run_init is safe. A *running* container
-/// must NOT be retried: `spawn_request` can fail in Phase 2 (the PTY console
-/// handshake) after Phase 1 already spawned the process, and a retry would
+/// must NOT be retried: `spawn_request` can fail in PTY handle construction after Phase 1 already spawned the process, and a retry would
 /// execute the user's command twice. A Stopped container fails run_init and
 /// the original error is returned unchanged.
 async fn revive_and_retry<F, Fut, E>(
@@ -813,7 +799,7 @@ mod container_id_path_tests {
     use nix::unistd::{pipe, write, Pid};
 
     /// The retry gate must not re-spawn when the container is already running:
-    /// `spawn_request` can fail after spawning (the PTY console handshake), and
+    /// `spawn_request` can fail after spawning (PTY handle construction), and
     /// a retry would execute the user's command twice. With the old
     /// `is_running() || run_init()` condition the assertion below fails:
     /// "a running container must not be retried — the command may already have
@@ -821,34 +807,14 @@ mod container_id_path_tests {
     #[tokio::test]
     async fn failed_spawn_on_a_running_container_is_not_retried() {
         use crate::container::Container;
-        use libcontainer::container::{ContainerStatus, State};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
-        // Running state with our own (alive) pid — the same trick as
-        // `run_init_is_noop_when_init_already_running` in lifecycle.rs.
         let dir = tempfile::TempDir::new().expect("create temp dir");
-        let state_root = dir
-            .path()
-            .parent()
-            .expect("temp dir has a parent")
-            .to_path_buf();
-        let id = dir
-            .path()
-            .file_name()
-            .expect("temp dir has a name")
-            .to_string_lossy()
-            .to_string();
-        let state = State::new(
-            &id,
-            ContainerStatus::Running,
-            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
-            dir.path().to_path_buf(),
-        );
-        state.save(dir.path()).expect("save libcontainer state");
-
-        let container = Container::for_unit_test(&id, state_root, dir.path().join("bundle"));
+        let mut container =
+            Container::for_unit_test("running", dir.path().into(), dir.path().join("bundle"));
+        container.mark_running_for_unit_test();
         let container_ref = Arc::new(Mutex::new(container));
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_closure = Arc::clone(&calls);

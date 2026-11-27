@@ -174,20 +174,20 @@ fn mount_status(error: BoxliteError) -> Status {
 /// Prepare container rootfs based on the initialization strategy.
 ///
 /// Handles three strategies:
-/// - Merged: Shared rootfs already exists (no-op)
-/// - Overlay: Bind-mount layers to diff dir, create overlayfs
-/// - Disk: Mount block device to shared rootfs
-fn prepare_rootfs(
+/// - Merged: Bind the existing shared rootfs into the bundle
+/// - Overlay: Bind-mount layers to diff dir, then bind the shared rootfs
+/// - Disk: Use the block device mount at the shared rootfs directly
+fn prepare_rootfs<'a>(
     rootfs_init: &RootfsInit,
     container_id: &str,
-    shared_rootfs: &Path,
+    shared_rootfs: &'a Path,
+    bundle_rootfs: &'a Path,
     layout: &GuestLayout,
-) -> Result<(), String> {
+) -> Result<&'a Path, String> {
     match &rootfs_init.strategy {
         Some(rootfs_init::Strategy::Merged(_)) => {
             info!("Rootfs strategy: merged (using shared rootfs)");
-            // Shared rootfs already exists, nothing to do
-            Ok(())
+            // Shared rootfs already exists.
         }
         Some(rootfs_init::Strategy::Overlay(overlay)) => {
             info!(
@@ -214,15 +214,11 @@ fn prepare_rootfs(
             .map_err(|e| format!("Failed to bind-mount layers to diff: {}", e))?;
 
             // TODO: Create overlayfs and mount to shared_rootfs
-            Ok(())
         }
         Some(rootfs_init::Strategy::Disk(disk)) => {
             info!("Rootfs strategy: disk (device={})", disk.device);
 
-            std::fs::create_dir_all(shared_rootfs)
-                .map_err(|e| format!("Failed to create shared rootfs directory: {}", e))?;
-
-            // Mount container rootfs disk with options from host
+            // BlockDeviceMount creates the mountpoint if needed.
             BlockDeviceMount::mount(
                 Path::new(&disk.device),
                 shared_rootfs,
@@ -232,10 +228,24 @@ fn prepare_rootfs(
             )
             .map_err(|e| format!("Failed to mount rootfs disk: {}", e))?;
 
-            Ok(())
+            // Files RPCs still require the shared path. Point OCI at that same
+            // mount rather than creating a second mount inside the bundle.
+            return Ok(shared_rootfs);
         }
-        None => Err("Missing rootfs strategy in Container.Init request".to_string()),
+        None => return Err("Missing rootfs strategy in Container.Init request".to_string()),
     }
+
+    std::fs::create_dir_all(bundle_rootfs)
+        .map_err(|e| format!("Failed to create bundle rootfs directory: {e}"))?;
+    mount(
+        Some(shared_rootfs),
+        bundle_rootfs,
+        None::<&str>,
+        MsFlags::MS_BIND,
+        None::<&str>,
+    )
+    .map_err(|e| format!("Failed to bind mount rootfs: {e}"))?;
+    Ok(bundle_rootfs)
 }
 
 #[tonic::async_trait]
@@ -348,51 +358,30 @@ impl ContainerService for GuestServer {
             .container_bundle_dir(&container_id)
             .join("rootfs");
 
-        // Create bundle rootfs directory
-        if let Err(e) = std::fs::create_dir_all(&bundle_rootfs) {
-            error!("Failed to create bundle rootfs directory: {}", e);
-            return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(internal_init_error(
-                    format!("Failed to create bundle rootfs directory: {}", e),
-                ))),
-            }));
-        }
-
-        // Handle rootfs initialization based on strategy
         let rootfs_init = init_req
             .rootfs
             .ok_or_else(|| Status::invalid_argument("Missing rootfs in Container.Init request"))?;
-
-        if let Err(reason) =
-            prepare_rootfs(&rootfs_init, &container_id, &shared_rootfs, &self.layout)
-        {
-            error!("{}", reason);
-            return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(internal_init_error(
-                    reason,
-                ))),
-            }));
-        }
-
-        // Bind mount shared rootfs to bundle rootfs
-        if let Err(e) = mount(
-            Some(shared_rootfs.as_path()),
+        let rootfs = match prepare_rootfs(
+            &rootfs_init,
+            &container_id,
+            &shared_rootfs,
             &bundle_rootfs,
-            None::<&str>,
-            MsFlags::MS_BIND,
-            None::<&str>,
+            &self.layout,
         ) {
-            error!("Failed to bind mount rootfs: {}", e);
-            return Ok(Response::new(ContainerInitResponse {
-                result: Some(container_init_response::Result::Error(internal_init_error(
-                    format!("Failed to bind mount rootfs: {}", e),
-                ))),
-            }));
-        }
+            Ok(rootfs) => rootfs,
+            Err(reason) => {
+                error!("{reason}");
+                return Ok(Response::new(ContainerInitResponse {
+                    result: Some(container_init_response::Result::Error(internal_init_error(
+                        reason,
+                    ))),
+                }));
+            }
+        };
 
         // Install CA certs into container trust store (from gRPC CACert field).
         if !init_req.ca_certs.is_empty() {
-            let bundle = bundle_rootfs.join("etc/ssl/certs/ca-certificates.crt");
+            let bundle = rootfs.join("etc/ssl/certs/ca-certificates.crt");
             let installer = crate::ca_trust::CaInstaller::with_bundle(bundle);
             let mut installed = 0;
             for ca in &init_req.ca_certs {
@@ -471,8 +460,7 @@ impl ContainerService for GuestServer {
             entrypoint = ?config.entrypoint,
             workdir = %config.workdir,
             env_count = config.env.len(),
-            shared_rootfs = %shared_rootfs.display(),
-            bundle_rootfs = %bundle_rootfs.display(),
+            rootfs = %rootfs.display(),
             container_id = %container_id,
             user_mounts_count = user_mounts.len(),
             device_count = devices.len(),
@@ -482,8 +470,7 @@ impl ContainerService for GuestServer {
         // A new container run starts here, so drop the exit file the
         // previous run left behind. The file is per-run state: a box that is
         // stopped and started again must not inherit the exit its last init
-        // died with, or the guard in Exec would refuse every exec against the
-        // freshly running container ("container is not running: init exited").
+        // died with, or the host would report an exit from the previous run.
         let exit_file = self.layout.shared().container(&container_id).exit_file();
         if let Err(e) = std::fs::remove_file(&exit_file) {
             if e.kind() != std::io::ErrorKind::NotFound {
@@ -496,7 +483,7 @@ impl ContainerService for GuestServer {
             }
         }
 
-        // Start container using OCI bundle rootfs. Init is the box's main
+        // Start container using the prepared rootfs. Init is the box's main
         // command (docker semantics) and may exit on its own; its stdio is
         // pipe-based so the session registered below can stream it, and the
         // guest holds the stdin write-end until a client attaches.
@@ -513,7 +500,7 @@ impl ContainerService for GuestServer {
             .as_millis() as u64;
         let container_result = Container::start(
             &container_id,
-            &bundle_rootfs,
+            rootfs,
             config.entrypoint,
             config.env,
             &config.workdir,
@@ -536,12 +523,8 @@ impl ContainerService for GuestServer {
                 // host calls Container.Start for that. That its pid and stdio
                 // exist already is what lets the session below be registered
                 // against it, and a client attach to it, before it runs.
+                // The handle uses the PID returned by the runner.
                 debug!(container_id = %container_id, "Container created");
-
-                info!(
-                    container_id = %container_id,
-                    "✅ Container started successfully and ready for exec"
-                );
 
                 // Expose init as an attachable exec session under the
                 // host-assigned execution_id: the host's `run` attaches to it
@@ -569,7 +552,7 @@ impl ContainerService for GuestServer {
                         // Register init's exit slot and the follow-up the reaper
                         // fires on delivery (docker semantics: the box
                         // stops when init exits). Init is created but not yet
-                        // started here — it blocks on libcontainer's exec fifo —
+                        // started here — it blocks on the runner's start gate —
                         // so it cannot have exited, and `now` is a sound cutoff:
                         // any slot already under this pid is a recycled-pid
                         // leftover.
@@ -720,13 +703,8 @@ impl ContainerService for GuestServer {
                     }
                 };
 
-                // Store container in registry
-                self.containers.lock().await.insert(
-                    container_id.clone(),
-                    std::sync::Arc::new(tokio::sync::Mutex::new(container)),
-                );
-
-                // The Shutdown RPC reads this slot to write the exit record
+                // Publish the slot before making the container accessible to
+                // Start or Exec. Shutdown also reads the slot to write the exit record
                 // itself before answering the host — the reaper's action may
                 // still be running on its own task when that RPC returns.
                 self.init_exits
@@ -734,24 +712,36 @@ impl ContainerService for GuestServer {
                     .await
                     .insert(container_id.clone(), init_exit);
 
-                // Restore is owned by a task so cancellation cannot release its
-                // serialization lock while storage work is still running.
+                self.containers.lock().await.insert(
+                    container_id.clone(),
+                    std::sync::Arc::new(tokio::sync::Mutex::new(container)),
+                );
+
                 if let Some(guest) = self.ssh_manager.guest() {
-                    let root = shared_rootfs.clone();
-                    let result =
-                        tokio::spawn(async move { guest.ssh_manager.restore(root).await }).await;
-                    match result {
-                        Ok(Ok(())) => {}
-                        Ok(Err(error)) => tracing::warn!(
-                            %container_id,
-                            %error,
-                            "SSH state could not be restored"
-                        ),
-                        Err(error) => tracing::warn!(
-                            %container_id,
-                            reason = if error.is_panic() { "panic" } else { "cancelled" },
-                            "SSH state restore task failed"
-                        ),
+                    let missing_config =
+                        std::fs::symlink_metadata(shared_rootfs.join("etc/boxlite/ssh.cfg"))
+                            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+                    let result = if missing_config {
+                        // Still select the rootfs for later Ssh.Control calls.
+                        // No saved listener to activate in the common case.
+                        guest.ssh_manager.restore(shared_rootfs).await
+                    } else {
+                        // Keep restore's lock and activation alive if this RPC
+                        // is cancelled while restoring persisted state.
+                        match tokio::spawn(
+                            async move { guest.ssh_manager.restore(shared_rootfs).await },
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(error) => Err(Status::internal(format!(
+                                "SSH state restore task failed: {error}"
+                            ))
+                            .into()),
+                        }
+                    };
+                    if let Err(error) = result {
+                        warn!(%container_id, %error, "SSH state could not be restored");
                     }
                 }
 
@@ -977,8 +967,7 @@ impl ContainerService for GuestServer {
 }
 
 impl GuestServer {
-    /// Run a created container's init process. Reached only via the
-    /// `Container.Start` RPC — `Container.Init` creates the container and stops.
+    /// Run a created container's init process for Container.Start or Bootstrap.
     ///
     /// It deliberately does **not** check that init survived the start. Under
     /// docker semantics init *is* the user's command, and a command that finishes
@@ -989,7 +978,7 @@ impl GuestServer {
     /// still surfaces, and more precisely than before: the exit action records
     /// its code (127 for not-found, 126 for not-executable), the box stops with
     /// it, and the client that is already attached sees whatever it printed.
-    async fn run_container_init(&self, container_id: &str) -> Result<(), String> {
+    pub(super) async fn run_container_init(&self, container_id: &str) -> Result<(), String> {
         let containers = self.containers.lock().await;
         let Some(container_arc) = containers.get(container_id).cloned() else {
             return Err(format!("No such container: {}", container_id));

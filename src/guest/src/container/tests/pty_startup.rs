@@ -1,10 +1,8 @@
-//! PTY attachment and real zygote/Youki startup regressions.
+//! PTY attachment and real runner startup regressions.
 
 use super::*;
 use crate::service::exec::exec_handle::PtyMode;
 use crate::service::ssh::SshWorkload;
-use libcontainer::container::{ContainerStatus, State};
-use libcontainer::oci_spec::runtime::{LinuxBuilder, RootBuilder, SpecBuilder};
 use std::fs;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -83,8 +81,7 @@ fn pty_startup_preserves_shell_modes() {
     }
     assert!(nix::unistd::Uid::effective().is_root(), "requires root");
     let id = format!("pty-test-{}", uuid::Uuid::new_v4());
-    let cgroup_path = std::path::Path::new("/sys/fs/cgroup").join(&id);
-    fs::create_dir(&cgroup_path).unwrap();
+    let cgroup_path = std::path::Path::new("/sys/fs/cgroup").join(format!("boxlite:{id}"));
     let _cgroup = Cgroup(cgroup_path);
     let log = tempfile::tempfile().unwrap();
     let mut child = Command::new("unshare")
@@ -142,7 +139,7 @@ impl Drop for Cgroup {
         // This unique group belongs only to the test, including on panic.
         let _ = fs::write(self.0.join("cgroup.kill"), "1");
         for _ in 0..100 {
-            if fs::remove_dir(&self.0).is_ok() {
+            if !self.0.exists() || fs::remove_dir(&self.0).is_ok() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -162,33 +159,78 @@ fn wait_for_file(path: &std::path::Path) {
 fn exercise_startup() {
     let root = tempfile::tempdir().unwrap();
     let id = std::env::var(CHILD_ENV).unwrap();
-    let state_dir = root.path().join(&id);
-    fs::create_dir(&state_dir).unwrap();
-    // An existing namespace owner supplies the tenant's container context.
-    // The workload itself still crosses real zygote IPC and Youki build/exec.
-    State::new(
-        &id,
-        ContainerStatus::Running,
-        Some(std::process::id() as i32),
-        root.path().to_path_buf(),
-    )
-    .save(&state_dir)
-    .unwrap();
-    let spec = SpecBuilder::default()
-        .root(RootBuilder::default().path("/").build().unwrap())
-        .linux(
-            LinuxBuilder::default()
-                .cgroups_path(format!("/{id}"))
-                .build()
-                .unwrap(),
-        )
-        .build()
-        .unwrap();
-    spec.save(root.path().join("config.json")).unwrap();
-
+    use crate::container::spec::{self, ContainerDevices, MountOverride, ProcessSpec, UserMount};
+    let image = root.path().join("image");
+    let outputs = root.path().join("output");
+    fs::create_dir_all(image.join("etc")).unwrap();
+    fs::create_dir(&outputs).unwrap();
+    fs::copy("/etc/passwd", image.join("etc/passwd")).unwrap();
+    fs::copy("/etc/group", image.join("etc/group")).unwrap();
+    let mut mounts = Vec::new();
+    for path in ["/bin", "/sbin", "/lib", "/lib64", "/usr"] {
+        if let Ok(link) = fs::read_link(path) {
+            std::os::unix::fs::symlink(link, image.join(&path[1..])).unwrap();
+        } else if std::path::Path::new(path).is_dir() {
+            mounts.push(UserMount {
+                source: path.into(),
+                destination: path.into(),
+                read_only: true,
+                owner_uid: 0,
+                owner_gid: 0,
+            });
+        }
+    }
+    mounts.push(UserMount {
+        source: outputs.to_str().unwrap().into(),
+        destination: "/work".into(),
+        read_only: false,
+        owner_uid: 0,
+        owner_gid: 0,
+    });
+    crate::container::start::create_container_etc_files(root.path(), &id).unwrap();
+    let spec = spec::init_spec(
+        &image,
+        ProcessSpec {
+            args: vec!["/bin/sleep".into(), "30".into()],
+            env: HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
+            cwd: "/".into(),
+            uid: 0,
+            gid: 0,
+            capabilities: CapabilitySet::default(),
+        },
+        &[],
+        &MountOverride {
+            source: "/sys".into(),
+            options: vec!["rbind".into(), "rro".into()],
+        },
+        root.path(),
+        &mounts,
+        &ContainerDevices::default(),
+        Default::default(),
+    );
     zygote::ZYGOTE
         .set(zygote::Zygote::start().unwrap())
         .unwrap();
+    let server = zygote::ZYGOTE.get().unwrap();
+    let null = fs::File::options()
+        .read(true)
+        .write(true)
+        .open("/dev/null")
+        .unwrap();
+    server
+        .build_init(
+            zygote::InitBuildSpec {
+                container_id: id.clone(),
+                spec,
+                pty_config: None,
+            },
+            &[null.as_raw_fd(); 3],
+        )
+        .unwrap();
+    assert_eq!(server.status(&id).unwrap(), zygote::Status::Created);
+    server.run_init(&id).unwrap();
+    server.run_init(&id).unwrap();
+    assert_eq!(server.status(&id).unwrap(), zygote::Status::Running);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -198,7 +240,11 @@ fn exercise_startup() {
         // Both SSH transports arrive at this typed workload path. Also cover
         // ordinary container exec, which shares the same PTY attachment.
         for ssh in [true, false] {
-            let output = tempfile::tempdir().unwrap();
+            let output = tempfile::tempdir_in(&outputs).unwrap();
+            let container_output = format!(
+                "/work/{}",
+                output.path().file_name().unwrap().to_string_lossy()
+            );
             let script = r#"stty size > "$BOXLITE_PTY_TEST_DIR/size"
                 stty -a > "$BOXLITE_PTY_TEST_DIR/modes"
                 stty raw -echo
@@ -209,13 +255,12 @@ fn exercise_startup() {
                 .to_string();
             let mut cmd = ContainerCommand::new(
                 id.clone(),
-                root.path().to_path_buf(),
                 HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]),
                 (0, 0),
                 "/".into(),
                 CapabilitySet::default(),
             )
-            .env("BOXLITE_PTY_TEST_DIR", output.path().to_str().unwrap())
+            .env("BOXLITE_PTY_TEST_DIR", container_output)
             .with_pty(PtyConfig {
                 rows: 43,
                 cols: 137,
@@ -288,4 +333,5 @@ fn exercise_startup() {
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     });
+    server.remove(&id).unwrap();
 }

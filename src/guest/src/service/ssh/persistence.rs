@@ -110,19 +110,19 @@ pub(super) fn save(root: &Path, state: &DesiredState) -> io::Result<()> {
     let dir = directory(root, true)?.ok_or_else(error)?;
     // The live descriptor pins the verified private directory for both paths.
     let pinned_dir = format!("/proc/self/fd/{}", dir.as_raw_fd());
-    let mut file = tempfile::NamedTempFile::new_in(&pinned_dir)?;
-    fchown(
-        file.as_raw_fd(),
-        Some(Uid::from_raw(0)),
-        Some(Gid::from_raw(0)),
-    )?;
-    fchmod(file.as_raw_fd(), Mode::from_bits_truncate(0o600))?;
-    file.write_all(&bytes)?;
-    file.as_file().sync_all()?;
-    #[cfg(test)]
-    pause_save(false)?;
-    file.persist(Path::new(&pinned_dir).join("ssh.cfg"))
-        .map_err(|err| err.error)?;
+    crate::ca_trust::atomic_replace(&Path::new(&pinned_dir).join("ssh.cfg"), |file| {
+        fchown(
+            file.as_raw_fd(),
+            Some(Uid::from_raw(0)),
+            Some(Gid::from_raw(0)),
+        )?;
+        fchmod(file.as_raw_fd(), Mode::from_bits_truncate(0o600))?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        #[cfg(test)]
+        pause_save(false)?;
+        Ok(())
+    })?;
     #[cfg(test)]
     pause_save(true)?;
     dir.sync_all()
