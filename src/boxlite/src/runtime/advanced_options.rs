@@ -975,17 +975,15 @@ impl AdvancedBoxOptions {
     /// Match the guest's capability resolution: with `add=ALL`, named drops win.
     pub(crate) fn permits_aggregate_mounts(&self) -> bool {
         let caps = self.effective_capabilities();
-        let sys_admin = |name: &String| {
-            name.eq_ignore_ascii_case("SYS_ADMIN") || name.eq_ignore_ascii_case("CAP_SYS_ADMIN")
+        let has = |names: &[String], capability: &str| {
+            names
+                .iter()
+                .any(|name| canonical_capability_name(name) == capability)
         };
-        if caps
-            .add
-            .iter()
-            .any(|name| name.eq_ignore_ascii_case("ALL") || name.eq_ignore_ascii_case("CAP_ALL"))
-        {
-            caps.drop.iter().any(sys_admin)
+        if has(&caps.add, "ALL") {
+            has(&caps.drop, "SYS_ADMIN")
         } else {
-            !caps.add.iter().any(sys_admin)
+            !has(&caps.add, "SYS_ADMIN")
         }
     }
 

@@ -12,9 +12,10 @@
 )]
 
 use std::fmt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use boxlite_shared::constants::normalize_target;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use serde::{Deserialize, Serialize};
@@ -76,21 +77,16 @@ pub(crate) struct MountProgress {
     pub delivered_at_start: bool,
 }
 
-/// The target as the shim, the guest and the store all spell it: an absolute
-/// UTF-8 path of at least one normal component, without `..`.
-pub(crate) fn normalize_target(target: &str) -> Option<String> {
-    if !target.starts_with('/') || target.contains('\0') {
-        return None;
-    }
-    let mut components = Vec::new();
-    for component in Path::new(target).components() {
-        match component {
-            Component::RootDir | Component::CurDir => (),
-            Component::Normal(name) => components.push(name.to_str()?),
-            _ => return None,
+impl MountRequest {
+    /// The request as callers see it in `state`.
+    pub(crate) fn info(&self, state: MountState) -> MountInfo {
+        MountInfo {
+            source: self.source.clone(),
+            target: self.target.clone(),
+            read_only: self.read_only,
+            state,
         }
     }
-    (!components.is_empty()).then(|| format!("/{}", components.join("/")))
 }
 
 /// A caller's target, checked and normalized.

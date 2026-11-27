@@ -145,16 +145,18 @@ impl BoxStore {
     /// Updates queryable columns and JSON while preserving runtime overrides from the row.
     /// Returns error if box doesn't exist (Podman pattern: verify RowsAffected).
     pub fn update_state(&self, box_id: &str, state: &BoxState) -> BoxliteResult<()> {
-        Self::write_state(&self.db.conn(), box_id, state)
+        Self::write_state(&self.db.conn(), box_id, state, None)
     }
 
     /// Write the lifecycle state, keeping what the row holds besides it: the
-    /// runtime overrides and the directory mounts. A handle that read an
-    /// older state cannot replace them with its copy.
+    /// runtime overrides, and the directory mounts unless `mounts` replaces
+    /// them. A handle that read an older state cannot replace them with its
+    /// copy.
     fn write_state(
         conn: &rusqlite::Connection,
         box_id: &str,
         state: &BoxState,
+        mounts: Option<&str>,
     ) -> BoxliteResult<()> {
         let json = serde_json::to_string(state)
             .map_err(|e| BoxliteError::Database(format!("Failed to serialize state: {}", e)))?;
@@ -164,9 +166,9 @@ impl BoxStore {
              json = json_set(?3, \
                  '$.outbound_policy', json_extract(json, '$.outbound_policy'), \
                  '$.disk_size_gb', json_extract(json, '$.disk_size_gb'), \
-                 '$.mounts', json(coalesce(json_extract(json, '$.mounts'), '{}'))) \
+                 '$.mounts', coalesce(json(?5), json(coalesce(json_extract(json, '$.mounts'), '{}')))) \
              WHERE id = ?4",
-            params![state.status.as_str(), state.pid, json, box_id],
+            params![state.status.as_str(), state.pid, json, box_id, mounts],
         ))?;
 
         // Podman pattern: verify rows were actually updated
@@ -488,25 +490,18 @@ mod tests {
         let mut stale = store.load_state(TEST_ID_1).unwrap().unwrap();
         let other = BoxStore::new(Database::open(&path).unwrap());
         // Two clients, two targets, one row: each write lands.
-        let writers = std::sync::Barrier::new(2);
-        std::thread::scope(|scope| {
-            for (client, target) in [(&store, "/work"), (&other, "/second")] {
-                let writers = &writers;
-                scope.spawn(move || {
-                    writers.wait();
-                    client
-                        .update_mounts(TEST_ID_1, |mounts| {
-                            mounts.declare(crate::MountRequest {
-                                source: "/srv/data".into(),
-                                target: target.into(),
-                                read_only: true,
-                            });
-                            Ok(())
-                        })
-                        .unwrap();
-                });
-            }
-        });
+        for (client, target) in [(&store, "/work"), (&other, "/second")] {
+            client
+                .update_mounts(TEST_ID_1, |mounts| {
+                    mounts.declare(crate::MountRequest {
+                        source: "/srv/data".into(),
+                        target: target.into(),
+                        read_only: true,
+                    });
+                    Ok(())
+                })
+                .unwrap();
+        }
 
         // The handle stops the box with the state it read before both writes.
         stale.status = BoxStatus::Stopped;

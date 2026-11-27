@@ -276,15 +276,8 @@ async fn a_source_that_overlaps_a_delivered_directory_is_refused() {
 async fn a_target_at_or_around_the_containers_own_mounts_is_refused() {
     let fx = Fixture::new(BoxStatus::Stopped);
     let bx = fx.handle();
-    for target in [
-        "/dev",
-        "/dev/",
-        "/dev/null",
-        "/proc",
-        "/sys/fs",
-        "/tmp",
-        "/tmp/work",
-    ] {
+    // The target is normalized first; the full matrix lives with the shared helper.
+    for target in ["/dev/", "/tmp/work"] {
         let request = MountRequest {
             target: target.into(),
             ..fx.request()
@@ -306,4 +299,73 @@ async fn a_target_at_or_around_the_containers_own_mounts_is_refused() {
         MountState::Configured
     );
     assert_eq!(bx.mount_list().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_target_with_a_mount_below_it_is_refused() {
+    let data = tempfile::tempdir_in("/tmp").unwrap();
+    let fx = Fixture::with_mounts(
+        BoxStatus::Stopped,
+        vec![MountSpec::bind_mount(
+            data.path().to_str().unwrap(),
+            "/work/inner",
+        )],
+    );
+    let bx = fx.handle();
+    // Applied after the box's own mounts, the directory would cover this one.
+    let request = MountRequest {
+        target: "/work".into(),
+        ..fx.request()
+    };
+    let error = bx.mount_add(request).await.unwrap_err();
+    assert!(
+        matches!(error, BoxliteError::InvalidState(_)) && error.to_string().contains("/work/inner"),
+        "{error}"
+    );
+    assert_eq!(bx.mount_get(Path::new("/work")).await.unwrap(), None);
+
+    // Below that mount, nothing is covered.
+    let request = MountRequest {
+        target: "/work/inner/deeper".into(),
+        ..fx.request()
+    };
+    assert_eq!(
+        bx.mount_add(request).await.unwrap().state,
+        MountState::Configured
+    );
+}
+
+#[tokio::test]
+async fn a_target_below_a_file_the_box_was_created_with_is_refused() {
+    let home = tempfile::tempdir_in("/tmp").unwrap();
+    let file = home.path().join("config");
+    std::fs::write(&file, b"static").unwrap();
+    let fx = Fixture::with_mounts(
+        BoxStatus::Stopped,
+        vec![MountSpec::bind_mount(file.to_str().unwrap(), "/config")],
+    );
+    let bx = fx.handle();
+    // The file's mount leaves no path to mount a directory at.
+    for target in ["/config/cache", "/config/deeper/still"] {
+        let request = MountRequest {
+            target: target.into(),
+            ..fx.request()
+        };
+        let error = bx.mount_add(request).await.unwrap_err();
+        assert!(
+            matches!(error, BoxliteError::InvalidState(_)) && error.to_string().contains("/config"),
+            "{target}: {error}"
+        );
+        assert_eq!(bx.mount_get(Path::new(target)).await.unwrap(), None);
+    }
+
+    // A path that only shares the spelling is another directory.
+    let request = MountRequest {
+        target: "/config-cache".into(),
+        ..fx.request()
+    };
+    assert_eq!(
+        bx.mount_add(request).await.unwrap().state,
+        MountState::Configured
+    );
 }

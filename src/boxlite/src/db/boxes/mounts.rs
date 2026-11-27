@@ -2,8 +2,8 @@
 //! one VM run. Both live in the `mounts` object of the box's state row, next to
 //! the outbound policy, and every write is one short transaction.
 //!
-//! Only the native engine changes declarations and progress; other builds
-//! compile the storage but have no such caller.
+//! Only the native engine reads or changes them: its mount operations, a
+//! start, a clone or an export.
 #![cfg_attr(
     not(all(feature = "native", target_os = "linux", target_arch = "x86_64")),
     allow(dead_code)
@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use boxlite_shared::constants::{normalize_target, path_is_below};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -19,9 +20,7 @@ use std::fmt::Display;
 
 use super::BoxStore;
 use crate::db::db_err;
-use crate::litebox::mounts::{
-    MountInfo, MountProgress, MountRequest, MountState, normalize_target,
-};
+use crate::litebox::mounts::{MountInfo, MountProgress, MountRequest, MountState};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
 use crate::runtime::options::{BoxOptions, MountSpec, MountType, VolumeSpec};
 use crate::runtime::types::BoxState;
@@ -58,16 +57,9 @@ pub(crate) struct Mounts {
     pub progress: BTreeMap<String, MountProgress>,
     /// Creation targets that are no directory declaration: files and managed volumes.
     pub(crate) unmanaged: BTreeSet<String>,
+    /// Creation targets whose source is a file: no directory can sit below one.
+    pub(crate) files: BTreeSet<String>,
     changes: BTreeMap<String, Option<MountRequest>>,
-}
-
-fn info(request: &MountRequest, state: MountState) -> MountInfo {
-    MountInfo {
-        source: request.source.clone(),
-        target: request.target.clone(),
-        read_only: request.read_only,
-        state,
-    }
 }
 
 /// The mounts of the creation formats, split by what their sources are on the
@@ -75,6 +67,7 @@ fn info(request: &MountRequest, state: MountState) -> MountInfo {
 struct Creation {
     directories: BTreeMap<String, MountRequest>,
     unmanaged: BTreeSet<String>,
+    files: BTreeSet<String>,
 }
 
 impl Creation {
@@ -109,6 +102,7 @@ impl Creation {
                 .filter_map(normalize_target)
                 .collect(),
             directories: BTreeMap::new(),
+            files: BTreeSet::new(),
         };
         let directories = volumes
             .iter()
@@ -138,10 +132,11 @@ impl Creation {
             };
             // Both creation formats take a file in the same field. A bind whose
             // source is gone still counts as a directory, so it stays removable.
-            if this.unmanaged.contains(&key)
-                || std::fs::metadata(source).is_ok_and(|metadata| !metadata.is_dir())
-            {
+            if this.unmanaged.contains(&key) {
                 this.unmanaged.insert(key);
+            } else if std::fs::metadata(source).is_ok_and(|metadata| !metadata.is_dir()) {
+                this.unmanaged.insert(key.clone());
+                this.files.insert(key);
             } else {
                 this.directories.insert(
                     key.clone(),
@@ -184,6 +179,7 @@ impl Mounts {
             state,
             declarations: creation.directories,
             unmanaged: creation.unmanaged,
+            files: creation.files,
             changes: BTreeMap::new(),
         };
         for (target, change) in saved.changes {
@@ -217,12 +213,11 @@ impl Mounts {
     /// A mount on record below `target`. A mount applied at `target` after it
     /// would cover it, and a lazy detach of `target` would take it along.
     pub(crate) fn below(&self, target: &str) -> Option<&str> {
-        let below = format!("{target}/");
         self.declarations
             .keys()
             .chain(self.unmanaged.iter())
             .chain(self.progress.keys())
-            .find(|other| other.starts_with(below.as_str()))
+            .find(|other| path_is_below(other, target))
             .map(String::as_str)
     }
 
@@ -242,6 +237,7 @@ impl Mounts {
             None => {
                 self.declarations.remove(target);
                 self.unmanaged.remove(target);
+                self.files.remove(target);
             }
         }
     }
@@ -260,23 +256,23 @@ impl Mounts {
     pub(crate) fn lookup(&self, target: &str) -> Option<MountInfo> {
         self.progress
             .get(target)
-            .map(|entry| info(&entry.request, entry.state))
+            .map(|entry| entry.request.info(entry.state))
             .or_else(|| {
                 self.declarations
                     .get(target)
-                    .map(|request| info(request, MountState::Configured))
+                    .map(|request| request.info(MountState::Configured))
             })
     }
 
     pub(crate) fn visible(&self) -> Vec<MountInfo> {
         self.progress
             .values()
-            .map(|entry| info(&entry.request, entry.state))
+            .map(|entry| entry.request.info(entry.state))
             .chain(
                 self.declarations
                     .iter()
                     .filter(|(target, _)| !self.progress.contains_key(*target))
-                    .map(|(_, request)| info(request, MountState::Configured)),
+                    .map(|(_, request)| request.info(MountState::Configured)),
             )
             .collect()
     }
@@ -416,21 +412,15 @@ impl BoxStore {
         let tx = db_err!(conn.transaction_with_behavior(TransactionBehavior::Immediate))?;
         let mut mounts = Mounts::load(&tx, id, creation)?;
         let result = change(&mut mounts)?;
-        Self::write_state(&tx, id, &mounts.state)?;
-        db_err!(tx.execute(
-            "UPDATE box_state SET json = json_set(json, '$.mounts', json(?1)) WHERE id = ?2",
-            params![
-                db_err!(serde_json::to_string(&Saved {
-                    changes: mounts.changes,
-                    run: (!mounts.progress.is_empty()).then(|| Run {
-                        pid: mounts.state.pid.unwrap_or_default(),
-                        started_at: mounts.state.started_at,
-                        targets: mounts.progress,
-                    }),
-                }))?,
-                id
-            ],
-        ))?;
+        let saved = db_err!(serde_json::to_string(&Saved {
+            changes: mounts.changes,
+            run: (!mounts.progress.is_empty()).then(|| Run {
+                pid: mounts.state.pid.unwrap_or_default(),
+                started_at: mounts.state.started_at,
+                targets: mounts.progress,
+            }),
+        }))?;
+        Self::write_state(&tx, id, &mounts.state, Some(&saved))?;
         db_err!(tx.commit())?;
         Ok(result)
     }

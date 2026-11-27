@@ -463,6 +463,7 @@ mod mounts {
     use std::sync::Arc;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
+    const REQUEST_ID: MountRequestId = [7; 16];
 
     fn fixture() -> (tempfile::TempDir, Arc<AggregateFs>, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -480,7 +481,7 @@ mod mounts {
         (dir, fs, path)
     }
 
-    fn registration(target: &str, request_id: Option<MountRequestId>) -> ControlOp {
+    fn registration(target: &str, request_id: MountRequestId) -> ControlOp {
         ControlOp::RegisterMount {
             source: "/source".into(),
             target: target.into(),
@@ -512,8 +513,7 @@ mod mounts {
         let directory = File::open(dir.path()).unwrap();
         let mut stream = UnixStream::connect(&path).unwrap();
         stream.set_read_timeout(Some(TIMEOUT)).unwrap();
-        let request_id = [7; 16];
-        let body = serde_json::to_vec(&registration("/data", Some(request_id))).unwrap();
+        let body = serde_json::to_vec(&registration("/data", REQUEST_ID)).unwrap();
         let request = http_request("POST", MOUNT_PATH, &body);
         assert_eq!(
             transport::send_with_file(stream.as_raw_fd(), &request[..1], directory.as_raw_fd())
@@ -532,7 +532,7 @@ mod mounts {
         assert_eq!(mount.target, "/data");
         // The reply never arrived: only the request's ID finds the export.
         assert_eq!(
-            client.find_registered(request_id).unwrap().as_ref(),
+            client.find_registered(REQUEST_ID).unwrap().as_ref(),
             Some(mount)
         );
         assert!(client.find_registered([8; 16]).unwrap().is_none());
@@ -545,7 +545,7 @@ mod mounts {
         let (dir, _fs, path) = fixture();
         let directory = File::open(dir.path()).unwrap();
         assert_eq!(
-            exchange(&path, registration("/data", None), None, TIMEOUT).unwrap(),
+            exchange(&path, registration("/data", REQUEST_ID), None, TIMEOUT).unwrap(),
             Err(ControlError::Mount(libc::EINVAL))
         );
         assert_eq!(
@@ -554,10 +554,16 @@ mod mounts {
         );
         let file = tempfile::tempfile().unwrap();
         assert_eq!(
-            exchange(&path, registration("/data", None), Some(&file), TIMEOUT).unwrap(),
+            exchange(
+                &path,
+                registration("/data", REQUEST_ID),
+                Some(&file),
+                TIMEOUT
+            )
+            .unwrap(),
             Err(ControlError::Mount(libc::ENOTDIR))
         );
-        let body = serde_json::to_vec(&registration("/data", None)).unwrap();
+        let body = serde_json::to_vec(&registration("/data", REQUEST_ID)).unwrap();
         let request = http_request("POST", MOUNT_PATH, &body);
         let mut stream = UnixStream::connect(&path).unwrap();
         stream.set_read_timeout(Some(TIMEOUT)).unwrap();
@@ -582,7 +588,13 @@ mod mounts {
         let client = MountControlClient::new(path);
         assert!(client.list().unwrap().is_empty());
         client
-            .register("/source".into(), "/data".into(), directory, false)
+            .register(
+                "/source".into(),
+                "/data".into(),
+                directory,
+                false,
+                REQUEST_ID,
+            )
             .unwrap();
     }
 
@@ -593,7 +605,7 @@ mod mounts {
         let filesystem = Arc::new(AggregateFs::new(vec![]).unwrap());
         boxlite_vmm::insert_aggregate(tag, filesystem);
         let directory = File::open(dir.path()).unwrap();
-        let body = serde_json::to_vec(&registration("/data", None)).unwrap();
+        let body = serde_json::to_vec(&registration("/data", REQUEST_ID)).unwrap();
         let (mut client, stream) = UnixStream::pair().unwrap();
 
         // Queue the complete HTTP request before the byte carrying the descriptor.
@@ -633,6 +645,7 @@ mod mounts {
                 format!("/{admitted}{}", "\"".repeat(2000)),
                 File::open(dir.path()).unwrap(),
                 true,
+                (admitted as u128).to_be_bytes(),
             );
             match result {
                 Ok(_) => admitted += 1,
@@ -706,7 +719,7 @@ mod mounts {
         for (op, directory) in [
             (ControlOp::ListMounts, None),
             (
-                registration("/data", None),
+                registration("/data", REQUEST_ID),
                 Some(File::open(dir.path()).unwrap()),
             ),
         ] {

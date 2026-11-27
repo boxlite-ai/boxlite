@@ -30,7 +30,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use boxlite_shared::constants::{paths_overlap, STANDARD_MOUNT_TARGETS};
+use boxlite_shared::constants::{path_is_below, reserved_mount_target};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::fcntl::OFlag;
 use nix::libc;
@@ -219,15 +219,12 @@ impl Target {
 }
 
 /// Whether this kernel identifies a mount namespace, which recording a
-/// mount needs. The guest advertises it per ping: one `ioctl` on its own
+/// mount needs. The guest advertises it per ping: one read of its own
 /// namespace says whether the container's can be read.
 pub(crate) fn identifies_namespaces() -> bool {
-    File::open("/proc/self/ns/mnt").is_ok_and(|namespace| {
-        let mut id = 0u64;
-        // SAFETY: the descriptor is owned and the ioctl writes one u64.
-        let read = unsafe { libc::ioctl(namespace.as_raw_fd(), libc::NS_GET_MNTNS_ID, &mut id) };
-        read == 0
-    })
+    Target::open(nix::unistd::getpid())
+        .and_then(|own| own.namespace_id())
+        .is_ok()
 }
 
 /// Resolve an OCI destination against the created container's held root.
@@ -329,10 +326,7 @@ impl Attacher {
         read_only: bool,
     ) -> BoxliteResult<RuntimeAttach> {
         // The runtime mounts its own filesystems before any user mount applies.
-        if let Some(root) = STANDARD_MOUNT_TARGETS
-            .into_iter()
-            .find(|root| paths_overlap(&destination.to_string_lossy(), root))
-        {
+        if let Some(root) = reserved_mount_target(destination) {
             return Err(BoxliteError::InvalidArgument(format!(
                 "{} is reserved for the container's own mount at {root}",
                 destination.display()
@@ -505,11 +499,11 @@ impl Attacher {
                 mount_point.display()
             )));
         }
-        if self.runtime.values().any(|record| {
-            record.tree.is_some()
-                && record.mount_point != mount_point
-                && record.mount_point.starts_with(&mount_point)
-        }) {
+        if self
+            .runtime
+            .values()
+            .any(|record| record.tree.is_some() && path_is_below(&record.mount_point, &mount_point))
+        {
             return Err(BoxliteError::InvalidState(
                 "detach runtime descendants first".into(),
             ));
@@ -2006,8 +2000,8 @@ mod tests {
     fn a_runtime_mount_never_covers_a_mount_the_container_needs() {
         let target = Target::open(nix::unistd::getpid()).unwrap();
         let mut attacher = Attacher::default();
-        // At, below and above what the runtime mounts itself.
-        for destination in ["/dev", "/dev/null", "/proc", "/sys/fs", "/tmp", "/tmp/work"] {
+        // Below one root the runtime mounts itself, and at another.
+        for destination in ["/dev/null", "/tmp"] {
             let error = attacher
                 .attach_runtime(
                     "reserved",

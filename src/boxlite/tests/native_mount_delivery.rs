@@ -141,6 +141,7 @@ async fn descriptor_delivery_mounts_and_detaches_in_an_existing_container() {
             "/workspace".into(),
             File::open(&path)?,
             false,
+            uuid::Uuid::new_v4().into_bytes(),
         )
     })
     .await

@@ -2,6 +2,8 @@
 //!
 //! These constants must be identical on both sides of the host-guest boundary.
 
+use std::path::{Component, Path};
+
 /// Container runtime constants
 pub mod container {
     /// Default container hostname
@@ -62,14 +64,87 @@ pub mod mount_tags {
 /// or above one of them: it would hide the container's own mount.
 pub const STANDARD_MOUNT_TARGETS: [&str; 4] = ["/dev", "/proc", "/sys", "/tmp"];
 
+/// The mount target as the store, the shim and the guest all spell it: an
+/// absolute UTF-8 path of at least one normal component, without `..`. `.` and
+/// repeated separators are dropped.
+pub fn normalize_target(target: &str) -> Option<String> {
+    if !target.starts_with('/') || target.contains('\0') {
+        return None;
+    }
+    let mut components = Vec::new();
+    for component in Path::new(target).components() {
+        match component {
+            Component::RootDir | Component::CurDir => (),
+            Component::Normal(name) => components.push(name.to_str()?),
+            _ => return None,
+        }
+    }
+    (!components.is_empty()).then(|| format!("/{}", components.join("/")))
+}
+
+/// Whether `path` lies below `dir`. Components are compared, so `/devnull` is
+/// not below `/dev`.
+pub fn path_is_below(path: impl AsRef<Path>, dir: impl AsRef<Path>) -> bool {
+    let (path, dir) = (path.as_ref(), dir.as_ref());
+    path.strip_prefix(dir).is_ok() && path != dir
+}
+
 /// Whether the container paths `a` and `b` are equal, or one lies below the
 /// other.
-pub fn paths_overlap(a: &str, b: &str) -> bool {
-    fn below(path: &str, dir: &str) -> bool {
-        path.strip_prefix(dir)
-            .is_some_and(|rest| rest.starts_with('/'))
+pub fn paths_overlap(a: impl AsRef<Path>, b: impl AsRef<Path>) -> bool {
+    let (a, b) = (a.as_ref(), b.as_ref());
+    a == b || path_is_below(a, b) || path_is_below(b, a)
+}
+
+/// The standard mount root that `target` is at, below or above, if any.
+pub fn reserved_mount_target(target: impl AsRef<Path>) -> Option<&'static str> {
+    let target = target.as_ref();
+    STANDARD_MOUNT_TARGETS
+        .into_iter()
+        .find(|root| paths_overlap(target, *root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn container_paths_compare_by_component() {
+        for (path, dir) in [("/dev/null", "/dev"), ("/tmp/work", "/tmp")] {
+            assert!(path_is_below(path, dir) && paths_overlap(path, dir));
+        }
+        for (path, dir) in [("/devnull", "/dev"), ("/tmpwork", "/tmp")] {
+            assert!(!path_is_below(path, dir) && !paths_overlap(path, dir));
+        }
+        // Equal paths overlap without one lying below the other.
+        assert!(!path_is_below("/dev", "/dev") && paths_overlap("/dev", "/dev"));
+        assert!(paths_overlap("/dev", "/dev/null"));
     }
-    a == b || below(a, b) || below(b, a)
+
+    #[test]
+    fn reserved_targets_follow_path_components() {
+        for target in [
+            "/dev",
+            "/dev/",
+            "/dev/null",
+            "/proc",
+            "/sys/fs",
+            "/tmp",
+            "/tmp/work",
+        ] {
+            assert!(reserved_mount_target(target).is_some(), "{target}");
+        }
+        assert!(reserved_mount_target("/tmpwork").is_none());
+        assert_eq!(reserved_mount_target("/proc/1"), Some("/proc"));
+    }
+
+    #[test]
+    fn a_target_is_normalized_or_refused() {
+        assert_eq!(normalize_target("//work/./"), Some("/work".to_owned()));
+        for target in ["", "/", "relative", "/a/../b", "/a\0"] {
+            assert_eq!(normalize_target(target), None, "{target:?}");
+        }
+    }
 }
 
 /// SSH lifecycle limits shared between host and guest.

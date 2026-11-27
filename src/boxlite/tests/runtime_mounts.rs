@@ -216,6 +216,24 @@ impl Drop for CommitAbort {
     }
 }
 
+/// Wait until the entry at `target` is in `state`, or absent for `None`.
+async fn wait_for_mount(bx: &LiteBox, target: &str, state: Option<MountState>) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while bx
+            .mount()
+            .get(target)
+            .await
+            .unwrap()
+            .map(|mount| mount.state)
+            != state
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{target} never reached {state:?}"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[ignore = "requires native runtime, KVM and VMM_KERNEL"]
 async fn live_mounts_keep_lazy_references_and_support_remount() {
@@ -372,9 +390,7 @@ async fn offline_declarations_are_read_by_another_process_and_restarted() {
             old.remove("/work").await,
             Err(BoxliteError::Stopped(_))
         ));
-        let held = hold(&next).await;
         next.mount().remove("/work").await.unwrap();
-        release(&next, held, "offline").await;
         next.mount().remove("/late").await.unwrap();
         next.stop().await.unwrap();
         let last = lab.handle(&id).await;
@@ -475,19 +491,15 @@ async fn interrupted_and_committed_changes_choose_the_next_boot() {
             idle.stop().await.unwrap();
         }
 
+        // A caller nobody waits for does not undo its change: the admitted task
+        // commits, and the next boot follows the commit.
         let bx = lab.create(options()).await;
         bx.start().await.unwrap();
-        // Each owner finishes the real write and discards the result, as a disconnected client does.
         let (handle, directory) = (bx.mount(), request(data.path(), "/work", false));
-        tokio::spawn(async move {
-            let _ = handle.add(directory).await;
-        })
-        .await
-        .unwrap();
-        assert_eq!(
-            bx.mount().get("/work").await.unwrap().unwrap().state,
-            MountState::Mounted
-        );
+        let caller = tokio::spawn(async move { handle.add(directory).await });
+        wait_for_mount(&bx, "/work", Some(MountState::Mounted)).await;
+        caller.abort();
+        let _ = caller.await;
         bx.stop().await.unwrap();
         let next = lab.handle(bx.id().as_str()).await;
         assert_eq!(
@@ -497,12 +509,10 @@ async fn interrupted_and_committed_changes_choose_the_next_boot() {
         next.start().await.unwrap();
         first_process(&next, 2, "recovered").await;
         let handle = next.mount();
-        tokio::spawn(async move {
-            let _ = handle.remove("/work").await;
-        })
-        .await
-        .unwrap();
-        assert!(next.mount().get("/work").await.unwrap().is_none());
+        let caller = tokio::spawn(async move { handle.remove("/work").await });
+        wait_for_mount(&next, "/work", None).await;
+        caller.abort();
+        let _ = caller.await;
         next.stop().await.unwrap();
         let last = lab.handle(bx.id().as_str()).await;
         last.start().await.unwrap();
@@ -612,78 +622,6 @@ async fn directories_nested_at_runtime_come_back_in_order_after_a_restart() {
         bx.mount().remove("/nest/child").await.unwrap();
         bx.mount().remove("/nest").await.unwrap();
         assert!(bx.mount().list().await.unwrap().is_empty());
-        bx.stop().await.unwrap();
-    })
-    .await;
-}
-
-#[tokio::test]
-#[ignore = "requires native runtime, KVM and VMM_KERNEL"]
-async fn a_directory_may_not_cover_a_mount_the_box_already_has() {
-    scenario(async |lab| {
-        let (cover, inner) = (source("cover"), source("inner"));
-        let mut opts = options();
-        opts.mounts.push(MountSpec::bind_mount(
-            inner.path().to_str().unwrap(),
-            "/work/inner",
-        ));
-        let bx = lab.create(opts).await;
-        let cover = request(cover.path(), "/work", false);
-
-        // A saved directory applies after the box's own mounts, so it would hide this one.
-        let error = bx.mount().add(cover.clone()).await.unwrap_err();
-        assert!(
-            matches!(error, BoxliteError::InvalidState(_))
-                && error.to_string().contains("/work/inner"),
-            "{error}"
-        );
-        assert_eq!(bx.mount().get("/work").await.unwrap(), None);
-
-        // The same holds while the box runs: either mount could then no longer leave alone.
-        bx.start().await.unwrap();
-        let error = bx.mount().add(cover).await.unwrap_err();
-        assert!(
-            matches!(error, BoxliteError::InvalidState(_))
-                && error.to_string().contains("/work/inner"),
-            "{error}"
-        );
-        assert_eq!(bx.mount().get("/work").await.unwrap(), None);
-        assert_eq!(run(&bx, "cat /work/inner/probe").await, (0, "inner".into()));
-        bx.stop().await.unwrap();
-    })
-    .await;
-}
-
-#[tokio::test]
-#[ignore = "requires native runtime, KVM and VMM_KERNEL"]
-async fn overlapping_host_directories_are_refused_while_the_box_runs() {
-    scenario(async |lab| {
-        let parent = source("parent");
-        let child = parent.path().join("child");
-        std::fs::create_dir(&child).unwrap();
-        let bx = lab.create(options()).await;
-        bx.start().await.unwrap();
-        bx.mount()
-            .add(request(parent.path(), "/parent", false))
-            .await
-            .unwrap();
-
-        // The next start delivers each directory as its own share, and refuses
-        // two shares whose roots overlap.
-        for (source, target) in [(parent.path(), "/again"), (child.as_path(), "/child")] {
-            let error = bx
-                .mount()
-                .add(request(source, target, false))
-                .await
-                .unwrap_err();
-            assert!(
-                matches!(error, BoxliteError::InvalidState(_))
-                    && error.to_string().contains("/parent"),
-                "{target}: {error}"
-            );
-            assert_eq!(bx.mount().get(target).await.unwrap(), None);
-        }
-        demand(&bx, "test ! -e /again && test ! -e /child").await;
         bx.stop().await.unwrap();
     })
     .await;

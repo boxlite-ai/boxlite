@@ -113,7 +113,9 @@ sequenceDiagram
 Registration allocates an export identity and publishes the export before
 replying. The shim keeps no state beyond that table: delivery progress is the
 caller's. A new connection can find the export by request ID if the reply is
-lost. List admission accounts for serialized JSON bytes, including escaping.
+lost. A request ID, like a target, names at most one export: a repeated
+request, or a second export for one target, is refused with `EBUSY`. List
+admission accounts for serialized JSON bytes, including escaping.
 
 The kernel queues connections for the serial control thread. The client has
 one deadline for connect, queue wait, and I/O, including time behind a disk

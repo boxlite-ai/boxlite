@@ -1,9 +1,9 @@
 use super::{ControlMount, MountRequestId};
 use crate::vmm::vmm_socket::{ControlOp, ControlReply, MAX_MOUNT_BODY};
+use boxlite_shared::constants::normalize_target;
 use boxlite_vmm::lookup_aggregate;
 use std::fs::File;
 use std::io;
-use std::path::{Component, Path};
 
 /// Maximum length in bytes of a source or target path in a mount request.
 const MAX_PATH_BYTES: usize = 4096;
@@ -21,7 +21,7 @@ pub(crate) struct Registry {
 /// reply was lost find the export again.
 struct RegisteredMount {
     mount: ControlMount,
-    request_id: Option<MountRequestId>,
+    request_id: MountRequestId,
     /// The bytes the record takes in a `ListMounts` reply, JSON escaping included.
     cost: usize,
 }
@@ -47,28 +47,6 @@ fn record_cost(mount: &ControlMount) -> io::Result<usize> {
     Ok(counter.0 + 1)
 }
 
-/// The target as the registry reports it: absolute, without `.` or repeated
-/// separators, and one path component at least.
-fn normalize_target(target: &str) -> io::Result<String> {
-    if target.len() > MAX_PATH_BYTES || target.contains('\0') || !target.starts_with('/') {
-        return Err(errno(libc::EINVAL));
-    }
-    let mut components = Vec::new();
-    for component in Path::new(target).components() {
-        match component {
-            Component::RootDir | Component::CurDir => (),
-            Component::Normal(name) => {
-                components.push(name.to_str().ok_or_else(|| errno(libc::EINVAL))?)
-            }
-            _ => return Err(errno(libc::EINVAL)),
-        }
-    }
-    if components.is_empty() {
-        return Err(errno(libc::EINVAL));
-    }
-    Ok(format!("/{}", components.join("/")))
-}
-
 impl Registry {
     pub(crate) fn request(
         &mut self,
@@ -88,14 +66,20 @@ impl Registry {
                 if source.is_empty() || source.len() > MAX_PATH_BYTES || source.contains('\0') {
                     return Err(errno(libc::EINVAL));
                 }
-                let target = normalize_target(&target)?;
+                if target.len() > MAX_PATH_BYTES {
+                    return Err(errno(libc::EINVAL));
+                }
+                let target = normalize_target(&target).ok_or_else(|| errno(libc::EINVAL))?;
                 // One request registers one export: a retry must not publish a second.
-                if request_id.is_some()
-                    && self
-                        .mounts
-                        .iter()
-                        .any(|entry| entry.request_id == request_id)
+                if self
+                    .mounts
+                    .iter()
+                    .any(|entry| entry.request_id == request_id)
                 {
+                    return Err(errno(libc::EBUSY));
+                }
+                // One export per target: the guest would mount a second over the first.
+                if self.mounts.iter().any(|entry| entry.mount.target == target) {
                     return Err(errno(libc::EBUSY));
                 }
                 let next = self
@@ -139,7 +123,7 @@ impl Registry {
                 let mount = self
                     .mounts
                     .iter()
-                    .find(|entry| entry.request_id == Some(request_id))
+                    .find(|entry| entry.request_id == request_id)
                     .map(|entry| entry.mount.clone());
                 Ok(ControlReply::RegisteredMount(mount))
             }

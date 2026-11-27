@@ -5,9 +5,9 @@
 //! opened or registered. A change then runs against the lifecycle it is
 //! admitted to: a stopped box only commits a declaration for its next start;
 //! a running one records `Preparing` or `Detaching`, delivers through the shim
-//! and the guest, and commits the confirmation. Queries read the store: they
-//! take no lifecycle lock and touch neither the source directory, the shim nor
-//! the guest. Nothing here starts or restarts the box.
+//! and the guest, and commits the confirmation. Queries only read the store,
+//! on the blocking pool: no lifecycle lock, no shim or guest exchange.
+//! Nothing here starts or restarts the box.
 
 use std::fs::File;
 use std::future::Future;
@@ -17,15 +17,13 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use boxlite_shared::constants::{STANDARD_MOUNT_TARGETS, mount_tags::AGGREGATE, paths_overlap};
+use boxlite_shared::constants::{mount_tags::AGGREGATE, path_is_below, reserved_mount_target};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::{BoxImpl, BoxRun};
 use crate::db::{BoxStore, Mounts};
 use crate::experimental::ExperimentalFeature;
-use crate::litebox::mounts::{
-    MountInfo, MountProgress, MountRequest, MountState, normalize_target, target_key,
-};
+use crate::litebox::mounts::{MountInfo, MountProgress, MountRequest, MountState, target_key};
 use crate::lock::OwnedLockGuard;
 use crate::portal::interfaces::ContainerInterface;
 use crate::runtime::id::BoxID;
@@ -118,7 +116,7 @@ impl Running {
     /// request's entry at the target stays.
     fn release(&self, target: &str, request_id: MountRequestId) -> BoxliteResult<()> {
         self.update(|mounts| {
-            if owns(mounts, target, request_id) {
+            if owned(mounts, target, request_id).is_some() {
                 mounts.progress.remove(target);
             }
             Ok(())
@@ -129,7 +127,7 @@ impl Running {
     /// request's entry. A later request's entry at the target stays.
     fn end(&self, target: &str, request_id: MountRequestId) -> BoxliteResult<()> {
         self.update(|mounts| {
-            if owns(mounts, target, request_id) {
+            if owned(mounts, target, request_id).is_some() {
                 mounts.forget(target);
                 mounts.progress.remove(target);
             }
@@ -152,11 +150,7 @@ impl Running {
             return error;
         }
         let restored = self.update(|mounts| {
-            if let Some(entry) = mounts
-                .progress
-                .get_mut(target)
-                .filter(|entry| entry.request_id == request_id)
-            {
+            if let Some(entry) = owned(mounts, target, request_id) {
                 entry.state = found;
             }
             Ok(())
@@ -218,18 +212,9 @@ async fn guest_step<T>(
         })
 }
 
-/// Whether `target` still holds the entry of `request_id`.
-fn owns(mounts: &Mounts, target: &str, request_id: MountRequestId) -> bool {
-    mounts
-        .progress
-        .get(target)
-        .is_some_and(|entry| entry.request_id == request_id)
-}
-
-/// The entry of `request_id` at `target` while it still takes its add.
-/// Another request's entry, a removed one, or one a removal is detaching
-/// means the mount is no longer the add's.
-fn own_entry<'a>(
+/// The entry of `request_id` at `target`. Another request's entry, or none,
+/// is not this request's to change.
+fn owned<'a>(
     mounts: &'a mut Mounts,
     target: &str,
     request_id: MountRequestId,
@@ -237,7 +222,7 @@ fn own_entry<'a>(
     mounts
         .progress
         .get_mut(target)
-        .filter(|entry| entry.request_id == request_id && entry.state == MountState::Preparing)
+        .filter(|entry| entry.request_id == request_id)
 }
 
 /// A request as the shim, the guest and the store take it: an absolute UTF-8
@@ -261,12 +246,7 @@ impl CheckedRequest {
 
     /// The request as callers see it in `state`.
     fn info(&self, state: MountState) -> MountInfo {
-        MountInfo {
-            source: PathBuf::from(&self.source),
-            target: PathBuf::from(&self.target),
-            read_only: self.read_only,
-            state,
-        }
+        self.request().info(state)
     }
 }
 
@@ -285,10 +265,7 @@ fn checked_request(request: &MountRequest) -> BoxliteResult<CheckedRequest> {
     let target = target_key(&request.target)?;
     // The runtime mounts its own filesystems before any user mount applies,
     // so a directory there, above or below one would hide it.
-    if let Some(root) = STANDARD_MOUNT_TARGETS
-        .into_iter()
-        .find(|root| paths_overlap(&target, root))
-    {
+    if let Some(root) = reserved_mount_target(&target) {
         return Err(BoxliteError::InvalidArgument(format!(
             "mount target {target} is reserved for the container's own mount at {root}"
         )));
@@ -327,8 +304,9 @@ fn open_source(source: &Path) -> BoxliteResult<(File, PathBuf)> {
     Ok((directory, root))
 }
 
-/// Refuse a target that already has a mount on any plane, or one with a
-/// mount below it: a directory applied last would cover that mount.
+/// Refuse a target that already has a mount on any plane, one with a mount
+/// below it, or one below a file the box was created with: a directory applied
+/// last would cover that mount, and a file's mount leaves no path to mount at.
 fn require_free(mounts: &Mounts, target: &str) -> BoxliteResult<()> {
     if mounts.occupied(target) {
         return Err(BoxliteError::InvalidState(format!(
@@ -338,6 +316,11 @@ fn require_free(mounts: &Mounts, target: &str) -> BoxliteResult<()> {
     if let Some(below) = mounts.below(target) {
         return Err(BoxliteError::InvalidState(format!(
             "a mount at {below} sits below {target} and would be covered"
+        )));
+    }
+    if let Some(file) = mounts.files.iter().find(|file| path_is_below(target, file)) {
+        return Err(BoxliteError::InvalidState(format!(
+            "a file the box was created with is mounted at {file}; no directory can sit below it"
         )));
     }
     Ok(())
@@ -434,21 +417,6 @@ fn require_disjoint_source(
     Ok(())
 }
 
-/// A directory cannot go below a file the box was created with: the file's
-/// mount leaves no path to mount it at.
-fn require_below_no_file(binds: &[(String, String)], target: &str) -> BoxliteResult<()> {
-    for (source, guest) in binds {
-        let file = std::fs::metadata(source).is_ok_and(|metadata| !metadata.is_dir());
-        let below = |key: String| target.starts_with(format!("{key}/").as_str());
-        if file && normalize_target(guest).is_some_and(below) {
-            return Err(BoxliteError::InvalidState(format!(
-                "a file the box was created with is mounted at {guest}; no directory can sit below it"
-            )));
-        }
-    }
-    Ok(())
-}
-
 impl BoxImpl {
     /// Admission shared by every mount operation: the `native-vmm`
     /// experimental opt-in and the native engine. Neither starts the box.
@@ -481,23 +449,6 @@ impl BoxImpl {
         }
     }
 
-    /// The host source and container target of every bind the box was created
-    /// with.
-    fn created_binds(&self) -> impl Iterator<Item = (&str, &str)> {
-        let options = &self.config.options;
-        options
-            .volumes
-            .iter()
-            .filter(|volume| volume.managed_volume.is_none())
-            .map(|volume| (volume.host_path.as_str(), volume.guest_path.as_str()))
-            .chain(options.mounts.iter().map(|mount| {
-                (
-                    mount.source.as_deref().unwrap_or_default(),
-                    mount.target.as_str(),
-                )
-            }))
-    }
-
     /// Deliver a host directory into the container, or save it for the next
     /// start of a stopped box.
     pub(crate) async fn mount_add(&self, request: MountRequest) -> BoxliteResult<MountInfo> {
@@ -505,17 +456,11 @@ impl BoxImpl {
         self.require_aggregate_mounts()?;
         let request = checked_request(&request)?;
         // The host filesystem may sit on slow storage.
-        let created: Vec<_> = self
-            .created_binds()
-            .map(|(source, guest)| (source.to_owned(), guest.to_owned()))
-            .collect();
-        let (target, source) = (request.target.clone(), request.source.clone());
-        let (directory, root) = tokio::task::spawn_blocking(move || {
-            require_below_no_file(&created, &target)?;
-            open_source(Path::new(&source))
-        })
-        .await
-        .map_err(|error| BoxliteError::Internal(format!("open source task: {error}")))??;
+        let source = request.source.clone();
+        let (directory, root) =
+            tokio::task::spawn_blocking(move || open_source(Path::new(&source)))
+                .await
+                .map_err(|error| BoxliteError::Internal(format!("open source task: {error}")))??;
         self.mount_change(
             || self.add_while_stopped(&request, &root),
             |run| Self::add_while_running(run, request.clone(), directory, root.clone()),
@@ -561,10 +506,9 @@ impl BoxImpl {
         .await
     }
 
-    /// Run a change against the lifecycle it is admitted to. The lifecycle
-    /// lock decides once: a stopped box commits under the admission, so a
-    /// start cannot pass a write in flight, and a running one takes the change
-    /// inside its VM run.
+    /// Run a change under the box's lifecycle lock, from the admission to the
+    /// end: a stopped box commits under it, so a start cannot pass a write in
+    /// flight, and a running one keeps its VM for the whole change.
     async fn mount_change<T, S, F, R>(
         &self,
         stopped: S,
@@ -576,82 +520,66 @@ impl BoxImpl {
         R: Future<Output = BoxliteResult<T>> + Send + 'static,
         T: Send + 'static,
     {
-        let admitted = self
-            .with_operation(async move {
-                let status = self.state.read().status;
-                match status {
-                    BoxStatus::Paused => Err(BoxliteError::InvalidState(format!(
-                        "Box {} is paused; its mounts stay in place until it resumes or stops",
+        let lock_id = self.state.read().lock_id.ok_or_else(|| {
+            BoxliteError::Internal(format!("box {} is missing lock_id", self.id()))
+        })?;
+        let lifecycle =
+            OwnedLockGuard::new_async(self.runtime.lock_manager.retrieve(lock_id)?).await;
+        let current = self.refresh_state()?;
+        match current.status {
+            BoxStatus::Paused => Err(BoxliteError::InvalidState(format!(
+                "Box {} is paused; its mounts stay in place until it resumes or stops",
+                self.id()
+            ))),
+            BoxStatus::Running => {
+                let Some(pid) = current.pid else {
+                    return Err(BoxliteError::Internal(format!(
+                        "box {} is running without a pid",
                         self.id()
-                    ))),
-                    BoxStatus::Running => Ok(None),
-                    BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed => {
-                        stopped().await.map(Some)
-                    }
-                    status => Err(BoxliteError::InvalidState(format!(
-                        "Cannot change mounts of box {} while it is {status}",
-                        self.id()
-                    ))),
-                }
-            })
-            .await?;
-        match admitted {
-            Some(result) => Ok(result),
-            None => match self.running().await? {
-                Some(run) => self.owned_mount(running(run)).await,
-                // The box stopped while this handle looked at a running one.
-                None => Err(BoxliteError::InvalidState(format!(
-                    "the lifecycle of box {} changed while a mount change was admitted; retry",
-                    self.id()
-                ))),
-            },
+                    )));
+                };
+                let run = self
+                    .running(
+                        lifecycle,
+                        BoxRun {
+                            pid,
+                            started_at: current.started_at,
+                        },
+                    )
+                    .await?;
+                self.owned_mount(running(run)).await
+            }
+            BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed => stopped().await,
+            status => Err(BoxliteError::InvalidState(format!(
+                "Cannot change mounts of box {} while it is {status}",
+                self.id()
+            ))),
         }
     }
 
-    /// The running VM of a change. It takes the box's lifecycle lock and holds
-    /// it until the change ends, so no start or stop can replace the VM under it.
-    async fn running(&self) -> BoxliteResult<Option<Running>> {
+    /// The running VM of a change. The caller holds the box's lifecycle lock
+    /// until the change ends, so no start or stop can replace the VM under it.
+    async fn running(&self, lifecycle: OwnedLockGuard, run: BoxRun) -> BoxliteResult<Running> {
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
                 "Mount cancelled during shutdown".into(),
             ));
         }
-        let (pid, started_at, lock_id) = {
-            let state = self.state.read();
-            (state.pid, state.started_at, state.lock_id)
-        };
-        let lock_id = lock_id.ok_or_else(|| {
-            BoxliteError::Internal(format!("box {} is missing lock_id", self.id()))
-        })?;
-        let lifecycle =
-            OwnedLockGuard::new_async(self.runtime.lock_manager.retrieve(lock_id)?).await;
-        // The lock was free between the admission and here, so another process
-        // may have moved the lifecycle on.
-        let current = self.runtime.box_manager.update_box(self.id())?;
-        if current.pid != pid
-            || current.started_at != started_at
-            || current.status != BoxStatus::Running
-        {
-            return Ok(None);
-        }
-        let Some(pid) = pid else {
-            return Ok(None);
-        };
         // The guest mounts into the namespace of the container's init, so the
         // container runs first. The caller holds the lifecycle lock, so an
         // adopted VM is initialized under it.
         let live = self.existing_live_state_locked().await?;
         self.ensure_container_started(live).await?;
         let guest = live.guest_session.container().await?;
-        Ok(Some(Running {
+        Ok(Running {
             store: self.runtime.box_manager.store().clone(),
             id: self.id().clone(),
-            run: BoxRun { pid, started_at },
+            run,
             control: self.layout.sockets().vmm_sock(),
             _lifecycle: lifecycle,
             guest,
             container_id: self.container_id().to_owned(),
-        }))
+        })
     }
 
     /// Save the declaration for the next start. The source only has to be a
@@ -767,13 +695,7 @@ impl BoxImpl {
             .control("register the directory", {
                 let (target, source) = (target.clone(), request.source.clone());
                 move |client| {
-                    client.register_with_request_id(
-                        source,
-                        target,
-                        directory,
-                        request.read_only,
-                        Some(request_id),
-                    )
+                    client.register(source, target, directory, request.read_only, request_id)
                 }
             })
             .await;
@@ -805,11 +727,15 @@ impl BoxImpl {
             return Err(run.undo(&target, request_id, &export, error, detach).await);
         }
         let committed = run.update(|mounts| {
-            let entry = own_entry(mounts, &target, request_id).ok_or_else(|| {
-                BoxliteError::InvalidState(format!(
-                    "the mount at {target} was removed while being added"
-                ))
-            })?;
+            // Another request's entry, a removed one, or one a removal is
+            // detaching means the mount is no longer the add's.
+            let entry = owned(mounts, &target, request_id)
+                .filter(|entry| entry.state == MountState::Preparing)
+                .ok_or_else(|| {
+                    BoxliteError::InvalidState(format!(
+                        "the mount at {target} was removed while being added"
+                    ))
+                })?;
             entry.state = MountState::Mounted;
             entry.export = Some(export.clone());
             mounts.declare(stored);

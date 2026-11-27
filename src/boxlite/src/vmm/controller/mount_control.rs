@@ -51,23 +51,15 @@ impl MountControlClient {
         }
     }
 
+    /// Publish `file` as one export. A request ID names at most one export,
+    /// so a retry or a lost reply never publishes a second.
     pub fn register(
         &self,
         source: String,
         target: String,
         file: File,
         read_only: bool,
-    ) -> io::Result<ControlMount> {
-        self.register_with_request_id(source, target, file, read_only, None)
-    }
-
-    pub(crate) fn register_with_request_id(
-        &self,
-        source: String,
-        target: String,
-        file: File,
-        read_only: bool,
-        request_id: Option<MountRequestId>,
+        request_id: MountRequestId,
     ) -> io::Result<ControlMount> {
         match self.exchange(
             ControlOp::RegisterMount {

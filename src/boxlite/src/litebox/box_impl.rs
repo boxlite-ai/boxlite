@@ -1543,10 +1543,10 @@ impl BoxImpl {
                 state.init_health_status();
             }
 
-            // Save to DB (cache for queries and recovery). A new VM writes the
-            // mounts its start confirmed in the same transaction; an adopted
-            // VM keeps the ones of its own start.
-            if adopting_running {
+            // Save to DB (cache for queries and recovery). A new native VM
+            // writes the mounts its start confirmed in the same transaction;
+            // every other start only saves the state.
+            if adopting_running || self.config.engine_kind != crate::vmm::VmmKind::Native {
                 self.runtime.box_manager.save_box(&self.config.id, &state)?;
             } else {
                 self.runtime.box_manager.store().update_mounts(

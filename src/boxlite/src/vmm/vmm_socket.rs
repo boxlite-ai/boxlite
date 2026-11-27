@@ -83,8 +83,7 @@ pub(crate) enum ControlOp {
         source: String,
         target: String,
         read_only: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        request_id: Option<MountRequestId>,
+        request_id: MountRequestId,
     },
     #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
     ListMounts,

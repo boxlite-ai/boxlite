@@ -23,6 +23,7 @@ This directory contains integration tests for the BoxLite runtime. Tests run con
 | `pid_file.rs` | Yes | PID file management and process tracking tests |
 | `jailer.rs` | Yes | Jailer default behavior and macOS seatbelt deny lifecycle tests |
 | `clone_export_import.rs` | Yes | Clone, export, and import operations |
+| `runtime_mounts.rs` | Yes | Persistent directory mounts through `bx.mount()` on the native engine. Outside the M2/M3 matrix; the file header gives the command |
 | `sigstop_quiesce.rs` | Yes | SIGSTOP-based quiesce for snapshot operations |
 | `rest_integration.rs` | Yes | REST API integration tests |
 | `agents_opencode.rs` | Yes | OpenCode 2.2 agent adapter; ignored by default, run with `make test:integration:agents` and `BOXLITE_TEST_OPENCODE_BINARY` (see the file header). Its fake model lives in `common/opencode.rs`, which the CLI `agents` tests also include |
