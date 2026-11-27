@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout } from 'node:timers/promises'
 import { DataSource, MigrationInterface, QueryRunner } from 'typeorm'
 import cliDataSource, { baseDataSourceOptions } from './data-source'
+import { AddCompleteOutboundReleaseControl1795096806000 } from './pre-deploy/1795096806000-add-complete-outbound-release-control-migration'
 
 class CreateMigrationProbe1796096799000 implements MigrationInterface {
   async up(runner: QueryRunner) {
@@ -43,6 +44,48 @@ async function waitForActivity(observer: DataSource, name: string, patterns: str
 }
 
 const databaseTest = process.env.DB_HOST ? it : it.skip
+
+databaseTest.each(['journal', 'schema'] as const)(
+  'refuses superseded complete outbound $0 before running DDL',
+  async (kind) => {
+    const schema = `migration_outbound_${randomUUID().replaceAll('-', '')}`
+    const observer = await new DataSource({ ...baseDataSourceOptions, entities: [] }).initialize()
+    const MigrationSource = cliDataSource.constructor as typeof DataSource
+    const source = new MigrationSource({
+      ...baseDataSourceOptions,
+      schema,
+      entities: [],
+      migrations: [AddCompleteOutboundReleaseControl1795096806000, CreateMigrationProbe1796096799000],
+      extra: { options: `-c search_path=${schema},pg_catalog,public` },
+    })
+    try {
+      await observer.query(`CREATE SCHEMA "${schema}"`)
+      await source.initialize()
+      await source.showMigrations()
+      await source.query('INSERT INTO migrations (timestamp, name) VALUES ($1, $2)', [
+        1795096806000,
+        'AddCompleteOutboundReleaseControl1795096806000',
+      ])
+      if (kind === 'journal') {
+        await source.query('INSERT INTO migrations (timestamp, name) VALUES ($1, $2)', [
+          1795096802000,
+          'AddCompleteOutboundAdmission1795096802000',
+        ])
+      } else {
+        await source.query('CREATE TABLE complete_outbound_admission (id integer)')
+      }
+
+      const journal = await source.query('SELECT timestamp FROM migrations ORDER BY timestamp')
+      await expect(source.runMigrations()).rejects.toThrow('Restore the complete outbound migration baseline')
+      expect(await source.query('SELECT timestamp FROM migrations ORDER BY timestamp')).toEqual(journal)
+      expect(await source.query("SELECT to_regclass('migration_probe') AS probe")).toEqual([{ probe: null }])
+    } finally {
+      if (source.isInitialized) await source.destroy()
+      await observer.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+      await observer.destroy()
+    }
+  },
+)
 
 databaseTest('reports a committed revert as successful when unlock fails', async () => {
   const schema = `migration_revert_${randomUUID().replaceAll('-', '')}`

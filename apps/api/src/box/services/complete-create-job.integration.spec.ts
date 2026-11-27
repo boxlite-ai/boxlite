@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
+import { setTimeout as delay } from 'node:timers/promises'
 import { INestApplication, ValidationPipe } from '@nestjs/common'
 import { PassportModule } from '@nestjs/passport'
 import { Test } from '@nestjs/testing'
@@ -9,9 +10,9 @@ import { ApiKeyStrategy } from '../../auth/api-key.strategy'
 import { JwtStrategy } from '../../auth/jwt.strategy'
 import { Context } from '../../common/context/context'
 import type { RunnerContext } from '../../common/interfaces/runner-context.interface'
-import { AddCompleteOutboundAdmission1795096802000 } from '../../migrations/pre-deploy/1795096802000-add-complete-outbound-admission-migration'
 import { AddCompleteOutboundEnrollmentAndClaims1795096803000 } from '../../migrations/pre-deploy/1795096803000-add-complete-outbound-enrollment-and-claims-migration'
 import { AddPendingCompleteV2CreateIndex1795096804000 } from '../../migrations/pre-deploy/1795096804000-add-pending-complete-v2-create-index-migration'
+import { AddCompleteOutboundGeneration1795096805000 } from '../../migrations/pre-deploy/1795096805000-add-complete-outbound-generation-migration'
 import { AddCompleteOutboundReleaseControl1795096806000 } from '../../migrations/pre-deploy/1795096806000-add-complete-outbound-release-control-migration'
 import { CompleteCreateJobController } from '../controllers/complete-create-job.controller'
 import { JobStatus, JobType, ResourceType } from '../dto/job.dto'
@@ -25,10 +26,11 @@ import { BoxState } from '../enums/box-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BoxRepository } from '../repositories/box.repository'
 import { CompleteCreateAttempt, CompleteCreateBox } from '../runner-adapter/outbound-control'
-import { OutboundPolicyStore, requireCompleteOutboundAdmission } from '../stores/outbound-policy.store'
+import { OutboundPolicyStore } from '../stores/outbound-policy.store'
 import { BoxService } from './box.service'
 import { CompleteCreateJobService } from './complete-create-job.service'
 import { JobService } from './job.service'
+import { RunnerService } from './runner.service'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `complete_job_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -73,7 +75,6 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
     const migration = db.createQueryRunner()
     try {
       await migration.query('ALTER TABLE "job" DROP "completeOutboundReconciling"')
-      await new AddCompleteOutboundAdmission1795096802000().up(migration)
       await new AddCompleteOutboundEnrollmentAndClaims1795096803000().up(migration)
       await new AddPendingCompleteV2CreateIndex1795096804000().up(migration)
       await new AddCompleteOutboundReleaseControl1795096806000().up(migration)
@@ -124,18 +125,17 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
       createConfiguration: async () => ({ image: 'pinned-base', metadata: { fixture: 'fixture' }, nested: false }),
     } as never)
     await db.query('TRUNCATE "job", "box", "box_last_activity", "runner", complete_outbound_runner_enrollment')
-    await db.query(
-      "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = $1, api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1",
-      [release],
-    )
     runner = await db.getRepository(Runner).save(
-      new Runner({
-        region: 'local',
-        name: 'runner',
-        apiKey: controlKey,
-        apiUrl: `http://127.0.0.1:${(peer.address() as AddressInfo).port}`,
-        apiVersion: '2',
-      }),
+      Object.assign(
+        new Runner({
+          region: 'local',
+          name: 'runner',
+          apiKey: controlKey,
+          apiUrl: `http://127.0.0.1:${(peer.address() as AddressInfo).port}`,
+          apiVersion: '2',
+        }),
+        { state: RunnerState.READY },
+      ),
     )
     context = { role: 'runner', runnerId: runner.id, runner }
     cancelProof = async (attempt) => ({ attempt, outcome: 'pending' })
@@ -377,20 +377,46 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
     expect(emit.mock.calls.filter(([type]) => type === 'box.state.updated')).toHaveLength(1)
   })
 
-  it('serializes closing release admission with a Box and its V2 job', async () => {
+  it('keeps the selected Runner enrollment locked until the V2 reservation commits', async () => {
     await enroll()
-    const first = reservation()
-    await first.reserve(async () => {
-      await expect(db.query('SELECT id FROM complete_outbound_admission FOR UPDATE NOWAIT')).rejects.toMatchObject({
-        code: '55P03',
-      })
+    const candidate = reservation()
+    await candidate.reserve(async () => {
+      await expect(
+        db.query('SELECT runner_id FROM complete_outbound_runner_enrollment WHERE runner_id = $1 FOR UPDATE NOWAIT', [
+          runner.id,
+        ]),
+      ).rejects.toMatchObject({ code: '55P03' })
     })
-    await db.query("UPDATE complete_outbound_admission SET phase = 'closed' WHERE id = 1")
-    const second = reservation()
-    await expect(second.reserve()).rejects.toMatchObject({ status: 503 })
-    expect(await db.getRepository(Box).findOneBy({ id: second.box.id })).toBeNull()
-    expect(await db.getRepository(Job).findOneBy({ id: second.owner.jobId })).toBeNull()
-    expect((await jobs.claim(context, token)).attempt.job_id).toBe(first.owner.jobId)
+    expect((await jobs.claim(context, token)).attempt.job_id).toBe(candidate.owner.jobId)
+  })
+
+  it('keeps complete placement on a ready enrolled Runner when a better-scored Runner lacks a lease', async () => {
+    const repository = db.getRepository(Runner)
+    const other = await repository.save(
+      Object.assign(
+        new Runner({
+          region: 'local',
+          name: 'unenrolled-runner',
+          apiKey: 'unenrolled-key',
+          apiVersion: '2',
+        }),
+        { state: RunnerState.READY, availabilityScore: 100 },
+      ),
+    )
+    await enroll()
+    const service = Object.assign(Object.create(RunnerService.prototype), {
+      runnerRepository: repository,
+      configService: { getOrThrow: () => 0 },
+    }) as RunnerService
+    expect((await service.findAvailableRunners({ regions: ['local'] })).map(({ id }) => id)).toEqual([
+      other.id,
+      runner.id,
+    ])
+    const placement = { regions: ['local'], requiresCompleteOutbound: true }
+    expect((await service.findAvailableRunners(placement)).map(({ id }) => id)).toEqual([runner.id])
+    await expect(
+      service.getRandomAvailableRunner({ ...placement, excludedRunnerIds: [runner.id] }),
+    ).rejects.toMatchObject({ status: 503 })
   })
 
   it('closes never-delivered work after lease rotation and retains a delivered lease until recovery', async () => {
@@ -415,48 +441,83 @@ describeIfDatabase('complete V2 job ownership (real PostgreSQL)', () => {
     expect((await ordinary.findOne(second.owner.jobId)).status).toBe(JobStatus.FAILED)
   })
 
-  it('requires the complete serving cohort and pins admission to the configured PostgreSQL principal', async () => {
-    const application = `${schema}_api`
-    const retired = `${schema}_old`
-    const connection = db.createQueryRunner()
-    const activate = () =>
-      db.query('SELECT complete_outbound_activate($1, $2, $3, $4)', [
-        release,
-        application,
-        [retired],
-        'verified-fixture-receipt',
-      ])
+  it('rechecks the claimant credential after a concurrent lease rotation commits', async () => {
+    await enroll()
+    const pending = reservation()
+    await pending.reserve()
+    const replacementToken = 'b'.repeat(43)
+    const writer = db.createQueryRunner()
     try {
-      await db.query('SELECT complete_outbound_close()')
-      await db.query(`CREATE ROLE "${application}" LOGIN`)
-      await db.query(`CREATE ROLE "${retired}" LOGIN`)
-      await db.query(`GRANT USAGE ON SCHEMA "${schema}" TO "${application}"`)
-      await expect(activate()).rejects.toThrow('old application principal')
-      await db.query(`ALTER ROLE "${retired}" NOLOGIN`)
-      await db.getRepository(Runner).update(runner.id, { state: RunnerState.READY })
-      await expect(activate()).rejects.toThrow('cohort is incomplete')
-      await enroll()
-      await activate()
-      await expect(requireCompleteOutboundAdmission(db.manager, false)).rejects.toMatchObject({ status: 503 })
-      await connection.query(`SET ROLE "${application}"`)
-      await expect(requireCompleteOutboundAdmission(connection.manager, true)).resolves.toBeUndefined()
-      await expect(connection.query("UPDATE complete_outbound_admission SET phase = 'closed'")).rejects.toMatchObject({
-        code: '42501',
-      })
-      await connection.query('RESET ROLE')
-      await db.query('SELECT complete_outbound_close()')
-      await expect(db.query('SELECT complete_outbound_begin_downgrade()')).rejects.toThrow('still blocks downgrade')
+      await writer.startTransaction()
+      const [{ pid }] = await writer.query('SELECT pg_backend_pid() AS pid')
+      await writer.query(
+        'UPDATE complete_outbound_runner_enrollment SET lease_id = $1, token_sha256 = $2 WHERE runner_id = $3',
+        [randomUUID(), createHash('sha256').update(replacementToken).digest('hex'), runner.id],
+      )
+      const oldClaim = jobs.claim(context, token).catch((error) => error)
+      const deadline = performance.now() + 2000
+      let blocked = false
+      do {
+        const [waiter] = await db.query(
+          'SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))',
+          [pid],
+        )
+        blocked = !!waiter
+        if (!blocked) await delay(20)
+      } while (!blocked && performance.now() < deadline)
+      expect(blocked).toBe(true)
+      await writer.commitTransaction()
+      await expect(oldClaim).resolves.toMatchObject({ status: 403 })
+      await expect(jobs.claim(context, replacementToken)).resolves.toBeNull()
+      expect((await ordinary.findOne(pending.owner.jobId)).status).toBe(JobStatus.PENDING)
+    } finally {
+      if (writer.isTransactionActive) await writer.rollbackTransaction()
+      await writer.release()
+    }
+  })
+
+  it('refuses new reservations and claims while the Runner drains and still accepts owned evidence', async () => {
+    await enroll()
+    const pending = reservation()
+    await pending.reserve()
+    await db.getRepository(Runner).update(runner.id, { draining: true })
+    const newer = reservation()
+    newer.box.name = 'draining-reservation'
+    await expect(newer.reserve()).rejects.toMatchObject({ status: 503 })
+    await expect(jobs.claim(context, token)).rejects.toMatchObject({ status: 403 })
+    expect((await ordinary.findOne(pending.owner.jobId)).status).toBe(JobStatus.PENDING)
+
+    await db.getRepository(Runner).update(runner.id, { draining: false })
+    const claim = await jobs.claim(context, token)
+    expect(claim.attempt.job_id).toBe(pending.owner.jobId)
+    await db.getRepository(Runner).update(runner.id, { draining: true })
+    await jobs.accept(context, token, pending.owner.jobId, { attempt: claim.attempt, outcome: 'no_effect' })
+    expect((await ordinary.findOne(pending.owner.jobId)).status).toBe(JobStatus.FAILED)
+  })
+
+  it('refuses a live lease and permits a drained downgrade without an admission table', async () => {
+    await enroll()
+    const connection = db.createQueryRunner()
+    const releaseControl = new AddCompleteOutboundReleaseControl1795096806000()
+    try {
+      await connection.startTransaction()
+      await expect(releaseControl.down(connection)).rejects.toThrow('enrollment still blocks downgrade')
+      await connection.rollbackTransaction()
+
       await db.query(
         "UPDATE complete_outbound_runner_enrollment SET expires_at = clock_timestamp() - interval '1 second'",
       )
-      await db.query('SELECT complete_outbound_begin_downgrade()')
-      const [state] = await db.query('SELECT phase, minimum_release FROM complete_outbound_admission')
-      expect(state).toEqual({ phase: 'downgrading', minimum_release: release })
+      await connection.startTransaction()
+      await releaseControl.down(connection)
+      await new AddCompleteOutboundGeneration1795096805000().down(connection)
+      await new AddCompleteOutboundEnrollmentAndClaims1795096803000().down(connection)
+      const [schemaState] = await connection.query(
+        "SELECT to_regclass('complete_outbound_runner_enrollment') AS enrollment",
+      )
+      expect(schemaState.enrollment).toBeNull()
     } finally {
-      await connection.query('RESET ROLE').catch(() => undefined)
+      if (connection.isTransactionActive) await connection.rollbackTransaction()
       await connection.release()
-      await db.query(`DROP OWNED BY "${application}"`).catch(() => undefined)
-      await db.query(`DROP ROLE IF EXISTS "${application}", "${retired}"`)
     }
   })
 

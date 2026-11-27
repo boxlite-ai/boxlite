@@ -10,7 +10,6 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { AddOutboundControl1794888000000 } from '../../migrations/pre-deploy/1794888000000-add-outbound-control-migration'
 import { AddCompleteOutboundControl1795096800000 } from '../../migrations/pre-deploy/1795096800000-add-complete-outbound-control-migration'
 import { AddPendingCompleteV0CreateIndex1795096801000 } from '../../migrations/pre-deploy/1795096801000-add-pending-complete-v0-create-index-migration'
-import { AddCompleteOutboundAdmission1795096802000 } from '../../migrations/pre-deploy/1795096802000-add-complete-outbound-admission-migration'
 import { AddCompleteOutboundEnrollmentAndClaims1795096803000 } from '../../migrations/pre-deploy/1795096803000-add-complete-outbound-enrollment-and-claims-migration'
 import { Job } from '../entities/job.entity'
 import {
@@ -103,7 +102,6 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     try {
       await migration.query('ALTER TABLE "job" DROP "completeOutboundReconciling"')
       await new AddCompleteOutboundEnrollmentAndClaims1795096803000().up(migration)
-      await new AddCompleteOutboundAdmission1795096802000().up(migration)
     } finally {
       await migration.release()
     }
@@ -128,9 +126,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
   })
 
   beforeEach(async () => {
-    await primary.query(
-      "UPDATE complete_outbound_admission SET phase = 'closed', minimum_release = NULL, api_principal = NULL WHERE id = 1",
-    )
+    await primary.query('DELETE FROM complete_outbound_runner_enrollment WHERE runner_id = $1', [runnerId])
     proxy.rejectConnections = false
     proxy.rejectAfterCut = false
     box = Object.assign(new Box('local', randomUUID()), {
@@ -234,7 +230,8 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       `INSERT INTO complete_outbound_runner_enrollment
       (runner_id, lease_id, token_sha256, runner_key_sha256, verified_floor, expires_at)
       VALUES ($1, $2, $3, $3, $4, clock_timestamp() + interval '1 hour')
-      ON CONFLICT (runner_id) DO UPDATE SET verified_floor = EXCLUDED.verified_floor, expires_at = EXCLUDED.expires_at`,
+      ON CONFLICT (runner_id) DO UPDATE SET lease_id = EXCLUDED.lease_id,
+        verified_floor = EXCLUDED.verified_floor, expires_at = EXCLUDED.expires_at`,
       [runner.id, runnerLeaseId, hash, release],
     )
   }
@@ -348,9 +345,6 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
 
   async function reserveV0Create(createdAt = new Date(Date.now() - 60_000)) {
     await enrollV0('test-release')
-    await primary.query(
-      "UPDATE complete_outbound_admission SET minimum_release = 'test-release', api_principal = current_user WHERE id = 1",
-    )
     const pending = { ...completeIntent, kind: 'create', transport: 'v0', incarnation: box.id } as const
     const reservation = { version: 2, committed: null, pending } as const
     await primary.getRepository(Box).update(box.id, {
@@ -401,13 +395,10 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     return { manager, emit, repository }
   }
 
-  it('admits from BoxService only after an exact preparation and holds the release lock through insert', async () => {
+  it('admits from BoxService only after an exact preparation and holds the Runner lease through insert', async () => {
     const { manager, repository } = await v0Manager()
     const events: Promise<void>[] = []
     const trace: string[] = []
-    const open =
-      "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'test-release', api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1"
-    const close = "UPDATE complete_outbound_admission SET phase = 'closed', minimum_release = NULL WHERE id = 1"
     const service = Object.assign(Object.create(BoxService.prototype), {
       boxRepository: repository,
       organizationService: {
@@ -435,10 +426,11 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       service.create({ name: 'admitted-v0', image: 'base' }, { id: org } as never, Context.user(), {
         completeOutbound: { mode: 'enabled', allow_net: [], deny_net: [] },
         onPersist: async () => {
-          // Release close takes an exclusive row lock. A second connection
-          // cannot acquire it while the transaction that reserved the Box commits.
           await expect(
-            primary.query('SELECT id FROM complete_outbound_admission FOR UPDATE NOWAIT'),
+            primary.query(
+              'SELECT runner_id FROM complete_outbound_runner_enrollment WHERE runner_id = $1 FOR UPDATE NOWAIT',
+              [runner.id],
+            ),
           ).rejects.toMatchObject({ code: '55P03' })
           trace.push('reserved')
         },
@@ -446,10 +438,8 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     try {
       await expect(create()).rejects.toMatchObject({
         status: 503,
-        response: expect.objectContaining({ code: 'complete_outbound_closed' }),
       })
       expect(trace).toEqual([])
-      await primary.query(open)
       await enrollV0('test-release')
       completeCreatePeer = async (path, _body, response) => {
         trace.push(path.split('/').at(-1))
@@ -460,19 +450,31 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       expect(await primary.getRepository(Box).findOneBy({ organizationId: org, name: 'admitted-v0' })).toBeNull()
       expect(events).toHaveLength(0)
 
-      let closing: Promise<unknown> | undefined
+      let rotating: Promise<unknown> | undefined
+      let enrollmentLocked: boolean | undefined
       const reserve = repository.insertCompleteCreate.bind(repository)
       jest.spyOn(repository, 'insertCompleteCreate').mockImplementationOnce(async (...args) => {
-        expect(closing).toBeDefined()
-        await closing
+        expect(rotating).toBeDefined()
+        await rotating
         return reserve(...args)
       })
       completeCreatePeer = async (_path, _body, response, headers) => {
-        trace.push('prepared-while-closing')
-        await expect(
-          primary.query('SELECT id FROM complete_outbound_admission FOR UPDATE NOWAIT'),
-        ).rejects.toMatchObject({ code: '55P03' })
-        closing = primary.query(close)
+        trace.push('prepared-while-rotating')
+        enrollmentLocked = await primary
+          .query('SELECT runner_id FROM complete_outbound_runner_enrollment WHERE runner_id = $1 FOR UPDATE NOWAIT', [
+            runner.id,
+          ])
+          .then(
+            () => false,
+            (error) => {
+              if (error.code !== '55P03') throw error
+              return true
+            },
+          )
+        rotating = primary.query('UPDATE complete_outbound_runner_enrollment SET lease_id = $1 WHERE runner_id = $2', [
+          randomUUID(),
+          runner.id,
+        ])
         response.end(
           JSON.stringify({
             snapshot: { ...complete, revision: headers['x-boxlite-outbound-revision'] },
@@ -482,11 +484,11 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       }
       await expect(create()).rejects.toMatchObject({
         status: 503,
-        response: expect.objectContaining({ code: 'complete_outbound_closed' }),
       })
-      expect(trace).toEqual(['prepare-create', 'prepared-while-closing'])
+      expect(enrollmentLocked).toBe(true)
+      expect(trace).toEqual(['prepare-create', 'prepared-while-rotating'])
       expect(await primary.getRepository(Box).findOneBy({ organizationId: org, name: 'admitted-v0' })).toBeNull()
-      await primary.query(open)
+      await enrollV0('test-release')
 
       completeCreatePeer = async (path, body, response, headers) => {
         trace.push(path.split('/').at(-1))
@@ -510,7 +512,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       await Promise.all(events)
       expect(trace).toEqual([
         'prepare-create',
-        'prepared-while-closing',
+        'prepared-while-rotating',
         'prepare-create',
         'budget',
         'reserved',
@@ -520,7 +522,6 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     } finally {
       await Promise.allSettled(events)
       await primary.getRepository(Box).delete({ organizationId: org, name: 'admitted-v0' })
-      await primary.query(close)
     }
   })
 
@@ -783,9 +784,6 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     const predecessor = persistedCompleteOutbound(await store.read(box.id, org))!
     let installed = predecessor
     try {
-      await primary.query(
-        "UPDATE complete_outbound_admission SET phase = 'open', minimum_release = 'fixture', api_principal = current_user, deployment_receipt = 'fixture' WHERE id = 1",
-      )
       await enrollV0('fixture')
       completeCreatePeer = async (path, command, response) => {
         expect(path).toBe(`/v1/boxes/${box.id}/network/outbound/complete/replace-control`)
@@ -852,7 +850,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       expect(resolved.completeOutboundControl?.finalization).toBeUndefined()
       if (fault === 'before') expect(resolved.completeOutboundControl).toBeNull()
     } finally {
-      await primary.query("UPDATE complete_outbound_admission SET phase = 'closed' WHERE id = 1")
+      await primary.query('DELETE FROM complete_outbound_runner_enrollment WHERE runner_id = $1', [runner.id])
     }
   })
 

@@ -1,4 +1,5 @@
 import { MigrationInterface, QueryRunner } from 'typeorm'
+import { assertCompleteOutboundDrained } from '../complete-outbound-schema'
 
 export class AddCompleteOutboundEnrollmentAndClaims1795096803000 implements MigrationInterface {
   async up(runner: QueryRunner): Promise<void> {
@@ -14,24 +15,7 @@ export class AddCompleteOutboundEnrollmentAndClaims1795096803000 implements Migr
   }
 
   async down(runner: QueryRunner): Promise<void> {
-    await runner.query('LOCK TABLE complete_outbound_admission IN ACCESS EXCLUSIVE MODE')
-    const [admission] = await runner.query(
-      'SELECT phase, minimum_release FROM complete_outbound_admission WHERE id = 1',
-    )
-    if (
-      !admission ||
-      (admission.phase !== 'downgrading' && (admission.phase !== 'closed' || admission.minimum_release !== null))
-    ) {
-      throw new Error('Complete outbound release controller must close and drain admission before downgrade')
-    }
-    await runner.query('LOCK TABLE "box", "job", complete_outbound_runner_enrollment IN ACCESS EXCLUSIVE MODE')
-    const [state] = await runner.query(`SELECT
-      EXISTS (SELECT 1 FROM "box" WHERE "completeOutboundControl" IS NOT NULL) AS protected,
-      EXISTS (SELECT 1 FROM "job" WHERE type = 'CREATE_COMPLETE_OUTBOUND_BOX' AND "completedAt" IS NULL) AS pending,
-      EXISTS (SELECT 1 FROM complete_outbound_runner_enrollment WHERE expires_at > current_timestamp) AS enrolled`)
-    if (state.protected || state.pending || state.enrolled) {
-      throw new Error('Protected records, jobs or leases still block downgrade')
-    }
+    await assertCompleteOutboundDrained(runner, false)
     await runner.query('ALTER TABLE "job" DROP COLUMN "completeOutboundReconciling"')
     await runner.query('DROP TABLE complete_outbound_runner_enrollment')
   }

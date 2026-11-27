@@ -55,9 +55,7 @@ import {
   OutboundPolicyStore,
   persistedCompleteOutbound,
   persistedOutbound,
-  requireCompleteOutboundAdmission,
   verifiedCompleteRunner,
-  lockCompleteOutboundFloor,
 } from '../stores/outbound-policy.store'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
@@ -216,22 +214,12 @@ export class BoxRepository extends BaseRepository<Box> {
     }
   }
 
-  async assertCompleteCreateAdmission(): Promise<void> {
-    const primary = this.dataSource.createQueryRunner('master')
-    try {
-      await requireCompleteOutboundAdmission(primary.manager, false)
-    } finally {
-      await primary.release()
-    }
-  }
-
   async withCompleteCreateRunner<T>(
     runnerId: string,
     prepare: (runner: Runner, leaseId: string) => Promise<T>,
   ): Promise<T> {
     return this.dataSource.transaction(async (manager) => {
-      await requireCompleteOutboundAdmission(manager, true)
-      const { runner, leaseId } = await verifiedCompleteRunner(manager, runnerId)
+      const { runner, leaseId } = await verifiedCompleteRunner(manager, runnerId, undefined, false, true)
       return prepare(runner, leaseId)
     })
   }
@@ -248,8 +236,13 @@ export class BoxRepository extends BaseRepository<Box> {
     }
     try {
       return await this.insert(box, maxCreatedBoxes, onPersist, async (manager) => {
-        await requireCompleteOutboundAdmission(manager, true)
-        const { runner, leaseId } = await verifiedCompleteRunner(manager, pending.runnerId, preparation.leaseId)
+        const { runner, leaseId } = await verifiedCompleteRunner(
+          manager,
+          pending.runnerId,
+          preparation.leaseId,
+          false,
+          true,
+        )
         if (
           runner.id !== preparation.runner.id ||
           runnerOutboundEndpoint(runner) !== runnerOutboundEndpoint(preparation.runner) ||
@@ -274,7 +267,6 @@ export class BoxRepository extends BaseRepository<Box> {
     operation: (runner: Runner) => Promise<T>,
   ): Promise<T> {
     return this.dataSource.transaction(async (manager) => {
-      await lockCompleteOutboundFloor(manager)
       const { runner } = await verifiedCompleteRunner(manager, runnerId, leaseId, allowExpired)
       return operation(runner)
     })

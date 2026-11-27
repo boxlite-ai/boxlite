@@ -3,7 +3,7 @@
 
 import { setTimeout } from 'node:timers/promises'
 import type { Client, QueryResultRow } from 'pg'
-import { CannotExecuteNotConnectedError, DataSource, MigrationExecutor } from 'typeorm'
+import { CannotExecuteNotConnectedError, DataSource, MigrationExecutor, QueryRunner } from 'typeorm'
 
 const LOCK_NAME = 'boxlite:typeorm:migrations'
 const LOCK_POLL_MS = 250
@@ -66,7 +66,8 @@ async function discardMigrationSession(session: MigrationSession, error: unknown
 
 export class MigrationDataSource extends DataSource {
   override runMigrations(options?: MigrationOptions) {
-    return this.withMigrationLock((executor) => {
+    return this.withMigrationLock(async (executor, runner) => {
+      await this.assertCompleteOutboundSchema(executor, runner)
       executor.transaction = options?.transaction ?? this.options.migrationsTransactionMode ?? 'all'
       executor.fake = options?.fake ?? false
       return executor.executePendingMigrations()
@@ -86,7 +87,31 @@ export class MigrationDataSource extends DataSource {
     return this.withMigrationLock((executor) => executor.showMigrations())
   }
 
-  private async withMigrationLock<T>(execute: (executor: MigrationExecutor) => Promise<T>): Promise<T> {
+  private async assertCompleteOutboundSchema(executor: MigrationExecutor, runner: QueryRunner): Promise<void> {
+    if (!(await executor.getAllMigrations()).some((migration) => migration.timestamp === 1795096806000)) return
+
+    const executed = await executor.getExecutedMigrations()
+    const [obsolete] = await runner.query(
+      `SELECT EXISTS (
+        SELECT 1 FROM pg_class relation JOIN pg_namespace scope ON scope.oid = relation.relnamespace
+        WHERE scope.nspname = COALESCE($1, current_schema()) AND relation.relname = 'complete_outbound_admission'
+      ) OR EXISTS (
+        SELECT 1 FROM pg_proc fn JOIN pg_namespace scope ON scope.oid = fn.pronamespace
+        WHERE scope.nspname = COALESCE($1, current_schema()) AND (
+          fn.proname IN ('complete_outbound_activate', 'complete_outbound_close', 'complete_outbound_begin_downgrade')
+          OR (fn.proname = 'complete_outbound_protect_owned_lease' AND fn.prosrc LIKE '%complete_outbound_admission%')
+        )
+      ) AS present`,
+      [this.driver.schema ?? null],
+    )
+    if (obsolete.present || executed.some((migration) => migration.timestamp === 1795096802000)) {
+      throw new Error('Restore the complete outbound migration baseline before applying startup migrations')
+    }
+  }
+
+  private async withMigrationLock<T>(
+    execute: (executor: MigrationExecutor, runner: QueryRunner) => Promise<T>,
+  ): Promise<T> {
     if (!this.isInitialized) throw new CannotExecuteNotConnectedError(this.name)
 
     const runner = this.createQueryRunner('master')
@@ -106,7 +131,7 @@ export class MigrationDataSource extends DataSource {
       }
 
       try {
-        return await execute(new MigrationExecutor(this, runner))
+        return await execute(new MigrationExecutor(this, runner), runner)
       } finally {
         try {
           await withLockQueryTimeout(session, performance.now() + LOCK_QUERY_MS, async (query) => {
