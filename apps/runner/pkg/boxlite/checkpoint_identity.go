@@ -5,14 +5,23 @@ package boxlite
 
 import (
 	"context"
+	"maps"
 	"strings"
 
 	sdk "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/pkg/checkpoint"
 )
 
 func (c *Client) nativeBoxID(target string) (string, error) {
 	if c.homeDir == "" {
 		return target, nil
+	}
+	allocation, err := c.checkpointOperations().ProtectedAllocation(target)
+	if err != nil {
+		return "", err
+	}
+	if allocation != nil && allocation.NativeID != "" {
+		return allocation.NativeID, nil
 	}
 	return c.checkpointOperations().Resolve(target)
 }
@@ -38,6 +47,11 @@ func (c *Client) listPublicBoxes(ctx context.Context) ([]sdk.BoxInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	allocations, err := c.checkpointOperations().ProtectedAllocationBindings()
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(bindings, allocations)
 	byNativeID := make(map[string]string, len(bindings))
 	for target, id := range bindings {
 		byNativeID[id] = target
@@ -48,6 +62,14 @@ func (c *Client) listPublicBoxes(ctx context.Context) ([]sdk.BoxInfo, error) {
 			info.Name = target
 		} else if strings.HasPrefix(info.Name, "checkpoint-") || bindings[info.Name] != "" {
 			continue
+		} else if strings.HasPrefix(info.Name, checkpoint.ProtectedAllocationPrefix) {
+			attempt, err := c.nativeRunnerAllocation(ctx, info.ID)
+			if sdk.IsNotFound(err) || attempt != "" {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 		visible = append(visible, info)
 	}

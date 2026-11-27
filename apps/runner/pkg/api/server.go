@@ -45,37 +45,43 @@ import (
 )
 
 type ApiServerConfig struct {
-	Logger      *slog.Logger
-	ApiPort     int
-	ApiToken    string
-	TLSCertFile string
-	TLSKeyFile  string
-	EnableTLS   bool
-	LogRequests bool
+	Logger        *slog.Logger
+	ApiPort       int
+	ApiToken      string
+	TLSCertFile   string
+	TLSKeyFile    string
+	EnableTLS     bool
+	LogRequests   bool
+	ApiVersion    int
+	ProtectedBoot ProtectedBootConfig
 }
 
 func NewApiServer(config ApiServerConfig) *ApiServer {
 	return &ApiServer{
-		logger:      config.Logger.With(slog.String("component", "server")),
-		apiPort:     config.ApiPort,
-		apiToken:    config.ApiToken,
-		tlsCertFile: config.TLSCertFile,
-		tlsKeyFile:  config.TLSKeyFile,
-		enableTLS:   config.EnableTLS,
-		logRequests: config.LogRequests,
+		logger:        config.Logger.With(slog.String("component", "server")),
+		apiPort:       config.ApiPort,
+		apiToken:      config.ApiToken,
+		tlsCertFile:   config.TLSCertFile,
+		tlsKeyFile:    config.TLSKeyFile,
+		enableTLS:     config.EnableTLS,
+		logRequests:   config.LogRequests,
+		apiVersion:    config.ApiVersion,
+		protectedBoot: config.ProtectedBoot,
 	}
 }
 
 type ApiServer struct {
-	logger      *slog.Logger
-	apiPort     int
-	apiToken    string
-	tlsCertFile string
-	tlsKeyFile  string
-	enableTLS   bool
-	httpServer  *http.Server
-	router      *gin.Engine
-	logRequests bool
+	logger        *slog.Logger
+	apiPort       int
+	apiToken      string
+	tlsCertFile   string
+	tlsKeyFile    string
+	enableTLS     bool
+	httpServer    *http.Server
+	router        *gin.Engine
+	logRequests   bool
+	apiVersion    int
+	protectedBoot ProtectedBootConfig
 }
 
 func (a *ApiServer) Start(ctx context.Context) error {
@@ -120,6 +126,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 
 	protected := a.router.Group("/")
 	protected.Use(middlewares.AuthMiddleware(a.apiToken))
+	registerProtectedBoot(protected, a.protectedBoot, a.apiVersion, a.enableTLS)
 
 	metricsController := protected.Group("/metrics")
 	{

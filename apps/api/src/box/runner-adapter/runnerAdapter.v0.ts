@@ -4,11 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import axios, { AxiosError } from 'axios'
+import axios, { AxiosError, AxiosInstance } from 'axios'
 import axiosDebug from 'axios-debug-log'
 import axiosRetry from 'axios-retry'
+import { createHmac, randomBytes } from 'node:crypto'
+import { Agent } from 'node:https'
 
-import { Injectable, Logger } from '@nestjs/common'
+import { Injectable, Logger, Optional } from '@nestjs/common'
 import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './runnerAdapter'
 import { Runner } from '../entities/runner.entity'
 import {
@@ -23,6 +25,9 @@ import { Box } from '../entities/box.entity'
 import { memoryGiBOf } from '../utils/memory-allocation'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
+import { ProtectedBootstrapService } from '../services/protected-bootstrap.service'
+import { OutboundCommitUnknown } from '../stores/outbound-policy.store'
+import { checkedBootReceipt, ProtectedBootKey, ProtectedBootRoute } from './protected-runner'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -30,6 +35,13 @@ const isDebugEnabled = process.env.DEBUG === 'true'
 const RETRYABLE_NETWORK_ERROR_CODES = ['ECONNRESET', 'ETIMEDOUT']
 const RUNNER_NON_JSON_ERROR_CODE = 'runner_non_json_error'
 const NON_JSON_SNIPPET_MAX_LENGTH = 180
+
+function protectedCommand(payload: unknown) {
+  const body = JSON.stringify(payload)
+  const requestKey = randomBytes(32)
+  const fingerprint = createHmac('sha256', requestKey).update(body).digest('hex')
+  return { body, fingerprint, headers: { 'X-BoxLite-Bootstrap-Key': requestKey.toString('base64url') } }
+}
 
 function statusCodeFrom(error: AxiosError): number | undefined {
   return error.response?.status || (error as any).status
@@ -124,6 +136,9 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   private boxApiClient: BoxApi
   private runnerApiClient: DefaultApi
   private runner: Runner
+  private bootstrapApi?: AxiosInstance
+
+  constructor(@Optional() private readonly protectedBootstrap?: ProtectedBootstrapService) {}
 
   private convertBoxState(state: EnumsBoxState): BoxState {
     switch (state) {
@@ -156,11 +171,23 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
     this.runner = runner
 
+    const endpoint = URL.parse(runner.apiUrl)
+    const headers = { Authorization: `Bearer ${runner.apiKey}` }
+    this.bootstrapApi =
+      endpoint?.protocol === 'https:' && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash
+        ? axios.create({
+            baseURL: endpoint.href,
+            headers: { ...headers, 'X-BoxLite-Runner-Id': runner.id },
+            httpsAgent: new Agent({ rejectUnauthorized: true }),
+            maxRedirects: 0,
+            proxy: false,
+            timeout: 120_000,
+          })
+        : undefined
+
     const axiosInstance = axios.create({
       baseURL: runner.apiUrl,
-      headers: {
-        Authorization: `Bearer ${runner.apiKey}`,
-      },
+      headers,
       timeout: 1 * 60 * 60 * 1000, // 1 hour
     })
 
@@ -235,6 +262,117 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
+  async supportsProtectedBootstrap(): Promise<boolean> {
+    if (!this.bootstrapApi) return false
+    try {
+      const { data } = await this.bootstrapApi.get('/v1/outbound-proxy/bootstrap', { timeout: 3000 })
+      return (
+        data.runner_id === this.runner.id &&
+        data.version === 1 &&
+        Array.isArray(data.operations) &&
+        ['prepare', 'start', 'receipt', 'retire'].every((operation) => data.operations.includes(operation))
+      )
+    } catch {
+      return false
+    }
+  }
+
+  async createProtectedBox(
+    box: Box,
+    image: string,
+    key: ProtectedBootKey,
+    loadRoute: () => Promise<ProtectedBootRoute>,
+  ) {
+    const bootstrap = this.protectedBootstrap
+    if (
+      !bootstrap ||
+      box.runnerId !== this.runner.id ||
+      key.runner_id !== this.runner.id ||
+      !(await this.supportsProtectedBootstrap())
+    ) {
+      throw new Error('Runner does not qualify for protected bootstrap')
+    }
+    const route = await loadRoute()
+    const prepare = protectedCommand({
+      key,
+      configuration: { ...this.createParameters(box, image, undefined, false, true), volumes: box.volumes },
+    })
+    const start = protectedCommand({ ...route, key })
+    const reserve = () => bootstrap.reserve(box, key, prepare.fingerprint, start.fingerprint)
+    try {
+      await reserve()
+    } catch (error) {
+      if (!(error instanceof OutboundCommitUnknown)) throw error
+      try {
+        await reserve()
+      } catch (recoveryError) {
+        await this.retireProtectedBoot(box.id, key, undefined, true).catch(() => undefined)
+        throw recoveryError
+      }
+    }
+    try {
+      const prepared = (await this.sendProtectedCommand(box.id, '/prepare', key, prepare.body, prepare.headers)) as {
+        box_id?: string
+        native_id?: string
+      }
+      if (prepared?.box_id !== box.id || typeof prepared.native_id !== 'string' || !prepared.native_id) {
+        throw new Error('Runner did not confirm the prepared native Box')
+      }
+      await bootstrap.prepared(box.id, key, prepared.native_id)
+      const evidence = await this.sendProtectedCommand(box.id, '', key, start.body, start.headers)
+      const receipt = checkedBootReceipt(evidence, box.id, key)
+      if (receipt.outcome !== 'confirmed') throw new Error('Runner did not confirm protected startup')
+      await bootstrap.settle(box.id, key, evidence)
+      return receipt
+    } catch (error) {
+      let failure = error
+      const receipt = await this.readProtectedBoot(box.id, key).catch(() => undefined)
+      if (receipt?.outcome === 'confirmed') {
+        try {
+          await bootstrap.settle(box.id, key, { box_id: box.id, receipt })
+          return receipt
+        } catch (settlementError) {
+          failure = settlementError
+        }
+      }
+      await this.retireProtectedBoot(box.id, key, undefined, true).catch(() => undefined)
+      throw failure
+    }
+  }
+
+  async readProtectedBoot(boxId: string, key: ProtectedBootKey, expectedEpoch?: string) {
+    return checkedBootReceipt(await this.sendProtectedCommand(boxId, '/receipt', key, key), boxId, key, expectedEpoch)
+  }
+
+  async retireProtectedBoot(boxId: string, key: ProtectedBootKey, expectedEpoch?: string, onlyUnsettled = false) {
+    if (!this.protectedBootstrap) throw new Error('Protected bootstrap settlement is unavailable')
+    const epoch = await this.protectedBootstrap.beginRetirement(boxId, key, expectedEpoch, onlyUnsettled)
+    const evidence = await this.sendProtectedCommand(boxId, '/retire', key, key)
+    const receipt = checkedBootReceipt(evidence, boxId, key, epoch)
+    if (receipt.outcome !== 'retired') throw new Error('Runner did not confirm protected retirement')
+    await this.protectedBootstrap.settle(boxId, key, evidence)
+    return receipt
+  }
+
+  private async sendProtectedCommand(
+    boxId: string,
+    suffix: '' | '/prepare' | '/receipt' | '/retire',
+    key: ProtectedBootKey,
+    body: unknown,
+    headers?: Record<string, string>,
+  ): Promise<unknown> {
+    if (!this.bootstrapApi || key.runner_id !== this.runner.id)
+      throw new Error('Protected bootstrap requires the assigned Runner HTTPS endpoint')
+    try {
+      const path = `/v1/boxes/${encodeURIComponent(boxId)}/network/outbound/bootstrap${suffix}`
+      return (await this.bootstrapApi.post(path, body, { headers: { 'Content-Type': 'application/json', ...headers } }))
+        .data
+    } catch {
+      // Axios errors retain the request body, including the proxy credential.
+      throw new Error('Protected Runner bootstrap outcome is unconfirmed')
+    }
+  }
+
   async runnerInfo(signal?: AbortSignal): Promise<RunnerInfo> {
     const response = await this.runnerApiClient.runnerInfo({ signal })
     return {
@@ -260,10 +398,22 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     metadata?: { [key: string]: string },
     nestedVirtualization = false,
   ): Promise<StartBoxResponse | undefined> {
+    const response = await this.boxApiClient.create(this.createParameters(box, image, metadata, nestedVirtualization))
+    if (!response?.data?.daemonVersion) return undefined
+    return { daemonVersion: response.data.daemonVersion }
+  }
+
+  private createParameters(
+    box: Box,
+    image: string,
+    metadata?: Record<string, string>,
+    nestedVirtualization = false,
+    protectedPlaceholder = false,
+  ): Parameters<BoxApi['create']>[0] {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
-    const response = await this.boxApiClient.create({
+    return {
       id: box.id,
       ...(nestedVirtualization ? { nestedVirtualization: true } : {}),
       image,
@@ -285,20 +435,13 @@ export class RunnerAdapterV0 implements RunnerAdapter {
         placeholder: secret.placeholder,
         headers: secret.headers,
       })),
-      outboundEnabled: box.outboundEnabled,
-      outboundAllowNet: box.outboundAllowNet ?? undefined,
+      ...(protectedPlaceholder
+        ? { outboundEnabled: false, skipStart: true }
+        : { outboundEnabled: box.outboundEnabled, outboundAllowNet: box.outboundAllowNet ?? undefined }),
       metadata,
       authToken: box.authToken,
       organizationId: box.organizationId,
       regionId: box.region,
-    })
-
-    if (!response?.data?.daemonVersion) {
-      return undefined
-    }
-
-    return {
-      daemonVersion: response.data.daemonVersion,
     }
   }
 

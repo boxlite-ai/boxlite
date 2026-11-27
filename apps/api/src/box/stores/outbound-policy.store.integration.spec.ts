@@ -1,4 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { execFileSync, spawn } from 'node:child_process'
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { Agent } from 'node:https'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Test } from '@nestjs/testing'
+import axios from 'axios'
 import { DataSource } from 'typeorm'
 import { createServer, Server, ServerResponse } from 'node:http'
 import { AddressInfo } from 'node:net'
@@ -6,6 +13,8 @@ import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { BoxConflictError } from '../errors/box-conflict.error'
+import { ApiKeyStrategy } from '../../auth/api-key.strategy'
 import { AddOutboundControl1794888000000 } from '../../migrations/pre-deploy/1794888000000-add-outbound-control-migration'
 import { OutboundCommitUnknown, OutboundPolicyStore, outboundRecord, persistedOutbound } from './outbound-policy.store'
 import { PostgresCommitProxy } from './tests/postgres-commit-proxy'
@@ -13,6 +22,10 @@ import { Runner } from '../entities/runner.entity'
 import { RunnerOutboundControl, OutboundSnapshot } from '../runner-adapter/outbound-control'
 import { OutboundPolicyCoordinator } from '../services/outbound-policy.coordinator'
 import { BoxRepository } from '../repositories/box.repository'
+import { ProtectedBootstrapService } from '../services/protected-bootstrap.service'
+import { ProtectedBootstrapController } from '../controllers/protected-bootstrap.controller'
+import { RunnerAdapterV0 } from '../runner-adapter/runnerAdapter.v0'
+import type { ProtectedBootKey } from '../runner-adapter/protected-runner'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schema = `outbound_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -48,7 +61,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema,
-      entities: [Box, BoxLastActivity],
+      entities: [Box, BoxLastActivity, Runner],
       synchronize: false,
       entitySkipConstructor: true,
       ssl: false as const,
@@ -178,6 +191,375 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
     await primary.getRepository(Box).save(stale)
     expect(outboundRecord(await restarted.read(box.id, org))).toEqual(reserved)
   })
+
+  it('fences ordinary startup and requires exact reclaim evidence after a lost confirmation', async () => {
+    const token = randomUUID()
+    const runner = await primary.getRepository(Runner).save(
+      new Runner({
+        name: token,
+        apiKey: token,
+        apiVersion: '0',
+        region: org,
+        apiUrl: 'https://runner.example.test',
+        proxyUrl: 'https://proxy.example.test',
+      }),
+    )
+    await primary.getRepository(Box).update(box.id, { state: BoxState.STARTING, runnerId: runner.id, pending: true })
+    const key: ProtectedBootKey = {
+      runner_id: runner.id,
+      attempt_id: randomUUID(),
+      registration_id: randomUUID(),
+      registration_revision: '1',
+      policy: persistedOutbound(await store.read(box.id, org)),
+    }
+    const emit = jest.fn()
+    const repository = new BoxRepository(primary, { emit } as never, { invalidate: jest.fn() } as never)
+    const bootstrap = new ProtectedBootstrapService(transport, repository)
+    const fingerprint = 'f'.repeat(64)
+    const command = { box_id: box.id, key, fingerprint, native_id: 'exact-native-box' }
+    const authorization = `Bearer ${token}`
+    const cuts = proxy.cuts
+    proxy.arm('after')
+    await expect(bootstrap.reserve(box, key, fingerprint, fingerprint)).rejects.toBeInstanceOf(OutboundCommitUnknown)
+    expect(proxy.cuts).toBe(cuts + 1)
+    await bootstrap.reserve(box, key, fingerprint, fingerprint)
+    await expect(store.locked(box.id, org, ({ write }) => write(reserved))).rejects.toThrow('fenced')
+    await expect(
+      bootstrap.authorize(runner.id, authorization, { ...command, box_id: 'missingbox12', operation: 'prepare' }),
+    ).rejects.toThrow()
+    await expect(bootstrap.authorize(runnerId, authorization, { ...command, operation: 'prepare' })).rejects.toThrow(
+      'unavailable or ambiguous',
+    )
+    await expect(
+      bootstrap.authorize(runner.id, authorization, {
+        ...command,
+        key: { ...key, attempt_id: randomUUID() },
+        operation: 'prepare',
+      }),
+    ).rejects.toThrow('owner differs')
+    await expect(
+      bootstrap.authorize(runner.id, authorization, { ...command, fingerprint: '0'.repeat(64), operation: 'prepare' }),
+    ).rejects.toThrow('does not match its reservation')
+    await bootstrap.authorize(runner.id, authorization, { ...command, operation: 'prepare' })
+    await bootstrap.prepared(box.id, key, command.native_id)
+    await expect(
+      bootstrap.authorize(runner.id, authorization, { ...command, fingerprint: '0'.repeat(64), operation: 'start' }),
+    ).rejects.toThrow('does not match its reservation')
+    await bootstrap.authorize(runner.id, authorization, { ...command, operation: 'start' })
+    await expect(bootstrap.authorize(runner.id, authorization, { ...command, operation: 'start' })).rejects.toThrow(
+      'reservation is unavailable',
+    )
+    await expect(
+      repository.updateWhere(box.id, {
+        whereCondition: { state: BoxState.STARTING },
+        updateData: { state: BoxState.STARTED },
+      }),
+    ).rejects.toThrow(BoxConflictError)
+    expect((await store.read(box.id, org)).state).toBe(BoxState.STARTING)
+    await bootstrap.beginRetirement(box.id, key)
+    const evidence = (outcome: 'confirmed' | 'retired', allocationClosed = false) => ({
+      box_id: box.id,
+      receipt: { key, epoch: 'runtime-epoch', outcome, nativeId: command.native_id, allocationClosed },
+    })
+    await expect(bootstrap.settle(box.id, key, evidence('confirmed'))).rejects.toThrow('does not match its phase')
+    await expect(bootstrap.settle(box.id, key, evidence('retired'))).rejects.toThrow('does not match its phase')
+    await bootstrap.settle(box.id, key, evidence('retired', true))
+    const settled = await store.read(box.id, org)
+    expect(settled.state).toBe(BoxState.STOPPED)
+    expect(outboundRecord(settled).bootstrap).toBeUndefined()
+    expect(outboundRecord(settled).bootstrapRetirement?.epoch).toBe('runtime-epoch')
+    expect(
+      (await primary.getRepository(BoxLastActivity).findOneByOrFail({ boxId: box.id })).lastActivityAt,
+    ).toBeDefined()
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(emit.mock.calls[0])).not.toContain('bootstrapRetirement')
+    await expect(
+      repository.updateWhere(box.id, {
+        whereCondition: { state: BoxState.STOPPED },
+        updateData: { state: BoxState.STARTED },
+      }),
+    ).rejects.toThrow(BoxConflictError)
+
+    const replacement = { ...key, attempt_id: randomUUID() }
+    await bootstrap.reserve(settled, replacement, fingerprint, fingerprint)
+    await bootstrap.prepared(box.id, replacement, command.native_id)
+    await bootstrap.authorize(runner.id, authorization, { ...command, key: replacement, operation: 'start' })
+    const confirmation = {
+      box_id: box.id,
+      receipt: { key: replacement, epoch: 'replacement-epoch', outcome: 'confirmed', nativeId: command.native_id },
+    }
+    await expect(
+      bootstrap.settle(box.id, replacement, {
+        ...confirmation,
+        receipt: { ...confirmation.receipt, nativeId: 'different-native-box' },
+      }),
+    ).rejects.toThrow('no longer owns the assignment')
+    proxy.arm('after')
+    await bootstrap.settle(box.id, replacement, confirmation)
+    await bootstrap.settle(box.id, replacement, confirmation)
+    const confirmed = await store.read(box.id, org)
+    expect(confirmed.state).toBe(BoxState.STARTED)
+    expect(outboundRecord(confirmed).bootstrap).toMatchObject({ phase: 'confirmed', epoch: 'replacement-epoch' })
+    expect(emit).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(emit.mock.calls[1])).not.toContain('replacement-epoch')
+    await expect(bootstrap.beginRetirement(box.id, replacement, undefined, true)).rejects.toThrow('already settled')
+
+    await primary
+      .getRepository(Runner)
+      .save(new Runner({ name: randomUUID(), apiKey: token, apiVersion: '2', region: org }))
+    await expect(bootstrap.identity(runner.id, authorization)).rejects.toThrow('ambiguous')
+  })
+
+  it('authorizes only the matching Runner through the live private HTTPS controller', async () => {
+    const owners = primary.getRepository(Runner)
+    const saveRunner = () =>
+      owners.save(
+        new Runner({
+          name: randomUUID(),
+          apiKey: randomUUID(),
+          apiVersion: '0',
+          region: org,
+          apiUrl: 'https://runner.example.test',
+        }),
+      )
+    const owner = await saveRunner()
+    const other = await saveRunner()
+    await primary.getRepository(Box).update(box.id, { state: BoxState.STARTING, runnerId: owner.id, pending: true })
+    const boxes = new BoxRepository(primary, { emit: jest.fn() } as never, { invalidate: jest.fn() } as never)
+    const bootstrap = new ProtectedBootstrapService(transport, boxes)
+    const strategy = new ApiKeyStrategy(
+      { get: async () => null } as never,
+      {
+        getApiKeyByValue: async () => {
+          throw new Error('not a user key')
+        },
+      } as never,
+      {} as never,
+      { get: () => undefined } as never,
+      { findByApiKey: (apiKey: string) => owners.findOneBy({ apiKey }) } as never,
+      { findOneByProxyApiKey: async () => null } as never,
+    )
+    const module = await Test.createTestingModule({
+      controllers: [ProtectedBootstrapController],
+      providers: [
+        { provide: ProtectedBootstrapService, useValue: bootstrap },
+        { provide: ApiKeyStrategy, useValue: strategy },
+      ],
+    }).compile()
+    const directory = mkdtempSync(join(tmpdir(), 'protected-callback-'))
+    try {
+      const keyFile = join(directory, 'server.key')
+      const certFile = join(directory, 'server.crt')
+      execFileSync(
+        'openssl',
+        [
+          'req',
+          '-x509',
+          '-newkey',
+          'rsa:2048',
+          '-nodes',
+          '-days',
+          '1',
+          '-subj',
+          '/CN=127.0.0.1',
+          '-addext',
+          'subjectAltName=IP:127.0.0.1',
+          '-keyout',
+          keyFile,
+          '-out',
+          certFile,
+        ],
+        { stdio: 'ignore' },
+      )
+      const cert = readFileSync(certFile)
+      const app = module.createNestApplication({
+        logger: false,
+        httpsOptions: { cert, key: readFileSync(keyFile) },
+      })
+      try {
+        app.setGlobalPrefix('api')
+        const client = axios.create({ httpsAgent: new Agent({ ca: cert }), validateStatus: () => true, proxy: false })
+        await app.listen(0, '127.0.0.1')
+        const url = `${await app.getUrl()}/api/runners/protected-bootstrap`
+        const key: ProtectedBootKey = {
+          runner_id: owner.id,
+          attempt_id: randomUUID(),
+          registration_id: randomUUID(),
+          registration_revision: '1',
+          policy: persistedOutbound(await store.read(box.id, org)),
+        }
+        const fingerprint = 'f'.repeat(64)
+        await bootstrap.reserve(box, key, fingerprint, fingerprint)
+        const identity = await client.get(`${url}/identity`, { headers: { Authorization: `Bearer ${owner.apiKey}` } })
+        expect(identity.status).toBe(200)
+        expect(identity.data).toEqual({ runner_id: owner.id })
+        const command = { box_id: box.id, key, fingerprint, native_id: 'fixture-native', operation: 'start' }
+        await bootstrap.prepared(box.id, key, command.native_id)
+        const authorize = (apiKey: string, request: object) =>
+          client.post(`${url}/authorize`, request, {
+            headers: { Authorization: `Bearer ${apiKey}` },
+          })
+        const foreign = await authorize(other.apiKey, command)
+        expect(foreign.status).toBe(403)
+        const changed = await authorize(owner.apiKey, { ...command, fingerprint: '0'.repeat(64) })
+        expect(changed.status).toBe(403)
+        expect(outboundRecord(await store.read(box.id, org)).bootstrap?.phase).toBe('reserved')
+        const allowed = await authorize(owner.apiKey, command)
+        expect(allowed.status).toBe(200)
+        expect(allowed.data).toMatchObject({ runner_id: owner.id, native_id: command.native_id })
+        expect(outboundRecord(await store.read(box.id, org)).bootstrap?.phase).toBe('claimed')
+        const repeated = await authorize(owner.apiKey, command)
+        expect(repeated.status).toBe(403)
+
+        if (process.env.BOXLITE_TEST_REAL_RUNNER === '1') {
+          const disposablePort = createServer()
+          await new Promise<void>((resolve) => disposablePort.listen(0, '127.0.0.1', resolve))
+          const { port } = disposablePort.address() as AddressInfo
+          await new Promise<void>((resolve) => disposablePort.close(() => resolve()))
+          const runnerURL = `https://127.0.0.1:${port}`
+          await owners.update(owner.id, { apiUrl: runnerURL, proxyUrl: runnerURL })
+          const previousRunnerRoot = process.env.BOXLITE_TEST_PREVIOUS_RUNNER_ROOT
+          if (previousRunnerRoot) chmodSync(directory, 0o755)
+          const runnerFilter = 'TestProtectedRunnerExternalControl'
+          const startRunner = async (cwd: string, version: string) => {
+            const stopFile = join(directory, `stop-runner-${version}`)
+            const args = ['test:apps:runner', 'SETUP_DONE=1', `FILTER=${runnerFilter}`]
+            if (previousRunnerRoot) args.push(`GOTEST_FILTER=-run ${runnerFilter} -exec "sudo -n -E"`)
+            const worker = spawn('make', args, {
+              cwd,
+              env: {
+                ...process.env,
+                BOXLITE_API_URL: `${await app.getUrl()}/api`,
+                BOXLITE_LISTEN_HOST: '127.0.0.1',
+                BOXLITE_RUNNER_TOKEN: owner.apiKey,
+                BOXLITE_TEST_PROTECTED_RUNNER_PORT: String(port),
+                BOXLITE_TEST_PROTECTED_RUNNER_STOP_FILE: stopFile,
+                BOXLITE_TEST_PROTECTED_RUNTIME_HOME: join(directory, 'runtime'),
+                RUNNER_DOMAIN: '127.0.0.1',
+                TLS_CERT_FILE: certFile,
+                TLS_KEY_FILE: keyFile,
+                ENVIRONMENT: 'development',
+              },
+            })
+            let output = ''
+            worker.stdout.on('data', (data) => {
+              output += String(data)
+            })
+            worker.stderr.on('data', (data) => {
+              output += String(data)
+            })
+            const exited = new Promise<number | null>((resolve) => {
+              worker.once('exit', resolve)
+              worker.once('error', () => resolve(null))
+            })
+            const stop = async () => {
+              writeFileSync(stopFile, '')
+              if ((await exited) !== 0) throw new Error(output)
+            }
+            const deadline = Date.now() + 65000
+            while (Date.now() < deadline) {
+              if (worker.exitCode !== null) throw new Error(output)
+              const health = await client.get(`${runnerURL}/`, { timeout: 250 }).catch(() => undefined)
+              if (health?.status === 200) return stop
+              await new Promise((resolve) => setTimeout(resolve, 150))
+            }
+            await stop()
+            throw new Error(`Runner did not become healthy\n${output}`)
+          }
+          if (previousRunnerRoot) {
+            const stopPrevious = await startRunner(previousRunnerRoot, 'previous')
+            try {
+              const legacy = await client.get(`${runnerURL}/v1/outbound-proxy/bootstrap`, {
+                headers: { Authorization: `Bearer ${owner.apiKey}`, 'X-BoxLite-Runner-Id': owner.id },
+              })
+              expect(legacy.status).toBe(404)
+            } finally {
+              await stopPrevious()
+            }
+          }
+          const stopCurrent = await startRunner(join(__dirname, '../../../../..'), 'current')
+          try {
+            const newAssignment = async () => {
+              const assigned = Object.assign(new Box(org, randomUUID()), {
+                organizationId: org,
+                osUser: 'boxlite',
+                runnerId: owner.id,
+                state: BoxState.STARTING,
+                desiredState: BoxDesiredState.STARTED,
+                pending: true,
+                cpu: 1,
+                mem: 1,
+                disk: 2,
+                entrypoint: ['/bin/sleep'],
+                cmd: ['120'],
+              })
+              await primary.getRepository(Box).insert(assigned)
+              const attempt = {
+                ...key,
+                attempt_id: randomUUID(),
+                policy: persistedOutbound(await store.read(assigned.id, org)),
+              }
+              return { assigned, attempt }
+            }
+            const { assigned, attempt } = await newAssignment()
+            const adapter = new RunnerAdapterV0(bootstrap)
+            const createClient = axios.create.bind(axios)
+            jest
+              .spyOn(axios, 'create')
+              .mockImplementationOnce((options) => createClient({ ...options, httpsAgent: new Agent({ ca: cert }) }))
+            await adapter.init(await owners.findOneByOrFail({ id: owner.id }))
+            const prepared = bootstrap.prepared.bind(bootstrap)
+            const prepareSpy = jest.spyOn(bootstrap, 'prepared').mockImplementation(async (id, owner, nativeId) => {
+              await prepared(id, owner, nativeId)
+              await primary.getRepository(Box).update(id, { desiredState: BoxDesiredState.STOPPED })
+            })
+            await expect(
+              adapter.createProtectedBox(assigned, 'alpine:latest', attempt, async () => ({
+                scheme: 'https',
+                host: 'provider.example.test',
+                port: 443,
+              })),
+            ).rejects.toThrow()
+            expect(prepareSpy).toHaveBeenCalledTimes(1)
+            const closed = await store.read(assigned.id, org)
+            expect(closed.state).toBe(BoxState.STOPPED)
+            expect(outboundRecord(closed).bootstrapRetirement).toMatchObject({
+              key: attempt,
+              epoch: null,
+              allocationClosed: true,
+              noSpawn: true,
+            })
+            prepareSpy.mockRestore()
+
+            if (previousRunnerRoot) {
+              const { assigned: live, attempt: liveAttempt } = await newAssignment()
+              const receipt = await adapter.createProtectedBox(live, 'alpine:latest', liveAttempt, async () => ({
+                scheme: 'http',
+                host: '11.23.0.1',
+                port: 12345,
+              }))
+              expect(receipt).toMatchObject({ outcome: 'confirmed', key: liveAttempt })
+              const started = await store.read(live.id, org)
+              expect(started.state).toBe(BoxState.STARTED)
+              expect(outboundRecord(started).bootstrap?.epoch).toBe(receipt.epoch)
+              const retired = await adapter.retireProtectedBoot(live.id, liveAttempt, receipt.epoch ?? undefined)
+              expect(retired).toMatchObject({ outcome: 'retired', epoch: receipt.epoch, allocationClosed: true })
+            }
+          } finally {
+            await stopCurrent()
+          }
+        }
+      } finally {
+        await app.close()
+      }
+    } finally {
+      if (process.env.BOXLITE_TEST_PREVIOUS_RUNNER_ROOT) {
+        execFileSync('sudo', ['-n', 'rm', '-rf', '--', directory])
+      } else {
+        rmSync(directory, { recursive: true, force: true })
+      }
+    }
+  }, 220000)
 
   it('publishes policy and revision together and rolls a failed callback back', async () => {
     await store.locked(box.id, org, async ({ write }) => {

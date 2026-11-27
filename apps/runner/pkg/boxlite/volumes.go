@@ -72,7 +72,7 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 
 	for _, vol := range volumes {
 		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
-		baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeIdPrefixed)
+		baseMountPath := volumeRootPath(vol.VolumeId)
 
 		subpathStr := ""
 		if vol.Subpath != nil {
@@ -110,6 +110,10 @@ func (c *Client) getVolumeMounts(ctx context.Context, volumes []dto.VolumeDTO) (
 	return volumeMounts, nil
 }
 
+func volumeRootPath(volumeID string) string {
+	return filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+volumeID)
+}
+
 func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID string, metadata map[string]string) error {
 	if metadata == nil {
 		return nil
@@ -124,16 +128,63 @@ func (c *Client) ensureVolumeMountsFromMetadata(ctx context.Context, boxID strin
 	if err := json.Unmarshal([]byte(volumesJSON), &volumes); err != nil {
 		return nil
 	}
+	_, err := c.prepareBoxVolumeMounts(ctx, boxID, volumes, false)
+	return err
+}
+
+func (c *Client) prepareBoxVolumeMounts(ctx context.Context, boxID string, volumes []dto.VolumeDTO, protectedAllocation bool) ([]volumeMount, error) {
 	if len(volumes) == 0 {
-		return nil
+		return nil, nil
 	}
 
+	if protectedAllocation {
+		// Register ownership before mounting so orphan cleanup preserves
+		// partial preparation. Unrelated mounts can then proceed independently.
+		references := make([]volumeMount, 0, len(volumes))
+		for _, volume := range volumes {
+			references = append(references, volumeMount{rootPath: volumeRootPath(volume.VolumeId)})
+		}
+		if err := lockVolumeMount(ctx, &c.volumeCleanupMutex); err != nil {
+			return nil, err
+		}
+		err := c.recordBoxVolumeMounts(ctx, boxID, references)
+		c.volumeCleanupMutex.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		return c.getVolumeMounts(ctx, volumes)
+	}
+	// Orphan cleanup must wait until the ordinary mount has an ownership record.
+	c.volumeCleanupMutex.Lock()
+	defer c.volumeCleanupMutex.Unlock()
 	volumeMounts, err := c.getVolumeMounts(ctx, volumes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return c.recordBoxVolumeMounts(ctx, boxID, volumeMounts)
+	if err := c.recordBoxVolumeMounts(ctx, boxID, volumeMounts); err != nil {
+		return nil, err
+	}
+	return volumeMounts, nil
+}
+
+func lockVolumeMount(ctx context.Context, mutex *sync.Mutex) error {
+	if !mutex.TryLock() {
+		retry := time.NewTicker(10 * time.Millisecond)
+		defer retry.Stop()
+		for !mutex.TryLock() {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-retry.C:
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		mutex.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, mountPath string) error {
@@ -145,7 +196,9 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 	}
 	c.volumeMutexesMutex.Unlock()
 
-	volumeMutex.Lock()
+	if err := lockVolumeMount(ctx, volumeMutex); err != nil {
+		return err
+	}
 	defer volumeMutex.Unlock()
 
 	mounted, err := c.isDirectoryMounted(ctx, mountPath)

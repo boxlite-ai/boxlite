@@ -1212,10 +1212,23 @@ runtime and its microVMs.
 | `GET`     | `/v1/boxes/{boxId}/network/outbound/status` | Reads Runtime persistence, backend observation, completion phase and `revision-v1` capability. |
 | `PUT`     | `/v1/boxes/{boxId}/network/outbound` | Replaces the complete local policy; rejects revision headers, which require the dedicated snapshot resource. |
 | `PUT`     | `/v1/boxes/{boxId}/network/outbound/snapshot` | Requires one strong expected ETag and a fresh `X-Boxlite-Outbound-Revision`; acknowledges the exact policy and candidate revision. |
+| `GET`     | `/v1/outbound-proxy/bootstrap` | Reports the V0 Runner identity and protected startup capability over its ordinary HTTPS listener. |
+| `POST`    | `/v1/boxes/{boxId}/network/outbound/bootstrap/prepare` | Reserves one exact native allocation without starting its Guest. |
+| `POST`    | `/v1/boxes/{boxId}/network/outbound/bootstrap` | Starts the prepared allocation after the control plane grants the exact command. |
+| `POST`    | `/v1/boxes/{boxId}/network/outbound/bootstrap/receipt` | Reads the receipt for the exact attempt. |
+| `POST`    | `/v1/boxes/{boxId}/network/outbound/bootstrap/retire` | Retires the exact attempt and returns its receipt after allocation cleanup. |
 | `POST`    | `/v1/boxes/{boxId}/ssh`                        | Configures guest SSH once after checking that the box is running; otherwise `409 invalid_state`. |
 | `POST`    | `/v1/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration only while running; otherwise `409 invalid_state`. |
 | `GET`     | `/v1/boxes/{boxId}/ssh`                        | Reads guest SSH status; a stopped box answers disabled status without a handle. |
 | `DELETE`  | `/v1/boxes/{boxId}/ssh`                        | Disables guest SSH on a running box; otherwise `409 invalid_state`. Never boots.              |
+
+Protected V0 operations use the existing Runner Bearer token over validated HTTPS.
+The Runner calls the private control-plane `GET /api/runners/protected-bootstrap/identity` and `POST /api/runners/protected-bootstrap/authorize` routes for identity and operation ownership.
+Both routes use normal Runner authentication and verify the unique token against the primary database.
+
+Authorization binds start and preparation to the reserved command fingerprint.
+The control plane settles lifecycle state from the exact receipt for the original Box, Runner and attempt.
+See the [protected Runner bootstrap contract](../outbound-proxy-contract.md#protected-runner-bootstrap).
 
 </details>
 

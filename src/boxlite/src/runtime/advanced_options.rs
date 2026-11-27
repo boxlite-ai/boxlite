@@ -847,6 +847,10 @@ pub struct AdvancedBoxOptions {
     #[serde(default)]
     pub privileged: bool,
 
+    /// Exact allocation admitted by the local Runner before its first protected boot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runner_allocation: Option<crate::net::OutboundRevision>,
+
     /// Set once `resolve_container_security` has run on this instance.
     /// `set_capabilities` refuses to change the policy afterward — a
     /// resolved request's capabilities shouldn't shift under it before the
@@ -877,12 +881,23 @@ impl Clone for AdvancedBoxOptions {
             nested_virtualization: self.nested_virtualization,
             engine: self.engine,
             privileged: self.privileged,
+            runner_allocation: self.runner_allocation.clone(),
             resolved: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
 
 impl AdvancedBoxOptions {
+    pub(crate) fn runner_allocation(&self) -> Option<&crate::net::OutboundRevision> {
+        self.runner_allocation.as_ref()
+    }
+
+    /// Associate a newly configured local Box with its Runner allocation.
+    #[doc(hidden)]
+    pub fn set_runner_allocation(&mut self, attempt: crate::net::OutboundRevision) {
+        self.runner_allocation = Some(attempt);
+    }
+
     /// The caller's capability policy, if one was configured. `None` means
     /// unspecified — see the field's own doc comment for why that's not the
     /// same as an explicit empty policy.

@@ -45,6 +45,9 @@ function completed(status: OutboundStatus, candidate: OutboundSnapshot): boolean
 }
 
 function requireRunning(box: Box): void {
+  if (outboundRecord(box).bootstrap) {
+    throw new ConflictException('Ordinary outbound policy is fenced by protected bootstrap')
+  }
   if (box.state !== BoxState.STARTED || box.desiredState !== BoxDesiredState.STARTED || box.pending || !box.runnerId) {
     throw new ConflictException('Outbound policy updates require a running box')
   }

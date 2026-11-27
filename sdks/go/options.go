@@ -258,6 +258,7 @@ type boxConfig struct {
 	network            *NetworkSpec
 	networkErr         error // deferred WithNetwork validation error, surfaced at conversion
 	secrets            []Secret
+	runnerAllocation   string
 	advanced           *AdvancedBoxOptions // nil = runtime defaults; non-nil = caller-owned advanced opts applied via boxlite_options_set_advanced
 }
 
@@ -273,6 +274,15 @@ type volumeEntry struct {
 // WithName sets a human-readable name for the box.
 func WithName(name string) BoxOption {
 	return func(c *boxConfig) { c.name = name }
+}
+
+// WithRunnerProtectedAllocation marks a stopped allocation with its exact attempt.
+// An ordinary HTTPS V0 Runner sets it before requesting protected boot.
+func WithRunnerProtectedAllocation(attemptID string) BoxOption {
+	return func(c *boxConfig) {
+		c.checkpointOverride = true
+		c.runnerAllocation = attemptID
+	}
 }
 
 // WithCPUs sets the CPU allocation. Fractions require Linux and round guest vCPUs up.
@@ -764,6 +774,15 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 		cArgs, argc := toCStringArray(cfg.cmd)
 		C.boxlite_options_set_cmd(cOpts, cArgs, C.int(argc))
 		freeCStringArray(cArgs, argc)
+	}
+	if cfg.runnerAllocation != "" {
+		attempt := toCString(cfg.runnerAllocation)
+		code := C.boxlite_options_set_runner_allocation(cOpts, attempt, &cerr)
+		C.free(unsafe.Pointer(attempt))
+		if code != C.Ok {
+			C.boxlite_options_free(cOpts)
+			return nil, freeError(&cerr)
+		}
 	}
 	return cOpts, nil
 }

@@ -305,6 +305,7 @@ impl Drop for CleanupGuard {
 pub struct InitPipelineContext {
     pub outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
     pub outbound_revision: Option<crate::net::OutboundRevision>,
+    pub(crate) protected_launch: Option<crate::vmm::shim_launch::ProtectedNetworkLaunch>,
     pub config: BoxConfig,
     pub runtime: SharedRuntimeImpl,
     pub guard: CleanupGuard,
@@ -356,6 +357,7 @@ impl InitPipelineContext {
         Self {
             outbound_policy: None,
             outbound_revision: None,
+            protected_launch: None,
             config,
             runtime,
             guard,

@@ -38,6 +38,7 @@ use crate::{BoxID, BoxInfo};
 
 mod operations;
 pub(crate) mod outbound;
+mod protected;
 pub(crate) use operations::{BoxEvent, BoxRun};
 use operations::{StopCommit, StopReason};
 
@@ -312,6 +313,7 @@ impl BoxImpl {
                 self.config.clone(),
                 state,
                 locker.id(),
+                None,
             )?;
             self.auto_removed.store(true, Ordering::Release);
             Ok(())
@@ -376,6 +378,13 @@ impl BoxImpl {
     }
 
     async fn start_inner(&self) -> BoxliteResult<()> {
+        self.start_with_network(None).await
+    }
+
+    async fn start_with_network(
+        &self,
+        protected: Option<crate::vmm::shim_launch::ProtectedNetworkLaunch>,
+    ) -> BoxliteResult<()> {
         let t0 = Instant::now();
 
         // Check if already shutdown (via stop() or runtime shutdown)
@@ -401,7 +410,14 @@ impl BoxImpl {
         // Boot creates the container; running its init is the separate step that
         // makes `run` docker-shaped — create, attach, then start. `run` slips the
         // attach between these two calls; every other caller just wants both.
-        let live = self.ensure_booted_locked().await?;
+        let live = match protected {
+            Some(network) => {
+                self.live
+                    .get_or_try_init(|| self.init_live_state(true, Some(network)))
+                    .await?
+            }
+            None => self.ensure_booted_locked().await?,
+        };
         let guest_session = live.guest_session.clone();
         let container_start = Arc::clone(&self.container_start);
         let shutdown_token = self.shutdown_token.child_token();
@@ -800,7 +816,7 @@ impl BoxImpl {
                 )));
             }
             self.live
-                .get_or_try_init(|| self.init_live_state(false))
+                .get_or_try_init(|| self.init_live_state(false, None))
                 .await
         })
         .await
@@ -1331,7 +1347,7 @@ impl BoxImpl {
         }
 
         self.live
-            .get_or_try_init(|| self.init_live_state(true))
+            .get_or_try_init(|| self.init_live_state(true, None))
             .await
     }
 
@@ -1451,7 +1467,11 @@ impl BoxImpl {
     ///
     /// Note: Lock is allocated in create(), not here. DB persistence also
     /// happens in create().
-    async fn init_live_state(&self, allow_start: bool) -> BoxliteResult<LiveState> {
+    async fn init_live_state(
+        &self,
+        allow_start: bool,
+        protected: Option<crate::vmm::shim_launch::ProtectedNetworkLaunch>,
+    ) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
         use std::sync::Arc;
 
@@ -1468,6 +1488,37 @@ impl BoxImpl {
         // to run it a second time.
         let adopting_running = state.status == BoxStatus::Running;
 
+        let protection = self.runtime.box_manager.protected_boot(self.id())?;
+        if protection.is_none() && self.config.options.advanced.runner_allocation().is_some() {
+            return Err(BoxliteError::InvalidState(
+                "Protected allocation requires an exact protected launch".into(),
+            ));
+        }
+        let protected_box = protection.is_some();
+        match (protection, &protected) {
+            (None, None) => {}
+            (Some(record), None) if adopting_running => {
+                let active = record
+                    .active
+                    .filter(|active| active.confirmed)
+                    .ok_or_else(|| {
+                        BoxliteError::InvalidState("Missing protected bootstrap attempt".into())
+                    })?;
+                self.verify_protected_boot(&active).await?;
+            }
+            (Some(record), Some(network))
+                if !adopting_running
+                    && record.active.as_ref().is_some_and(|active| {
+                        active.binding() == network.route.binding
+                            && active.key.policy == network.policy
+                    }) => {}
+            _ => {
+                return Err(BoxliteError::InvalidState(
+                    "Box requires an exact protected launch".into(),
+                ));
+            }
+        }
+
         // Build the box (lock is held)
         // New and restarted VMs remain guarded until DB persistence succeeds.
         // Running adoption disarms cleanup before reconnecting to the live VM.
@@ -1477,7 +1528,8 @@ impl BoxImpl {
             .box_manager
             .update_box(&self.config.id)?
             .outbound_policy;
-        let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
+        let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?
+            .with_protected_launch(protected_box, protected);
         let crate::litebox::init::BuiltBox {
             live: live_state,
             guard: mut cleanup_guard,
@@ -1982,6 +2034,7 @@ mod tests {
     #[cfg(feature = "gvproxy")]
     mod outbound_recovery;
     mod outbound_revision;
+    mod protected_boot;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network

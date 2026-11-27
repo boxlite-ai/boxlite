@@ -529,7 +529,7 @@ or `archived`.
 | `inboundEnabled` | `boolean` | default `false`; `true` lets the proxy serve exposed services under each tunnel's access policy (public: no sign-in; private: tunnel token or member) |
 | `outboundEnabled` | `boolean` | default `true`; `false` blocks all egress |
 | `outboundAllowNet` | `text[]` | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress |
-| `outboundControl` | `jsonb` | nullable private revision and pending-attempt metadata; omitted from ordinary entity reads |
+| `outboundControl` | `jsonb` | nullable private policy revision and protected startup ownership; omitted from ordinary entity reads |
 | `authToken` | `character varying` | `nanoid(32)`, lowercased |
 | `daemonVersion` | `character varying` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
@@ -548,6 +548,10 @@ The nullable column preserves existing policies, using revision `initial` when m
 
 The column is private storage, separate from the public Box DTO.
 Dedicated policy and status resources expose revision and completion state through the [outbound durability contract](../outbound-contract.md#cloud-durable-intent).
+
+The same column stores the active protected startup attempt, command fingerprints, prepared native identity and settlement phase.
+The primary Box row lock commits `STARTED`, the confirmed attempt and its epoch together.
+The retirement receipt and last attempt identity remain after the active record clears, fencing late lifecycle updates.
 
 **Unique:** `(organizationId, name)`.
 
