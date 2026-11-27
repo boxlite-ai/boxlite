@@ -1457,6 +1457,17 @@ mod tests {
         }
     }
 
+    /// A stand-in for the root of a container that takes runtime mounts.
+    /// `attach_runtime` refuses a destination at, below or above a mount the
+    /// container provides itself, and the system temporary directory is `/tmp`
+    /// on CI and on most hosts.
+    fn runtime_mount_root() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("boxlite-guest-runtime-mount.")
+            .tempdir_in("/var/tmp")
+            .expect("a root outside the container's own mounts")
+    }
+
     #[test]
     fn canceled_incarnation_never_attaches_or_detaches_another_mount() {
         let target = Target::open(nix::unistd::getpid()).unwrap();
@@ -1520,7 +1531,7 @@ mod tests {
     fn privileged_detach_can_recover_an_unconfirmed_attachment() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"mounted").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mount");
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
@@ -1546,7 +1557,7 @@ mod tests {
     fn privileged_detach_confirms_absence_after_its_result_is_lost() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"mounted").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mount");
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
@@ -1580,7 +1591,7 @@ mod tests {
     fn privileged_detach_refuses_a_different_namespace() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"original").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mount");
         let mut attacher = Attacher::default();
         {
@@ -1611,7 +1622,7 @@ mod tests {
     fn privileged_incarnation_replay_and_replacement_are_safe() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("marker"), b"runtime").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mount");
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
@@ -1786,7 +1797,7 @@ mod tests {
     fn privileged_writable_attach_allows_writes_until_detached() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("agent"), b"agent-bytes").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("opt/boxlite/late");
         let holder = NamespaceHolder::spawn();
         let mut attacher = Attacher::default();
@@ -1849,7 +1860,7 @@ mod tests {
         use std::io::Read as _;
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join("payload"), b"still readable").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let destination = root.path().join("mounted");
         let holder = NamespaceHolder::spawn();
         let target = Target::open(holder.pid).unwrap();
@@ -1881,7 +1892,7 @@ mod tests {
         let replacement = tempfile::tempdir().unwrap();
         fs::write(original.path().join("marker"), b"original").unwrap();
         fs::write(replacement.path().join("marker"), b"replacement").unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = runtime_mount_root();
         let ancestor = root.path().join("parent");
         let renamed = root.path().join("renamed");
         let destination = ancestor.join("mount");
