@@ -130,7 +130,24 @@ describe('POST /api/organizations/:organizationId/coupon-claims', () => {
         // PostgreSQL UUID lookups return the canonical lowercase ID for either spelling.
         { provide: OrganizationService, useValue: { findOne: (id: string) => ({ id: id.toLowerCase() }) } },
         { provide: OrganizationUserService, useValue: membership },
-        { provide: getRedisConnectionToken(), useValue: cache },
+        {
+          provide: getRedisConnectionToken(),
+          useValue: {
+            get: async (key: string) => cache.get(key) ?? null,
+            set: async (key: string, value: string) => {
+              cache.set(key, value)
+              return 'OK'
+            },
+            eval: async (_script: string, _count: number, _generation: string, key: string, ...args: string[]) => {
+              if (args.length === 0) {
+                cache.delete(key)
+                return 1
+              }
+              cache.set(key, args[1])
+              return 1
+            },
+          },
+        },
       ],
     })
       .overrideGuard(AuthenticatedRateLimitGuard)

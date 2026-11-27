@@ -17,8 +17,7 @@ import type { User } from '../user/user.entity'
 import { SystemRole } from '../user/enums/system-role.enum'
 import type { ApiKey } from '../api-key/api-key.entity'
 import { BoxService } from '../box/services/box.service'
-import { RunnerService } from '../box/services/runner.service'
-import type { Runner } from '../box/entities/runner.entity'
+import { RunnerService, type RunnerProxyTarget } from '../box/services/runner.service'
 import { BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { hasOrganizationResourcePermissions } from '../organization/guards/organization-resource-action.guard'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
@@ -29,7 +28,7 @@ import { propagation } from '@opentelemetry/api'
 import { startTimedOperation, TimedOperation } from '../common/decorators/otel.decorator'
 
 type RunnerUpgradeRequest = IncomingMessage & {
-  __boxliteRunner?: Runner
+  __boxliteRunner?: RunnerProxyTarget
   __boxliteRunnerBoxId?: string
   __boxliteAttachAudit?: AttachAuditSession
   __boxliteExecutionId?: string
@@ -101,7 +100,7 @@ export class BoxliteWsProxyService {
         if (!runner) {
           throw new Error('ws proxy: runner not resolved before upgrade — bug in caller')
         }
-        return runner.apiUrl || (runner as Runner & { proxyUrl?: string }).proxyUrl || ''
+        return runner.apiUrl || runner.proxyUrl || ''
       },
       on: {
         proxyReqWs: (proxyReq: ClientRequest, req: IncomingMessage) => {
@@ -258,7 +257,7 @@ export class BoxliteWsProxyService {
       this.boxService
         .updateLastActivityAt(box.id, new Date())
         .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
-      const runner = await this.runnerService.findOne(box.runnerId)
+      const runner = await this.runnerService.findProxyTarget(box.runnerId)
       if (!runner) {
         lookup.finish('error', new Error('runner not found'))
         root.finish('error', new Error('runner not found'))

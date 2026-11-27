@@ -647,6 +647,8 @@ export class BoxRepository extends BaseRepository<Box> {
           organizationId: updated.organizationId,
           name: updated.name,
           authToken: updated.authToken,
+          state: BoxState.STOPPED,
+          desiredState: BoxDesiredState.STOPPED,
         })
 
         return updated
@@ -906,7 +908,7 @@ export class BoxRepository extends BaseRepository<Box> {
    */
   private invalidateLookupCacheOnUpdate(
     updatedBox: Box,
-    previousBox: Pick<Box, 'organizationId' | 'name' | 'authToken'>,
+    previousBox: Pick<Box, 'organizationId' | 'name' | 'authToken' | 'state' | 'desiredState'>,
   ): void {
     try {
       this.boxLookupCacheInvalidationService.invalidate({
@@ -919,6 +921,27 @@ export class BoxRepository extends BaseRepository<Box> {
     } catch (error) {
       this.logger.warn(
         `Failed to enqueue box lookup cache invalidation on update (id, organizationId, name) for ${updatedBox.id}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+
+    try {
+      const identityChanged =
+        updatedBox.organizationId !== previousBox.organizationId || updatedBox.name !== previousBox.name
+      const deletionStarted =
+        updatedBox.desiredState === BoxDesiredState.DESTROYED && previousBox.desiredState !== BoxDesiredState.DESTROYED
+      const destroyed = updatedBox.state === BoxState.DESTROYED && previousBox.state !== BoxState.DESTROYED
+      if (identityChanged || deletionStarted || destroyed) {
+        this.boxLookupCacheInvalidationService.invalidateOrgId({
+          id: updatedBox.id,
+          organizationId: updatedBox.organizationId,
+          previousOrganizationId: previousBox.organizationId,
+          name: updatedBox.name,
+          previousName: previousBox.name,
+        })
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to enqueue box organization cache invalidation on update for ${updatedBox.id}: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
 

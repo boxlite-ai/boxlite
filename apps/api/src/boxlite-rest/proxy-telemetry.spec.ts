@@ -91,7 +91,7 @@ describe('runner proxy telemetry', () => {
         }),
         updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
       } as any,
-      { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }) } as any,
+      { findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }) } as any,
       { ensureReady: jest.fn() } as any,
       {} as any,
     )
@@ -196,7 +196,7 @@ describe('runner proxy telemetry', () => {
         findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: false }),
         updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
       } as any,
-      { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }) } as any,
+      { findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }) } as any,
       { ensureReady: jest.fn() } as any,
       { findOne: jest.fn().mockResolvedValue({ id: 'user-1', role: 'user', email: 'dev@acme.test' }) } as any,
       undefined,

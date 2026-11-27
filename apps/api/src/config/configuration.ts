@@ -797,7 +797,7 @@ const configuration = {
     apiKey: process.env.BILLING_API_KEY,
   },
   apiModuleCache: {
-    enabled: process.env.ENABLE_API_MODULE_CACHE === 'true',
+    enabled: process.env.ENABLE_API_MODULE_CACHE !== 'false',
   },
   boxCreationQuota: {
     redisEnabled: process.env.BOX_CREATION_QUOTA_REDIS_ENABLED === 'true',

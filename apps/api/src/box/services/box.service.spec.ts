@@ -22,6 +22,7 @@ import { CreateBoxDto as RestCreateBoxDto } from '../../boxlite-rest/dto/create-
 import { createBoxToCreateBox } from '../../boxlite-rest/mappers/box-to-box.mapper'
 import { Context } from '../../common/context/context'
 import { OrganizationService } from '../../organization/services/organization.service'
+import { Singleflight } from '../../common/utils/singleflight.util'
 import { SecretServerClient } from './secret-server-client'
 import { createServer } from 'node:http'
 import { AddressInfo } from 'node:net'
@@ -739,6 +740,7 @@ describe('BoxService inbound defaults', () => {
           organizationRepository,
           assertOrganizationIsNotSuspended: jest.fn(),
           configService: { get: () => undefined },
+          nestedVirtualizationSingleflight: new Singleflight(),
         })
         const { service, boxRepository } = makeCreateService({ organizationService })
         await expect(
@@ -760,6 +762,7 @@ describe('BoxService inbound defaults', () => {
           organizationRepository,
           assertOrganizationIsNotSuspended: jest.fn(),
           configService: { get: () => undefined },
+          nestedVirtualizationSingleflight: new Singleflight(),
         })
         const { service, boxRepository, warmPoolService } = makeCreateService({
           organizationService,

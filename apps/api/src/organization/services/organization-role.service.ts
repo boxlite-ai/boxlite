@@ -5,14 +5,19 @@
  */
 
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import Redis from 'ioredis'
 import { InjectRepository } from '@nestjs/typeorm'
 import { In, Repository } from 'typeorm'
 import { CreateOrganizationRoleDto } from '../dto/create-organization-role.dto'
 import { UpdateOrganizationRoleDto } from '../dto/update-organization-role.dto'
 import { OrganizationRole } from '../entities/organization-role.entity'
+import { invalidateMembershipAccessCaches } from './organization-access-cache.service'
 
 @Injectable()
 export class OrganizationRoleService {
+  @InjectRedis() private readonly redis: Redis
+
   constructor(
     @InjectRepository(OrganizationRole)
     private readonly organizationRoleRepository: Repository<OrganizationRole>,
@@ -65,6 +70,7 @@ export class OrganizationRoleService {
         { id: roleId, organizationId },
         { id: roleId, isGlobal: true },
       ],
+      relations: { users: true },
     })
 
     if (!role) {
@@ -79,7 +85,9 @@ export class OrganizationRoleService {
     role.description = updateOrganizationRoleDto.description
     role.permissions = updateOrganizationRoleDto.permissions
 
-    return this.organizationRoleRepository.save(role)
+    const saved = await this.organizationRoleRepository.save(role)
+    await invalidateMembershipAccessCaches(this.redis, role.users ?? [])
+    return saved
   }
 
   async delete(organizationId: string, roleId: string): Promise<void> {
@@ -92,6 +100,7 @@ export class OrganizationRoleService {
         { id: roleId, organizationId },
         { id: roleId, isGlobal: true },
       ],
+      relations: { users: true },
     })
 
     if (!role) {
@@ -103,5 +112,6 @@ export class OrganizationRoleService {
     }
 
     await this.organizationRoleRepository.remove(role)
+    await invalidateMembershipAccessCaches(this.redis, role.users ?? [])
   }
 }

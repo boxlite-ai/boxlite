@@ -28,6 +28,7 @@ const makeService = (found: Organization | null) => {
     save: jest.fn().mockImplementation((org: Organization) => Promise.resolve(org)),
   }
   const configService = { getOrThrow: jest.fn().mockReturnValue(false), get: jest.fn() }
+  const redis = { eval: jest.fn().mockResolvedValue(1) }
 
   const service = new OrganizationService(
     organizationRepository as any,
@@ -39,7 +40,8 @@ const makeService = (found: Organization | null) => {
     {} as any,
   )
 
-  return { service, organizationRepository, configService }
+  ;(service as any).redis = redis
+  return { service, organizationRepository, configService, redis }
 }
 
 describe('OrganizationService nested virtualization cache', () => {
@@ -53,6 +55,23 @@ describe('OrganizationService nested virtualization cache', () => {
     await expect(service.isNestedVirtualizationEnabled('org-1')).resolves.toBe(true)
 
     expect(organizationRepository.findOne).toHaveBeenCalledTimes(cacheEnabled ? 1 : 2)
+  })
+
+  it('coalesces concurrent cache misses', async () => {
+    const { service, organizationRepository, configService } = makeService(
+      organization({ nestedVirtualizationEnabled: true }),
+    )
+    configService.get.mockReturnValue(true)
+    let release!: (value: Organization | null) => void
+    organizationRepository.findOne.mockReturnValue(new Promise<Organization | null>((resolve) => (release = resolve)))
+
+    const first = service.isNestedVirtualizationEnabled('org-1')
+    const second = service.isNestedVirtualizationEnabled('org-1')
+    await Promise.resolve()
+    release(organization({ nestedVirtualizationEnabled: true }))
+
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true])
+    expect(organizationRepository.findOne).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -77,6 +96,19 @@ describe('OrganizationService.unsuspend', () => {
     await service.unsuspend('org-1', 'abuse')
 
     expect(organizationRepository.save).toHaveBeenCalledWith(expect.objectContaining({ suspended: false }))
+  })
+
+  it('invalidates the organization access cache after unsuspending', async () => {
+    const { service, redis } = makeService(organization({ suspended: true, suspensionReason: 'abuse' }))
+
+    await service.unsuspend('org-1')
+
+    expect(redis.eval).toHaveBeenCalledWith(
+      expect.any(String),
+      2,
+      'organization-access:generation:organization:org-1',
+      'organization:org-1',
+    )
   })
 
   // An admin may have re-suspended for a different reason after a credit hold
@@ -125,7 +157,11 @@ describe('OrganizationService.handleUserEmailVerifiedEvent', () => {
       save: jest.fn().mockImplementation((org: Organization) => Promise.resolve(org)),
     }
     const { service } = makeService(null)
-    return { service, entityManager, payload: { entityManager, userId: 'user-1' } as any }
+    return {
+      service,
+      entityManager,
+      payload: { entityManager, userId: 'user-1', afterCommit: jest.fn() } as any,
+    }
   }
 
   it('clears the default organization suspension created by email verification', async () => {
@@ -140,6 +176,7 @@ describe('OrganizationService.handleUserEmailVerifiedEvent', () => {
       Organization,
       expect.objectContaining({ suspended: false, suspensionReason: null, suspendedAt: null }),
     )
+    expect(payload.afterCommit).toHaveBeenCalledWith(expect.any(Function))
   })
 
   it('preserves an unrelated administrator or billing suspension', async () => {
@@ -184,6 +221,14 @@ describe('OrganizationService.assertOrganizationIsNotSuspended', () => {
       ;(guard as any).redis = {
         get: async (key: string) => cache.get(key) ?? null,
         set: async (key: string, value: string) => cache.set(key, value),
+        eval: async (_script: string, _count: number, _generationKey: string, key: string, ...args: string[]) => {
+          if (args.length === 0) {
+            cache.delete(key)
+            return 1
+          }
+          cache.set(key, args[1])
+          return 1
+        },
       }
 
       for (let read = 0; read < 2; read++) {

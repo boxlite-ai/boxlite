@@ -36,7 +36,7 @@ function makeHarness(box: Record<string, unknown>) {
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     assertOrganizationIsNotSuspended: jest.fn(),
   }
-  const runnerService = { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'k' }) }
+  const runnerService = { findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'k' }) }
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }
   const controller = new BoxliteProxyController(
     boxService as never,
@@ -308,7 +308,7 @@ async function startSshApp(principal?: Record<string, unknown>): Promise<SshApp>
     controllers: [BoxliteProxyController],
     providers: [
       { provide: BoxService, useValue: { findOneByIdOrName, updateLastActivityAt } },
-      { provide: RunnerService, useValue: { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local' }) } },
+      { provide: RunnerService, useValue: { findProxyTarget: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local' }) } },
       { provide: BoxAutoResumeService, useValue: { ensureReady: jest.fn().mockResolvedValue(undefined) } },
       { provide: OrganizationService, useValue: { findOne: async (id: string) => ({ id }) } },
       {
@@ -317,7 +317,7 @@ async function startSshApp(principal?: Record<string, unknown>): Promise<SshApp>
           findOne: async (organizationId: string, userId: string) => ({ organizationId, userId, role: 'member' }),
         },
       },
-      { provide: getRedisConnectionToken(), useValue: { get: async () => null, set: async () => 'OK' } },
+      { provide: getRedisConnectionToken(), useValue: { get: async () => null, set: async () => 'OK', eval: async () => 1 } },
     ],
   })
     .useMocker(() => ({}))

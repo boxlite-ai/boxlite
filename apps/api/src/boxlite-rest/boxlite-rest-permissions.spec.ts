@@ -103,7 +103,7 @@ describe('execution inventory authorization', () => {
       } as never,
       reflector,
     )
-    Object.assign(guard, { redis: { get: async () => null, set: async () => 'OK' } })
+    Object.assign(guard, { redis: { get: async () => null, set: async () => 'OK', eval: async () => 1 } })
     return guard
   }
 

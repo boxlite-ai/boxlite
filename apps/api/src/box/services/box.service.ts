@@ -980,39 +980,51 @@ export class BoxService {
   }
 
   async getOrganizationId(boxIdOrName: string, organizationId?: string): Promise<string> {
-    const organizationFilter = organizationId ? { organizationId: organizationId } : {}
+    const organizationFilter = organizationId ? { organizationId } : {}
+    const nameCacheKey = organizationId ? boxOrgIdCacheKeyByName({ organizationId, boxName: boxIdOrName }) : undefined
+    if (nameCacheKey) {
+      const cachedName = this.boxLookupCacheInvalidationService.getCachedOrganizationId(nameCacheKey)
+      if (cachedName) return cachedName
+    }
 
-    let box = await this.boxRepository.findOne({
-      where: {
-        id: boxIdOrName,
-        ...organizationFilter,
-      },
-      select: ['organizationId'],
-      cache: {
-        id: boxOrgIdCacheKeyById({ organizationId, id: boxIdOrName }),
-        milliseconds: BOX_ORG_ID_CACHE_TTL_MS,
-      },
-    })
-
-    if (!box && organizationId) {
-      box = await this.boxRepository.findOne({
+    const idCacheKey = boxOrgIdCacheKeyById({ organizationId, id: boxIdOrName })
+    let resolvedOrganizationId = await this.boxLookupCacheInvalidationService.getOrganizationId(idCacheKey, async () => {
+      const box = await this.boxRepository.findOne({
         where: {
-          name: boxIdOrName,
-          organizationId: organizationId,
+          id: boxIdOrName,
+          ...organizationFilter,
         },
         select: ['organizationId'],
         cache: {
-          id: boxOrgIdCacheKeyByName({ organizationId, boxName: boxIdOrName }),
+          id: idCacheKey,
           milliseconds: BOX_ORG_ID_CACHE_TTL_MS,
         },
       })
+      return box?.organizationId ?? null
+    })
+
+    if (!resolvedOrganizationId && organizationId && nameCacheKey) {
+      resolvedOrganizationId = await this.boxLookupCacheInvalidationService.getOrganizationId(nameCacheKey, async () => {
+        const box = await this.boxRepository.findOne({
+          where: {
+            name: boxIdOrName,
+            organizationId,
+          },
+          select: ['organizationId'],
+          cache: {
+            id: nameCacheKey,
+            milliseconds: BOX_ORG_ID_CACHE_TTL_MS,
+          },
+        })
+        return box?.organizationId ?? null
+      })
     }
 
-    if (!box || !box.organizationId) {
+    if (!resolvedOrganizationId) {
       throw new NotFoundException(`Box with ID or name ${boxIdOrName} not found`)
     }
 
-    return box.organizationId
+    return resolvedOrganizationId
   }
 
   async getRunnerId(boxIdOrName: string): Promise<string | null> {

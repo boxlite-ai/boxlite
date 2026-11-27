@@ -66,7 +66,8 @@ describeWithDatabase('Organization role authorization (HTTP and Postgres)', () =
     roles = db.getRepository(OrganizationRole)
     memberships = db.getRepository(OrganizationUser)
     roleService = new OrganizationRoleService(roles)
-    const redis = { get: async () => null, set: async () => 'OK' }
+    const redis = { get: async () => null, set: async () => 'OK', eval: async () => 1 }
+    ;(roleService as any).redis = redis
     userService = new OrganizationUserService(memberships, roleService, {} as never, {} as never, db, redis as never)
     const organizationService = new OrganizationService(
       organizations,

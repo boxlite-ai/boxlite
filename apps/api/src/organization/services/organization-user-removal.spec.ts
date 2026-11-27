@@ -50,6 +50,10 @@ async function createServices(membership: OrganizationUser, apiKeys: StoredApiKe
       timeline.push(`del ${key}`)
       return 1
     }),
+    eval: jest.fn(async (_script: string, _count: number, _generation: string, key: string) => {
+      timeline.push(`invalidate ${key}`)
+      return 1
+    }),
   }
   const dataSource = {
     transaction: async (work: (em: unknown) => Promise<unknown>) => {
@@ -107,7 +111,7 @@ describe('OrganizationUserService.delete', () => {
     await expect(service.delete('org-1', 'user-2')).resolves.toBeUndefined()
 
     expect(timeline[0]).toBe('commit')
-    expect(timeline.slice(1).sort()).toEqual(['del api-key:validation:hash-ci', 'del organization-user:org-1:user-2'])
+    expect(timeline.slice(1).sort()).toEqual(['del api-key:validation:hash-ci', 'invalidate organization-user:org-1:user-2'])
   })
 
   it("revokes the removed member's API keys in that organization and nothing else", async () => {
@@ -132,7 +136,7 @@ describe('OrganizationUserService.delete', () => {
     await service.delete('org-1', 'user-2')
 
     expect(timeline[0]).toBe('commit')
-    expect(timeline.slice(1).sort()).toEqual(['del api-key:validation:hash-ci', 'del organization-user:org-1:user-2'])
+    expect(timeline.slice(1).sort()).toEqual(['del api-key:validation:hash-ci', 'invalidate organization-user:org-1:user-2'])
   })
 })
 
@@ -152,6 +156,10 @@ describe('OrganizationUserService.updateAccess', () => {
 
     await service.updateAccess('org-1', 'user-2', OrganizationMemberRole.MEMBER, [])
 
-    expect(timeline).toEqual(['commit', 'del api-key:validation:hash-ci'])
+    expect(timeline).toEqual([
+      'commit',
+      'del api-key:validation:hash-ci',
+      'invalidate organization-user:org-1:user-2',
+    ])
   })
 })

@@ -101,8 +101,10 @@ visible in role listings and reject update or delete with 403.
 
 For example, an OWNER of A can edit A's custom role, but using B's role ID through
 A's route returns 404. A MEMBER of A receives 403 on all four role routes.
-Updated permissions apply to assigned members when their membership is reloaded;
-OrganizationAccessGuard caches memberships for up to ten seconds.
+Updated permissions apply to assigned members when their membership is reloaded.
+OrganizationAccessGuard caches memberships for up to ten seconds. Member access changes,
+removals, account-link membership moves, and custom-role updates invalidate the affected
+entries after their database writes commit. Failed invalidation falls back to the TTL.
 
 Run `make test:apps:api TEST_FILES='organization-action.guard.spec|organization-role.authorization'`
 with `DB_HOST=127.0.0.1`, `DB_PORT`, `DB_USERNAME`, `DB_DATABASE`, and any required
@@ -113,9 +115,12 @@ JWT identity setup, rate limiting, and Redis transport use test doubles.
 
 ## Organization suspension
 
-Organization access caches organization records as JSON for 10 seconds. On cache reads,
-`suspendedUntil` is restored to a `Date` so temporary suspensions are enforced until their
-deadline on both cached and database reads. A null deadline keeps a suspension indefinite.
+Organization access caches organization records as JSON for 60 seconds. Suspension,
+unsuspension, email-verification unsuspension, and deletion invalidate the entry after their
+transactions commit. Cache backfills carry a Redis generation: an in-flight query that started
+before invalidation cannot write its old result back afterward. On cache reads, organization
+timestamps are restored to `Date` values, including `suspendedUntil`; a null deadline keeps a
+suspension indefinite. Failed invalidation falls back to the 60-second TTL.
 
 ## Registration configuration
 
@@ -1267,21 +1272,45 @@ directory. Decoder tests consume unmodified responses from the current Box produ
 
 ## Hot-path I/O and consistency controls
 
-`ENABLE_API_MODULE_CACHE=true` enables the optional organization nested-virtualization and
-region metadata caches. Both use a 60-second TTL; the nested-policy cache is an in-process
-LRU, while region lookup uses the existing TypeORM query cache. Administrator changes can
-therefore take up to 60 seconds to reach every API instance. The switch defaults to false
-and does not disable existing caches. `isEnableApiModuleCache` also accepts an organization
-ID so a future organization-specific override can supersede the global default.
+`ENABLE_API_MODULE_CACHE` controls the organization nested-virtualization and region metadata
+caches and defaults to true. Set it to false to bypass their reads and writes. Both use a
+60-second TTL; the nested-policy cache is an in-process LRU, while region lookup uses the
+existing TypeORM query cache. Administrator changes can therefore take up to 60 seconds to
+reach every API instance. The switch does not disable other existing caches.
+`isEnableApiModuleCache` also accepts an organization ID so a future organization-specific
+override can supersede the global default.
 
 Runner bearer-token authentication has a separate in-process, 60-second LRU keyed by the
 SHA-256 token hash. A hit bypasses both the user-key miss and Runner lookup; revocation or
 rotation can take up to 60 seconds and each API instance has its own cache. Set
 `ENABLE_RUNNER_AUTH_CACHE=false` to bypass both cache reads and writes independently of the
 metadata-cache switch. Existing explicit `findOne(id, true)` region lookups retain their
-original 30-second TTL; only the new switch-enabled default path uses 60 seconds. Runner IDs,
-region lookups and organization policy must not be used as a substitute for the required
-organization-suspension check on proxy execution.
+original 30-second TTL and use cache keys separate from the switch-enabled 60-second path.
+Runner IDs, region lookups and organization policy must not be used as a substitute for the
+required organization-suspension check on proxy execution.
+
+HTTP runner proxying and WebSocket attach use `RunnerService.findProxyTarget`, which caches only
+`id`, `apiUrl`, `proxyUrl`, and `apiKey` for 60 seconds. The positive-result LRU holds 10,000
+entries per API process and has a separate TypeORM cache key from full Runner entities. CPU,
+memory, disk, Box-count, availability, and health updates do not invalidate this narrow cache;
+endpoint or key changes and Runner deletion do. Other API instances expire their local entries
+within the same 60-second bound. Full Runner lookups retain their existing cache and dynamic
+fields for scheduling and lifecycle callers.
+
+API-key validation, nested-policy reads, Region lookups, Runner lookups, and organization or
+membership cache misses share one in-flight Promise per resource key within each API process.
+This coalesces concurrent cold reads without a Redis distributed lock. Completed loads are
+removed from the in-flight map and failures are not memoized, so later requests can retry.
+Runner and Region callers receive independent entity objects rather than a shared mutable ORM
+instance. Cache hits do not require singleflight and multiple API instances can still each
+perform one backfill.
+
+Box organization lookups use a 10,000-entry, 120-second positive-result LRU in each API process.
+ID and name entries are separate, and name keys include the organization ID. Missing Boxes are
+not cached. Rename, deletion, destruction, and warm-pool organization assignment clear the local
+and shared query-cache variants; other API instances age out local entries within 120 seconds.
+This cache does not contain `runnerId` or mutable runtime state. Complete Box lookups retain
+their separate 10-second cache.
 
 `BOX_SYNC_STATES_CRON` controls the compensating state scan and defaults to one minute.
 Set it to `*/10 * * * * *` to restore the previous ten-second interval. Ordinary runner
@@ -1293,6 +1322,14 @@ run after the Box transaction without delaying its caller, with at most three at
 jittered exponential backoff. `GREATEST` keeps timestamps monotonic. A final failure or
 process exit can lose an activity update; set the variable to false to wait for one
 best-effort upsert synchronously without retries.
+
+Proxy execution starts its initial Redis activity write without awaiting it. A valid request
+counts as activity even if runner forwarding later fails, and activity failure is logged without
+changing the exec response; there is no retry. The write still uses the same throttle and
+10-second PostgreSQL batch flush. AutoResume and runner readiness remain awaited. AutoStop
+rechecks activity under the Box state lock and, if the first read is stale, waits 30ms before a
+second read. This debounce reduces the chance of stopping during an unobserved asynchronous
+write but is not a strict barrier: Redis failure or process exit can still lose activity.
 
 ### Redis Box creation quota POC
 

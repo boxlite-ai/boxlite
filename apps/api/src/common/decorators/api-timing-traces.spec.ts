@@ -17,6 +17,8 @@ import { Context } from '../context/context'
 import { BoxService } from '../../box/services/box.service'
 import { BoxliteBoxController } from '../../boxlite-rest/boxlite-box.controller'
 import { RunnerService } from '../../box/services/runner.service'
+import { Singleflight } from '../utils/singleflight.util'
+import { TtlLruCache } from '../utils/ttl-lru-cache.util'
 import { ImageAdmissionService } from '../../image/services/image-admission.service'
 import { ImageResolverService } from '../../image/services/image-resolver.service'
 import { BoxStateWaiterService } from '../../box/services/box-state-waiter.service'
@@ -249,6 +251,8 @@ describe('API timing trace relationships', () => {
       redisLockProvider: { lock: jest.fn().mockResolvedValue(true), unlock: jest.fn().mockResolvedValue(undefined) },
     })
     const runnerService = Object.assign(Object.create(RunnerService.prototype), {
+      lookupSingleflight: new Singleflight(),
+      proxyTargetCache: new TtlLruCache(10, 60_000),
       runnerRepository: {
         findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'runner-key' }),
       },

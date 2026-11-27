@@ -128,7 +128,7 @@ describe('attach audit over real WebSocket connections', () => {
         findOneByIdOrName: async () => ({ id: 'canonical-box', runnerId: 'runner' }),
         updateLastActivityAt: async () => undefined,
       } as never,
-      { findOne: async () => runnerConfig } as never,
+      { findProxyTarget: async () => runnerConfig } as never,
       {} as never,
       { findOne: async (id: string) => ({ id, email: `${id}@example.test`, role: 'user' }) } as never,
       { verifyToken: async () => ({ sub: 'jwt-user' }) } as never,

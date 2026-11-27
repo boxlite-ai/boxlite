@@ -151,10 +151,13 @@ export class UserService {
 
     if (updateUserDto.emailVerified) {
       user.emailVerified = updateUserDto.emailVerified
-      await this.dataSource.transaction(async (em) => {
+      const verification = await this.dataSource.transaction(async (em) => {
         await em.save(user)
-        await this.eventEmitter.emitAsync(UserEvents.EMAIL_VERIFIED, new UserEmailVerifiedEvent(em, user.id))
+        const event = new UserEmailVerifiedEvent(em, user.id)
+        await this.eventEmitter.emitAsync(UserEvents.EMAIL_VERIFIED, event)
+        return event
       })
+      await verification.runAfterCommitTasks()
     }
 
     return this.userRepository.save(user)

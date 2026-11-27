@@ -43,7 +43,7 @@ describe('CI connect HTTP authorization boundary', () => {
   }
   const workers = { list: jest.fn() }
   const permissions = ['write:boxes', 'delete:boxes']
-  const redis = { get: async () => null, set: async () => undefined, setex: async () => undefined }
+  const redis = { get: async () => null, set: async () => undefined, setex: async () => undefined, eval: async () => 1 }
   beforeAll(async () => {
     const keyService = {
       getApiKeyByValue: async (token: string) => ({
