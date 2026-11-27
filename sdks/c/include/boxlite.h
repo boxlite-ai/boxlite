@@ -1120,6 +1120,23 @@ enum BoxliteErrorCode boxlite_box_export(CBoxHandle *handle,
 //
 // Options are copied before this function returns. On success, the callback
 // owns the returned path and must release it with `boxlite_free_string`.
+//
+// # Safety
+//
+// - `handle` must be a non-null, valid `CBoxHandle` pointer for the duration of
+//   the call.
+// - `dest` must be non-null and point to a readable, NUL-terminated UTF-8 C
+//   string for the duration of the call.
+// - If non-null, `options` must point to a valid `CExportOptions` struct that
+//   remains readable and is not modified during the call. If null, the default
+//   disk-only options are used.
+// - If non-null, `out_error` must point to aligned, writable storage for a
+//   `CBoxliteError`. If null, synchronous error details are not written.
+// - `cb` must be a valid callback for a successful submission. It may be called
+//   after this function returns, when the runtime drains the completion. The
+//   archive path is passed to `cb`, not written to an output pointer. Any data
+//   referenced by `user_data` must remain valid through the callback.
+// - Access to memory through these pointers must not race with other threads.
 enum BoxliteErrorCode boxlite_box_export_with_options(CBoxHandle *handle,
                                                       const char *dest,
                                                       const struct CExportOptions *options,

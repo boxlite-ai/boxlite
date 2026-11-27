@@ -189,10 +189,11 @@ defer restored.Close()
 `Box.Export` and `Box.ExportWithOptions` with zero-valued `ExportOptions` both
 export disk only. To request guest memory and VM state as well, call
 `box.ExportWithOptions(ctx, dest, boxlite.ExportOptions{IncludeMemory: true})`.
-Local full export requires a running box: a stopped box returns
-`ErrInvalidState`, and a running box returns `ErrUnsupported` because the VMM
-checkpoint hook is still a placeholder. REST returns `ErrUnsupported` without
-sending an HTTP request.
+Local full export requires a running box with live VM state. A stopped box or
+a handle obtained via `Get` without live VM state returns `ErrInvalidState`.
+With live VM state, the VMM's full checkpoint hook is still a placeholder and
+returns `ErrUnsupported`. REST returns `ErrUnsupported` without sending an
+HTTP request.
 
 ### Streaming file uploads
 
