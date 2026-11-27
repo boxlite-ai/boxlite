@@ -4,6 +4,7 @@
 
 use crate::ContainerID;
 use crate::lock::LockId;
+use crate::util::PidRecord;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -290,6 +291,18 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub resolved_image: Option<crate::images::ResolvedImage>,
+    /// Host process that started this box's live VM run (PID + OS start-time
+    /// fingerprint).
+    ///
+    /// Published with [`Self::started_at`] when a fresh run enters
+    /// [`BoxStatus::Running`] ([`Self::mark_started`]), and cleared when the
+    /// run ends or when recovery adopts a different PID. Exit cleanup stops
+    /// only non-detached boxes whose `owner` matches the current process;
+    /// `None` is treated as not owned by this process.
+    ///
+    /// Serde default keeps existing DB rows readable without migration.
+    #[serde(default)]
+    pub owner: Option<PidRecord>,
 }
 
 /// Health status of a box.
@@ -393,6 +406,7 @@ impl BoxState {
             exit_code: None,
             started_at: None,
             resolved_image: None,
+            owner: None,
         }
     }
 
@@ -408,24 +422,44 @@ impl BoxState {
         }
     }
 
-    /// Record when this box enters [`BoxStatus::Running`].
+    /// Record when this box enters [`BoxStatus::Running`] and which host
+    /// process started it.
     pub fn mark_started(&mut self) {
         let now = Utc::now();
         self.started_at = Some(now);
+        self.owner = Some(PidRecord::current());
         self.last_updated = now;
+    }
+
+    /// Whether `process` is the verified spawning owner of this box's live run.
+    ///
+    /// Requires a start-time fingerprint on both sides so missing ownership
+    /// metadata or a recycled PID is never mistaken for ownership.
+    pub fn is_owned_by(&self, process: PidRecord) -> bool {
+        matches!(
+            (self.owner, process.start_time),
+            (
+                Some(PidRecord {
+                    pid,
+                    start_time: Some(owner_start),
+                }),
+                Some(current_start),
+            ) if pid == process.pid && owner_start == current_start
+        )
     }
 
     /// Adopt a live shim that recovery found on disk.
     ///
     /// Recovery can find a live PID that this row did not publish with its
     /// matching Running transition—for example, when a crash occurs between the
-    /// shim writing its PID file and this row being saved. A `started_at` written
-    /// for the PID we are replacing cannot describe the adopted one, so recovery
-    /// clears it. This keeps the PID and timestamp safe to read together as one
-    /// snapshot.
+    /// shim writing its PID file and this row being saved. A `started_at` or
+    /// `owner` written for the PID we are replacing cannot describe the adopted
+    /// one, so recovery clears both. This keeps the PID, timestamp, and owner
+    /// safe to read together as one snapshot.
     pub fn adopt_recovered_shim(&mut self, pid: u32) {
         if self.pid != Some(pid) {
             self.started_at = None;
+            self.owner = None;
         }
         self.set_pid(Some(pid));
         self.set_status(BoxStatus::Running);
@@ -478,6 +512,7 @@ impl BoxState {
     pub fn mark_stop(&mut self) {
         self.status = BoxStatus::Stopped;
         self.pid = None;
+        self.owner = None;
         self.last_updated = Utc::now();
     }
 
@@ -493,6 +528,7 @@ impl BoxState {
         self.status = BoxStatus::Failed;
         self.error_reason = Some(reason.to_string());
         self.pid = None;
+        self.owner = None;
         self.last_updated = Utc::now();
     }
 
@@ -505,6 +541,7 @@ impl BoxState {
             self.status = BoxStatus::Stopped;
         }
         self.pid = None;
+        self.owner = None;
         self.last_updated = Utc::now();
     }
 
@@ -1166,12 +1203,17 @@ mod tests {
         state.set_pid(Some(4242));
         state.mark_started();
         let recorded = state.started_at;
+        let recorded_owner = state.owner;
 
         state.adopt_recovered_shim(4242);
 
         assert_eq!(
             state.started_at, recorded,
             "recovery re-attaching the same shim must preserve its Running timestamp"
+        );
+        assert_eq!(
+            state.owner, recorded_owner,
+            "recovery re-attaching the same shim must preserve its spawning owner"
         );
         assert_eq!(state.status, BoxStatus::Running);
     }
@@ -1180,8 +1222,8 @@ mod tests {
     fn adopting_a_different_shim_voids_started_at() {
         // A crash between the shim writing its PID file and this row being
         // saved leaves recovery adopting a PID the row never published. The
-        // timestamp describes the PID it was written with, so it cannot
-        // survive that swap — every consumer reads the two as one fact.
+        // timestamp and owner describe the PID they were written with, so
+        // neither can survive that swap — every consumer reads them as one fact.
         let mut state = BoxState::new();
         state.set_pid(Some(4242));
         state.mark_started();
@@ -1193,12 +1235,16 @@ mod tests {
             state.started_at.is_none(),
             "started_at for pid 4242 must not be read as evidence about pid 4243"
         );
+        assert!(
+            state.owner.is_none(),
+            "owner for pid 4242 must not be read as evidence about pid 4243"
+        );
     }
 
     /// The three ways a lifecycle ends all keep the timestamp, like docker's
-    /// `StartedAt` on an exited container. With the PID cleared,
-    /// `Some(started_at)` describes when the run that ended entered `Running`;
-    /// it cannot be read as a live box.
+    /// `StartedAt` on an exited container, while dropping PID and spawning owner.
+    /// With the PID cleared, `Some(started_at)` describes when the run that ended
+    /// entered `Running`; it cannot be read as a live box.
     #[test]
     fn ending_a_lifecycle_keeps_started_at_and_drops_the_pid() {
         let ended = |end: fn(&mut BoxState)| {
@@ -1223,10 +1269,73 @@ mod tests {
                 state.pid, None,
                 "{name} must drop the PID, or kept started_at would read as a live box"
             );
+            assert_eq!(
+                state.owner, None,
+                "{name} must drop the spawning owner when the live run ends"
+            );
             assert!(
                 !state.status.is_active(),
                 "{name} must leave the box inactive"
             );
         }
+    }
+
+    #[test]
+    fn owner_persists_and_verifies_process_identity() {
+        let mut state = BoxState::new();
+        let current = PidRecord {
+            pid: 4242,
+            start_time: Some(987_654),
+        };
+        assert!(!state.is_owned_by(current));
+
+        state.owner = Some(current);
+        assert!(state.is_owned_by(current));
+        assert!(!state.is_owned_by(PidRecord {
+            pid: 4243,
+            start_time: Some(987_654),
+        }));
+        assert!(!state.is_owned_by(PidRecord {
+            pid: 4242,
+            start_time: Some(987_655),
+        }));
+        assert!(!state.is_owned_by(PidRecord {
+            pid: 4242,
+            start_time: None,
+        }));
+
+        state.owner = Some(PidRecord {
+            pid: 4242,
+            start_time: None,
+        });
+        assert!(!state.is_owned_by(current));
+        assert!(!state.is_owned_by(PidRecord {
+            pid: 4242,
+            start_time: None,
+        }));
+
+        // Serde roundtrip preserves owner; legacy JSON without owner defaults to None.
+        state.owner = Some(current);
+        let json = serde_json::to_string(&state).unwrap();
+        let reloaded: BoxState = serde_json::from_str(&json).unwrap();
+        assert_eq!(reloaded.owner, Some(current));
+
+        let legacy = r#"{
+            "status":"running",
+            "pid":4242,
+            "container_id":null,
+            "last_updated":"2026-05-13T23:37:57.965434066Z",
+            "lock_id":null
+        }"#;
+        let legacy_state: BoxState = serde_json::from_str(legacy).unwrap();
+        assert!(legacy_state.owner.is_none());
+        assert!(!legacy_state.is_owned_by(current));
+
+        let mut started = BoxState::new();
+        started.mark_started();
+        let self_record = PidRecord::current();
+        assert_eq!(started.owner, Some(self_record));
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        assert!(started.is_owned_by(self_record));
     }
 }

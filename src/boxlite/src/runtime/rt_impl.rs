@@ -830,15 +830,15 @@ impl RuntimeImpl {
     // PUBLIC API - SHUTDOWN
     // ========================================================================
 
-    /// Gracefully shutdown all non-detached boxes in this runtime.
+    /// Gracefully shutdown all non-detached boxes started by this process.
     ///
     /// This method:
     /// 1. Marks the runtime as shut down (no new operations allowed)
     /// 2. Cancels the shutdown token (signals in-flight operations)
-    /// 3. Stops all active non-detached boxes with the given timeout
+    /// 3. Stops all active non-detached boxes owned by this process with the given timeout
     ///
-    /// Detached boxes (`detach=true`) are skipped — they are designed to
-    /// survive parent process exit and runtime shutdown.
+    /// Detached boxes (`detach=true`) and boxes started by another process (or
+    /// with no recorded owner) are skipped.
     ///
     /// # Arguments
     /// * `timeout` - Seconds before force-kill. None=10s, Some(-1)=infinite
@@ -853,11 +853,15 @@ impl RuntimeImpl {
 
         tracing::info!("Initiating runtime shutdown");
 
-        // Cancel the shutdown token - marks shutdown and signals all in-flight operations
+        // Cancel the shutdown token and mark sync cleanup pending before any await,
+        // so cancellation or failure at any point leaves Drop able to retry.
         self.shutdown_token.cancel();
+        self.sync_cleanup_pending.store(true, Ordering::Release);
 
-        // Collect all active non-detached boxes
-        let active_boxes: Vec<SharedBoxImpl> = {
+        let current_owner = crate::util::PidRecord::current();
+
+        // Collect candidate handles first so DB reads do not run under sync_state.
+        let candidate_boxes: Vec<SharedBoxImpl> = {
             let sync = self.sync_state.read().unwrap();
             sync.active_boxes_by_id
                 .values()
@@ -866,7 +870,35 @@ impl RuntimeImpl {
                 .collect()
         };
 
+        let (mut active_boxes, need_db_check): (Vec<_>, Vec<_>) = candidate_boxes
+            .into_iter()
+            .partition(|box_impl| box_impl.is_starting());
+
+        if !need_db_check.is_empty() {
+            let box_manager = self.box_manager.clone();
+            let ids: Vec<BoxID> = need_db_check.iter().map(|b| b.id().clone()).collect();
+            let persisted_states = tokio::task::spawn_blocking(move || {
+                ids.into_iter()
+                    .map(|id| box_manager.update_box(&id))
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))?;
+
+            for (box_impl, persisted) in need_db_check.into_iter().zip(persisted_states) {
+                let is_owned = match persisted {
+                    Ok(state) => state.is_owned_by(current_owner),
+                    Err(BoxliteError::NotFound(_)) => false,
+                    Err(_) => box_impl.state.read().is_owned_by(current_owner),
+                };
+                if is_owned {
+                    active_boxes.push(box_impl);
+                }
+            }
+        }
+
         if active_boxes.is_empty() {
+            self.sync_cleanup_pending.store(false, Ordering::Release);
             tracing::info!("No active boxes to shutdown");
             return Ok(());
         }
@@ -876,22 +908,20 @@ impl RuntimeImpl {
         // Convert timeout to duration
         let timeout_duration = timeout_to_duration(timeout);
 
-        // Stop all boxes concurrently
+        // Stop all owned boxes concurrently (rechecking ownership under the lock).
         let stop_futures = active_boxes.iter().map(|box_impl| {
             let box_id = box_impl.id().to_string();
             async move {
                 let result = if let Some(duration) = timeout_duration {
-                    tokio::time::timeout(duration, box_impl.stop()).await
+                    tokio::time::timeout(duration, box_impl.stop_if_owned_by(current_owner)).await
                 } else {
                     // Infinite timeout
-                    Ok(box_impl.stop().await)
+                    Ok(box_impl.stop_if_owned_by(current_owner).await)
                 };
                 (box_id, result)
             }
         });
 
-        // Drop must retry if this await is cancelled or any stop is incomplete.
-        self.sync_cleanup_pending.store(true, Ordering::Release);
         let results = futures::future::join_all(stop_futures).await;
 
         // Check for errors
@@ -928,10 +958,12 @@ impl RuntimeImpl {
     ///
     /// At atexit/Drop time, all `LiteBox` handles are gone (Weak refs dead),
     /// so async `shutdown()` would find nothing. This method queries the DB
-    /// directly and sends SIGTERM to shim processes. The shim's SIGTERM handler
-    /// does graceful Guest.Shutdown() RPC (qcow2 flush) before exiting.
+    /// directly and sends SIGTERM to shim processes for non-detached boxes
+    /// started by this process. The shim's SIGTERM handler does graceful
+    /// Guest.Shutdown() RPC (qcow2 flush) before exiting.
     ///
-    /// Detached boxes are skipped (same contract as async `shutdown()`).
+    /// Detached boxes and boxes owned by another process (or with no recorded
+    /// owner, including legacy records) are left untouched.
     pub(crate) fn shutdown_sync(&self) {
         if self.shutdown_token.is_cancelled() && !self.sync_cleanup_pending.load(Ordering::Acquire)
         {
@@ -939,6 +971,24 @@ impl RuntimeImpl {
         }
         self.shutdown_token.cancel();
         self.sync_cleanup_pending.store(false, Ordering::Release);
+
+        let current_owner = crate::util::PidRecord::current();
+
+        // Snapshot boxes with an in-flight local start after cancelling the
+        // shutdown token so a busy start that has not yet persisted its owner
+        // still defers cleanup for retry instead of being skipped as unowned.
+        let starting_ids: std::collections::HashSet<BoxID> = {
+            let sync = self
+                .sync_state
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            sync.active_boxes_by_id
+                .values()
+                .filter_map(|weak| weak.upgrade())
+                .filter(|box_impl| !box_impl.config.options.detach && box_impl.is_starting())
+                .map(|box_impl| box_impl.id().clone())
+                .collect()
+        };
 
         let boxes = match self.box_manager.all_boxes(true) {
             Ok(b) => b,
@@ -949,8 +999,10 @@ impl RuntimeImpl {
             }
         };
 
-        for (config, _) in boxes {
-            if config.options.detach {
+        for (config, initial_state) in boxes {
+            let is_starting = starting_ids.contains(&config.id);
+            if config.options.detach || (!initial_state.is_owned_by(current_owner) && !is_starting)
+            {
                 continue;
             }
             let locker = match self.box_locker(&config.id) {
@@ -993,6 +1045,9 @@ impl RuntimeImpl {
                     continue;
                 }
             };
+            if !state.is_owned_by(current_owner) {
+                continue;
+            }
             if state.status != BoxStatus::Running {
                 continue;
             }
@@ -1264,8 +1319,7 @@ impl RuntimeImpl {
                     let _ = handler.stop();
                 }
                 // Update status to stopped and save
-                state.set_status(BoxStatus::Stopped);
-                state.set_pid(None);
+                state.mark_stop();
                 self.box_manager.save_box(id, &state)?;
             } else {
                 // Non-force mode: error on active box
@@ -1657,6 +1711,7 @@ impl RuntimeImpl {
             let original_status = state.status;
             let original_pid = state.pid;
             let original_lock_id = state.lock_id;
+            let original_owner = state.owner;
             if state.lock_id.is_none() {
                 let lock_id = self.lock_manager.allocate()?;
                 self.disk_lock_manager.allocate_and_retrieve(lock_id)?;
@@ -1763,6 +1818,7 @@ impl RuntimeImpl {
             if state.status != original_status
                 || state.pid != original_pid
                 || state.lock_id != original_lock_id
+                || state.owner != original_owner
             {
                 self.box_manager.save_box(box_id, &state)?;
             }
@@ -2597,7 +2653,7 @@ mod tests {
     }
 
     /// Create a RuntimeImpl with isolated temp directory.
-    fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
+    pub(super) fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
         let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
         let options = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -2841,16 +2897,17 @@ mod tests {
         }
     }
 
-    /// Create a BoxState with Running status and a given PID.
-    fn running_state(pid: u32) -> BoxState {
+    /// Create a BoxState with Running status, a given PID, and current process ownership.
+    pub(super) fn running_state(pid: u32) -> BoxState {
         let mut state = BoxState::new();
         state.status = BoxStatus::Running;
         state.pid = Some(pid);
+        state.mark_started();
         state
     }
 
     /// Spawn a dummy sleep process and return its PID.
-    fn spawn_dummy_process() -> (u32, std::process::Child) {
+    pub(super) fn spawn_dummy_process() -> (u32, std::process::Child) {
         let child = std::process::Command::new("sleep")
             .arg("300")
             .spawn()
@@ -2859,7 +2916,7 @@ mod tests {
         (pid, child)
     }
 
-    struct ChildGuard(std::process::Child);
+    pub(super) struct ChildGuard(pub(super) std::process::Child);
 
     impl Drop for ChildGuard {
         fn drop(&mut self) {
@@ -2883,7 +2940,7 @@ mod tests {
 
     /// Create a BoxConfig whose box_home aligns with the runtime's layout.
     /// This is needed for tests that verify PID file operations.
-    fn test_box_config_in_layout(detach: bool, runtime: &RuntimeImpl) -> BoxConfig {
+    pub(super) fn test_box_config_in_layout(detach: bool, runtime: &RuntimeImpl) -> BoxConfig {
         let id = BoxIDMint::mint();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
         BoxConfig {
@@ -3060,6 +3117,7 @@ mod tests {
             .expect("Box should exist");
         assert_eq!(updated_state.status, BoxStatus::Stopped);
         assert!(updated_state.pid.is_none());
+        assert!(updated_state.owner.is_none());
     }
 
     #[test]
@@ -3473,7 +3531,7 @@ mod tests {
 
     /// Write a two-line `shim.pid` whose start-time matches the live PID
     /// so the recovery and stop fingerprint checks adopt it.
-    fn write_pid_file_with_fingerprint(pid_file: &std::path::Path, pid: u32) {
+    pub(super) fn write_pid_file_with_fingerprint(pid_file: &std::path::Path, pid: u32) {
         if let Some(parent) = pid_file.parent() {
             std::fs::create_dir_all(parent).expect("create box directory");
         }
@@ -3734,6 +3792,7 @@ mod tests {
         let mut state = BoxState::new();
         state.status = BoxStatus::Running;
         state.pid = None;
+        state.mark_started();
 
         runtime
             .box_manager
@@ -4436,3 +4495,7 @@ mod tests {
 #[cfg(test)]
 #[path = "tests/disk_lock.rs"]
 mod disk_lock_tests;
+
+#[cfg(test)]
+#[path = "tests/shutdown_ownership.rs"]
+mod shutdown_ownership_tests;
