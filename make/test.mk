@@ -546,13 +546,6 @@ test\:unit\:gvproxy:
 	@echo "🧪 Running gvproxy bridge unit tests..."
 	@bash src/deps/libgvproxy-sys/gvproxy-bridge/go-with-gvproxy-patch.sh test ./... $(GOTEST_FILTER)
 
-PHONY_TARGETS += test\:platform-guard-bpf
-test\:platform-guard-bpf:
-	@$(MAKE) build:platform-guard-bpf
-	@GOWORK=off BOXLITE_TEST_BPF_OBJECT="$(PROJECT_ROOT)/target/platform-guard/deadline.bpf.o" \
-		go -C src/deps/libgvproxy-sys/gvproxy-bridge test -count=1 -v \
-		./internal/guardkernel ./cmd/boxlite-platform-guard
-
 # OpenAPI reference-server unit tests: the error class the server answers with
 # must be one openapi/box.openapi.yaml declares, and must match the triple
 # `BoxliteError::http()` (src/shared/src/errors.rs) gives the same failure —

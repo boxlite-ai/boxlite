@@ -74,7 +74,12 @@ const gcpProvider = (output: (value: any) => any) =>
     project: 'project',
     zone: 'us-east5-a',
     volumePrefix: 'boxlite-volume',
-    placement: { cloud: 'gcp', subnetwork: output('subnet'), serviceAccount: output('runner@example.invalid') } as any,
+    placement: {
+      cloud: 'gcp',
+      subnetwork: output('subnet'),
+      serviceAccount: output('runner@example.invalid'),
+      cloudScope: output('e30'),
+    } as any,
   })
 
 test('GCP checkpoint object access names only the configured archive bucket', (t) => {

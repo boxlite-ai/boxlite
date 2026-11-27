@@ -124,10 +124,16 @@ func decodeOutboundJSON(input []byte, output any) error {
 func decodeGvproxyStartup(input []byte) (GvproxyConfig, outboundPolicy, error) {
 	var config GvproxyConfig
 	var version struct {
-		Outbound json.RawMessage `json:"outbound_v1"`
+		Outbound    json.RawMessage `json:"outbound_v1"`
+		LegacyGuard json.RawMessage `json:"cloud_guard"`
+		CloudScope  json.RawMessage `json:"cloud_scope"`
+		Config      json.RawMessage `json:"config"`
 	}
 	if err := json.Unmarshal(input, &version); err != nil {
 		return config, outboundPolicy{}, err
+	}
+	if version.LegacyGuard != nil || bytes.Equal(bytes.TrimSpace(version.CloudScope), []byte("null")) {
+		return config, outboundPolicy{}, fmt.Errorf("Cloud startup requires a managed scope")
 	}
 	if version.Outbound == nil {
 		if err := json.Unmarshal(input, &config); err != nil {
@@ -137,7 +143,7 @@ func decodeGvproxyStartup(input []byte) (GvproxyConfig, outboundPolicy, error) {
 		if config.OutboundDisabled {
 			mode = "disabled"
 		}
-		err := config.prepareGuard()
+		err := config.preparePlatformScope()
 		return config, outboundPolicy{Mode: mode, AllowNet: config.AllowNet}, err
 	}
 	var envelope struct {
@@ -146,6 +152,15 @@ func decodeGvproxyStartup(input []byte) (GvproxyConfig, outboundPolicy, error) {
 	}
 	if err := decodeOutboundJSON(input, &envelope); err != nil {
 		return config, outboundPolicy{}, err
+	}
+	var wireConfig struct {
+		CloudScope json.RawMessage `json:"cloud_scope"`
+	}
+	if err := json.Unmarshal(version.Config, &wireConfig); err != nil {
+		return config, outboundPolicy{}, err
+	}
+	if bytes.Equal(bytes.TrimSpace(wireConfig.CloudScope), []byte("null")) {
+		return config, outboundPolicy{}, fmt.Errorf("Cloud startup requires a managed scope")
 	}
 	policy, required, err := envelope.Outbound.Snapshot.prepare(true)
 	if err != nil {
@@ -156,7 +171,7 @@ func decodeGvproxyStartup(input []byte) (GvproxyConfig, outboundPolicy, error) {
 	}
 	config = envelope.Config
 	config.OutboundRevision = envelope.Outbound.Snapshot.Revision
-	err = config.prepareGuard()
+	err = config.preparePlatformScope()
 	return config, policy, err
 }
 

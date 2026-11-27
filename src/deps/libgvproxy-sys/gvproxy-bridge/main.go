@@ -19,6 +19,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -166,8 +167,8 @@ type DNSRecord struct {
 
 // DNSZone represents a local DNS zone configuration
 // These are local DNS records served by the gateway's embedded DNS server.
-// Local forwards non-zone queries through the host resolver. Cloud uses
-// the resolver endpoints approved by the operator inventory.
+// Local forwards non-zone queries through the host resolver. Managed Cloud
+// Runners use the GCP resolver.
 type DNSZone struct {
 	Name      string      `json:"name"`              // Zone name (e.g., "myapp.local.", "." for root)
 	Records   []DNSRecord `json:"records,omitempty"` // Exact A records within the zone
@@ -205,10 +206,10 @@ type GvproxyConfig struct {
 	RateLimit *RateLimitConfig `json:"rate_limit,omitempty"`
 
 	// Host-protected prefixes are compiled before network startup.
-	PlatformProtectedCIDRs  []string        `json:"platform_protected_cidrs,omitempty"`
-	CloudGuard              *cloudBootstrap `json:"cloud_guard,omitempty"`
-	guard                   platformGuard
-	cloudInventoryDirectory string
+	PlatformProtectedCIDRs []string    `json:"platform_protected_cidrs,omitempty"`
+	CloudScope             *cloudScope `json:"cloud_scope,omitempty"`
+	guard                  platformGuard
+	cloudResolvers         []netip.AddrPort
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
@@ -480,24 +481,16 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 					mux.Handle(outboundStatusPath, policy)
 					mux.Handle(outboundSnapshotPath, policy)
 					mux.Handle(completeOutboundStatusPath, policy)
-					if policy.guard.epoch != nil {
-						mux.Handle(platformGuardStatus, policy.guard.epoch.status(policy.inventory))
+					if config.CloudScope != nil {
+						mux.HandleFunc(cloudScopeStatus, config.CloudScope.status)
 					}
-					serve := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-						if !policy.guard.active() && r.URL.Path != platformGuardStatus {
-							http.Error(w, "Cloud inventory is inactive", http.StatusServiceUnavailable)
-							return
-						}
-						mux.ServeHTTP(w, r)
-					})
-					if sErr := http.Serve(l, serve); sErr != nil && ctx.Err() == nil {
+					if sErr := http.Serve(l, mux); sErr != nil && ctx.Err() == nil {
 						logrus.WithError(sErr).Error("gvproxy services HTTP server exited")
 					}
 				}()
 			}
 		}
 		initErr <- nil
-		traffic := policy.guard.trafficContext(ctx)
 
 		// Platform-specific packet handling
 		if runtime.GOOS == "darwin" {
@@ -519,8 +512,8 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				logrus.WithFields(logrus.Fields{"id": id, "remote": wrappedConn.RemoteAddr().String()}).Info("VFKit connection accepted")
 
 				// Handle the VFKit protocol with the wrapped connection
-				if err := policy.guard.runGuestLink(traffic, wrappedConn, 0, config.RateLimit, vn.AcceptVfkit); err != nil {
-					if traffic.Err() == nil {
+				if err := runGuestLink(ctx, wrappedConn, 0, config.RateLimit, vn.AcceptVfkit); err != nil {
+					if ctx.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptVfkit error")
 					}
 				}
@@ -543,19 +536,10 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 
 				// Close listener after first connection (one VM per gvproxy instance)
 				listener.Close()
-				if config.CloudGuard != nil {
-					guest := acceptedConn.(*net.UnixConn)
-					if err := config.CloudGuard.hostOperation(traffic, "register_guest", guest); err != nil {
-						_ = guest.Close()
-						policy.guard.epoch.retire()
-						logrus.WithError(err).Error("Cloud guard refused guest data socket")
-						return
-					}
-				}
 
 				// Handle the Qemu protocol
-				if err := policy.guard.runGuestLink(traffic, acceptedConn, 4, config.RateLimit, vn.AcceptQemu); err != nil {
-					if traffic.Err() == nil {
+				if err := runGuestLink(ctx, acceptedConn, 4, config.RateLimit, vn.AcceptQemu); err != nil {
+					if ctx.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptQemu error")
 					}
 				}
@@ -661,7 +645,6 @@ func gvproxy_get_stats(id C.longlong) *C.char {
 
 //export gvproxy_outbound_capabilities
 func gvproxy_outbound_capabilities() C.uint {
-	// Cloud guards require the Linux cgroup and Unix descriptor handoff.
 	capabilities := supportedOutboundCapabilities()
 	// Bit 4 is the trusted platform-CIDR launch capability.
 	bits := C.uint(1 << 4)
@@ -671,7 +654,8 @@ func gvproxy_outbound_capabilities() C.uint {
 		}
 	}
 	if runtime.GOOS == "linux" {
-		bits |= 1 << 5
+		// Managed Cloud scope requires Linux process and cgroup verification.
+		bits |= 1 << 7
 	}
 	return bits
 }

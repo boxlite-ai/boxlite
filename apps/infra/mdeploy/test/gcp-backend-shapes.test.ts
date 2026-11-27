@@ -81,6 +81,7 @@ test('GCP backend constructors use scalar health references', { timeout: 30000 }
           exposure: 'private',
           subnetwork: $util.output('subnet'),
           egressSubnetwork: $util.output('egress'),
+          cloudScope: $util.output('e30'),
           serviceAccount: $util.output('proxy@example.test'),
         },
       })({

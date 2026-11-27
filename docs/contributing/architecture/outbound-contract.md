@@ -41,7 +41,7 @@ Retries check candidates individually and share one bounded setup deadline; canc
 Transport failure does not select a different route implicitly.
 
 Local host alias connections use direct NAT when Box and host rules permit them.
-The Cloud platform guard denies connections to the alias.
+Cloud platform filtering denies connections to the alias.
 A future remote transport must reject that alias unless it defines an explicit safe mapping; translated loopback is not the proxy server's equivalent destination.
 
 ### TCP transport implementation
@@ -53,7 +53,7 @@ Its error is returned without selecting the direct socket dialer; an unset conne
 Configure resolver and transport seams before installing the forwarder.
 
 TCP uses this boundary even with an empty Box allowlist. UDP uses checked
-admission when extended rules, host-protected ranges, or the Cloud guard apply.
+admission when extended rules, host-protected ranges, or Cloud platform filtering apply.
 Other legacy UDP delegates to the upstream forwarder after the Box policy check.
 
 Address setup and controlled hostname resolution each use a bounded setup context, including candidate retries and MITM redials.
@@ -190,14 +190,14 @@ In the extended policy, direct and resolved targets both run mandatory address c
 Link-local, unspecified, IPv4 0/8, multicast, IPv4 limited broadcast, and trusted platform-denied addresses are refused.
 Name-resolved candidates also exclude the Box subnet.
 
-The Cloud guard denies loopback, private and CGNAT IPv4 destinations and native
+Cloud platform filtering denies loopback, private and CGNAT IPv4 destinations and native
 IPv6 egress. On Local, direct IPv4 access to those ranges follows Box and host
 rules. With a nonempty Box allowlist, a resolved candidate in those ranges
 requires a matching IP rule for its address and port.
 
 User address rules evaluate the pre-NAT target.
-Platform policy also checks the translated dial destination, so the Cloud
-guard denies translated loopback even when the pre-NAT address passes.
+Platform policy also checks the translated dial destination, so Cloud filtering
+denies translated loopback even when the pre-NAT address passes.
 The Local alias maps to host loopback when Box and host policy allow it.
 
 Trusted UDP admission checks both addresses before endpoint creation and dials the exact approved literal.
@@ -209,7 +209,6 @@ Enabled mode exempts DNS on the registered gateway TCP/UDP 53 endpoints, DHCP on
 Other traffic to the gateway or guest IP and forwarded host aliases follows the normal policy.
 
 Disabled mode continues to block forwarding and registered DNS/DHCP delivery.
-On guarded Cloud Runners, those services also stop when the guard expires.
 
 ### Creation and replacement
 

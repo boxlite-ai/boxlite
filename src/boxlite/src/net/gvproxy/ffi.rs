@@ -8,7 +8,7 @@ use std::ffi::{CStr, CString};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::config::GvproxyConfig;
-use super::platform::CloudGuardBootstrap;
+use super::platform::CloudScope;
 use crate::net::{OutboundBootstrap, OutboundCapabilities, OutboundRevision};
 use libgvproxy_sys::{
     gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_stats, gvproxy_get_version,
@@ -27,14 +27,14 @@ pub fn create_instance(
     revision: Option<&OutboundRevision>,
     outbound: Option<&OutboundBootstrap>,
     protected_cidrs: &[String],
-    cloud_guard: Option<&CloudGuardBootstrap>,
+    cloud_scope: Option<&CloudScope>,
 ) -> BoxliteResult<i64> {
     let json = match outbound {
         Some(outbound) => {
             let host_config = PlatformStartup {
                 config,
                 platform_protected_cidrs: protected_cidrs,
-                cloud_guard,
+                cloud_scope,
             };
             serde_json::to_string(
                 &serde_json::json!({"config": host_config, "outbound_v1": outbound}),
@@ -43,7 +43,7 @@ pub fn create_instance(
                 BoxliteError::Network(format!("Failed to serialize complete gvproxy config: {e}"))
             })?
         }
-        None => serialize_config(config, revision, protected_cidrs, cloud_guard)?,
+        None => serialize_config(config, revision, protected_cidrs, cloud_scope)?,
     };
 
     let c_json = CString::new(json)
@@ -89,8 +89,8 @@ pub fn supports_platform_cidrs() -> bool {
     unsafe { gvproxy_outbound_capabilities() & (1 << 4) != 0 }
 }
 
-pub fn supports_cloud_guard() -> bool {
-    unsafe { gvproxy_outbound_capabilities() & (1 << 5) != 0 }
+pub fn supports_cloud_scope() -> bool {
+    unsafe { gvproxy_outbound_capabilities() & (1 << 7) != 0 }
 }
 
 #[derive(serde::Serialize)]
@@ -100,14 +100,14 @@ struct PlatformStartup<'a> {
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     platform_protected_cidrs: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
-    cloud_guard: Option<&'a CloudGuardBootstrap>,
+    cloud_scope: Option<&'a CloudScope>,
 }
 
 fn serialize_config(
     config: &GvproxyConfig,
     revision: Option<&crate::net::OutboundRevision>,
     protected_cidrs: &[String],
-    cloud_guard: Option<&CloudGuardBootstrap>,
+    cloud_scope: Option<&CloudScope>,
 ) -> BoxliteResult<String> {
     #[derive(serde::Serialize)]
     struct Startup<'a> {
@@ -120,7 +120,7 @@ fn serialize_config(
         config: PlatformStartup {
             config,
             platform_protected_cidrs: protected_cidrs,
-            cloud_guard,
+            cloud_scope,
         },
         outbound_revision: revision,
     })

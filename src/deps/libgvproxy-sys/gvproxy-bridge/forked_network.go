@@ -14,15 +14,12 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"net"
-	"net/netip"
 	"reflect"
 	"sync"
 	"unsafe"
 
-	"github.com/boxlite/gvproxy-bridge/internal/guardinventory"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 	logrus "github.com/sirupsen/logrus"
@@ -35,59 +32,26 @@ import (
 func newGvproxyNetwork(ctx context.Context, config *types.Configuration, startup GvproxyConfig, ca *BoxCA, secrets *SecretHostMatcher, initial outboundPolicy) (*virtualnetwork.VirtualNetwork, *outboundPolicyController, error) {
 	var vn *virtualnetwork.VirtualNetwork
 	var resolve resolveFunc
-	var inventory guardinventory.Observation
 	var err error
 	if startup.guard.cloud {
-		inventory, err = guardinventory.Sample(ctx, startup.cloudInventoryDirectory)
-		if err != nil {
-			return nil, nil, err
+		if len(startup.cloudResolvers) == 0 {
+			return nil, nil, fmt.Errorf("Cloud DNS requires an approved resolver")
 		}
-		if launch := startup.CloudGuard; launch != nil {
-			if launch.Revision != inventory.Revision || launch.Digest != hex.EncodeToString(inventory.Digest[:]) {
-				return nil, nil, fmt.Errorf("Cloud inventory does not match the launch identity")
-			}
-			if err := launch.hostOperation(ctx, "check", nil); err != nil {
-				return nil, nil, err
-			}
-		}
-		startup.guard.protected = append(append([]netip.Prefix(nil), startup.guard.protected...), inventory.Protected...)
-		startup.guard.epoch = newCloudGuardEpoch(ctx, inventory)
-		resolver := &cloudDNSResolver{endpoints: inventory.Resolvers, epoch: startup.guard.epoch}
+		resolver := &cloudDNSResolver{endpoints: startup.cloudResolvers}
 		resolve = resolver.lookupHost
-		network, err := virtualnetwork.NewWithDNSResolver(startup.guard.epoch.ctx, config, resolver)
+		vn, err = virtualnetwork.NewWithDNSResolver(ctx, config, resolver)
 		if err != nil {
-			startup.guard.epoch.retire()
 			return nil, nil, fmt.Errorf("initialize Cloud virtual network: %w", err)
 		}
-		vn = network
 	} else {
 		vn, err = virtualnetwork.New(config)
 		if err != nil {
 			return nil, nil, fmt.Errorf("initialize virtual network: %w", err)
 		}
 	}
-	policy, err := newOutboundPolicyController(startup.guard.trafficContext(ctx), vn, config, startup, ca, secrets, initial, resolve)
+	policy, err := newOutboundPolicyController(ctx, vn, config, startup, ca, secrets, initial, resolve)
 	if err != nil {
-		if startup.guard.epoch != nil {
-			startup.guard.epoch.retire()
-		}
 		return nil, nil, fmt.Errorf("initialize outbound policy: %w", err)
-	}
-	if startup.guard.epoch != nil {
-		if !startup.guard.active() {
-			startup.guard.epoch.retire()
-			policy.stack.Close()
-			return nil, nil, fmt.Errorf("Cloud inventory expired during network initialization")
-		}
-		policy.inventory = inventory
-		go func() {
-			startup.guard.epoch.watch(startup.cloudInventoryDirectory, inventory)
-			if launch := startup.CloudGuard; launch != nil {
-				if err := launch.hostOperation(context.Background(), "revoke", nil); err != nil {
-					logrus.WithError(err).Warn("Cloud guard revocation notification failed")
-				}
-			}
-		}()
 	}
 	return vn, policy, nil
 }

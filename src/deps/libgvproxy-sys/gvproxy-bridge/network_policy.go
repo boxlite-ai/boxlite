@@ -11,7 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/boxlite/gvproxy-bridge/internal/guardinventory"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -49,7 +48,6 @@ type outboundPolicyController struct {
 	active       atomic.Pointer[outboundSnapshot]
 	config       *types.Configuration
 	guard        platformGuard
-	inventory    guardinventory.Observation
 	resolve      resolveFunc
 	guestIP      string
 	stack        *stack.Stack
