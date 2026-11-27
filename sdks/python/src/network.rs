@@ -513,8 +513,6 @@ mod tests {
         (runtime, result)
     }
 
-    /// `is_public` is a new optional request field: omitted or at its default
-    /// it stays off the wire; only a private tunnel sends it.
     #[test]
     fn quickstart_tunnel_call_matches_the_binding() {
         let template =
@@ -539,6 +537,8 @@ mod tests {
         );
     }
 
+    /// `is_public` is a new optional request field: omitted or at its default
+    /// it stays off the wire; only a private tunnel sends it.
     #[test]
     fn tunnel_sends_is_public_only_when_private() {
         let (url, bodies) = tunnel_cloud();
