@@ -42,8 +42,13 @@ const state = vi.hoisted(() => ({
   errorReason: undefined as string | undefined,
   storageBackend: 'standard',
   instance: undefined as string | undefined,
-  capabilities: { object_storage_enabled: true, filestore_enabled: false },
+  capabilities: undefined as
+    | { object_storage_enabled?: boolean; filestore_enabled?: boolean }
+    | undefined,
   capabilitiesLoading: false,
+  capabilitiesFetching: false,
+  capabilitiesError: false,
+  capabilitiesRefetch: vi.fn(),
   createdVolume: undefined as Record<string, unknown> | undefined,
   createError: undefined as Error | undefined,
   createPending: false,
@@ -87,7 +92,13 @@ vi.mock('@/hooks/mutations/useCreateVolumeMutation', () => ({
   }),
 }))
 vi.mock('@/hooks/queries/useVolumeStorageCapabilities', () => ({
-  useVolumeStorageCapabilities: () => ({ data: state.capabilities, isLoading: state.capabilitiesLoading }),
+  useVolumeStorageCapabilities: () => ({
+    data: state.capabilities,
+    isLoading: state.capabilitiesLoading,
+    isFetching: state.capabilitiesFetching,
+    isError: state.capabilitiesError,
+    refetch: state.capabilitiesRefetch,
+  }),
 }))
 vi.mock('@/hooks/mutations/useDeleteVolumeMutation', () => ({
   useDeleteVolumeMutation: () => ({ mutateAsync: vi.fn() }),
@@ -151,6 +162,8 @@ describe('Volumes row action "New Box"', () => {
     state.instance = undefined
     state.capabilities = { object_storage_enabled: true, filestore_enabled: false }
     state.capabilitiesLoading = false
+    state.capabilitiesFetching = false
+    state.capabilitiesError = false
     state.createdVolume = undefined
     state.createError = undefined
     state.createPending = false
@@ -384,6 +397,8 @@ describe('Volumes storage selection', () => {
     state.instance = undefined
     state.capabilities = { object_storage_enabled: true, filestore_enabled: false }
     state.capabilitiesLoading = false
+    state.capabilitiesFetching = false
+    state.capabilitiesError = false
     state.createdVolume = undefined
     state.createError = undefined
     state.createPending = false
@@ -498,6 +513,16 @@ describe('Volumes storage selection', () => {
     expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('standard')
   })
 
+  it('keeps Standard available when an older config omits the new capability fields', async () => {
+    state.capabilities = { filestore_enabled: false }
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    inputText('Volume name', 'legacy-standard')
+    await act(async () => rowAction('Create')!.click())
+
+    expect(state.createdVolume).toEqual({ name: 'legacy-standard', storageBackend: 'standard' })
+  })
+
   it.each([
     {
       name: 'capabilities are loading',
@@ -509,6 +534,13 @@ describe('Volumes storage selection', () => {
       name: 'no backend is available',
       arrange: () => {
         state.capabilities = { object_storage_enabled: false, filestore_enabled: false }
+      },
+    },
+    {
+      name: 'capability discovery failed',
+      arrange: () => {
+        state.capabilities = undefined
+        state.capabilitiesError = true
       },
     },
   ])('does not submit with Enter while $name', async ({ arrange }) => {
@@ -530,6 +562,26 @@ describe('Volumes storage selection', () => {
 
     expect(state.createdVolume).toBeUndefined()
   }, 30_000)
+
+  it('distinguishes capability discovery failure from a disabled backend and retries it', async () => {
+    state.capabilities = undefined
+    state.capabilitiesError = true
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+
+    expect(document.body.textContent).toContain('Could not load volume storage options')
+    expect(document.body.textContent).not.toContain('Performance storage is not configured')
+    await act(async () => rowAction('Retry')!.click())
+    expect(state.capabilitiesRefetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not label an unknown response storage backend as Standard', () => {
+    state.storageBackend = '11184809'
+    renderPage()
+
+    expect(document.querySelector('.resource-list-row')?.textContent).toContain('Unknown')
+    expect(document.querySelector('.resource-list-row')?.textContent).not.toContain('Standard')
+  })
 
   it('shows only the storage backend', () => {
     state.storageBackend = 'performance'

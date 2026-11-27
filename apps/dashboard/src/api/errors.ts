@@ -28,17 +28,15 @@ export class BoxliteError extends Error {
   public static fromError(error: Error, options: BoxliteErrorOptions = {}): BoxliteError {
     const { code, retryAfterSeconds } = options
     if (code === 'disposable_email' || code === 'email_required' || code === 'invalid_email') {
-      return new RegistrationEmailError(error.message, code, { cause: error.cause })
+      return new RegistrationEmailError(error.message, code, { ...options, cause: error.cause })
     }
 
     if (code && registrationCodes.includes(code)) {
-      return new RegistrationError(error.message, code, retryAfterSeconds, { cause: error.cause })
+      return new RegistrationError(error.message, code, retryAfterSeconds, { ...options, cause: error.cause })
     }
 
     if (String(error).includes('Organization is suspended')) {
-      return new OrganizationSuspendedError(error.message, {
-        cause: error.cause,
-      })
+      return new OrganizationSuspendedError(error.message, { ...options, cause: error.cause })
     }
 
     return new BoxliteError(error.message, options)

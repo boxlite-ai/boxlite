@@ -45,8 +45,8 @@ import type { Checkpoint, CheckpointPage } from './checkpoint-types'
 import { readTunnelDescriptor, tunnelOperationError, TunnelRequestError, type TunnelDescriptor } from './tunnel'
 
 export interface VolumeStorageCapabilities {
-  object_storage_enabled: boolean
-  filestore_enabled: boolean
+  object_storage_enabled?: boolean
+  filestore_enabled?: boolean
 }
 
 // A burst of in-flight requests can all 401 at once when the access token goes

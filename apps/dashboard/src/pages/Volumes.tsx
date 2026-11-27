@@ -49,6 +49,7 @@ import {
   CreateVolumeStorageBackendEnum,
   OrganizationRolePermissionsEnum,
   VolumeDto,
+  VolumeDtoStorageBackendEnum,
   VolumeState,
 } from '@boxlite-ai/api-client'
 import { useQueryClient } from '@tanstack/react-query'
@@ -107,7 +108,13 @@ const Volumes: React.FC = () => {
   const queryKey = useMemo(() => queryKeys.volumes.list(selectedOrganization?.id ?? ''), [selectedOrganization?.id])
   const { data: inventory, error: volumesError, isFetching, refetch } = useVolumesQuery()
   const volumes = inventory ?? []
-  const { data: storageCapabilities, isLoading: storageCapabilitiesLoading } = useVolumeStorageCapabilities()
+  const {
+    data: storageCapabilities,
+    isLoading: storageCapabilitiesLoading,
+    isFetching: storageCapabilitiesFetching,
+    isError: storageCapabilitiesError,
+    refetch: refetchStorageCapabilities,
+  } = useVolumeStorageCapabilities()
   const createVolume = useCreateVolumeMutation()
   const deleteVolume = useDeleteVolumeMutation({ invalidateOnSuccess: false })
 
@@ -142,7 +149,7 @@ const Volumes: React.FC = () => {
   }, [volumes, filter])
 
   const nameValid = !newName || NAME_REGEX.test(newName)
-  const objectStorageAvailable = storageCapabilities ? storageCapabilities.object_storage_enabled : true
+  const objectStorageAvailable = storageCapabilities?.object_storage_enabled !== false
   const filestoreAvailable = storageCapabilities?.filestore_enabled === true
   // The server assigns the Filestore instance; the dashboard deliberately does
   // not ask users to know one. Falling back to the only available backend
@@ -168,7 +175,7 @@ const Volumes: React.FC = () => {
       toast.error('Only letters, digits, dots, underscores and dashes are allowed in the name.')
       return
     }
-    if (createVolume.isPending || storageCapabilitiesLoading || storageUnavailable) return
+    if (createVolume.isPending || storageCapabilitiesLoading || storageCapabilitiesError || storageUnavailable) return
     try {
       await createVolume.mutateAsync({
         volume: { name, storageBackend: selectedStorageBackend },
@@ -309,7 +316,11 @@ const Volumes: React.FC = () => {
                   <StatusMark tone={STATE_TONE[volume.state] ?? 'idle'}>{volume.state}</StatusMark>
                 </span>
                 <span className="font-mono text-meta text-muted-foreground">
-                  {volume.storageBackend === CreateVolumeStorageBackendEnum.PERFORMANCE ? 'Performance' : 'Standard'}
+                  {volume.storageBackend === VolumeDtoStorageBackendEnum.PERFORMANCE
+                    ? 'Performance'
+                    : volume.storageBackend === VolumeDtoStorageBackendEnum.STANDARD
+                      ? 'Standard'
+                      : 'Unknown'}
                 </span>
                 <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.createdAt)}</span>
                 <span className="font-mono text-meta text-muted-foreground">{timeAgo(volume.lastUsedAt)}</span>
@@ -405,7 +416,13 @@ const Volumes: React.FC = () => {
                 </option>
               </select>
             </div>
-            {!objectStorageAvailable && !filestoreAvailable ? (
+            {storageCapabilitiesError ? (
+              <ResourceErrorNotice
+                title="Could not load volume storage options."
+                retrying={storageCapabilitiesFetching}
+                onRetry={() => void refetchStorageCapabilities()}
+              />
+            ) : !objectStorageAvailable && !filestoreAvailable ? (
               <PanelNote>This deployment has no volume storage configured.</PanelNote>
             ) : !filestoreAvailable ? (
               <PanelNote>Performance storage is not configured on this deployment.</PanelNote>
@@ -426,6 +443,7 @@ const Volumes: React.FC = () => {
               disabled={
                 createVolume.isPending ||
                 storageCapabilitiesLoading ||
+                storageCapabilitiesError ||
                 storageUnavailable ||
                 !newName.trim() ||
                 !nameValid

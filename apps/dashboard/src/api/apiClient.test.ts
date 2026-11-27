@@ -218,6 +218,27 @@ describe('ApiClient Box API errors', () => {
     expect(requests[0].headers.Authorization).toBe('Bearer renewed-token')
   })
 
+  it('preserves structured metadata and the specialized type for suspended organizations', async () => {
+    const api = await makeClient(vi.fn(), 403, {
+      message: 'Organization is suspended',
+      statusCode: 403,
+      code: 'ORGANIZATION_SUSPENDED',
+      boxId: 'box-1',
+    })
+    const cloud = await import('../lib/cloudBox')
+    const { OrganizationSuspendedError } = await import('./errors')
+
+    const error = await cloud.createBoxViaBoxApi(api, 'org-1', {}).catch((failure) => failure)
+
+    expect(error).toBeInstanceOf(OrganizationSuspendedError)
+    expect(error).toMatchObject({
+      message: 'Organization is suspended',
+      statusCode: 403,
+      code: 'ORGANIZATION_SUSPENDED',
+      boxId: 'box-1',
+    })
+  })
+
   it('preserves the server reason, status, code and Box ID for create-box failures', async () => {
     const api = await makeClient(vi.fn(), 400, {
       message: 'runner has not declared filestore',
@@ -467,7 +488,7 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
 
     const error = await api.organizationsApi.listOrganizations().catch((caught: unknown) => caught)
 
-    expect(error).toMatchObject({ code, message: 'Account creation refused' })
+    expect(error).toMatchObject({ code, message: 'Account creation refused', statusCode: status })
     expect(onUnauthorized).not.toHaveBeenCalled()
     expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
   })

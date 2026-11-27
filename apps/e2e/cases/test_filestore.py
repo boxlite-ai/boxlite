@@ -56,13 +56,20 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
 import warnings
 from typing import Any
 
 import pytest
 
-from conftest import DEFAULT_IMAGE, drain, with_bounded_lifetime
+from conftest import (
+    DEFAULT_IMAGE,
+    drain,
+    wait_for_box_state,
+    wait_until_unlisted,
+    with_bounded_lifetime,
+)
 from e2e_auth import auth_context, request_json
 
 
@@ -77,6 +84,7 @@ UNKNOWN_INSTANCE_MARKER = "unknown Filestore instance"
 # all (empty FILESTORE_INSTANCES), pinned verbatim from
 # apps/api/src/box/services/volume.service.ts:134.
 NO_INSTANCE_MARKER = "Filestore is not configured"
+VOLUME_PERMISSION_MARKER = "Attaching a volume requires: read:volumes, write:volumes"
 
 
 @pytest.fixture(scope="module")
@@ -119,10 +127,12 @@ def filestore_instance():
                 }
             ),
         )
+        _skip_when_key_cannot_attach_volumes(status, body)
         body_str = json.dumps(body) if body else ""
-        not_configured = NO_INSTANCE_MARKER in body_str
-        unknown_instance = UNKNOWN_INSTANCE_MARKER in body_str
-        not_found = status in (400, 503) and "was not found" in body_str
+        expected_refusal = status in (400, 503)
+        not_configured = expected_refusal and NO_INSTANCE_MARKER in body_str
+        unknown_instance = expected_refusal and UNKNOWN_INSTANCE_MARKER in body_str
+        not_found = expected_refusal and "was not found" in body_str
         # Only unprovisioned-environment refusals skip; a configured instance
         # that is present but unusable ("is not ready") is a real defect and
         # must fail loudly below. Keep the two classes apart.
@@ -143,6 +153,7 @@ def filestore_instance():
         assert body is not None and body.get("id"), (
             f"volume create response has no id: {body}"
         )
+        volume_id = body["id"]
         assert body.get("state") == "ready", (
             f"a filestore volume must be ready at once (the runner provisions the data "
             f"directory lazily at first mount), got {body}"
@@ -153,18 +164,15 @@ def filestore_instance():
             assert candidate == os.environ["FILESTORE_E2E_INSTANCE"], (
                 f"API returned {candidate}; requested {os.environ['FILESTORE_E2E_INSTANCE']}"
             )
-        volume_id = body["id"]
 
         status, body = _create_box_with_volume(volume_id, name=probe_box_name)
-        _skip_when_key_cannot_attach_volumes(status)
+        _skip_when_key_cannot_attach_volumes(status, body)
 
         assert 200 <= status < 300, (
             f"filestore probe box create failed: HTTP {status}: {body}"
         )
     finally:
-        _delete_box_by_name(probe_box_name)
-        if volume_id:
-            _delete_volume_by_id(volume_id, force=True)
+        _cleanup_probe(probe_box_name, volume_id)
 
     return candidate
 
@@ -204,44 +212,110 @@ def _create_box_with_volume(
     return request_json("POST", _boxes_path(), with_bounded_lifetime(body))
 
 
-def _skip_when_key_cannot_attach_volumes(status: int) -> None:
-    """Attaching any volume requires the key to hold READ_VOLUMES and
-    WRITE_VOLUMES (boxlite-box.controller.ts::assertCanAttachVolumes). A 403
-    is a precondition of the credential, not a defect; same skip class as
-    test_volumes' managed-volume 403."""
-    if status == 403:
+def _skip_when_key_cannot_attach_volumes(status: int, body: Any) -> None:
+    """Skip only the API's explicit volume-permission refusal."""
+    body_str = json.dumps(body) if body else ""
+    if status == 403 and VOLUME_PERMISSION_MARKER in body_str:
         pytest.skip(
             "API key lacks volume attach permissions (READ_VOLUMES, WRITE_VOLUMES)"
         )
 
 
 def _delete_box_by_name(name: str) -> None:
-    """Remove the ERROR-state box a refused create leaves behind.
-
-    The refusal came from the create's STARTED wait, not from the insert: the
-    row exists in ERROR state. Best effort — the bounded lifetime and the
-    `e2e-` name let `sweep.py` reclaim the box if this deletion itself fails.
-    """
-    try:
-        status, body = request_json("GET", _boxes_path(f"/{name}"))
-        if status == 200 and body and body.get("box_id"):
-            request_json("DELETE", _boxes_path(f"/{body['box_id']}?force=true"))
-    except Exception:
-        pass
+    """Remove a Box returned by either a successful or a refused create."""
+    status, body = request_json("GET", _boxes_path(f"/{name}"))
+    if status == 404:
+        return
+    assert status == 200 and body and body.get("box_id"), (
+        f"GET box {name} for cleanup failed: HTTP {status}: {body}"
+    )
+    status, body = request_json("DELETE", _boxes_path(f"/{body['box_id']}?force=true"))
+    assert 200 <= status < 300 or status == 404, (
+        f"DELETE box {body['box_id']} failed: HTTP {status}: {body}"
+    )
 
 
 def _delete_volume_by_id(volume_id: str, force: bool = False) -> None:
+    suffix = f"/{volume_id}" + ("?force=true" if force else "")
+    status, body = request_json("DELETE", _volumes_path(suffix))
+    assert 200 <= status < 300 or status == 404, (
+        f"DELETE volume {volume_id} failed: HTTP {status}: {body}"
+    )
+
+
+def _cleanup_probe(box_name: str, volume_id: str | None) -> None:
+    errors = []
     try:
-        suffix = f"/{volume_id}" + ("?force=true" if force else "")
-        request_json("DELETE", _volumes_path(suffix))
-    except Exception:
-        pass
+        _delete_box_by_name(box_name)
+    except Exception as exc:
+        errors.append(f"box {box_name}: {exc}")
+    if volume_id:
+        try:
+            _delete_volume_by_id(volume_id, force=True)
+        except Exception as exc:
+            errors.append(f"volume {volume_id}: {exc}")
+    if errors:
+        raise AssertionError("Filestore cleanup failed: " + "; ".join(errors))
+
+
+async def _cleanup_resources(
+    rt,
+    *,
+    box_ids: list[str] | None = None,
+    box_names: list[str] | None = None,
+    volume_id: str | None = None,
+) -> None:
+    errors = []
+    for box_id in box_ids or []:
+        try:
+            await rt.remove(box_id, force=True)
+        except Exception as exc:
+            errors.append(f"box {box_id}: {exc}")
+    for name in box_names or []:
+        try:
+            _delete_box_by_name(name)
+        except Exception as exc:
+            errors.append(f"box {name}: {exc}")
+    if volume_id:
+        try:
+            _delete_volume_by_id(volume_id, force=True)
+        except Exception as exc:
+            errors.append(f"volume {volume_id}: {exc}")
+    if errors:
+        raise AssertionError("Filestore cleanup failed: " + "; ".join(errors))
+
+
+def _wait_for_volume_deleted(volume_id: str, timeout: float = 60) -> None:
+    deadline = time.monotonic() + timeout
+    last_state = "not observed"
+    while True:
+        status, body = request_json("GET", _volumes_path(f"/{volume_id}"))
+        assert status == 200 and body is not None, (
+            f"GET volume {volume_id} while waiting for deletion failed: HTTP {status}: {body}"
+        )
+        last_state = body.get("state")
+        if last_state == "deleted":
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(1, remaining))
+    raise AssertionError(
+        f"volume {volume_id} did not reach deleted within {timeout}s; last state: {last_state}"
+    )
 
 
 async def _exec_ok(box, script: str) -> str:
-    ex = await box.exec("sh", ["-c", script], None)
-    out, err = await drain(ex)
-    rc = await asyncio.wait_for(ex.wait(), timeout=60)
+    async def collect():
+        ex = await box.exec("sh", ["-c", script], None)
+        out, err = await drain(ex)
+        rc = await ex.wait()
+        return out, err, rc
+
+    try:
+        out, err, rc = await asyncio.wait_for(collect(), timeout=60)
+    except asyncio.TimeoutError as exc:
+        raise AssertionError(f"{script!r} timed out after 60s") from exc
     assert rc.exit_code == 0, f"{script!r} failed ({rc.exit_code}): {err!r}"
     return out
 
@@ -263,16 +337,22 @@ async def test_create_with_unregistered_instance_fails_loudly(filestore_instance
     instance = f"e2e-no-such-instance-{uuid.uuid4().hex[:8]}"
     volume_name = f"e2e-fs-bad-{uuid.uuid4().hex[:10]}"
 
-    status, body = _create_filestore_volume(instance, name=volume_name)
-    body_str = json.dumps(body) if body else ""
-    assert 400 <= status < 500, (
-        f"an unknown Filestore instance must fail the volume create with 4xx, "
-        f"got HTTP {status}: {body_str}"
-    )
-    assert UNKNOWN_INSTANCE_MARKER in body_str, (
-        f"the refusal must carry the API's words ({UNKNOWN_INSTANCE_MARKER!r}), "
-        f"got HTTP {status}: {body_str}"
-    )
+    volume_id = None
+    try:
+        status, body = _create_filestore_volume(instance, name=volume_name)
+        volume_id = body.get("id") if body else None
+        body_str = json.dumps(body) if body else ""
+        assert 400 <= status < 500, (
+            f"an unknown Filestore instance must fail the volume create with 4xx, "
+            f"got HTTP {status}: {body_str}"
+        )
+        assert UNKNOWN_INSTANCE_MARKER in body_str, (
+            f"the refusal must carry the API's words ({UNKNOWN_INSTANCE_MARKER!r}), "
+            f"got HTTP {status}: {body_str}"
+        )
+    finally:
+        if volume_id:
+            _delete_volume_by_id(volume_id, force=True)
 
 
 @pytest.mark.asyncio
@@ -286,30 +366,31 @@ async def test_filestore_volume_data_survives_stop_start(rt, filestore_instance)
     own disk, and it had no coverage outside the runner's own tests.
     """
     volume_name = f"e2e-fs-keep-{uuid.uuid4().hex[:10]}"
+    box_name = f"e2e-fs-keep-box-{uuid.uuid4().hex[:10]}"
+    volume_id = None
+    box_id = None
 
-    status, body = _create_filestore_volume(filestore_instance, name=volume_name)
-    assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
-    volume_id = body["id"]
-    status, body = _create_box_with_volume(
-        volume_name
-    )  # by name, the other selector form
-    assert 200 <= status < 300, f"filestore box create failed: HTTP {status}: {body}"
-
-    assert body is not None and body.get("box_id"), (
-        f"create response has no box_id: {body}"
-    )
-    box_id = body["box_id"]
-    # The create's 2xx already means STARTED (the endpoint waits for it), so
-    # the handle is usable for exec right away.
-    box = await rt.get(box_id)
-    assert box is not None, f"box {box_id} missing right after create"
-
-    payload = f"filestore-e2e-{uuid.uuid4().hex[:8]}"
     try:
+        status, body = _create_filestore_volume(filestore_instance, name=volume_name)
+        volume_id = body.get("id") if body else None
+        assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
+        assert volume_id, f"volume create response has no id: {body}"
+        status, body = _create_box_with_volume(volume_name, name=box_name)
+        box_id = body.get("box_id") if body else None
+        assert 200 <= status < 300, f"filestore box create failed: HTTP {status}: {body}"
+        assert box_id, f"create response has no box_id: {body}"
+        # The create's 2xx already means STARTED (the endpoint waits for it), so
+        # the handle is usable for exec right away.
+        box = await rt.get(box_id)
+        assert box is not None, f"box {box_id} missing right after create"
+
+        payload = f"filestore-e2e-{uuid.uuid4().hex[:8]}"
         await _exec_ok(box, f"printf %s {payload} > {GUEST_PATH}/probe.txt")
 
         await box.stop()
+        await wait_for_box_state(rt, box_id, "stopped")
         await box.start()
+        await wait_for_box_state(rt, box_id, "running")
         # A freshly started box gets the same short grace before its first
         # exec as in test_lifecycle_comprehensive; mirror it rather than race it.
         await asyncio.sleep(2)
@@ -319,8 +400,12 @@ async def test_filestore_volume_data_survives_stop_start(rt, filestore_instance)
             f"filestore content did not survive stop/start: {out!r}"
         )
     finally:
-        await rt.remove(box_id, force=True)
-        _delete_volume_by_id(volume_id, force=True)
+        await _cleanup_resources(
+            rt,
+            box_ids=[box_id] if box_id else [],
+            box_names=[] if box_id else [box_name],
+            volume_id=volume_id,
+        )
 
 
 @pytest.mark.asyncio
@@ -334,24 +419,30 @@ async def test_filestore_volume_shares_data_across_boxes(rt, filestore_instance)
     """
     volume_name = f"e2e-fs-share-{uuid.uuid4().hex[:10]}"
     box1_name = f"e2e-fs-share-a-{uuid.uuid4().hex[:8]}"
-
-    status, body = _create_filestore_volume(filestore_instance, name=volume_name)
-    assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
-    volume_id = body["id"]
-
-    status, body = _create_box_with_volume(volume_id, name=box1_name)
-    assert 200 <= status < 300, f"box1 create failed: HTTP {status}: {body}"
-    box1_id = body["box_id"]
-    box1 = await rt.get(box1_id)
-
-    payload = f"shared-e2e-{uuid.uuid4().hex[:8]}"
+    box2_name = f"e2e-fs-share-b-{uuid.uuid4().hex[:8]}"
+    volume_id = None
+    box1_id = None
     box2_id = None
+
     try:
+        status, body = _create_filestore_volume(filestore_instance, name=volume_name)
+        volume_id = body.get("id") if body else None
+        assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
+        assert volume_id, f"volume create response has no id: {body}"
+
+        status, body = _create_box_with_volume(volume_id, name=box1_name)
+        box1_id = body.get("box_id") if body else None
+        assert 200 <= status < 300, f"box1 create failed: HTTP {status}: {body}"
+        assert box1_id, f"box1 create response has no box_id: {body}"
+        box1 = await rt.get(box1_id)
+
+        payload = f"shared-e2e-{uuid.uuid4().hex[:8]}"
         await _exec_ok(box1, f"printf %s {payload} > {GUEST_PATH}/shared.txt")
 
-        status, body = _create_box_with_volume(volume_name)  # second box, by name
+        status, body = _create_box_with_volume(volume_name, name=box2_name)
+        box2_id = body.get("box_id") if body else None
         assert 200 <= status < 300, f"box2 create failed: HTTP {status}: {body}"
-        box2_id = body["box_id"]
+        assert box2_id, f"box2 create response has no box_id: {body}"
         box2 = await rt.get(box2_id)
 
         out = await _exec_ok(box2, f"cat {GUEST_PATH}/shared.txt")
@@ -362,15 +453,23 @@ async def test_filestore_volume_shares_data_across_boxes(rt, filestore_instance)
         # A destroyed box's data stays reachable: destroy box1, box2 still
         # reads what box1 wrote.
         await rt.remove(box1_id, force=True)
+        leaked = await wait_until_unlisted(rt, [box1_id])
+        assert not leaked, f"box1 was not destroyed before the readback: {leaked}"
         box1_id = None
+        box1_name = None
         out = await _exec_ok(box2, f"cat {GUEST_PATH}/shared.txt")
         assert out.strip() == payload, f"data must survive box1's destroy: {out!r}"
     finally:
-        if box1_id:
-            await rt.remove(box1_id, force=True)
-        if box2_id:
-            await rt.remove(box2_id, force=True)
-        _delete_volume_by_id(volume_id, force=True)
+        await _cleanup_resources(
+            rt,
+            box_ids=[box_id for box_id in (box1_id, box2_id) if box_id],
+            box_names=[
+                name
+                for box_id, name in ((box1_id, box1_name), (box2_id, box2_name))
+                if not box_id and name
+            ],
+            volume_id=volume_id,
+        )
 
 
 @pytest.mark.asyncio
@@ -385,17 +484,20 @@ async def test_filestore_volume_lifecycle_rules(rt, filestore_instance):
     """
     volume_name = f"e2e-fs-del-{uuid.uuid4().hex[:10]}"
     box_name = f"e2e-fs-del-box-{uuid.uuid4().hex[:10]}"
-
-    status, body = _create_filestore_volume(filestore_instance, name=volume_name)
-    assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
-    volume_id = body["id"]
+    volume_id = None
     box_id = None
 
     try:
+        status, body = _create_filestore_volume(filestore_instance, name=volume_name)
+        volume_id = body.get("id") if body else None
+        assert 200 <= status < 300, f"filestore volume create failed: HTTP {status}: {body}"
+        assert volume_id, f"volume create response has no id: {body}"
+
         # In-use refusal: the delete arrives while a box mounts the volume.
         status, body = _create_box_with_volume(volume_id, name=box_name)
+        box_id = body.get("box_id") if body else None
         assert 200 <= status < 300, f"box create failed: HTTP {status}: {body}"
-        box_id = body["box_id"]
+        assert box_id, f"box create response has no box_id: {body}"
 
         status, body = request_json("DELETE", _volumes_path(f"/{volume_id}"))
         assert status == 409, (
@@ -405,11 +507,23 @@ async def test_filestore_volume_lifecycle_rules(rt, filestore_instance):
 
         # Free, then removed: destroy the box, delete succeeds.
         await (await rt.get(box_id)).remove(force=True)
+        leaked = await wait_until_unlisted(rt, [box_id])
+        assert not leaked, f"box was not destroyed before volume deletion: {leaked}"
         box_id = None
+        box_name = None
 
         status, body = request_json("DELETE", _volumes_path(f"/{volume_id}"))
         assert status == 204, (
             f"deleting a free volume must answer 204, got HTTP {status}: {body}"
+        )
+        await asyncio.to_thread(_wait_for_volume_deleted, volume_id)
+
+        status, body = request_json("GET", _volumes_path())
+        assert status == 200 and body is not None, (
+            f"listing volumes after deletion failed: HTTP {status}: {body}"
+        )
+        assert volume_id not in {volume.get("id") for volume in body}, (
+            f"deleted volume {volume_id} remains in the default list"
         )
 
         # A second delete with force is accepted as already-deleted.
@@ -418,6 +532,9 @@ async def test_filestore_volume_lifecycle_rules(rt, filestore_instance):
             f"force-deleting an already-deleted volume must answer 204, got HTTP {status}: {body}"
         )
     finally:
-        if box_id:
-            await rt.remove(box_id, force=True)
-        _delete_volume_by_id(volume_id, force=True)
+        await _cleanup_resources(
+            rt,
+            box_ids=[box_id] if box_id else [],
+            box_names=[] if box_id or box_name is None else [box_name],
+            volume_id=volume_id,
+        )
