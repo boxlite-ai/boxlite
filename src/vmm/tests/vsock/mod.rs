@@ -1176,7 +1176,7 @@ fn quiesce_succeeds_while_snapshots_stay_unsupported_and_event_buffers_remain_av
                     version: 1,
                     payload: vec![]
                 },
-                RestoreContext,
+                RestoreContext::default(),
             ),
             Err(DeviceError::Unsupported("restore_state"))
         );

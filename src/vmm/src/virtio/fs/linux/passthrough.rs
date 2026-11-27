@@ -27,6 +27,8 @@ use super::super::filesystem::{
     OpenOptions, SetattrValid, ZeroCopyReader, ZeroCopyWriter,
 };
 use super::super::multikey::MultikeyBTreeMap;
+use super::super::state::{FileHandle, MAX_HANDLE_BYTES, NodeLocation};
+use super::mounts;
 
 const ROOT: u64 = 1;
 
@@ -128,6 +130,71 @@ fn statx(file: &File) -> io::Result<(libc::stat64, u64)> {
     Ok((st, stx.stx_mnt_id))
 }
 
+/// Where this process sees the `O_PATH` descriptor `file`, as `readlink` on
+/// its proc entry reports it.
+fn fd_path(proc_self_fd: &File, file: &File) -> io::Result<Vec<u8>> {
+    let name = PassthroughFs::proc_name(file)?;
+    let mut path = vec![0_u8; libc::PATH_MAX as usize];
+    // SAFETY: name is NUL-terminated and the buffer is writable for its whole
+    // length; readlinkat writes no more than that and appends no NUL.
+    let length = unsafe {
+        libc::readlinkat(
+            proc_self_fd.as_raw_fd(),
+            name.as_ptr(),
+            path.as_mut_ptr().cast(),
+            path.len(),
+        )
+    };
+    if length < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    path.truncate(length as usize);
+    Ok(path)
+}
+
+/// The file handle of the `O_PATH` descriptor `file`, or `None` on a file
+/// system that does not provide one. Every other failure is reported.
+pub(crate) fn file_handle(file: &File) -> io::Result<Option<FileHandle>> {
+    // The kernel returns no more than MAX_HANDLE_SZ bytes, so one call that
+    // offers them all answers with the handle's type and its real length.
+    let mut buffer = [0_u8; mem::size_of::<libc::file_handle>() + MAX_HANDLE_BYTES];
+    // SAFETY: the buffer is zeroed and holds the header followed by MAX_HANDLE_BYTES.
+    let handle = buffer.as_mut_ptr().cast::<libc::file_handle>();
+    // SAFETY: handle points into the writable buffer.
+    unsafe { (*handle).handle_bytes = MAX_HANDLE_BYTES as libc::c_uint };
+    let mut mount_id: libc::c_int = 0;
+    // SAFETY: the empty path addresses the owned descriptor; the header, the
+    // payload and the mount ID stay alive for the call.
+    let result = unsafe {
+        libc::name_to_handle_at(
+            file.as_raw_fd(),
+            c"".as_ptr(),
+            handle,
+            &mut mount_id,
+            libc::AT_EMPTY_PATH,
+        )
+    };
+    match cvt(result) {
+        Ok(()) => {}
+        // EOPNOTSUPP and ENOSYS: the file system does not export file handles.
+        Err(error) if matches!(error.raw_os_error(), Some(libc::EOPNOTSUPP | libc::ENOSYS)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    }
+    // SAFETY: the call succeeded and filled the handle_bytes bytes after the header.
+    let (handle_type, bytes) = unsafe {
+        (
+            (*handle).handle_type,
+            std::slice::from_raw_parts(handle.add(1).cast::<u8>(), (*handle).handle_bytes as usize),
+        )
+    };
+    Ok(Some(FileHandle {
+        handle_type,
+        handle: bytes.to_vec(),
+    }))
+}
+
 #[derive(Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub(crate) struct InodeAltKey {
     ino: u64,
@@ -143,6 +210,30 @@ impl InodeAltKey {
             mnt_id,
         }
     }
+
+    pub(crate) fn of(file: &File) -> io::Result<Self> {
+        let (attr, mount) = statx(file)?;
+        Ok(Self::new(&attr, mount))
+    }
+
+    /// The identity as a snapshot records it: `(dev, ino, mnt_id)`.
+    pub(crate) fn parts(&self) -> (u64, u64, u64) {
+        (self.dev, self.ino, self.mnt_id)
+    }
+
+    /// The identity of a file that now sits on mount `mnt_id`.
+    pub(crate) fn from_parts(dev: u64, ino: u64, mnt_id: u64) -> Self {
+        Self { ino, dev, mnt_id }
+    }
+}
+
+/// One backend inode as a snapshot lists it.
+pub(crate) struct ExportedInode {
+    pub(crate) location: NodeLocation,
+    /// `(dev, ino, mnt_id)` of the host file.
+    pub(crate) key: (u64, u64, u64),
+    /// The file handle, when the file system provides one.
+    pub(crate) handle: io::Result<Option<FileHandle>>,
 }
 
 struct InodeData {
@@ -364,6 +455,135 @@ impl PassthroughFs {
         Ok(())
     }
 
+    /// Captures a pinned inode using its cached identity. The path is resolved
+    /// before asking for a file handle, since an unreachable file cannot be reopened.
+    pub(crate) fn export_inode(&self, inode: u64, root_path: &[u8]) -> io::Result<ExportedInode> {
+        let data = self
+            .state()
+            .inodes
+            .get(&inode)
+            .map(|record| record.data.clone())
+            .ok_or_else(|| errno(libc::EBADF))?;
+        let path = fd_path(&self.proc_self_fd, &data.file)
+            .ok()
+            .filter(|path| !path.ends_with(b" (deleted)"))
+            .and_then(|path| mounts::beneath(root_path, &path));
+        let (location, handle) = match path {
+            Some(path) => (NodeLocation::Path(path), file_handle(&data.file)),
+            None => (NodeLocation::Invalid, Ok(None)),
+        };
+        Ok(ExportedInode {
+            location,
+            key: data.identity.parts(),
+            handle,
+        })
+    }
+
+    /// Where this process sees the export root.
+    pub(crate) fn root_path(&self) -> io::Result<Vec<u8>> {
+        fd_path(&self.proc_self_fd, &self.root.file)
+    }
+
+    /// The export root's identity as a snapshot records it: `(dev, ino, mnt_id)`.
+    pub(crate) fn root_key(&self) -> (u64, u64, u64) {
+        self.root_key.parts()
+    }
+
+    /// The export root's file handle, when the file system provides one.
+    pub(crate) fn root_handle(&self) -> io::Result<Option<FileHandle>> {
+        file_handle(&self.root.file)
+    }
+
+    /// The inode and handle allocators, to be restored as they were.
+    pub(crate) fn allocators(&self) -> (u64, u64) {
+        let state = self.state();
+        (state.next_inode, state.next_handle)
+    }
+
+    /// The mount ID of the directory at `path` below the export root. An
+    /// empty path is the export root itself.
+    pub(crate) fn mount_id_at(&self, path: &[Vec<u8>]) -> io::Result<u64> {
+        if path.is_empty() {
+            return Ok(self.root_key.parts().2);
+        }
+        Ok(statx(&self.open_beneath(path)?)?.1)
+    }
+
+    /// Opens `path` below the export root one component at a time. No
+    /// component is followed through a symlink, so the walk stays confined.
+    pub(crate) fn open_beneath(&self, path: &[Vec<u8>]) -> io::Result<File> {
+        let mut current: Option<File> = None;
+        for bytes in path {
+            let parent = current.as_ref().unwrap_or(&self.root.file);
+            let name = CString::new(bytes.as_slice()).map_err(|_| errno(libc::EINVAL))?;
+            current = Some(openat(
+                parent.as_raw_fd(),
+                &name,
+                libc::O_PATH | libc::O_NOFOLLOW,
+                0,
+            )?);
+        }
+        current.ok_or_else(|| errno(libc::EINVAL))
+    }
+
+    /// Registers the verified descriptor under its saved number and lookup count.
+    pub(crate) fn restore_inode(
+        &self,
+        inode: u64,
+        file: File,
+        key: InodeAltKey,
+        lookups: u64,
+    ) -> io::Result<()> {
+        let data = Arc::new(InodeData {
+            inode,
+            identity: key.clone(),
+            file,
+        });
+        let mut state = self.state();
+        // insert refuses a repeated inode number and a repeated host identity alike.
+        if !state.inodes.insert(
+            inode,
+            key,
+            InodeRecord {
+                data,
+                lookups,
+                opens: 0,
+                inflight: 0,
+            },
+        ) {
+            return Err(errno(libc::EEXIST));
+        }
+        Ok(())
+    }
+
+    /// Restores the allocators as saved. The state's reader has checked that
+    /// they exceed every number in use.
+    pub(crate) fn restore_allocators(&self, next_inode: u64, next_handle: u64) {
+        let mut state = self.state();
+        state.next_inode = next_inode;
+        state.next_handle = next_handle;
+    }
+
+    /// Reopens a handle on backend inode `inode` under the number `handle` it
+    /// had when its state was saved. `open_flags` are the saved POSIX flags.
+    pub(crate) fn restore_handle(
+        &self,
+        inode: u64,
+        handle: u64,
+        open_flags: u32,
+        directory: bool,
+    ) -> io::Result<()> {
+        // The file is the one that was verified: reopening neither creates nor truncates it.
+        const CREATING: i32 = libc::O_CREAT | libc::O_EXCL | libc::O_TRUNC;
+        self.open_handle(
+            inode,
+            flags(open_flags)? & !CREATING,
+            directory,
+            Some(handle),
+        )?;
+        Ok(())
+    }
+
     fn inode(&self, inode: u64) -> io::Result<InodeRef<'_>> {
         let data = {
             let mut state = self.state();
@@ -526,6 +746,20 @@ impl PassthroughFs {
         )
     }
 
+    /// Reopens the `O_PATH` descriptor `file` for `flags`, after checking
+    /// that it is the regular file or directory the handle kind requires.
+    fn reopen_as(&self, file: &File, flags: i32, directory: bool) -> io::Result<File> {
+        match stat(file)?.st_mode & libc::S_IFMT {
+            libc::S_IFREG if !directory => {}
+            libc::S_IFDIR if directory => {}
+            libc::S_IFREG => return Err(errno(libc::ENOTDIR)),
+            libc::S_IFDIR => return Err(errno(libc::EISDIR)),
+            libc::S_IFLNK => return Err(errno(libc::ELOOP)),
+            _ => return Err(errno(libc::EOPNOTSUPP)),
+        }
+        self.reopen(file, flags | if directory { libc::O_DIRECTORY } else { 0 })
+    }
+
     fn xattr_file(&self, inode: u64) -> io::Result<(File, InodeRef<'_>)> {
         let node = self.inode(inode)?;
         // l*xattr on a proc-FD symlink would address the proc entry, not the
@@ -582,15 +816,46 @@ impl PassthroughFs {
         })
     }
 
+    /// Reopens backend inode `inode` for the validated `flags` and registers
+    /// the handle: under `restored`, or under the next number.
+    fn open_handle(
+        &self,
+        inode: u64,
+        flags: i32,
+        directory: bool,
+        restored: Option<u64>,
+    ) -> io::Result<u64> {
+        let node = self.inode(inode)?;
+        let file = self.reopen_as(&node.data.file, flags, directory)?;
+        self.add_handle(
+            &node,
+            file,
+            directory,
+            flags & libc::O_ACCMODE != libc::O_RDONLY,
+            restored,
+        )
+    }
+
+    /// Registers `file` as a handle on `node`. A new handle takes the next
+    /// number; a restored one keeps `restored`.
     fn add_handle(
         &self,
         node: &InodeRef<'_>,
         file: File,
         directory: bool,
         writable: bool,
+        restored: Option<u64>,
     ) -> io::Result<u64> {
         let mut state = self.state();
-        let handle = next(&mut state.next_handle)?;
+        let handle = match restored {
+            Some(handle) => {
+                if state.handles.contains_key(&handle) {
+                    return Err(errno(libc::EEXIST));
+                }
+                handle
+            }
+            None => next(&mut state.next_handle)?,
+        };
         let record = state
             .inodes
             .get_mut(&node.data.inode)
@@ -626,25 +891,7 @@ impl PassthroughFs {
         if flags & (libc::O_CREAT | libc::O_EXCL) != 0 {
             return Err(errno(libc::EINVAL));
         }
-        let node = self.inode(inode)?;
-        match stat(&node.data.file)?.st_mode & libc::S_IFMT {
-            libc::S_IFREG if !directory => {}
-            libc::S_IFDIR if directory => {}
-            libc::S_IFREG => return Err(errno(libc::ENOTDIR)),
-            libc::S_IFDIR => return Err(errno(libc::EISDIR)),
-            libc::S_IFLNK => return Err(errno(libc::ELOOP)),
-            _ => return Err(errno(libc::EOPNOTSUPP)),
-        }
-        let file = self.reopen(
-            &node.data.file,
-            flags | if directory { libc::O_DIRECTORY } else { 0 },
-        )?;
-        let handle = self.add_handle(
-            &node,
-            file,
-            directory,
-            flags & libc::O_ACCMODE != libc::O_RDONLY,
-        )?;
+        let handle = self.open_handle(inode, flags, directory, None)?;
         Ok((
             Some(handle),
             if directory {
@@ -911,6 +1158,7 @@ impl FileSystem for PassthroughFs {
             file,
             false,
             flags & libc::O_ACCMODE != libc::O_RDONLY,
+            None,
         ) {
             Ok(handle) => handle,
             Err(error) => {

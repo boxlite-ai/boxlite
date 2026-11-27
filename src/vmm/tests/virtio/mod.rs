@@ -348,7 +348,7 @@ fn quiesce_default_succeeds_and_snapshots_remain_unsupported() {
                 version: 1,
                 payload: Vec::new(),
             },
-            RestoreContext
+            RestoreContext::default()
         ),
         Err(DeviceError::Unsupported(_))
     ));

@@ -321,6 +321,135 @@ after the callback finishes. Both cases pass with
 `make test:unit:vmm FILTER=blocked_fs`. This verifies host ownership and cleanup;
 it does not exercise a real hypervisor or physical slow storage.
 
+## Freeze, save and restore
+
+A VM snapshot carries guest memory, and with it the guest's live FUSE session:
+the guest does not send another `FUSE_INIT` after a restore. The device therefore
+keeps its whole session across a snapshot instead of only its queues. Queue and
+transport state, the device section of the state file and the wiring that
+pauses, exports and restores a VM with devices are separate work; this section
+covers the device's own four hooks.
+
+`Fs::quiesce` freezes the namespace: it sets one flag on the aggregate and
+touches nothing else. The handshake, every node and every handle stay, and the
+device remains published under its tag. While the device is frozen,
+`register_fd`, `set_export_phase` and `remove` fail with `EBUSY`, so the export
+table is read-only. `Fs::resume` clears the flag. Reset and drop still close
+the session: reset keeps the export configuration, and drop unpublishes the tag
+first so a control operation that still holds an `Arc<AggregateFs>` cannot
+reach a dead device.
+
+The mount controller owns the mount state machine, which the device cannot
+read, so it mirrors each state into the device. An export registered with
+`register_fd` starts in `Preparing`; `SetMountState` moves it to `Mounted` or
+`Detaching` before the registry records the same transition; exports built with
+the device are `Mounted` from the start. A transition the device refuses leaves
+the registry unchanged too.
+
+`Fs::save_state` is valid only on a frozen device. It returns a
+`DeviceSnapshot { format, version, payload }` whose payload is a Postcard-encoded
+`FsState`:
+
+| Group | What it keeps |
+| --- | --- |
+| Session | Device tag; whether `FUSE_INIT` completed, the negotiated options and the protocol version |
+| Exports | Root number, visible inode number, name, read-only flag and the backend's two allocators |
+| Mounts | Per export, the mount IDs its nodes with a path use and where each mount point sits relative to the export root |
+| Nodes | Number, visible inode number, lookups, backend number, path below the export or `Invalid`, host device and inode, and an optional file-system handle for a valid path |
+| Handles | Number, node, backend number, POSIX open flags and whether it is a directory handle |
+| Allocators and identities | The three aggregate allocators and the identity entries of the nodes with a path |
+
+Host descriptors, directory contents, read offsets and host paths are not part
+of the state; each file is reopened from the directory the caller supplies. The
+tables are listed under the two aggregate locks, and paths, file handles and
+`/proc/self/mountinfo` are read only after the locks are released.
+
+A save returns `SnapshotError::Refused` with the affected object and reason
+under these conditions:
+
+- The device has not been frozen.
+- An export is `Preparing` or `Detaching`.
+- The mount table cannot be read or parsed, or it omits a live node's mount.
+- Two mounts in one export resolve to the same path.
+- A live node belongs to an export that has been unmounted.
+- A mount of the export's nodes is neither below the export root nor above it, so the mount table disagrees with the nodes.
+- The host path of an export root cannot be read, so no node path can be made relative to it.
+
+If `/proc/self/fd` cannot supply a node's path, the path ends in ` (deleted)`,
+or it lies outside the export, the save records `NodeLocation::Invalid` and
+omits the file-system handle, the identity entry and the mount. It preserves
+every other node field and any open guest handles. This needs no extra `stat`
+or file probe. One warning names the node and its export, and the save
+continues.
+
+If `name_to_handle_at` fails for a node with a valid path, including an export
+root, the save omits its file-system handle and restore checks only device and
+inode. `EOPNOTSUPP` and `ENOSYS` are silent. Any other error produces one
+warning with the node number, export name and errno.
+
+`Fs::restore_state` succeeds only on an inactive device built without exports.
+`RestoreContext` carries one directory per export, keyed by export name. The
+reader treats the payload as untrusted: format, version, device tag and
+protocol version must match, a payload above the limits is refused before
+decoding, trailing bytes are refused, and the decoded tables must agree with
+each other before one file is reopened. The limits are 64 MiB of payload,
+65,536 exports and mounts, 1,048,576 nodes, handles and identities, 4096 bytes
+per path and 128 bytes per file handle, the kernel's `MAX_HANDLE_SZ`. The
+writer runs the same checks, so a save never produces a state this build
+would refuse. A new aggregate is then built beside the old one:
+
+1. Match the supplied directories to all saved exports by count, name and
+   read-only flag. Each directory must be usable and its root node present.
+   Verify each root's device, inode and any saved file-system handle.
+2. Reopen the saved mount points and use `statx` to obtain their current mount
+   IDs. If a mount point cannot be opened, keep its saved ID and log one warning.
+3. Reopen each non-root node beneath its export one component at a time with
+   `O_PATH | O_NOFOLLOW`. Compare its device and inode. If the snapshot has a
+   file-system handle, obtain it again and compare it without the mount ID.
+   Device and inode alone cannot detect a reused inode number. An `Invalid`
+   location, reopen failure, identity mismatch, unavailable saved handle or
+   backend registration failure makes just this node stale. Keep its number,
+   identity and lookup count, omit it from `local_ids`, and log one warning
+   naming the node and the reason.
+4. Reopen handles with their saved access mode and `O_APPEND`, stripping
+   `O_CREAT`, `O_EXCL` and `O_TRUNC`. A handle on a stale node, or one that
+   cannot reopen on a live node, stays under its saved number as stale and
+   counts toward the node's open count.
+5. Rebuild identity keys with the remapped mount IDs, restore every allocator
+   to its saved value, and install the handshake result. A device saved before
+   `FUSE_INIT` waits for the guest's handshake.
+
+The device publishes the new aggregate only after decoding succeeds and every
+export and root passes validation. A failure at that level leaves the device
+and its publication untouched. Several devices can restore the same state.
+Each reopens its own handles, and writable exports share one host directory.
+
+**Stale nodes and handles.** A guest request using a stale node or handle
+returns `ESTALE`, including operations that use a stale directory as a parent.
+`FORGET` releases lookup references, and `RELEASE` or `RELEASEDIR` removes the
+handle. Cleanup of a stale object requires no backend call and logs no error.
+A fresh lookup under a live parent gives a replacement file a new node number
+or returns `ENOENT` if the name was deleted.
+
+A later save records a stale node as `Invalid` without a file-system handle,
+an identity entry or a mount. It keeps the guest inode number and the lookup
+count so open guest handles still refer to it. For a stale handle on a live
+node, the next save preserves its open flags and the next restore retries the
+open, making the same handle number usable again on success.
+
+Three test-only seams keep the suite free of mount privileges and host file
+system quirks. The first is compiled only in test builds; the other two exist
+only in test binaries:
+
+- `mounts::replace_mountinfo` substitutes the mount table.
+- The `statx` interposer in the Linux backend tests assigns mount IDs by path.
+- The `name_to_handle_at` interposer in the snapshot tests answers like a file
+  system without handles, or like a failing host call.
+
+The device tests do not cover a save inside the real jail, a KVM guest resuming
+after a restore, or directory reads that span a restore on OverlayFS merged
+directories.
+
 ## Verification record
 
 The table below records the source implementation's results before integration
@@ -417,6 +546,34 @@ attempt failed first because Go was absent from PATH. Retrying with the installe
 Go toolchain built libgvproxy, then failed in libkrunfw install-name adjustment
 because the required executable was unavailable. No release archive was produced.
 These are open acceptance items, not passing results.
+
+### Snapshot checks
+
+These runs come from the branch that added freeze, save and restore, based on
+`origin/main` at `c8b14155`, on Linux x86_64 with an ext4 `/tmp`. The boxlite
+runs used `BOXLITE_DEPS_STUB=1`, so the vendored libkrun, e2fsprogs and
+bubblewrap were not built.
+
+| Check | Observed result |
+| --- | --- |
+| `make test:unit:vmm FILTER=virtio::fs::snapshot_tests` | 43 passed. They cover the freeze, the `EBUSY` refusals, the export phases, the save refusals, the mount table, the codec and 26 inconsistent states, the saved contents, a session saved before `FUSE_INIT` and one saved after a driver reset, the restore inputs, the identity checks, handle and lookup numbers, the allocators, two devices from one state, the reopen flags, directory handles and modeled bind mounts. Under the optimistic policy they also cover an unlinked file saved as invalid, a replaced or unopenable node restored as stale, `ESTALE` from stale nodes, directories and handles while `FORGET` and `RELEASE` still work, a name looked up again below a live parent, a mount point that cannot be reopened, a handle whose `name_to_handle_at` failed at save time, and two save and restore rounds in a row |
+| `make test:unit:vmm` | 675 VMM and 86 hypervisor tests passed, 36 and 46 ignored; the existing `virtio::fs` tests are among them |
+| `make clippy:vmm`, `make clippy`, `make fmt:check:rust` | Passed |
+| `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=vmm_socket` | 24 passed in the native build and 14 in the REST build. Before the registry called `set_export_phase`, the new phase test failed with `Preparing` where it expected `Mounted` |
+| `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=seccomp` | 9 passed in each build. Before the two x86_64 profiles listed `name_to_handle_at`, the filter test's child was killed by `SIGSYS` |
+| One-off probe under the production Landlock ruleset and the VMM filter, since removed | `readlinkat` reported `/tmp/<export>/sub/file` below the export root `/tmp/<export>`; `/proc/self/mountinfo` was readable; `name_to_handle_at` returned an 8-byte ext4 handle |
+
+With the freeze in `Fs::quiesce` replaced by the session reset it used to
+perform, `snapshot_freeze_keeps_the_negotiated_session` failed with `EPROTO`
+on `getattr`. That is a targeted check of one hook, not a full revert: the
+other tests need APIs that the base does not have.
+
+The stale-node tests have no earlier build to revert to: the strict policy they
+replaced was never committed, and `main` has no save or restore. Each one
+asserts the `ESTALE` answer next to a request on a live object that succeeds.
+
+Not exercised: the bubblewrap mount namespace of the shim, a save of a real
+Box, and a KVM guest after a restore.
 
 ## Acceptance IDs and evidence layers
 

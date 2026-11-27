@@ -118,9 +118,13 @@ impl Registry {
                 match (mount.state, state) {
                     (current, requested) if current == requested => (),
                     (MountState::Preparing, MountState::Mounted | MountState::Detaching)
-                    | (MountState::Mounted, MountState::Detaching) => mount.state = state,
+                    | (MountState::Mounted, MountState::Detaching) => {}
                     _ => return Err(errno(libc::EINVAL)),
                 }
+                // The device learns the phase before the registry records it, so
+                // a transition the device refuses leaves the registry as it was.
+                filesystem.set_export_phase(&export, state.into())?;
+                mount.state = state;
                 Ok(ControlReply::MountUpdated)
             }
             ControlOp::RemoveMount { export } => {

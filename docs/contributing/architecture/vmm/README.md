@@ -19,7 +19,7 @@ Diagrams of this design:
 - [Linux KVM](./kvm.md)
 - [Windows Hypervisor Platform](./whp.md)
 - [Guest memory](./memory.md)
-- [Linux virtio-fs data flow](./virtio-fs.md) traces share configuration, FUSE requests, object ownership and cleanup, with observed acceptance results.
+- [Linux virtio-fs data flow](./virtio-fs.md) traces share configuration, FUSE requests, object ownership and cleanup, and device snapshots, with observed acceptance results.
 
 BoxLite line references are to commit `42ec1a2a6`. External citations name
 their project; their revisions are pinned under [References](#references).
@@ -461,7 +461,7 @@ worker slot synchronously.
     VM exit and Drop stop/join before unmap; after joining, the framework
     quiesces every device while RAM remains registered. The default is a
     successful no-op; console drains published TX before the host console worker
-    finishes, and block flushes/syncs its backend.
+    finishes, block flushes/syncs its backend, and virtio-fs freezes its export table.
   - Shutdown hook failures are cached separately from join failures, so later hooks
     still run and a completed join still permits RAM unmapping.
     `WorkerRuntime` preserves the future per-device seam without adding a

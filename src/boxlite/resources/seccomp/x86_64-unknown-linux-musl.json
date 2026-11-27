@@ -539,8 +539,12 @@
         "comment": "libkrun: modern file stat (used by glibc 2.38+)"
       },
       {
+        "syscall": "name_to_handle_at",
+        "comment": "M8 virtio-fs snapshot: file handles verify the identity of a reopened node. Required at steady-state."
+      },
+      {
         "syscall": "readlinkat",
-        "comment": "libkrun: modern readlink (glibc uses readlinkat)"
+        "comment": "libkrun: modern readlink (glibc uses readlinkat). virtio-fs snapshots also read it at steady state to locate a node below its export."
       },
       {
         "syscall": "unlinkat",

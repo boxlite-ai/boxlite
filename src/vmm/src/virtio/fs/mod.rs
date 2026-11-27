@@ -29,8 +29,9 @@ pub(crate) mod fuse;
 mod linux;
 mod multikey;
 pub(crate) mod server;
+pub(crate) mod state;
 
-pub use aggregate::{AggregateFs, Share};
+pub use aggregate::{AggregateFs, ExportPhase, Share};
 
 use std::collections::BTreeMap;
 
@@ -128,6 +129,10 @@ mod backend_tests;
 #[cfg(test)]
 #[path = "../../../tests/virtio/fs_linux.rs"]
 mod linux_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/virtio/fs_snapshot.rs"]
+mod snapshot_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/virtio/fs_worker.rs"]

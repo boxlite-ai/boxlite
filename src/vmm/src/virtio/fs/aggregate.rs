@@ -9,7 +9,7 @@
 //! FORGET can therefore remove the guest lookup without invalidating a request
 //! that has already acquired that node. No namespace lock spans backend I/O.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io;
@@ -23,7 +23,14 @@ use super::filesystem::{
     Context, DirEntry, Entry, Extensions, FileSystem, FsOptions, GetxattrReply, ListxattrReply,
     OpenOptions, SetattrValid, ZeroCopyReader, ZeroCopyWriter,
 };
-use super::linux::passthrough::{InodeAltKey, PassthroughFs};
+use super::fuse::{KERNEL_MINOR_VERSION, KERNEL_VERSION};
+use super::linux::mounts;
+use super::linux::passthrough::{ExportedInode, InodeAltKey, PassthroughFs, file_handle};
+use super::state::{
+    ExportState, FileHandle, FsState, HandleState, IdentityState, MountState, NodeLocation,
+    NodeState, refuse, refused,
+};
+use crate::virtio::{RestoreExport, SnapshotError};
 
 const ROOT: u64 = 1;
 const TIMEOUT: Duration = Duration::ZERO;
@@ -32,6 +39,17 @@ const INTERNAL: Context = Context {
     gid: 0,
     pid: 0,
 };
+
+/// Where an export is in the life cycle the mount controller drives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportPhase {
+    /// Registered; the guest has not finished mounting it.
+    Preparing,
+    /// Mounted in the guest.
+    Mounted,
+    /// The guest is unmounting it.
+    Detaching,
+}
 
 #[derive(Debug)]
 pub struct Share {
@@ -62,15 +80,23 @@ struct Node {
     // The export Arc keeps a removed share's backend alive for this node.
     export: Arc<Export>,
     local: u64,
+    // Restored nodes without a backend inode retain their identity for the next save.
+    stale: Option<StaleNode>,
     root: bool,
     // Retired roots release their backend reference when their final guest
     // lookup, handle, and in-flight request have finished.
     retired: AtomicBool,
 }
 
+/// The host identity a stale node keeps for the next save.
+struct StaleNode {
+    dev: u64,
+    ino: u64,
+}
+
 impl Drop for Node {
     fn drop(&mut self) {
-        if !self.root || self.retired.load(Ordering::Acquire) {
+        if self.stale.is_none() && (!self.root || self.retired.load(Ordering::Acquire)) {
             self.export.backend.forget(INTERNAL, self.local, 1);
         }
     }
@@ -88,11 +114,14 @@ struct Handle {
     local: u64,
     directory: bool,
     flags: u32,
+    stale: bool,
 }
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        if let Some(node) = &self.node {
+        if let Some(node) = &self.node
+            && !self.stale
+        {
             // Removing a guest handle prevents new requests. Its last owned Arc
             // releases the backend handle only after existing requests finish.
             let result = if self.directory {
@@ -130,6 +159,8 @@ struct State {
 /// backend I/O.
 struct Registry {
     exports: BTreeMap<u64, Arc<Export>>,
+    /// The phase of every export, keyed like `exports`.
+    phases: BTreeMap<u64, ExportPhase>,
     /// Cleared by `destroy`; mutations refuse the dead session.
     alive: bool,
 }
@@ -140,10 +171,114 @@ struct Registry {
 pub struct AggregateFs {
     registry: Mutex<Registry>,
     state: Mutex<State>,
+    /// Set while a snapshot owns the namespace: mount changes fail until it is cleared.
+    frozen: AtomicBool,
+}
+
+/// What a snapshot takes under the two locks. Every host call runs once they are released.
+struct Listed {
+    /// The registered exports, each with the nodes the guest still holds below its root.
+    groups: BTreeMap<u64, Group>,
+    handles: Vec<HandleState>,
+    next_node: u64,
+    next_identity: u64,
+    next_handle: u64,
+}
+
+/// One export's live nodes.
+struct Group {
+    export: Arc<Export>,
+    /// The lookups held on the export root; a session waiting for FUSE_INIT holds none.
+    root_lookups: u64,
+    nodes: Vec<(Arc<Node>, u64)>,
 }
 
 fn errno(code: i32) -> io::Error {
     io::Error::from_raw_os_error(code)
+}
+
+/// Ends the enclosing function with a restore failure that names what did not match.
+macro_rules! mismatch {
+    ($($arg:tt)*) => {
+        return Err(mismatch(format!($($arg)*)))
+    };
+}
+
+/// A restore failure that names what did not match its saved state.
+fn mismatch(reason: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, reason)
+}
+
+/// The device and inode still identify a file when the host cannot supply its handle.
+fn saved_handle(
+    result: io::Result<Option<FileHandle>>,
+    node: u64,
+    export: &str,
+) -> Option<FileHandle> {
+    result.unwrap_or_else(|error| {
+        tracing::warn!(node, export, %error, errno = error.raw_os_error(), "saving inode without a filesystem handle");
+        None
+    })
+}
+
+/// A path below an export as one slash-separated string, for messages.
+fn shown(path: &[Vec<u8>]) -> String {
+    if path.is_empty() {
+        return ".".into();
+    }
+    path.iter()
+        .map(|component| String::from_utf8_lossy(component))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Checks that a reopened host file is the object `node` saved: the same
+/// device and inode and, when one was saved, the same file handle.
+fn verify(node: &NodeState, key: (u64, u64, u64), handle: Option<FileHandle>) -> io::Result<()> {
+    if (key.0, key.1) != (node.dev, node.ino) {
+        mismatch!(
+            "node {} is now device {} inode {} and was saved as device {} inode {}",
+            node.node,
+            key.0,
+            key.1,
+            node.dev,
+            node.ino
+        );
+    }
+    match (&node.handle, &handle) {
+        (Some(saved), Some(actual)) if saved == actual => {}
+        (None, _) => {}
+        (Some(_), Some(_)) => mismatch!("node {} now has a different file handle", node.node),
+        (Some(_), None) => mismatch!(
+            "node {} was saved with a file handle that its file system no longer provides",
+            node.node
+        ),
+    }
+    Ok(())
+}
+
+/// Asks for the file handle of a reopened object only when `saved` holds one to compare.
+fn checked_handle(
+    saved: &Option<FileHandle>,
+    handle: impl FnOnce() -> io::Result<Option<FileHandle>>,
+) -> io::Result<Option<FileHandle>> {
+    match saved {
+        Some(_) => handle(),
+        None => Ok(None),
+    }
+}
+
+/// Checks a non-root inode before either backend index can resolve it.
+fn reopen_node(node: &NodeState, backend: &PassthroughFs) -> io::Result<()> {
+    let NodeLocation::Path(path) = &node.location else {
+        return Err(mismatch("saved without a path".into()));
+    };
+    let file = backend.open_beneath(path)?;
+    let key = InodeAltKey::of(&file)?;
+    let handle = checked_handle(&node.handle, || file_handle(&file))?;
+    verify(node, key.parts(), handle)?;
+    // One backend lookup belongs to the aggregate until its last Node reference drops.
+    backend.restore_inode(node.local, file, key, node.lookups + 1)
 }
 
 // Manual Debug: the registry and state hold backend descriptors and large
@@ -210,6 +345,7 @@ impl AggregateFs {
         let fs = Self {
             registry: Mutex::new(Registry {
                 exports: BTreeMap::new(),
+                phases: BTreeMap::new(),
                 alive: true,
             }),
             state: Mutex::new(State {
@@ -218,6 +354,7 @@ impl AggregateFs {
                 next_handle: 1,
                 ..State::default()
             }),
+            frozen: AtomicBool::new(false),
         };
         for share in shares {
             fs.register(share)?;
@@ -226,20 +363,26 @@ impl AggregateFs {
         Ok(fs)
     }
 
-    /// Adds an export under `name`. The backend is constructed outside every
-    /// lock so a slow source cannot stall device callbacks; the registry and
-    /// state updates are short critical sections. Returns the export's root
-    /// inode, which is also its registry key and its stable identity.
+    /// Adds an export under `name` that is mounted from the start. The backend
+    /// is constructed outside every lock so a slow source cannot stall device
+    /// callbacks; the registry and state updates are short critical sections.
+    /// Returns the export's root inode, which is also its registry key and its
+    /// stable identity.
     pub(crate) fn register(&self, share: Share) -> io::Result<u64> {
+        self.check_thawed()?;
         let backend = Arc::new(PassthroughFs::new(share.path)?);
-        self.insert_export(share.name, backend, share.read_only)
+        self.insert_export(share.name, backend, share.read_only, ExportPhase::Mounted)
     }
 
     /// Registers a backend over a directory descriptor delivered by the
-    /// runtime. `from_dir_fd` validates its type; host permissions apply per operation.
+    /// runtime. The export starts in [`ExportPhase::Preparing`] until the mount
+    /// controller reports that the guest mounted it. `from_dir_fd` validates
+    /// the descriptor's type; host permissions apply per operation.
     pub fn register_fd(&self, name: String, file: File, read_only: bool) -> io::Result<u64> {
+        // A frozen device answers EBUSY before it looks at the descriptor.
+        self.check_thawed()?;
         let backend = Arc::new(PassthroughFs::from_dir_fd(file)?);
-        self.insert_export(name, backend, read_only)
+        self.insert_export(name, backend, read_only, ExportPhase::Preparing)
     }
 
     fn insert_export(
@@ -247,6 +390,7 @@ impl AggregateFs {
         name: String,
         backend: Arc<PassthroughFs>,
         read_only: bool,
+        phase: ExportPhase,
     ) -> io::Result<u64> {
         let name = CString::new(name).map_err(|_| errno(libc::EINVAL))?;
         component(&name, true)?;
@@ -254,6 +398,7 @@ impl AggregateFs {
         if !registry.alive {
             return Err(errno(libc::ENODEV));
         }
+        self.check_thawed()?;
         if registry.exports.values().any(|export| export.name == name) {
             return Err(errno(libc::EEXIST));
         }
@@ -267,20 +412,7 @@ impl AggregateFs {
             backend,
             read_only,
         });
-        state.local_ids.insert((root, ROOT), root);
-        state.nodes.entry(root).or_insert_with(|| NodeRecord {
-            node: Arc::new(Node {
-                global: root,
-                identity,
-                export: export.clone(),
-                local: ROOT,
-                root: true,
-                retired: AtomicBool::new(false),
-            }),
-            lookups: 0,
-            opens: 0,
-        });
-        registry.exports.insert(root, export.clone());
+        Self::publish(&mut registry, &mut state, export, phase);
         Ok(root)
     }
 
@@ -294,13 +426,10 @@ impl AggregateFs {
         if !registry.alive {
             return Err(errno(libc::ENODEV));
         }
-        let root = registry
-            .exports
-            .values()
-            .find(|export| export.name == name)
-            .map(|export| export.root)
-            .ok_or_else(|| errno(libc::ENOENT))?;
+        self.check_thawed()?;
+        let root = Self::named(&registry, &name)?;
         registry.exports.remove(&root);
+        registry.phases.remove(&root);
         let mut state = self.state.lock().unwrap();
         if let Some(record) = state.nodes.get_mut(&root) {
             record.node.retired.store(true, Ordering::Release);
@@ -309,50 +438,139 @@ impl AggregateFs {
         Ok(())
     }
 
+    /// `EBUSY` while a snapshot owns the namespace and mount changes must stop.
+    fn check_thawed(&self) -> io::Result<()> {
+        if self.is_frozen() {
+            Err(errno(libc::EBUSY))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The root of the export published under `name`.
+    fn named(registry: &Registry, name: &CStr) -> io::Result<u64> {
+        registry
+            .exports
+            .values()
+            .find(|export| export.name == name)
+            .map(|export| export.root)
+            .ok_or_else(|| errno(libc::ENOENT))
+    }
+
+    /// Publishes an export: its root node, its phase and its registry entry.
+    fn publish(
+        registry: &mut Registry,
+        state: &mut State,
+        export: Arc<Export>,
+        phase: ExportPhase,
+    ) {
+        Self::install_root(state, &export);
+        registry.phases.insert(export.root, phase);
+        registry.exports.insert(export.root, export);
+    }
+
+    /// Installs an export root unless it is already there: the alias of the
+    /// backend root and the root node. Returns the root's record.
+    fn install_root<'a>(state: &'a mut State, export: &Arc<Export>) -> &'a mut NodeRecord {
+        state.local_ids.insert((export.root, ROOT), export.root);
+        state
+            .nodes
+            .entry(export.root)
+            .or_insert_with(|| NodeRecord {
+                node: Arc::new(Node {
+                    global: export.root,
+                    identity: export.identity,
+                    export: export.clone(),
+                    local: ROOT,
+                    stale: None,
+                    root: true,
+                    retired: AtomicBool::new(false),
+                }),
+                lookups: 0,
+                opens: 0,
+            })
+    }
+
+    /// Freezes the namespace for a snapshot. The session, its nodes and its
+    /// handles stay; only mount changes are refused until [`Self::unfreeze`].
+    pub(crate) fn freeze(&self) {
+        self.frozen.store(true, Ordering::Release);
+    }
+
+    /// Ends a freeze started by [`Self::freeze`].
+    pub(crate) fn unfreeze(&self) {
+        self.frozen.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn is_frozen(&self) -> bool {
+        self.frozen.load(Ordering::Acquire)
+    }
+
+    /// Whether any export is registered.
+    pub(crate) fn has_exports(&self) -> bool {
+        !self.registry.lock().unwrap().exports.is_empty()
+    }
+
+    /// Records that the export published under `name` entered `phase`, as the
+    /// mount controller observed it.
+    pub fn set_export_phase(&self, name: &str, phase: ExportPhase) -> io::Result<()> {
+        let name = CString::new(name).map_err(|_| errno(libc::EINVAL))?;
+        let mut registry = self.registry.lock().unwrap();
+        if !registry.alive {
+            return Err(errno(libc::ENODEV));
+        }
+        self.check_thawed()?;
+        let root = Self::named(&registry, &name)?;
+        registry.phases.insert(root, phase);
+        Ok(())
+    }
+
+    /// The phase of the export published under `name`.
+    pub fn export_phase(&self, name: &str) -> io::Result<ExportPhase> {
+        let name = CString::new(name).map_err(|_| errno(libc::EINVAL))?;
+        let registry = self.registry.lock().unwrap();
+        let root = Self::named(&registry, &name)?;
+        registry
+            .phases
+            .get(&root)
+            .copied()
+            .ok_or_else(|| errno(libc::EIO))
+    }
+
     fn install_roots(&self) {
         let registry = self.registry.lock().unwrap();
         let mut state = self.state.lock().unwrap();
         for export in registry.exports.values() {
-            state.local_ids.insert((export.root, ROOT), export.root);
-            state
-                .nodes
-                .entry(export.root)
-                .or_insert_with(|| NodeRecord {
-                    node: Arc::new(Node {
-                        global: export.root,
-                        identity: export.identity,
-                        export: export.clone(),
-                        local: ROOT,
-                        root: true,
-                        retired: AtomicBool::new(false),
-                    }),
-                    lookups: 0,
-                    opens: 0,
-                });
+            Self::install_root(&mut state, export);
         }
     }
 
     fn node(&self, inode: u64) -> io::Result<Arc<Node>> {
-        self.state
-            .lock()
-            .unwrap()
+        let state = self.state.lock().unwrap();
+        let node = &state
             .nodes
             .get(&inode)
-            .map(|record| record.node.clone())
-            .ok_or_else(|| errno(libc::EBADF))
+            .ok_or_else(|| errno(libc::EBADF))?
+            .node;
+        if node.stale.is_some() {
+            return Err(errno(libc::ESTALE));
+        }
+        Ok(node.clone())
     }
 
     fn handle(&self, inode: u64, handle: u64, directory: Option<bool>) -> io::Result<Arc<Handle>> {
-        self.state
-            .lock()
-            .unwrap()
+        let state = self.state.lock().unwrap();
+        let held = state
             .handles
             .get(&handle)
             .filter(|data| {
                 data.inode == inode && directory.is_none_or(|kind| data.directory == kind)
             })
-            .cloned()
-            .ok_or_else(|| errno(libc::EBADF))
+            .ok_or_else(|| errno(libc::EBADF))?;
+        if held.stale {
+            return Err(errno(libc::ESTALE));
+        }
+        Ok(held.clone())
     }
 
     fn writable(&self, node: &Node) -> io::Result<()> {
@@ -371,6 +589,20 @@ impl AggregateFs {
         let node = self.node(inode)?;
         self.writable(&node)?;
         Ok(node)
+    }
+
+    /// LINK and RENAME must check both operands, even when one is the synthetic root.
+    fn mutation_nodes(&self, source: u64, target: u64) -> io::Result<(Arc<Node>, Arc<Node>)> {
+        let lookup = |inode| (inode != ROOT).then(|| self.node(inode)).transpose();
+        let (source, target) = (lookup(source)?, lookup(target)?);
+        let (Some(source), Some(target)) = (source, target) else {
+            return Err(errno(libc::EROFS));
+        };
+        if !Arc::ptr_eq(&source.export, &target.export) {
+            return Err(errno(libc::EXDEV));
+        }
+        self.writable(&target)?;
+        Ok((source, target))
     }
 
     fn map_entry(&self, export: &Arc<Export>, entry: Entry) -> io::Result<Entry> {
@@ -420,6 +652,7 @@ impl AggregateFs {
                             identity,
                             export: export.clone(),
                             local,
+                            stale: None,
                             root: false,
                             retired: AtomicBool::new(false),
                         }),
@@ -456,7 +689,7 @@ impl AggregateFs {
             let removed = Self::collect_zero(&mut state, inode);
             (node, released, removed)
         };
-        if forward {
+        if forward && node.stale.is_none() {
             node.export.backend.forget(INTERNAL, node.local, released);
         }
         drop(removed);
@@ -478,6 +711,7 @@ impl AggregateFs {
             local,
             directory,
             flags,
+            stale: false,
         });
         let mut state = self.state.lock().unwrap();
         let id = allocate(&mut state.next_handle)?;
@@ -675,6 +909,380 @@ impl AggregateFs {
     }
 }
 
+impl AggregateFs {
+    /// Captures the session of a frozen aggregate for a snapshot.
+    ///
+    /// The locks only list the tables. Paths, file handles and the mount table
+    /// are read afterwards, so a slow host never widens a critical section.
+    /// Unreachable inodes keep their guest references and are saved without a path.
+    pub(crate) fn export_state(
+        &self,
+        tag: &str,
+        handshake: (bool, u64),
+    ) -> Result<FsState, SnapshotError> {
+        if !self.is_frozen() {
+            refuse!("the device is not quiesced");
+        }
+        let table = mounts::parse_mountinfo(
+            &mounts::read_mountinfo()
+                .map_err(|error| refused(format!("the mount table cannot be read: {error}")))?,
+        )
+        .map_err(|error| refused(format!("the mount table cannot be parsed: {error}")))?;
+        // Lock order is `registry` before `state`.
+        let listed = {
+            let registry = self.registry.lock().unwrap();
+            let state = self.state.lock().unwrap();
+            for export in registry.exports.values() {
+                // An export without a phase is not known to be mounted.
+                let phase = registry
+                    .phases
+                    .get(&export.root)
+                    .copied()
+                    .unwrap_or(ExportPhase::Preparing);
+                if phase != ExportPhase::Mounted {
+                    refuse!("export {} is {phase:?}", export.name.to_string_lossy());
+                }
+            }
+            let mut listed = Listed {
+                groups: registry
+                    .exports
+                    .values()
+                    .map(|export| {
+                        (
+                            export.root,
+                            Group {
+                                export: export.clone(),
+                                root_lookups: 0,
+                                nodes: Vec::new(),
+                            },
+                        )
+                    })
+                    .collect(),
+                handles: state
+                    .handles
+                    .iter()
+                    .map(|(number, handle)| HandleState {
+                        fh: *number,
+                        node: handle.node.as_ref().map_or(ROOT, |node| node.global),
+                        local: handle.local,
+                        flags: handle.flags,
+                        directory: handle.directory,
+                    })
+                    .collect(),
+                next_node: state.next_node,
+                next_identity: state.next_identity,
+                next_handle: state.next_handle,
+            };
+            for record in state.nodes.values() {
+                let Some(group) = listed.groups.get_mut(&record.node.export.root) else {
+                    refuse!("node {} belongs to an unmounted export", record.node.global);
+                };
+                if record.node.root {
+                    group.root_lookups = record.lookups;
+                } else {
+                    group.nodes.push((record.node.clone(), record.lookups));
+                }
+            }
+            listed
+        };
+        let mut saved = FsState {
+            tag: tag.to_string(),
+            fuse_initialized: handshake.0,
+            fuse_options: handshake.1,
+            fuse_version: (KERNEL_VERSION, KERNEL_MINOR_VERSION),
+            exports: Vec::new(),
+            mounts: Vec::new(),
+            nodes: Vec::new(),
+            handles: listed.handles,
+            next_node: listed.next_node,
+            next_identity: listed.next_identity,
+            next_handle: listed.next_handle,
+            identities: Vec::new(),
+        };
+        for Group {
+            export,
+            root_lookups,
+            nodes,
+        } in listed.groups.into_values()
+        {
+            let name = export.name.to_string_lossy();
+            let backend = &export.backend;
+            let failed = |error: io::Error| refused(format!("export {name}: {error}"));
+            let root_path = backend.root_path().map_err(failed)?;
+            let mut used_mounts: BTreeSet<u64> = BTreeSet::new();
+            // The root is the export itself.
+            let (dev, ino, mount) = backend.root_key();
+            used_mounts.insert(mount);
+            saved.nodes.push(NodeState {
+                node: export.root,
+                identity: export.identity,
+                export_root: export.root,
+                lookups: root_lookups,
+                local: ROOT,
+                location: NodeLocation::Path(Vec::new()),
+                dev,
+                ino,
+                handle: saved_handle(backend.root_handle(), export.root, &name),
+            });
+            for (node, lookups) in &nodes {
+                let inode = match &node.stale {
+                    // A node without a path cannot be reopened. It needs neither a mount nor an
+                    // identity row; its guest number travels in the node row itself.
+                    Some(stale) => ExportedInode {
+                        location: NodeLocation::Invalid,
+                        key: (stale.dev, stale.ino, 0),
+                        handle: Ok(None),
+                    },
+                    None => backend
+                        .export_inode(node.local, &root_path)
+                        .map_err(failed)?,
+                };
+                if inode.location == NodeLocation::Invalid {
+                    tracing::warn!(node = node.global, export = %name, "saving inode without a path below the export");
+                }
+                let (dev, ino, mount) = inode.key;
+                let located = matches!(inode.location, NodeLocation::Path(_));
+                saved.nodes.push(NodeState {
+                    node: node.global,
+                    identity: node.identity,
+                    export_root: export.root,
+                    lookups: *lookups,
+                    local: node.local,
+                    location: inode.location,
+                    dev,
+                    ino,
+                    handle: saved_handle(inode.handle, node.global, &name),
+                });
+                if located {
+                    used_mounts.insert(mount);
+                    saved.identities.push(IdentityState {
+                        export_root: export.root,
+                        dev,
+                        ino,
+                        mnt_id: mount,
+                        identity: node.identity,
+                    });
+                }
+            }
+            let mut paths: BTreeMap<Vec<Vec<u8>>, u64> = BTreeMap::new();
+            for mount in used_mounts {
+                let point = table.get(&mount).ok_or_else(|| {
+                    refused(format!(
+                        "export {name} is on mount {mount}, which the mount table does not list"
+                    ))
+                })?;
+                let path = mounts::mount_path(&root_path, point).map_err(|_| {
+                    refused(format!(
+                        "mount {mount} of export {name} lies outside the export"
+                    ))
+                })?;
+                if let Some(first) = paths.insert(path.clone(), mount) {
+                    refuse!(
+                        "export {name} stacks mounts {first} and {mount} at {}",
+                        shown(&path)
+                    );
+                }
+                saved.mounts.push(MountState {
+                    export_root: export.root,
+                    mnt_id: mount,
+                    path,
+                });
+            }
+            let (next_inode, next_handle) = backend.allocators();
+            saved.exports.push(ExportState {
+                root: export.root,
+                identity: export.identity,
+                name: name.into_owned(),
+                read_only: export.read_only,
+                next_inode,
+                next_handle,
+            });
+        }
+        saved.nodes.sort_by_key(|node| node.node);
+        Ok(saved)
+    }
+
+    /// Builds the aggregate that `saved` describes over the directories the
+    /// caller supplies, one per export.
+    ///
+    /// Export roots must match. Unrecoverable children and handles retain their
+    /// guest numbers and return ESTALE until the guest drops its references.
+    /// A failed restore drops the unpublished aggregate.
+    pub(crate) fn restore(saved: &FsState, directories: Vec<RestoreExport>) -> io::Result<Self> {
+        let mut fs = Self::new(Vec::new())?;
+        // The aggregate is not published yet, so nothing else can reach either table.
+        let registry = fs.registry.get_mut().unwrap();
+        let state = fs.state.get_mut().unwrap();
+        // A name given twice or an unknown name leaves a directory unmatched.
+        let mut directories = directories;
+        if directories.len() != saved.exports.len() {
+            mismatch!(
+                "the state lists {} exports and {} directories were supplied",
+                saved.exports.len(),
+                directories.len()
+            );
+        }
+        // Each export's saved mounts, keyed by `(export root, saved mount ID)`.
+        let mut mounts = BTreeMap::new();
+        for entry in &saved.exports {
+            let position = directories
+                .iter()
+                .position(|directory| directory.name == entry.name)
+                .ok_or_else(|| {
+                    mismatch(format!(
+                        "no directory was supplied for export {}",
+                        entry.name
+                    ))
+                })?;
+            let directory = directories.swap_remove(position);
+            if directory.read_only != entry.read_only {
+                mismatch!(
+                    "export {} was saved read-only = {} and is supplied read-only = {}",
+                    entry.name,
+                    entry.read_only,
+                    directory.read_only
+                );
+            }
+            let backend = Arc::new(PassthroughFs::from_dir_fd(directory.directory).map_err(
+                |error| {
+                    mismatch(format!(
+                        "the directory of export {} is unusable: {error}",
+                        entry.name
+                    ))
+                },
+            )?);
+            let root = saved
+                .nodes
+                .binary_search_by_key(&entry.root, |node| node.node)
+                .ok()
+                .map(|index| &saved.nodes[index])
+                .ok_or_else(|| mismatch(format!("export {} has no root node", entry.name)))?;
+            let handle = checked_handle(&root.handle, || backend.root_handle())?;
+            verify(root, backend.root_key(), handle)?;
+            let export = Arc::new(Export {
+                name: CString::new(entry.name.clone()).map_err(|_| errno(libc::EINVAL))?,
+                root: entry.root,
+                identity: entry.identity,
+                backend: backend.clone(),
+                read_only: entry.read_only,
+            });
+            Self::install_root(state, &export).lookups = root.lookups;
+            registry.phases.insert(entry.root, ExportPhase::Mounted);
+            registry.exports.insert(entry.root, export);
+            for mount in saved
+                .mounts
+                .iter()
+                .filter(|mount| mount.export_root == entry.root)
+            {
+                let current = backend.mount_id_at(&mount.path).unwrap_or_else(|error| {
+                    tracing::warn!(export = %entry.name, mount = mount.mnt_id, path = %shown(&mount.path), %error, "retaining saved ID for unavailable mount");
+                    mount.mnt_id
+                });
+                mounts.insert(
+                    (entry.root, mount.mnt_id),
+                    Arc::new(MountState {
+                        export_root: entry.root,
+                        mnt_id: current,
+                        path: mount.path.clone(),
+                    }),
+                );
+            }
+        }
+        // Decode gave each non-root node that has a path one identity row.
+        let identities: BTreeMap<_, _> = saved
+            .identities
+            .iter()
+            .map(|row| {
+                (
+                    (row.export_root, row.dev, row.ino, row.identity),
+                    row.mnt_id,
+                )
+            })
+            .collect();
+        for node in saved
+            .nodes
+            .iter()
+            .filter(|node| !registry.exports.contains_key(&node.node))
+        {
+            let export = &registry.exports[&node.export_root];
+            let stale = match reopen_node(node, &export.backend) {
+                Ok(()) => {
+                    let saved_mount =
+                        identities[&(node.export_root, node.dev, node.ino, node.identity)];
+                    let mount = &mounts[&(node.export_root, saved_mount)];
+                    state.local_ids.insert((export.root, node.local), node.node);
+                    state.identities.insert(
+                        (
+                            export.root,
+                            InodeAltKey::from_parts(node.dev, node.ino, mount.mnt_id),
+                        ),
+                        node.identity,
+                    );
+                    None
+                }
+                Err(error) => {
+                    tracing::warn!(node = node.node, export = %export.name.to_string_lossy(), %error, "restoring stale inode");
+                    Some(StaleNode {
+                        dev: node.dev,
+                        ino: node.ino,
+                    })
+                }
+            };
+            state.nodes.insert(
+                node.node,
+                NodeRecord {
+                    node: Arc::new(Node {
+                        global: node.node,
+                        identity: node.identity,
+                        export: export.clone(),
+                        local: node.local,
+                        stale,
+                        root: false,
+                        retired: AtomicBool::new(false),
+                    }),
+                    lookups: node.lookups,
+                    opens: 0,
+                },
+            );
+        }
+        // Handles keep their numbers and are reopened the way they were opened.
+        for handle in &saved.handles {
+            let (node, stale) = if handle.node == ROOT {
+                (None, false)
+            } else {
+                let record = state.nodes.get_mut(&handle.node).unwrap();
+                let node = &record.node;
+                let stale = node.stale.is_some() || node.export.backend
+                    .restore_handle(node.local, handle.local, handle.flags, handle.directory)
+                    .inspect_err(|error| tracing::warn!(fh = handle.fh, node = node.global, %error, "restoring stale handle"))
+                    .is_err();
+                record.opens += 1;
+                (Some(node.clone()), stale)
+            };
+            state.handles.insert(
+                handle.fh,
+                Arc::new(Handle {
+                    inode: handle.node,
+                    node,
+                    local: handle.local,
+                    directory: handle.directory,
+                    flags: handle.flags,
+                    stale,
+                }),
+            );
+        }
+        state.next_node = saved.next_node;
+        state.next_identity = saved.next_identity;
+        state.next_handle = saved.next_handle;
+        for entry in &saved.exports {
+            registry.exports[&entry.root]
+                .backend
+                .restore_allocators(entry.next_inode, entry.next_handle);
+        }
+        Ok(fs)
+    }
+}
+
 impl FileSystem for AggregateFs {
     type Inode = u64;
     type Handle = u64;
@@ -799,10 +1407,10 @@ impl FileSystem for AggregateFs {
             return Err(errno(libc::EROFS));
         }
         let node = self.node(inode)?;
-        self.writable(&node)?;
         let held = handle
             .map(|handle| self.handle(inode, handle, None))
             .transpose()?;
+        self.writable(&node)?;
         let (mut attr, timeout) = node.export.backend.setattr(
             ctx,
             node.local,
@@ -964,16 +1572,7 @@ impl FileSystem for AggregateFs {
     ) -> io::Result<()> {
         component(oldname, true)?;
         component(newname, true)?;
-        if olddir == ROOT || newdir == ROOT {
-            return Err(errno(libc::EROFS));
-        }
-        let source = self.node(olddir)?;
-        let target = self.node(newdir)?;
-        if !Arc::ptr_eq(&source.export, &target.export) {
-            return Err(errno(libc::EXDEV));
-        }
-        self.writable(&source)?;
-        self.writable(&target)?;
+        let (source, target) = self.mutation_nodes(olddir, newdir)?;
         source
             .export
             .backend
@@ -981,15 +1580,7 @@ impl FileSystem for AggregateFs {
     }
     fn link(&self, ctx: Context, inode: u64, newparent: u64, newname: &CStr) -> io::Result<Entry> {
         component(newname, true)?;
-        if inode == ROOT || newparent == ROOT {
-            return Err(errno(libc::EROFS));
-        }
-        let source = self.node(inode)?;
-        let target = self.node(newparent)?;
-        if !Arc::ptr_eq(&source.export, &target.export) {
-            return Err(errno(libc::EXDEV));
-        }
-        self.writable(&target)?;
+        let (source, target) = self.mutation_nodes(inode, newparent)?;
         self.map_entry(
             &source.export,
             source

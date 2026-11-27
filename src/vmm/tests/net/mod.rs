@@ -1069,7 +1069,7 @@ fn quiesce_succeeds_and_snapshots_are_explicitly_unsupported() {
                 version: 0,
                 payload: vec![]
             },
-            RestoreContext
+            RestoreContext::default()
         ),
         Err(DeviceError::Unsupported("restore_state"))
     );

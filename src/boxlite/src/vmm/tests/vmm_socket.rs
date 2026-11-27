@@ -457,7 +457,7 @@ fn http_runs_under_the_production_vmm_filter() {
 mod mounts {
     use super::*;
     use crate::vmm::controller::mount_control::{MountControlClient, MountState, Registry};
-    use boxlite_vmm::AggregateFs;
+    use boxlite_vmm::{AggregateFs, ExportPhase};
     use std::os::fd::AsRawFd;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -478,6 +478,51 @@ mod mounts {
         })
         .unwrap();
         (dir, fs, path)
+    }
+
+    #[test]
+    fn mount_registry_synchronizes_export_phases_with_the_device() {
+        let (dir, fs, path) = fixture();
+        let client = MountControlClient::new(path);
+        let mount = client
+            .register(
+                "/source".into(),
+                "/data".into(),
+                File::open(dir.path()).unwrap(),
+                false,
+            )
+            .unwrap();
+        // A registered export is mounted by the guest only after it says so.
+        assert_eq!(
+            fs.export_phase(&mount.export).unwrap(),
+            ExportPhase::Preparing
+        );
+        client
+            .set_state(&mount.export, MountState::Mounted)
+            .unwrap();
+        assert_eq!(
+            fs.export_phase(&mount.export).unwrap(),
+            ExportPhase::Mounted
+        );
+        client
+            .set_state(&mount.export, MountState::Detaching)
+            .unwrap();
+        assert_eq!(
+            fs.export_phase(&mount.export).unwrap(),
+            ExportPhase::Detaching
+        );
+        // An impossible transition reaches neither the registry nor the device.
+        assert_eq!(
+            client
+                .set_state(&mount.export, MountState::Mounted)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::EINVAL)
+        );
+        assert_eq!(
+            fs.export_phase(&mount.export).unwrap(),
+            ExportPhase::Detaching
+        );
     }
 
     fn registration(target: &str) -> ControlOp {
