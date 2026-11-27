@@ -377,8 +377,10 @@ exports disks only, as does omitting `options`. On a local runtime,
 `get()` reconnects to a running detached VM. In either case, `export()` raises
 `UnsupportedError` because the VMM's full checkpoint hook is still a placeholder.
 A valid handle to a box that is not running raises `InvalidStateError`; a handle
-invalidated by `stop()` raises `StoppedError`. The REST client raises
-`UnsupportedError` for `include_memory=True` without sending an HTTP request.
+invalidated by `stop()` raises `StoppedError` if the box was retained. If
+`stop()` automatically deleted the box, `export()` raises `NotFoundError`.
+The REST client raises `UnsupportedError` for `include_memory=True` without
+sending an HTTP request.
 
 `executions().list()` returns the box's live sessions, so an execution whose
 handle was lost — a crashed client, a dropped connection — can be named again

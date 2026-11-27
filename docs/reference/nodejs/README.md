@@ -348,7 +348,8 @@ requires a running box, including when a new handle from `get()` reconnects to
 a running detached VM. The VMM's full checkpoint hook is still a placeholder,
 so `export()` rejects with code `unsupported` in either case. Use
 `errorCode(err)` to read the code: `invalid_state` means the handle is valid but
-the box is not running, and `stopped` means `stop()` invalidated the handle.
+the box is not running; `stopped` means `stop()` invalidated the handle to a
+retained box; `not_found` means `stop()` automatically deleted the box.
 The REST client rejects `{ includeMemory: true }` with `unsupported` without
 sending an HTTP request.
 
