@@ -4,7 +4,7 @@ import { CapacityPolicy } from './capacity'
 import { AllocationRow, ExecutionJournal } from './execution/journal'
 import { ExecutionScope, object, positive, retryCapacity, scopeKey } from './execution/model'
 import { GitHubRequestError } from './github'
-import { DEFAULT_RESOURCE_LABEL, selectRunnerLabels } from './resource-labels'
+import { parseResourceLabels, selectRunnerLabels } from './resource-labels'
 import { ScaleSetDiagnostics, ScaleSetEvent, ScaleSetFailure } from './scale-set-diagnostics'
 import { ActionsScaleSets, isRequestIdText, ScaleSetRemoved, ScaleSetSession } from './scale-set-client'
 import { LeaseLost, StateCorrupt, StateRecord } from './state/database'
@@ -139,7 +139,9 @@ export class ScaleSetController {
   private readonly stop = new AbortController()
   private readonly lanes = new Map<string, Lane>()
   private readonly confirmed = new Map<string, ScaleTarget>()
-  private readonly persisted = new Set<string>()
+  private notices = new Map<string, string>()
+  private readonly polledNotices = new Set<string>()
+  private readonly recovering = new Set<string>()
   private readonly waiting = new Map<string, number>()
   private readonly cooling = new Map<string, NodeJS.Timeout>()
   private readonly prefix: string
@@ -169,25 +171,76 @@ export class ScaleSetController {
     }
     return active
   }
-  async restore(): Promise<void> {
-    const occupied: string[] = [],
-      idle: string[] = []
+  /** Recover service commitments once per owner. Idle registrations retain their identities in storage. */
+  static async recover(state: ListenerState, lease: ExecutionLease): Promise<Map<string, string[]>> {
+    const occupied = new Map<string, string[]>()
     let after = ''
     for (;;) {
-      const page = await this.state.scan(this.lease, { prefix: this.prefix, after, limit: 100 })
+      const page = await state.scan(lease, { prefix: 'scale-set/', after, limit: 100 })
       for (const row of page) {
         const record = readRecord(row)
-        const list = record.held || record.assigned ? occupied : idle
-        const label = row.key.slice(this.prefix.length)
-        list.push(label)
-        this.persisted.add(label)
+        const match = /^scale-set\/([a-f0-9]{64})\/([^/]+)$/.exec(row.key)
+        if (!match || !selectRunnerLabels([match[2]], [])) throw new StateCorrupt()
+        if (!record.held && !record.assigned && !record.pending.length) continue
+        const key = 'scope/' + match[1]
+        const labels = occupied.get(key) ?? []
+        labels.push(match[2])
+        occupied.set(key, labels)
       }
-      if (page.length < 100) break
+      if (page.length < 100) return occupied
       after = page[page.length - 1].key
     }
-    for (const label of [...occupied, DEFAULT_RESOURCE_LABEL, ...idle]) this.watch(label)
   }
-  watch(label: string, failures = 0) {
+  private async workerLabels(): Promise<Map<number, string>> {
+    const labels = new Map<number, string>()
+    let after = ''
+    do {
+      const page = await this.journal.workers(this.lease, scopeKey(this.scope), after)
+      for (const { value } of page.rows) {
+        const supply = value.supply
+        if (!supply?.scaleSet) continue
+        const selected = parseResourceLabels(supply.labels)
+        if (!selected) throw new StateCorrupt()
+        labels.set(supply.scaleSet, selected.label)
+      }
+      after = page.after
+    } while (after)
+    return labels
+  }
+  async restoreWorkers(): Promise<void> {
+    for (const label of (await this.workerLabels()).values()) this.restoreLabel(label)
+  }
+  /** A notice survives takeover until a successful poll covers that exact version. */
+  observe(notices: readonly { row: StateRecord; label: string }[]): StateRecord[] {
+    const previous = this.notices
+    this.notices = new Map(notices.map(({ row, label }) => [row.version, label]))
+    for (const version of this.polledNotices) if (!this.notices.has(version)) this.polledNotices.delete(version)
+    const settled: StateRecord[] = []
+    const needed = new Set(this.recovering)
+    for (const { row, label } of notices) {
+      if (this.polledNotices.has(row.version)) settled.push(row)
+      else {
+        needed.add(label)
+        if (!previous.has(row.version)) this.queue(label)
+      }
+    }
+    for (const label of this.waiting.keys()) if (!needed.has(label)) this.waiting.delete(label)
+    return settled
+  }
+  private pendingNotices(label: string): string[] {
+    return [...this.notices]
+      .filter(([version, target]) => target === label && !this.polledNotices.has(version))
+      .map(([version]) => version)
+  }
+  private finishPoll(versions: string[]): void {
+    for (const version of versions) if (this.notices.has(version)) this.polledNotices.add(version)
+    if (versions.length) this.host.wake()
+  }
+  restoreLabel(label: string): void {
+    this.recovering.add(label)
+    this.queue(label)
+  }
+  private queue(label: string, failures = 0) {
     if (this.lanes.has(label) || this.waiting.has(label) || this.cooling.has(label) || this.signal.aborted) return
     this.waiting.set(label, failures)
     this.openNext()
@@ -213,18 +266,21 @@ export class ScaleSetController {
       },
       this.host.observe,
     )
+    let parked = false
     lane.task = this.listen(lane, [...selection.labels], failures, log)
-      .then((rotate) => {
-        if (rotate) {
-          this.confirmed.delete(label)
-          if (!this.signal.aborted) this.waiting.set(label, 0)
-        }
+      .then((idle) => {
+        parked = idle
       })
       .catch((error) => {
         if (!this.signal.aborted) this.host.report(error, log.failure(error))
       })
       .finally(() => {
         this.lanes.delete(label)
+        if (parked) {
+          this.confirmed.delete(label)
+          // A notice can arrive while the old HTTP session is closing.
+          if (!this.signal.aborted && this.pendingNotices(label).length) this.waiting.set(label, 0)
+        }
         this.openNext()
       })
   }
@@ -237,7 +293,8 @@ export class ScaleSetController {
         setTimeout(() => {
           if (Date.now() < deadline) return schedule()
           this.cooling.delete(label)
-          this.watch(label, failures)
+          // A canceled job can disappear during backoff. Its provider cooldown still applies to a later wake.
+          if (this.recovering.has(label) || this.pendingNotices(label).length) this.queue(label, failures)
         }, wait),
       )
     }
@@ -367,13 +424,6 @@ export class ScaleSetController {
       ])
     return row
   }
-  async observe(label: string): Promise<void> {
-    if (!this.persisted.has(label)) {
-      await this.registration(this.prefix + label)
-      this.persisted.add(label)
-    }
-    this.watch(label)
-  }
   private async start(key: string, labels: string[], signal: AbortSignal, log: ScaleSetDiagnostics) {
     await log.during('authority', () => this.host.authority(signal))
     let row = await this.registration(key)
@@ -431,6 +481,15 @@ export class ScaleSetController {
       const pendingRequests = new Map(previous.pending.map(({ id, phase }) => [id, phase]))
       let freshStatistics = true
       const publish = (assigned: number, held: number, previous: SetRecord) => {
+        if (
+          assigned ||
+          held ||
+          pendingRequests.size ||
+          previous.assigned ||
+          previous.held ||
+          this.host.charged(start.id)
+        )
+          this.recovering.add(lane.label)
         const delivery = !freshStatistics && lane.target?.assigned === assigned ? lane.target.delivery : undefined
         lane.target = {
           id: start.id,
@@ -555,9 +614,22 @@ export class ScaleSetController {
           }),
         )
         log.emit({ event: 'ci-scale-set-poll-started', capacity })
+        // A poll advertising only capacity already committed to this set cannot cover a new job.
+        const notices =
+          capacity > lane.target!.assigned + lane.target!.held && this.host.creationReady(lane.label)
+            ? this.pendingNotices(lane.label)
+            : []
+        const reconciling = !!(
+          lane.target!.held ||
+          lane.target!.assigned ||
+          pendingRequests.size ||
+          this.host.charged(start.id)
+        )
         const message = await log.during('poll', () => start.session.poll(capacity, last, signal))
         log.context.messageId = message?.id ?? null
-        if (message)
+        if (message) {
+          // An unacknowledged service message can outlive the original job notice.
+          this.recovering.add(lane.label)
           log.emit({
             event: 'ci-scale-set-message-received',
             offered: message.available.length,
@@ -565,6 +637,7 @@ export class ScaleSetController {
             assigned: message.assigned,
             held: lane.target!.held,
           })
+        }
         failures = 0
         // On reconnect a lost acquire may never be redelivered. Compare any
         // missing request with service statistics, keeping explicit reoffers charged.
@@ -611,10 +684,20 @@ export class ScaleSetController {
           })
         }
         if (!message) {
-          if (this.waiting.size && !lane.target!.held && !lane.target!.assigned && !this.host.charged(start.id))
-            return true
+          this.finishPoll(notices)
+          // A poll that reconciled outstanding work used the old capacity. Advertise the released slots once.
+          if (reconciling || (!this.waiting.size && this.pendingNotices(lane.label).length)) continue
+          if (!lane.target!.held && !lane.target!.assigned && !pendingRequests.size && !this.host.charged(start.id)) {
+            // Local charges may be empty before a recovered or retiring worker reaches pool planning.
+            const workers = await this.work.run(signal, () => this.workerLabels())
+            if (!workers.has(start.id)) {
+              this.recovering.delete(lane.label)
+              return true
+            }
+          }
           continue
         }
+        let acquiredOffer = false
         await this.work.run(signal, async () => {
           // A crash after acquisition can leave a message with pre-acquisition statistics.
           // Resolve a conflicting first delivery against the current set before acquiring again.
@@ -657,6 +740,7 @@ export class ScaleSetController {
                     if (slots.available < charged || !(await permitChargedRetry(charged, slots.activity))) return []
                   }
                   const accepted = await start.session.acquire(ids, signal)
+                  if (accepted.length) acquiredOffer = true
                   log.emit({ event: 'ci-scale-set-acquired', attempted: ids.length, accepted: accepted.length })
                   return accepted
                 }, signal),
@@ -764,6 +848,7 @@ export class ScaleSetController {
           await log.during('ack', () => start.session.ack(message.id, signal))
           last = message.id
         })
+        if (acquiredOffer) this.finishPoll(notices)
       }
     } catch (error) {
       const failure = log.failure(error)

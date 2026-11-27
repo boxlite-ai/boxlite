@@ -93,6 +93,10 @@ export class ExecutionJournal {
 
   async check(lease?: ExecutionLease): Promise<void> {
     const [row] = await this.state.read(['journal/format'], lease)
+    this.validateFormat(row)
+  }
+
+  private validateFormat(row?: StateRecord): void {
     if (!row || !object(row.payload) || row.payload.version !== 2) throw new StateCorrupt()
   }
 
@@ -105,10 +109,9 @@ export class ExecutionJournal {
 
   private async readScopeMetadata(lease: ExecutionLease, key: string): Promise<ScopeRow> {
     const id = scopeId(key)
-    await this.check(lease)
-    const records = new Map(
-      (await this.state.read([key, 'scope-state/' + id, 'active-scope/' + id], lease)).map((row) => [row.key, row]),
-    )
+    const keys = ['journal/format', key, 'scope-state/' + id, 'active-scope/' + id, 'app-scope/' + id]
+    const records = new Map((await this.state.read(keys, lease)).map((row) => [row.key, row]))
+    this.validateFormat(records.get('journal/format'))
     const record = records.get(key)
     if (!record || !object(record.payload)) throw new StateCorrupt()
     const scope = decodeScope(record.payload.scope)
@@ -120,7 +123,7 @@ export class ExecutionJournal {
     const application = record.payload.application
     if (application !== null) {
       if (typeof application !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(application)) throw new StateCorrupt()
-      const [mapping] = await this.state.read(['app-scope/' + id], lease)
+      const mapping = records.get('app-scope/' + id)
       if (!mapping || !object(mapping.payload) || mapping.payload.application !== application) throw new StateCorrupt()
     }
     return { record, scope, activity: activity!, index, active }

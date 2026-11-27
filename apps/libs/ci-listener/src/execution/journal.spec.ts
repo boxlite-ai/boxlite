@@ -243,6 +243,14 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(removed).toBe(true)
       observed.mockRestore()
     })
+    it('reads scope metadata in one fenced batch when computing capacity', async () => {
+      const reads = jest.spyOn(state, 'read')
+      expect(await journal.remainingCapacity(lease, key, limits)).toBe(1)
+      const metadata = reads.mock.calls.filter(([keys]) => !keys.some((item) => item.startsWith('usage/')))
+      expect(metadata).toHaveLength(1)
+      expect(metadata[0][0]).toEqual(expect.arrayContaining(['journal/format', key, 'app-scope/' + key.slice(6)]))
+      expect(metadata[0][1]).toEqual(lease)
+    })
     it.each(['remainingCapacity', 'permitsChargedRetry'] as const)('%s reads usage in one batch', async (probe) => {
       const reads = jest.spyOn(state, 'read')
       const result = await journal[probe](lease, key, limits)
