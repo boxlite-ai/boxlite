@@ -718,7 +718,8 @@ nothing mapped.
 
 4. Once every vCPU joins, `run` shuts down the [virtio workers](#virtio-workers),
    which join dispatch and quiesce every device: console drains published TX,
-   block flushes its backend, and the other devices use a successful no-op.
+   block flushes its backend, virtio-fs freezes its export table, and the other
+   devices use a successful no-op.
    It then finishes the host console worker that `Vm::new` started.
    Before `run` returns, the guest's last output, including device output, reaches
    the sink or is counted as dropped and logged.
@@ -918,7 +919,7 @@ replace the shared one without changing the transport, the devices or `Vm`.
 - **Shutdown quiesce.** After joining, the framework calls every device's
   `quiesce` under its lock while guest RAM is registered, including devices never
   started. The default succeeds without extra work; console scans published TX,
-  and block flushes/syncs its backend.
+  block flushes/syncs its backend, and virtio-fs freezes its export table.
 
 Other devices keep their existing reset/drop cleanup. Successful quiesce does
 not promise network delivery, processing of unconsumed queues, filesystem
@@ -1236,6 +1237,12 @@ FLUSH and RELEASE (including RELEASE_FLUSH) do not promise durability.
 FORGET/BATCH_FORGET/DESTROY use zero reply
 bytes but still complete the descriptor. Reset clears session state and objects
 after the caller has stopped callbacks; it keeps export roots and ID counters.
+
+The device advertises `Stopped` snapshots. `quiesce` freezes the export table
+and keeps the FUSE session, `save_state` and `restore_state` carry that whole
+session, and the mount controller mirrors each export's phase into the device.
+[Freeze, save and restore](../../../docs/contributing/architecture/vmm/virtio-fs.md#freeze-save-and-restore)
+describes the saved state, the refusals and the restore checks.
 
 Unsupported POLL/IOCTL requests return ENOSYS for Linux's standard opt-out;
 these do not claim a backend operation succeeded. Other unsupported operations,

@@ -4,6 +4,7 @@
 //! reconciled with `list`. The caller owns guest acknowledgment and recovery.
 
 use crate::vmm::vmm_socket::{self, ControlError, ControlOp, ControlReply};
+use boxlite_vmm::ExportPhase;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io;
@@ -21,6 +22,16 @@ pub enum MountState {
     Preparing,
     Mounted,
     Detaching,
+}
+
+impl From<MountState> for ExportPhase {
+    fn from(state: MountState) -> Self {
+        match state {
+            MountState::Preparing => ExportPhase::Preparing,
+            MountState::Mounted => ExportPhase::Mounted,
+            MountState::Detaching => ExportPhase::Detaching,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

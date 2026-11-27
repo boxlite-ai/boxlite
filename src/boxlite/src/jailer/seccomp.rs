@@ -519,6 +519,27 @@ mod tests {
             if ret == -1 {
                 unsafe { libc::_exit(6) };
             }
+            // virtio-fs snapshots ask for a file handle on every node they save.
+            let mut handle = std::mem::MaybeUninit::<libc::file_handle>::zeroed();
+            let mut mount_id: libc::c_int = 0;
+            // SAFETY: directory owns the descriptor and the literal is
+            // NUL-terminated; a zeroed handle only asks for the size.
+            let ret = unsafe {
+                libc::syscall(
+                    libc::SYS_name_to_handle_at,
+                    directory.as_raw_fd(),
+                    c"probe".as_ptr(),
+                    handle.as_mut_ptr(),
+                    &mut mount_id,
+                    0,
+                )
+            };
+            // A size query ends in EOVERFLOW, or EOPNOTSUPP on a file system
+            // without handles. Any other errno is a filter denial.
+            let errno = unsafe { *libc::__errno_location() };
+            if ret == -1 && ![libc::EOPNOTSUPP, libc::EOVERFLOW].contains(&errno) {
+                unsafe { libc::_exit(7) };
+            }
             // SAFETY: directory owns the fd and the literal is NUL-terminated.
             let ret = unsafe {
                 libc::syscall(

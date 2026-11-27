@@ -4,11 +4,11 @@
 use std::io;
 use std::sync::Arc;
 
-use super::{AggregateFs, Share, descriptor::request_buffers, server::Server};
+use super::{AggregateFs, Share, descriptor::request_buffers, server::Server, state};
 use crate::memory::GuestMemoryMmap;
 use crate::virtio::{
-    ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, SnapshotSupport,
-    VirtioDevice,
+    ActivationContext, DeviceError, DeviceEvent, DeviceSnapshot, DeviceSpec, FeatureError,
+    RestoreContext, SnapshotError, SnapshotSupport, VirtioDevice,
     queue::{Completion, VIRTIO_F_EVENT_IDX},
 };
 
@@ -21,19 +21,20 @@ const SPEC: DeviceSpec = DeviceSpec {
     features: VIRTIO_F_EVENT_IDX,
     config_len: CONFIG_LEN,
     queue_max: QUEUE_MAX,
-    snapshot: SnapshotSupport::Unsupported,
+    snapshot: SnapshotSupport::Stopped,
 };
 
 /// One dynamic share registry and one FUSE session, independent of transport.
 ///
 /// Reset releases the session's file handles and lookup references before the
 /// transport can replace guest RAM. It retains the export configuration.
+/// Quiescing keeps the whole session for a snapshot; only the mount registry
+/// stays frozen until resume.
 pub(crate) struct Fs {
     config: [u8; CONFIG_LEN],
     features: u64,
     server: Server<AggregateFs>,
     activation: Option<ActivationContext>,
-    closed: bool,
 }
 
 impl Fs {
@@ -52,7 +53,6 @@ impl Fs {
             features: 0,
             server: Server::new(AggregateFs::new(shares)?),
             activation: None,
-            closed: false,
         })
     }
 
@@ -62,25 +62,22 @@ impl Fs {
         self.server.filesystem()
     }
 
-    fn close(&mut self) {
-        if self.closed {
-            return;
-        }
-        // Unpublish only this device's registration, then close its session
-        // even when a control operation still holds a filesystem reference.
+    /// The tag this device was built with. It is also the key of its entry in
+    /// the process mount registry and the name a saved state is checked against.
+    fn tag(&self) -> &str {
         let bytes = &self.config[..TAG_LEN];
         let len = bytes.iter().position(|byte| *byte == 0).unwrap_or(TAG_LEN);
-        if let Ok(tag) = std::str::from_utf8(&bytes[..len]) {
-            super::remove_aggregate(tag, &self.server.filesystem());
-        }
-        self.server.reset();
-        self.closed = true;
+        // `new` admits only valid UTF-8 without NUL, so the tag cannot fail to decode.
+        std::str::from_utf8(&bytes[..len]).expect("the tag was validated at construction")
     }
 }
 
 impl Drop for Fs {
     fn drop(&mut self) {
-        self.close();
+        // Unpublish only this device's registration, then close its session
+        // even when a control operation still holds a filesystem reference.
+        super::remove_aggregate(self.tag(), &self.server.filesystem());
+        self.server.reset();
     }
 }
 
@@ -140,7 +137,46 @@ impl VirtioDevice for Fs {
     }
 
     fn quiesce(&mut self) -> Result<(), DeviceError> {
-        self.close();
+        // A snapshot needs the session exactly as it is. Reset and drop close it.
+        self.server.filesystem().freeze();
+        Ok(())
+    }
+
+    fn save_state(&self) -> Result<DeviceSnapshot, SnapshotError> {
+        self.server
+            .filesystem()
+            .export_state(self.tag(), self.server.handshake())
+            .and_then(|captured| state::encode(&captured))
+            .inspect_err(|error| tracing::warn!(%error, "virtio-fs snapshot refused"))
+    }
+
+    fn restore_state(
+        &mut self,
+        snapshot: DeviceSnapshot,
+        ctx: RestoreContext,
+    ) -> Result<(), DeviceError> {
+        if self.activation.is_some() {
+            return Err(DeviceError::Unsupported(
+                "restoring an active virtio-fs device",
+            ));
+        }
+        if self.server.filesystem().has_exports() {
+            return Err(DeviceError::Unsupported(
+                "restoring virtio-fs state over configured exports",
+            ));
+        }
+        // The new session is built beside this one; a refused state leaves the device untouched.
+        self.server = state::decode(&snapshot, self.tag())
+            .and_then(|saved| {
+                let handshake = (saved.fuse_initialized, saved.fuse_options);
+                AggregateFs::restore(&saved, ctx.exports)
+                    .map(|filesystem| Server::with_handshake(filesystem, handshake.0, handshake.1))
+                    .map_err(|error| SnapshotError::Refused(error.to_string()))
+            })
+            .inspect_err(|error| tracing::warn!(%error, "virtio-fs state refused"))
+            .map_err(|_| DeviceError::Unsupported("virtio-fs restore_state"))?;
+        // The control plane reaches the restored session through the same tag.
+        super::insert_aggregate(self.tag(), self.server.filesystem());
         Ok(())
     }
 
@@ -178,5 +214,10 @@ impl VirtioDevice for Fs {
             ctx.interrupt.raise();
         }
         result.map(|_| ())
+    }
+
+    fn resume(&mut self) -> Result<(), DeviceError> {
+        self.server.filesystem().unfreeze();
+        Ok(())
     }
 }

@@ -23,7 +23,7 @@
 //! before Status=0 resets the device, and it rejects queue-configuration writes
 //! after DRIVER_OK. Every device needs the methods here first.
 
-use std::{fmt, io, sync::Arc};
+use std::{fmt, fs::File, io, sync::Arc};
 
 use self::{queue::VirtQueues, worker::VirtioWorkers};
 use crate::{events::EventSender, memory::GuestMemoryView};
@@ -267,15 +267,20 @@ impl fmt::Display for DeviceError {
 impl std::error::Error for DeviceError {}
 
 /// A snapshot encoding failure.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SnapshotError {
     /// The device does not support snapshots.
     Unsupported,
+    /// The device cannot be saved in its current state. The text says what blocks it.
+    Refused(String),
 }
 
 impl fmt::Display for SnapshotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the device does not support snapshots")
+        match self {
+            Self::Unsupported => f.write_str("the device does not support snapshots"),
+            Self::Refused(reason) => write!(f, "the device cannot be saved: {reason}"),
+        }
     }
 }
 
@@ -312,9 +317,23 @@ pub(crate) struct DeviceSnapshot {
     pub(crate) payload: Vec<u8>,
 }
 
+/// A directory the caller supplies for one export of a restored device.
+#[derive(Debug)]
+pub(crate) struct RestoreExport {
+    /// The export name the saved state lists.
+    pub(crate) name: String,
+    /// The exported directory.
+    pub(crate) directory: File,
+    /// Whether the export was saved read-only.
+    pub(crate) read_only: bool,
+}
+
 /// The resources a restored device receives from the transport.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct RestoreContext;
+#[derive(Debug, Default)]
+pub(crate) struct RestoreContext {
+    /// One entry for each export of the saved state.
+    pub(crate) exports: Vec<RestoreExport>,
+}
 
 /// One virtio device.
 pub(crate) trait VirtioDevice: Send {

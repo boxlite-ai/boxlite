@@ -28,14 +28,55 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 thread_local! {
     static OMIT_MOUNT_ID: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static BEFORE_STATX: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static MOUNT_IDS: std::cell::RefCell<Vec<(Vec<u8>, u64)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 pub(super) fn before_next_statx(callback: impl FnOnce() + 'static) {
     BEFORE_STATX.with(|hook| *hook.borrow_mut() = Some(Box::new(callback)));
 }
 
-// Interpose only in the test binary, preserving real host results except for a
-// thread-local old-kernel response. Production still calls libc::statx directly.
+/// Makes statx on this thread report the mount ID paired with the longest path
+/// prefix below, until the returned guard drops. Tests model bind mounts with it.
+pub(super) fn mount_ids(mounts: Vec<(Vec<u8>, u64)>) -> impl Drop {
+    struct Assigned;
+    impl Drop for Assigned {
+        fn drop(&mut self) {
+            MOUNT_IDS.with(|mounts| mounts.borrow_mut().clear());
+        }
+    }
+    MOUNT_IDS.with(|assigned| *assigned.borrow_mut() = mounts);
+    Assigned
+}
+
+/// The mount ID assigned to the path of the descriptor `dirfd`, if any.
+fn mount_at(mounts: &[(Vec<u8>, u64)], dirfd: libc::c_int) -> Option<u64> {
+    if mounts.is_empty() {
+        return None;
+    }
+    let link = CString::new(format!("/proc/self/fd/{dirfd}")).ok()?;
+    let mut buffer = [0_u8; libc::PATH_MAX as usize];
+    // SAFETY: link is NUL-terminated and the buffer is writable for its whole length.
+    let length = unsafe {
+        libc::readlinkat(
+            libc::AT_FDCWD,
+            link.as_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    if length <= 0 {
+        return None;
+    }
+    mounts
+        .iter()
+        .filter(|(prefix, _)| buffer[..length as usize].starts_with(prefix))
+        .max_by_key(|(prefix, _)| prefix.len())
+        .map(|(_, id)| *id)
+}
+
+// Interpose only in the test binary, preserving real host results except for
+// thread-local fault injections: an old kernel without mount IDs, and mount
+// IDs a test assigns by path. Production still calls libc::statx directly.
 #[unsafe(export_name = "statx")]
 unsafe extern "C" fn host_statx(
     dirfd: libc::c_int,
@@ -51,6 +92,9 @@ unsafe extern "C" fn host_statx(
     if let Some(hook) = hook {
         hook();
     }
+    let assigned = MOUNT_IDS
+        .try_with(|mounts| mounts.borrow().clone())
+        .unwrap_or_default();
     // SAFETY: forward the libc ABI arguments unchanged to the Linux syscall.
     let result = unsafe { libc::syscall(libc::SYS_statx, dirfd, path, flags, mask, out) };
     if result == 0 && OMIT_MOUNT_ID.try_with(|omit| omit.get()).unwrap_or(false) {
@@ -59,6 +103,12 @@ unsafe extern "C" fn host_statx(
             (*out).stx_mask &= !libc::STATX_MNT_ID;
             (*out).stx_mnt_id = 0;
         }
+    }
+    if result == 0
+        && let Some(id) = mount_at(&assigned, dirfd)
+    {
+        // SAFETY: a successful statx initialized the caller-provided output.
+        unsafe { (*out).stx_mnt_id = id };
     }
     result as libc::c_int
 }

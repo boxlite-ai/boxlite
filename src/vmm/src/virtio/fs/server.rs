@@ -91,10 +91,16 @@ pub struct Server<F: FileSystem + Sync> {
 
 impl<F: FileSystem + Sync> Server<F> {
     pub fn new(fs: F) -> Server<F> {
+        Server::with_handshake(fs, false, FsOptions::empty().bits())
+    }
+
+    /// A server for a restored session: `initialized` and `options` are what
+    /// the guest negotiated before its state was saved.
+    pub fn with_handshake(fs: F, initialized: bool, options: u64) -> Server<F> {
         Server {
             fs: Arc::new(fs),
-            options: AtomicU64::new(FsOptions::empty().bits()),
-            initialized: AtomicBool::new(false),
+            options: AtomicU64::new(options),
+            initialized: AtomicBool::new(initialized),
         }
     }
 
@@ -102,6 +108,14 @@ impl<F: FileSystem + Sync> Server<F> {
     /// it to reach the device without crossing the worker runtime.
     pub fn filesystem(&self) -> Arc<F> {
         self.fs.clone()
+    }
+
+    /// Whether the guest completed `FUSE_INIT`, and the options it negotiated.
+    pub fn handshake(&self) -> (bool, u64) {
+        (
+            self.initialized.load(Ordering::Relaxed),
+            self.options.load(Ordering::Relaxed),
+        )
     }
 
     /// Clear negotiated protocol state and invalidate backend session resources.

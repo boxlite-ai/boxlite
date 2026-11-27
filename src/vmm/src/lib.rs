@@ -90,7 +90,7 @@ pub use error::{ControlReason, Error, Result};
 pub use lifecycle::VmStatus;
 pub use memory::ReclaimPolicy;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-pub use virtio::fs::{AggregateFs, Share, insert_aggregate, lookup_aggregate};
+pub use virtio::fs::{AggregateFs, ExportPhase, Share, insert_aggregate, lookup_aggregate};
 pub use vm::{StopHandle, Vm, VmExit};
 
 /// A recording hypervisor backend shared by the crate's unit tests. Test
