@@ -186,6 +186,17 @@ if err != nil {
 defer restored.Close()
 ```
 
+`Box.Export` and `Box.ExportWithOptions` with zero-valued `ExportOptions` both
+export disk only. To request guest memory and VM state as well, call
+`box.ExportWithOptions(ctx, dest, boxlite.ExportOptions{IncludeMemory: true})`.
+Local full export requires a running box, including when a new handle from
+`Get` reconnects to a running detached VM. In either case, the VMM's full
+checkpoint hook is still a placeholder and returns `ErrUnsupported`. A valid
+handle to a box that is not running returns `ErrInvalidState`; a handle
+invalidated by `Stop` returns `ErrStopped` if the box was retained. If `Stop`
+automatically deleted the box, export returns `ErrNotFound`. The REST client
+returns `ErrUnsupported` without sending an HTTP request.
+
 ### Streaming file uploads
 
 `CopyInStream` accepts a raw tar reader and defaults to replacing existing files.

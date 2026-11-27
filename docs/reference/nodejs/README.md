@@ -340,6 +340,18 @@ Handle to a running or stopped box.
 | `executions()` | `() => JsExecutionsHandle` | Live session inventory and recovery; never starts a box |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `metrics()` | `() => Promise<JsBoxMetrics>` | Get resource metrics |
+| `export()` | `(dest: string, options?: JsExportOptions \| null) => Promise<string>` | Export a `.boxlite` archive and return its path |
+
+`JsExportOptions` has one optional field, `includeMemory?: boolean`. Exports
+are disk-only by default. On an embedded runtime, `{ includeMemory: true }`
+requires a running box, including when a new handle from `get()` reconnects to
+a running detached VM. The VMM's full checkpoint hook is still a placeholder,
+so `export()` rejects with code `unsupported` in either case. Use
+`errorCode(err)` to read the code: `invalid_state` means the handle is valid but
+the box is not running; `stopped` means `stop()` invalidated the handle to a
+retained box; `not_found` means `stop()` automatically deleted the box.
+The REST client rejects `{ includeMemory: true }` with `unsupported` without
+sending an HTTP request.
 
 ---
 

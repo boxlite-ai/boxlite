@@ -741,7 +741,9 @@ export interface NativeBoxConnection {
 
 export type JsCloneOptions = Record<string, never>;
 
-export type JsExportOptions = Record<string, never>;
+export interface JsExportOptions {
+  includeMemory?: boolean;
+}
 
 export interface JsBox {
   readonly agents: Agents;
