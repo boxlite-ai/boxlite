@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { load } from 'js-yaml'
 import { selectRelease } from './release-selection.mjs'
@@ -451,12 +452,77 @@ test('GHCR pins unlock dev and dev acceptance independently unlocks prod and pub
   assert.ok(jobs.publish_crates.needs.includes('finalize'))
 })
 
+test('Go tag stays unpublished until every C SDK can be downloaded anonymously for this public release', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'go-public-c-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const root = new URL('../../../', import.meta.url)
+  const tag = 'v1.2.3'
+  const goRef = 'refs/tags/sdks/go/' + tag
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  git('init', '--bare', 'origin.git')
+  git('init')
+  git('-c', 'user.name=Fixture', '-c', 'user.email=ci@example.invalid', '-c', 'commit.gpgSign=false', 'commit', '--allow-empty', '-m', 'source')
+  const sha = git('rev-parse', 'HEAD')
+  git('remote', 'add', 'origin', join(dir, 'origin.git'))
+  git('push', 'origin', sha + ':refs/tags/' + tag)
+  for (const path of ['apps/infra/scripts/release-candidate.mjs', '.github/ci-config.json']) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true })
+    copyFileSync(new URL(path, root), join(dir, path))
+  }
+
+  const targets = JSON.parse(readFileSync(new URL('.github/ci-config.json', root))).platforms
+  const assets = targets.map(({ target }) => {
+    const name = 'boxlite-c-' + tag + '-' + target + '.tar.gz'
+    return { name, size: name.length, state: 'uploaded', digest: 'sha256:' + createHash('sha256').update(name).digest('hex') }
+  })
+  writeFileSync(join(dir, 'gh'), [
+    '#!/bin/sh',
+    'case "$*" in',
+    '  "api repos/boxlite-ai/boxlite/releases/123") cat "$FIXTURE/release.json" ;;',
+    '  *"/releases/123/assets?per_page=100") cat "$FIXTURE/assets.json" ;;',
+    '  *) exit 2 ;;',
+    'esac',
+  ].join('\n'), { mode: 0o755 })
+  writeFileSync(join(dir, 'public-fetch.mjs'), `
+    globalThis.fetch = async (url, options) => {
+      const request = new Request(url, options)
+      const base = 'https://github.com/boxlite-ai/boxlite/releases/download/v1.2.3/'
+      if (!request.url.startsWith(base) || request.method !== 'GET' || request.headers.has('authorization')) throw Error('unexpected request')
+      const name = request.url.slice(base.length)
+      if (name === process.env.UNAVAILABLE) return new Response(null, { status: 404 })
+      return new Response(name === process.env.CORRUPT ? 'wrong bytes' : name)
+    }
+  `)
+  const steps = release.jobs['tag-go-module'].steps.filter(step => step.run).map(step => step.run)
+  function publish({ draft = false, files = assets, ...extra } = {}) {
+    writeFileSync(join(dir, 'release.json'), JSON.stringify({ tag_name: tag, draft }))
+    writeFileSync(join(dir, 'assets.json'), JSON.stringify([files]))
+    return spawnSync('bash', ['-ec', steps.join('\n')], { cwd: dir, encoding: 'utf8',
+      env: { ...process.env, FIXTURE: dir, PATH: dir + ':' + process.env.PATH, GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
+        TAG: tag, RELEASE_TAG: tag, RELEASE_ID: '123', C_SHA: sha, NODE_OPTIONS: '--import=' + join(dir, 'public-fetch.mjs'), ...extra },
+    })
+  }
+  for (const [reason, options] of [
+    ['draft', { draft: true }], ['missing asset', { files: assets.slice(1) }],
+    ['anonymous 404', { UNAVAILABLE: assets.at(-1).name }], ['wrong bytes', { CORRUPT: assets[0].name }],
+  ]) {
+    const result = publish(options)
+    assert.equal(git('ls-remote', '--refs', 'origin', goRef), '', 'Go tag was pushed for ' + reason)
+    assert.notEqual(result.status, 0, reason)
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = publish()
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(git('ls-remote', '--refs', 'origin', goRef), sha + '\t' + goRef)
+  }
+})
+
 test('publication gates accept a skipped optional ancestor and require successful direct prerequisites', () => {
   for (const [id, prerequisites, commands] of [
     ['npm', ['attach'], ['publish', 'publish-node', 'repair-node']],
     ['pypi', ['attach'], ['publish', 'publish-wheels', 'repair-wheels']],
-    ['tag-go-module', ['attach'], ['publish', 'publish-go']],
-    ['finalize', ['npm', 'pypi', 'tag-go-module'], ['publish']],
+    ['tag-go-module', ['finalize'], ['publish', 'publish-go']],
+    ['finalize', ['npm', 'pypi', 'attach'], ['publish']],
     ['publish_crates', ['finalize'], ['publish', 'publish-runtime']],
   ]) {
     const condition = expression(release.jobs[id].if)
@@ -473,6 +539,7 @@ test('publication gates accept a skipped optional ancestor and require successfu
       assert.equal(selected(command), commands.includes(command), id + ' on ' + command)
     }
     for (const name of prerequisites) {
+      needs[name] ??= { result: 'success' }
       for (const result of ['skipped', 'failure', 'cancelled']) {
         needs[name].result = result
         assert.equal(selected('publish'), false, id + ' after ' + name + ' ' + result)
@@ -502,7 +569,7 @@ test('single components select their producers and bypass rollout, including wit
         return Boolean(evaluate(needs, statuses, { command, 'build-only': buildOnly }, { ref: 'refs/heads/main' }, (a,b) => a.includes(b), JSON.parse, () => false))
       }
       const enabled = []
-      for (const id of ['build-runtime','build-wheels','build-node','build-c','build-go','build-runner-binary','publish','publish-runner','distribution','accepted-candidate','dev','attach','npm','pypi','tag-go-module','prod','finalize','publish_crates']) {
+      for (const id of ['build-runtime','build-wheels','build-node','build-c','build-go','build-runner-binary','publish','publish-runner','distribution','accepted-candidate','dev','attach','npm','pypi','prod','finalize','tag-go-module','publish_crates']) {
         if (allows(id)) { enabled.push(id); needs[id].result = 'success' }
       }
       const expected = ['go','runner'].includes(component) ? ['build-c'] : []

@@ -28,7 +28,8 @@ PRODUCT RELEASE (dispatch from main)    mbuild-release creates or selects the dr
                                                                                   └─▶ dev E2E with Linux clients
                                                                                           ├─▶ prod approval + deployment
                                    complete distribution + Go tests + successful dev E2E ─┴─▶ attach files
-                                         ──▶ PyPI, npm and Go tag ──▶ publish GitHub Release ──▶ crates.io
+                                         ──▶ PyPI and npm ──▶ publish GitHub Release ──┬─▶ crates.io
+                                                                                       └─▶ verify public C SDK downloads → Go tag
 
 SINGLE COMPONENT (dispatch from main)   mbuild-release ──▶ component build + tests ──▶ component publication
                                         build-only ──▶ artifacts from the selected source
@@ -85,7 +86,9 @@ Set `TAG` to the existing stable version tag and start the product release from 
 gh workflow run mbuild-release.yml --ref main -f tag="$TAG"
 ```
 
-The parent creates or selects the draft, gathers the build outputs in Actions Artifacts and requests dev approval. Successful dev E2E allows the attachment job to upload the verified files. Once the attachments, PyPI, npm and Go tag jobs succeed, the parent makes the Release public.
+The parent creates or selects the draft, gathers the build outputs in Actions Artifacts and requests dev approval. Successful dev E2E allows the attachment job to upload the verified files. Once the attachments, PyPI and npm jobs succeed, the parent makes the Release public.
+
+Both full releases and standalone Go publication verify anonymous downloads of the versioned C SDK archives before pushing the Go module tag.
 
 The prod Environment requires reviewers. The optional prod Slack message includes the dev E2E result and the approval link. See the [release runbook](../../apps/infra/docs/release.md) for package publisher setup and retry behavior.
 

@@ -53,6 +53,9 @@ function artifactIndex(runId) {
       .map((item) => [item.name, item.id]),
   )
 }
+function cArchiveName(tag, target) {
+  return 'boxlite-c-' + tag + '-' + target + '.tar.gz'
+}
 async function archiveSources(tag, platforms) {
   const version = tag.slice(1)
   const names = new Map()
@@ -64,7 +67,7 @@ async function archiveSources(tag, platforms) {
     const cli = 'boxlite-cli-' + tag + '-' + rust_target + '.tar.gz'
     runtimes.push(runtime, runtime + '.sha256', cli, cli + '.sha256')
     packages.push('boxlite-ai-boxlite-' + target + '-' + version + '.tgz')
-    required('c-sdk-' + target, ['boxlite-c-' + tag + '-' + target + '.tar.gz'])
+    required('c-sdk-' + target, [cArchiveName(tag, target)])
     names.set('wheels-' + os, {
       required: [],
       accepts: (name) => name.startsWith('boxlite-' + version + '-') && name.endsWith('.whl'),
@@ -247,6 +250,25 @@ function releaseAssets(releaseId) {
     ),
   ).flat()
 }
+async function verifyPublicCArchives(tag, releaseId) {
+  const release = api('releases/' + numberId(releaseId))
+  assert.equal(release.tag_name, tag, 'Unexpected product release')
+  assert.equal(release.draft, false, 'Publish the GitHub Release before tagging the Go module')
+  const assets = new Map(releaseAssets(releaseId).map(asset => [asset.name, asset]))
+  const { platforms } = await readJson('.github/ci-config.json')
+  assert.ok(platforms.length, 'The C SDK platform matrix is empty')
+  for (const { target } of platforms) {
+    const name = cArchiveName(tag, target)
+    const asset = assets.get(name)
+    assert.ok(asset?.state === 'uploaded' && asset.size > 0, 'Missing public C SDK archive: ' + name)
+    const url = 'https://github.com/' + process.env.GITHUB_REPOSITORY + '/releases/download/' + tag + '/' + name
+    const response = await fetch(url, { signal: AbortSignal.timeout(300_000) })
+    assert.equal(response.status, 200, 'Anonymous C SDK download failed: ' + name)
+    const hash = createHash('sha256')
+    for await (const chunk of response.body) hash.update(chunk)
+    assert.equal('sha256:' + hash.digest('hex'), asset.digest, 'Public C SDK digest mismatch: ' + name)
+  }
+}
 async function publishFiles(candidate, id, scope, finalize = false) {
   const release = api('releases/' + numberId(id))
   assert.equal(release.tag_name, candidate.tag)
@@ -287,6 +309,7 @@ async function publishFiles(candidate, id, scope, finalize = false) {
 }
 async function main(command) {
   const { TAG: tag, SHA: sha, CANDIDATE_DIGEST: fingerprint, RELEASE_ID } = process.env
+  if (command === 'verify-public-c') return verifyPublicCArchives(tag, RELEASE_ID)
   if (command === 'client-ids') {
     await tagIdentity(tag, sha)
     console.log(await clientArtifactIds(tag))

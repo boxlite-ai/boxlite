@@ -1396,7 +1396,7 @@ test('reusable Runner builds link the selected C artifact or published library',
   }
 })
 
-test('the C archive reaches Go and Runner through the same release run and Go tagging follows acceptance', () => {
+test('the C archive reaches Go and Runner through the same release run and Go tagging follows public release', () => {
   const release = load(readFileSync(join(REPO_ROOT, '.github/workflows/mbuild-release.yml'), 'utf8'))
   for (const name of ['build-go', 'build-runner-binary']) {
     assert.ok(release.jobs[name].needs.includes('build-c'))
@@ -1410,9 +1410,9 @@ test('the C archive reaches Go and Runner through the same release run and Go ta
     assert.ok(!('run-id' in download.with))
   }
   assert.equal(release.jobs['build-runner-binary'].with.libboxlite_source, 'artifact')
-  assert.ok(release.jobs['tag-go-module'].needs.includes('attach'))
+  assert.ok(release.jobs['tag-go-module'].needs.includes('finalize'))
   assert.ok(release.jobs.attach.needs.includes('dev'))
-  assert.ok(release.jobs.finalize.needs.includes('tag-go-module'))
+  assert.ok(release.jobs.finalize.needs.includes('attach'))
 })
 
 test('the cloud E2E suite is reachable only from a deploy or a human', () => {

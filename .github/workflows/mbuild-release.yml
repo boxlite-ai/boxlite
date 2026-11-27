@@ -648,19 +648,24 @@ jobs:
       queue: max
     if: >-
       ${{ github.ref == 'refs/heads/main' && !cancelled() &&
-      ((inputs.command == 'publish' && needs.attach.result == 'success') ||
+      ((inputs.command == 'publish' && needs.finalize.result == 'success') ||
       (inputs.command == 'publish-go' && !inputs['build-only'] && needs.build-go.result == 'success')) }}
     name: Tag Go Module
-    needs: [resolve, attach, build-go]
+    needs: [resolve, finalize, build-go]
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
-          ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0
+
+      - name: Verify public C SDK downloads
+        env:
+          TAG: ${{ inputs.tag }}
+          RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
+        run: node apps/infra/scripts/release-candidate.mjs verify-public-c
 
       - name: Create Go module tag
         shell: bash
@@ -814,9 +819,9 @@ jobs:
     if: >-
       ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' &&
       !cancelled() && needs.npm.result == 'success' &&
-      needs.pypi.result == 'success' && needs.tag-go-module.result == 'success' }}
+      needs.pypi.result == 'success' && needs.attach.result == 'success' }}
     name: Publish the verified GitHub Release
-    needs: [resolve, distribution, attach, pypi, npm, tag-go-module]
+    needs: [resolve, distribution, attach, pypi, npm]
     runs-on: ubuntu-latest
     permissions:
       contents: write

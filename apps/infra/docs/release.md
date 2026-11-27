@@ -20,10 +20,10 @@ The run creates the draft or selects the existing draft for that tag. Configure 
 | Build | Runtime and CLI, wheels, npm packages and C SDK archives build in parallel and enter Actions Artifacts. Go tests and the Linux Runner build link the C archives from this run. |
 | Prepare dev | `mbuild publish` pushes the declared images to GHCR. The Runner job uploads the original tarball as an OCI layer. Once the GHCR producers finish, the dev preparation job verifies image and Runner digests, saves the deployment candidate and requests dev approval. SDK tests and distribution packaging continue in parallel. |
 | Dev approval and E2E | Approve the dev Environment in the run. The cloud suite reads only the Linux x64 CLI, Python wheel, C SDK and two npm tarballs from this run. It records their checksums with the accepted deployment digests. |
-| Publish | Dev E2E success opens prod approval immediately. In parallel, publication waits for the complete distribution and Go tests, compares the tested client bytes, and attaches the verified files to the draft. The top-level PyPI and npm jobs publish the accepted packages and the Go job tags the tested commit. |
-| Release and prod | When those publishers succeed, the workflow marks the draft public. Rust crates publish after the runtime becomes public. Approved prod deployment uses the same GHCR digests and can finish while the release is still a draft. |
+| Publish | Dev E2E success opens prod approval immediately. In parallel, publication waits for the complete distribution and Go tests, compares the tested client bytes, and attaches the verified files to the draft. The top-level PyPI and npm jobs publish the accepted packages. |
+| Release and prod | When those publishers succeed, the workflow marks the draft public. Rust crates can then publish, and the Go job verifies the public C SDK downloads before tagging the tested commit. Approved prod deployment uses the same GHCR digests and can finish while the release is still a draft. |
 
-The C SDK and Runner workflows each load CI configuration and validate the build commit in one preparation job. A regular release skips the lookup for a previous acceptance receipt. Once its own attachments succeed, npm, PyPI and Go tagging can start. Finalization requires all three to succeed, and crates.io requires successful finalization.
+The C SDK and Runner workflows each load CI configuration and validate the build commit in one preparation job. A regular release skips the lookup for a previous acceptance receipt. Once its own attachments succeed, npm and PyPI can start. Finalization requires both to succeed.
 
 The Runner package at `ghcr.io/boxlite-ai/boxlite/runner` must allow anonymous pulls from hosts. First boot and in-place upgrade verify the OCI manifest against the release tag, source commit and archive digest before extracting the binary. Dev and prod receive those pins from the candidate. A version-only manual rollout reads the same pins from the published `release-candidate.json`.
 
@@ -62,8 +62,10 @@ Run `mbuild-release.yml` from `main` and select an existing product Release tag.
 | `publish-wheels` | Platform wheels → GitHub Release and PyPI. |
 | `publish-node` | Platform packages and main npm package → GitHub Release and npm. |
 | `publish-c` | Platform C SDK archives → GitHub Release. |
-| `publish-go` | Builds the C SDK matrix, tests the Go SDK against those archives and tags `sdks/go/vX.Y.Z`. |
+| `publish-go` | Builds the C SDK matrix, tests Go, then tags `sdks/go/vX.Y.Z` only after downloading every versioned C SDK archive anonymously from the public Release and verifying its GitHub asset digest. |
 | `publish-runner` | Builds the Linux x64 C SDK and Runner, pushes the Runner to GHCR and attaches its archive and checksum to GitHub Release. |
+
+If Go tagging fails on a draft, finish the full release first. If a public Release lacks a C SDK archive, run `publish-c` for that tag and retry `publish-go`.
 
 For example, `gh workflow run mbuild-release.yml --ref main -f command=publish-wheels -f tag=v1.2.3` selects fresh wheel publication. Set `build-only=true` to keep a standalone build in Actions. Use `source-ref` to build a branch or commit. A complete `publish` with `build-only=true` stages the GHCR images and Runner.
 
