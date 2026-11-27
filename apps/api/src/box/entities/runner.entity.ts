@@ -12,6 +12,7 @@ import { RunnerServiceInfo } from '../common/runner-service-info'
 import { RunnerDataDiskRef } from '../common/runner-data-disk-ref'
 
 @Entity()
+@Index('idx_runner_api_key', ['apiKey'])
 @Unique(['region', 'name'])
 @Index(['state', 'unschedulable', 'region'])
 export class Runner {

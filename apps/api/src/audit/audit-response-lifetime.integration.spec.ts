@@ -23,7 +23,8 @@ jest.mock('http-proxy-middleware', () =>
 )
 
 const databaseSuite = process.env.DB_HOST ? describe : describe.skip
-databaseSuite('response audit lifetime on PostgreSQL', () => {
+databaseSuite.each([false, true])('response audit lifetime on PostgreSQL (async: %s)', (asyncWrites) => {
+  const originalAsyncWrites = process.env.AUDIT_ASYNC_WRITES_ENABLED
   let db: DataSource
   let schema: string
   let app: INestApplication
@@ -40,6 +41,7 @@ databaseSuite('response audit lifetime on PostgreSQL', () => {
   let uploadReceived: Promise<void>
 
   beforeEach(async () => {
+    process.env.AUDIT_ASYNC_WRITES_ENABLED = String(asyncWrites)
     leaseAcquired = false
     terminalWrite = new Promise((resolve) => (markTerminalWrite = resolve))
     schema = `audit_response_${randomUUID().replaceAll('-', '')}`
@@ -75,10 +77,24 @@ databaseSuite('response audit lifetime on PostgreSQL', () => {
       publisher,
     )
     const acquire = service.keepPendingLogAlive.bind(service)
-    jest.spyOn(service, 'keepPendingLogAlive').mockImplementation(async (id) => {
-      const lease = await acquire(id)
+    jest.spyOn(service, 'keepPendingLogAlive').mockImplementation(async (id, timeout, pending) => {
+      const lease = await acquire(id, timeout, pending)
       leaseAcquired = true
-      return { signal: lease.signal, complete: (result) => lease.complete(result).finally(markTerminalWrite) }
+      return {
+        signal: lease.signal,
+        ready: lease.ready,
+        complete: (result) => lease.complete(result).finally(markTerminalWrite),
+      }
+    })
+    const acquireAsync = service.leasePendingLog.bind(service)
+    jest.spyOn(service, 'leasePendingLog').mockImplementation((id, timeout, pending) => {
+      const lease = acquireAsync(id, timeout, pending)
+      leaseAcquired = true
+      return {
+        signal: lease.signal,
+        ready: lease.ready,
+        complete: (result) => lease.complete(result).finally(markTerminalWrite),
+      }
     })
     forwarded = new Promise((resolve) => (markForwarded = resolve))
     upstream = createServer((req, res) => {
@@ -134,6 +150,8 @@ databaseSuite('response audit lifetime on PostgreSQL', () => {
   })
 
   afterEach(async () => {
+    if (originalAsyncWrites === undefined) delete process.env.AUDIT_ASYNC_WRITES_ENABLED
+    else process.env.AUDIT_ASYNC_WRITES_ENABLED = originalAsyncWrites
     client?.destroy()
     upstreamResponse?.destroy()
     upstream?.closeAllConnections()
@@ -162,9 +180,14 @@ databaseSuite('response audit lifetime on PostgreSQL', () => {
     // Register rejection handling before test cleanup may destroy a pending upload.
     void completed.catch(() => undefined)
     await forwarded
-    const [row] = await db.query('SELECT id FROM audit_log')
-    await db.query('UPDATE audit_log SET "createdAt" = now() - interval \'40 minutes\' WHERE id = $1', [row.id])
-    return { id: row.id as string, completed }
+    let row: { id: string } | undefined
+    for (let attempt = 0; attempt < 50 && !row; attempt++) {
+      ;[row] = await db.query('SELECT id FROM audit_log')
+      if (!row) await new Promise(setImmediate)
+    }
+    expect(row).toBeDefined()
+    await db.query('UPDATE audit_log SET "createdAt" = now() - interval \'40 minutes\' WHERE id = $1', [row!.id])
+    return { id: row!.id, completed }
   }
 
   async function finish(completed: Promise<number>) {
@@ -174,6 +197,29 @@ databaseSuite('response audit lifetime on PostgreSQL', () => {
     expect(await completed).toBe(204)
     await terminalWrite
   }
+
+  it('preserves the business result according to the audit write mode when INSERT fails', async () => {
+    jest.spyOn(service, 'createLog').mockRejectedValueOnce(new Error('insert failed'))
+    const completed = new Promise<number>((resolve, reject) => {
+      client = request(
+        `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/v1/boxes/box-id/files`,
+        { method: 'PUT' },
+        (res) => {
+          res.resume()
+          res.on('end', () => resolve(res.statusCode!))
+        },
+      )
+      client.on('error', reject)
+    })
+    client.end('body')
+    if (asyncWrites) {
+      await forwarded
+      await uploadReceived
+      upstreamResponse.writeHead(204).end()
+    }
+
+    expect(await completed).toBe(asyncWrites ? 204 : 500)
+  })
 
   it('adds a nullable lease to existing rows and can roll it back', async () => {
     const runner = db.createQueryRunner()

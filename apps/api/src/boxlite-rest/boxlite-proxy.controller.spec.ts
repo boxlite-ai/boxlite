@@ -52,7 +52,7 @@ function makeHarness() {
     autoResume,
     tunnelService,
   ) as BoxliteProxyController
-  return { controller, boxService, autoResume, tunnelService }
+  return { controller, boxService, runnerService, autoResume, tunnelService }
 }
 
 describe('BoxliteProxyController', () => {
@@ -151,6 +151,56 @@ describe('BoxliteProxyController', () => {
     expect(pathRewrite('/api/v1/boxes/public-box/exec', req)).toBe('/v1/boxes/box-uuid/exec')
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
+  })
+
+  it('looks up the runner while auto-resume is still pending', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, runnerService, autoResume } = makeHarness()
+    let finishResume: () => void
+    autoResume.ensureReady.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishResume = resolve
+      }),
+    )
+
+    const pending = controller.proxyExec(
+      activeAuth as never,
+      'public-box',
+      { method: 'GET', params: {} } as never,
+      new EventEmitter() as never,
+      jest.fn(),
+    )
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(runnerService.findOne).toHaveBeenCalledWith('runner-1')
+    finishResume!()
+    await pending
+  })
+
+  it('waits for both parallel failures and reports the auto-resume error first', async () => {
+    const { controller, runnerService, autoResume } = makeHarness()
+    let rejectResume!: (error: Error) => void
+    let rejectRunner!: (error: Error) => void
+    autoResume.ensureReady.mockReturnValue(new Promise((_resolve, reject) => (rejectResume = reject)))
+    runnerService.findOne.mockReturnValue(new Promise((_resolve, reject) => (rejectRunner = reject)))
+
+    const pending = controller.proxyExec(
+      activeAuth as never,
+      'public-box',
+      { method: 'GET', params: {} } as never,
+      new EventEmitter() as never,
+      jest.fn(),
+    )
+    let settled = false
+    void pending.finally(() => (settled = true)).catch(() => undefined)
+    await new Promise(setImmediate)
+    rejectRunner(new Error('runner lookup failed'))
+    await new Promise(setImmediate)
+    expect(settled).toBe(false)
+    rejectResume(new Error('resume failed'))
+
+    await expect(pending).rejects.toThrow('resume failed')
+    expect(createProxyMiddleware).not.toHaveBeenCalled()
   })
 
   it('lists a stopped box without resuming it or extending its idle lifetime', async () => {

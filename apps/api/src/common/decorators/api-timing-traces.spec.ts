@@ -225,18 +225,23 @@ describe('API timing trace relationships', () => {
       runnerId: 'runner-1',
       autoResume: true,
       autoStop: 0,
-      state: BoxState.STARTED,
-      desiredState: BoxDesiredState.STARTED,
+      state: BoxState.STOPPED,
+      desiredState: BoxDesiredState.STOPPED,
       inboundEnabled: true,
     }
+    const startedBox = { ...box, state: BoxState.STARTED, desiredState: BoxDesiredState.STARTED }
     const boxService = {
-      boxRepository: { findOne: jest.fn().mockResolvedValue(box) },
+      boxRepository: {
+        findOne: jest.fn().mockResolvedValue(box),
+        conditionalStartForProxy: jest.fn().mockResolvedValue(startedBox),
+      },
       boxActivityService: { updateLastActivityAt: jest.fn().mockResolvedValue(undefined) },
       organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
       eventEmitter: { emit: jest.fn() },
       findOneByIdOrName: BoxService.prototype.findOneByIdOrName,
       updateLastActivityAt: BoxService.prototype.updateLastActivityAt,
       ensureStartedForProxy: BoxService.prototype.ensureStartedForProxy,
+      assertOrganizationIsNotSuspended: BoxService.prototype.assertOrganizationIsNotSuspended,
     }
     const autoResume = Object.assign(Object.create(BoxAutoResumeService.prototype), {
       boxService,

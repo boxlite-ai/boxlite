@@ -209,7 +209,7 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       commerceBoxLimitService as any,
       {} as any,
     )
-    return { controller, boxService }
+    return { controller, boxService, commerceBoxLimitService }
   }
 
   function keyContext(permissions: OrganizationResourcePermission[]) {
@@ -263,6 +263,25 @@ describe('BoxliteBoxController volume attachment authorization', () => {
       controller.createBox(keyContext([WRITE_BOXES, WRITE_VOLUMES]), dtoWithVolume, Context.user()),
     ).rejects.toThrow(/read:volumes/)
     expect(boxService.create).not.toHaveBeenCalled()
+  })
+
+  it('starts box creation reads before the Commerce limit request finishes', async () => {
+    const { controller, boxService, commerceBoxLimitService } = makeController()
+    let resolveLimit!: (value: number) => void
+    commerceBoxLimitService.resolveMaxCreatedBoxes.mockReturnValue(
+      new Promise<number>((resolve) => {
+        resolveLimit = resolve
+      }),
+    )
+
+    const creating = controller.createBox(keyContext([WRITE_BOXES]), { image: 'alpine:latest' } as any, Context.user())
+    await new Promise(setImmediate)
+    const createStarted = boxService.create.mock.calls.length === 1
+    resolveLimit(10)
+    await creating
+
+    expect(createStarted).toBe(true)
+    await expect(boxService.create.mock.calls[0][3].maxCreatedBoxesPromise).resolves.toBe(10)
   })
 
   it('allows a key holding both volume permissions', async () => {

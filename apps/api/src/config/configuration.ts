@@ -796,6 +796,12 @@ const configuration = {
   billing: {
     apiKey: process.env.BILLING_API_KEY,
   },
+  apiModuleCache: {
+    enabled: process.env.ENABLE_API_MODULE_CACHE === 'true',
+  },
+  runnerAuthCache: {
+    enabled: process.env.ENABLE_RUNNER_AUTH_CACHE !== 'false',
+  },
   organizationBoxDefaultLimitedNetworkEgress: process.env.ORGANIZATION_BOX_DEFAULT_LIMITED_NETWORK_EGRESS === 'true',
   pylonAppId: process.env.PYLON_APP_ID,
   billingApiUrl: billingApiUrlConfig(),
@@ -954,6 +960,7 @@ const configuration = {
   },
   boxMigration: boxMigrationConfig(),
   boxSync: {
+    organizationActivityAsync: process.env.BOX_ORGANIZATION_ACTIVITY_ASYNC !== 'false',
     // How long a claimed startup job may sit without completing before a
     // runner reporting the box as started is allowed to close it out. This is
     // a backstop for a lost job-completion callback, not a fast path: raise it

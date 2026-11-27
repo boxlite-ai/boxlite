@@ -106,6 +106,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
       dataSource,
       { emit: jest.fn() } as never,
       { invalidate: jest.fn(), invalidateOrgId: jest.fn() } as never,
+      { get: (key: string) => (key === 'boxSync.organizationActivityAsync' ? false : undefined) } as never,
     )
     organizations = new OrganizationService(
       dataSource.getRepository(Organization),
@@ -139,7 +140,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
   it('returns a committed Box start while another transaction holds the facts row', async () => {
     const id = await organization()
     const boxId = await box(id)
-    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
     const holder = dataSource.createQueryRunner()
     await holder.connect()
     await holder.startTransaction()
@@ -159,7 +160,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
       ])
       const [row] = await dataSource.query('SELECT state FROM box WHERE id = $1', [boxId])
       expect([started.state, row.state]).toEqual([BoxState.STARTED, BoxState.STARTED])
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Failed to record activity of box ${boxId}`))
+      expect(error).toHaveBeenCalledWith(expect.objectContaining({ event: 'organization.activity.dropped', boxId }))
       expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: null })
     } finally {
       clearTimeout(deadline)
@@ -183,11 +184,17 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
     expect(await dataSource.query('SELECT id FROM box')).toEqual([])
     expect(await service.get(id)).toMatchObject({ lastBoxCreatedAt: later, lastBoxModifiedAt: at(started) })
 
-    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
     await dataSource.getRepository(Organization).delete(id)
     const orphan = await box(id, later)
     await transition(orphan, BoxState.STARTED)
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('organization_activation_facts'))
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'organization.activity.dropped',
+        boxId: orphan,
+        error: expect.stringContaining('organization_activation_facts'),
+      }),
+    )
     expect(await service.get(id)).toBeNull()
     expect(await factRows(id)).toEqual([])
   })
@@ -302,7 +309,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
   it('keeps the Box write when the facts update fails, and the next start records it', async () => {
     const id = await organization()
     const boxId = await box(id)
-    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    const error = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined)
     await dataSource.query('ALTER TABLE organization_activation_facts RENAME TO organization_activation_facts_moved')
     let started: Box
     try {
@@ -311,7 +318,7 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
       await dataSource.query('ALTER TABLE organization_activation_facts_moved RENAME TO organization_activation_facts')
     }
     expect(started.state).toBe(BoxState.STARTED)
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`Failed to record activity of box ${boxId}`))
+    expect(error).toHaveBeenCalledWith(expect.objectContaining({ event: 'organization.activity.dropped', boxId }))
     expect(await service.get(id)).toMatchObject({ lastBoxModifiedAt: null })
     await transition(boxId, BoxState.STOPPED, BoxDesiredState.STOPPED)
     const restarted = await transition(boxId, BoxState.STARTED, BoxDesiredState.STARTED)

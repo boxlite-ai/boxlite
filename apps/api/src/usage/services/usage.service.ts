@@ -211,14 +211,11 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
 
   private async closeUsagePeriod(boxId: string, entityManager?: EntityManager, endAt = new Date()) {
     const where = { boxId, endAt: IsNull() }
-    const lastUsagePeriod = entityManager
-      ? await entityManager.findOne(BoxUsagePeriod, { where })
-      : await this.boxUsagePeriodRepository.findOne({ where })
-
-    if (lastUsagePeriod) {
-      lastUsagePeriod.endAt = endAt
-      await (entityManager ? entityManager.save(lastUsagePeriod) : this.boxUsagePeriodRepository.save(lastUsagePeriod))
+    if (entityManager) {
+      await entityManager.update(BoxUsagePeriod, where, { endAt })
+      return
     }
+    await this.boxUsagePeriodRepository.update(where, { endAt })
   }
 
   @Cron(CronExpression.EVERY_MINUTE, { name: 'close-and-reopen-usage-periods' })

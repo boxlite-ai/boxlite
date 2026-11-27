@@ -16,7 +16,7 @@ import { BoxCheckpointState } from '../entities/box-checkpoint-state.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common'
 import { BoxConflictError } from '../errors/box-conflict.error'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { EventEmitter2 } from '@nestjs/event-emitter'
@@ -34,6 +34,7 @@ import { matchingCredential } from '../../registry/utils/matching-credential'
 import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
 import { OutboundPolicy } from '../runner-adapter/network-policy'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
+import { TypedConfigService } from '../../config/typed-config.service'
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
@@ -159,6 +160,7 @@ export class BoxRepository extends BaseRepository<Box> {
     @InjectDataSource() dataSource: DataSource,
     eventEmitter: EventEmitter2,
     private readonly boxLookupCacheInvalidationService: BoxLookupCacheInvalidationService,
+    @Optional() private readonly configService?: TypedConfigService,
   ) {
     super(dataSource, eventEmitter, Box)
   }
@@ -199,7 +201,7 @@ export class BoxRepository extends BaseRepository<Box> {
     )
 
     this.invalidateLookupCacheOnInsert(box)
-    await this.recordOrganizationActivity(box)
+    await this.afterBoxWrite(box)
 
     return box
   }
@@ -297,7 +299,7 @@ export class BoxRepository extends BaseRepository<Box> {
 
     this.emitUpdateEvents(box, previousBox)
     this.invalidateLookupCacheOnUpdate(box, previousBox)
-    await this.recordOrganizationActivity(box, previousBox)
+    await this.afterBoxWrite(box, previousBox)
 
     return box
   }
@@ -383,6 +385,41 @@ export class BoxRepository extends BaseRepository<Box> {
     return { box, checkpointState }
   }
 
+  async findWithCheckpointStateForLifecycle(
+    idOrName: string,
+    organizationId: string | undefined,
+    lookup: 'id' | 'id-or-name',
+  ): Promise<{ box: Box; checkpointState: BoxCheckpointState | null }> {
+    if (lookup === 'id' && !organizationId) throw new NotFoundException(`Box with ID ${idOrName} not found`)
+    const organization = organizationId ? { organizationId } : {}
+    const state = { state: Not(BoxState.DESTROYED) }
+    const find = (where: FindOptionsWhere<Box>) =>
+      this.repository
+        .createQueryBuilder('box')
+        .leftJoin(BoxCheckpointState, 'checkpoint', 'checkpoint.boxId = box.id')
+        .addSelect('checkpoint.activeJobId', 'checkpoint_job_id')
+        .addSelect('checkpoint.sequence', 'checkpoint_sequence')
+        .where(where)
+        .getRawAndEntities<{ checkpoint_job_id: string | null; checkpoint_sequence: number | null }>()
+
+    let { entities, raw } = await find({ id: idOrName, ...organization, ...state })
+    if (!entities[0] && lookup === 'id-or-name') {
+      ;({ entities, raw } = await find({ name: idOrName, ...organization, ...state }))
+    }
+    const box = entities[0]
+    if (
+      !box ||
+      (lookup === 'id-or-name' && box.state === BoxState.ERROR && box.desiredState === BoxDesiredState.DESTROYED)
+    ) {
+      throw new NotFoundException(`Box with ID or name ${idOrName} not found`)
+    }
+    const checkpointState =
+      raw[0].checkpoint_sequence === null
+        ? null
+        : { boxId: box.id, activeJobId: raw[0].checkpoint_job_id, sequence: raw[0].checkpoint_sequence }
+    return { box, checkpointState }
+  }
+
   /** Explicit deletion fences checkpoint callbacks before the runner removes the target. */
   async deleteCheckpointTarget(selected: Box, selectedState: BoxCheckpointState): Promise<Box> {
     if (!selectedState.activeJobId) throw new ConflictException('Box has no checkpoint operation')
@@ -438,7 +475,7 @@ export class BoxRepository extends BaseRepository<Box> {
     })
     this.emitUpdateEvents(changed.box, changed.previous)
     this.invalidateLookupCacheOnUpdate(changed.box, changed.previous)
-    await this.recordOrganizationActivity(changed.box, changed.previous)
+    await this.afterBoxWrite(changed.box, changed.previous)
     return changed.box
   }
 
@@ -542,7 +579,7 @@ export class BoxRepository extends BaseRepository<Box> {
       return [box, previousBox] as const
     })
 
-    await this.recordOrganizationActivity(updatedBox, previousBox)
+    await this.afterBoxWrite(updatedBox, previousBox)
     return updatedBox
   }
 
@@ -725,41 +762,76 @@ export class BoxRepository extends BaseRepository<Box> {
     await entityManager.upsert(BoxLastActivity, { boxId, lastActivityAt }, ['boxId'])
   }
 
+  private afterBoxWrite(box: Box, previousBox?: OrganizationActivitySource): Promise<void> {
+    const asynchronous = this.configService?.get('boxSync.organizationActivityAsync') !== false
+    const recording = this.recordOrganizationActivity(box, previousBox, asynchronous)
+    if (!asynchronous) return recording
+    void recording
+    return Promise.resolve()
+  }
+
   /**
-   * Advances the organization's activation facts after a Box write has committed.
-   *
-   * It runs outside the Box transaction, so same-organization writes never queue
-   * on the facts row. The upsert is optimistic: it only moves a time forward, and
-   * Read Committed rechecks that against the newest row, so late or concurrent
-   * updates cannot move a time backwards. The foreign key rejects a deleted
-   * organization, so its facts are not recreated. A failure, including a facts-row
-   * lock wait past ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS, is logged and dropped:
-   * the Box write stands, and a later event supersedes the lost maximum.
+   * Advances activation facts after the Box commits. GREATEST keeps late and
+   * concurrent retries monotonic. Three attempts bound transient-lock recovery;
+   * a final failure or process exit may lose this best-effort activity update.
    */
-  private async recordOrganizationActivity(box: Box, previousBox?: OrganizationActivitySource): Promise<void> {
+  private async recordOrganizationActivity(
+    box: Box,
+    previousBox?: OrganizationActivitySource,
+    retry = true,
+  ): Promise<void> {
+    let activity: OrganizationActivity | null
     try {
-      const activity = this.organizationActivityOf(box, previousBox)
-      if (!activity) {
-        return
-      }
-      await this.manager.transaction(async (entityManager) => {
-        // SET takes a literal, so the constant is interpolated rather than bound.
-        await entityManager.query(`SET LOCAL lock_timeout = '${ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS}ms'`)
-        await entityManager.query(
-          `INSERT INTO organization_activation_facts AS facts ("organizationId", "lastBoxCreatedAt", "lastBoxModifiedAt")
-           VALUES ($1::uuid, $2::timestamptz, $3::timestamptz)
-           ON CONFLICT ("organizationId") DO UPDATE
-           SET "lastBoxCreatedAt" = GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt"),
-             "lastBoxModifiedAt" = GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")
-           WHERE facts."lastBoxCreatedAt" IS DISTINCT FROM GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt")
-             OR facts."lastBoxModifiedAt" IS DISTINCT FROM GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")`,
-          [box.organizationId, activity.createdAt, activity.modifiedAt],
-        )
-      })
+      activity = this.organizationActivityOf(box, previousBox)
     } catch (error) {
       this.logger.warn(
         `Failed to record activity of box ${box.id} for organization ${box.organizationId}: ${error instanceof Error ? error.message : String(error)}`,
       )
+      return
+    }
+    if (!activity) return
+
+    const maxAttempts = retry ? 3 : 1
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        await this.manager.transaction(async (entityManager) => {
+          // SET takes a literal, so the constant is interpolated rather than bound.
+          await entityManager.query(`SET LOCAL lock_timeout = '${ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS}ms'`)
+          await entityManager.query(
+            `INSERT INTO organization_activation_facts AS facts ("organizationId", "lastBoxCreatedAt", "lastBoxModifiedAt")
+             VALUES ($1::uuid, $2::timestamptz, $3::timestamptz)
+             ON CONFLICT ("organizationId") DO UPDATE
+             SET "lastBoxCreatedAt" = GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt"),
+               "lastBoxModifiedAt" = GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")
+             WHERE facts."lastBoxCreatedAt" IS DISTINCT FROM GREATEST(facts."lastBoxCreatedAt", EXCLUDED."lastBoxCreatedAt")
+               OR facts."lastBoxModifiedAt" IS DISTINCT FROM GREATEST(facts."lastBoxModifiedAt", EXCLUDED."lastBoxModifiedAt")`,
+            [box.organizationId, activity.createdAt, activity.modifiedAt],
+          )
+        })
+        return
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (attempt === maxAttempts - 1) {
+          this.logger.error({
+            event: 'organization.activity.dropped',
+            boxId: box.id,
+            organizationId: box.organizationId,
+            attempt: maxAttempts,
+            error: message,
+          })
+        } else {
+          this.logger.warn(
+            `Failed to record activity of box ${box.id} for organization ${box.organizationId}: ${message}`,
+          )
+        }
+        if (attempt < maxAttempts - 1) {
+          const delay = 100 * 2 ** attempt + randomInt(100)
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, delay)
+            timer.unref()
+          })
+        }
+      }
     }
   }
 

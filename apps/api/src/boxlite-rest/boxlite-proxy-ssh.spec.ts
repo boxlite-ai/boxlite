@@ -34,6 +34,7 @@ function makeHarness(box: Record<string, unknown>) {
   const boxService = {
     findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', runnerId: 'runner-1', autoResume: true, ...box }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
+    assertOrganizationIsNotSuspended: jest.fn(),
   }
   const runnerService = { findOne: jest.fn().mockResolvedValue({ apiUrl: 'http://runner.local', apiKey: 'k' }) }
   const autoResume = { ensureReady: jest.fn().mockResolvedValue(undefined) }

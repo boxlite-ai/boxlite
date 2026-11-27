@@ -72,7 +72,8 @@ describe('response audit lease lifecycle', () => {
   it('does not start a timer when acquisition fails', async () => {
     const { service, query } = setup()
     query.mockRejectedValueOnce(new Error('database unavailable'))
-    await expect(service.keepPendingLogAlive('audit')).rejects.toThrow('database unavailable')
+    const lease = await service.keepPendingLogAlive('audit')
+    await expect(lease.ready).rejects.toThrow('database unavailable')
     expect(jest.getTimerCount()).toBe(0)
   })
 
