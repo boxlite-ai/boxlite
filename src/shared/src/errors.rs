@@ -82,6 +82,10 @@ pub enum BoxliteError {
     /// a new exec instead.
     #[error("session reaped: {0}")]
     SessionReaped(String),
+
+    /// The process-wide default runtime has already been initialized.
+    #[error("default runtime already initialized")]
+    AlreadyInitialized,
 }
 
 // Implement From for common error types to enable `?` operator
@@ -170,6 +174,9 @@ impl BoxliteError {
                 (400, "UnsupportedError", "unsupported")
             }
             BoxliteError::NotFound(_) => (404, "NotFoundError", "not_found"),
+            BoxliteError::AlreadyInitialized => {
+                (409, "AlreadyInitializedError", "already_initialized")
+            }
             BoxliteError::SessionReaped(_) => (410, "SessionReapedError", "session_reaped"),
             BoxliteError::AlreadyExists(_) => (409, "AlreadyExistsError", "already_exists"),
             BoxliteError::InvalidState(_) => (409, "InvalidStateError", "invalid_state"),
@@ -247,6 +254,12 @@ mod tests {
                 404,
                 "NotFoundError",
                 "not_found",
+            ),
+            (
+                BoxliteError::AlreadyInitialized,
+                409,
+                "AlreadyInitializedError",
+                "already_initialized",
             ),
             (
                 BoxliteError::SessionReaped("exec 123".into()),
@@ -377,6 +390,7 @@ mod tests {
             BoxliteError::Unsupported(String::new()),
             BoxliteError::UnsupportedEngine,
             BoxliteError::NotFound(String::new()),
+            BoxliteError::AlreadyInitialized,
             BoxliteError::SessionReaped(String::new()),
             BoxliteError::AlreadyExists(String::new()),
             BoxliteError::InvalidState(String::new()),
