@@ -144,6 +144,24 @@ it('sends the dashboard activity source without inventing an SDK version', async
   }
 })
 
+it('keeps usage and telemetry requests on the configured Analytics API', async () => {
+  const requests: any[] = []
+  const analyticsApiUrl = 'http://analytics.test/analytics'
+  const api = await makeClient(vi.fn(), 200, {}, requests, {}, { ...config, analyticsApiUrl } as never)
+  const from = '2026-11-01T00:00:00.000Z'
+  const to = '2026-11-02T00:00:00.000Z'
+
+  await api.analyticsUsageApi!.organizationOrganizationIdUsageAggregatedGet('org-1', from, to)
+  await api.analyticsTelemetryApi!.organizationOrganizationIdBoxBoxIdTelemetryTracesGet('org-1', 'box-1', from, to)
+
+  expect(requests).toHaveLength(2)
+  expect(requests.map((request) => request.baseURL)).toEqual([analyticsApiUrl, analyticsApiUrl])
+  expect(requests.map((request) => request.url)).toEqual([
+    '/organization/org-1/usage/aggregated?from=2026-11-01T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z',
+    '/organization/org-1/box/box-1/telemetry/traces?from=2026-11-01T00%3A00%3A00.000Z&to=2026-11-02T00%3A00%3A00.000Z',
+  ])
+}, 30_000)
+
 // Each client starts with fresh reauthentication state and uses the real response interceptor.
 async function makeClient(
   onUnauthorized: () => Promise<void> | void,
@@ -151,6 +169,7 @@ async function makeClient(
   body: unknown = {},
   requests: any[] = [],
   headers: Record<string, string> = {},
+  clientConfig = config,
 ) {
   vi.resetModules()
   const axios = (await import('axios')).default
@@ -171,7 +190,7 @@ async function makeClient(
     throw new axios.AxiosError(`Request failed with status code ${status}`, undefined, cfg, undefined, response)
   }
   const { ApiClient } = await import('./apiClient')
-  return new ApiClient(config, 'tok', onUnauthorized)
+  return new ApiClient(clientConfig, 'tok', onUnauthorized)
 }
 
 it('uses the renewed token for billing requests', async () => {

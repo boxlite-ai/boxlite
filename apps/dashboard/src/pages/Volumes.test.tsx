@@ -46,6 +46,7 @@ const state = vi.hoisted(() => ({
   capabilitiesLoading: false,
   createdVolume: undefined as Record<string, unknown> | undefined,
   createError: undefined as Error | undefined,
+  createPending: false,
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
@@ -82,7 +83,7 @@ vi.mock('@/hooks/mutations/useCreateVolumeMutation', () => ({
       if (state.createError) throw state.createError
       state.createdVolume = variables.volume
     }),
-    isPending: false,
+    isPending: state.createPending,
   }),
 }))
 vi.mock('@/hooks/queries/useVolumeStorageCapabilities', () => ({
@@ -112,6 +113,13 @@ function inputText(label: string, value: string) {
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+async function submitWithEnter() {
+  const input = document.querySelector<HTMLInputElement>('input[aria-label="Volume name"]')!
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   })
 }
 
@@ -145,6 +153,7 @@ describe('Volumes row action "New Box"', () => {
     state.capabilitiesLoading = false
     state.createdVolume = undefined
     state.createError = undefined
+    state.createPending = false
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES, OrganizationRolePermissionsEnum.WRITE_BOXES]
   })
 
@@ -377,6 +386,7 @@ describe('Volumes storage selection', () => {
     state.capabilitiesLoading = false
     state.createdVolume = undefined
     state.createError = undefined
+    state.createPending = false
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES]
   })
 
@@ -487,6 +497,39 @@ describe('Volumes storage selection', () => {
     act(() => rowAction('New Volume')?.click())
     expect(document.querySelector<HTMLSelectElement>('[aria-label="Volume storage"]')!.value).toBe('standard')
   })
+
+  it.each([
+    {
+      name: 'capabilities are loading',
+      arrange: () => {
+        state.capabilitiesLoading = true
+      },
+    },
+    {
+      name: 'no backend is available',
+      arrange: () => {
+        state.capabilities = { object_storage_enabled: false, filestore_enabled: false }
+      },
+    },
+  ])('does not submit with Enter while $name', async ({ arrange }) => {
+    arrange()
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    inputText('Volume name', 'must-not-create')
+    await submitWithEnter()
+
+    expect(state.createdVolume).toBeUndefined()
+  })
+
+  it('does not submit with Enter while creation is pending', async () => {
+    state.createPending = true
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    inputText('Volume name', 'must-not-create')
+    await submitWithEnter()
+
+    expect(state.createdVolume).toBeUndefined()
+  }, 30_000)
 
   it('shows only the storage backend', () => {
     state.storageBackend = 'performance'

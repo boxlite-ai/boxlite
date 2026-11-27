@@ -168,6 +168,7 @@ const Volumes: React.FC = () => {
       toast.error('Only letters, digits, dots, underscores and dashes are allowed in the name.')
       return
     }
+    if (createVolume.isPending || storageCapabilitiesLoading || storageUnavailable) return
     try {
       await createVolume.mutateAsync({
         volume: { name, storageBackend: selectedStorageBackend },

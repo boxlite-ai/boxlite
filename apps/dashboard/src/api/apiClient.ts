@@ -483,6 +483,7 @@ export class ApiClient {
         basePath: config.analyticsApiUrl,
         accessToken: accessToken,
         baseOptions: {
+          baseURL: config.analyticsApiUrl,
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
