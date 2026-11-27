@@ -35,7 +35,10 @@ Without a writable project, retain the selection in the conversation.
 
 ## Cloud OAuth
 
-Use the bundled OAuth connection for normal interactive sign-in. Open `/mcp`, select `plugin:boxlite:boxlite`, and authorize it in the browser.
+You can leave **BoxLite API key** blank. Open `/mcp`, select `plugin:boxlite:boxlite`, and authorize it in the browser.
+
+If the unused `plugin:boxlite:boxlite-api` connection reports HTTP 401 with the key blank, select that entry in `/mcp` and choose **Disable** for this project.
+Verify OAuth by calling `listBoxes` on `plugin:boxlite:boxlite`.
 
 ## Cloud API key
 
@@ -52,8 +55,11 @@ Stop on missing credentials or denial. Keep secrets out of chat, logs, and proje
 
 ## Local
 
-Follow [local setup](../boxlite/references/local.md) and verify the runtime on the actual execution host.
-Never request cloud login or call cloud tools; disable the unused cloud connection if the host attempts automatic connection.
+Skip OAuth sign-in and leave **BoxLite API key** blank. Follow [local setup](../boxlite/references/local.md) and verify the runtime on the actual execution host.
+
+Use only the local runtime for this mode. If Claude attempts to connect to the cloud, open `/mcp` and choose **Disable** for each BoxLite entry in this project: `plugin:boxlite:boxlite` and `plugin:boxlite:boxlite-api`.
+When switching back to a cloud mode, re-enable its entry in `/mcp`.
+
 A web-only host cannot provide Local mode: explain the missing capability and preserve the choice.
 
 ## File transfer prerequisites
