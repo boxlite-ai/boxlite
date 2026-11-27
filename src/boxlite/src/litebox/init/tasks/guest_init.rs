@@ -40,6 +40,10 @@ const MIN_PRIVILEGED_CONTAINER_GUEST_VERSION: crate::portal::interfaces::guest::
 /// with no `/dev/kvm` while the caller believes nesting was granted.
 const MIN_DEVICE_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 9, 8);
 
+/// Bootstrap may start init, so fields introduced after its first release
+/// must be version-checked before sending the request.
+const FIRST_BOOTSTRAP_GUEST_VERSION: crate::portal::interfaces::guest::GuestVersion = (0, 15, 0);
+
 pub struct GuestInitTask {
     pub auto_start: bool,
     pub started: Arc<AtomicBool>,
@@ -176,6 +180,9 @@ async fn run_guest_init(
     .into_iter()
     .flatten()
     .max();
+    if let Some(minimum) = minimum.filter(|&version| version > FIRST_BOOTSTRAP_GUEST_VERSION) {
+        guest_interface.require_min_version(minimum).await?;
+    }
     let needs_safe_subpaths = requires_safe_volume_sub_path(&bootstrap.container.mounts);
     let guest_init = GuestInitRequest::from(bootstrap.guest);
     let container_init = ContainerInitRequest::from(bootstrap.container);
@@ -187,11 +194,9 @@ async fn run_guest_init(
         })
         .await?;
 
-    // A Bootstrap-capable guest honors these fields by contract and returns
-    // its capabilities inline. On older guests, Ping *before* either Init so
-    // fields that the legacy peer would silently ignore never reach it.
-    guest_interface.bootstrap_info().await?;
-    if let Some(minimum) = minimum {
+    // Bootstrap supplies version and capabilities inline. On legacy guests,
+    // only the checks that apply to this request need Ping before either Init.
+    if let Some(minimum) = minimum.filter(|&version| version <= FIRST_BOOTSTRAP_GUEST_VERSION) {
         guest_interface.require_min_version(minimum).await?;
     }
     if needs_safe_subpaths {

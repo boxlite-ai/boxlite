@@ -95,7 +95,14 @@ impl ContainerExecutor {
         // timeout. This does NOT need the container mutex — chdir() is done.
         let result = match spawn_result {
             SpawnResult::Ready(handle) => Ok(handle),
-            SpawnResult::PtyPending(pending) => pending.finish().map_err(SpawnFailure::from),
+            SpawnResult::PtyPending(pending) => {
+                tokio::task::spawn_blocking(move || pending.finish())
+                    .await
+                    .map_err(|error| {
+                        BoxliteError::Internal(format!("PTY handshake task: {error}"))
+                    })?
+                    .map_err(SpawnFailure::from)
+            }
         };
 
         tracing::debug!(

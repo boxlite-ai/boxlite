@@ -24,11 +24,12 @@ const PROGRESS: &[&str] = &[
     "devtmpfs: mounted",
     "Run /boxlite/bin/boxlite-guest as init process",
     "[guest] T+0ms: agent starting",
-    "BoxLite Guest Agent starting",
+    "tracing initialized",
     "init bootstrap completed",
-    "kernel hardening applied",
     "zygote started",
     "tmpfs mounted",
+    "server bound (vsock:2695)",
+    "kernel hardening applied",
     "loopback ready",
 ];
 
@@ -65,7 +66,10 @@ async fn first_box_runs_boxlite_guest_as_pid_1_on_the_ext4_root() {
     let mut options = common::alpine_opts();
     custom_kernel::configure(
         &mut options,
-        KernelOptions::new(kernel).with_format(KernelFormat::Elf),
+        KernelOptions::new(kernel)
+            .with_format(KernelFormat::Elf)
+            // Linux passes the timing flag to PID 1 as an environment variable.
+            .with_command_line("console=hvc0 panic=-1 reboot=k BOXLITE_GUEST_BOOT_TIMING=1"),
     );
     native_vmm::configure(&mut options);
     let bx = runtime.create(options, None).await.expect("create the box");
@@ -100,7 +104,6 @@ async fn first_box_runs_boxlite_guest_as_pid_1_on_the_ext4_root() {
         !console.contains("Unable to mount root fs"),
         "the kernel did not mount the guest root"
     );
-    assert!(console.contains("server bound (vsock:2695)"));
     assert!(!console.contains("Failed to connect to notify vsock"));
     assert!(!console.contains("Kernel panic"), "console:\n{console}");
     assert!(

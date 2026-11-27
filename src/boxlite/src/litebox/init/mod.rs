@@ -240,6 +240,9 @@ impl BoxBuilder {
             state,
         } = self;
 
+        // Guest init and host port publication run in parallel. With ports,
+        // leave init staged until the pipeline has finished publishing them.
+        let auto_start = auto_start && config.options.ports.is_empty();
         let status = state.status;
         let reuse_rootfs = status == BoxStatus::Stopped;
         let skip_guest_wait = status == BoxStatus::Running;

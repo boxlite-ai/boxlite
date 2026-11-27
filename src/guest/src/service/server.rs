@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::Mutex;
 use tonic::transport::Server;
 use tracing::{debug, warn};
 
@@ -33,10 +33,6 @@ pub(crate) struct GuestServer {
 
     /// Guest initialization state (set by Guest.Init)
     pub init_state: Arc<Mutex<GuestInitState>>,
-
-    /// Set by `run` until boot preparation has finished. Direct service tests
-    /// don't run guest boot preparation.
-    boot_ready: Option<watch::Receiver<bool>>,
 
     /// Container registry: container_id -> Container
     pub containers: Arc<Mutex<HashMap<String, Arc<Mutex<Container>>>>>,
@@ -79,7 +75,6 @@ impl GuestServer {
         Self {
             layout,
             init_state: Arc::new(Mutex::new(GuestInitState::default())),
-            boot_ready: None,
             containers: Arc::new(Mutex::new(HashMap::new())),
             registry: ExecutionRegistry::new(),
             ssh_manager: crate::service::ssh::SshManager::default(),
@@ -102,18 +97,6 @@ impl GuestServer {
             .cloned()?;
         // Once populated, the slot never clears, so get() will not wait.
         Some(exit.get().await.shell_code())
-    }
-
-    /// Wait for the boot work that can run in parallel with host notification.
-    #[allow(clippy::result_large_err)]
-    pub(super) async fn wait_for_boot_prep(&self) -> Result<(), tonic::Status> {
-        if let Some(mut ready) = self.boot_ready.clone() {
-            ready
-                .wait_for(|ready| *ready)
-                .await
-                .map_err(|_| tonic::Status::internal("Guest boot preparation failed"))?;
-        }
-        Ok(())
     }
 
     /// Run the tonic server listening on the specified transport.
@@ -152,8 +135,6 @@ impl GuestServer {
             prepare_loopback()?;
         }
 
-        let (boot_ready_tx, boot_ready_rx) = watch::channel(false);
-        self.boot_ready = Some(boot_ready_rx);
         let boot_layout = self.layout.clone();
 
         // Wrap self in Arc for sharing across services
@@ -209,7 +190,6 @@ impl GuestServer {
                     notify_uri,
                     boot_layout,
                     loopback_ready,
-                    boot_ready_tx,
                 )
                 .await?;
             }
@@ -237,7 +217,6 @@ impl GuestServer {
                     notify_uri,
                     boot_layout,
                     loopback_ready,
-                    boot_ready_tx,
                 )
                 .await?;
             }
@@ -256,7 +235,6 @@ impl GuestServer {
                     notify_uri,
                     boot_layout,
                     loopback_ready,
-                    boot_ready_tx,
                 )
                 .await?;
             }
@@ -277,7 +255,6 @@ async fn serve_after_bind(
     notify_uri: Option<String>,
     layout: GuestLayout,
     loopback_ready: bool,
-    boot_ready: watch::Sender<bool>,
 ) -> BoxliteResult<()> {
     if notify_uri.is_some() {
         tokio::spawn(async move {
@@ -296,8 +273,8 @@ async fn serve_after_bind(
     }
     debug!("Preparing guest layout at {}", layout.base().display());
     layout.prepare_base()?;
-    boot_ready.send_replace(true);
 
+    // RPCs are only served after boot preparation completes.
     serve
         .await
         .map_err(|e| BoxliteError::Internal(format!("Server error: {e}")))

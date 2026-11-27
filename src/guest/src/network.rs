@@ -8,9 +8,6 @@ use std::net::Ipv4Addr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 
-// Match the virtual network's standard Ethernet MTU. Guest.Init has no MTU field.
-const ETHERNET_MTU: libc::c_int = 1500;
-
 /// Localhost is required even when Guest.Init has no external network config.
 pub(crate) fn configure_loopback() -> BoxliteResult<()> {
     let fd = ipv4_socket()?;
@@ -44,8 +41,6 @@ pub async fn configure_network_from_config(
 
     tracing::debug!(?interface, ?ip, ?gateway, "Configuring guest network");
     let fd = ipv4_socket()?;
-    req.ifr_ifru.ifru_mtu = ETHERNET_MTU;
-    interface_ioctl(&fd, libc::SIOCSIFMTU as _, &mut req, "set interface MTU")?;
     bring_up_interface(&fd, &mut req)?;
 
     if let Some((address, prefix)) = ip {

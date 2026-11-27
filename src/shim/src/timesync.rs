@@ -199,6 +199,14 @@ mod tests {
 
     #[tonic::async_trait]
     impl boxlite_shared::Guest for FakeGuest {
+        async fn bootstrap(
+            &self,
+            _: tonic::Request<boxlite_shared::GuestBootstrapRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::GuestBootstrapResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("test fake"))
+        }
+
         async fn init(
             &self,
             _: tonic::Request<boxlite_shared::GuestInitRequest>,

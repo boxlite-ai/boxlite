@@ -93,10 +93,6 @@ impl GuestService for GuestServer {
         let req = request.into_inner();
         info!("Received guest init request");
 
-        // Bootstrap also calls this method. Neither path can mount volumes or
-        // configure networking before guest boot preparation has finished.
-        self.wait_for_boot_prep().await?;
-
         // Check if already initialized
         let mut init_state = self.init_state.lock().await;
         if init_state.initialized {
@@ -154,8 +150,6 @@ impl GuestService for GuestServer {
 
     async fn ping(&self, _request: Request<PingRequest>) -> Result<Response<PingResponse>, Status> {
         debug!("Received ping request");
-        // Ping reports a prepared guest; the notification only reports a live listener.
-        self.wait_for_boot_prep().await?;
         Ok(Response::new(guest_info()))
     }
 
@@ -192,9 +186,19 @@ impl GuestService for GuestServer {
         let containers = self.containers.lock().await;
         for (container_id, container_arc) in containers.iter() {
             info!(container_id = %container_id, "Shutting down container");
-            let container = container_arc.lock().await;
-            if let Err(e) = container.shutdown(CONTAINER_SHUTDOWN_TIMEOUT_MS) {
-                error!(container_id = %container_id, error = %e, "Failed to shutdown container");
+            let container = container_arc.clone().lock_owned().await;
+            match tokio::task::spawn_blocking(move || {
+                container.shutdown(CONTAINER_SHUTDOWN_TIMEOUT_MS)
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    error!(container_id = %container_id, error = %e, "Failed to shutdown container");
+                }
+                Err(e) => {
+                    error!(container_id = %container_id, error = %e, "Container shutdown task failed");
+                }
             }
         }
         drop(containers);
@@ -260,7 +264,6 @@ impl GuestService for GuestServer {
         _request: Request<QuiesceRequest>,
     ) -> Result<Response<QuiesceResponse>, Status> {
         info!("Received quiesce request — freezing filesystems");
-        self.wait_for_boot_prep().await?;
 
         let frozen = crate::storage::fsfreeze::freeze_filesystems();
         let frozen_count = frozen.len() as u32;

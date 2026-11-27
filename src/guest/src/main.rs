@@ -82,6 +82,10 @@ impl GuestArgs {
                     println!("Usage: boxlite-guest -l|--listen URI [-n|--notify URI]");
                     lifecycle::exit(0);
                 }
+                ("--version" | "-V", None) => {
+                    println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+                    lifecycle::exit(0);
+                }
                 ("--listen" | "-l", _) => &mut listen,
                 ("--notify" | "-n", _) => &mut notify,
                 _ => return Err(format!("unknown argument: {arg}")),
@@ -200,7 +204,7 @@ async fn async_main(args: GuestArgs) -> BoxliteResult<()> {
     let _ = reaper::REAPER.set(reaper::Reaper::install());
 
     // Bind and notify the host before completing boot preparation.
-    // Guest.Init waits for that preparation before setting up storage or networking.
+    // The server starts serving RPCs only after boot preparation finishes.
     debug!("Starting guest server on: {}", args.listen);
     GuestServer::new(layout::GuestLayout::new())
         .run(args.listen, args.notify)

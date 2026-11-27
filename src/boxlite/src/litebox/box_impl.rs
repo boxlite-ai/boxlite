@@ -412,9 +412,9 @@ impl BoxImpl {
 
         // A fresh default-command boot can start init inside Bootstrap. User
         // commands and containers already created by attach use Container.Start.
-        let live = self.ensure_booted_locked(true).await?;
-        if self.container_start.initialized() {
-            return Ok(status != BoxStatus::Running);
+        let (live, started_here) = self.ensure_booted_with_start_locked(true).await?;
+        if started_here || self.container_start.initialized() {
+            return Ok(started_here);
         }
         let guest_session = live.guest_session.clone();
         let container_start = Arc::clone(&self.container_start);
@@ -817,7 +817,10 @@ impl BoxImpl {
             )));
         }
         self.live
-            .get_or_try_init(|| self.init_live_state(false, false))
+            .get_or_try_init(|| async {
+                let (live, _) = self.init_live_state(false, false).await?;
+                Ok(live)
+            })
             .await
     }
 
@@ -1313,6 +1316,17 @@ impl BoxImpl {
 
     /// Caller owns lifecycle admission, including when stop attaches for teardown.
     async fn ensure_booted_locked(&self, start_container: bool) -> BoxliteResult<&LiveState> {
+        let (live, _) = self
+            .ensure_booted_with_start_locked(start_container)
+            .await?;
+        Ok(live)
+    }
+
+    /// Only the caller that initializes the cell can claim a Bootstrap start.
+    async fn ensure_booted_with_start_locked(
+        &self,
+        start_container: bool,
+    ) -> BoxliteResult<(&LiveState, bool)> {
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
@@ -1323,9 +1337,16 @@ impl BoxImpl {
             )));
         }
 
-        self.live
-            .get_or_try_init(|| self.init_live_state(true, start_container))
-            .await
+        let mut started_here = false;
+        let live = self
+            .live
+            .get_or_try_init(|| async {
+                let (live, container_started) = self.init_live_state(true, start_container).await?;
+                started_here = container_started;
+                Ok::<_, BoxliteError>(live)
+            })
+            .await?;
+        Ok((live, started_here))
     }
 
     /// Hold the agent-install lock of this VM run, booting the Box if needed.
@@ -1449,7 +1470,7 @@ impl BoxImpl {
         &self,
         allow_start: bool,
         start_container: bool,
-    ) -> BoxliteResult<LiveState> {
+    ) -> BoxliteResult<(LiveState, bool)> {
         use super::BoxBuilder;
         use std::sync::Arc;
 
@@ -1597,7 +1618,7 @@ impl BoxImpl {
             "Box booted successfully (first_start={})",
             is_first_start
         );
-        Ok(live_state)
+        Ok((live_state, container_started))
     }
 }
 
@@ -2326,7 +2347,14 @@ mod tests {
             .start()
             .await
             .expect("idempotent explicit start failed");
-        wait_for_background_starts(&fixture.box_impl, 3).await;
+        assert_eq!(
+            fixture
+                .box_impl
+                .background_starts_finished
+                .load(Ordering::SeqCst),
+            2,
+            "an already started container does not need another background start"
+        );
         assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
         assert_eq!(fixture.listener.count.load(Ordering::SeqCst), 1);
     }

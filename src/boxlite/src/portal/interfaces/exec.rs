@@ -560,18 +560,10 @@ impl ExecProtocol {
                 Self::wait_for_exit(client.clone(), &execution_id, result_tx, &shutdown_token);
             if let Some(stdin_rx) = stdin_rx {
                 let stdin = Self::send_stdin(client, &execution_id, stdin_rx, &shutdown_token);
-                tokio::pin!(wait, stdin);
-                tokio::select! {
-                    biased;
-                    exited = &mut wait => {
-                        // An independently held stdin must still work if the
-                        // result receiver was dropped or Wait itself failed.
-                        if !exited {
-                            stdin.await;
-                        }
-                    }
-                    () = &mut stdin => { wait.await; }
-                }
+                // Wait reports the first process's exit, not that its
+                // descendants have closed stdin. Keep serving the input
+                // handle so dropping it can still deliver EOF after Wait.
+                tokio::join!(biased; wait, stdin);
             } else {
                 wait.await;
             }
@@ -583,27 +575,25 @@ impl ExecProtocol {
         execution_id: &str,
         result_tx: mpsc::UnboundedSender<ExecResult>,
         shutdown_token: &CancellationToken,
-    ) -> bool {
+    ) {
         let result = tokio::select! {
             biased;
             _ = shutdown_token.cancelled() => {
                 // Preserve the shutdown sentinel used by the main-session
                 // exit-file fallback when the guest connection closes.
                 let _ = result_tx.send(ExecResult { exit_code: -1, error_message: None });
-                return true;
+                return;
             }
-            _ = result_tx.closed() => return false,
+            _ = result_tx.closed() => return,
             result = client.wait(WaitRequest { execution_id: execution_id.to_owned() }) => result,
         };
 
         match result {
             Ok(resp) => {
                 let _ = result_tx.send(Self::map_wait_response(resp.into_inner()));
-                true
             }
             Err(error) => {
                 tracing::warn!(%execution_id, %error, "Wait failed");
-                false
             }
         }
     }
