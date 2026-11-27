@@ -173,9 +173,10 @@ fn binary_mode_reads_and_sets_plain_numbers() {
     write(&mut rtc, 0x0b, 0x06);
     assert_eq!(time(&mut rtc), [59, 59, 23, 6, 31, 12, 99, 19]);
 
-    // 2030-05-06 07:08:09, a Monday, written in binary.
+    // 1930-05-06 07:08:09, a Tuesday, written in binary: the year alone keeps
+    // the century that register 0x32 held.
     set_time_intel(&mut rtc, [30, 5, 6, 7, 8, 9]);
-    assert_eq!(time(&mut rtc), [9, 8, 7, 2, 6, 5, 30, 20]);
+    assert_eq!(time(&mut rtc), [9, 8, 7, 3, 6, 5, 30, 19]);
 }
 
 #[test]
@@ -258,16 +259,41 @@ fn an_impossible_time_leaves_the_clock_alone() {
 }
 
 #[test]
-fn two_digit_years_pivot_at_70_unless_the_guest_writes_the_century() {
-    let (mut rtc, _) = rtc_at(0);
-    set_time_intel(&mut rtc, [0x69, 0x01, 0x01, 0x00, 0x00, 0x00]);
-    assert_eq!([read(&mut rtc, 0x09), read(&mut rtc, 0x32)], [0x69, 0x20]);
-    set_time_intel(&mut rtc, [0x70, 0x01, 0x01, 0x00, 0x00, 0x00]);
-    assert_eq!([read(&mut rtc, 0x09), read(&mut rtc, 0x32)], [0x70, 0x19]);
-
+fn stopping_the_clock_writes_the_current_century_byte() {
+    // 2026-01-02 23:59:59, so register 0x32 becomes 0x20.
+    let (mut rtc, _) = rtc_at(1_767_398_399);
     write(&mut rtc, 0x0b, 0x82);
-    write(&mut rtc, 0x32, 0x21);
-    write(&mut rtc, 0x09, 0x05);
+    assert_eq!(read(&mut rtc, 0x32), 0x20);
+}
+
+#[test]
+fn a_two_digit_year_keeps_the_century_register() {
+    // 1999-12-31 23:59:59, so register 0x32 holds 0x19 when the clock stops.
+    let (mut rtc, clock) = rtc_at(946_684_799);
+    write(&mut rtc, 0x0b, 0x82);
+    assert_eq!(read(&mut rtc, 0x32), 0x19);
+    write(&mut rtc, 0x09, 0x69);
+    write(&mut rtc, 0x0b, 0x02);
+    // 1969-12-31 23:59:59, a Wednesday.
+    assert_eq!(
+        time(&mut rtc),
+        [0x59, 0x59, 0x23, 0x04, 0x31, 0x12, 0x69, 0x19]
+    );
+    advance(&clock, NANOS);
+    // 1970-01-01 00:00:00, a Thursday.
+    assert_eq!(
+        time(&mut rtc),
+        [0x00, 0x00, 0x00, 0x05, 0x01, 0x01, 0x70, 0x19]
+    );
+}
+
+#[test]
+fn writing_the_century_byte_sets_the_century() {
+    let (mut rtc, _) = rtc_at(0);
+    write(&mut rtc, 0x0b, 0x82);
+    for (index, value) in [(0x07, 0x01), (0x08, 0x01), (0x32, 0x21), (0x09, 0x05)] {
+        write(&mut rtc, index, value);
+    }
     write(&mut rtc, 0x0b, 0x02);
     // 2105-01-01, a Thursday.
     assert_eq!(
@@ -277,13 +303,25 @@ fn two_digit_years_pivot_at_70_unless_the_guest_writes_the_century() {
 }
 
 #[test]
+fn a_century_byte_above_99_leaves_the_time_alone() {
+    let (mut rtc, clock) = rtc_at(946_684_799);
+    write(&mut rtc, 0x0b, 0x86); // SET, binary
+    write(&mut rtc, 0x32, 100);
+    write(&mut rtc, 0x0b, 0x06);
+    advance(&clock, NANOS);
+    // 2000-01-01 00:00:00, a Saturday: the written century was not adopted.
+    assert_eq!(time(&mut rtc), [0, 0, 0, 7, 1, 1, 0, 20]);
+}
+
+#[test]
 fn a_day_past_the_month_end_runs_into_the_next_month() {
     let (mut rtc, _) = rtc_at(0);
     set_time_amd(&mut rtc, [0x01, 0x02, 0x31, 0x00, 0x00, 0x00]);
-    // 2001-02-31 is 2001-03-03, a Saturday.
+    // 1901-02-31 is 1901-03-03, a Sunday: the year alone keeps the century
+    // that register 0x32 held.
     assert_eq!(
         time(&mut rtc),
-        [0x00, 0x00, 0x00, 0x07, 0x03, 0x03, 0x01, 0x20]
+        [0x00, 0x00, 0x00, 0x01, 0x03, 0x03, 0x01, 0x19]
     );
 }
 
@@ -577,3 +615,7 @@ fn a_failed_alarm_irq_stops_the_vm_and_the_worker() {
     assert_eq!(chip.0.load(Ordering::SeqCst), 1);
     assert!(events.wait(Some(Duration::ZERO)).unwrap().is_none());
 }
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "snapshot.rs"]
+mod snapshot;
