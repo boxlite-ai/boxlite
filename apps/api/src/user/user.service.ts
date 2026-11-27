@@ -17,8 +17,12 @@ import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
 import { recordOutcomes } from '../common/utils/business-event.util'
 import { Organization } from '../organization/entities/organization.entity'
+import { OrganizationUser } from '../organization/entities/organization-user.entity'
 import { Context } from '../common/context/context'
+import { ActorKind } from '../common/context/actor-kind.enum'
+import { assertAccountLinkAllowsSignup } from './account-link-registration'
 import { normalizeRegistrationEmail } from './registration-email'
+import { AcceptedLegalVersions, RegistrationConsent } from './registration-consent.entity'
 import { UserAlreadyExistsException } from './user-already-exists.exception'
 
 @Injectable()
@@ -31,7 +35,7 @@ export class UserService {
   ) {}
 
   /** Records the user.registration events of the new user, started by ctx. */
-  async create(createUserDto: CreateUserDto, ctx: Context): Promise<User> {
+  async create(createUserDto: CreateUserDto, ctx: Context, consent?: AcceptedLegalVersions): Promise<User> {
     const email = createUserDto.email ? normalizeRegistrationEmail(createUserDto.email) : undefined
 
     const defaultOrganizationDefaultRegionId =
@@ -54,6 +58,9 @@ export class UserService {
       { name: 'user.registration', correlationId: createUserDto.id, ctx },
       () =>
         this.dataSource.transaction(async (em) => {
+          if (ctx.actorKind === ActorKind.USER && ctx.actor?.authMethod === 'jwt' && ctx.actor.userId === user.id) {
+            await assertAccountLinkAllowsSignup(em, user.id, ctx.actor.tokenIssuedAt)
+          }
           try {
             await em.insert(User, user)
           } catch (error) {
@@ -74,6 +81,9 @@ export class UserService {
             UserEvents.CREATED,
             new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
           )
+          if (consent) {
+            await em.insert(RegistrationConsent, { userId: user.id, acceptedByUserId: user.id, ...consent })
+          }
           return created.find((value): value is Organization => value instanceof Organization)
         }),
       (error) => (error instanceof UserAlreadyExistsException ? 'user_conflict' : 'internal'),
@@ -85,6 +95,26 @@ export class UserService {
 
   async findAll(): Promise<User[]> {
     return this.userRepository.find()
+  }
+
+  async acceptPendingRegistration(
+    id: string,
+    consent: AcceptedLegalVersions,
+    defaultRegionId: string,
+  ): Promise<{ user: User; accepted: boolean }> {
+    return this.dataSource.transaction(async (em) => {
+      const user = await em.findOneOrFail(User, { where: { id }, lock: { mode: 'pessimistic_write' } })
+      if (!user.registrationConsentPending) return { user, accepted: false }
+
+      const hasDefault = await em.existsBy(OrganizationUser, { userId: id, isDefaultForUser: true })
+      if (!hasDefault) {
+        await this.eventEmitter.emitAsync(UserEvents.CREATED, new UserCreatedEvent(em, user, defaultRegionId))
+      }
+      await em.insert(RegistrationConsent, { userId: id, acceptedByUserId: id, ...consent })
+      await em.update(User, { id }, { registrationConsentPending: false })
+      user.registrationConsentPending = false
+      return { user, accepted: true }
+    })
   }
 
   async findByIds(ids: string[]): Promise<User[]> {

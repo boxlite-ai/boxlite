@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { onlineManager, QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ErrorBoundary } from 'react-error-boundary'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RegistrationEmailError, RegistrationError } from '@/api/errors'
+import { queryKeys } from '@/hooks/queries/queryKeys'
 import { RegistrationGate } from '../RegistrationGate'
 import { ErrorBoundaryFallback } from '../ErrorBoundaryFallback'
 
@@ -15,7 +16,16 @@ const auth = vi.hoisted(() => ({ user: { profile: { sub: 'auth0|user' } } }))
 const businessMount = vi.fn()
 const businessUnmount = vi.fn()
 vi.mock('@/hooks/useApi', () => ({ useApi: () => api }))
-vi.mock('@/hooks/useConfig', () => ({ useConfig: () => ({ turnstile: { sitekey: 'sitekey', action: 'signup' } }) }))
+const legal = {
+  tosVersion: '2026-11-17',
+  privacyVersion: '2026-10-10',
+  tosUrl: 'https://example.com/terms',
+  privacyUrl: 'https://example.com/privacy',
+}
+const widgetConfig = { turnstile: { sitekey: 'sitekey', action: 'signup' } }
+vi.mock('@/hooks/useConfig', () => ({
+  useConfig: () => useQueryClient().getQueryData(queryKeys.config.all) ?? widgetConfig,
+}))
 vi.mock('react-oidc-context', () => ({ useAuth: () => auth }))
 vi.mock('../Turnstile', () => ({
   Turnstile: ({ onToken }: { onToken: (value: string | null) => void }) => {
@@ -66,16 +76,30 @@ async function flush() {
     else await new Promise((resolve) => setTimeout(resolve, 0))
   })
 }
-async function render() {
+function CachedConfig({ fetchConfig }: { fetchConfig: () => Promise<unknown> }) {
+  useQuery({ queryKey: queryKeys.config.all, queryFn: fetchConfig, initialData: {}, staleTime: Infinity })
+  return null
+}
+
+async function render(fetchConfig?: () => Promise<unknown>) {
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/dashboard/boxes?template=python']}>
-          <ErrorBoundary FallbackComponent={ErrorBoundaryFallback}>
-            <RegistrationGate key={auth.user.profile.sub}>
-              <Business />
-            </RegistrationGate>
-          </ErrorBoundary>
+          {fetchConfig && <CachedConfig fetchConfig={fetchConfig} />}
+          <Routes>
+            <Route path="/logout" element={<p>Sign-out route</p>} />
+            <Route
+              path="*"
+              element={
+                <ErrorBoundary FallbackComponent={ErrorBoundaryFallback}>
+                  <RegistrationGate key={auth.user.profile.sub}>
+                    <Business />
+                  </RegistrationGate>
+                </ErrorBoundary>
+              }
+            />
+          </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     )
@@ -95,6 +119,65 @@ async function click(text: string) {
 }
 
 describe('RegistrationGate', () => {
+  it('refreshes config from a tab that cached neither flag, and sends the accepted versions without a challenge', async () => {
+    const fetchConfig = vi.fn().mockResolvedValue({ legal })
+    await render(fetchConfig)
+    expect(fetchConfig).toHaveBeenCalledTimes(1)
+    expect(widgetMount).not.toHaveBeenCalled()
+    const checkbox = document.querySelector<HTMLButtonElement>('[role="checkbox"]')!
+    expect(checkbox.getAttribute('aria-checked')).toBe('false')
+    expect(button('Continue').disabled).toBe(true)
+    await act(async () => checkbox.labels![0].click())
+    expect(checkbox.getAttribute('aria-checked')).toBe('true')
+    expect(checkbox.querySelector('[data-slot="checkbox-indicator"]')).not.toBeNull()
+    api.userApi.getAuthenticatedUser.mockResolvedValue(userResponse)
+    await click('Continue')
+    expect(api.register).toHaveBeenCalledWith(undefined, {
+      accepted: true,
+      tosVersion: legal.tosVersion,
+      privacyVersion: legal.privacyVersion,
+    })
+    expect(businessMount).toHaveBeenCalledTimes(1)
+  })
+
+  it('takes Cancel to existing logout without submitting', async () => {
+    await render(async () => ({ legal }))
+    await click('Cancel')
+    expect(document.body.textContent).toContain('Sign-out route')
+    expect(api.register).not.toHaveBeenCalled()
+    expect(businessMount).not.toHaveBeenCalled()
+  })
+
+  it('refreshes a Turnstile-only form when registration starts requiring consent', async () => {
+    const fetchConfig = vi.fn().mockResolvedValueOnce(widgetConfig).mockResolvedValue({ ...widgetConfig, legal })
+    api.register.mockRejectedValueOnce(new RegistrationError('Accept the terms to continue registration', 'consent_required'))
+    await render(fetchConfig)
+    expect(document.querySelector('[role="checkbox"]')).toBeNull()
+    await click('Complete challenge')
+    await click('Create account')
+    expect(fetchConfig).toHaveBeenCalledTimes(2)
+    expect(document.querySelector('[role="checkbox"]')?.getAttribute('aria-checked')).toBe('false')
+    expect(button('Continue').disabled).toBe(true)
+  })
+
+  it('refreshes changed terms and requires the user to tick again after a version mismatch', async () => {
+    const fetchConfig = vi
+      .fn()
+      .mockResolvedValueOnce({ legal })
+      .mockResolvedValue({
+        legal: { ...legal, tosVersion: '2026-12-01', tosUrl: 'https://example.com/updated-terms' },
+      })
+    api.register.mockRejectedValue(
+      new RegistrationError('Review the current terms and try again', 'legal_version_mismatch'),
+    )
+    await render(fetchConfig)
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="checkbox"]')!.click())
+    await click('Continue')
+    expect(fetchConfig).toHaveBeenCalledTimes(2)
+    expect(document.querySelector('[role="checkbox"]')?.getAttribute('aria-checked')).toBe('false')
+    expect(document.querySelector('a[href="https://example.com/updated-terms"]')).not.toBeNull()
+    expect(button('Continue').disabled).toBe(true)
+  })
   it('waits for a fresh account check when cached user data is available offline', async () => {
     client.setQueryData(['users', 'registration', 'auth0|user'], userResponse.data)
     onlineManager.setOnline(false)
@@ -145,6 +228,32 @@ describe('RegistrationGate', () => {
       expect(button('Create account').disabled).toBe(true)
     },
   )
+
+  it('retries account lookup when the account link is still being confirmed', async () => {
+    const message = 'Your account link is still being confirmed. Try again shortly.'
+    api.userApi.getAuthenticatedUser.mockRejectedValueOnce(new RegistrationError(message, 'account_link_pending'))
+    await render()
+
+    expect(document.body.textContent).toContain(message)
+    expect(businessMount).not.toHaveBeenCalled()
+    api.userApi.getAuthenticatedUser.mockResolvedValueOnce(userResponse)
+    await click('Try again')
+
+    expect(businessMount).toHaveBeenCalledTimes(1)
+    expect(api.register).not.toHaveBeenCalled()
+  })
+
+  it('sends a superseded sign-in to logout to start a new session', async () => {
+    const message = 'This sign-in predates an account link. Please sign in again.'
+    api.userApi.getAuthenticatedUser.mockRejectedValueOnce(new RegistrationError(message, 'account_link_superseded'))
+    await render()
+
+    expect(document.body.textContent).toContain(message)
+    expect(businessMount).not.toHaveBeenCalled()
+    await click('Sign in again')
+    expect(document.body.textContent).toContain('Sign-out route')
+    expect(api.register).not.toHaveBeenCalled()
+  })
 
   it.each(['reconnect', 'invalidation'])(
     'keeps admitted business mounted during %s and transient failure',

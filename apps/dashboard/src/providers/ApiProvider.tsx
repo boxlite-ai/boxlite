@@ -22,7 +22,7 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [failed, setFailed] = useState(false)
   const redirecting = useRef(false)
-  const manual = getSignInIntent()
+  const requiresManualSignIn = Boolean(getSignInIntent() || config.legal)
   const apiRef = useRef<ApiClient | null>(null)
   const [isApiReady, setIsApiReady] = useState(false)
 
@@ -48,7 +48,7 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [user, config, removeUser])
 
   useEffect(() => {
-    if (isLoading || isAuthenticated || manual || error || activeNavigator || redirecting.current) return
+    if (isLoading || isAuthenticated || requiresManualSignIn || error || activeNavigator || redirecting.current) return
     redirecting.current = true
     const returnTo = location.pathname + location.search + location.hash
     try {
@@ -61,10 +61,10 @@ export const ApiProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {
       setFailed(true)
     }
-  }, [isLoading, isAuthenticated, manual, error, activeNavigator, signinRedirect, location])
+  }, [isLoading, isAuthenticated, requiresManualSignIn, error, activeNavigator, signinRedirect, location])
 
   if (failed || error) return <LandingPage />
-  if (!isLoading && !isAuthenticated && manual && !redirecting.current) {
+  if (!isLoading && !isAuthenticated && requiresManualSignIn && !redirecting.current) {
     return (
       <Navigate
         to={RoutePath.LANDING}

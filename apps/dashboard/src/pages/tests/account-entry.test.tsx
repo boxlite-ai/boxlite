@@ -3,10 +3,14 @@
 import { act, StrictMode } from 'react'
 import { renderToString } from 'react-dom/server'
 import { createRoot, type Root } from 'react-dom/client'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import LandingPage from '../LandingPage'
 import { markJustLoggedOut } from '@/lib/auth-session'
+import { ApiProvider } from '@/providers/ApiProvider'
+
+const config = vi.hoisted(() => ({ legal: undefined as { tosUrl: string; privacyUrl: string } | undefined }))
+vi.mock('@/hooks/useConfig', () => ({ useConfig: () => config }))
 
 const auth = vi.hoisted(() => ({
   signinRedirect: vi.fn(),
@@ -23,6 +27,7 @@ let root: Root
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   sessionStorage.clear()
+  config.legal = undefined
   auth.activeNavigator = undefined
   auth.user = undefined
   auth.isLoading = false
@@ -49,6 +54,46 @@ const mount = async (strict = false, path = '/') => {
 const click = async () => {
   await act(async () => container.querySelector('button')!.click())
 }
+
+it('shows the hosted legal notice before starting sign-in', async () => {
+  config.legal = { tosUrl: 'https://example.com/terms', privacyUrl: 'https://example.com/privacy' }
+  await mount(true)
+  expect(auth.signinRedirect).not.toHaveBeenCalled()
+  expect(container.querySelector('button')?.textContent).toBe('Continue to BoxLite')
+  expect([...container.querySelectorAll('a')].map((link) => link.href)).toEqual([
+    config.legal.tosUrl,
+    config.legal.privacyUrl,
+  ])
+  await click()
+  expect(auth.signinRedirect).toHaveBeenCalledTimes(1)
+})
+
+it('shows the hosted legal notice on a protected deep link and preserves the destination', async () => {
+  const destination = '/dashboard/keys?source=welcome#tokens'
+  config.legal = { tosUrl: 'https://example.com/terms', privacyUrl: 'https://example.com/privacy' }
+  await act(async () =>
+    root.render(
+      <MemoryRouter initialEntries={[destination]}>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route
+            path="/dashboard/*"
+            element={
+              <ApiProvider>
+                <p>Protected data</p>
+              </ApiProvider>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    ),
+  )
+  expect(auth.signinRedirect).not.toHaveBeenCalled()
+  expect(container.textContent).toContain('Review the Terms of Service and Privacy Policy before continuing.')
+  expect(container.textContent).not.toContain('Protected data')
+  await click()
+  expect(auth.signinRedirect).toHaveBeenCalledWith({ state: { returnTo: destination } })
+})
 
 describe('account entry regression', () => {
   it('keeps explicit logout manual through StrictMode and a fresh mount', async () => {

@@ -30,6 +30,9 @@ export class User {
   })
   emailVerified: boolean
 
+  @Column({ default: false })
+  registrationConsentPending: boolean
+
   @Column('simple-json')
   publicKeys: UserPublicKey[]
 

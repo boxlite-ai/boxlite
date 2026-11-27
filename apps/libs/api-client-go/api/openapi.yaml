@@ -4454,6 +4454,27 @@ components:
       - action
       - sitekey
       type: object
+    LegalConfig:
+      example:
+        tosVersion: tosVersion
+        privacyVersion: privacyVersion
+        tosUrl: tosUrl
+        privacyUrl: privacyUrl
+      properties:
+        tosVersion:
+          type: string
+        privacyVersion:
+          type: string
+        tosUrl:
+          type: string
+        privacyUrl:
+          type: string
+      required:
+      - privacyUrl
+      - privacyVersion
+      - tosUrl
+      - tosVersion
+      type: object
     PosthogConfig:
       properties:
         apiKey:
@@ -4527,6 +4548,11 @@ components:
         turnstile:
           sitekey: sitekey
           action: signup
+        legal:
+          tosVersion: tosVersion
+          privacyVersion: privacyVersion
+          tosUrl: tosUrl
+          privacyUrl: privacyUrl
         version: 0.0.1
         posthog: ""
         oidc: ""
@@ -4546,6 +4572,8 @@ components:
       properties:
         turnstile:
           $ref: "#/components/schemas/TurnstileConfig"
+        legal:
+          $ref: "#/components/schemas/LegalConfig"
         version:
           description: BoxLite version
           example: 0.0.1

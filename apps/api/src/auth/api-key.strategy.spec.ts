@@ -23,6 +23,7 @@ function createStrategy() {
   }
   const apiKeyService = {
     getApiKeyByValue: jest.fn().mockRejectedValue(new Error('not found')),
+    findWithCurrentOwner: jest.fn(),
     updateLastUsedAt: jest.fn(),
   }
   const userService = {
@@ -55,6 +56,33 @@ function createStrategy() {
 }
 
 describe('ApiKeyStrategy', () => {
+  it.each(['runner', 'region-proxy'])('still checks %s credentials if the owner lookup fails', async (role) => {
+    const { strategy, mocks } = createStrategy()
+    mocks.configService.get.mockImplementation((name) => (name === 'legal' ? {} : undefined))
+    mocks.apiKeyService.findWithCurrentOwner.mockRejectedValue(new Error('owner query failed'))
+    if (role === 'runner') mocks.runnerService.findByApiKey.mockResolvedValue({ id: 'runner' })
+    else mocks.regionService.findOneByProxyApiKey.mockResolvedValue({ id: 'region' })
+
+    await expect(strategy.validate('service-key')).resolves.toMatchObject({ role })
+    expect(mocks.redis.get).not.toHaveBeenCalled()
+    expect(mocks.apiKeyService.updateLastUsedAt).not.toHaveBeenCalled()
+  })
+
+  it('denies an adopted key owned by a pending user before reading caches or trying service keys', async () => {
+    const { strategy, mocks } = createStrategy()
+    mocks.configService.get.mockImplementation((name) => (name === 'legal' ? {} : undefined))
+    mocks.apiKeyService.findWithCurrentOwner.mockResolvedValue({
+      apiKey: { organizationId: 'org-1', userId: 'pending-user', name: 'key' },
+      owner: { id: 'pending-user', registrationConsentPending: true },
+    })
+    mocks.redis.get.mockResolvedValue(JSON.stringify({ userId: 'old-owner' }))
+
+    await expect(strategy.validate('adopted-key')).rejects.toMatchObject({ status: 401 })
+    expect(mocks.redis.get).not.toHaveBeenCalled()
+    expect(mocks.apiKeyService.updateLastUsedAt).not.toHaveBeenCalled()
+    expect(mocks.runnerService.findByApiKey).not.toHaveBeenCalled()
+    expect(mocks.regionService.findOneByProxyApiKey).not.toHaveBeenCalled()
+  })
   it('translates historical cached grants without separating the revocation cache', async () => {
     const { strategy, mocks } = createStrategy()
     const key = `api-key:validation:${generateApiKeyHash('cached-key')}`

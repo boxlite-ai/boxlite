@@ -10,6 +10,7 @@ import { ConfigModule as NestConfigModule, ConfigModuleOptions } from '@nestjs/c
 import { TypedConfigService } from './typed-config.service'
 import { configuration } from './configuration'
 import { ConfigController } from './config.controller'
+import { LegalVersionService } from './legal-version.service'
 import { OidcMetadataService } from './oidc-metadata.service'
 
 @Global()
@@ -22,8 +23,8 @@ import { OidcMetadataService } from './oidc-metadata.service'
     HttpModule,
   ],
   controllers: [ConfigController],
-  providers: [TypedConfigService, OidcMetadataService],
-  exports: [TypedConfigService, OidcMetadataService],
+  providers: [TypedConfigService, OidcMetadataService, LegalVersionService],
+  exports: [TypedConfigService, OidcMetadataService, LegalVersionService],
 })
 export class TypedConfigModule {
   static forRoot(options: Partial<ConfigModuleOptions> = {}): DynamicModule {
@@ -35,8 +36,8 @@ export class TypedConfigModule {
         }),
         HttpModule,
       ],
-      providers: [TypedConfigService, OidcMetadataService],
-      exports: [TypedConfigService, OidcMetadataService],
+      providers: [TypedConfigService, OidcMetadataService, LegalVersionService],
+      exports: [TypedConfigService, OidcMetadataService, LegalVersionService],
     }
   }
 }

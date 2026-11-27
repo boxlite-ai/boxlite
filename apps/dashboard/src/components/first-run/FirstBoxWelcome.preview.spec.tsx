@@ -113,7 +113,6 @@ describe('Welcome trial preview integration', () => {
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'New workspace')
       input.dispatchEvent(new Event('input', { bubbles: true }))
-      ;(host.querySelector('#welcome-terms') as HTMLInputElement).click()
     })
     await click('Continue')
     expect(fixture.api.organizationsApi.updateOrganizationName).toHaveBeenCalledWith('org-preview', {

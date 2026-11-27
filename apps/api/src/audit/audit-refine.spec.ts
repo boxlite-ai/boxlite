@@ -413,7 +413,12 @@ it('audits verified account adoption before migration and records only local suc
       expect(audit.createLog).toHaveBeenCalledTimes(1)
     }),
   }
-  const service = new (AccountLinkService as any)({ getOrThrow: () => secret }, linked, {}, audit) as AccountLinkService
+  const service = new (AccountLinkService as any)(
+    { get: () => false, getOrThrow: () => secret },
+    linked,
+    {},
+    audit,
+  ) as AccountLinkService
   const token = await new SignJWT({ sub: 'auth0|secondary', primary_user_id: 'auth0|primary' })
     .setProtectedHeader({ alg: 'HS256' })
     .setAudience(ADOPT_AUDIENCE)

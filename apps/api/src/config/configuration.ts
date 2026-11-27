@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { legalConfig } from './legal-config'
 import { turnstileConfig } from './turnstile-config'
 import { parseFilestoreInstances } from './filestore-instances'
 import { checkpointConfig } from './checkpoint-config'
@@ -282,6 +283,7 @@ export function incidentIoConfig(env: NodeJS.ProcessEnv = process.env) {
 
 function oidcManagementApiConfig(env: NodeJS.ProcessEnv = process.env) {
   const enabled = env.OIDC_MANAGEMENT_API_ENABLED === 'true'
+  const reconcileLinks = Boolean(env.OIDC_ACCOUNT_LINK_READ_CLIENT_ID?.trim())
   const rawBaseUrl = env.OIDC_MANAGEMENT_API_BASE_URL?.trim()
   const rawTokenUrl = env.OIDC_MANAGEMENT_API_TOKEN_URL?.trim()
   const settings = {
@@ -293,7 +295,7 @@ function oidcManagementApiConfig(env: NodeJS.ProcessEnv = process.env) {
     tokenUrl: rawTokenUrl,
   }
 
-  if (!enabled) {
+  if (!enabled && !reconcileLinks) {
     return settings
   }
 
@@ -349,14 +351,20 @@ const ARCHIVE_PREFIX_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
  */
 export function oidcAccountLinkConfig(env: NodeJS.ProcessEnv = process.env) {
   const secret = env.OIDC_ACCOUNT_LINK_SECRET?.trim()
+  const readClientId = env.OIDC_ACCOUNT_LINK_READ_CLIENT_ID?.trim()
+  const readClientSecret = env.OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET?.trim()
+  if (Boolean(readClientId) !== Boolean(readClientSecret)) {
+    throw new Error('Account-link reconciliation requires both read client credentials')
+  }
+  const readClient = readClientId && readClientSecret ? { id: readClientId, secret: readClientSecret } : undefined
   if (!secret) {
-    return { enabled: false, secret: undefined as string | undefined }
+    return { enabled: false, secret: undefined as string | undefined, readClient }
   }
   // RFC 7518 §3.2: an HS256 key must be at least as long as the hash, 256 bits.
   if (secret.length < 32) {
     throw new Error('OIDC_ACCOUNT_LINK_SECRET must hold at least 32 characters')
   }
-  return { enabled: true, secret }
+  return { enabled: true, secret, readClient }
 }
 
 /**
@@ -620,6 +628,7 @@ function ciWorkerResources() {
 
 const configuration = {
   turnstile: turnstileConfig(),
+  legal: legalConfig(),
   checkpoint: checkpointConfig(),
   customDomains: customDomainConfig(),
   production: process.env.NODE_ENV === 'production',

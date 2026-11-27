@@ -32,6 +32,8 @@ export interface ApiInputs {
   oidcMgmtClientId: sst.Secret
   oidcMgmtClientSecret: sst.Secret
   accountLinkSecret: sst.Secret
+  accountLinkReadClientId: sst.Secret
+  accountLinkReadClientSecret: sst.Secret
   posthogApiKey: sst.Secret
   svixAuthToken: sst.Secret
   usageExportToken: sst.Secret
@@ -70,6 +72,8 @@ export async function buildApi(input: ApiInputs) {
     oidcMgmtClientId,
     oidcMgmtClientSecret,
     accountLinkSecret,
+    accountLinkReadClientId,
+    accountLinkReadClientSecret,
     posthogApiKey,
     svixAuthToken,
     usageExportToken,
@@ -225,6 +229,11 @@ export async function buildApi(input: ApiInputs) {
             }
           : {}),
 
+        LEGAL_TOS_VERSION: envOr('LEGAL_TOS_VERSION', ''),
+        LEGAL_PRIVACY_VERSION: envOr('LEGAL_PRIVACY_VERSION', ''),
+        LEGAL_TOS_URL: envOr('LEGAL_TOS_URL', ''),
+        LEGAL_PRIVACY_URL: envOr('LEGAL_PRIVACY_URL', ''),
+
         // Encryption
         ENCRYPTION_KEY: envOr('ENCRYPTION_KEY', encryptionKey.result),
         ENCRYPTION_SALT: envOr('ENCRYPTION_SALT', encryptionSalt.result),
@@ -236,15 +245,19 @@ export async function buildApi(input: ApiInputs) {
         ...(publicOidcIssuer && {
           PUBLIC_OIDC_DOMAIN: publicOidcIssuer,
         }),
+        ...(process.env.OIDC_MANAGEMENT_API_BASE_URL && {
+          OIDC_MANAGEMENT_API_BASE_URL: process.env.OIDC_MANAGEMENT_API_BASE_URL,
+        }),
+        ...(process.env.OIDC_MANAGEMENT_API_TOKEN_URL && {
+          OIDC_MANAGEMENT_API_TOKEN_URL: process.env.OIDC_MANAGEMENT_API_TOKEN_URL,
+        }),
+        ...(process.env.OIDC_MANAGEMENT_API_ENABLED !== 'true' &&
+          process.env.OIDC_MANAGEMENT_API_AUDIENCE && {
+            OIDC_MANAGEMENT_API_AUDIENCE: process.env.OIDC_MANAGEMENT_API_AUDIENCE,
+          }),
         // Optional: Auth0 Management API (enables account linking etc.)
         ...(process.env.OIDC_MANAGEMENT_API_ENABLED === 'true' && {
           OIDC_MANAGEMENT_API_ENABLED: 'true',
-          ...(process.env.OIDC_MANAGEMENT_API_BASE_URL && {
-            OIDC_MANAGEMENT_API_BASE_URL: process.env.OIDC_MANAGEMENT_API_BASE_URL,
-          }),
-          ...(process.env.OIDC_MANAGEMENT_API_TOKEN_URL && {
-            OIDC_MANAGEMENT_API_TOKEN_URL: process.env.OIDC_MANAGEMENT_API_TOKEN_URL,
-          }),
           // Client id/secret come from the SST secret store now. If the feature
           // is enabled but a secret is unset, the value resolves to '' and the
           // Api errors at runtime — instead of the old deploy-time requireEnv
@@ -260,6 +273,8 @@ export async function buildApi(input: ApiInputs) {
         // status requests with; the link merges a person's logins into one
         // account. Empty leaves both endpoints off.
         OIDC_ACCOUNT_LINK_SECRET: accountLinkSecret.value,
+        OIDC_ACCOUNT_LINK_READ_CLIENT_ID: accountLinkReadClientId.value,
+        OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET: accountLinkReadClientSecret.value,
         // RP-initiated logout fallback. Safe to set unconditionally: the API
         // probes the IdP's discovery doc at startup and only exposes this URL
         // to the dashboard when the IdP itself lacks end_session_endpoint

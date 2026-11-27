@@ -120,8 +120,8 @@ deadline on both cached and database reads. A null deadline keeps a suspension i
 ## Registration configuration
 
 Turnstile registration protection is opt-in. Leave `TURNSTILE_SITEKEY` unset or
-blank to create local users automatically after OIDC authentication, without a
-widget or Cloudflare credentials. A nonempty sitekey enables protection and then
+blank to run without the widget or Cloudflare credentials. New OIDC identities
+create local users automatically only when both Turnstile and legal consent are disabled. A nonempty sitekey enables protection and then
 requires `TURNSTILE_SECRET_KEY` and `TURNSTILE_EXPECTED_HOSTNAMES`. Hostnames are a
 comma-separated list without schemes, ports or paths. `TURNSTILE_TIMEOUT_MS`
 defaults to 5000 and must be a positive integer when enabled. Invalid enabled
@@ -134,6 +134,30 @@ publishes only `turnstile.sitekey` and `turnstile.action` (`signup`).
 The secret, allowed hostnames and verification timeout remain server-side. Restart
 the API to change a widget configuration; the dashboard reads it at runtime.
 The generated TypeScript and Go configuration models accept an absent `turnstile`.
+
+### Registration consent
+
+Set all four API environment variables to enable legal consent:
+`LEGAL_TOS_VERSION`, `LEGAL_PRIVACY_VERSION`, `LEGAL_TOS_URL`, and
+`LEGAL_PRIVACY_URL`. The URLs must be absolute HTTP(S) URLs without credentials.
+Leave all four unset for deployments that do not require consent. When enabled,
+`GET /api/config` publishes the versions and URLs in its optional `legal` field.
+
+New OIDC users then submit `accepted: true`, `tosVersion`, and `privacyVersion`
+to `POST /api/auth/register`. A missing or false acceptance returns
+`400 consent_required`. A missing or stale version returns
+`409 legal_version_mismatch`. Include `turnstileToken` when Turnstile is enabled.
+The API creates the user, default organization and consent record in one
+transaction and assigns the timestamp in PostgreSQL. Existing users do not
+accept again. Account linking moves the original record if the kept account
+has none.
+
+Apply the additive migration and deploy the API and consent-capable console
+before setting these variables. Enforcement starts per instance when it
+restarts. During that first rollout window, an instance still using the old
+configuration can create a user without consent. After the rollout, check for
+users created during the window with no record. To roll back enforcement, unset
+all four settings and restart the API. Existing records remain in the database.
 
 ## Hosted Box inventory
 
@@ -268,7 +292,8 @@ Refunds preserve the window's expiry; an expired ticket cannot debit a replaceme
 ## Registration email policy
 
 With protection enabled, new OIDC identities register through `POST /api/auth/register`,
-using an API-audience Access Token and a `turnstileToken` string of 1–2048 characters.
+using an API-audience Access Token. When Turnstile is enabled, include a
+`turnstileToken` string of 1–2048 characters.
 Ordinary JWT-authenticated requests then return `403 registration_required` until that
 account exists. Database-account email verification remains an Auth0 Action responsibility.
 The API's registration email policy requires an email address for a new local user.
@@ -290,6 +315,29 @@ Deploy the API after upgrading the package to apply the new list.
 
 Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
 and `make build:apps:api` to validate the production bundle and dependency imports.
+
+### Account linking and consent
+
+Deploy the account-link migration and API before updating the Auth0 login Action.
+Configure `OIDC_ACCOUNT_LINK_READ_CLIENT_ID` and `OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET` for a
+dedicated Auth0 Management API client with `read:users` and verify the API scheduler
+can run without incoming traffic before enabling legal enforcement.
+
+The Action reserves an attempt in BoxLite before calling Auth0. Confirmed
+links move resources and eligible consent in one transaction. An existing
+acceptance on the retained account takes precedence.
+
+A rejected operation allows a fresh attempt from sign-in. With an unknown result,
+the scheduler checks for the exact identity and logs a warning after six
+inconclusive checks, then continues hourly. Alert on that warning.
+
+After the dispatch reservation and backoff expire, a fresh sign-in can retry
+the same pair if Auth0 confirms the identity is absent. A later rejection keeps
+an earlier uncertain attempt eligible for confirmation.
+
+The preparation audit records the operation ID, attempt ID and dispatch decision.
+The completion audit commits with the local ownership changes and terminal job
+state whether the signed result or the scheduler confirms the link.
 
 ## Coupon link claims
 
@@ -535,6 +583,17 @@ without validating the challenge again. Both require a valid JWT and request bod
 Challenge rejection returns `403 turnstile_verification_failed`; verification service
 failure returns `503 turnstile_unavailable`. Neither creates a local account. The
 internal registration endpoint is excluded from public Swagger and MCP tools.
+First JWT signup returns `409 account_link_pending` while an incoming account
+link is still confirming a default organization to inherit. Try again after
+the link completes. A failed link leaves the target free to create its own
+default organization.
+
+First signup with a token for a merged source identity returns
+`409 account_link_superseded` if the token has no issuance time or was issued
+in or before the recorded completion second. Sign in again to obtain a fresh
+token. An identity explicitly unlinked in Auth0 can register with a token
+issued in a later second.
+
 Existing users, including MCP tokens without profile claims, keep their local profile
 and existing permissions. When protection is enabled, new MCP users first register in Dashboard.
 Notification connections check local user existence before joining rooms.

@@ -10,6 +10,7 @@ import { PlatformReason } from './platform-reason.enum'
 export interface RequestActor {
   userId: string
   authMethod: 'api_key' | 'jwt'
+  tokenIssuedAt?: number
   clientSource?: string
   sdkVersion?: string
 }

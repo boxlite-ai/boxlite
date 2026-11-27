@@ -88,6 +88,8 @@ export async function deployStack() {
   // status requests with; the account link merges a person's logins into one
   // account. Empty leaves both endpoints answering 404.
   const accountLinkSecret = new sst.Secret('OIDC_ACCOUNT_LINK_SECRET', '')
+  const accountLinkReadClientId = new sst.Secret('OIDC_ACCOUNT_LINK_READ_CLIENT_ID', '')
+  const accountLinkReadClientSecret = new sst.Secret('OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET', '')
   const posthogApiKey = new sst.Secret('POSTHOG_API_KEY', '')
   const svixAuthToken = new sst.Secret('SVIX_AUTH_TOKEN', '')
   // The API key the status sync presents to incident.io — scoped to alert
@@ -273,6 +275,8 @@ export async function deployStack() {
     oidcMgmtClientId,
     oidcMgmtClientSecret,
     accountLinkSecret,
+    accountLinkReadClientId,
+    accountLinkReadClientSecret,
     posthogApiKey,
     svixAuthToken,
     usageExportToken,

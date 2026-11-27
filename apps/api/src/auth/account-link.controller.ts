@@ -17,6 +17,7 @@ import { ApiExcludeController } from '@nestjs/swagger'
 import { AnonymousRateLimitGuard } from '../common/guards/anonymous-rate-limit.guard'
 import { TypedConfigService } from '../config/typed-config.service'
 import { AccountLinkService } from './account-link.service'
+import type { AccountLinkPreparation } from './account-link-consent-jobs.service'
 
 /**
  * Called by the Post-Login Action, never by a browser: the request carries no
@@ -36,6 +37,19 @@ export class AccountLinkController {
   @UseGuards(AnonymousRateLimitGuard)
   async adopt(@Headers('authorization') authorization?: string): Promise<void> {
     await this.accountLink.adopt(this.requestToken(authorization))
+  }
+
+  @Post('prepare')
+  @UseGuards(AnonymousRateLimitGuard)
+  async prepare(@Headers('authorization') authorization?: string): Promise<AccountLinkPreparation> {
+    return this.accountLink.prepare(this.requestToken(authorization))
+  }
+
+  @Post('result')
+  @HttpCode(204)
+  @UseGuards(AnonymousRateLimitGuard)
+  async result(@Headers('authorization') authorization?: string): Promise<void> {
+    await this.accountLink.result(this.requestToken(authorization))
   }
 
   /** Whether BoxLite already has the user the Action names. */

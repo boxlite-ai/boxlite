@@ -73,7 +73,12 @@ describe('Checkpoint REST authentication and request admission', () => {
         emailVerified: true,
       }),
     }
-    const config = { get: (key: string) => (key === 'proxy.apiKey' ? 'checkpoint-proxy-key' : 30) }
+    const configValues: Record<string, number | string> = {
+      'proxy.apiKey': 'checkpoint-proxy-key',
+      'apiKey.validationCacheTtlSeconds': 30,
+      'apiKey.userCacheTtlSeconds': 30,
+    }
+    const config = { get: (key: string) => configValues[key] }
     const apiKeys = {
       getApiKeyByValue: async (token: string) => {
         if (

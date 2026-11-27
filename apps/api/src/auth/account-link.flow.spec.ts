@@ -6,7 +6,7 @@
 /**
  * The login-time account link end to end: the real Post-Login Action, its
  * placeholders filled as the bootstrap configurator fills them, calling the
- * real adopt and status endpoints.
+ * real preparation, result and status endpoints.
  *
  * Auth0 is played by `tenant()`, answering the calls the Action makes the way
  * the Auth0 docs describe them: the token endpoint for the link client's
@@ -14,8 +14,7 @@
  * and the link. What only this test can catch is a break in the contract
  * between the Action and the API: a claim one side writes and the other does
  * not read, a key or audience the two disagree on. The cases follow the
- * design's table of every login against the accounts holding its address
- * (POL-735).
+ * design's table of every login against the accounts holding its address.
  */
 
 import { NotFoundException, UnauthorizedException } from '@nestjs/common'
@@ -27,6 +26,7 @@ import { LinkedIdentityService } from '../user/linked-identity.service'
 import { UserService } from '../user/user.service'
 import { AccountLinkController } from './account-link.controller'
 import { AccountLinkService } from './account-link.service'
+import { AccountLinkConsentJobs } from './account-link-consent-jobs.service'
 
 const SECRET = 'a-shared-secret-of-at-least-32-chars'
 const API = 'https://api.dev.example.com'
@@ -80,11 +80,28 @@ function tenant(
     // Claims that replace the ID token's own, which are valid for this tenant.
     grant?: Record<string, unknown>
     adopt?: jest.Mock
+    linkStatus?: number
+    preparationPending?: boolean
+    resumedOperationId?: string
+    slowResult?: boolean
+    preparationSignals?: Array<AbortSignal | undefined>
   } = {},
 ) {
   const calls: Call[] = []
   const accounts = options.accounts ?? [account(PASSWORD_USER)]
   const adopt = options.adopt ?? jest.fn().mockResolvedValue(undefined)
+  const complete = jest.fn()
+  const consentJobs: Pick<AccountLinkConsentJobs, 'prepare' | 'complete'> = {
+    prepare: async ({ id, source_id, target_id }) => {
+      await adopt(target_id, source_id)
+      return {
+        operationId: options.resumedOperationId ?? id,
+        ready: !options.preparationPending,
+        dispatchUntil: Date.now() + 30000,
+      }
+    },
+    complete,
+  }
   const known = new Set(options.known ?? [])
   const config = {
     get: jest.fn(() => true),
@@ -98,6 +115,7 @@ function tenant(
       { adopt } as unknown as LinkedIdentityService,
       users as unknown as UserService,
       { createLog: jest.fn().mockResolvedValue({ id: 'audit' }), updateLog: jest.fn().mockResolvedValue({}) } as any,
+      consentJobs as AccountLinkConsentJobs,
     ),
   )
   const passwordAccount = accounts.find((user) => user.identities.some((each) => each.connection === 'boxlite-users'))
@@ -120,8 +138,11 @@ function tenant(
   }
 
   async function answer(call: Call): Promise<{ status: number; body?: unknown }> {
-    if (call.url === `${API}/api/auth/link/adopt` && call.method === 'POST') {
-      return endpoint(() => controller.adopt(call.headers.authorization), 204)
+    if (call.url === `${API}/api/auth/link/prepare` && call.method === 'POST') {
+      return endpoint(() => controller.prepare(call.headers.authorization), 201)
+    }
+    if (call.url === `${API}/api/auth/link/result` && call.method === 'POST') {
+      return endpoint(() => controller.result(call.headers.authorization), 204)
     }
     if (call.url === `${API}/api/auth/link/status` && call.method === 'GET') {
       return endpoint(() => controller.status(call.headers.authorization), 200)
@@ -140,12 +161,16 @@ function tenant(
       return { status: 200, body: accounts }
     }
     if (call.url.startsWith(`https://${DOMAIN}/api/v2/users/`) && call.url.endsWith('/identities')) {
-      return { status: 201, body: [] }
+      return { status: options.linkStatus ?? 201, body: [] }
     }
     return { status: 404 }
   }
 
-  async function fetch(url: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) {
+  const timeout = jest.fn((_ms: number) => AbortSignal.abort())
+  async function fetch(
+    url: string,
+    init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal } = {},
+  ) {
     const call = {
       url,
       method: init.method ?? 'GET',
@@ -153,6 +178,11 @@ function tenant(
       body: init.body && JSON.parse(init.body),
     }
     calls.push(call)
+    if (options.preparationSignals && url.endsWith('/prepare')) {
+      options.preparationSignals.push(init.signal)
+      throw new Error('simulated transport stall')
+    }
+    if (options.slowResult && url.endsWith('/result')) init.signal?.throwIfAborted()
     const { status, body } = await answer(call)
     return {
       ok: status >= 200 && status < 300,
@@ -173,8 +203,16 @@ function tenant(
     .replace('__API_AUDIENCE_JSON__', JSON.stringify(''))
   expect(source).not.toMatch(/__[A-Z_]+_JSON__/)
   const exports: Record<string, Handler> = {}
-  runInNewContext(source, { exports, require, Buffer, URL, fetch, console: { log: () => undefined } })
-  return { action: exports, calls, adopt }
+  runInNewContext(source, {
+    exports,
+    require,
+    Buffer,
+    URL,
+    fetch,
+    AbortSignal: options.slowResult ? { timeout } : AbortSignal,
+    console: { log: () => undefined },
+  })
+  return { action: exports, calls, adopt, complete, timeout }
 }
 
 function transaction() {
@@ -270,7 +308,7 @@ describe('login-time account link, Action and API together', () => {
     })
 
     it('folds into the password account holding the address once its password checks out', async () => {
-      const { action, calls, adopt } = tenant()
+      const { action, calls, adopt, complete } = tenant()
       const first = transaction()
       await action.onExecutePostLogin(google(), first.api)
       expect(first.seen.renders).toEqual([
@@ -293,9 +331,17 @@ describe('login-time account link, Action and API together', () => {
         body: expect.objectContaining({ realm: 'boxlite-users', username: 'ada@example.com', client_id: 'link_456' }),
       })
       const order = calls.map((call) => call.url)
-      expect(order.indexOf(`${API}/api/auth/link/adopt`)).toBeGreaterThan(-1)
+      expect(order.indexOf(`${API}/api/auth/link/prepare`)).toBeGreaterThan(-1)
       expect(order.findIndex((url) => url.endsWith('/identities'))).toBeGreaterThan(
-        order.indexOf(`${API}/api/auth/link/adopt`),
+        order.indexOf(`${API}/api/auth/link/prepare`),
+      )
+      expect(order.indexOf(`${API}/api/auth/link/result`)).toBeGreaterThan(
+        order.findIndex((url) => url.endsWith('/identities')),
+      )
+      expect(complete).toHaveBeenCalledWith(
+        { id: expect.any(String), source_id: GOOGLE_USER, target_id: PASSWORD_USER },
+        'done',
+        { attemptId: expect.any(String) },
       )
     })
 
@@ -633,6 +679,78 @@ describe('login-time account link, Action and API together', () => {
 
       expect(step.seen.denied).toEqual([expect.stringMatching(/unavailable/)])
       expect(links(calls)).toEqual([])
+    })
+
+    it('reports a confirmed rejection and lets the user sign in again to retry', async () => {
+      const { action, complete } = tenant({ linkStatus: 403 })
+      const step = transaction()
+
+      await action.onContinuePostLogin(google({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }), step.api)
+
+      expect(complete).toHaveBeenCalledWith(expect.objectContaining({ source_id: GOOGLE_USER }), 'failed', {
+        attemptId: expect.any(String),
+      })
+      expect(step.seen.denied).toEqual([expect.stringMatching(/sign in again to retry/i)])
+    })
+
+    it('tells the user to wait without asking Auth0 to repeat a pending link', async () => {
+      const { action, calls, complete } = tenant({ preparationPending: true })
+      const step = transaction()
+
+      await action.onContinuePostLogin(google({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }), step.api)
+
+      expect(links(calls)).toEqual([])
+      expect(complete).not.toHaveBeenCalled()
+      expect(step.seen.denied).toEqual([expect.stringMatching(/still checking/i)])
+    })
+
+    it('bounds both preparation attempts with abort signals', async () => {
+      const preparationSignals: Array<AbortSignal | undefined> = []
+      const { action, calls } = tenant({ preparationSignals })
+      const step = transaction()
+
+      await action.onContinuePostLogin(google({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }), step.api)
+
+      expect(links(calls)).toEqual([])
+      expect(preparationSignals).toEqual([expect.any(AbortSignal), expect.any(AbortSignal)])
+    })
+
+    it('continues the login when a confirmed link exceeds the result callback deadline', async () => {
+      const { action, complete, timeout } = tenant({ slowResult: true })
+      const step = transaction()
+
+      await action.onContinuePostLogin(google({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }), step.api)
+
+      expect(timeout).toHaveBeenCalledWith(expect.any(Number))
+      expect(timeout.mock.lastCall?.[0]).toBeLessThanOrEqual(2000)
+      expect(complete).not.toHaveBeenCalled()
+      expect(step.seen.denied).toEqual([])
+      expect(step.seen.primary).toEqual([PASSWORD_USER])
+    })
+
+    it('binds a successful retry to the existing operation and the fresh attempt', async () => {
+      const operationId = 'c0421f9e-3679-4d67-911d-d80b957212a0'
+      const { action, calls, complete } = tenant({ resumedOperationId: operationId })
+      const step = transaction()
+
+      await action.onContinuePostLogin(google({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }), step.api)
+
+      expect(links(calls)).toHaveLength(1)
+      expect(complete).toHaveBeenCalledWith(expect.objectContaining({ id: operationId }), 'done', {
+        attemptId: expect.any(String),
+      })
+      expect(complete.mock.calls[0][2].attemptId).not.toBe(operationId)
+      expect(step.seen.primary).toEqual([PASSWORD_USER])
+    })
+
+    it('keeps an unclassified Auth0 failure eligible for a later confirmation', async () => {
+      const { action, complete } = tenant({ linkStatus: 503 })
+      const step = transaction()
+
+      await action.onContinuePostLogin(google({ prompt: { id: 'ap_link', fields: { password: PASSWORD } } }), step.api)
+
+      expect(complete).not.toHaveBeenCalled()
+      expect(step.seen.denied).toEqual([expect.stringMatching(/still checking/i)])
     })
   })
 

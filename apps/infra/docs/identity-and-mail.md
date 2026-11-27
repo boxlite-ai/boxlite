@@ -292,18 +292,23 @@ Action folds a login into the account that already holds its address once the
 person proves that account is theirs, and nobody is asked to set a password.
 BoxLite never receives a password.
 
-Moving BoxLite's own rows is the one step Auth0 cannot take. Before it links,
-the Action asks the API with `POST /api/auth/link/adopt`, a server-to-server
-call carrying an HS256 bearer token signed with `OIDC_ACCOUNT_LINK_SECRET`. The
-token names the user being folded as `sub` and the account that stays as
-`primary_user_id`, with the audience `boxlite-account-link-adopt`, and is
-refused once it is older than a minute. `GET /api/auth/link/status`, signed the
-same way for the audience `boxlite-account-link-status`, answers
-`{"known": true}` when BoxLite already has the user named in `sub`. Without the
-secret both endpoints answer 404; a key shorter than 32 characters stops the
-API at boot. The key reaches the API on both deploy paths: SST declares
-`OIDC_ACCOUNT_LINK_SECRET` as a secret that defaults to empty, and mdeploy
-fetches it from the stage's optional API group.
+Before linking, the Action calls `POST /api/auth/link/prepare` with both
+identities and an attempt ID. The API returns the operation ID and dispatch
+deadline. The Action reports a confirmed result to `POST /api/auth/link/result`.
+
+BoxLite moves resources and consent after confirmation from the Action or its
+read-only Auth0 lookup. A later sign-in can retry the same unresolved pair
+after the dispatch window and a negative lookup.
+
+The Action signs each call with an endpoint-specific HS256 audience and a
+one-minute lifetime. `GET /api/auth/link/status` reports whether BoxLite knows
+the named user. The legacy `POST /api/auth/link/adopt` supports rolling out the
+API before the new Action while legal enforcement is disabled.
+
+Set `OIDC_ACCOUNT_LINK_SECRET` to a value of at least 32 characters on both
+sides. The stage also needs `OIDC_ACCOUNT_LINK_READ_CLIENT_ID` and
+`OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET` for a dedicated Auth0 client granted
+`read:users`. Both deployment paths deliver these through the API secret group.
 
 ### The Action's part
 
@@ -415,7 +420,11 @@ Auth0 never returns a secret's value, so every such apply rewrites all three;
 that is how a rotated key arrives. The journal keeps the Action's code and no
 secret, so `--rollback` restores the code and leaves the secrets in place.
 
-Give the API the same key and
+Create a dedicated Auth0 machine-to-machine application with only `read:users`.
+Store its client ID and secret in the API stage before deploying. The Action
+setup command provisions a separate client for writing links.
+
+Give the API the same signing key and
 [deploy the stage](deployment.md#deploy-through-github-actions) before that
 apply turns the link on. Until the API runs with the key, both endpoints answer
 404 and the Action denies every login it would link.
@@ -424,6 +433,10 @@ apply turns the link on. Until the API runs with the key, both endpoints answer
 export AUTH0_ACCOUNT_LINK_SECRET="$(openssl rand -base64 48)"
 printf %s "$AUTH0_ACCOUNT_LINK_SECRET" |
   npm run mstage env set -- OIDC_ACCOUNT_LINK_SECRET --stage <stage>
+printf %s "$AUTH0_ACCOUNT_LINK_READ_CLIENT_ID" |
+  npm run mstage env set -- OIDC_ACCOUNT_LINK_READ_CLIENT_ID --stage <stage>
+printf %s "$AUTH0_ACCOUNT_LINK_READ_CLIENT_SECRET" |
+  npm run mstage env set -- OIDC_ACCOUNT_LINK_READ_CLIENT_SECRET --stage <stage>
 # Deploy the stage, then turn the link on:
 npm run auth0:configure-login -- --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> --connection <database-connection-name> \

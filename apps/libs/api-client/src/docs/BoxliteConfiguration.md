@@ -6,6 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **turnstile** | [**TurnstileConfig**](TurnstileConfig.md) |  | [optional] [default to undefined]
+**legal** | [**LegalConfig**](LegalConfig.md) |  | [optional] [default to undefined]
 **version** | **string** | BoxLite version | [default to undefined]
 **posthog** | [**PosthogConfig**](PosthogConfig.md) | PostHog configuration | [optional] [default to undefined]
 **oidc** | [**OidcConfig**](OidcConfig.md) | OIDC configuration | [default to undefined]
@@ -27,6 +28,7 @@ import { BoxliteConfiguration } from './api';
 
 const instance: BoxliteConfiguration = {
     turnstile,
+    legal,
     version,
     posthog,
     oidc,

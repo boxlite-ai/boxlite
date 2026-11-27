@@ -73,6 +73,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (typeof userId !== 'string' || !userId.trim()) throw new UnauthorizedException('Invalid credentials')
     let user = await this.userService.findOne(userId)
 
+    if (user?.registrationConsentPending && this.configService.get('legal')) {
+      throw new ForbiddenException({ message: 'Complete registration to continue', code: 'registration_required' })
+    }
+
     if (user && !user.emailVerified && payload.email_verified) {
       await this.userService.update(user.id, {
         emailVerified: payload.email_verified,
@@ -80,7 +84,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     if (!user) {
-      if (this.configService.get('turnstile')) {
+      if (this.configService.get('turnstile') || this.configService.get('legal')) {
         throw new ForbiddenException({ message: 'Complete registration to continue', code: 'registration_required' })
       }
       if (typeof email !== 'string' || !email.trim()) {
@@ -95,7 +99,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
             emailVerified: payload.email_verified === true,
             defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
           },
-          Context.user({ userId, authMethod: 'jwt' }),
+          Context.user({
+            userId,
+            authMethod: 'jwt',
+            ...(payload.iat === undefined ? {} : { tokenIssuedAt: payload.iat }),
+          }),
         )
       } catch (error) {
         if (!(error instanceof UserAlreadyExistsException)) throw error

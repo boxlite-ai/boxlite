@@ -24,6 +24,7 @@ export function AccountEntryLayout({
   descriptionRole,
   children,
   footer,
+  compactFooter = false,
 }: {
   label?: string
   identity?: ReactNode
@@ -35,6 +36,7 @@ export function AccountEntryLayout({
   descriptionRole?: 'alert' | 'status'
   children?: ReactNode
   footer?: ReactNode
+  compactFooter?: boolean
 }) {
   return (
     <div className={`min-h-svh bg-background font-sans text-foreground ${centered ? 'flex flex-col' : ''}`}>
@@ -50,13 +52,13 @@ export function AccountEntryLayout({
           </p>
         )}
         <div className={size === 'compact' ? 'mt-6' : 'mt-8'}>{children}</div>
-        {footer && <div className="mt-10 border-t border-border pt-5">{footer}</div>}
+        {footer && <div className={`${compactFooter ? 'mt-6' : 'mt-10'} border-t border-border pt-5`}>{footer}</div>}
       </main>
     </div>
   )
 }
 
-export function SetupLayout(props: { title: string; description: string; children?: ReactNode }) {
+export function SetupLayout(props: { title: string; description: string; children?: ReactNode; compactFooter?: boolean }) {
   return (
     <AccountEntryLayout
       {...props}

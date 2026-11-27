@@ -48,10 +48,11 @@ describe('BoxliteWsProxyService', () => {
     } as IncomingMessage
   }
 
-  function buildAuthHarness() {
+  function buildAuthHarness(legalEnabled = false) {
     const apiKeyService = {
       getApiKeyByValue: jest.fn().mockRejectedValue(new Error('api key not found')),
       getApiKeyByHash: jest.fn().mockRejectedValue(new Error('api key not found')),
+      findWithCurrentOwner: jest.fn().mockResolvedValue(null),
     }
     const organizationUserService = {
       findOne: jest.fn(),
@@ -89,6 +90,7 @@ describe('BoxliteWsProxyService', () => {
       jwtStrategy as never,
       attachTickets,
       audit as never,
+      { get: () => (legalEnabled ? {} : undefined) } as never,
     ) as unknown as {
       authenticate: (req: IncomingMessage, urlTenant?: string) => Promise<{ organization: { id: string } } | null>
     }
@@ -347,6 +349,26 @@ describe('BoxliteWsProxyService', () => {
       await (harness.service as unknown as BoxliteWsProxyService).upgrade(req, socket as never, Buffer.alloc(0))
       return { req, socket }
     }
+
+    it('refuses an attach ticket after its user becomes subject to the consent gate', async () => {
+      const harness = buildAuthHarness(true)
+      harness.userService.findOne.mockResolvedValue({
+        id: 'user-1',
+        role: 'admin',
+        email: 'dev@acme.test',
+        registrationConsentPending: true,
+      })
+      const ticket = await harness.attachTickets.issue({
+        userId: 'user-1',
+        organizationId: 'org-1',
+        boxId: 'box-uuid',
+        execId: 'exec-1',
+      })
+
+      const { socket } = await upgradeWithTicket(harness, attachUrl(ticket))
+
+      expect(socket.write).toHaveBeenCalledWith(expect.stringContaining('401'))
+    })
 
     function ticketHarness() {
       const harness = buildAuthHarness()

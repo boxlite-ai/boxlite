@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
+import {
+  AccountLinkConsentJobs,
+  AccountLinkOperation,
+  AccountLinkPreparation,
+} from './account-link-consent-jobs.service'
 import { AuditService } from '../audit/services/audit.service'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
@@ -15,6 +20,8 @@ import { UserService } from '../user/user.service'
 /** The audiences the Action signs its requests for, one per endpoint. */
 export const ADOPT_AUDIENCE = 'boxlite-account-link-adopt'
 export const STATUS_AUDIENCE = 'boxlite-account-link-status'
+export const PREPARE_AUDIENCE = 'boxlite-account-link-prepare'
+export const RESULT_AUDIENCE = 'boxlite-account-link-result'
 
 /** Who an adopt request names. */
 export interface AdoptRequest {
@@ -24,6 +31,7 @@ export interface AdoptRequest {
 
 // An Auth0 user id: the provider, a bar, and the provider's own id.
 const USER_ID = /^[^|\s]+\|\S+$/
+const OPERATION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 
 function isUserId(value: unknown): value is string {
   return typeof value === 'string' && USER_ID.test(value)
@@ -34,12 +42,8 @@ function isUserId(value: unknown): value is string {
  * logins into one account.
  *
  * The Post-Login Action proves the person holds both accounts and links them
- * inside Auth0. The step it cannot take is moving BoxLite's rows, so it asks
- * here first, with an HS256 token signed by the shared secret that names both
- * users and lives for a minute. Moving before the link keeps a failed link
- * retryable: the next login asks again, and moving is idempotent. Before it
- * decides which account stays, or what Cancel does, it asks whether BoxLite
- * knows a user already.
+ * inside Auth0. The Action signs both identities and first reserves an attempt.
+ * BoxLite moves its rows once the Action or the reconciler confirms the link.
  */
 @Injectable()
 export class AccountLinkService {
@@ -50,7 +54,51 @@ export class AccountLinkService {
     private readonly linkedIdentity: LinkedIdentityService,
     private readonly userService: UserService,
     private readonly audit: AuditService,
+    private readonly consentJobs: AccountLinkConsentJobs,
   ) {}
+
+  async prepare(token: string): Promise<AccountLinkPreparation> {
+    const payload = await this.readRequest(token, PREPARE_AUDIENCE)
+    const operation = this.operation(payload)
+    const result = await this.consentJobs.prepare(operation)
+    await this.audit.createLog({
+      actorId: operation.target_id,
+      actorEmail: '',
+      action: AuditAction.LINK_ACCOUNT,
+      targetType: AuditTarget.USER,
+      targetId: operation.source_id,
+      source: 'auth0-account-link',
+      statusCode: 201,
+      metadata: {
+        scope: 'link_preparation',
+        operationId: result.operationId,
+        attemptId: operation.id,
+        ready: result.ready,
+      },
+    })
+    return result
+  }
+
+  async result(token: string): Promise<void> {
+    const payload = await this.readRequest(token, RESULT_AUDIENCE)
+    const operation = this.operation(payload)
+    const attemptId = payload.attempt_id ?? operation.id
+    if (typeof attemptId !== 'string' || !OPERATION_ID.test(attemptId)) {
+      throw new UnauthorizedException('The account-link attempt is not valid.')
+    }
+    if (payload.outcome !== 'done' && payload.outcome !== 'failed') {
+      throw new UnauthorizedException('The account-link result is not valid.')
+    }
+    await this.consentJobs.complete(operation, payload.outcome, { attemptId })
+  }
+
+  private operation(payload: Record<string, unknown> & { sub: string }): AccountLinkOperation {
+    const { sub, primary_user_id: target, operation_id: id } = payload
+    if (!isUserId(target) || target === sub || typeof id !== 'string' || !OPERATION_ID.test(id)) {
+      throw new UnauthorizedException('The account-link operation is not valid.')
+    }
+    return { id, source_id: sub, target_id: target }
+  }
 
   /** Move the BoxLite data of the user the token names to the account that stays. */
   async adopt(token: string): Promise<AdoptRequest> {
@@ -60,6 +108,20 @@ export class AccountLinkService {
     if (!isUserId(primaryUserId) || primaryUserId === secondaryUserId) {
       throw new UnauthorizedException('The account-link request does not name two accounts.')
     }
+    if (this.configService.get('legal')) {
+      throw new ConflictException('The Auth0 Action must prepare a consent operation before linking accounts.')
+    }
+    return this.recordAdoption(primaryUserId, secondaryUserId, async () => {
+      await this.linkedIdentity.adopt(primaryUserId, secondaryUserId)
+      return { primaryUserId, secondaryUserId }
+    })
+  }
+
+  private async recordAdoption<T>(
+    primaryUserId: string,
+    secondaryUserId: string,
+    prepare: () => Promise<T>,
+  ): Promise<T> {
     const log = await this.audit.createLog({
       actorId: primaryUserId,
       actorEmail: '',
@@ -69,8 +131,9 @@ export class AccountLinkService {
       source: 'auth0-account-link',
       metadata: { primaryUserId, secondaryUserId, scope: 'local_ownership' },
     })
+    let result: T
     try {
-      await this.linkedIdentity.adopt(primaryUserId, secondaryUserId)
+      result = await prepare()
     } catch (error) {
       await this.audit
         .updateLog(log.id, { statusCode: 500, errorMessage: 'Local account adoption failed.' })
@@ -80,8 +143,7 @@ export class AccountLinkService {
     await this.audit
       .updateLog(log.id, { statusCode: 204 })
       .catch(() => this.logger.error(`Failed to record account adoption result for audit ${log.id}`))
-    this.logger.log(`Moved ${secondaryUserId}'s BoxLite data to ${primaryUserId} for an account link`)
-    return { primaryUserId, secondaryUserId }
+    return result
   }
 
   /** Whether BoxLite has the user the token names, that is, whether it has signed in before. */

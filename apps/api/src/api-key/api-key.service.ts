@@ -24,6 +24,7 @@ import {
   generateApiKeyValue,
 } from '../common/utils/api-key'
 import { TypedConfigService } from '../config/typed-config.service'
+import { User } from '../user/user.entity'
 import { randomUUID } from 'crypto'
 import { Context } from '../common/context/context'
 import { mutationFailureType, recordOutcomes } from '../common/utils/business-event.util'
@@ -157,6 +158,17 @@ export class ApiKeyService {
 
   async getApiKeyByValue(value: string): Promise<ApiKey> {
     return this.getApiKeyByHash(generateApiKeyHash(value))
+  }
+
+  async findWithCurrentOwner(value: string): Promise<{ apiKey: ApiKey; owner: User | null } | null> {
+    const row = (await this.apiKeyRepository
+      .createQueryBuilder('key')
+      .leftJoinAndMapOne('key.owner', User, 'owner', 'owner.id = key.userId')
+      .where({ keyHash: generateApiKeyHash(value) })
+      .getOne()) as (ApiKey & { owner: User | null }) | null
+    if (!row) return null
+    const { owner, ...apiKey } = row
+    return { apiKey, owner }
   }
 
   async getApiKeyByHash(keyHash: string): Promise<ApiKey> {

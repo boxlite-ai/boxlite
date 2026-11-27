@@ -22,6 +22,7 @@ const auth = vi.hoisted(() => ({
   removeUser: vi.fn(),
   stopSilentRenew: vi.fn(),
 }))
+vi.mock('@/hooks/useConfig', () => ({ useConfig: () => ({}) }))
 vi.mock('react-oidc-context', () => ({ useAuth: () => auth }))
 vi.mock('posthog-js/react', () => ({ usePostHog: () => undefined }))
 vi.mock('@/hooks/useConfig', () => {

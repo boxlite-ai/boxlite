@@ -137,9 +137,17 @@ export class ApiClient {
     if (response.status !== 204) throw new BoxliteError('Feedback save was not confirmed')
   }
 
-  public async register(turnstileToken: string): Promise<User> {
-    return (await this.http.post<User>('/auth/register', { turnstileToken }, { ...this.v1Config(), timeout: 30_000 }))
-      .data
+  public async register(
+    turnstileToken: string | undefined,
+    consent?: { accepted: true; tosVersion: string; privacyVersion: string },
+  ): Promise<User> {
+    return (
+      await this.http.post<User>(
+        '/auth/register',
+        { turnstileToken, ...consent },
+        { ...this.v1Config(), timeout: 30_000 },
+      )
+    ).data
   }
   public async getCiRepositories(
     organization: string,
