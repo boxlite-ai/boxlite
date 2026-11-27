@@ -1345,12 +1345,38 @@ because `boot/kernel.config` disables `RTC_HCTOSYS`.
   divider reset freezes it. On release, the clock resumes half a second into
   the written second, matching Linux's RTC write timing. Time registers read
   in 24-hour BCD or binary.
+- Register `0x32` is the century, as in QEMU. SET writes the current century
+  there, and a two-digit year alone never changes it. A century byte above
+  99, or one that is not BCD in BCD mode, leaves the time as it was.
 - Alarms match hours, minutes, and seconds in guest RTC time. The RTC latches
   due matches in AF before rescheduling, even with AIE off. Enabling AIE with
   AF set asserts IRQ 8. Reading register C clears the flags and rearms the
   alarm. Clearing AIE lowers IRQ 8 and keeps AF.
 - Linux uses the alarm to emulate update interrupts for `hwclock`. A failed
   IRQ update ends the VM with `DeviceFailed`.
+
+On Linux x86_64 the RTC also has the four operations `VirtioDevice` uses for
+snapshots. Nothing calls them yet; wiring them into pause, export and restore
+is a follow-up.
+
+- `quiesce` sets a paused flag, wakes the alarm thread and joins it. IRQ 8
+  stays as it was, repeated calls succeed, and a thread that had panicked
+  makes it fail.
+- `save_state` is valid only after `quiesce` and changes nothing, so the same
+  device gives the same bytes. It returns a `DeviceSnapshot` of format 1,
+  version 1. The Postcard payload holds the selected register, the CMOS bytes
+  with AF and IRQF in byte `0x0C`, the guest offset and the pending alarm.
+- `restore_state` checks the snapshot before changing anything. It rejects
+  another format or version, a payload that does not decode exactly, and a
+  selected register of 128 or more. Alarm hour, minute or second fields below
+  zero or at 24, 60 or 60 and above are rejected as well.
+- A rejected snapshot leaves the device as it was. An accepted one replaces
+  the whole state and leaves the device paused with IRQ 8 untouched. AF comes
+  from byte `0x0C` and AIE from register B.
+- `resume` ends the pause. An alarm that fell due meanwhile latches AF and
+  raises IRQ 8 once; an AF latched before the pause is not raised again. It
+  fails when the device has stopped, or when raising IRQ 8 or starting the
+  thread fails.
 
 ## Build
 

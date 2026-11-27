@@ -12,13 +12,23 @@
 //! writes stays set and keeps running. While the guest sets the time, the
 //! clock stops and the registers hold what it wrote; when the clock restarts,
 //! it starts half a second into the written second, because Linux writes the
-//! time half a second early (`set_offset_nsec` in `rtc-cmos.c`).
+//! time half a second early (`set_offset_nsec` in `rtc-cmos.c`). The century
+//! is register 0x32, which stopping the clock sets to the current century.
 //!
 //! Alarm matches latch AF in register C. IRQF and GSI 8 follow AF and AIE.
 //! Further matches coalesce until the guest reads C.
 //! Linux emulates update interrupts with that alarm, and `hwclock` waits
 //! on them. Not modelled: 12-hour mode, day and month alarms, and
 //! periodic and update-ended interrupts.
+//!
+//! A snapshot is four operations with the signatures of `VirtioDevice`.
+//! `quiesce` stops the alarm thread and `save_state` reads the state without
+//! changing it: the selected register, the CMOS bytes with AF and IRQF in
+//! byte 0x0C, the offset and the pending alarm, as a Postcard payload in a
+//! `DeviceSnapshot` of format 1, version 1. `restore_state` checks a
+//! snapshot and replaces the state whole, leaving the device paused.
+//! `resume` raises IRQ 8 once for an alarm that fell due meanwhile, then
+//! restarts the thread. Nothing calls the four operations yet.
 
 use std::{
     sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
@@ -32,6 +42,11 @@ use crate::{
     events::{Event, EventSender},
     irq::IrqLine,
 };
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use crate::virtio::{DeviceError, DeviceSnapshot, RestoreContext, SnapshotError};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use serde::{Deserialize, Serialize};
 
 /// The clock the RTC follows, in nanoseconds since the Unix epoch.
 pub(crate) type Clock = Box<dyn Fn() -> i64 + Send>;
@@ -100,6 +115,12 @@ const INTERRUPT_REQUEST: u8 = 0x80;
 /// Status C: the time matched the alarm.
 const ALARM_FLAG: u8 = 0x20;
 
+/// The `DeviceSnapshot` format of the RTC state, and its only version.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SNAPSHOT_FORMAT: u32 = 1;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const SNAPSHOT_VERSION: u32 = 1;
+
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
 const SECONDS_PER_DAY: i64 = 86_400;
 /// Resample an armed alarm within one RTC tick after the host clock jumps.
@@ -116,8 +137,6 @@ pub(crate) struct CmosRtc {
     selected: usize,
     /// The status registers, NVRAM, and the time while the clock is stopped.
     registers: [u8; 128],
-    /// Whether the guest wrote the century byte, which then sets the century.
-    century_written: bool,
     /// The alarm the worker raises, and register C's flags.
     alarm: Arc<Alarm>,
     /// The thread that raises the alarm; `drop` stops and joins it.
@@ -143,7 +162,6 @@ impl CmosRtc {
         Self {
             selected: 0,
             registers,
-            century_written: false,
             alarm: Arc::new(Alarm {
                 state: Mutex::new(AlarmState {
                     clock,
@@ -154,6 +172,7 @@ impl CmosRtc {
                     matched: false,
                     aie: false,
                     stopping: false,
+                    paused: false,
                 }),
                 changed: Condvar::new(),
             }),
@@ -237,7 +256,6 @@ impl CmosRtc {
         }
         if !matches!(register, STATUS_A | STATUS_B) {
             self.registers[register] = value;
-            self.century_written |= register == CENTURY;
         }
 
         if running && (writing_time || !was_running) {
@@ -261,7 +279,7 @@ impl CmosRtc {
         }
         state.aie = self.registers[STATUS_B] & ALARM_INTERRUPT_ENABLE != 0;
         state.update_irq();
-        let start_worker = state.armed.is_some() && !state.stopping;
+        let start_worker = state.armed.is_some() && !state.stopping && !state.paused;
         drop(state);
         if start_worker {
             self.start_worker();
@@ -284,13 +302,7 @@ impl CmosRtc {
         {
             return None;
         }
-        let century = if self.century_written {
-            field(CENTURY).filter(|century| *century <= 99)?
-        } else if year < 70 {
-            20
-        } else {
-            19
-        };
+        let century = field(CENTURY).filter(|century| *century <= 99)?;
         let days = days_from_civil(century * 100 + year, month, day);
         let seconds = days * SECONDS_PER_DAY + hour * 3600 + minute * 60 + second;
         seconds
@@ -356,6 +368,141 @@ impl CmosRtc {
         };
         Some(Armed::after(fields, now.div_euclid(NANOS_PER_SECOND)))
     }
+
+    /// Stops the alarm thread and waits for it, so nothing changes IRQ 8
+    /// until `resume`. Repeated calls are harmless.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "No snapshot caller yet."))]
+    pub(crate) fn quiesce(&mut self) -> Result<(), DeviceError> {
+        self.alarm.state().paused = true;
+        self.alarm.changed.notify_one();
+        if let Some(worker) = self.worker.take()
+            && worker.join().is_err()
+        {
+            return Err(DeviceError::Fatal("joining the CMOS RTC alarm thread"));
+        }
+        Ok(())
+    }
+
+    /// The state for a snapshot, valid only after `quiesce`. Reading it
+    /// changes nothing: register C's flags go into byte 0x0C of a copy.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "No snapshot caller yet."))]
+    pub(crate) fn save_state(&self) -> Result<DeviceSnapshot, SnapshotError> {
+        let state = self.alarm.state();
+        let mut registers = self.registers;
+        registers[STATUS_C] = state.flags();
+        let snapshot = CmosRtcState {
+            // The select port keeps seven bits, and restore checks the rest.
+            selected: u8::try_from(self.selected).expect("the selected register is below 128"),
+            registers: registers.to_vec(),
+            offset_from_clock: state.offset_from_clock,
+            armed: state.armed,
+        };
+        Ok(DeviceSnapshot {
+            format: SNAPSHOT_FORMAT,
+            version: SNAPSHOT_VERSION,
+            // The fields are integers, options and a byte vector, and the
+            // buffer grows, so nothing can fail.
+            payload: postcard::to_allocvec(&snapshot)
+                .expect("postcard cannot fail into a growable buffer"),
+        })
+    }
+
+    /// Checks `snapshot`, then replaces the state with it only if every check
+    /// passes. The device then stays paused until `resume`: no thread runs
+    /// and IRQ 8 does not change. Meant for a device nothing else uses.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "No snapshot caller yet."))]
+    pub(crate) fn restore_state(
+        &mut self,
+        snapshot: DeviceSnapshot,
+        _ctx: RestoreContext,
+    ) -> Result<(), DeviceError> {
+        if snapshot.format != SNAPSHOT_FORMAT {
+            return Err(DeviceError::Fatal("checking the CMOS RTC snapshot format"));
+        }
+        if snapshot.version != SNAPSHOT_VERSION {
+            return Err(DeviceError::Fatal("checking the CMOS RTC snapshot version"));
+        }
+        let (state, trailing) = postcard::take_from_bytes::<CmosRtcState>(&snapshot.payload)
+            .map_err(|error| {
+                tracing::debug!(?error, "the CMOS RTC snapshot does not decode");
+                DeviceError::Fatal("decoding the CMOS RTC snapshot")
+            })?;
+        // Bytes after the state mean it is not the state this version wrote.
+        if !trailing.is_empty() {
+            return Err(DeviceError::Fatal("decoding the CMOS RTC snapshot"));
+        }
+        let out_of_range = |field: Option<i64>, limit: i64| {
+            field.is_some_and(|field| !(0..limit).contains(&field))
+        };
+        // Register 128 or more would panic at the next data-port access. The
+        // alarm ranges are ones `next_alarm` never produces.
+        if state.selected >= 128
+            || state.armed.is_some_and(|armed| {
+                out_of_range(armed.fields.hour, 24)
+                    || out_of_range(armed.fields.minute, 60)
+                    || out_of_range(armed.fields.second, 60)
+            })
+        {
+            return Err(DeviceError::Fatal("checking the CMOS RTC snapshot fields"));
+        }
+
+        let CmosRtcState {
+            selected,
+            registers,
+            offset_from_clock,
+            armed,
+        } = state;
+        // The bank is saved as a byte sequence, so its length needs a check.
+        let mut registers = <[u8; 128]>::try_from(registers)
+            .map_err(|_| DeviceError::Fatal("checking the CMOS RTC snapshot fields"))?;
+        // AF is the alarm thread's `matched`; IRQF follows from AIE.
+        let matched = registers[STATUS_C] & ALARM_FLAG != 0;
+        let aie = registers[STATUS_B] & ALARM_INTERRUPT_ENABLE != 0;
+        registers[STATUS_C] = 0;
+        self.selected = usize::from(selected);
+        self.registers = registers;
+        let mut state = self.alarm.state();
+        state.offset_from_clock = offset_from_clock;
+        state.armed = armed;
+        state.matched = matched;
+        state.aie = aie;
+        state.paused = true;
+        Ok(())
+    }
+
+    /// Ends the pause. An alarm that fell due meanwhile latches AF and raises
+    /// IRQ 8 once; an AF latched before is not raised again. Repeated calls
+    /// are harmless. Fails when the device has stopped, and also when raising
+    /// IRQ 8 or starting the thread fails, like every other device failure.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg_attr(not(test), expect(dead_code, reason = "No snapshot caller yet."))]
+    pub(crate) fn resume(&mut self) -> Result<(), DeviceError> {
+        let mut state = self.alarm.state();
+        if state.stopping {
+            return Err(DeviceError::Fatal("resuming the CMOS RTC"));
+        }
+        state.paused = false;
+        let was_matched = state.matched;
+        let now = state.guest_time_nanos();
+        state.settle_match(now);
+        if !was_matched && state.matched {
+            state.update_irq();
+        }
+        let start_worker = state.armed.is_some() && !state.stopping;
+        drop(state);
+        if start_worker {
+            self.start_worker();
+        }
+        self.alarm.changed.notify_one();
+        // A failed line update or thread start stopped the device above.
+        if self.alarm.state().stopping {
+            return Err(DeviceError::Fatal("resuming the CMOS RTC"));
+        }
+        Ok(())
+    }
 }
 
 impl BusDevice for CmosRtc {
@@ -391,6 +538,11 @@ impl Drop for CmosRtc {
 
 /// The alarm's second, minute and hour; `None` matches any value.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(test, derive(PartialEq))]
+#[cfg_attr(
+    all(target_os = "linux", target_arch = "x86_64"),
+    derive(Serialize, Deserialize)
+)]
 struct AlarmFields {
     second: Option<i64>,
     minute: Option<i64>,
@@ -423,6 +575,12 @@ impl AlarmFields {
 }
 
 /// A pending occurrence in guest RTC seconds since the Unix epoch.
+#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Clone, Copy)]
+#[cfg_attr(
+    all(target_os = "linux", target_arch = "x86_64"),
+    derive(Serialize, Deserialize)
+)]
 struct Armed {
     target_second: i64,
     observed_second: i64,
@@ -440,6 +598,20 @@ impl Armed {
     }
 }
 
+/// The state a snapshot carries: the selected register, the CMOS bytes with
+/// AF and IRQF in byte 0x0C, the guest offset from the host clock, and the
+/// pending alarm with its deadline.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[derive(Serialize, Deserialize)]
+struct CmosRtcState {
+    selected: u8,
+    /// The 128 CMOS bytes. A `Vec`, because serde's derive stops at arrays of
+    /// 32 elements.
+    registers: Vec<u8>,
+    offset_from_clock: i64,
+    armed: Option<Armed>,
+}
+
 /// RTC time, alarm flags and the IRQ line share one lock so a port access can
 /// settle an overdue match before acknowledging or reconfiguring it.
 struct AlarmState {
@@ -451,6 +623,9 @@ struct AlarmState {
     matched: bool,
     aie: bool,
     stopping: bool,
+    /// Set between `quiesce` and `resume`: the alarm thread stays stopped,
+    /// and register writes do not start it.
+    paused: bool,
 }
 
 impl AlarmState {
@@ -508,7 +683,7 @@ impl Alarm {
 
     fn run(&self) {
         let mut state = self.state();
-        while !state.stopping {
+        while !state.stopping && !state.paused {
             if state.armed.is_none() || state.matched {
                 // Further matches coalesce while AF is pending.
                 state = self
