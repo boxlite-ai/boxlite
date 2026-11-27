@@ -2,6 +2,7 @@ import { ConflictException, NotFoundException, ServiceUnavailableException } fro
 import { DataSource, EntityManager, IsNull, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { Runner } from '../entities/runner.entity'
+import { RunnerState } from '../enums/runner-state.enum'
 import { CompleteOutboundControlRecord, OutboundControlRecord } from '../entities/outbound-control-record'
 import {
   CompleteOutboundSnapshot,
@@ -62,17 +63,13 @@ export function hasCompleteOutboundControl(manager: EntityManager, id: string): 
   return manager.existsBy(Box, { id, completeOutboundControl: Not(IsNull()) })
 }
 
-export async function requireCompleteOutboundAdmission(manager: EntityManager, lock: boolean): Promise<void> {
-  const [control] = await manager.query(
-    'SELECT phase, minimum_release FROM complete_outbound_admission WHERE id = 1 AND api_principal = current_user' +
-      (lock ? ' FOR SHARE' : ''),
-  )
-  if (control?.phase !== 'open' || !control.minimum_release) {
-    throw new ServiceUnavailableException({
-      code: 'complete_outbound_closed',
-      message: 'Complete outbound admission is closed',
-    })
-  }
+/** Take ownership locks before locking a Box or a job. */
+export async function lockCompleteRunner(manager: EntityManager, runnerId?: string): Promise<void> {
+  if (!runnerId) return
+  await manager.query('SELECT id FROM "runner" WHERE id = $1 FOR SHARE', [runnerId])
+  await manager.query('SELECT runner_id FROM complete_outbound_runner_enrollment WHERE runner_id = $1 FOR SHARE', [
+    runnerId,
+  ])
 }
 
 export async function verifiedCompleteRunner(
@@ -80,26 +77,26 @@ export async function verifiedCompleteRunner(
   runnerId?: string,
   expectedLease?: string,
   allowExpired = false,
+  forNewWork = false,
 ): Promise<{ runner: Runner; leaseId: string }> {
   if (!runnerId) throw new ServiceUnavailableException('No Runner owns the Box')
+  await lockCompleteRunner(manager, runnerId)
   const [enrollment] = await manager.query(
     `SELECT e.lease_id FROM complete_outbound_runner_enrollment e
     JOIN "runner" r ON r.id = e.runner_id
-    JOIN complete_outbound_admission a ON a.id = 1 AND a.minimum_release = e.verified_floor
-    WHERE e.runner_id = $1 AND a.api_principal = current_user AND a.phase <> 'downgrading'
+    WHERE e.runner_id = $1
       AND r."apiVersion" IN ('0', '2')
       AND e.runner_key_sha256 = encode(sha256(convert_to(r."apiKey", 'UTF8')), 'hex')
       AND ($2::uuid IS NULL OR e.lease_id = $2) AND ($3 OR e.expires_at > clock_timestamp())
-    FOR SHARE OF r`,
+    FOR SHARE OF e`,
     [runnerId, expectedLease ?? null, allowExpired],
   )
   if (!enrollment) throw new ServiceUnavailableException('Runner has no verified complete outbound enrollment')
   const runner = await manager.findOneByOrFail(Runner, { id: runnerId })
+  if (forNewWork && (runner.state !== RunnerState.READY || runner.unschedulable || runner.draining)) {
+    throw new ServiceUnavailableException('Runner is unavailable for new complete outbound work')
+  }
   return { runner, leaseId: enrollment.lease_id }
-}
-
-export async function lockCompleteOutboundFloor(manager: EntityManager): Promise<void> {
-  await manager.query('SELECT id FROM complete_outbound_admission WHERE id = 1 FOR SHARE')
 }
 
 export function completeOutboundRecord(box: Box): CompleteOutboundControlRecord | null {
@@ -201,7 +198,7 @@ export class OutboundPolicyStore {
     organizationId: string,
     operation: (locked: LockedOutboundBox) => Promise<T>,
   ): Promise<T> {
-    return this.transaction(id, organizationId, 'legacy', async (manager, box) => {
+    return this.transaction(id, organizationId, false, async (manager, box) => {
       requireLegacyOutbound(box)
       return operation({
         box,
@@ -228,11 +225,11 @@ export class OutboundPolicyStore {
     admit: boolean,
     operation: (locked: LockedCompleteOutboundBox) => Promise<T>,
   ): Promise<T> {
-    return this.transaction(id, organizationId, admit ? 'reserve' : 'owned', (manager, box) =>
+    return this.transaction(id, organizationId, true, (manager, box) =>
       operation({
         box,
         runner: (expectedLease, allowExpired = !admit) =>
-          verifiedCompleteRunner(manager, box.runnerId, expectedLease, allowExpired),
+          verifiedCompleteRunner(manager, box.runnerId, expectedLease, allowExpired, admit),
         write: async (control, generation, legacy) => {
           completeOutboundRecord({ completeOutboundControl: control } as Box)
           if (
@@ -286,7 +283,7 @@ export class OutboundPolicyStore {
   private async transaction<T>(
     id: string,
     organizationId: string,
-    admission: 'legacy' | 'reserve' | 'owned',
+    lockRunner: boolean,
     operation: (manager: EntityManager, box: Box) => Promise<T>,
   ): Promise<T> {
     const runner = this.dataSource.createQueryRunner('master')
@@ -295,9 +292,14 @@ export class OutboundPolicyStore {
       await runner.connect()
       await runner.startTransaction()
       await runner.query("SET LOCAL lock_timeout = '5s'")
-      if (admission === 'reserve') await requireCompleteOutboundAdmission(runner.manager, true)
-      if (admission === 'owned') await lockCompleteOutboundFloor(runner.manager)
+      const owner = lockRunner
+        ? await runner.manager.findOne(Box, { select: ['runnerId'], where: { id, organizationId } })
+        : undefined
+      if (owner) await lockCompleteRunner(runner.manager, owner.runnerId)
       const box = await this.find(runner.manager, id, organizationId, true)
+      if (lockRunner && owner?.runnerId !== box.runnerId) {
+        throw new ServiceUnavailableException('Box Runner changed before locking outbound control')
+      }
       const result = await operation(runner.manager, box)
       committing = true
       await runner.commitTransaction()

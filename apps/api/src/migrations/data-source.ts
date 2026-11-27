@@ -4,20 +4,22 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DataSource, DataSourceOptions } from 'typeorm'
+import { DataSourceOptions } from 'typeorm'
 import { CustomNamingStrategy } from '../common/utils/naming-strategy.util'
 import { join } from 'path'
 import { config } from 'dotenv'
+import { MigrationDataSource } from './migration-data-source'
 
-config({ path: [join(__dirname, '../../.env'), join(__dirname, '../../.env.local')] })
+config({ path: [join(__dirname, '../../.env'), join(__dirname, '../../.env.local')], quiet: true })
 
-export const baseDataSourceOptions: DataSourceOptions = {
+export const baseDataSourceOptions = {
   type: 'postgres' as const,
   host: process.env.DB_HOST,
   port: parseInt(process.env.DB_PORT!, 10),
   username: process.env.DB_USERNAME,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_DATABASE,
+  installExtensions: false,
   synchronize: false,
   migrationsRun: false,
   migrationsTransactionMode: 'each',
@@ -31,9 +33,9 @@ export const baseDataSourceOptions: DataSourceOptions = {
           rejectUnauthorized: process.env.DB_TLS_REJECT_UNAUTHORIZED !== 'false',
         }
       : false,
-}
+} satisfies DataSourceOptions
 
-const AppDataSource = new DataSource({
+const AppDataSource = new MigrationDataSource({
   ...baseDataSourceOptions,
   migrations: [join(__dirname, '**/*-migration.{ts,js}')],
 })

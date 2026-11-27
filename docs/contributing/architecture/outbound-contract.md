@@ -985,40 +985,32 @@ Legacy checkpoint recovery keeps the published Box ID as the replacement identit
 native name changes. After a complete policy is installed, checkpoint recovery refuses that Box
 before downloading or importing another archive.
 
-#### Release admission
+#### Runner eligibility and rollout
 
 ```mermaid
 sequenceDiagram
-    participant O as Release controller
-    participant P as PostgreSQL primary
+    participant D as Deploy workflow
+    participant P as Primary Runner enrollment
     participant A as API
     participant R as Runner
-    O->>O: Verify ingress, Runtime access and retired credentials
-    O->>P: Register enrolled Runners and verified rollout receipt
-    O->>P: Activate with the dedicated API principal
-    A->>P: Lock admission and verify Runner enrollment
-    A->>R: Dispatch with the enrolled credential
-    O->>P: Close admission and retain the release floor
-    A->>R: Drain existing work under its enrollment
-    O->>P: Confirm drain and begin downgrade
+    D->>D: Retire incompatible API processes
+    A->>P: Run startup migrations
+    D->>R: Verify ready Runners and current artifacts
+    D->>P: Commit the first cohort leases together
+    D->>A: Open external ingress
+    A->>P: Lock and verify the selected Runner and lease
+    A->>R: Submit work under that lease
 ```
 
-The PostgreSQL admission row starts closed. The release controller removes the old API from
-ingress and excludes old Runner processes from Runtime state.
+Hosted placement selects ready Runners with a current, verified enrollment. The API locks the Runner and enrollment before the Box or job and checks for lease changes at reservation. Owned work can still settle while its Runner is draining.
 
-Before activation, the controller rotates Runner credentials and records each verified release
-and lease.
+The GCP deployment must start the compatible API on its private route to run migrations and register the configured Runners. It must commit the first cohort's leases together before opening external ingress. A request on the private route still needs an eligible lease to reserve a complete operation.
 
-The database owner calls `complete_outbound_activate` with the verified rollout receipt,
-release floor, dedicated API role and retired API roles.
-The transaction requires the retired roles to have login disabled and their sessions drained.
+The release workflow must use the existing API login and deployment identity. Runner startup and compatible upgrades must use the same verified binary and lease, including after reboot. Release acceptance covers initial registration of extra Runners and rollback to the last verified compatible artifact.
 
-It also checks the enrolled Runner cohort against the floor and current credentials.
-The API role can lock the admission row and read enrollment.
+API startup and the migration CLI use the same exclusive PostgreSQL session advisory lock. Applying or reverting migrations checks for superseded admission schema and journal entries before DDL.
 
-`complete_outbound_close` disables new reservations and preserves the floor for recovery.
-`complete_outbound_begin_downgrade` requires drained work and expired enrollment. The migrations
-also reject downgrade while protected policy or its generation floor remains.
+Restore a superseded migration baseline with its matching release. An incompatible downgrade requires drained writers and exclusive checks for protected policy, generation floors, unfinished jobs, and current leases.
 
 ### Public Cloud control resources
 
