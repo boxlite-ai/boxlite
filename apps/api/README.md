@@ -1839,3 +1839,42 @@ Feedback is not a cancellation receipt or subscription history. Writing it never
 Deploy the additive pre-deploy migration and API before the updated Console. Billing requires no deployment for this feature. Reverting the schema migration drops saved feedback, so retain the column during an application rollback if data must be preserved.
 
 Run `make test:apps:api TEST_FILES=cancellation-feedback` with `CANCELLATION_TEST_DATABASE_URL` pointing at a disposable loopback PostgreSQL database. The integration suite creates an isolated schema and exercises real JWT verification, organization guards, validation and latest-value replacement. It verifies independent reads and persistence after restarting the API and its database connection.
+
+## Create and exec timing metrics
+
+The API records millisecond OpenTelemetry histograms for Box creation and exec request lifecycles, creation orchestration, startup waits, job dispatch and completion, notifications, Commerce, audit writes, and the external services used by image, volume and secret handling. These metrics use the existing OTLP exporter and 30-second metric reader; no additional collector or ClickHouse configuration is required. Successful operations do not emit additional logs, and existing logs are unchanged.
+
+| Area                            | Histogram names                                                                                                                                                                                                   |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP interfaces                 | `box_create_http_duration`, `box_exec_http_duration`                                                                                                                                                              |
+| Create orchestration            | `box_service_create_duration`, `box_persist_available_runner_duration`, `box_runner_select_duration`, `box_created_event_duration`, `box_start_action_duration`, `box_runner_create_dispatch_duration`            |
+| Exec proxy and readiness        | `box_runner_proxy_setup_duration`, `box_lookup_duration`, `box_activity_update_duration`, `box_auto_resume_duration`, `box_auto_resume_start_duration`, `box_proxy_start_duration`, `box_runner_lookup_duration` |
+| Runner HTTP upstream            | `box_runner_proxy_ttfb_duration`, `box_runner_proxy_upstream_duration` |
+| WebSocket attach                | `box_exec_ws_duration`, `box_exec_ws_auth_duration`, `box_exec_ws_lookup_duration`, `box_exec_ws_handshake_duration` |
+| Startup wait                    | `box_state_wait_duration`, `box_state_subscription_duration`, `box_state_wait_dto_duration`                                                                                                                       |
+| Job dispatch and completion     | `box_job_create_duration`, `box_job_notify_duration`, `box_job_status_update_duration`, `box_create_job_completion_duration`, `box_create_job_completion_update_duration`                                         |
+| State notification              | `box_state_notification_duration`, `box_state_notification_dto_duration`, `box_state_notification_publish_duration`                                                                                               |
+| Commerce and audit              | `commerce_box_limit_resolve_duration`, `commerce_box_limit_cache_read_duration`, `commerce_box_limit_fetch_duration`, `commerce_box_limit_cache_write_duration`, `audit_create_duration`, `audit_update_duration`, `audit_pending_lease_duration`, `audit_pending_lease_complete_duration` |
+| Secret and Filestore boundaries | `secret_store_transfer_duration`, `secret_store_auth_duration`, `secret_store_http_duration`, `secret_credential_issue_duration`, `filestore_lookup_duration`                                                     |
+| Image and volume resolution     | `image_admission_duration`, `image_resolve_duration`, `image_curated_pin_duration`, `volume_validate_duration`                                                                                                    |
+
+The histogram labels are the existing decorator's `component`, `method`, and `status` (`success` or `error`); Box, job, organization, and secret values are not metric labels. Most methods also emit a same-named OpenTelemetry span without the `_duration` suffix. `BoxManager.handleBoxCreatedEvent` and `BoxStartAction.run` retain their existing spans and add only these histograms.
+
+Timing boundaries matter:
+
+- `box.create_http` covers the create controller handler. Middleware and guards remain covered by the existing HTTP/Nest spans; `box.service_create`, persistence, and runner selection are nested below it.
+- `box.exec.http` starts when a POST exec enters the controller and ends when the runner's execution-acceptance response finishes, closes, errors, or rejects during setup. It measures acceptance, not process completion; the runner's `box.exec.wait` span measures the process lifetime. `box.runner_proxy_setup` measures only forwarding setup and is nested below it. Finish/close/event duplication records only once.
+- `box.runner_proxy_ttfb` starts at `http-proxy-middleware`'s `proxyReq` event and ends at `proxyRes`. `box.runner_proxy_upstream` starts at the same event and ends at the upstream response's `end`, early `close`, request/response `error`, or `timeout`. These are direct upstream measurements, not estimates derived from `box.runner_proxy_setup`. Their histogram status is `success`, `error`, or `timeout`.
+- `box.exec.ws` covers the actual Node `upgrade` path through client socket close/error. Its `box.exec.ws_auth`, `box.exec.ws_lookup`, and `box.exec.ws_handshake` children measure authentication, box/runner resolution (including auto-resume), and the runner's successful `open` event or terminal failure. These paths do not pass through the Nest controller.
+- HTTP `proxyReq` and WS `proxyReqWs` inject W3C `traceparent` from their captured operation contexts. Event callbacks retain those contexts explicitly instead of depending on a later `context.active()`. Span attributes include `box_id` and `execution_id` where known; these identifiers never become histogram labels. No output/data frame creates a span, metric, or additional log.
+- `box.state_wait_dto` remains a child of `box.state_wait` when a Redis message or timeout invokes the waiter callback.
+- `audit_pending_lease_complete_duration` includes an in-flight renewal wait and the terminal audit write.
+- `box_job_status_update_duration` ends after the status update schedules asynchronous completion handling; use the completion histograms for that later work.
+- `box_state_notification_publish_duration` records when the Redis publish Promise settles, although the notification handler does not await it.
+- `secret_store_auth_duration` applies only to Google identity acquisition, not a configured development token.
+- `filestore_lookup_duration` covers the actual Filestore lookup, rather than a cache hit.
+- `secret_credential_issue_duration` records one issuance once, including when the public method opens its own transaction.
+
+Run `make test:apps:api TEST_FILES='create-box-instrumentation|api-timing-traces|proxy-telemetry|boxlite-proxy.controller|boxlite-ws-proxy.service'` to verify the real in-memory OpenTelemetry histogram contracts, including asynchronous publish, transaction recursion, create/exec parentage, response completion, upstream TTFB/error/timeout, WebSocket denial/handshake/socket termination, trace propagation, client disconnects, and setup failures.
+
+The Backoffice OpenAPI reader is intentionally restricted to `otel_logs`; the added spans and histograms do not become queryable through that account. Querying them requires Backoffice support and a separately approved least-privilege reader for `otel_traces` and `otel_metrics_histogram`. See [the ClickHouse access guide](../infra/docs/clickhouse.md#query-scope-for-latency-measurements). A `503` from `/v1/telemetry/query` is an external Backoffice capability/configuration issue, not something the API's OTLP exporter can enable.

@@ -21,6 +21,7 @@ import {
   parseImageRef,
   proxyRefOf,
 } from '../utils/image-ref.util'
+import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 /** What a box should boot from, and where that answer came from. */
 export type ResolvedImage = {
@@ -67,6 +68,7 @@ export class ImageResolverService {
     private readonly registryCredentials: RegistryCredentialService,
   ) {}
 
+  @WithInstrumentation('image.resolve')
   async resolve(organization: Organization, image: string | undefined): Promise<ResolvedImage> {
     if (isCuratedSelector(image)) {
       return { ref: assertSupportedImage(image), isOrgOwned: false }

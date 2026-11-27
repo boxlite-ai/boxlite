@@ -259,6 +259,7 @@ export class BoxService {
    * and resets its counter while any remain, so the runner keeps draining and
    * the box keeps running.
    */
+  @WithInstrumentation('box.persist_available_runner')
   private async persistOnAvailableRunner(
     box: Box,
     runnerParams: GetRunnerParams,
@@ -317,6 +318,7 @@ export class BoxService {
     )
   }
 
+  @WithInstrumentation('box.service_create')
   async create(
     createBoxDto: CreateBoxDto,
     organization: Organization,
@@ -897,6 +899,7 @@ export class BoxService {
     return boxes
   }
 
+  @WithInstrumentation('box.lookup')
   async findOneByIdOrName(
     boxIdOrName: string,
     organizationId?: string,
@@ -1148,6 +1151,7 @@ export class BoxService {
    * states are returned unchanged so the caller can wait and retry. Unexpected
    * database errors propagate; AutoResume must never proxy before readiness.
    */
+  @WithInstrumentation('box.proxy_start')
   async ensureStartedForProxy(boxIdOrName: string, organization: Organization, admit?: ProxyAdmission): Promise<Box> {
     this.organizationService.assertOrganizationIsNotSuspended(organization)
     const box = await this.findOneByIdOrName(boxIdOrName, organization.id)
@@ -1280,6 +1284,7 @@ export class BoxService {
     })
   }
 
+  @WithInstrumentation('box.activity_update')
   async updateLastActivityAt(boxId: string, lastActivityAt: Date, previewOpen = false): Promise<void> {
     if (!previewOpen) return this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
     const controller = new AbortController()

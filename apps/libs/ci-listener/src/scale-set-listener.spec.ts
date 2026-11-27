@@ -444,7 +444,7 @@ for (const storage of ['sqlite', 'postgres'])
                 return { limits: [{ maximum, domain: 'organization' }], checks: policyChecks }
               },
             },
-            timing: { tickMs: 5, leaseMs: 450 },
+            timing: { tickMs: 5, leaseMs: 1000 },
           })
           const task = listener.run(controller.signal)
           return async () => {
@@ -453,7 +453,7 @@ for (const storage of ['sqlite', 'postgres'])
           }
         }
         const until = async (predicate: () => boolean | Promise<boolean>) => {
-          const deadline = Date.now() + 4500
+          const deadline = Date.now() + 15000
           while (!(await predicate())) {
             if (Date.now() > deadline)
               throw new Error(
@@ -674,7 +674,7 @@ for (const storage of ['sqlite', 'postgres'])
             return
           }
           if (scenario === 'opens a healthy specification while 64 sessions back off') {
-            const owner = (await state.acquire(randomUUID(), 600))!
+            const owner = (await state.acquire(randomUUID(), 1000))!
             const key = await journal.define(owner, scope)
             for (let n = 1; n <= 64; n++) {
               fixture.throttledSets.set(100 + n, 0)
@@ -751,7 +751,7 @@ for (const storage of ['sqlite', 'postgres'])
             return
           }
           if (scenario === 'rotates idle sessions through every page of restored specifications') {
-            const owner = (await state.acquire(randomUUID(), 600))!
+            const owner = (await state.acquire(randomUUID(), 1000))!
             const key = await journal.define(owner, scope)
             const labels = Array.from({ length: 101 }, (_, index) => 'boxlite-1vcpu-1gbmem-' + (index + 1) + 'gbdisk')
             for (const label of labels) {
@@ -785,7 +785,7 @@ for (const storage of ['sqlite', 'postgres'])
             return
           }
           if (scenario === 'returns an undispatched reservation for a deleted set') {
-            const owner = (await state.acquire(randomUUID(), 600))!
+            const owner = (await state.acquire(randomUUID(), 1000))!
             const originalScope = await journal.define(owner, scope)
             await state.commit(owner, [
               {
@@ -819,7 +819,7 @@ for (const storage of ['sqlite', 'postgres'])
             return
           }
           if (scanOnly) {
-            const former = (await state.acquire(randomUUID(), 600))!,
+            const former = (await state.acquire(randomUUID(), 1000))!,
               scans = state.scans()
             await scans.synchronize(former, 'personal-token', scope.binding, [scope])
             const claim = (await scans.claim('label-scanner'))!

@@ -31,8 +31,10 @@ import {
   ValidationPipe,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
-import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
+import { createProxyMiddleware, errorResponsePlugin, fixRequestBody, Options } from 'http-proxy-middleware'
 import { Request, Response, NextFunction } from 'express'
+import type { IncomingMessage } from 'node:http'
+import { context, propagation } from '@opentelemetry/api'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
@@ -51,6 +53,12 @@ import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
+import {
+  startTimedOperation,
+  TimedOperation,
+  WithInstrumentation,
+  withResponseInstrumentation,
+} from '../common/decorators/otel.decorator'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -136,19 +144,26 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
-      req,
-      res,
-      next,
-      USER_OPERATION,
-      {
-        operation: req.method === 'POST' ? 'box.exec' : undefined,
-        admit: req.method === 'POST' ? requireExecReady : undefined,
-      },
-    )
+    const proxy = () =>
+      this.proxyToRunner(
+        authContext,
+        boxId,
+        (runnerBoxId) => `/v1/boxes/${runnerBoxId}/exec`,
+        req,
+        res,
+        next,
+        USER_OPERATION,
+        {
+          operation: req.method === 'POST' ? 'box.exec' : undefined,
+          admit: req.method === 'POST' ? requireExecReady : undefined,
+        },
+      )
+    return req.method === 'POST'
+      ? withResponseInstrumentation('box.exec.http', res, proxy, {
+          component: BoxliteProxyController.name,
+          method: 'proxyExec',
+        })
+      : proxy()
   }
 
   @All(':boxId/executions/:execId/signal')
@@ -510,6 +525,7 @@ export class BoxliteProxyController {
     await this.tunnelService.revoke(box.id, port)
   }
 
+  @WithInstrumentation('box.runner_proxy_setup')
   private async proxyToRunner(
     authContext: OrganizationAuthContext,
     boxId: string,
@@ -574,17 +590,52 @@ export class BoxliteProxyController {
       throw new NotFoundException(`Runner endpoint for box ${boxId} not found`)
     }
 
+    const proxyContext = context.active()
+    const spanAttributes = {
+      component: BoxliteProxyController.name,
+      method: 'proxyToRunner',
+      box_id: box.id,
+      ...(typeof req.params?.execId === 'string' ? { execution_id: req.params.execId } : {}),
+    }
+    const metricAttributes = { component: BoxliteProxyController.name, method: 'proxyToRunner' }
+    let upstream: TimedOperation | undefined
+    let ttfb: TimedOperation | undefined
+    const finishUpstream = (status: 'success' | 'error' | 'timeout', error?: unknown) => {
+      ttfb?.finish(status, error)
+      upstream?.finish(status, error)
+    }
+
     const proxyOptions: Options = {
       target: targetUrl,
       secure: false,
       changeOrigin: true,
       autoRewrite: true,
       ws: opts?.ws ?? false,
+      plugins: [errorResponsePlugin],
       pathRewrite: () => targetPathForRunnerBox(box.id),
       on: {
         proxyReq: (proxyReq: any, originalReq: any) => {
+          upstream = startTimedOperation('box.runner_proxy_upstream', spanAttributes, metricAttributes, proxyContext)
+          ttfb = startTimedOperation('box.runner_proxy_ttfb', spanAttributes, metricAttributes, proxyContext)
           proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
+          propagation.inject(upstream.ctx, {}, { set: (_carrier, key, value) => proxyReq.setHeader(key, value) })
+          proxyReq.once('timeout', () => finishUpstream('timeout', new Error('upstream request timed out')))
+          proxyReq.once('error', (error) => finishUpstream('error', error))
           fixRequestBody(proxyReq, originalReq)
+        },
+        proxyRes: (proxyRes: IncomingMessage) => {
+          const responseAttributes = { 'http.status_code': proxyRes.statusCode ?? 0 }
+          ttfb?.finish((proxyRes.statusCode ?? 500) >= 400 ? 'error' : 'success', undefined, responseAttributes)
+          proxyRes.once('end', () => {
+            upstream?.finish((proxyRes.statusCode ?? 500) >= 400 ? 'error' : 'success', undefined, responseAttributes)
+          })
+          proxyRes.once('error', (error) => finishUpstream('error', error))
+          proxyRes.once('close', () => {
+            if (!proxyRes.readableEnded) finishUpstream('error', new Error('upstream response closed early'))
+          })
+        },
+        error: (error: Error & { code?: string }) => {
+          finishUpstream(error.code === 'ETIMEDOUT' ? 'timeout' : 'error', error)
         },
       },
       proxyTimeout: opts?.proxyTimeoutMs ?? 5 * 60 * 1000,

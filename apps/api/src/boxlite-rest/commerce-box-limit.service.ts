@@ -9,6 +9,7 @@ import axios from 'axios'
 import { Redis } from 'ioredis'
 import { TypedConfigService } from '../config/typed-config.service'
 import { BoxCreationAdmissionUnavailableError } from '../box/errors/box-creation-limit.error'
+import { WithInstrumentation } from '../common/decorators/otel.decorator'
 
 const COMMERCE_REQUEST_TIMEOUT_MS = 2_000
 const COMMERCE_BOX_LIMIT_CACHE_KEY_PREFIX = 'commerce:box-limit:v1:'
@@ -49,6 +50,7 @@ export class CommerceBoxLimitService {
     @InjectRedis() private readonly redis: Redis,
   ) {}
 
+  @WithInstrumentation('commerce.box_limit_resolve')
   async resolveMaxCreatedBoxes(organizationId: string): Promise<number | undefined> {
     const rawBaseUrl = this.configService.get('billingApiUrl')?.trim()
     if (!rawBaseUrl) {
@@ -93,6 +95,7 @@ export class CommerceBoxLimitService {
     return resolution.maxCreatedBoxes
   }
 
+  @WithInstrumentation('commerce.box_limit_cache_read')
   private async getCachedLimit(cacheKey: string): Promise<CachedBoxLimit> {
     let cached: string | null
     try {
@@ -121,6 +124,7 @@ export class CommerceBoxLimitService {
     return { hit: false }
   }
 
+  @WithInstrumentation('commerce.box_limit_cache_write')
   private async cacheResolvedLimit(cacheKey: string, maxCreatedBoxes: number | undefined): Promise<void> {
     const cachedValue =
       maxCreatedBoxes === undefined ? UNLIMITED_CACHE_VALUE : `${LIMIT_CACHE_VALUE_PREFIX}${maxCreatedBoxes}`
@@ -132,6 +136,7 @@ export class CommerceBoxLimitService {
     }
   }
 
+  @WithInstrumentation('commerce.box_limit_fetch')
   private async fetchMaxCreatedBoxes(
     organizationId: string,
     baseUrl: string,

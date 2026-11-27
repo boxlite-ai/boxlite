@@ -4,6 +4,7 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,9 @@ import (
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // stubAttachExec is a substitutable attachExec for unit-testing the
@@ -233,6 +237,15 @@ func readNextDataFrame(t *testing.T, conn *websocket.Conn, deadline time.Duratio
 }
 
 func TestBoxliteExecAttach_StdinAndExit(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	defer func() {
+		otel.SetTracerProvider(previous)
+		_ = provider.Shutdown(context.Background())
+	}()
+
 	stub := newStubAttachExec()
 	stub.exitCode = 42
 	cleanup := withStubExec(t, "exec-1", stub)
@@ -342,6 +355,22 @@ func TestBoxliteExecAttach_StdinAndExit(t *testing.T) {
 	if stub.disconnect.Load() == 0 {
 		t.Fatal("expected MarkDisconnected to be called")
 	}
+
+	var exitSpan sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == "box.exec.exit_frame" {
+			exitSpan = span
+		}
+	}
+	if exitSpan == nil {
+		t.Fatal("missing exit-frame span")
+	}
+	for _, attr := range exitSpan.Attributes() {
+		if attr.Key == "exit_code" && attr.Value.AsInt64() == 42 {
+			return
+		}
+	}
+	t.Fatalf("exit-frame span attributes = %v, want exit_code=42", exitSpan.Attributes())
 }
 
 func TestBoxliteExecAttach_SingleAttach409(t *testing.T) {

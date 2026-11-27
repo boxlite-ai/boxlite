@@ -6,7 +6,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import type { ClientRequest, IncomingMessage } from 'http'
 import type { Socket } from 'net'
-import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
+import { createProxyMiddleware, errorResponsePlugin, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
 import { JwtStrategy, jwtUserId } from '../auth/jwt.strategy'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
@@ -25,11 +25,17 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { AttachTicketService } from '../box/services/attach-ticket.service'
 import { AuditService } from '../audit/services/audit.service'
 import { AttachAuditSession } from './attach-audit-session'
+import { propagation } from '@opentelemetry/api'
+import { startTimedOperation, TimedOperation } from '../common/decorators/otel.decorator'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
   __boxliteRunnerBoxId?: string
   __boxliteAttachAudit?: AttachAuditSession
+  __boxliteExecutionId?: string
+  __boxliteWsRoot?: TimedOperation
+  __boxliteWsHandshake?: TimedOperation
+  __boxliteWsHandshakeSucceeded?: boolean
 }
 
 // Matches /api/v1/boxes/<id>/executions/<id>/attach and the
@@ -60,6 +66,7 @@ const ATTACH_REQUIRED_PERMISSIONS = [OrganizationResourcePermission.WRITE_BOXES]
 export class BoxliteWsProxyService {
   private readonly logger = new Logger(BoxliteWsProxyService.name)
   private readonly proxy: RequestHandler
+  private readonly upgrades = new WeakMap<Socket, RunnerUpgradeRequest>()
 
   constructor(
     private readonly apiKeyService: ApiKeyService,
@@ -78,6 +85,7 @@ export class BoxliteWsProxyService {
     this.proxy = createProxyMiddleware({
       ws: true,
       changeOrigin: true,
+      plugins: [errorResponsePlugin],
       // Drop the public `/api/v1/` or `/api/v1/<tenant>/` prefix; runner mounts routes at `/v1/...`.
       pathRewrite: (path: string, req: IncomingMessage) => {
         const runnerBoxId = (req as RunnerUpgradeRequest).__boxliteRunnerBoxId
@@ -97,11 +105,51 @@ export class BoxliteWsProxyService {
       },
       on: {
         proxyReqWs: (proxyReq: ClientRequest, req: IncomingMessage) => {
-          const runner = (req as RunnerUpgradeRequest).__boxliteRunner
+          const upgradeReq = req as RunnerUpgradeRequest
+          const runner = upgradeReq.__boxliteRunner
           if (runner?.apiKey) {
             proxyReq.setHeader('Authorization', `Bearer ${runner.apiKey}`)
           }
-          ;(req as RunnerUpgradeRequest).__boxliteAttachAudit?.bind(proxyReq)
+          const root = upgradeReq.__boxliteWsRoot
+          if (root) {
+            upgradeReq.__boxliteWsHandshakeSucceeded = false
+            const handshake = startTimedOperation(
+              'box.exec.ws_handshake',
+              {
+                component: BoxliteWsProxyService.name,
+                method: 'upgrade',
+                box_id: upgradeReq.__boxliteRunnerBoxId ?? '',
+                execution_id: upgradeReq.__boxliteExecutionId ?? '',
+              },
+              { component: BoxliteWsProxyService.name, method: 'upgrade' },
+              root.ctx,
+            )
+            upgradeReq.__boxliteWsHandshake = handshake
+            proxyReq.once('upgrade', (_proxyRes, proxySocket) => this.upgrades.set(proxySocket, upgradeReq))
+            propagation.inject(handshake.ctx, {}, { set: (_carrier, key, value) => proxyReq.setHeader(key, value) })
+          }
+          upgradeReq.__boxliteAttachAudit?.bind(proxyReq)
+        },
+        open: (proxySocket) => {
+          const upgradeReq = this.upgrades.get(proxySocket)
+          if (upgradeReq) upgradeReq.__boxliteWsHandshakeSucceeded = true
+          upgradeReq?.__boxliteWsHandshake?.finish()
+        },
+        close: (_proxyRes, proxySocket) => {
+          const upgradeReq = this.upgrades.get(proxySocket)
+          if (!upgradeReq) return
+          upgradeReq.__boxliteWsHandshake?.finish('error', new Error('runner socket closed during handshake'))
+          upgradeReq.__boxliteWsRoot?.finish(
+            upgradeReq.__boxliteWsHandshakeSucceeded === false ? 'error' : 'success',
+            upgradeReq.__boxliteWsHandshakeSucceeded === false
+              ? new Error('runner socket closed before the upgrade completed')
+              : undefined,
+          )
+        },
+        error: (error, req) => {
+          const upgradeReq = req as RunnerUpgradeRequest
+          upgradeReq.__boxliteWsHandshake?.finish('error', error)
+          upgradeReq.__boxliteWsRoot?.finish('error', error)
         },
       },
     })
@@ -129,27 +177,75 @@ export class BoxliteWsProxyService {
       socket.destroy()
       return
     }
+    const upgradeReq = req as RunnerUpgradeRequest
+    const root = startTimedOperation(
+      'box.exec.ws',
+      {
+        component: BoxliteWsProxyService.name,
+        method: 'upgrade',
+        box_id: match.boxId,
+        execution_id: match.execId,
+      },
+      { component: BoxliteWsProxyService.name, method: 'upgrade' },
+    )
+    upgradeReq.__boxliteExecutionId = match.execId
+    upgradeReq.__boxliteWsRoot = root
+    let socketError: unknown
+    socket.once('error', (error) => {
+      socketError = error
+      upgradeReq.__boxliteWsHandshake?.finish('error', error)
+      root.finish('error', error)
+    })
+    socket.once('close', () => {
+      upgradeReq.__boxliteWsHandshake?.finish('error', new Error('client socket closed during handshake'))
+      const upgradeFailed = upgradeReq.__boxliteWsHandshakeSucceeded === false
+      root.finish(
+        socketError !== undefined || upgradeFailed ? 'error' : 'success',
+        socketError ?? (upgradeFailed ? new Error('client socket closed before the upgrade completed') : undefined),
+      )
+    })
 
+    const authentication = startTimedOperation(
+      'box.exec.ws_auth',
+      { component: BoxliteWsProxyService.name, method: 'upgrade' },
+      { component: BoxliteWsProxyService.name, method: 'upgrade' },
+      root.ctx,
+    )
     // Browsers cannot set `Authorization` on a WebSocket; they send a ticket.
     const auth = req.headers['authorization']
       ? await this.authenticate(req, match.tenant)
       : await this.authenticateTicket(req, match)
     if (!auth) {
+      authentication.finish('error', new Error('unauthorized'))
+      root.finish('error', new Error('unauthorized'))
       this.respondAndClose(socket, 401, 'Unauthorized')
       return
     }
+    authentication.finish()
     // The runner authenticates the proxy, not the ticket. Drop it before
     // anything below can log the URL or forward it to the runner.
     req.url = withoutTicket(req.url ?? '')
 
+    const lookup = startTimedOperation(
+      'box.exec.ws_lookup',
+      { component: BoxliteWsProxyService.name, method: 'upgrade', execution_id: match.execId },
+      { component: BoxliteWsProxyService.name, method: 'upgrade' },
+      root.ctx,
+    )
     try {
       const box = await this.boxService.findOneByIdOrName(match.boxId, auth.organization.id)
       if (!box?.runnerId) {
+        lookup.finish('error', new Error('box or runner not found'))
+        root.finish('error', new Error('box or runner not found'))
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
+      root.setAttributes({ box_id: box.id })
+      lookup.setAttributes({ box_id: box.id })
       // A ticket names the box it was issued for, by id; the URL may use a name.
       if (auth.ticketBoxId !== undefined && auth.ticketBoxId !== box.id) {
+        lookup.finish('error', new Error('ticket box mismatch'))
+        root.finish('error', new Error('ticket box mismatch'))
         this.respondAndClose(socket, 401, 'Unauthorized')
         return
       }
@@ -164,11 +260,14 @@ export class BoxliteWsProxyService {
         .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${box.id}: ${err}`))
       const runner = await this.runnerService.findOne(box.runnerId)
       if (!runner) {
+        lookup.finish('error', new Error('runner not found'))
+        root.finish('error', new Error('runner not found'))
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
-      ;(req as RunnerUpgradeRequest).__boxliteRunner = runner
-      ;(req as RunnerUpgradeRequest).__boxliteRunnerBoxId = box.id
+      lookup.finish()
+      upgradeReq.__boxliteRunner = runner
+      upgradeReq.__boxliteRunnerBoxId = box.id
       let session: AttachAuditSession | undefined
       try {
         session = await AttachAuditSession.start(
@@ -184,17 +283,23 @@ export class BoxliteWsProxyService {
         )
       } catch {
         this.logger.warn('Failed to create attach audit')
+        root.finish('error', new Error('failed to create attach audit'))
         this.respondAndClose(socket, 500, 'Internal Server Error')
         return
       }
-      if (!session) return
-      ;(req as RunnerUpgradeRequest).__boxliteAttachAudit = session
+      if (!session) {
+        root.finish()
+        return
+      }
+      upgradeReq.__boxliteAttachAudit = session
       ;(
         this.proxy as unknown as {
           upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
         }
       ).upgrade(req, socket, head)
     } catch (err) {
+      lookup.finish('error', err)
+      root.finish('error', err)
       this.logger.warn(`upgrade failed for ${req.url}: ${(err as Error).message}`)
       this.respondAndClose(socket, 404, 'Not Found')
     }
