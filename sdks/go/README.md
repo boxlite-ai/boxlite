@@ -126,6 +126,18 @@ func main() {
 }
 ```
 
+### Cancel command startup
+
+Pass a cancellable context to `box.StartExecution`. An expired context returns
+its error before submitting a command. If the context ends during native
+startup, the Go call can return while startup continues. The native call can
+still submit the command after the Go call returns the cancellation error.
+The SDK releases any late execution handle and attempts to terminate the
+command. Retrying immediately can run a command with side effects twice.
+
+After a successful start, use `execution.Wait(ctx)` to control how long you
+wait and `execution.Kill(ctx)` to stop a running command explicitly.
+
 ### Live Execution Discovery and Recovery
 
 `box.Executions().List(ctx)` returns `[]ExecutionInfo` from the live guest,
@@ -523,9 +535,21 @@ make dev:go
 # Run hosted unit and REST tests
 make test:unit:go
 
-# Run native archive import/export tests on a VM-capable host
+# Run native execution and archive tests on a VM-capable host
 make test:integration:go
 ```
+
+The startup cancellation regression runs through the same integration target:
+
+```bash
+make test:integration:go FILTER=TestIntegrationStartExecutionCancelReapsLateVMProcess RACE=1
+```
+
+It requires KVM on Linux or a supported macOS host. The default Alpine image
+comes from the local test registry. Set `BOXLITE_TEST_REGISTRIES=upstream` to use
+public ECR, or set `BOXLITE_GO_VM_IMAGE` to override the image.
+The test checks prompt cancellation, termination by SIGKILL within the cleanup
+deadline, and continued VM use.
 
 Native archive import/export tests use the production runtime constructor and
 require a VM-capable host, even when the test does not start a VM.

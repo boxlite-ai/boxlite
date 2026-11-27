@@ -707,11 +707,11 @@ test\:unit\:go:
 	@$(MAKE) dev:go GO_CARGO_FEATURES="--features test-support"
 	@cd sdks/go && go test -a -count=1 -tags boxlite_dev,boxlite_agent_test $(GOTEST_RACE) -v $(GOTEST_FILTER) ./...
 
-# Native Go archive import/export tests require a supported host.
+# Native Go integration tests require a supported host.
 # Keep them in the VM-capable integration workflow, outside hosted unit coverage.
-test\:integration\:go: dev\:go
-	@echo "🧪 Running Go SDK archive integration test (requires VM)..."
-	@cd sdks/go && go test -count=1 -tags=boxlite_dev,boxlite_integration -v $(GOTEST_FILTER) ./integration/archive
+test\:integration\:go: dev\:go $(if $(WITH_LOCAL_REGISTRY),_local-registry)
+	@echo "🧪 Running Go SDK integration tests (requires VM)..."
+	@cd sdks/go && $(WITH_LOCAL_REGISTRY) go test -count=1 -tags=boxlite_dev,boxlite_integration $(GOTEST_RACE) -v $(GOTEST_FILTER) ./integration/...
 
 # Go SDK full suite.
 test\:all\:go:

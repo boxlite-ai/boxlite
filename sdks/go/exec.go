@@ -10,6 +10,7 @@ import (
 	"context"
 	"io"
 	"runtime/cgo"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -43,13 +44,6 @@ func envMapToFlatPairs(env map[string]string) []string {
 		pairs = append(pairs, k, env[k])
 	}
 	return pairs
-}
-
-// envMapToCStringArray converts an env map to a C string array suitable
-// for `BoxliteCommand.env_pairs`. Returns (nil, 0) for nil/empty input.
-// Caller must free via freeCStringArray.
-func envMapToCStringArray(env map[string]string) (**C.char, int) {
-	return toCStringArray(envMapToFlatPairs(env))
 }
 
 // ExecutionOptions configures a streaming command execution.
@@ -214,24 +208,69 @@ func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult
 }
 
 // StartExecution starts a command and returns a streaming execution handle.
-//
-// boxlite_box_exec is synchronous on the C side; once it returns, we
-// register stream callbacks (which post events into the runtime queue).
-func (b *Box) StartExecution(_ context.Context, name string, args []string, opts *ExecutionOptions) (*Execution, error) {
+// If ctx ends during startup, StartExecution returns its error and releases
+// any execution the native call returns later. A native call already in
+// progress can still submit the command after StartExecution returns.
+func (b *Box) StartExecution(ctx context.Context, name string, args []string, opts *ExecutionOptions) (*Execution, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	b.runtime.ensureDrainRunning()
 
+	cfg := ExecutionOptions{}
+	if opts != nil {
+		cfg = *opts
+	}
+	handle, err := b.submitExecutionWithContext(ctx, name, args, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return b.executionWithCallbacks(handle, cfg)
+}
+
+func (b *Box) submitExecutionWithContext(ctx context.Context, name string, args []string, cfg ExecutionOptions) (*C.CExecutionHandle, error) {
+	// Native submission can outlive this call. Flatten the environment before
+	// starting the worker so it owns the sorted pairs without cloning the map.
+	env := envMapToFlatPairs(cfg.Env)
+	cfg.Env = nil
+	if ctx.Done() == nil {
+		return b.submitExecution(ctx, name, args, env, cfg)
+	}
+
+	args = slices.Clone(args)
+	type submission struct {
+		handle *C.CExecutionHandle
+		err    error
+	}
+	submitted := make(chan submission)
+	go func() {
+		handle, err := b.submitExecution(ctx, name, args, env, cfg)
+		select {
+		case submitted <- submission{handle: handle, err: err}:
+		case <-ctx.Done():
+			// Without a receiver, the worker still owns the handle. Freeing
+			// an owned execution attempts to terminate and reap its command.
+			if handle != nil {
+				C.boxlite_execution_free(handle)
+			}
+		}
+	}()
+	select {
+	case result := <-submitted:
+		return result.handle, result.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (b *Box) submitExecution(ctx context.Context, name string, args, env []string, cfg ExecutionOptions) (*C.CExecutionHandle, error) {
 	cCmd := toCString(name)
 	defer C.free(unsafe.Pointer(cCmd))
 
 	cArgs, argc := toCStringArray(args)
 	defer freeCStringArray(cArgs, argc)
 
-	cfg := ExecutionOptions{}
-	if opts != nil {
-		cfg = *opts
-	}
-
-	envPairs, envCount := envMapToCStringArray(cfg.Env)
+	envPairs, envCount := toCStringArray(env)
 	defer freeCStringArray(envPairs, envCount)
 
 	var cWorkdir *C.char
@@ -278,13 +317,16 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 	if err != nil {
 		return nil, err
 	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	code := C.boxlite_box_exec(boxHandle, &cCommand, &handle, &cerr)
-	unlock()
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
 
-	return b.executionWithCallbacks(handle, cfg)
+	return handle, nil
 }
 
 // executionWithCallbacks shares stream and exit ownership across exec/attach.
