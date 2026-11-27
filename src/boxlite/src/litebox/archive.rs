@@ -175,8 +175,18 @@ fn append_archive_files<W: Write>(
 /// Zstd magic bytes: `0x28B52FFD` (little-endian in file).
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
-/// Extract an archive, detecting format via magic bytes (zstd or plain tar).
+#[cfg(test)]
 pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()> {
+    extract_archive_with_manifest(archive_path, dest_dir, |_| Ok(()))
+}
+
+/// Extract a zstd or plain tar archive. Validate each top-level manifest as
+/// soon as it is unpacked, before advancing to the next member.
+pub(crate) fn extract_archive_with_manifest(
+    archive_path: &Path,
+    dest_dir: &Path,
+    validate_manifest: impl FnMut(&Path) -> BoxliteResult<()>,
+) -> BoxliteResult<()> {
     use std::io::Read;
 
     let mut file = std::fs::File::open(archive_path).map_err(|e| {
@@ -209,9 +219,9 @@ pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteRe
     if magic == ZSTD_MAGIC {
         let decoder = zstd::Decoder::new(file)
             .map_err(|e| BoxliteError::Storage(format!("Failed to create zstd decoder: {}", e)))?;
-        unpack_file_members(decoder, dest_dir)
+        unpack_file_members(decoder, dest_dir, validate_manifest)
     } else {
-        unpack_file_members(file, dest_dir)
+        unpack_file_members(file, dest_dir, validate_manifest)
     }
 }
 
@@ -247,7 +257,13 @@ fn carries_file_contents(entry_type: tar::EntryType) -> bool {
 /// member. Member *names* are deliberately not filtered — archives written
 /// before the guest rootfs became a shared base image carry a third member that
 /// the importer ignores, and rejecting it would strand them.
-fn unpack_file_members<R: std::io::Read>(reader: R, dest_dir: &Path) -> BoxliteResult<()> {
+fn unpack_file_members<R: std::io::Read>(
+    reader: R,
+    dest_dir: &Path,
+    mut validate_manifest: impl FnMut(&Path) -> BoxliteResult<()>,
+) -> BoxliteResult<()> {
+    use std::path::Component;
+
     let mut archive = tar::Archive::new(reader);
     let entries = archive
         .entries()
@@ -269,9 +285,20 @@ fn unpack_file_members<R: std::io::Read>(reader: R, dest_dir: &Path) -> BoxliteR
             )));
         }
 
-        entry
+        let unpacked = entry
             .unpack_in(dest_dir)
             .map_err(|e| BoxliteError::Storage(format!("Failed to extract archive: {}", e)))?;
+        // unpack_in already skips paths with '..' and strips root and '.'
+        // components. Match the resulting name, not the raw tar path.
+        if unpacked
+            && entry
+                .path()?
+                .components()
+                .filter(|part| matches!(part, Component::Normal(_)))
+                .eq(Path::new(MANIFEST_FILENAME).components())
+        {
+            validate_manifest(&dest_dir.join(MANIFEST_FILENAME))?;
+        }
     }
 
     Ok(())

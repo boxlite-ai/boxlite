@@ -502,11 +502,16 @@ Other engines and remote backends return `Unsupported`; this API is not exposed 
 
 `ExportOptions::default()` exports disks only. Set `include_memory: true` or
 use `ExportOptions::full()` to request a full checkpoint. Local full export
-requires a running box with live VM state; otherwise it returns `InvalidState`.
-The current VMM checkpoint hook is a placeholder and returns `Unsupported`.
-REST export also returns `Unsupported` for full checkpoints without sending a
-request. Import rejects v8 archives and manifests carrying memory checkpoint
-metadata with `Unsupported`; disk-only archives remain supported through v7.
+requires a running box and reconnects to a detached VM if needed. It does not
+start an inactive box. The current VMM checkpoint hook is a placeholder and
+returns `Unsupported`. REST export also returns `Unsupported` for full
+checkpoints without sending a request. Import rejects v8 archives and manifests
+carrying memory checkpoint metadata with `Unsupported` as soon as it reads the
+manifest; disk-only archives remain supported through v7.
+
+Rust source migration: replace `ExportOptions {}` with `ExportOptions::default()`
+for disk-only export. If you construct a disk-only `ArchiveManifest` directly,
+set `memory_checkpoint: None`.
 
 #### ExecutionsHandle
 

@@ -192,7 +192,7 @@ impl BoxImpl {
                         .map_err(|e| {
                             BoxliteError::Storage(format!("Failed to create temp directory: {}", e))
                         })?;
-                    self.capture_memory_checkpoint(temp_dir.path())?;
+                    self.capture_memory_checkpoint(temp_dir.path()).await?;
                     // A successful capture still cannot be packaged by this placeholder.
                     Err(BoxliteError::Unsupported(
                         "full memory checkpoint archive creation is not supported".into(),

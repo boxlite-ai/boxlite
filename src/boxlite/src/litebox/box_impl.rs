@@ -806,14 +806,12 @@ impl BoxImpl {
             .await
     }
 
-    /// Capture memory through an already initialized handler without booting or attaching.
-    pub(super) fn capture_memory_checkpoint(
+    /// Caller holds lifecycle admission. Reattach to a running VM if needed, never boot one.
+    pub(super) async fn capture_memory_checkpoint(
         &self,
         dest_dir: &std::path::Path,
     ) -> BoxliteResult<()> {
-        let live = self.live.get().ok_or_else(|| {
-            BoxliteError::InvalidState("full checkpoint export requires live VM state".into())
-        })?;
+        let live = self.existing_live_state_locked().await?;
         let handler = live
             .handler
             .lock()
@@ -2149,21 +2147,6 @@ mod tests {
             "unexpected error: {error:?}"
         );
         assert!(captured_dir.lock().unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn full_checkpoint_export_requires_live_vm_state() {
-        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
-        let box_impl = Arc::get_mut(&mut fixture.box_impl).unwrap();
-        assert!(box_impl.live.take().is_some());
-        let dest = fixture._temp_dir.path().join("checkpoint.boxlite");
-        let error = box_impl
-            .export_box(ExportOptions::full(), &dest)
-            .await
-            .unwrap_err();
-        assert!(matches!(error, BoxliteError::InvalidState(message)
-            if message == "full checkpoint export requires live VM state"));
-        assert!(box_impl.live.get().is_none());
     }
 
     #[tokio::test]

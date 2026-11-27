@@ -5,8 +5,9 @@
 
 mod common;
 
+use boxlite::BoxliteError;
 use boxlite::litebox::BoxCommand;
-use boxlite::runtime::options::BoxliteOptions;
+use boxlite::runtime::options::{BoxliteOptions, ExportOptions};
 use boxlite::runtime::types::BoxStatus;
 use boxlite::util::{PidFileReader, is_process_alive};
 use common::TestRuntime as BoxliteRuntime;
@@ -315,9 +316,21 @@ async fn detached_box_recoverable_after_restart() {
         );
         assert!(info.pid.is_some(), "Recovered box should have PID");
 
-        // Should be able to stop it
         let handle = runtime.get(&box_id).await.unwrap().unwrap();
+        let export_dir = tempfile::tempdir().unwrap();
+        // The new handle must reattach on its first live operation, not require
+        // a start or exec before reaching the backend checkpoint hook.
+        let result = handle
+            .export(ExportOptions::full(), export_dir.path())
+            .await;
         handle.stop().await.unwrap();
+
+        let error = result.unwrap_err();
+        assert!(
+            matches!(&error, BoxliteError::Unsupported(message)
+                if message == "full memory checkpoint capture is not supported by this VMM backend"),
+            "unexpected full export error: {error:?}"
+        );
 
         let info = runtime
             .get_info(&box_id)
