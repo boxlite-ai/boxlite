@@ -6,7 +6,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import type { ClientRequest, IncomingMessage } from 'http'
 import type { Socket } from 'net'
-import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
+import { createProxyMiddleware, errorResponsePlugin, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
 import { JwtStrategy, jwtUserId } from '../auth/jwt.strategy'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
@@ -85,6 +85,7 @@ export class BoxliteWsProxyService {
     this.proxy = createProxyMiddleware({
       ws: true,
       changeOrigin: true,
+      plugins: [errorResponsePlugin],
       // Drop the public `/api/v1/` or `/api/v1/<tenant>/` prefix; runner mounts routes at `/v1/...`.
       pathRewrite: (path: string, req: IncomingMessage) => {
         const runnerBoxId = (req as RunnerUpgradeRequest).__boxliteRunnerBoxId

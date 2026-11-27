@@ -14,7 +14,7 @@ import {
 } from '@opentelemetry/sdk-metrics'
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { EventEmitter } from 'node:events'
-import { createProxyMiddleware } from 'http-proxy-middleware'
+import { createProxyMiddleware, errorResponsePlugin } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
@@ -22,6 +22,7 @@ import { startTimedOperation } from '../common/decorators/otel.decorator'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
+  errorResponsePlugin: jest.fn(),
   fixRequestBody: jest.fn(),
 }))
 jest.mock('uuid', () => ({ v4: jest.fn(() => 'mock-uuid'), validate: jest.fn(() => true) }))
@@ -115,6 +116,12 @@ describe('runner proxy telemetry', () => {
     )
     return { options: jest.mocked(createProxyMiddleware).mock.calls[0][0], req, res }
   }
+
+  it('preserves default proxy error responses while recording failures', async () => {
+    const { options } = await httpHarness()
+
+    expect(options.plugins).toEqual([errorResponsePlugin])
+  })
 
   it('measures upstream TTFB and the complete response while propagating traceparent', async () => {
     const { options, req, res } = await httpHarness()
