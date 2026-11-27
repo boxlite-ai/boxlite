@@ -1549,6 +1549,7 @@ paths:
         "400": {$ref: "#/components/responses/AgentBadRequest"}
         "401": {$ref: "#/components/responses/AgentUnauthorized"}
         "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
         "503": {$ref: "#/components/responses/AgentUnavailable"}
 
   /{prefix}/boxes/{box_id}/agents/{agent_id}:
@@ -1571,6 +1572,7 @@ paths:
         "400": {$ref: "#/components/responses/AgentBadRequest"}
         "401": {$ref: "#/components/responses/AgentUnauthorized"}
         "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
         "503": {$ref: "#/components/responses/AgentUnavailable"}
 
   /{prefix}/boxes/{box_id}/agents/{agent_id}/close:
@@ -1663,6 +1665,7 @@ paths:
         "400": {$ref: "#/components/responses/AgentBadRequest"}
         "401": {$ref: "#/components/responses/AgentUnauthorized"}
         "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
         "503": {$ref: "#/components/responses/AgentUnavailable"}
 
   /{prefix}/boxes/{box_id}/agents/{agent_id}/requests/{request_id}/respond:
@@ -1776,6 +1779,7 @@ paths:
         "400": {$ref: "#/components/responses/AgentBadRequest"}
         "401": {$ref: "#/components/responses/AgentUnauthorized"}
         "404": {$ref: "#/components/responses/AgentNotFound"}
+        "409": {$ref: "#/components/responses/AgentConflict"}
         "503": {$ref: "#/components/responses/AgentUnavailable"}
 
 
@@ -2595,7 +2599,7 @@ components:
           example: {error: {message: "agent not found", type: NotFoundError, code: not_found, request_id: req_1}}
 
     AgentConflict:
-      description: Agent or turn state does not permit the operation, or request is resolved
+      description: The Box is stopped with AutoResume disabled, agent or turn state prevents the operation, or the request is resolved
       content:
         application/json:
           schema: {$ref: "#/components/schemas/ErrorResponse"}

@@ -293,20 +293,255 @@ fn agents_reach_the_local_runtime_and_report_a_box_without_opencode() {
     ctx.cleanup_box(name);
 }
 
-#[test]
-#[ignore = "needs a VM and network; run make test:integration:agents"]
-fn agents_on_a_rest_profile_report_unsupported() {
-    let serve = common::serve::ServeChild::start();
-    let created = serve.client(&["create", "--name", "cli-agent-rest", "alpine:latest"]);
-    assert!(created.status.success(), "{created:?}");
-    let output = serve.client(&["agent", "create", "cli-agent-rest", "--agent", "opencode"]);
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("agents require a local runtime"),
-        "{output:?}"
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; run make test:integration:agents"]
+async fn agents_over_rest_drive_opencode() {
+    use boxlite::agents::{
+        AgentCreateOptions, AgentEventsOptions, AgentSendOptions, AgentWaitOptions,
+    };
+    use futures::StreamExt;
+
+    let (model_port, _) = opencode::start_fake_model().await;
+    let name = "cli-agent-rest";
+    let ctx = common::boxlite();
+    opencode_box(&ctx, name, model_port);
+    let serve = common::serve::ServeChild::start_for_home(&ctx.home);
+
+    let runtime =
+        boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(serve.url())).unwrap();
+    let sandbox = runtime.get(name).await.unwrap().unwrap();
+    let agent = sandbox
+        .agents()
+        .create(
+            "opencode",
+            AgentCreateOptions {
+                config: boxlite::agents::AgentConfig {
+                    model: Some("fake/fake-model".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        agent.config().unwrap().model.as_deref(),
+        Some("fake/fake-model")
     );
-    let removed = serve.client(&["rm", "--force", "cli-agent-rest"]);
+    assert!(
+        agent
+            .capabilities()
+            .unwrap()
+            .operations
+            .iter()
+            .any(|op| op == "agent.send")
+    );
+    assert!(matches!(
+        agent.state(),
+        Err(boxlite::BoxliteError::Unsupported(_))
+    ));
+    assert!(matches!(
+        agent.requests().await,
+        Err(boxlite::BoxliteError::Unsupported(_))
+    ));
+    let mut events = agent.events(AgentEventsOptions::default()).await.unwrap();
+    let turn = agent
+        .send("hello", AgentSendOptions::default())
+        .await
+        .unwrap();
+    let turn_id = turn.state().unwrap().id;
+    let result = turn
+        .wait(AgentWaitOptions {
+            timeout: Some(Duration::from_secs(120)),
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.text.as_deref(), Some("pong: hello"));
+    assert_eq!(result.turn_id, turn_id);
+    let event = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let event = events.next().await.unwrap().unwrap();
+            if event.kind == "session.inbox.enqueued" {
+                break event;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(event.turn_id.as_deref(), Some(turn_id.as_str()));
+    assert_eq!(
+        agent.get_turn(&turn_id).await.unwrap().state().unwrap().id,
+        turn_id
+    );
+    assert!(matches!(
+        agent.close(Default::default()).await,
+        Err(boxlite::BoxliteError::Unsupported(_))
+    ));
+    drop(events);
+    let removed = serve.client(&["rm", "--force", name]);
+    assert!(removed.status.success(), "{removed:?}");
+    serve.wait_until_no_boxes();
+}
+
+/// Compare native and remote handles using the same input and real OpenCode.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; run make test:integration:agents"]
+async fn agents_over_rest_match_local_rust() {
+    use boxlite::agents::{
+        self, AgentCreateOptions, AgentEventsOptions, AgentResponse, AgentSendOptions,
+        AgentWaitOptions,
+    };
+    use futures::StreamExt;
+
+    async fn observe(sandbox: &boxlite::LiteBox) -> (Value, Value, Value, Value, String, bool) {
+        let agent = sandbox
+            .agents()
+            .create(
+                "opencode",
+                AgentCreateOptions {
+                    config: agents::AgentConfig {
+                        model: Some("fake/fake-model".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let agent_id = agent.id().to_owned();
+        assert!(!agent_id.is_empty());
+        let config = agents::records::config(&agent.config().unwrap());
+        let capabilities = agents::records::capabilities(&agent.capabilities().unwrap());
+        let reopened = sandbox.agents().get(&agent_id).await.unwrap();
+        assert_eq!(reopened.id(), agent_id);
+        assert_eq!(agents::records::config(&reopened.config().unwrap()), config);
+        assert_eq!(
+            agents::records::capabilities(&reopened.capabilities().unwrap()),
+            capabilities
+        );
+        assert!(matches!(
+            agent.state(),
+            Err(boxlite::BoxliteError::Unsupported(_))
+        ));
+        assert!(matches!(
+            agent.requests().await,
+            Err(boxlite::BoxliteError::Unsupported(_))
+        ));
+
+        let mut events = agent.events(AgentEventsOptions::default()).await.unwrap();
+        let turn = agent
+            .send("hello", AgentSendOptions::default())
+            .await
+            .unwrap();
+        let turn_id = turn.state().unwrap().id;
+        assert!(!turn_id.is_empty());
+        let result = turn
+            .wait(AgentWaitOptions {
+                timeout: Some(Duration::from_secs(120)),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.turn_id, turn_id);
+        let first = tokio::time::timeout(Duration::from_secs(30), events.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.agent_id, agent_id);
+        let event_names_turn = first.turn_id.as_deref() == Some(turn_id.as_str());
+        let fetched = reopened.get_turn(&turn_id).await.unwrap().state().unwrap();
+        assert_eq!(fetched.id, turn_id);
+        assert_eq!(fetched.agent_id, agent_id);
+        assert_eq!(fetched.result.as_ref().unwrap().turn_id, turn_id);
+        assert!(matches!(
+            agent.close(Default::default()).await,
+            Err(boxlite::BoxliteError::Unsupported(_))
+        ));
+        assert!(matches!(
+            turn.steer("adjust", Default::default()).await,
+            Err(boxlite::BoxliteError::Unsupported(_))
+        ));
+        assert!(matches!(
+            turn.interrupt(Default::default()).await,
+            Err(boxlite::BoxliteError::Unsupported(_))
+        ));
+        assert!(matches!(
+            agent
+                .respond(
+                    "request",
+                    AgentResponse::Permission { approved: false },
+                    Default::default()
+                )
+                .await,
+            Err(boxlite::BoxliteError::Unsupported(_))
+        ));
+        assert!(matches!(
+            turn.events(Default::default()).await,
+            Err(boxlite::BoxliteError::Unsupported(_))
+        ));
+
+        fn normalized_result(mut value: Value, turn_id: &str) -> Value {
+            let object = value.as_object_mut().unwrap();
+            assert_eq!(object.remove("turn_id").unwrap(), turn_id);
+            if let Some(entries) = object.get_mut("usage").and_then(Value::as_array_mut) {
+                for entry in entries {
+                    let id = entry.as_object_mut().unwrap().remove("message_id").unwrap();
+                    assert!(!id.as_str().unwrap().is_empty());
+                }
+            }
+            value
+        }
+        let result = serde_json::from_str(agents::records::result(&result).get()).unwrap();
+        let result = normalized_result(result, &turn_id);
+        let mut snapshot: Value =
+            serde_json::from_str(agents::records::turn_state(&fetched).get()).unwrap();
+        let object = snapshot.as_object_mut().unwrap();
+        assert_eq!(object.remove("id").unwrap(), turn_id);
+        assert_eq!(object.remove("agent_id").unwrap(), agent_id);
+        let snapshot_result = object.remove("result").unwrap();
+        object.insert(
+            "result".into(),
+            normalized_result(snapshot_result, &turn_id),
+        );
+        (
+            config,
+            capabilities,
+            result,
+            snapshot,
+            first.kind,
+            event_names_turn,
+        )
+    }
+
+    let (model_port, _) = opencode::start_fake_model().await;
+    let local = common::boxlite();
+    opencode_box(&local, "local-agent", model_port);
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::BoxliteOptions {
+        home_dir: local.home.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let sandbox = runtime.get("local-agent").await.unwrap().unwrap();
+    let native = observe(&sandbox).await;
+    drop(sandbox);
+    runtime.shutdown(Some(30)).await.unwrap();
+    drop(runtime);
+    local.cleanup_box("local-agent");
+
+    let remote = common::boxlite();
+    opencode_box(&remote, "remote-agent", model_port);
+    let serve = common::serve::ServeChild::start_for_home(&remote.home);
+    let runtime =
+        boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(serve.url())).unwrap();
+    let sandbox = runtime.get("remote-agent").await.unwrap().unwrap();
+    let transported = observe(&sandbox).await;
+    assert_eq!(native.0, transported.0, "agent configuration");
+    assert_eq!(native.1, transported.1, "agent capabilities");
+    assert_eq!(native.2, transported.2, "turn result");
+    assert_eq!(native.3, transported.3, "turn snapshot");
+    assert_eq!(native.4, transported.4, "first event kind");
+    assert_eq!(native.5, transported.5, "first event turn association");
+    let removed = serve.client(&["rm", "--force", "remote-agent"]);
     assert!(removed.status.success(), "{removed:?}");
     serve.wait_until_no_boxes();
 }

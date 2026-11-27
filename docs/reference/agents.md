@@ -195,11 +195,34 @@ These records define SDK data types. The
 [REST design](../contributing/investigations/2026-10-28-agent-rest-api-design.md)
 maps them to nine HTTP operations, including snapshot reads, resumable events,
 steering and typed replies. It also defines cached getter behavior and retry
-headers. The Rust REST client forwards create, snapshot, turn, and control calls
-to an existing server. Response config accepts additional fields and validates
-known types; request config rejects unknown fields. Close and interrupt require
-HTTP 204. The remote `requests()` method is unsupported. The Rust client opens agent and turn SSE streams before returning, ignores
-comment heartbeats, validates parent IDs, and bounds event size and buffering.
+headers. The REST server exposes these routes, and the Rust REST client forwards
+agent operations to them. Agent operations on a stopped Box return HTTP 409 (`conflict`) when AutoResume is disabled. Start the Box explicitly to continue.
+AutoStop keeps the Box running while an admitted turn is active and can stop it
+after the turn ends. If admission fails with an uncertain outcome and no turn ID,
+the server retains the protection for five minutes or until the Box is removed.
+After that grace period AutoStop may interrupt work that was admitted but could
+not be observed.
+
+An explicit stop and turn submission are ordered per Box. Stop releases protection for the run it ends. If an AutoStop sweep is also stopping that Box, new submissions wait until the sweep finishes. A turn accepted after restart receives fresh protection. Observers read Box metadata
+without resuming a stopped Box and exit when its run ends. If OpenCode resumes
+an earlier turn after restart, that resumed turn is not protected from AutoStop;
+only turns admitted through the server in the new run receive protection.
+The observer captures PID and start time from the original Box handle before
+dispatch. A changed available run marker also releases protection when a restart
+occurs between metadata checks.
+
+Agent config responses accept additional fields while validating known fields.
+Agent config request bodies reject unknown fields.
+
+Close and interrupt return HTTP 204 without a snapshot;
+read a resource separately when its current state is needed. The remote Rust
+`requests()` method remains unsupported, although turn snapshots can include
+pending requests. The CLI does not provide interactive request handling.
+SSE connections send comment heartbeats while idle; clients do not receive them
+as agent events.
+Agent `Idempotency-Key` values must contain 1–256 visible ASCII bytes and are
+forwarded to the adapter; BoxLite does not store retry results.
+
 On an OpenCode agent subscription, a subagent event carries the subscribed
 agent's ID in the outer `agent_id` field. Its native payload identifies the
 child session, and its outer `turn_id` is null.
@@ -209,7 +232,6 @@ connection without cancelling the turn. Agent writes return redirects as errors
 and make one attempt. A turn result is valid for `wait()` only when its status
 matches a `completed`, `failed`, or `cancelled` turn snapshot. An `unknown`
 turn returns `InvalidState` even when the server includes a result.
-Server handlers are unavailable.
 
 ### Node agent JSON numbers
 

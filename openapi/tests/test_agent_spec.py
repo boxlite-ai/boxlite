@@ -41,6 +41,14 @@ class AgentSpecTest(unittest.TestCase):
             "getAgentEvents", "respondAgentRequest", "steerAgentTurn", "interruptAgentTurn",
         })
 
+    def test_stopped_box_conflict_is_documented(self):
+        for path, item in SPEC["paths"].items():
+            if "/agents" in path:
+                for method in ("post", "get"):
+                    if method in item:
+                        with self.subTest(operation=item[method]["operationId"]):
+                            self.assertIn("409", item[method]["responses"])
+
     def test_agent_examples(self):
         count = 0
         for path, item in SPEC["paths"].items():
