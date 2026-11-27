@@ -480,7 +480,9 @@ platforms — the client reconnects after 2 seconds and keeps trying for 270
 seconds; output buffered on the server in the meantime is replayed, which means
 the last stretch before the drop (up to 256 KiB per stream) can appear twice. If
 the command finished while the connection was down, the client reconnects once
-more to fetch the rest of its output and exit code; when that fails it still
+more to fetch its retained output and exit code. The server keeps only the
+newest 256 KiB per stream and discards anything older, so that output can be
+incomplete even when reconnect succeeds. When that fetch fails, the client still
 returns the exit code, but the result carries an error message saying the output
 was not fetched, and the CLI exits non-zero. The client logs to stderr at
 WARN by default: one line per disconnect (with the cause, the heartbeat counts

@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use futures::StreamExt;
 use std::io;
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
@@ -921,6 +922,33 @@ const WS_CLIENT_PING_INTERVAL: std::time::Duration = std::time::Duration::from_s
 #[cfg(test)]
 const WS_CLIENT_PING_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Whether a deadline-bounded WebSocket send finished, hit the connection
+/// deadline, or reached a closed transport.
+#[derive(Debug)]
+enum BoundedWsSend {
+    Sent,
+    TimedOut,
+    Failed,
+}
+
+/// Send one WebSocket message without taking longer than the connection's
+/// current read deadline. A `TimedOut` send may already have queued bytes, so
+/// the caller must treat the socket as poisoned and replace it; it must not
+/// keep writing on or reading from the same sink.
+async fn bounded_ws_send(
+    sink: &mut (impl futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin),
+    deadline: tokio::time::Instant,
+    message: Message,
+) -> BoundedWsSend {
+    use futures::SinkExt;
+
+    match tokio::time::timeout_at(deadline, sink.send(message)).await {
+        Ok(Ok(())) => BoundedWsSend::Sent,
+        Ok(Err(_)) => BoundedWsSend::Failed,
+        Err(_) => BoundedWsSend::TimedOut,
+    }
+}
+
 /// Drive the bidirectional WS attach for a single execution.
 ///
 /// Wire contract (mirrors the server's `/executions/{id}/attach` handler):
@@ -1028,6 +1056,10 @@ async fn attach_ws_pump(
     let mut last_error_message: Option<String> = None;
     let mut user_closed_stdin = false;
     let mut reconnect_budget = WS_RECONNECT_BUDGET;
+    // Set when the status probe found a terminal exec and its output-fetch
+    // socket was accepted. If that socket then drops before Exit, this result
+    // is the authoritative exit code; probing again can only lose it.
+    let mut terminal_fetch: Option<ExecResult> = None;
     // Set when a status probe finds the exec finished: the probe's own
     // diagnostic must reach the caller even when the exit frame, not the
     // probe, ends up supplying the exit code.
@@ -1052,7 +1084,8 @@ async fn attach_ws_pump(
             connected_at: Some(Instant::now()),
             ..Default::default()
         };
-        let (kind, cause): (DisconnectKind, String);
+        let mut kind = DisconnectKind::FirstFrameTimeout;
+        let mut cause = String::new();
 
         {
             let (mut sink, mut read) = stream.split();
@@ -1069,9 +1102,24 @@ async fn attach_ws_pump(
             // If the user closed stdin during a previous attach, propagate the
             // EOF to this fresh server-side handler immediately. Best-effort.
             if wire_stdin && user_closed_stdin {
-                let _ = sink
-                    .send(Message::Text(r#"{"type":"stdin_eof"}"#.to_string()))
-                    .await;
+                match bounded_ws_send(
+                    &mut sink,
+                    tokio::time::Instant::now() + WS_FIRST_FRAME_TIMEOUT,
+                    Message::Text(r#"{"type":"stdin_eof"}"#.to_string()),
+                )
+                .await
+                {
+                    BoundedWsSend::Sent => {}
+                    BoundedWsSend::TimedOut => {
+                        kind = DisconnectKind::StdinWriteFailed;
+                        cause = "stdin EOF write timed out; closing socket instead of reusing it"
+                            .to_string();
+                    }
+                    BoundedWsSend::Failed => {
+                        kind = DisconnectKind::StdinWriteFailed;
+                        cause = "stdin EOF write failed (sink closed)".to_string();
+                    }
+                }
             }
 
             // When the connection counts as silent: `WS_FIRST_FRAME_TIMEOUT`
@@ -1087,6 +1135,11 @@ async fn attach_ws_pump(
             // becomes unusable; returns immediately from the function on a
             // clean Exit frame.
             loop {
+                // A pre-loop write already poisoned this socket. Do not select
+                // another branch on it; leave through the same close/drop path.
+                if !cause.is_empty() {
+                    break;
+                }
                 tokio::select! {
                     // Forward stdin bytes from the SDK consumer to the WS sink.
                     // Disabled once we've observed stdin EOF — the WS reader is
@@ -1095,18 +1148,44 @@ async fn attach_ws_pump(
                         if wire_stdin && !user_closed_stdin => {
                         match stdin_msg {
                             Some(bytes) => {
-                                if sink.send(Message::Binary(bytes)).await.is_err() {
-                                    kind = DisconnectKind::StdinWriteFailed;
-                                    cause = "stdin write failed (sink closed)".to_string();
-                                    break;
+                                match bounded_ws_send(&mut sink, idle_deadline, Message::Binary(bytes))
+                                    .await
+                                {
+                                    BoundedWsSend::Sent => {}
+                                    BoundedWsSend::TimedOut => {
+                                        kind = DisconnectKind::StdinWriteFailed;
+                                        cause = "stdin write timed out; closing socket instead of reusing it".to_string();
+                                        break;
+                                    }
+                                    BoundedWsSend::Failed => {
+                                        kind = DisconnectKind::StdinWriteFailed;
+                                        cause = "stdin write failed (sink closed)".to_string();
+                                        break;
+                                    }
                                 }
                             }
                             None => {
                                 // SDK consumer dropped the stdin sender.
                                 user_closed_stdin = true;
-                                let _ = sink
-                                    .send(Message::Text(r#"{"type":"stdin_eof"}"#.to_string()))
-                                    .await;
+                                match bounded_ws_send(
+                                    &mut sink,
+                                    idle_deadline,
+                                    Message::Text(r#"{"type":"stdin_eof"}"#.to_string()),
+                                )
+                                .await
+                                {
+                                    BoundedWsSend::Sent => {}
+                                    BoundedWsSend::TimedOut => {
+                                        kind = DisconnectKind::StdinWriteFailed;
+                                        cause = "stdin EOF write timed out; closing socket instead of reusing it".to_string();
+                                        break;
+                                    }
+                                    BoundedWsSend::Failed => {
+                                        kind = DisconnectKind::StdinWriteFailed;
+                                        cause = "stdin EOF write failed (sink closed)".to_string();
+                                        break;
+                                    }
+                                }
                                 // Continue reading — server still owes us an exit frame.
                             }
                         }
@@ -1117,13 +1196,24 @@ async fn attach_ws_pump(
                     // Pong, even if an intermediary swallows the server's own
                     // pings.
                     _ = ping_interval.tick() => {
-                        if sink.send(Message::Ping(Vec::new())).await.is_err() {
-                            kind = DisconnectKind::WriteError;
-                            cause = "keepalive ping write failed (sink closed)".to_string();
-                            break;
+                        match bounded_ws_send(&mut sink, idle_deadline, Message::Ping(Vec::new()))
+                            .await
+                        {
+                            BoundedWsSend::Sent => {
+                                stats.pings_sent += 1;
+                                stats.last_ping_at = Some(Instant::now());
+                            }
+                            BoundedWsSend::TimedOut => {
+                                kind = DisconnectKind::WriteError;
+                                cause = "keepalive ping write timed out; closing socket instead of reusing it".to_string();
+                                break;
+                            }
+                            BoundedWsSend::Failed => {
+                                kind = DisconnectKind::WriteError;
+                                cause = "keepalive ping write failed (sink closed)".to_string();
+                                break;
+                            }
                         }
-                        stats.pings_sent += 1;
-                        stats.last_ping_at = Some(Instant::now());
                     }
                     next = tokio::time::timeout_at(idle_deadline, read.next()) => {
                         let frame = match next {
@@ -1268,6 +1358,23 @@ async fn attach_ws_pump(
 
         // We disconnected without seeing an Exit frame. Probe the server to
         // distinguish "exec really finished" from "transient WS drop".
+        if let Some(result) = terminal_fetch.take() {
+            // This was the one socket sent to fetch the terminal result's
+            // output, and it dropped before Exit. Do not probe or reopen:
+            // the exit code is already authoritative, and the output may be
+            // partial.
+            let _ = result_tx.send(ExecResult {
+                exit_code: result.exit_code,
+                error_message: Some(join_error_messages(
+                    result.error_message,
+                    format!(
+                        "execution finished while the connection was down; remaining output may be incomplete (connection lost while fetching: {cause})"
+                    ),
+                )),
+            });
+            return;
+        }
+
         match probe_execution_status(client, box_id, execution_id).await {
             ProbeResult::Terminal(result) => {
                 pending_error_message = result.error_message.clone();
@@ -1289,6 +1396,7 @@ async fn attach_ws_pump(
                             "WS attach reconnected"
                         );
                         current_stream = Some(new_stream);
+                        terminal_fetch = Some(result);
                         continue 'session;
                     }
                     Err(e) => {
@@ -3686,6 +3794,161 @@ mod tests {
         );
         drop(s);
         server.abort();
+    }
+
+    /// A terminal result already recovered from the status probe must not be
+    /// thrown away when the socket opened to fetch its output drops again.
+    /// That failure is the end of the one output fetch, not a reason to probe
+    /// and reconnect forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_keeps_terminal_result_when_the_output_fetch_socket_drops() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let status_body =
+            r#"{"execution_id":"exec1","status":"completed","exit_code":5}"#.to_string();
+
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_multi_server(
+                listener,
+                state_clone,
+                Some(status_body),
+                ws_handler(|idx, mut ws, _state| {
+                    Box::pin(async move {
+                        match idx {
+                            0 => {
+                                ws.send(Message::Binary(vec![0x01, b'b', b'e', b'f']))
+                                    .await
+                                    .unwrap();
+                                drop(ws);
+                            }
+                            // The first fetch starts successfully, but drops after
+                            // delivering output and before its Exit frame.
+                            _ => {
+                                ws.send(Message::Binary(vec![0x01, b'a', b'f', b't']))
+                                    .await
+                                    .unwrap();
+                                drop(ws);
+                            }
+                        }
+                    })
+                }),
+            )
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        let res = tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("the known terminal result must end the output fetch")
+            .expect("result channel closed without value");
+        assert_eq!(
+            res.exit_code, 5,
+            "the probed exit code must survive the fetch drop"
+        );
+        let msg = res
+            .error_message
+            .expect("the caller must be told the fetched output may be incomplete");
+        assert!(
+            msg.contains("output may be incomplete"),
+            "unexpected diagnostic: {msg:?}"
+        );
+
+        attach.await.unwrap();
+        let mut lines = Vec::new();
+        while let Ok(line) =
+            tokio::time::timeout(Duration::from_millis(100), stdout_rx.recv()).await
+        {
+            lines.push(line.expect("stdout closed"));
+            if lines.len() == 2 {
+                break;
+            }
+        }
+        assert_eq!(lines, vec!["bef".to_string(), "aft".to_string()]);
+
+        let s = state.lock().await;
+        let attaches = s
+            .requested_paths
+            .iter()
+            .filter(|p| p.contains("/attach"))
+            .count();
+        assert_eq!(
+            attaches, 2,
+            "one fetch socket after the original attach; requests: {:?}",
+            s.requested_paths
+        );
+        assert_eq!(
+            s.status_calls, 1,
+            "a dropped fetch socket must not trigger another status probe; events: {:?}",
+            s.events
+        );
+        drop(s);
+        server.abort();
+    }
+
+    /// A WebSocket send can stall on a full TCP send buffer even while the
+    /// peer still holds the socket open. The pump must bound such a send by
+    /// its absolute connection deadline instead of blocking the read watchdog
+    /// inside the selected branch.
+    #[tokio::test]
+    async fn bounded_ws_send_times_out_a_pending_flush() {
+        use futures::Sink;
+        use std::task::{Context, Poll};
+
+        struct PendingFlush;
+
+        impl Sink<Message> for PendingFlush {
+            type Error = tokio_tungstenite::tungstenite::Error;
+
+            fn poll_ready(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<Result<(), Self::Error>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn start_send(
+                self: std::pin::Pin<&mut Self>,
+                _item: Message,
+            ) -> Result<(), Self::Error> {
+                Ok(())
+            }
+
+            fn poll_flush(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<Result<(), Self::Error>> {
+                Poll::Pending
+            }
+
+            fn poll_close(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<Result<(), Self::Error>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        let mut sink = PendingFlush;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
+        let outcome = bounded_ws_send(&mut sink, deadline, Message::Ping(Vec::new())).await;
+        assert!(
+            matches!(outcome, BoundedWsSend::TimedOut),
+            "a pending flush must time out, got {outcome:?}"
+        );
     }
 
     // ─── ws_text_error_frame_logs_but_continues ──────────────────────────
