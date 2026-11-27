@@ -93,6 +93,14 @@ function ApiKeyForm({
     invalid.length === 0
   const effectivePresetId = presetId === 'all' && !allSelected ? 'custom' : presetId
   const preset = API_KEY_ACCESS_PRESETS.find((item) => item.id === effectivePresetId)
+  const matchingPreset =
+    permissionsStatus === 'ready' &&
+    invalid.length === 0 &&
+    preset &&
+    selected.length === preset.permissions.length &&
+    preset.permissions.every((permission) => selected.includes(permission))
+      ? preset
+      : undefined
   const canSubmit = Boolean(
     organizationId &&
     name.trim() &&
@@ -246,7 +254,10 @@ function ApiKeyForm({
             />
           </div>
           <fieldset className="space-y-2" disabled={submitting} aria-describedby={`${id}-permission-help`}>
-            <legend className="form-field-label mb-2">Access</legend>
+            <legend className="form-field-label mb-2">Access preset</legend>
+            <p id={id + '-preset-help'} className="text-body text-muted-foreground">
+              Choose a preset or customize individual permissions.
+            </p>
             <Select
               value={effectivePresetId}
               disabled={submitting || permissionsStatus !== 'ready'}
@@ -275,7 +286,7 @@ function ApiKeyForm({
                 setCustomize(false)
               }}
             >
-              <SelectTrigger aria-label="Access" aria-describedby={id + '-permission-help'}>
+              <SelectTrigger aria-label="Access preset" aria-describedby={`${id}-preset-help ${id}-permission-help`}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -283,7 +294,7 @@ function ApiKeyForm({
                   const missing = item.permissions.filter((permission) => !availablePermissions.includes(permission))
                   return (
                     <SelectItem key={item.id} value={item.id} disabled={missing.length > 0}>
-                      {item.label}
+                      {item.label} · {item.permissions.length} permission{item.permissions.length === 1 ? '' : 's'}
                       {missing.length > 0 && (
                         <span className="block text-meta text-muted-foreground">
                           Requires: {missing.map((p) => API_KEY_PERMISSION_LABELS[p]).join(', ')}
@@ -304,14 +315,30 @@ function ApiKeyForm({
                 : (preset?.description ?? 'Choose specific operations for this key.')}
             </p>
             <div className="flex items-center justify-between gap-3">
-              <span className="text-meta text-muted-foreground" aria-live="polite">
+              <div className="text-meta text-muted-foreground" aria-live="polite">
                 {permissionsStatus === 'ready' && (
                   <>
-                    {selectedAvailable.length}/{availablePermissions.length} permissions selected
+                    {matchingPreset ? (
+                      <>
+                        <p>
+                          This preset includes {matchingPreset.permissions.length} permission
+                          {matchingPreset.permissions.length === 1 ? '' : 's'}
+                        </p>
+                        <ul aria-label="Included permissions" className="mt-1 list-inside list-disc text-body">
+                          {matchingPreset.permissions.map((permission) => (
+                            <li key={permission}>{API_KEY_PERMISSION_LABELS[permission]}</li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : (
+                      <>
+                        {selectedAvailable.length}/{availablePermissions.length} permissions selected
+                      </>
+                    )}
                     {allSelected && <span className="block">All available permissions selected</span>}
                   </>
                 )}
-              </span>
+              </div>
               <AsciiButton
                 type="button"
                 variant="quiet"

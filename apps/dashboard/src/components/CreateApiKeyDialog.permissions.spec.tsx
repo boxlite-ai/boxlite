@@ -159,11 +159,11 @@ describe('API key permission contract', () => {
 async function chooseAccess(label: string) {
   await act(async () =>
     document
-      .querySelector('[aria-label="Access"]')!
+      .querySelector('[aria-label="Access preset"]')!
       .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
   )
   const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
-    (item) => item.textContent?.trim() === label,
+    (item) => item.textContent?.trim() === label || item.textContent?.trim().startsWith(`${label} · `),
   )!
   expect(option).toBeTruthy()
   await act(async () => option.click())
@@ -178,7 +178,7 @@ describe('API key selection completeness', () => {
   it('shows selected/available counts globally and in resource groups', async () => {
     await render()
     await open()
-    expect(summary()).toContain('1/3 permissions selected')
+    expect(summary()).toContain('This preset includes 1 permission')
     await act(async () => button('Adjust permissions').click())
     expect([...document.querySelectorAll('summary')].map((item) => item.textContent)).toEqual(
       expect.arrayContaining(['Boxes1/2 selected', 'Members0/1 selected']),
@@ -210,7 +210,7 @@ describe('API key selection completeness', () => {
     await chooseAccess('Custom access')
     await toggle('Delete boxes')
     expect(summary()).toContain('All available permissions selected')
-    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    expect(document.querySelector('[aria-label="Access preset"]')!.textContent).toBe('Custom access')
     await toggle('Operate boxes')
     expect(summary()).toContain('1/2 permissions selected')
     expect(summary()).not.toContain('All available permissions selected')
@@ -225,7 +225,7 @@ describe('API key selection completeness', () => {
     await chooseAccess('All available permissions')
     await render([P.WRITE_BOXES, P.DELETE_BOXES])
     expect(summary()).toContain('1/2 permissions selected')
-    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    expect(document.querySelector('[aria-label="Access preset"]')!.textContent).toBe('Custom access')
     await submit()
     expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES])
   })
@@ -236,7 +236,7 @@ describe('API key selection completeness', () => {
     await render([P.WRITE_BOXES])
     expect(summary()).toContain('1/1 permissions selected')
     expect(summary()).not.toContain('All available permissions selected')
-    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    expect(document.querySelector('[aria-label="Access preset"]')!.textContent).toBe('Custom access')
     expect(document.querySelector('summary')!.textContent).toBe('Boxes1/1 selected')
     await submit()
     expect(mocks.create).not.toHaveBeenCalled()
@@ -255,7 +255,7 @@ describe('API key selection completeness', () => {
       ),
     )
     expect(summary()).not.toContain('permissions selected')
-    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    expect(document.querySelector('[aria-label="Access preset"]')!.textContent).toBe('Custom access')
     await submit()
     expect(mocks.create).not.toHaveBeenCalled()
   })
@@ -266,7 +266,7 @@ describe('API key selection completeness', () => {
     expect(summary()).not.toContain('All available permissions selected')
     await act(async () =>
       document
-        .querySelector('[aria-label="Access"]')!
+        .querySelector('[aria-label="Access preset"]')!
         .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
     )
     const option = [...document.querySelectorAll('[role="option"]')].find(
@@ -279,14 +279,31 @@ describe('API key selection completeness', () => {
     await open()
     await chooseAccess('All available permissions')
     await chooseAccess('Operate boxes')
-    expect(summary()).toContain('1/13 permissions selected')
+    expect(summary()).toContain('This preset includes 1 permission')
     await chooseAccess('All available permissions')
     await render(supported, 'org-2')
-    expect(summary()).toContain('1/13 permissions selected')
-    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Operate boxes')
+    expect(summary()).toContain('This preset includes 1 permission')
+    expect(document.querySelector('[aria-label="Access preset"]')!.textContent).toBe('Operate boxes · 1 permission')
   })
 })
 describe('API key access presets', () => {
+  it('explains the preset bundle without opening advanced settings', async () => {
+    await render([...all, P.READ_VOLUMES, P.WRITE_VOLUMES])
+    await open()
+    await chooseAccess('Operate boxes')
+    await chooseAccess('Manage box lifecycle')
+    await chooseAccess('Use boxes with volumes')
+    expect(document.body.textContent).toContain('This preset includes 3 permissions')
+    const included = document.querySelector('[aria-label="Included permissions"]')!
+    expect([...included.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
+      'Operate boxes',
+      'View volumes',
+      'Manage volumes',
+    ])
+    expect(button('Adjust permissions').getAttribute('aria-expanded')).toBe('false')
+    await submit()
+    expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES, P.READ_VOLUMES, P.WRITE_VOLUMES])
+  })
   it.each([
     ['Manage box lifecycle', [P.WRITE_BOXES, P.DELETE_BOXES]],
     ['Use boxes with volumes', [P.WRITE_BOXES, P.READ_VOLUMES, P.WRITE_VOLUMES]],
@@ -302,7 +319,7 @@ describe('API key access presets', () => {
     await open()
     await act(async () =>
       document
-        .querySelector('[aria-label="Access"]')!
+        .querySelector('[aria-label="Access preset"]')!
         .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
     )
     const option = [...document.querySelectorAll('[role="option"]')].find((item) =>
@@ -320,7 +337,7 @@ describe('API key access presets', () => {
     await act(async () => button('Adjust permissions').click())
     const label = [...document.querySelectorAll('label')].find((item) => item.textContent?.startsWith('Delete boxes'))!
     await act(async () => document.getElementById(label.htmlFor)!.click())
-    expect(document.querySelector('[aria-label="Access"]')!.textContent).toBe('Custom access')
+    expect(document.querySelector('[aria-label="Access preset"]')!.textContent).toBe('Custom access')
     await chooseAccess('Operate boxes')
     await submit()
     expect(mocks.create.mock.calls[0][0].permissions).toEqual([P.WRITE_BOXES])

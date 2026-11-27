@@ -625,13 +625,20 @@ duplicates, updates with fixed scope, write permissions, and refusals named by b
 ## Console API key permissions and expiration
 
 **New API key** defaults to **Operate boxes** (`write:boxes`) and **30 days**.
-The Access selector offers Operate boxes, Manage box lifecycle (adds Box deletion),
+The Access preset selector offers Operate boxes, Manage box lifecycle (adds Box deletion),
 and Use boxes with volumes (adds Volume read and write). A preset requires every
 scope in its bundle; unavailable presets explain the missing capabilities.
+Each named option shows its permission count. Selecting a valid preset displays
+**This preset includes N permissions** and its constituent permission labels without
+opening advanced settings. For example, **Use boxes with volumes · 3 permissions**
+includes Operate boxes, View volumes, and Manage volumes. Switching presets replaces
+the selected bundle; it does not accumulate permissions from earlier choices.
+Preset previews: [desktop](../../docs/contributing/investigations/assets/api-key-access-presets/desktop.png)
+and [390px viewport](../../docs/contributing/investigations/assets/api-key-access-presets/narrow.png).
 
 **All available permissions** explicitly selects every supported permission the
 current member can grant in this organization; it does not change the default.
-The overall summary and resource groups show selected/available counts, such as
+Custom access and All available permissions summaries, plus resource groups, show selected/available counts, such as
 **13/13 permissions selected** and **3/3 selected**. Implicit Box reading is excluded.
 
 Manual complete selections also show **All available permissions selected**.
