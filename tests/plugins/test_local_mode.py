@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-SCRIPT = Path(__file__).resolve().parents[2] / 'plugins/boxlite/skills/boxlite/scripts/local.py'
+SCRIPT = Path(__file__).resolve().parents[2] / 'plugins/boxlite-claude/skills/boxlite/scripts/local.py'
 spec = importlib.util.spec_from_file_location('local_mode', SCRIPT)
 local = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(local)

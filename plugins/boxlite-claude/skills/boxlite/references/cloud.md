@@ -1,7 +1,7 @@
 # Shared cloud operations
 
-Both cloud authentication modes use `https://api.boxlite.ai/mcp`, the same discovered tools, and this workflow.
-Only the credential and its granted permissions differ. Lifecycle and execution use native MCP; the packaged file helper calls the existing MCP file tools programmatically.
+Both cloud authentication modes use the BoxLite MCP service and the tools discovered on the selected connection.
+The selected credential determines the granted permissions. Lifecycle and execution use native MCP; the packaged file helper calls the existing MCP file tools programmatically.
 
 ## Create and execute
 
@@ -33,12 +33,12 @@ Supply absolute paths on both ends. Keep archive bytes inside the transfer tools
 
 ### Claude Code
 
-Use the BoxLite marketplace plugin's tools from the current session. For example:
+Use the BoxLite tools from the current session. Replace `SELECTED_CONNECTION` with the complete MCP connection name verified during setup for the user's chosen mode.
 
 | Tool | Arguments |
 | --- | --- |
-| `mcp__boxlite__upload` | `{"connection":"boxlite-api","box_id":"BOX_ID","local_source":"/home/user/report.csv","remote_destination":"/workspace/report.csv"}` |
-| `mcp__boxlite__download` | `{"connection":"boxlite-api","box_id":"BOX_ID","remote_source":"/workspace/report.csv","local_destination":"/home/user/new-download"}` |
+| `mcp__boxlite__upload` | `{"connection":"SELECTED_CONNECTION","box_id":"BOX_ID","local_source":"/home/user/report.csv","remote_destination":"/workspace/report.csv"}` |
+| `mcp__boxlite__download` | `{"connection":"SELECTED_CONNECTION","box_id":"BOX_ID","remote_source":"/workspace/report.csv","local_destination":"/home/user/new-download"}` |
 
 Claude applies its current permission mode and rules to the requested operation, connection, Box and paths.
 Configure tool rules on these two transfer tools. An authorized directory transfer covers its contents.

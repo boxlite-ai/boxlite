@@ -3,6 +3,18 @@ name: boxlite-setup
 description: Choose and verify BoxLite Cloud OAuth, Cloud API key, or Local mode before operating a Box. Use for onboarding or an explicit mode change, not application end-user login.
 ---
 
+## Install from a local marketplace
+
+For a local installation, run `make plugin:boxlite:dist` in the BoxLite repository.
+Replace `ABSOLUTE_MARKETPLACE_DIRECTORY` with the absolute path to the generated `target/plugins/boxlite-marketplace` directory.
+
+```sh
+codex plugin marketplace add ABSOLUTE_MARKETPLACE_DIRECTORY
+codex plugin add boxlite@boxlite
+```
+
+Start a new session and ask Codex to set up BoxLite.
+
 ## Choose a mode
 
 Reuse the user's explicit choice, or present these three options before workload operations:
@@ -23,31 +35,36 @@ Without a writable project, retain the selection in the conversation; OAuth need
 
 ## Cloud OAuth
 
-For first use, have the user complete BoxLite registration in the Dashboard, including email verification and a default organization.
-An existing Dashboard account can sign in even when its MCP token contains no profile claims; direct first-time registration from MCP is not promised.
+Authorize the bundled `boxlite` connection through the host. For an independent Codex connection, use:
 
-Use the bundled `boxlite` MCP connection and the host's OAuth UI.
-Let the host open the browser, obtain consent, and store tokens; never implement login or read the host's token store.
+```sh
+codex mcp add boxlite-oauth --url https://api.boxlite.ai/mcp
+codex mcp login boxlite-oauth
+```
 
-If unavailable, report the exact setup step and wait for authorization rather than installing a CLI or requesting an API key.
-Client-registration errors happen before user login: report the issuer/client setup blocker without asking the user to reset a password.
-
-If the API returns `email_required` or `registration_required`, direct the user to complete Dashboard registration with the same identity, then retry explicitly.
-If no default organization exists, stop and have the user complete organization setup; never choose another account or organization automatically.
-
-Discover tools and read their schemas, then call `listBoxes` for the selected organization.
-Check `isError` and the response; an empty authorized list is valid, but discovery or HTTP 401 is not successful login.
-Confirm the intended organization before writes, then resume the original task.
+Reuse an existing connection when available. Codex manages browser consent and token storage.
 
 ## Cloud API key
 
-Follow [native host setup](references/cloud-auth.md); only authentication differs from OAuth.
-Require the user to supply a key to the host explicitly through their chosen private secret environment.
-Never put credentials in plugin files, argv, chat, screenshots, or application archives.
+Have the user supply their chosen key as `BOXLITE_API_KEY` to the host through a private environment or secret source.
+The process running Codex must inherit it, not merely a transient child shell.
+Check presence only:
 
-Check that the selected key reference is nonempty without printing its value before discovering or calling tools.
-Refuse a missing or empty key even if OAuth is cached; if the host cannot enforce that separation, report API-key mode unavailable.
-Use only the selected API-key MCP connection, verify identity and organization, then follow the shared cloud workflow.
+```sh
+test -n "${BOXLITE_API_KEY:-}"
+codex mcp add boxlite-api --url https://api.boxlite.ai/mcp --bearer-token-env-var BOXLITE_API_KEY
+```
+
+Run the second command only after the first succeeds, then reload as required by the host.
+Select only `boxlite-api` tools and disable the unselected OAuth connection when necessary to prevent duplicate tools.
+Do not disable unrelated plugins.
+
+## Verify the selected cloud connection
+
+Follow [cloud authentication checks](references/cloud-auth.md) on the selected connection.
+Confirm the intended organization and a successful `listBoxes` response before workload operations. An empty authorized list is valid.
+
+Stop on missing credentials or denial. Keep secrets out of chat, logs, and project files.
 
 ## Local
 

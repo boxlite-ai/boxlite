@@ -12,7 +12,7 @@ import urllib.request
 import uuid
 
 REPO = Path(__file__).resolve().parents[2]
-LAUNCHER = REPO / 'plugins/boxlite/skills/boxlite/scripts/local.py'
+LAUNCHER = REPO / 'plugins/boxlite-claude/skills/boxlite/scripts/local.py'
 
 
 def exercise(cli, workspace, report):

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "boxlite",
+  "version": "0.2.0",
+  "description": "Run BoxLite with Cloud OAuth, Cloud API key, or an independent local runtime.",
+  "author": {
+    "name": "BoxLite",
+    "url": "https://boxlite.ai"
+  },
+  "homepage": "https://docs.boxlite.ai",
+  "repository": "https://github.com/boxlite-ai/boxlite",
+  "license": "Apache-2.0",
+  "keywords": ["boxlite", "cloud", "local", "mcp", "skills"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "BoxLite",
+        "shortDescription": "Run cloud or local sandboxes",
+        "longDescription": "Choose Cloud OAuth or Cloud API key through the same BoxLite MCP service, or use an independent local runtime. OAuth is the public-directory connection. API-key setup requires a native host supporting private MCP configuration; Local requires shell execution and virtualization. OAuth cannot create public tunnels. Preserve Box identity and data across updates, inspect failures, and clean up explicit resources.",
+        "developerName": "BoxLite",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Interactive",
+          "Write"
+        ],
+        "websiteURL": "https://boxlite.ai",
+        "supportURL": "https://boxlite.ai/contact",
+        "privacyPolicyURL": "https://boxlite.ai/legal/privacy",
+        "termsOfServiceURL": "https://boxlite.ai/legal/terms",
+        "brandColor": "#111111",
+        "composerIcon": "./assets/boxlite-icon.png",
+        "logo": "./assets/boxlite-icon.png",
+        "defaultPrompt": [
+          "Choose how to use BoxLite: Cloud OAuth, Cloud API key, or Local.",
+          "Create a BoxLite cloud Box and run hello using my selected connection.",
+          "Run my project in a local BoxLite sandbox without cloud login."
+        ]
+      },
+      "onboardingSkill": "./skills/boxlite-setup/SKILL.md",
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "List Boxes visible to the connected review account",
+              "prompt": "Using my BoxLite Cloud OAuth connection, list the Boxes visible in my review workspace. Include their IDs and states, and tell me if the list is empty.",
+              "tools_triggered": "listBoxes",
+              "expected_behavior": "Report the returned Boxes and their states, or an empty list when the workspace has none. The operation leaves the workspace unchanged."
+            },
+            {
+              "description": "Create a disposable Python Box and inspect it",
+              "prompt": "Using my BoxLite Cloud OAuth connection, create one temporary Box with the python image. Look up the ID returned by this creation and report its state. Then stop it if running, wait until stopped, and remove only that ID.",
+              "tools_triggered": "createBox, getBox, stopBox, removeBox",
+              "expected_behavior": "The lookup returns the ID from this request. Report that ID, its observed state before cleanup, and whether removal succeeded."
+            },
+            {
+              "description": "Run a command and report its actual exit status",
+              "prompt": "Using my BoxLite Cloud OAuth connection, create a temporary Box with the python image. In the Box identified by this creation response, run python3 -c \"import sys; print('review-output'); sys.exit(7)\" once. Capture stdout and the exit code, then stop that Box, wait until stopped, and remove it. Report the execution and cleanup results.",
+              "tools_triggered": "createBox, startExecution, getExecution, stopBox, getBox, removeBox",
+              "expected_behavior": "Call startExecution once with wait: true. On completion, verify review-output on stdout and exit code 7. If the wait expires, report only the output captured so far and poll getExecution with the same Box and execution IDs. It returns the execution ID and status, plus the exit code, start time, duration and diagnostic message when available. Verify exit code 7 when reported. If review-output was not captured, report stdout as unverified: getExecution cannot retrieve stdout or stderr."
+            },
+            {
+              "description": "Update a file while preserving other data in the same Box",
+              "prompt": "Using my BoxLite Cloud OAuth connection, create a temporary Box with the python image. Use its returned ID for both commands. First use Python to write v1 to /tmp/review-version and kept to /tmp/review-marker and read both back. Then change only the version to v2 and read both again. Report both reads, stop that Box, wait until stopped, and remove only its ID.",
+              "tools_triggered": "createBox, startExecution, stopBox, getBox, removeBox",
+              "expected_behavior": "The first read returns v1 and kept. The second returns v2 and kept from the same Box ID. Report the observed contents of both reads."
+            },
+            {
+              "description": "Remove only the disposable review Box and verify cleanup",
+              "prompt": "Using my BoxLite Cloud OAuth connection, create a temporary Box with the python image. Use the returned ID throughout. Start it if needed, confirm it is running, stop it, and wait until stopped. Remove that ID and look it up again to verify cleanup.",
+              "tools_triggered": "createBox, getBox, startBox, stopBox, removeBox",
+              "expected_behavior": "Poll the recorded ID until stopped, remove it, and verify a final lookup reports not found. Leave all other Boxes untouched."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Explain sandboxing without provisioning infrastructure",
+              "prompt": "For a glossary, explain in two sentences what a Linux sandbox is."
+            },
+            {
+              "description": "Review Python source without executing it",
+              "prompt": "By inspection only, what does this Python expression return: [n * n for n in range(3)]?"
+            },
+            {
+              "description": "Draft deployment documentation without accessing a workspace",
+              "prompt": "Write a generic deployment checklist for a README. I only need the text."
+            }
+          ]
+        }
+      }
+    }
+  }
+}

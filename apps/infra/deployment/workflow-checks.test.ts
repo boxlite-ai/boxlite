@@ -199,8 +199,8 @@ const coverageWorkflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/wor
 const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard', 'plugins', 'infra']
 
 for (const path of ['scripts/plugins/boxlite.py', 'scripts/plugins/.coveragerc',
-  'tests/plugins/test_boxlite_package.py', 'plugins/boxlite/skills/boxlite-setup/SKILL.md',
-  'plugins/boxlite/.codex-plugin/plugin.json', 'make/plugins.mk', '.agents/plugins/marketplace.json']) {
+  'tests/plugins/test_boxlite_package.py', 'plugins/boxlite-claude/skills/boxlite-setup/SKILL.md',
+  'plugins/boxlite-codex/plugin.json', 'make/plugins.mk', '.agents/plugins/marketplace.json']) {
   test(`plugin inputs select real coverage on PRs and main pushes: ${path}`, () => {
     assert.deepEqual(testSuites([path]), ['plugins'])
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)

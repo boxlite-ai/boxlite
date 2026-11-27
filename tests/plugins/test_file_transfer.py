@@ -18,7 +18,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-SCRIPTS = Path(__file__).resolve().parents[2] / 'plugins/boxlite/skills/boxlite/scripts'
+SCRIPTS = Path(__file__).resolve().parents[2] / 'plugins/boxlite-claude/skills/boxlite/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import archive_worker
 import transfer
