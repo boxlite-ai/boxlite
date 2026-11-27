@@ -65,7 +65,10 @@ Run `mbuild-release.yml` from `main` and select an existing product Release tag.
 | `publish-go` | Builds the C SDK matrix, tests Go, then tags `sdks/go/vX.Y.Z` only after downloading every versioned C SDK archive anonymously from the public Release and verifying its GitHub asset digest. |
 | `publish-runner` | Builds the Linux x64 C SDK and Runner, pushes the Runner to GHCR and attaches its archive and checksum to GitHub Release. |
 
-If Go tagging fails on a draft, finish the full release first. If a public Release lacks a C SDK archive, run `publish-c` for that tag and retry `publish-go`.
+If Go tagging fails on a draft, finish the full release first. On a public Release, `publish-c` rebuilds every C archive. Fresh tar timestamps can change an existing archive's digest and block all uploads, including the missing archive.
+
+- If the original distribution artifact and its dev acceptance receipt are available, run `repair-c` for the same tag. Set `candidate-id` to that distribution artifact's ID. After the repair restores the missing archives, retry `publish-go`.
+- If either artifact has expired, follow the [full release procedure](#release-runbook) with a new patch version and tag. The new version goes through dev acceptance and publishes its own C archives and Go module tag.
 
 For example, `gh workflow run mbuild-release.yml --ref main -f command=publish-wheels -f tag=v1.2.3` selects fresh wheel publication. Set `build-only=true` to keep a standalone build in Actions. Use `source-ref` to build a branch or commit. A complete `publish` with `build-only=true` stages the GHCR images and Runner.
 
