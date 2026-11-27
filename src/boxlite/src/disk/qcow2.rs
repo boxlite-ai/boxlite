@@ -327,7 +327,7 @@ impl Qcow2Helper {
 
                 let l1_idx = (vc / l2_entries) as usize;
                 let l2_idx = (vc % l2_entries) as usize;
-                l2_tables[l1_idx][l2_idx] = offset;
+                l2_tables[l1_idx][l2_idx] = offset | QCOW2_OFLAG_COPIED;
                 next_data_cluster += 1;
             }
         }
@@ -356,7 +356,7 @@ impl Qcow2Helper {
         for (i, l2) in l2_tables.iter().enumerate() {
             let has_data = l2.iter().any(|&e| e != 0);
             let entry: u64 = if has_data {
-                (l2_start + i as u64) * cluster_size
+                ((l2_start + i as u64) * cluster_size) | QCOW2_OFLAG_COPIED
             } else {
                 0
             };
@@ -1165,6 +1165,9 @@ pub fn is_backing_dependency(target: &Path, chain_root: &Path) -> bool {
 /// QCOW2 magic number: "QFI\xfb".
 const QCOW2_MAGIC: u32 = 0x514649fb;
 
+/// QCOW2 L1/L2 entry flag indicating refcount == 1 for the referenced table/cluster.
+const QCOW2_OFLAG_COPIED: u64 = 1 << 63;
+
 /// A layer in a QCOW2 backing chain, used during flatten.
 enum FlattenLayer {
     /// A QCOW2 layer with L1/L2 indirection.
@@ -1337,6 +1340,11 @@ impl FlattenLayer {
                     ));
                 }
 
+                // Bit 0: zero-cluster flag (reads as all zeros; never fall through to backing).
+                if l2_entry & 1 != 0 {
+                    return Ok(Some(vec![0u8; cs as usize]));
+                }
+
                 let data_offset = l2_entry & 0x00FF_FFFF_FFFF_FE00;
                 if data_offset == 0 {
                     return Ok(None); // Unallocated — fall through to backing.
@@ -1345,8 +1353,26 @@ impl FlattenLayer {
                 file.seek(SeekFrom::Start(data_offset))
                     .map_err(|e| BoxliteError::Storage(format!("flatten: data seek: {}", e)))?;
                 let mut buf = vec![0u8; cs as usize];
-                file.read_exact(&mut buf)
-                    .map_err(|e| BoxliteError::Storage(format!("flatten: data read: {}", e)))?;
+                let mut total = 0usize;
+                while total < buf.len() {
+                    match file.read(&mut buf[total..]) {
+                        Ok(0) => break,
+                        Ok(n) => total += n,
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(e) => {
+                            return Err(BoxliteError::Storage(format!(
+                                "flatten: data read: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+                if total == 0 {
+                    return Err(BoxliteError::Storage(format!(
+                        "flatten: data read: unexpected EOF at offset {}",
+                        data_offset
+                    )));
+                }
                 Ok(Some(buf))
             }
         }
@@ -1856,5 +1882,230 @@ mod tests {
             "error should mention compressed clusters, got: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_flatten_respects_zero_cluster_l2_flag() {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let virtual_size = cluster_size * 2;
+
+        // Backing image has non-zero markers in cluster 0 and cluster 1.
+        let base = dir.path().join("base.raw");
+        write_raw_disk(&base, virtual_size);
+
+        let child = dir.path().join("child.qcow2");
+        let _child_disk =
+            Qcow2Helper::create_cow_child_disk(&base, BackingFormat::Raw, &child, virtual_size)
+                .unwrap();
+
+        // Populate L1[0] -> L2 table with L2[0] = QCOW_OFLAG_ZERO (bit 0 = 1, offset = 0)
+        // and L2[1] = 0 (unallocated, falls through to backing).
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&child)
+                .unwrap();
+            let mut hdr = [0u8; 48];
+            f.read_exact(&mut hdr).unwrap();
+            let l1_offset = u64::from_be_bytes(hdr[40..48].try_into().unwrap());
+
+            let l2_offset = 10u64 * cluster_size;
+            f.seek(SeekFrom::Start(l1_offset)).unwrap();
+            f.write_all(&(l2_offset | (1u64 << 63)).to_be_bytes())
+                .unwrap();
+
+            let mut l2_cluster = vec![0u8; cluster_size as usize];
+            l2_cluster[0..8].copy_from_slice(&1u64.to_be_bytes()); // bit 0 = zero cluster
+            f.seek(SeekFrom::Start(l2_offset)).unwrap();
+            f.write_all(&l2_cluster).unwrap();
+        }
+
+        // Layer itself must return explicit zeros for cluster 0 rather than None.
+        let mut child_chain = Qcow2Helper::open_flatten_chain(&child).unwrap();
+        let c0 = child_chain[0].read_cluster(0, cluster_size).unwrap();
+        assert_eq!(
+            c0.as_deref(),
+            Some(vec![0u8; cluster_size as usize].as_slice()),
+            "zero-flagged L2 entry must return explicit zero cluster, not fall through to backing"
+        );
+
+        let flat = dir.path().join("flat.qcow2");
+        Qcow2Helper::flatten(&child, &flat).unwrap();
+
+        let mut flat_chain = Qcow2Helper::open_flatten_chain(&flat).unwrap();
+        // Flattened standalone image must NOT contain backing's marker in cluster 0.
+        assert!(
+            flat_chain[0]
+                .read_cluster(0, cluster_size)
+                .unwrap()
+                .is_none(),
+            "zeroed cluster 0 must not resurrect backing data after flatten"
+        );
+        // Cluster 1 should still carry backing's marker (2).
+        let c1 = flat_chain[0]
+            .read_cluster(1, cluster_size)
+            .unwrap()
+            .unwrap();
+        assert_eq!(u64::from_be_bytes(c1[0..8].try_into().unwrap()), 2);
+    }
+
+    #[test]
+    fn test_flatten_sets_oflag_copied_and_passes_qemu_img_check() {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let virtual_size = cluster_size * 2;
+
+        let base = dir.path().join("base.raw");
+        write_raw_disk(&base, virtual_size);
+
+        let child = dir.path().join("child.qcow2");
+        let _child_disk =
+            Qcow2Helper::create_cow_child_disk(&base, BackingFormat::Raw, &child, virtual_size)
+                .unwrap();
+
+        let flat = dir.path().join("flat.qcow2");
+        Qcow2Helper::flatten(&child, &flat).unwrap();
+
+        // Inspect L1[0] and L2[0] directly for QCOW2_OFLAG_COPIED (bit 63).
+        let mut f = std::fs::File::open(&flat).unwrap();
+        let mut hdr = [0u8; 48];
+        f.read_exact(&mut hdr).unwrap();
+        let l1_offset = u64::from_be_bytes(hdr[40..48].try_into().unwrap());
+
+        f.seek(SeekFrom::Start(l1_offset)).unwrap();
+        let mut l1_buf = [0u8; 8];
+        f.read_exact(&mut l1_buf).unwrap();
+        let l1_entry = u64::from_be_bytes(l1_buf);
+        assert_ne!(
+            l1_entry & (1u64 << 63),
+            0,
+            "L1 entry must set QCOW2_OFLAG_COPIED (bit 63), got 0x{:016x}",
+            l1_entry
+        );
+
+        let l2_offset = l1_entry & 0x00FF_FFFF_FFFF_FE00;
+        f.seek(SeekFrom::Start(l2_offset)).unwrap();
+        let mut l2_buf = [0u8; 8];
+        f.read_exact(&mut l2_buf).unwrap();
+        let l2_entry = u64::from_be_bytes(l2_buf);
+        assert_ne!(
+            l2_entry & (1u64 << 63),
+            0,
+            "L2 entry must set QCOW2_OFLAG_COPIED (bit 63), got 0x{:016x}",
+            l2_entry
+        );
+
+        if let Ok(output) = Command::new("qemu-img")
+            .args(["check", "-f", "qcow2"])
+            .arg(&flat)
+            .output()
+        {
+            assert!(
+                output.status.success(),
+                "qemu-img check failed (status={:?}): stdout={}, stderr={}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn test_flatten_handles_short_eof_trailing_cluster() {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let virtual_size = cluster_size * 2;
+
+        // Build a standalone flattened QCOW2 first, then simulate imago 0.2.2's
+        // partial trailing cluster write (12 KiB at end of file without extending
+        // the file to the full 64 KiB cluster boundary).
+        let base = dir.path().join("base.raw");
+        write_raw_disk(&base, virtual_size);
+
+        let child = dir.path().join("child.qcow2");
+        let _child_disk =
+            Qcow2Helper::create_cow_child_disk(&base, BackingFormat::Raw, &child, virtual_size)
+                .unwrap();
+
+        let standalone = dir.path().join("standalone.qcow2");
+        Qcow2Helper::flatten(&child, &standalone).unwrap();
+
+        let file_len = std::fs::metadata(&standalone).unwrap().len();
+        assert_eq!(file_len % cluster_size, 0);
+        let trailing_cluster_offset = file_len;
+        let partial_len = 12 * 1024usize;
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&standalone)
+                .unwrap();
+            let mut hdr = [0u8; 48];
+            f.read_exact(&mut hdr).unwrap();
+            let l1_offset = u64::from_be_bytes(hdr[40..48].try_into().unwrap());
+            f.seek(SeekFrom::Start(l1_offset)).unwrap();
+            let mut l1_buf = [0u8; 8];
+            f.read_exact(&mut l1_buf).unwrap();
+            let l2_offset = u64::from_be_bytes(l1_buf) & 0x00FF_FFFF_FFFF_FE00;
+
+            // Point cluster 1 at `trailing_cluster_offset` and write only 12 KiB.
+            f.seek(SeekFrom::Start(l2_offset + 8)).unwrap();
+            f.write_all(&(trailing_cluster_offset | QCOW2_OFLAG_COPIED).to_be_bytes())
+                .unwrap();
+            let mut payload = vec![0u8; partial_len];
+            payload[0..8].copy_from_slice(&0xDEAD_BEEF_CAFE_BABEu64.to_be_bytes());
+            f.seek(SeekFrom::Start(trailing_cluster_offset)).unwrap();
+            f.write_all(&payload).unwrap();
+        }
+
+        let reflattened = dir.path().join("reflattened.qcow2");
+        Qcow2Helper::flatten(&standalone, &reflattened)
+            .expect("flatten must zero-pad a short trailing cluster at EOF");
+
+        let mut chain = Qcow2Helper::open_flatten_chain(&reflattened).unwrap();
+        let c1 = chain[0]
+            .read_cluster(1, cluster_size)
+            .unwrap()
+            .expect("cluster 1 must exist");
+        assert_eq!(
+            u64::from_be_bytes(c1[0..8].try_into().unwrap()),
+            0xDEAD_BEEF_CAFE_BABEu64
+        );
+        assert!(
+            c1[partial_len..].iter().all(|&b| b == 0),
+            "unwritten tail past EOF must be zero-filled"
+        );
+
+        // Cluster pointing entirely past EOF (0 bytes readable) must still error.
+        let mut chain_mut = Qcow2Helper::open_flatten_chain(&standalone).unwrap();
+        let past_eof_cluster = (file_len + cluster_size * 4) | QCOW2_OFLAG_COPIED;
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&standalone)
+                .unwrap();
+            let mut hdr = [0u8; 48];
+            f.read_exact(&mut hdr).unwrap();
+            let l1_offset = u64::from_be_bytes(hdr[40..48].try_into().unwrap());
+            f.seek(SeekFrom::Start(l1_offset)).unwrap();
+            let mut l1_buf = [0u8; 8];
+            f.read_exact(&mut l1_buf).unwrap();
+            let l2_offset = u64::from_be_bytes(l1_buf) & 0x00FF_FFFF_FFFF_FE00;
+            f.seek(SeekFrom::Start(l2_offset + 8)).unwrap();
+            f.write_all(&past_eof_cluster.to_be_bytes()).unwrap();
+        }
+        let err = chain_mut[0]
+            .read_cluster(1, cluster_size)
+            .expect_err("cluster starting past EOF must still fail");
+        assert!(err.to_string().contains("unexpected EOF"), "{err}");
     }
 }
