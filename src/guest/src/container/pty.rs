@@ -1,40 +1,8 @@
-//! Initialize the terminal in the tenant child, before its workload can use it.
+//! Set terminal attributes before handing a PTY to its workload.
 
 use crate::service::exec::exec_handle::PtyConfig;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use libcontainer::oci_spec::runtime::Spec;
-use libcontainer::workload::{
-    Executor, ExecutorError, ExecutorSetEnvsError, ExecutorValidationError,
-};
-use std::collections::HashMap;
 use std::os::fd::AsRawFd;
-
-#[derive(Clone)]
-pub(super) struct PtyExecutor {
-    pub inner: Box<dyn Executor>,
-    pub config: Option<PtyConfig>,
-}
-
-impl Executor for PtyExecutor {
-    fn exec(&self, spec: &Spec) -> Result<(), ExecutorError> {
-        if let Some(config) = &self.config {
-            // Youki has already wired the slave to stdin. Its tenant build
-            // waits for exec-notify EOF, so waiting for parent-side attachment
-            // here would deadlock. Configure locally before delegating instead.
-            initialize(&std::io::stdin(), config)
-                .map_err(|error| ExecutorError::Execution(Box::new(error)))?;
-        }
-        self.inner.exec(spec)
-    }
-
-    fn validate(&self, spec: &Spec) -> Result<(), ExecutorValidationError> {
-        self.inner.validate(spec)
-    }
-
-    fn setup_envs(&self, envs: HashMap<String, String>) -> Result<(), ExecutorSetEnvsError> {
-        self.inner.setup_envs(envs)
-    }
-}
 
 pub(super) fn initialize(fd: &impl AsRawFd, config: &PtyConfig) -> BoxliteResult<()> {
     let winsize = nix::pty::Winsize {

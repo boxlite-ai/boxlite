@@ -1,10 +1,9 @@
-//! BoxLite workloads executed by libcontainer after tenant setup.
+//! BoxLite workloads executed by the runner after tenant setup.
 
 use super::{limits, reverse_streamlocal, session, sftp, streamlocal};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use libcontainer::oci_spec::runtime::Spec;
-use libcontainer::workload::{Executor, ExecutorError, ExecutorValidationError};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddrV4;
 
 /// Reserved OCI argv[0] used to represent a typed workload in the process spec.
@@ -138,92 +137,64 @@ impl BoxliteWorkloadExecutor {
         Self { workload }
     }
 
-    fn validate_spec(&self, spec: &Spec) -> BoxliteResult<()> {
-        let process = spec.process().as_ref().ok_or_else(|| {
-            BoxliteError::Config("internal SSH workload requires an OCI process".into())
-        })?;
-        let args = process.args().as_deref().ok_or_else(|| {
-            BoxliteError::Config("internal SSH workload requires process arguments".into())
-        })?;
+    pub(crate) fn validate(&self, args: &[String], terminal: bool) -> BoxliteResult<()> {
         let parsed = SshWorkload::from_container_args(args)?.ok_or_else(|| {
             BoxliteError::Config("internal SSH workload placeholder is missing".into())
         })?;
         if parsed != self.workload {
             return Err(BoxliteError::Config(
-                "internal SSH workload does not match its OCI placeholder".into(),
+                "internal SSH workload does not match its launch placeholder".into(),
             ));
         }
-        if process.terminal().unwrap_or(false) && !self.workload.supports_pty() {
+        if terminal && !self.workload.supports_pty() {
             return Err(BoxliteError::Config(
                 "this internal SSH workload does not support a PTY".into(),
             ));
         }
         Ok(())
     }
-}
 
-impl Executor for BoxliteWorkloadExecutor {
-    fn exec(&self, spec: &Spec) -> Result<(), ExecutorError> {
-        self.validate_spec(spec).map_err(executor_error)?;
+    /// Called exclusively in the isolated tenant child, after credentials and
+    /// descriptor isolation. Direct Rust workloads acknowledge readiness at
+    /// their logical exec boundary; shells use the runner's CLOEXEC notifier.
+    pub(crate) fn exec(
+        &self,
+        env: &HashMap<String, String>,
+        ready: impl FnOnce(),
+    ) -> BoxliteResult<()> {
+        for (key, value) in env {
+            if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
+                return Err(BoxliteError::Config(
+                    "invalid SSH workload environment".into(),
+                ));
+            }
+        }
+        for (key, _) in std::env::vars_os() {
+            std::env::remove_var(key);
+        }
+        for (key, value) in env {
+            std::env::set_var(key, value);
+        }
         let workload = self.workload.clone();
         if !workload.is_direct_rust() {
-            return workload.run().map_err(executor_error);
+            return workload.run();
         }
 
         install_direct_workload_panic_hook();
-        clear_non_root_capabilities().map_err(executor_error)?;
-        let profile = session::prepare_environment().map_err(executor_error)?;
+        let profile = session::prepare_environment()?;
         if matches!(workload, SshWorkload::Sftp) {
-            session::enter_home(&profile).map_err(executor_error)?;
+            session::enter_home(&profile)?;
         }
-
-        // Youki normally marks these descriptors CLOEXEC and waits for execve
-        // to close its notification pipe. Direct Rust workloads do not exec,
-        // so this real close is both the readiness boundary and leak defense.
-        close_inherited_fds().map_err(executor_error)?;
-
-        match workload.run() {
-            Ok(()) => exit_without_inherited_handlers(0),
-            Err(error) => {
-                eprintln!("[ssh-workload] {error}");
-                use std::io::Write as _;
-                let _ = std::io::stderr().flush();
-                exit_without_inherited_handlers(1);
-            }
+        ready();
+        // Defense in depth for a workload that never calls execve.
+        if let Err(error) = close_inherited_fds().and_then(|()| workload.run()) {
+            eprintln!("[ssh-workload] {error}");
+            use std::io::Write as _;
+            let _ = std::io::stderr().flush();
+            exit_without_inherited_handlers(1);
         }
+        exit_without_inherited_handlers(0)
     }
-
-    fn validate(&self, spec: &Spec) -> Result<(), ExecutorValidationError> {
-        self.validate_spec(spec)
-            .map_err(|error| ExecutorValidationError::ArgValidationError(error.to_string()))
-    }
-}
-
-fn executor_error(error: BoxliteError) -> ExecutorError {
-    ExecutorError::Execution(Box::new(error))
-}
-
-fn clear_non_root_capabilities() -> BoxliteResult<()> {
-    if nix::unistd::Uid::effective().is_root() {
-        return Ok(());
-    }
-    // Direct helpers do not execve, so they must shed privileges explicitly.
-    // Keep the bounding ceiling unchanged, just as an ordinary non-root exec.
-    let mut capabilities = libcontainer::oci_spec::runtime::LinuxCapabilities::default();
-    capabilities.set_bounding(None);
-    capabilities.set_effective(Some(Default::default()));
-    capabilities.set_permitted(Some(Default::default()));
-    capabilities.set_inheritable(Some(Default::default()));
-    capabilities.set_ambient(Some(Default::default()));
-    libcontainer::capabilities::drop_privileges(
-        &capabilities,
-        &libcontainer::syscall::linux::LinuxSyscall,
-    )
-    .map_err(|error| {
-        BoxliteError::Execution(format!(
-            "failed to clear non-root SSH helper capabilities: {error}"
-        ))
-    })
 }
 
 fn close_inherited_fds() -> BoxliteResult<()> {
@@ -278,9 +249,7 @@ fn close_inherited_fds() -> BoxliteResult<()> {
         }
     }
     if let Some((descriptor, error)) = close_error {
-        // Closing any descriptor >= 3 crosses Youki's logical exec boundary:
-        // its parent may already have observed EOF on the exec-notify pipe.
-        // Never return into libcontainer after that point.
+        // Never return into the runner once the workload crossed readiness.
         eprintln!("[ssh-workload] close inherited descriptor {descriptor}: {error}");
         use std::io::Write as _;
         let _ = std::io::stderr().flush();
@@ -310,7 +279,6 @@ fn exit_without_inherited_handlers(status: i32) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libcontainer::oci_spec::runtime::{ProcessBuilder, SpecBuilder, UserBuilder};
     use std::fs;
     use std::io::{Read as _, Write as _};
     use std::path::{Path, PathBuf};
@@ -322,25 +290,8 @@ mod tests {
     const SUBPROCESS_TEST: &str =
         "service::ssh::workload::tests::internal_workload_subprocess_driver";
 
-    fn spec(args: &[&str], terminal: bool) -> Spec {
-        let user = UserBuilder::default()
-            .uid(0_u32)
-            .gid(0_u32)
-            .build()
-            .unwrap();
-        let process = ProcessBuilder::default()
-            .terminal(terminal)
-            .user(user)
-            .args(
-                args.iter()
-                    .map(|value| (*value).to_string())
-                    .collect::<Vec<_>>(),
-            )
-            .env(vec!["PATH=/bin:/usr/bin".to_string()])
-            .cwd("/")
-            .build()
-            .unwrap();
-        SpecBuilder::default().process(process).build().unwrap()
+    fn args_owned(args: &[&str]) -> Vec<String> {
+        args.iter().map(|value| (*value).to_owned()).collect()
     }
 
     fn parse(args: &[&str]) -> BoxliteResult<Option<SshWorkload>> {
@@ -418,7 +369,7 @@ mod tests {
         for (args, terminal) in cases {
             let workload = parse(&args).unwrap().unwrap();
             BoxliteWorkloadExecutor::new(workload)
-                .validate(&spec(&args, terminal))
+                .validate(&args_owned(&args), terminal)
                 .unwrap();
         }
     }
@@ -447,7 +398,7 @@ mod tests {
 
         let args = [INTERNAL_PROGRAM, session::INTERNAL_SESSION_ARG, "shell"];
         assert!(BoxliteWorkloadExecutor::new(SshWorkload::Sftp)
-            .validate(&spec(&args, false))
+            .validate(&args_owned(&args), false)
             .is_err());
     }
 
@@ -455,32 +406,8 @@ mod tests {
     fn rejects_a_pty_for_protocol_and_relay_workloads() {
         let args = [INTERNAL_PROGRAM, sftp::INTERNAL_SFTP_ARG];
         assert!(BoxliteWorkloadExecutor::new(SshWorkload::Sftp)
-            .validate(&spec(&args, true))
+            .validate(&args_owned(&args), true)
             .is_err());
-    }
-
-    #[test]
-    fn accepts_non_root_internal_workloads() {
-        let args = [INTERNAL_PROGRAM, sftp::INTERNAL_SFTP_ARG];
-        let process = ProcessBuilder::default()
-            .terminal(false)
-            .user(
-                UserBuilder::default()
-                    .uid(1000_u32)
-                    .gid(1000_u32)
-                    .build()
-                    .unwrap(),
-            )
-            .args(args.map(str::to_owned).to_vec())
-            .env(vec!["PATH=/bin:/usr/bin".to_string()])
-            .cwd("/")
-            .build()
-            .unwrap();
-        let non_root_spec = SpecBuilder::default().process(process).build().unwrap();
-
-        assert!(BoxliteWorkloadExecutor::new(SshWorkload::Sftp)
-            .validate(&non_root_spec)
-            .is_ok());
     }
 
     fn spawn_subprocess(case: &str, cwd: &Path) -> Child {
@@ -628,9 +555,8 @@ mod tests {
             _ => panic!("unknown subprocess case: {case}"),
         };
         let workload = SshWorkload::from_container_args(&args).unwrap().unwrap();
-        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
         BoxliteWorkloadExecutor::new(workload)
-            .exec(&spec(&arg_refs, false))
+            .exec(&std::env::vars().collect(), || {})
             .unwrap();
         unreachable!("successful workload execution must not return");
     }

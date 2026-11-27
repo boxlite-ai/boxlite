@@ -12,12 +12,8 @@ use std::path::{Path, PathBuf};
 
 /// Per-container runtime directory layout.
 ///
-/// Represents the OCI bundle directory for a single container:
-/// ```text
-/// /run/boxlite/containers/{cid}/
-/// ├── rootfs/            # Container rootfs (bind → shared/containers/{cid}/rootfs)
-/// └── state/             # libcontainer state directory
-/// ```
+/// The per-container bundle contains generated configuration files and a
+/// rootfs bind mount to `shared/containers/{cid}/rootfs`.
 #[derive(Clone, Debug)]
 pub struct ContainerLayout {
     root: PathBuf,
@@ -56,7 +52,7 @@ impl ContainerLayout {
 ///
 /// Provides paths for the guest's runtime directories:
 /// - shared/ (virtiofs mount from host)
-/// - containers/ (OCI bundles + libcontainer state)
+/// - containers/ (container bundles)
 ///
 /// # Structure
 ///
@@ -68,9 +64,7 @@ impl ContainerLayout {
 /// │       └── rootfs/                 # merged rootfs mount point
 /// └── containers/                     # OCI containers
 ///     └── {cid}/
-///         ├── config.json             # OCI bundle config
-///         ├── rootfs/                 # bind mount to shared/.../rootfs
-///         └── state/                  # libcontainer state
+///         └── rootfs/                 # bind mount to shared/.../rootfs
 /// ```
 #[derive(Clone, Debug)]
 pub struct GuestLayout {
@@ -124,27 +118,17 @@ impl GuestLayout {
 
     /// Containers directory: /run/boxlite/containers
     ///
-    /// Each container has its own directory at /run/boxlite/containers/{cid}/
-    /// containing OCI bundle (config.json, rootfs/) and libcontainer state.
+    /// Each container has its own bundle under this directory.
     pub fn containers_dir(&self) -> PathBuf {
         self.base.join(dirs::CONTAINERS)
     }
 
     /// Get the bundle directory for a specific container.
     ///
-    /// Returns /run/boxlite/containers/{cid}/ which contains:
-    /// - config.json (OCI bundle config)
-    /// - rootfs/ (bind mount to shared/.../rootfs)
-    /// - state/ (libcontainer state)
+    /// Returns `/run/boxlite/containers/{cid}/`, which contains generated
+    /// configuration files and the rootfs bind mount.
     pub fn container_bundle_dir(&self, container_id: &str) -> PathBuf {
         self.containers_dir().join(container_id)
-    }
-
-    /// Get the state directory for a specific container.
-    ///
-    /// Returns /run/boxlite/containers/{cid}/state/ for libcontainer.
-    pub fn container_state_dir(&self, container_id: &str) -> PathBuf {
-        self.container_bundle_dir(container_id).join("state")
     }
 
     /// Get layout for a specific container's runtime directory.
@@ -238,15 +222,6 @@ mod tests {
         assert_eq!(
             layout.container_bundle_dir("main").to_str().unwrap(),
             "/run/boxlite/containers/main"
-        );
-    }
-
-    #[test]
-    fn test_guest_layout_container_state_dir() {
-        let layout = GuestLayout::new();
-        assert_eq!(
-            layout.container_state_dir("main").to_str().unwrap(),
-            "/run/boxlite/containers/main/state"
         );
     }
 

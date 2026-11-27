@@ -5,7 +5,7 @@
 //!   `cpu.max` and `memory.max` match the box size, `pids.max` is `max`, a
 //!   non-root user can read them, and nobody can write them.
 //! - A privileged container keeps the writable guest tree that `dockerd`
-//!   needs; the same limits sit under its `:youki:<id>` cgroup.
+//!   needs; the same limits sit under its `boxlite:<id>` cgroup.
 //!
 //! Run with:
 //!
@@ -118,7 +118,7 @@ async fn privileged_container_keeps_the_writable_guest_tree() {
 
     let (code, cgroup) = sh(&bx, "cat /proc/self/cgroup", None).await;
     assert_eq!(code, 0);
-    assert!(cgroup.contains(":youki:"), "guest-tree view: {cgroup}");
+    assert!(cgroup.contains("boxlite:"), "guest-tree view: {cgroup}");
 
     // dockerd needs to create cgroups here.
     let (code, out) = sh(
@@ -130,7 +130,7 @@ async fn privileged_container_keeps_the_writable_guest_tree() {
     assert_eq!(code, 0, "privileged tree must stay writable: {out}");
 
     // The box limits are still written to the container cgroup. Its name,
-    // `/:youki:<id>`, contains colons, hence `-f3-`.
+    // `/boxlite:<id>`, contains colons, hence `-f3-`.
     let (code, limits) = sh(
         &bx,
         "dir=/sys/fs/cgroup$(cut -d: -f3- /proc/self/cgroup); cat $dir/cpu.max $dir/memory.max",

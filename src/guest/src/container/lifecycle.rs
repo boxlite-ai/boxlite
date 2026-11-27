@@ -1,21 +1,20 @@
-//! OCI container lifecycle management
+//! Container lifecycle management
 //!
-//! Provides container creation, startup, and status checking using libcontainer.
-//! Follows the OCI Runtime Specification.
+//! The zygote owns process lifecycle state; this handle owns the guest-side I/O.
 
 use super::capabilities::CapabilitySet;
 use super::command::ContainerCommand;
 use super::spec::{ContainerCgroup, ContainerDevices, MountOverride, UserMount};
 use super::stdio::{ContainerStdio, InitIo};
-use super::{console_socket, kill, spec, start};
+use super::zygote::{InitBuildSpec, Status, ZYGOTE};
+use super::{spec, start};
 use crate::layout::GuestLayout;
 use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
 use crate::service::exec::InitHealthCheck;
 use crate::storage::attach::Attacher;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use libcontainer::container::Container as LibContainer;
-use libcontainer::signal::Signal;
 use std::collections::HashMap;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -38,34 +37,10 @@ const DEFAULT_INIT_PTY: PtyConfig = PtyConfig {
 #[path = "tests/pty_init.rs"]
 mod pty_init_tests;
 
-/// OCI container
-///
-/// Manages the lifecycle of an OCI-compliant container using libcontainer.
-/// Follows the OCI Runtime Specification.
-///
-/// # Example
-///
-/// ```no_run
-/// # use guest::container::Container;
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// // Create and start container
-/// let container = Container::start(
-///     "my-container",
-///     "/rootfs",
-///     vec!["sh".to_string()],
-///     vec!["PATH=/bin:/usr/bin".to_string()],
-///     "/",
-/// )?;
-///
-/// // Execute command
-/// let child = container.command("ls").args(&["-la"]).spawn().await?;
-/// # Ok(())
-/// # }
-/// ```
+/// Guest-side handle to a container registered in the zygote.
 #[derive(Debug)]
 pub struct Container {
     id: String,
-    state_root: PathBuf,
     /// PID returned by the zygote at creation, before init starts running.
     init_pid: Option<nix::unistd::Pid>,
     bundle_path: PathBuf,
@@ -86,38 +61,12 @@ pub struct Container {
     /// Dropping this closes pipes → init gets EOF → init exits.
     #[allow(dead_code)]
     stdio: ContainerStdio,
-    /// Flag to track if shutdown() was called (prevents double-kill in Drop).
-    is_shutdown: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    test_status: Option<Status>,
 }
 
 impl Container {
-    /// Create and start an OCI container
-    ///
-    /// Creates a container with the specified rootfs and starts the init process.
-    /// The init process runs detached in the background.
-    ///
-    /// Uses GuestLayout internally to determine paths:
-    /// - Container directory: /run/boxlite/{container_id}/
-    /// - OCI bundle (config.json): /run/boxlite/{container_id}/config.json
-    /// - libcontainer state: /run/boxlite/{container_id}/state.json
-    ///
-    /// # Arguments
-    ///
-    /// - `container_id`: Unique container identifier
-    /// - `rootfs`: Path to container root filesystem
-    /// - `entrypoint`: Command and arguments for container init process
-    /// - `env`: Environment variables in "KEY=VALUE" format
-    /// - `workdir`: Working directory inside container
-    /// - `user_mounts`: Bind mounts from guest VM paths into container
-    /// - `capabilities`/`readonly_paths`/`mount_override`/`cgroup`: fields
-    ///   resolved at the RPC boundary
-    ///
-    /// # Errors
-    ///
-    /// - Empty rootfs or entrypoint
-    /// - Failed to create container directory
-    /// - Failed to create or start container
-    /// - Init process exited immediately
+    /// Create init and its stdio without releasing the start gate.
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         container_id: &str,
@@ -137,8 +86,9 @@ impl Container {
         let rootfs = rootfs.as_ref();
         let workdir = workdir.as_ref();
 
-        // Use GuestLayout for all paths (per-container directories)
-        let layout = GuestLayout::new();
+        super::runner::validate_id(container_id)
+            .map_err(|e| BoxliteError::InvalidArgument(e.to_string()))?;
+        let bundle_path = GuestLayout::new().containers_dir().join(container_id);
 
         // Validate inputs early
         start::validate_container_inputs(rootfs, &entrypoint, workdir)?;
@@ -152,9 +102,6 @@ impl Container {
                 env_map.insert(key, value);
             }
         }
-
-        // State at /run/boxlite/containers/{cid}/state/
-        let state_root = layout.container_state_dir(container_id);
 
         // Resolve user string to numeric (uid, gid) once — used for both
         // init process OCI spec and all subsequent exec commands.
@@ -195,126 +142,95 @@ impl Container {
             }
         }
 
-        // Create OCI bundle at /run/boxlite/containers/{cid}/
-        // create_oci_bundle creates bundle_root/{cid}/, so pass containers_dir
-        let bundle = start::create_oci_bundle(
-            container_id,
-            rootfs,
-            &entrypoint,
-            &env,
-            workdir,
-            uid,
-            gid,
-            &capabilities,
-            &readonly_paths,
-            &mount_override,
-            &layout.containers_dir(),
-            &user_mounts,
-            tty,
-            &devices,
-            cgroup,
-        )?;
-
-        let (stdio, init_pid) = if tty {
-            // libcontainer allocates the PTY while creating init and passes the
-            // master back over this socket, so the socket must exist before the
-            // build and be read after it — a PTY, unlike a pipe, cannot be made
-            // before the process that owns the other end.
-            let socket = console_socket::ConsoleSocket::new(container_id)?;
-            let init_pid = start::create_container_with_stdio(
-                container_id,
-                &state_root,
-                &bundle.path,
-                start::InitIoSetup::Console(socket.path().to_string()),
+        std::fs::create_dir_all(&bundle_path).map_err(|e| {
+            BoxliteError::Internal(format!(
+                "prepare container directory {}: {e}",
+                bundle_path.display()
+            ))
+        })?;
+        let result = (|| {
+            start::create_container_etc_files(&bundle_path, container_id)?;
+            let spec = spec::init_spec(
+                rootfs,
+                spec::ProcessSpec {
+                    args: entrypoint,
+                    env: env_map.clone(),
+                    cwd: workdir.into(),
+                    uid,
+                    gid,
+                    capabilities: capabilities.clone(),
+                },
+                readonly_paths.as_slice(),
+                &mount_override,
+                &bundle_path,
+                &user_mounts,
+                &devices,
+                cgroup,
+            );
+            let mount_destinations = spec.mounts.iter().map(|m| m.destination.clone()).collect();
+            let (stdio, init_fds) = if tty {
+                (None, None)
+            } else {
+                let (stdio, fds) = ContainerStdio::pipes()?;
+                (Some(stdio), Some(fds))
+            };
+            let raw_fds = init_fds.as_ref().map(|fds| {
+                [
+                    fds.stdin.as_raw_fd(),
+                    fds.stdout.as_raw_fd(),
+                    fds.stderr.as_raw_fd(),
+                ]
+            });
+            let spawned = ZYGOTE.get().expect("zygote not started").build_init(
+                InitBuildSpec {
+                    container_id: container_id.into(),
+                    spec,
+                    pty_config: tty.then_some(DEFAULT_INIT_PTY),
+                },
+                raw_fds.as_ref().map_or(&[], |fds| &fds[..]),
             )?;
-            (ContainerStdio::pty(socket.receive_pty_master()?), init_pid)
-        } else {
-            // Pipes exist before the container does. The guest holds stdin's
-            // write-end, so init's read() blocks instead of seeing EOF.
-            let (stdio, init_fds) = ContainerStdio::pipes()?;
-            let init_pid = start::create_container_with_stdio(
-                container_id,
-                &state_root,
-                &bundle.path,
-                start::InitIoSetup::Pipes(init_fds),
-            )?;
-            (stdio, init_pid)
-        };
-
-        // Note: init is *created*, not started. `run_init()` does that, so a
-        // caller can attach to the main command before it runs.
-
-        Ok(Self {
-            id: container_id.to_string(),
-            state_root,
-            init_pid: Some(init_pid),
-            bundle_path: bundle.path,
-            rootfs: rootfs.to_path_buf(),
-            env: env_map,
-            user: (uid, gid),
-            mount_destinations: bundle.mount_destinations,
-            attacher: Arc::default(),
-            capabilities,
-            stdio,
-            is_shutdown: std::sync::atomic::AtomicBool::new(false),
-        })
-    }
-
-    /// Run the init process of a container that was created but not started.
-    ///
-    /// Separated from creation so the host can attach to the main command first
-    /// — docker's create → attach → start. Fused, a command that finishes
-    /// immediately can be gone before an attach issued after start reaches the
-    /// guest, taking its output and exit code with it when the VM powers off.
-    ///
-    /// Idempotent: a container whose init is already up no-ops here instead of
-    /// reaching youki's start, which errors with IncorrectStatus on a Running
-    /// container. This method itself takes no lock — the guarantee relies on
-    /// both callers (the Container.Start RPC and the exec zombie-revival path)
-    /// holding the per-container mutex, so concurrent calls serialize at the
-    /// caller and the late one observes Running. A Created container (the
-    /// zombie, or a start still in flight behind the lock) proceeds to start.
-    pub fn run_init(&self) -> BoxliteResult<()> {
-        start::start_container(&self.id, &self.state_root)
-    }
-
-    /// Check if container init process is running
-    ///
-    /// Returns `true` if the container is in Running state, `false` otherwise.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use guest::container::Container;
-    /// # fn example(container: &Container) {
-    /// if container.is_running() {
-    ///     println!("Container is running");
-    /// }
-    /// # }
-    /// ```
-    pub fn is_running(&self) -> bool {
-        let container_state_path = self.container_state_path();
-        match start::load_container_status(&container_state_path) {
-            Ok(status) => {
-                use libcontainer::container::ContainerStatus;
-                let is_running = matches!(status, ContainerStatus::Running);
-                tracing::trace!(
-                    container_id = %self.id,
-                    status = ?status,
-                    is_running = is_running,
-                    "Container status check"
-                );
-                is_running
-            }
-            Err(e) => {
-                tracing::warn!(
-                    container_id = %self.id,
-                    error = %e,
-                    "Failed to load container status, assuming not running"
-                );
-                false
-            }
+            let stdio = stdio
+                .unwrap_or_else(|| ContainerStdio::pty(spawned.pty.expect("validated PTY reply")));
+            Ok(Self {
+                id: container_id.into(),
+                init_pid: Some(spawned.pid),
+                bundle_path: bundle_path.clone(),
+                rootfs: rootfs.into(),
+                env: env_map,
+                user: (uid, gid),
+                mount_destinations,
+                attacher: Arc::default(),
+                capabilities,
+                stdio,
+                #[cfg(test)]
+                test_status: None,
+            })
+        })();
+        if result.is_err() {
+            start::cleanup_bundle_directory(&bundle_path);
         }
+        result
+    }
+
+    /// Release init only after the caller can attach to its main command.
+    /// Releasing the gate twice is a no-op for a running container.
+    pub fn run_init(&self) -> BoxliteResult<()> {
+        ZYGOTE.get().expect("zygote not started").run_init(&self.id)
+    }
+
+    fn status(&self) -> Status {
+        #[cfg(test)]
+        if let Some(status) = self.test_status {
+            return status;
+        }
+        ZYGOTE
+            .get()
+            .and_then(|zygote| zygote.status(&self.id).ok())
+            .unwrap_or(Status::Stopped)
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.status() == Status::Running
     }
 
     /// Get container ID
@@ -362,20 +278,7 @@ impl Container {
     /// plus those `Container.Mount` added since (see
     /// [`Self::record_mount_destination`]).
     ///
-    /// The creation mounts come from the OCI spec that was actually applied —
-    /// the same object `config.json` was written from — so they cover the
-    /// standard tmpfs/pseudo mounts and user volumes alike and cannot drift
-    /// from what the runtime did. Callers use this to tell whether a path
-    /// inside the container is reachable through the rootfs directory: anything
-    /// at or below one of these destinations is covered by a mount in the
-    /// container's own namespace and is *not* the file a process in the box
-    /// would see at that path.
-    ///
-    /// Held in memory, like [`Self::user`], rather than re-read per question:
-    /// the bundle is written once and never rewritten, and the callers are RPC
-    /// handlers on the guest's async runtime — which on a single-vCPU box is a
-    /// single worker thread — so a `Spec::load` here stalled every other
-    /// in-flight RPC for the length of a file read and a deserialize.
+    /// The initial list is taken from the same in-memory plan the runner uses.
     pub fn mount_destinations(&self) -> &[PathBuf] {
         &self.mount_destinations
     }
@@ -415,19 +318,11 @@ impl Container {
         self.init_pid
     }
 
-    /// Test-only constructor: a container whose libcontainer state must be
-    /// written separately by the test (see `run_init_is_noop_when_init_already_running`
-    /// and the exec `failed_spawn_on_a_running_container_is_not_retried` test,
-    /// which save a Running state file first). `is_shutdown` is set so Drop
-    /// never signals the recorded pid — tests point it at their own process.
     #[cfg(test)]
-    pub(crate) fn for_unit_test(id: &str, state_root: PathBuf, bundle_path: PathBuf) -> Self {
-        // Drop removes the bundle directory; create it so cleanup is a
-        // silent no-op instead of warning on a NotFound during tests.
-        std::fs::create_dir_all(&bundle_path).expect("create bundle dir for unit test");
+    pub(crate) fn for_unit_test(id: &str, _unused: PathBuf, bundle_path: PathBuf) -> Self {
+        std::fs::create_dir_all(&bundle_path).expect("create test container directory");
         Self {
-            id: id.to_string(),
-            state_root,
+            id: id.into(),
             init_pid: None,
             rootfs: bundle_path.join("rootfs"),
             bundle_path,
@@ -436,9 +331,14 @@ impl Container {
             mount_destinations: Vec::new(),
             attacher: Arc::default(),
             capabilities: CapabilitySet::default(),
-            stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
-            is_shutdown: std::sync::atomic::AtomicBool::new(true),
+            stdio: ContainerStdio::pipes().unwrap().0,
+            test_status: Some(Status::Stopped),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mark_running_for_unit_test(&mut self) {
+        self.test_status = Some(Status::Running);
     }
 
     /// Build the exec-session handle for the container's init process — the
@@ -502,7 +402,6 @@ impl Container {
     pub fn cmd(&self) -> ContainerCommand {
         ContainerCommand::new(
             self.id.clone(),
-            self.state_root.clone(),
             self.env.clone(),
             self.user,
             self.rootfs.clone(),
@@ -543,65 +442,18 @@ impl Container {
     /// # }
     /// ```
     pub fn diagnose_exit(&mut self) -> String {
-        let container_state_path = self.container_state_path();
-
-        // Drain init process output before building diagnostics
         let (init_stdout, init_stderr) = self.drain_init_output();
-
-        // Try to load container state from libcontainer
-        let mut result = match LibContainer::load(container_state_path.clone()) {
-            Ok(libcontainer) => {
-                let status = libcontainer.status();
-                let pid = libcontainer.pid();
-
-                let mut diagnostics = vec![
-                    format!("Container ID: {}", self.id),
-                    format!("Status: {:?}", status),
-                ];
-
-                if let Some(pid) = pid {
-                    diagnostics.push(format!("PID: {}", pid));
-
-                    // Try to get process state information
-                    match std::fs::read(format!("/proc/{pid}/stat")) {
-                        Ok(stat) => {
-                            if let Some(state) =
-                                crate::service::exec::process_instance::stat_fields(&stat)
-                                    .and_then(|mut fields| fields.next())
-                            {
-                                diagnostics.push(format!("Process state: {state}"));
-                            }
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            diagnostics.push("Process: no longer exists (exited)".to_string());
-                        }
-                        Err(_) => {}
-                    }
-                } else {
-                    diagnostics.push(
-                        "PID: none (init process never started or exited immediately)".to_string(),
-                    );
+        let mut result = format!("Container ID: {}, Status: {:?}", self.id, self.status());
+        if let Some(pid) = self.init_pid {
+            result.push_str(&format!(", PID: {pid}"));
+            if let Ok(stat) = std::fs::read(format!("/proc/{pid}/stat")) {
+                if let Some(state) = crate::service::exec::process_instance::stat_fields(&stat)
+                    .and_then(|mut fields| fields.next())
+                {
+                    result.push_str(&format!(", Process state: {state}"));
                 }
-
-                // Check for common issues
-                if !self.bundle_path.exists() {
-                    diagnostics.push(format!(
-                        "Bundle path missing: {}",
-                        self.bundle_path.display()
-                    ));
-                }
-
-                diagnostics.join(", ")
             }
-            Err(e) => {
-                format!(
-                    "Container ID: {}, Failed to load container state from {}: {}",
-                    self.id,
-                    container_state_path.display(),
-                    e
-                )
-            }
-        };
+        }
 
         // Append captured init output if any
         if !init_stdout.is_empty() {
@@ -614,61 +466,22 @@ impl Container {
         result
     }
 
-    /// Gracefully shutdown the container.
-    ///
-    /// Sends SIGTERM first, waits for exit with timeout, then SIGKILL if needed.
-    /// Sets the `shutdown_called` flag to prevent double-kill in Drop.
-    ///
-    /// # Arguments
-    ///
-    /// - `timeout_ms`: Maximum time to wait for graceful exit before SIGKILL
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) on successful shutdown, or if container was already stopped.
+    /// Send SIGTERM to init, then kill the PID namespace and cgroup on timeout.
     pub fn shutdown(&self, timeout_ms: u64) -> BoxliteResult<()> {
-        self.is_shutdown
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-
-        let container_state_path = self.container_state_path();
-        let mut container = match LibContainer::load(container_state_path) {
-            Ok(c) => c,
-            Err(_) => {
-                tracing::debug!(container_id = %self.id, "Container already gone, nothing to shutdown");
-                return Ok(());
-            }
-        };
-
-        if !container.can_kill() {
-            tracing::debug!(container_id = %self.id, "Container cannot be killed, skipping shutdown");
+        let Some(zygote) = ZYGOTE.get() else {
             return Ok(());
-        }
-
-        // Step 1: Send SIGTERM
-        tracing::info!(container_id = %self.id, "Sending SIGTERM to container");
-        let sigterm = Signal::try_from(15).expect("SIGTERM (15) is a valid signal");
-        let _ = container.kill(sigterm, true);
-
-        // Step 2: Wait for graceful exit with timeout
-        let start = std::time::Instant::now();
-        while start.elapsed().as_millis() < timeout_ms as u128 {
-            if !self.is_running() {
-                tracing::info!(container_id = %self.id, "Container exited gracefully");
-                return Ok(());
+        };
+        if self.status() == Status::Running {
+            zygote.signal(&self.id, false)?;
+            let start = std::time::Instant::now();
+            while start.elapsed().as_millis() < u128::from(timeout_ms) {
+                if self.status() == Status::Stopped {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-
-        // Step 3: SIGKILL if still running
-        tracing::warn!(container_id = %self.id, "Container didn't exit gracefully, sending SIGKILL");
-        let sigkill = Signal::try_from(9).expect("SIGKILL (9) is a valid signal");
-        let _ = container.kill(sigkill, true);
-
-        Ok(())
-    }
-
-    fn container_state_path(&self) -> PathBuf {
-        self.state_root.join(&self.id)
+        zygote.signal(&self.id, true)
     }
 }
 
@@ -707,31 +520,24 @@ impl InitHealthCheck for Container {
 
 impl Drop for Container {
     fn drop(&mut self) {
-        tracing::debug!(container_id = %self.id, "Cleaning up container");
-
-        let container_state_path = self.container_state_path();
-
-        if let Ok(mut container) = LibContainer::load(container_state_path) {
-            // Skip kill if already shutdown gracefully
-            if self.is_shutdown.load(std::sync::atomic::Ordering::SeqCst) {
-                tracing::debug!(container_id = %self.id, "Container already shutdown, skipping kill");
-            } else {
-                // Fallback: SIGKILL if shutdown() wasn't called
-                kill::kill_container(&mut container);
+        #[cfg(test)]
+        let registered = self.test_status.is_none();
+        #[cfg(not(test))]
+        let registered = true;
+        if registered {
+            if let Some(zygote) = ZYGOTE.get() {
+                if let Err(error) = zygote.remove(&self.id) {
+                    tracing::warn!(container_id = %self.id, %error, "failed to remove runner entry");
+                }
             }
-            kill::delete_container(&mut container);
         }
-
         start::cleanup_bundle_directory(&self.bundle_path);
-
-        tracing::debug!(container_id = %self.id, "Container cleanup complete");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use libcontainer::container::{ContainerStatus, State};
     use nix::sys::signal::kill;
     use nix::unistd::{pipe, Pid};
     use std::os::fd::OwnedFd;
@@ -751,7 +557,6 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut container = Container {
             id: "mount-bookkeeping".into(),
-            state_root: root.path().join("state"),
             bundle_path: root.path().join("bundle"),
             rootfs: root.path().join("bundle/rootfs"),
             env: HashMap::new(),
@@ -761,7 +566,7 @@ mod tests {
             capabilities: CapabilitySet::default(),
             stdio: ContainerStdio::pipes().unwrap().0,
             init_pid: None,
-            is_shutdown: std::sync::atomic::AtomicBool::new(true),
+            test_status: Some(Status::Stopped),
         };
         container.record_mount_destination("/data".into());
         container.record_mount_destination("/data/runtime-child".into());
@@ -791,12 +596,9 @@ mod tests {
 
     #[test]
     fn init_pipe_handle_failure_reaps_init() {
-        let child = ChildGuard(
-            Command::new("/bin/sh")
-                .args(["-c", "sleep 30"])
-                .spawn()
-                .unwrap(),
-        );
+        // This fixture is a single process: killing the simulated init must
+        // not leave a shell's child holding nextest's output pipes open.
+        let child = ChildGuard(Command::new("sleep").arg("30").spawn().unwrap());
         let pid = Pid::from_raw(child.0.id() as i32);
         let (_stdin_read, stdin_write) = pipe().unwrap();
         let stdout: OwnedFd = std::fs::File::open("/proc/self/stat").unwrap().into();
@@ -816,66 +618,6 @@ mod tests {
         assert!(
             kill(pid, None).is_err(),
             "failed init handle must not leave a child"
-        );
-    }
-
-    /// `run_init` must be idempotent: the Container.Start RPC and the exec
-    /// zombie-revival path both call it, and a second call on a container whose
-    /// init is already running must no-op — youki's `start()` errors with
-    /// `IncorrectStatus(Running)` on a Running container, and that error is the
-    /// failure this test exists to pin.
-    #[test]
-    fn run_init_is_noop_when_init_already_running() {
-        // `container_state_path()` is `state_root.join(id)`, and libcontainer
-        // persists the state as `<that dir>/state.json` — so point the two
-        // halves at one TempDir by splitting it into parent + name.
-        let dir = tempfile::TempDir::new().expect("create temp dir");
-        let state_root = dir
-            .path()
-            .parent()
-            .expect("temp dir has a parent")
-            .to_path_buf();
-        let id = dir
-            .path()
-            .file_name()
-            .expect("temp dir has a name")
-            .to_string_lossy()
-            .to_string();
-
-        // Running with our own (alive) pid: `refresh_status` keeps it Running,
-        // the same trick `load_container_status_refreshes_stale_persisted_status`
-        // relies on in start.rs.
-        let state = State::new(
-            &id,
-            ContainerStatus::Running,
-            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
-            dir.path().to_path_buf(),
-        );
-        state.save(dir.path()).expect("save libcontainer state");
-
-        // Drop removes the bundle directory; create it so cleanup is a
-        // silent no-op instead of warning on a NotFound during tests.
-        std::fs::create_dir_all(dir.path().join("bundle")).expect("create bundle dir");
-        let container = Container {
-            id,
-            state_root,
-            bundle_path: dir.path().join("bundle"),
-            rootfs: dir.path().join("bundle/rootfs"),
-            env: HashMap::new(),
-            user: (0, 0),
-            mount_destinations: Vec::new(),
-            attacher: Arc::default(),
-            capabilities: CapabilitySet::default(),
-            stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
-            init_pid: None,
-            // Drop must not SIGKILL the recorded pid — it is this test process.
-            is_shutdown: std::sync::atomic::AtomicBool::new(true),
-        };
-
-        let result = container.run_init();
-        assert!(
-            result.is_ok(),
-            "run_init on an already-running container must no-op, got: {result:?}"
         );
     }
 }

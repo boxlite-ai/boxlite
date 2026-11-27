@@ -747,11 +747,10 @@ async fn spawn_with_executor(
 /// One revival attempt for a failed exec spawn.
 ///
 /// Retries via `spawn_again` only when the container is provably not running:
-/// a non-running container can never have spawned the command (libcontainer
-/// refuses to build into Created), so the first failure was the Created-window
+/// a Created container can never have spawned the command (the runner refuses
+/// to build into Created), so the first failure was the Created-window
 /// build error and one retry after run_init is safe. A *running* container
-/// must NOT be retried: `spawn_request` can fail in Phase 2 (the PTY console
-/// handshake) after Phase 1 already spawned the process, and a retry would
+/// must NOT be retried: `spawn_request` can fail in PTY handle construction after Phase 1 already spawned the process, and a retry would
 /// execute the user's command twice. A Stopped container fails run_init and
 /// the original error is returned unchanged.
 async fn revive_and_retry<F, Fut, E>(
@@ -800,7 +799,7 @@ mod container_id_path_tests {
     use nix::unistd::{pipe, write, Pid};
 
     /// The retry gate must not re-spawn when the container is already running:
-    /// `spawn_request` can fail after spawning (the PTY console handshake), and
+    /// `spawn_request` can fail after spawning (PTY handle construction), and
     /// a retry would execute the user's command twice. With the old
     /// `is_running() || run_init()` condition the assertion below fails:
     /// "a running container must not be retried — the command may already have
@@ -808,34 +807,14 @@ mod container_id_path_tests {
     #[tokio::test]
     async fn failed_spawn_on_a_running_container_is_not_retried() {
         use crate::container::Container;
-        use libcontainer::container::{ContainerStatus, State};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
         use tokio::sync::Mutex;
 
-        // Running state with our own (alive) pid — the same trick as
-        // `run_init_is_noop_when_init_already_running` in lifecycle.rs.
         let dir = tempfile::TempDir::new().expect("create temp dir");
-        let state_root = dir
-            .path()
-            .parent()
-            .expect("temp dir has a parent")
-            .to_path_buf();
-        let id = dir
-            .path()
-            .file_name()
-            .expect("temp dir has a name")
-            .to_string_lossy()
-            .to_string();
-        let state = State::new(
-            &id,
-            ContainerStatus::Running,
-            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
-            dir.path().to_path_buf(),
-        );
-        state.save(dir.path()).expect("save libcontainer state");
-
-        let container = Container::for_unit_test(&id, state_root, dir.path().join("bundle"));
+        let mut container =
+            Container::for_unit_test("running", dir.path().into(), dir.path().join("bundle"));
+        container.mark_running_for_unit_test();
         let container_ref = Arc::new(Mutex::new(container));
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_closure = Arc::clone(&calls);

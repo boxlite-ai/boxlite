@@ -523,7 +523,7 @@ impl ContainerService for GuestServer {
                 // host calls Container.Start for that. That its pid and stdio
                 // exist already is what lets the session below be registered
                 // against it, and a client attach to it, before it runs.
-                // The handle uses the zygote's PID, without reloading state.json.
+                // The handle uses the PID returned by the runner.
                 debug!(container_id = %container_id, "Container created");
 
                 // Expose init as an attachable exec session under the
@@ -552,7 +552,7 @@ impl ContainerService for GuestServer {
                         // Register init's exit slot and the follow-up the reaper
                         // fires on delivery (docker semantics: the box
                         // stops when init exits). Init is created but not yet
-                        // started here — it blocks on libcontainer's exec fifo —
+                        // started here — it blocks on the runner's start gate —
                         // so it cannot have exited, and `now` is a sound cutoff:
                         // any slot already under this pid is a recycled-pid
                         // leftover.

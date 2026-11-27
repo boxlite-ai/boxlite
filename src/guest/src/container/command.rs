@@ -38,8 +38,6 @@ pub struct ContainerCommand {
     // Container context (provided by Container::cmd())
     id: String,
 
-    state_root: PathBuf,
-
     /// Program to run (set via program())
     program: Option<String>,
 
@@ -65,9 +63,6 @@ pub struct ContainerCommand {
     /// Working directory (None = use default "/")
     cwd: Option<String>,
 
-    /// Console socket path for PTY (internal, set by spawn when pty_config is present)
-    console_socket: Option<String>,
-
     /// PTY configuration (set via with_pty())
     pty_config: Option<PtyConfig>,
 
@@ -83,7 +78,6 @@ impl ContainerCommand {
     /// Users should call `container.exec()` instead.
     pub(super) fn new(
         id: String,
-        state_root: PathBuf,
         env: HashMap<String, String>,
         user: (u32, u32),
         rootfs: PathBuf,
@@ -98,17 +92,14 @@ impl ContainerCommand {
             rootfs: Some(rootfs),
             capabilities,
             cwd: None,
-            console_socket: None,
             pty_config: None,
             ssh_workload: None,
             id,
-            state_root,
         }
     }
 
     /// Enable PTY mode with configuration
     ///
-    /// Sets up console socket for OCI-compliant PTY handling.
     /// Call this before spawn() to enable PTY mode.
     pub fn with_pty(mut self, config: PtyConfig) -> Self {
         // Store config for spawn() to use
@@ -249,9 +240,7 @@ impl ContainerCommand {
     /// Creates a tenant process in the container with stdin/stdout/stderr pipes.
     /// Returns an [`ExecHandle`] for interacting with the running process.
     ///
-    /// For PTY mode, this includes the full console-socket handshake.
-    /// If you need to release the container mutex between the zygote build
-    /// and the PTY handshake, use [`spawn_build()`] + [`SpawnedPty::finish()`] instead.
+    /// For PTY mode, this includes attaching the returned master.
     ///
     /// # Example
     ///
@@ -271,15 +260,7 @@ impl ContainerCommand {
         }
     }
 
-    /// Build phase only: zygote IPC without PTY handshake.
-    ///
-    /// Returns [`SpawnResult::Ready`] for non-PTY (handle ready immediately),
-    /// or [`SpawnResult::PtyPending`] for PTY (must call [`SpawnedPty::finish()`]
-    /// to complete the console-socket handshake).
-    ///
-    /// Use this instead of [`spawn()`] when you need to release the container
-    /// mutex between the zygote build and the PTY handshake. The build phase
-    /// serializes `chdir()` in libcontainer; the PTY handshake does not need it.
+    /// Spawn via the zygote; PTY handle construction may be deferred.
     pub(crate) async fn spawn_build(self) -> Result<SpawnResult, SpawnFailure> {
         if let Some(pty_config) = self.pty_config.clone() {
             self.spawn_pty_build(pty_config).await
@@ -304,7 +285,7 @@ impl ContainerCommand {
         tracing::debug!(container_id = %self.id, "spawning with pipes");
 
         let pipes = Some((stdin_read, stdout_write, stderr_write));
-        let pid = self.build_and_spawn(pipes).await?;
+        let pid = self.build_and_spawn(pipes).await?.pid;
 
         tracing::debug!(pid = pid.as_raw(), "spawned with pipes");
         // Non-PTY mode: stdout and stderr are separate pipes
@@ -317,29 +298,13 @@ impl ContainerCommand {
         }
     }
 
-    /// Build phase of PTY spawn: zygote IPC only, no console-socket handshake.
-    ///
-    /// Creates the console socket, sends the build spec to the zygote, and
-    /// returns a [`SpawnedPty`] that captures the PID + socket for later
-    /// completion via [`SpawnedPty::finish()`].
-    async fn spawn_pty_build(mut self, config: PtyConfig) -> Result<SpawnResult, SpawnFailure> {
-        use super::console_socket::ConsoleSocket;
-
-        let exec_id = uuid::Uuid::new_v4().to_string();
-        let socket = ConsoleSocket::new(&exec_id)?;
-
-        tracing::debug!(
-            container_id = %self.id,
-            console_socket = %socket.path(),
-            "spawning with PTY (build phase)"
-        );
-
-        self.console_socket = Some(socket.path().to_string());
-        let pid = self.build_and_spawn(None).await?;
-
+    /// The zygote returns the master over the existing SCM_RIGHTS channel.
+    /// Defer AsyncFd registration and handle assembly to outside the container lock.
+    async fn spawn_pty_build(self, config: PtyConfig) -> Result<SpawnResult, SpawnFailure> {
+        let spawned = self.build_and_spawn(None).await?;
         Ok(SpawnResult::PtyPending(SpawnedPty {
-            pid,
-            socket,
+            pid: spawned.pid,
+            master: spawned.pty.expect("validated PTY reply"),
             config,
         }))
     }
@@ -366,23 +331,16 @@ impl ContainerCommand {
         }
     }
 
-    /// Build and spawn process via the zygote.
-    ///
-    /// Sends a BuildSpec to the zygote process (forked before tokio started),
-    /// which calls ContainerBuilder::build() in a single-threaded context.
-    /// This avoids the musl __malloc_lock deadlock on clone3().
-    ///
-    /// Uses spawn_blocking because the IPC round-trip blocks until the
-    /// zygote completes the build.
+    /// Blocking IPC to the single-threaded launch server.
     async fn build_and_spawn(
         &self,
         pipes: Option<(OwnedFd, OwnedFd, OwnedFd)>,
-    ) -> Result<Pid, SpawnFailure> {
+    ) -> Result<super::runner::Spawned, SpawnFailure> {
         let program = self.program.clone().unwrap_or_default();
         let mut container_args = vec![program.clone()];
         container_args.extend_from_slice(self.args.as_slice());
         let ssh_workload = self.ssh_workload.clone();
-        if self.console_socket.is_some()
+        if self.pty_config.is_some()
             && ssh_workload
                 .as_ref()
                 .is_some_and(|workload| !workload.supports_pty())
@@ -411,29 +369,29 @@ impl ContainerCommand {
 
         let spec = BuildSpec {
             container_id: self.id.clone(),
-            state_root: self.state_root.clone(),
-            console_socket: self.console_socket.clone(),
-            cwd: self.cwd.clone().unwrap_or_else(|| "/".to_string()).into(),
-            env: self.env.clone(),
-            args: container_args.clone(),
             ssh_workload,
             pty_config: self.pty_config.clone(),
-            uid,
-            gid,
-            capabilities: self.capabilities.clone(),
+            process: super::spec::ProcessSpec {
+                cwd: self.cwd.clone().unwrap_or_else(|| "/".to_string()).into(),
+                env: self.env.clone(),
+                args: container_args.clone(),
+                uid,
+                gid,
+                capabilities: self.capabilities.clone(),
+            },
         };
 
         // Blocking IPC to zygote — use spawn_blocking to not block tokio.
         // pipes must live until sendmsg duplicates them via SCM_RIGHTS,
         // then drop to close the parent's copies (so pipe readers see EOF).
-        let pid = tokio::task::spawn_blocking(move || {
+        let spawned = tokio::task::spawn_blocking(move || {
             let raw_fds = pipes
                 .as_ref()
                 .map(|(a, b, c)| [a.as_raw_fd(), b.as_raw_fd(), c.as_raw_fd()]);
             let result = zygote::ZYGOTE
                 .get()
                 .expect("zygote not started")
-                .build(spec, raw_fds);
+                .build(spec, raw_fds.as_ref().map_or(&[], |fds| &fds[..]));
             // Close parent's copies AFTER build() — zygote has its own via SCM_RIGHTS.
             // Without this, pipe readers in the parent never see EOF.
             drop(pipes);
@@ -454,12 +412,12 @@ impl ContainerCommand {
 
         tracing::debug!(
             container_id = %self.id,
-            pid = pid.as_raw(),
+            pid = spawned.pid.as_raw(),
             elapsed_ms = build_start.elapsed().as_millis() as u64,
             "exec: build completed"
         );
 
-        Ok(pid)
+        Ok(spawned)
     }
 }
 
@@ -471,40 +429,19 @@ impl ContainerCommand {
 pub(crate) enum SpawnResult {
     /// Non-PTY: handle is ready immediately.
     Ready(ExecHandle),
-    /// PTY: build is done, but the console-socket handshake is pending.
+    /// PTY: child is running; the master is ready for handle construction.
     PtyPending(SpawnedPty),
 }
 
-/// Intermediate state between zygote build and PTY handshake.
-///
-/// Holds the PID (from `build_and_spawn`) and the console socket
-/// needed to receive the PTY master FD from libcontainer.
-///
-/// Call [`finish()`] to complete the handshake. This blocks on
-/// `accept()` + `recvmsg()` with a 30s timeout.
 pub(crate) struct SpawnedPty {
     pid: Pid,
-    socket: super::console_socket::ConsoleSocket,
+    master: OwnedFd,
     config: PtyConfig,
 }
 
 impl SpawnedPty {
-    /// Complete the PTY handshake and create the [`ExecHandle`].
-    ///
-    /// Blocks on the console-socket `accept()` + `recvmsg()` to receive
-    /// the PTY master FD from libcontainer. Has a 30s timeout.
-    ///
-    /// Call this AFTER releasing the container mutex — the handshake
-    /// does not need serialization.
     pub(crate) fn finish(self) -> BoxliteResult<ExecHandle> {
-        let pty_master = match self.socket.receive_pty_master() {
-            Ok(pty_master) => pty_master,
-            Err(error) => {
-                terminate_process(self.pid);
-                return Err(error);
-            }
-        };
-        create_pty_child(self.pid, pty_master, self.config)
+        create_pty_child(self.pid, self.master, self.config)
     }
 }
 
@@ -589,7 +526,6 @@ mod tests {
     fn make_cmd() -> ContainerCommand {
         ContainerCommand::new(
             "test-container".to_string(),
-            PathBuf::from("/tmp/state"),
             HashMap::new(),
             (0, 0),
             PathBuf::from("/tmp/rootfs"),

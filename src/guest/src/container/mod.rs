@@ -1,6 +1,6 @@
 //! OCI container runtime
 //!
-//! This module provides an OCI-compliant container runtime using libcontainer.
+//! This module provides an OCI-compliant container runtime using the guest-local runner.
 //!
 //! # Architecture
 //!
@@ -62,15 +62,13 @@ mod capabilities;
 #[cfg(target_os = "linux")]
 mod command;
 #[cfg(target_os = "linux")]
-mod console_socket;
-#[cfg(target_os = "linux")]
-mod kill;
-#[cfg(target_os = "linux")]
 mod lifecycle;
 #[cfg(target_os = "linux")]
 mod mount_override;
 #[cfg(target_os = "linux")]
 mod pty;
+#[cfg(target_os = "linux")]
+mod runner;
 #[cfg(target_os = "linux")]
 mod spec;
 #[cfg(target_os = "linux")]
