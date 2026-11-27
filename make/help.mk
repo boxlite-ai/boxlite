@@ -92,6 +92,8 @@ help:
 	@echo "    make test:integration:c:agents - Compare C and Rust OpenCode agent behavior (requires VM)"
 	@echo "    make test:integration:agent-sdk-parity - Compare Python and Node agent results with Rust (requires VM)"
 	@echo "    make test:perf:import-export - Run manual 1 GiB import/export benchmark (release, requires VM)"
+	@echo "    make test:perf:startup      - Run opt-in cold/warm startup baseline (see scripts/benchmark/README.md)"
+	@echo "    make test:unit:startup      - Test startup benchmark orchestration (no VM required)"
 	@echo "    make test:unit:ffi          - Run BoxLite FFI unit tests"
 	@echo "    make test:unit:gvproxy      - Run gvproxy bridge unit tests"
 	@echo "    make test:unit:openapi:server - Run reference-server request mapping tests"
