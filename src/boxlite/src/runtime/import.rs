@@ -8,8 +8,8 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::LiteBox;
 use crate::litebox::archive::{
-    ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, PUBLISHED_PORTS_ARCHIVE_VERSION,
-    extract_archive, move_file, sha256_file,
+    ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, MEMORY_CHECKPOINT_ARCHIVE_VERSION,
+    PUBLISHED_PORTS_ARCHIVE_VERSION, extract_archive_with_manifest, move_file, sha256_file,
 };
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::options::{
@@ -144,18 +144,14 @@ fn extract_and_validate(
     let temp_dir = tempfile::tempdir_in(layout.temp_dir())
         .map_err(|e| BoxliteError::Storage(format!("Failed to create temp directory: {}", e)))?;
 
-    extract_archive(archive_path, temp_dir.path())?;
-
-    let manifest_path = temp_dir.path().join(MANIFEST_FILENAME);
-    if !manifest_path.exists() {
-        return Err(BoxliteError::Storage(
-            "Invalid archive: manifest.json not found".to_string(),
-        ));
-    }
-
-    let manifest_json = std::fs::read_to_string(&manifest_path)?;
-    let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
-        .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
+    let mut manifest = None;
+    extract_archive_with_manifest(archive_path, temp_dir.path(), |path| {
+        manifest = Some(read_disk_only_manifest(path)?);
+        Ok(())
+    })?;
+    let manifest = manifest.ok_or_else(|| {
+        BoxliteError::Storage(format!("Invalid archive: {MANIFEST_FILENAME} not found"))
+    })?;
 
     if manifest.version > MAX_SUPPORTED_VERSION {
         return Err(BoxliteError::Storage(format!(
@@ -184,6 +180,19 @@ fn extract_and_validate(
     }
 
     Ok((manifest, temp_dir))
+}
+
+fn read_disk_only_manifest(path: &Path) -> BoxliteResult<ArchiveManifest> {
+    let json = std::fs::read_to_string(path)?;
+    let manifest: ArchiveManifest = serde_json::from_str(&json)
+        .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {e}")))?;
+    if manifest.version == MEMORY_CHECKPOINT_ARCHIVE_VERSION || manifest.memory_checkpoint.is_some()
+    {
+        return Err(BoxliteError::Unsupported(
+            "importing full memory checkpoint archives is not supported by this VMM backend".into(),
+        ));
+    }
+    Ok(manifest)
 }
 
 /// Validate disk security and move disks into box_home/disks/.
@@ -274,6 +283,7 @@ mod tests {
             box_name: None,
             image: "alpine:latest".to_string(),
             box_options: Some(options),
+            memory_checkpoint: None,
             guest_disk_checksum: String::new(),
             container_disk_checksum: String::new(),
             exported_at: "2026-07-26T00:00:00Z".to_string(),
@@ -543,6 +553,7 @@ mod tests {
                 advanced,
                 ..Default::default()
             }),
+            memory_checkpoint: None,
             guest_disk_checksum: String::new(),
             container_disk_checksum: String::new(),
             exported_at: "2026-01-01T00:00:00Z".into(),
@@ -605,6 +616,85 @@ mod tests {
         );
     }
     #[test]
+    fn full_checkpoint_archives_are_unsupported() {
+        use crate::litebox::archive::{MemoryCheckpointMetadata, build_zstd_tar_archive};
+        use crate::runtime::layout::FilesystemLayout;
+
+        let dir = TempDir::new().unwrap();
+        let layout = FilesystemLayout::new(dir.path().join("home"), Default::default());
+        std::fs::create_dir_all(layout.temp_dir()).unwrap();
+        let manifest_path = dir.path().join(MANIFEST_FILENAME);
+        let disk_path = dir.path().join("disk");
+        let archive_path = dir.path().join("checkpoint.boxlite");
+        std::fs::write(&disk_path, b"test disk").unwrap();
+        let metadata = MemoryCheckpointMetadata {
+            memory_size_bytes: 4096,
+        };
+        for (version, memory_checkpoint) in
+            [(8, Some(metadata.clone())), (8, None), (7, Some(metadata))]
+        {
+            let mut manifest = v3_manifest(BoxOptions::default());
+            manifest.version = version;
+            manifest.memory_checkpoint = memory_checkpoint;
+            std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            build_zstd_tar_archive(&archive_path, &manifest_path, &disk_path, 1).unwrap();
+            let error = extract_and_validate(&archive_path, &layout).unwrap_err();
+            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn full_checkpoint_import_skips_corrupt_member_after_manifest() {
+        use crate::litebox::archive::MemoryCheckpointMetadata;
+        use crate::runtime::layout::FilesystemLayout;
+
+        let dir = TempDir::new().unwrap();
+        let layout = FilesystemLayout::new(dir.path().join("home"), Default::default());
+        std::fs::create_dir_all(layout.temp_dir()).unwrap();
+        let archive_path = dir.path().join("checkpoint.boxlite");
+
+        let metadata = MemoryCheckpointMetadata {
+            memory_size_bytes: 4096,
+        };
+        for (version, memory_checkpoint, full) in [
+            (MEMORY_CHECKPOINT_ARCHIVE_VERSION, None, true),
+            (7, Some(metadata), true),
+            (7, None, false),
+        ] {
+            let mut manifest = v3_manifest(BoxOptions::default());
+            manifest.version = version;
+            manifest.memory_checkpoint = memory_checkpoint;
+            let json = serde_json::to_vec(&manifest).unwrap();
+
+            let mut builder = tar::Builder::new(Vec::new());
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o644);
+            header.set_size(json.len() as u64);
+            builder
+                .append_data(&mut header, MANIFEST_FILENAME, json.as_slice())
+                .unwrap();
+            // A nonzero but invalid tar header must fail if extraction advances.
+            builder.get_mut().extend([0xff; 512]);
+            let tar = builder.into_inner().unwrap();
+            let compressed = zstd::encode_all(tar.as_slice(), 1).unwrap();
+
+            for archive in [&tar, &compressed] {
+                std::fs::write(&archive_path, archive).unwrap();
+                let error = extract_and_validate(&archive_path, &layout).unwrap_err();
+                if full {
+                    assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+                } else {
+                    assert!(
+                        matches!(&error, BoxliteError::Storage(message)
+                            if message.contains("Failed to read archive member")),
+                        "{error:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn fractional_cpus_archive_versions_and_legacy_options() {
         use crate::litebox::archive::build_zstd_tar_archive;
         use crate::runtime::layout::FilesystemLayout;
@@ -615,7 +705,7 @@ mod tests {
         std::fs::write(&container_path, b"test disk").unwrap();
         let manifest_path = dir.path().join(MANIFEST_FILENAME);
         let archive_path = dir.path().join("box.boxlite");
-        for version in [1, 2, 3, 4, 5, 6, 7, 8] {
+        for version in [1, 2, 3, 4, 5, 6, 7, 9] {
             let mut manifest = v3_manifest(BoxOptions {
                 cpus: Some(if version == 6 { 1.5 } else { 2.0 }),
                 ..Default::default()
@@ -626,6 +716,7 @@ mod tests {
             let result = extract_and_validate(&archive_path, &layout);
             if version > crate::litebox::archive::MAX_SUPPORTED_VERSION {
                 let error = result.unwrap_err();
+                assert!(matches!(error, BoxliteError::Storage(_)));
                 assert!(error.to_string().contains(&format!("version {version}")));
             } else {
                 assert_eq!(
@@ -677,6 +768,7 @@ mod required_import_safety_tests {
                         secrets: vec![secret],
                         ..Default::default()
                     }),
+                    memory_checkpoint: None,
                     guest_disk_checksum: String::new(),
                     container_disk_checksum: sha256_file(&disk).unwrap(),
                     exported_at: "2026-11-10T00:00:00Z".into(),
@@ -774,6 +866,7 @@ mod required_import_safety_tests {
                 )],
                 ..Default::default()
             }),
+            memory_checkpoint: None,
             guest_disk_checksum: String::new(),
             container_disk_checksum: sha256_file(&disk).unwrap(),
             exported_at: "2026-11-15T00:00:00Z".into(),

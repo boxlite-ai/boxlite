@@ -40,6 +40,9 @@ pub(crate) const FRACTIONAL_CPUS_ARCHIVE_VERSION: u32 = 6;
 /// Managed and typed mounts require a local volume-capable importer.
 pub(crate) const MANAGED_MOUNTS_ARCHIVE_VERSION: u32 = 7;
 
+/// Reserved archive version for full checkpoints that include VM memory.
+pub(crate) const MEMORY_CHECKPOINT_ARCHIVE_VERSION: u32 = 8;
+
 /// Maximum archive version this build can import.
 pub(crate) const MAX_SUPPORTED_VERSION: u32 = MANAGED_MOUNTS_ARCHIVE_VERSION;
 
@@ -71,6 +74,13 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
     }
 }
 
+/// VMM-independent metadata for a full memory checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryCheckpointMetadata {
+    /// Size of the captured VM memory in bytes.
+    pub memory_size_bytes: u64,
+}
+
 /// Archive manifest stored as `manifest.json` inside exported archives.
 ///
 /// v1: plain tar, no checksums
@@ -80,9 +90,10 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v5: `ports` carry publication semantics (automatic host port, bind IP)
 /// v6: fractional `box_options.cpus` requires host CPU bandwidth enforcement
 /// v7: managed/typed mounts require local volume-capable resolution
+/// v8: reserved for full memory checkpoints (not importable yet)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1 through 7).
+    /// Archive format version.
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -92,6 +103,9 @@ pub struct ArchiveManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "crate::runtime::cpu_count::deserialize_options")]
     pub box_options: Option<crate::runtime::options::BoxOptions>,
+    /// Present only for full memory checkpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_checkpoint: Option<MemoryCheckpointMetadata>,
     /// SHA-256 checksum of the guest rootfs disk.
     ///
     /// Always empty: the guest rootfs is no longer bundled in archives (it ships
@@ -161,8 +175,18 @@ fn append_archive_files<W: Write>(
 /// Zstd magic bytes: `0x28B52FFD` (little-endian in file).
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
-/// Extract an archive, detecting format via magic bytes (zstd or plain tar).
+#[cfg(test)]
 pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()> {
+    extract_archive_with_manifest(archive_path, dest_dir, |_| Ok(()))
+}
+
+/// Extract a zstd or plain tar archive. Validate each top-level manifest as
+/// soon as it is unpacked, before advancing to the next member.
+pub(crate) fn extract_archive_with_manifest(
+    archive_path: &Path,
+    dest_dir: &Path,
+    validate_manifest: impl FnMut(&Path) -> BoxliteResult<()>,
+) -> BoxliteResult<()> {
     use std::io::Read;
 
     let mut file = std::fs::File::open(archive_path).map_err(|e| {
@@ -195,9 +219,9 @@ pub(crate) fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteRe
     if magic == ZSTD_MAGIC {
         let decoder = zstd::Decoder::new(file)
             .map_err(|e| BoxliteError::Storage(format!("Failed to create zstd decoder: {}", e)))?;
-        unpack_file_members(decoder, dest_dir)
+        unpack_file_members(decoder, dest_dir, validate_manifest)
     } else {
-        unpack_file_members(file, dest_dir)
+        unpack_file_members(file, dest_dir, validate_manifest)
     }
 }
 
@@ -233,7 +257,13 @@ fn carries_file_contents(entry_type: tar::EntryType) -> bool {
 /// member. Member *names* are deliberately not filtered — archives written
 /// before the guest rootfs became a shared base image carry a third member that
 /// the importer ignores, and rejecting it would strand them.
-fn unpack_file_members<R: std::io::Read>(reader: R, dest_dir: &Path) -> BoxliteResult<()> {
+fn unpack_file_members<R: std::io::Read>(
+    reader: R,
+    dest_dir: &Path,
+    mut validate_manifest: impl FnMut(&Path) -> BoxliteResult<()>,
+) -> BoxliteResult<()> {
+    use std::path::Component;
+
     let mut archive = tar::Archive::new(reader);
     let entries = archive
         .entries()
@@ -255,9 +285,20 @@ fn unpack_file_members<R: std::io::Read>(reader: R, dest_dir: &Path) -> BoxliteR
             )));
         }
 
-        entry
+        let unpacked = entry
             .unpack_in(dest_dir)
             .map_err(|e| BoxliteError::Storage(format!("Failed to extract archive: {}", e)))?;
+        // unpack_in already skips paths with '..' and strips root and '.'
+        // components. Match the resulting name, not the raw tar path.
+        if unpacked
+            && entry
+                .path()?
+                .components()
+                .filter(|part| matches!(part, Component::Normal(_)))
+                .eq(Path::new(MANIFEST_FILENAME).components())
+        {
+            validate_manifest(&dest_dir.join(MANIFEST_FILENAME))?;
+        }
     }
 
     Ok(())
@@ -334,6 +375,35 @@ pub(crate) fn sha256_file(path: &Path) -> BoxliteResult<String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn memory_checkpoint_manifest_round_trips_without_changing_v7_json() {
+        let legacy = serde_json::json!({
+            "version": 7,
+            "box_name": null,
+            "image": "alpine:latest",
+            "guest_disk_checksum": "",
+            "container_disk_checksum": "",
+            "exported_at": "2026-07-26T00:00:00Z"
+        });
+        let mut manifest: ArchiveManifest = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(manifest.memory_checkpoint, None);
+        assert_eq!(serde_json::to_value(&manifest).unwrap(), legacy);
+
+        manifest.version = MEMORY_CHECKPOINT_ARCHIVE_VERSION;
+        manifest.memory_checkpoint = Some(MemoryCheckpointMetadata {
+            memory_size_bytes: 512 * 1024 * 1024,
+        });
+        let encoded = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(encoded["version"], 8);
+        assert_eq!(
+            encoded["memory_checkpoint"]["memory_size_bytes"],
+            536_870_912
+        );
+        let decoded: ArchiveManifest = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.version, manifest.version);
+        assert_eq!(decoded.memory_checkpoint, manifest.memory_checkpoint);
+    }
 
     /// An export must not be readable by an importer that would drop part of
     /// its configuration: capability policies are stamped v4, published ports

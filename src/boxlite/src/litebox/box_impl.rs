@@ -806,6 +806,19 @@ impl BoxImpl {
             .await
     }
 
+    /// Caller holds lifecycle admission. Reattach to a running VM if needed, never boot one.
+    pub(super) async fn capture_memory_checkpoint(
+        &self,
+        dest_dir: &std::path::Path,
+    ) -> BoxliteResult<()> {
+        let live = self.existing_live_state_locked().await?;
+        let handler = live
+            .handler
+            .lock()
+            .map_err(|e| BoxliteError::Internal(format!("handler lock poisoned: {e}")))?;
+        handler.capture_memory_checkpoint(dest_dir)
+    }
+
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
         // Check if box is stopped before proceeding (via stop() or runtime shutdown)
         if self.shutdown_token.is_cancelled() {
@@ -1953,7 +1966,9 @@ mod tests {
     use crate::litebox::config::ContainerRuntimeConfig;
     use crate::net::{NetworkBackendConfig, NetworkBackendFactory};
     use crate::runtime::id::BoxIDMint;
-    use crate::runtime::options::{BoxOptions, BoxliteOptions, PortProtocol, PortSpec, RootfsSpec};
+    use crate::runtime::options::{
+        BoxOptions, BoxliteOptions, ExportOptions, PortProtocol, PortSpec, RootfsSpec,
+    };
     use crate::runtime::rt_impl::RuntimeImpl;
     use crate::runtime::types::{ContainerID, PublishedPort};
     use crate::util::{PidFileWriter, PidRecord, ShimPidRecord, is_process_alive};
@@ -2018,6 +2033,136 @@ mod tests {
         fn pid(&self) -> u32 {
             self.0
         }
+    }
+
+    #[test]
+    fn default_vmm_memory_checkpoint_is_unsupported() {
+        let error = InfoTestHandler(0)
+            .capture_memory_checkpoint(std::path::Path::new("unused"))
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Unsupported(message)
+            if message == "full memory checkpoint capture is not supported by this VMM backend"));
+    }
+
+    struct CheckpointTestHandler {
+        expected_temp_root: std::path::PathBuf,
+        captured_dir: Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
+        succeeds: bool,
+    }
+
+    impl CheckpointTestHandler {
+        fn install(
+            fixture: &mut StartFixture,
+            succeeds: bool,
+        ) -> Arc<std::sync::Mutex<Option<std::path::PathBuf>>> {
+            let box_impl = Arc::get_mut(&mut fixture.box_impl).unwrap();
+            let captured_dir = Arc::new(std::sync::Mutex::new(None));
+            *box_impl.live.get_mut().unwrap().handler.get_mut().unwrap() = Box::new(Self {
+                expected_temp_root: box_impl.runtime.layout.temp_dir(),
+                captured_dir: Arc::clone(&captured_dir),
+                succeeds,
+            });
+            captured_dir
+        }
+    }
+
+    impl VmmHandler for CheckpointTestHandler {
+        fn stop(&mut self) -> BoxliteResult<()> {
+            Ok(())
+        }
+
+        fn metrics(&self) -> BoxliteResult<VmmMetrics> {
+            Ok(VmmMetrics::default())
+        }
+
+        fn is_running(&self) -> bool {
+            true
+        }
+
+        fn pid(&self) -> u32 {
+            0
+        }
+
+        fn capture_memory_checkpoint(&self, dest_dir: &std::path::Path) -> BoxliteResult<()> {
+            assert!(dest_dir.is_dir());
+            assert!(dest_dir.starts_with(&self.expected_temp_root));
+            *self.captured_dir.lock().unwrap() = Some(dest_dir.to_path_buf());
+            if self.succeeds {
+                std::fs::write(dest_dir.join("memory"), b"checkpoint").unwrap();
+                Ok(())
+            } else {
+                Err(BoxliteError::Unsupported("checkpoint test handler".into()))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn full_checkpoint_export_requires_running_box() {
+        let fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let mut state = fixture.box_impl.state.read().clone();
+        state.status = BoxStatus::Stopped;
+        fixture
+            .box_impl
+            .runtime
+            .box_manager
+            .save_box(fixture.box_impl.id(), &state)
+            .unwrap();
+        let error = fixture
+            .box_impl
+            .export_box(ExportOptions::full(), fixture._temp_dir.path())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::InvalidState(message)
+            if message == "full checkpoint export requires a running box"));
+    }
+
+    #[tokio::test]
+    async fn full_checkpoint_export_routes_to_vmm_handler() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        CheckpointTestHandler::install(&mut fixture, false);
+        let dest = fixture._temp_dir.path().join("checkpoint.boxlite");
+        let error = fixture
+            .box_impl
+            .export_box(ExportOptions::full(), &dest)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Unsupported(message)
+            if message == "checkpoint test handler"));
+    }
+
+    #[tokio::test]
+    async fn full_checkpoint_export_rejects_cancelled_shutdown_token() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let captured_dir = CheckpointTestHandler::install(&mut fixture, false);
+        fixture.box_impl.shutdown_token.cancel();
+        let dest = fixture.box_impl.runtime.layout.temp_dir();
+        let error = fixture
+            .box_impl
+            .export_box(ExportOptions::full(), &dest)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, BoxliteError::Stopped(message)
+                if message == "Handle invalidated after stop(). Use runtime.get() to get a new handle."),
+            "unexpected error: {error:?}"
+        );
+        assert!(captured_dir.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn full_checkpoint_export_fails_closed_when_handler_succeeds() {
+        let mut fixture = running_box_for_start_test(Arc::new(StartGate::default())).await;
+        let captured_dir = CheckpointTestHandler::install(&mut fixture, true);
+        let dest = fixture._temp_dir.path().join("checkpoint.boxlite");
+        let error = fixture
+            .box_impl
+            .export_box(ExportOptions::full(), &dest)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, BoxliteError::Unsupported(message)
+            if message == "full memory checkpoint archive creation is not supported"));
+        let captured_dir = captured_dir.lock().unwrap().take().expect("handler called");
+        assert!(!captured_dir.exists());
     }
 
     struct StartGate {

@@ -55,7 +55,7 @@ pub use disk::DiskInfo;
 pub use event_listener::{AuditEvent, AuditEventKind, AuditEventListener, EventListener};
 pub use images::ResolvedImage;
 pub use litebox::SnapshotHandle;
-pub use litebox::archive::ArchiveManifest;
+pub use litebox::archive::{ArchiveManifest, MemoryCheckpointMetadata};
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
     AttachOptions, BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout,

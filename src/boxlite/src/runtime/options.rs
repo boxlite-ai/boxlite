@@ -1666,9 +1666,21 @@ impl BoxArchive {
 #[derive(Debug, Clone, Default)]
 pub struct SnapshotOptions {}
 
-/// Forward-compatible options for exporting a box archive.
-#[derive(Debug, Clone, Default)]
-pub struct ExportOptions {}
+/// Options for exporting a box archive. The default exports disks only.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExportOptions {
+    /// Request a full checkpoint including VM memory. Currently unsupported.
+    pub include_memory: bool,
+}
+
+impl ExportOptions {
+    /// Request a full checkpoint instead of a disk-only archive.
+    pub fn full() -> Self {
+        Self {
+            include_memory: true,
+        }
+    }
+}
 
 /// Forward-compatible options for cloning a box.
 #[derive(Debug, Clone, Default)]
@@ -1681,6 +1693,12 @@ mod tests {
     use crate::runtime::advanced_options::{
         ContainerCapabilities, NetworkRateLimit, SecurityOptions, SecurityOptionsBuilder,
     };
+
+    #[test]
+    fn export_options_default_to_disk_only() {
+        assert!(!ExportOptions::default().include_memory);
+        assert!(ExportOptions::full().include_memory);
+    }
 
     /// The type decides whose storage `source` names, so only the two exact
     /// spellings parse; a near miss is an error naming what is accepted.
