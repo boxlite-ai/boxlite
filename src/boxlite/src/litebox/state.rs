@@ -202,10 +202,32 @@ impl std::fmt::Display for BoxStatus {
     }
 }
 
-/// Virtual disk capacity in binary GiB.
+/// Current resources of a running native Box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoxResources {
     pub disk_size_gb: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<BoxMemoryResources>,
+}
+
+/// VM memory resize progress for a Box with an online memory ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoxMemoryResources {
+    pub requested_mib: u32,
+    pub plugged_hotplug_mib: u32,
+    pub completed_mib: u32,
+    /// Target recorded before sending to the VMM, if completion is still pending.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_mib: Option<u32>,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) struct MemoryResizeState {
+    pub(crate) shim: crate::util::PidRecord,
+    pub(crate) baseline_bytes: u64,
+    pub(crate) completed_mib: u32,
+    pub(crate) pending_mib: Option<u32>,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -214,6 +236,7 @@ impl BoxResources {
         let bytes = crate::disk::Qcow2Helper::qcow2_virtual_size(path)?;
         Ok(Self {
             disk_size_gb: bytes.div_ceil(1 << 30),
+            memory: None,
         })
     }
 }

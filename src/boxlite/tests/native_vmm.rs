@@ -10,7 +10,7 @@ use boxlite::runtime::layout::{BoxFilesystemLayout, FilesystemLayout};
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::{BoxliteError, BoxliteRuntime, LiteBox, ResizeOptions};
 use boxlite_test_utils::home::PerTestBoxHome;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -140,6 +140,43 @@ async fn root_capacity_kib(bx: &LiteBox) -> u64 {
         .trim()
         .parse()
         .unwrap()
+}
+
+async fn guest_managed_bytes(bx: &LiteBox) -> u64 {
+    let kib = shell_output(bx, "awk '/^MemTotal:/ {print $2}' /proc/meminfo").await;
+    kib.trim().parse::<u64>().unwrap() << 10
+}
+
+async fn mapped_hotplug_mib(home: &PerTestBoxHome, bx: &LiteBox) -> u64 {
+    let layout = BoxFilesystemLayout::new(
+        home.path.join("boxes").join(bx.id().as_str()),
+        Default::default(),
+        false,
+    );
+    let exchange = async {
+        let mut socket = UnixStream::connect(layout.sockets().vmm_sock())
+            .await
+            .unwrap();
+        let body = r#"{"target_mib":null}"#;
+        let request = format!(
+            "POST /v1/memory HTTP/1.1\r\nHost: vmm\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        socket.read_to_string(&mut response).await.unwrap();
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        assert!(
+            head.starts_with("HTTP/1.1 200 "),
+            "unexpected shim reply: {response}"
+        );
+        let reply: serde_json::Value = serde_json::from_str(body).unwrap();
+        reply["Ok"]["memory"]["mapped_mib"].as_u64().unwrap()
+    };
+    tokio::time::timeout(Duration::from_secs(5), exchange)
+        .await
+        .expect("read mapped hotplug slots from the live shim")
 }
 
 fn open_box_db(home: &PerTestBoxHome, flags: rusqlite::OpenFlags) -> rusqlite::Connection {
@@ -296,6 +333,7 @@ async fn online_resize_allows_other_execs_to_exit() {
     std::fs::write(gate.join("armed"), b"").unwrap();
     let resize = bx.resize(ResizeOptions {
         disk_size_gb: Some(20),
+        ..ResizeOptions::default()
     });
     tokio::pin!(resize);
     let (exec_wait, ssh_disable) = tokio::select! {
@@ -368,6 +406,7 @@ async fn resize_after_snapshot_restore_uses_the_restored_disk_size() {
     let grown = bx
         .resize(ResizeOptions {
             disk_size_gb: Some(20),
+            ..ResizeOptions::default()
         })
         .await
         .unwrap();
@@ -403,6 +442,7 @@ async fn resize_after_snapshot_restore_uses_the_restored_disk_size() {
     let grown = bx
         .resize(ResizeOptions {
             disk_size_gb: Some(15),
+            ..ResizeOptions::default()
         })
         .await
         .unwrap();
@@ -451,7 +491,8 @@ async fn online_disk_growth_keeps_workloads_and_recovers_an_interrupted_filesyst
     );
     assert!(matches!(
         bx.resize(ResizeOptions {
-            disk_size_gb: Some(9)
+            disk_size_gb: Some(9),
+            ..ResizeOptions::default()
         })
         .await,
         Err(BoxliteError::InvalidArgument(_))
@@ -474,6 +515,7 @@ async fn online_disk_growth_keeps_workloads_and_recovers_an_interrupted_filesyst
     assert_eq!(completed_disk_size_gb(&db, &bx).unwrap(), None);
     let target = ResizeOptions {
         disk_size_gb: Some(20),
+        ..ResizeOptions::default()
     };
     let initial_capacity = root_capacity_kib(&bx).await;
     if let Err(error) = resize_with_lost_shim_reply(&bx, target, &vmm_socket, &db).await {
@@ -556,6 +598,7 @@ async fn online_disk_growth_keeps_workloads_and_recovers_an_interrupted_filesyst
     let undispatched = bx
         .resize(ResizeOptions {
             disk_size_gb: Some(30),
+            ..ResizeOptions::default()
         })
         .await;
     std::fs::rename(&hidden_socket, &vmm_socket).unwrap();
@@ -602,6 +645,7 @@ async fn online_disk_growth_keeps_workloads_and_recovers_an_interrupted_filesyst
     let grown = restarted
         .resize(ResizeOptions {
             disk_size_gb: Some(24),
+            ..ResizeOptions::default()
         })
         .await
         .unwrap();
@@ -751,4 +795,294 @@ async fn assert_native_boot_disk(scenario: BootDisk) {
     if let Some(marker) = marker {
         assert_eq!(marker, "preserved");
     }
+}
+
+#[tokio::test]
+#[ignore = "requires Linux x86_64 KVM, the qualified VMM_KERNEL and current boxlite-guest"]
+async fn memory_resize_startup_rejects_a_kernel_without_automatic_onlining() {
+    let kernel = std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL or run make vmm:boot");
+    let home = PerTestBoxHome::new();
+    let runtime = native_runtime(&home);
+    let mut options = common::alpine_opts();
+    options.memory_mib = Some(512);
+    options.max_memory_mib = Some(2048);
+    custom_kernel::configure(
+        &mut options,
+        KernelOptions::new(kernel)
+            .with_format(KernelFormat::Elf)
+            .with_command_line("console=hvc0 panic=-1 reboot=k memhp_default_state=offline"),
+    );
+    native_vmm::configure(&mut options);
+    let bx = runtime.create(options, None).await.unwrap();
+    let error = bx.start().await.unwrap_err();
+    runtime.remove(bx.id().as_str(), true).await.unwrap();
+    assert!(
+        matches!(error, BoxliteError::Unsupported(message) if message.contains("automatic onlining"))
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires Linux x86_64 KVM, the qualified VMM_KERNEL and current boxlite-guest"]
+async fn memory_resize_enforces_address_space_limit_during_growth() {
+    const CHILD: &str = "BOXLITE_TEST_MEMORY_RESIZE_RLIMIT_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "memory_resize_enforces_address_space_limit_during_growth",
+            ])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "isolated RLIMIT_AS regression: {status}");
+        return;
+    }
+    // Set the limit only in the isolated test process and its shim descendants.
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_AS, &mut limit) }, 0);
+    limit.rlim_cur = (4 << 30).min(limit.rlim_max);
+    assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_AS, &limit) }, 0);
+
+    let kernel = std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL or run make vmm:boot");
+    let home = PerTestBoxHome::new();
+    let runtime = native_runtime(&home);
+    let mut options = common::alpine_opts();
+    options.memory_mib = Some(512);
+    options.max_memory_mib = Some(4608);
+    custom_kernel::configure(
+        &mut options,
+        KernelOptions::new(kernel).with_format(KernelFormat::Elf),
+    );
+    native_vmm::configure(&mut options);
+    let bx = runtime.create(options, None).await.unwrap();
+    let scenario = std::panic::AssertUnwindSafe(async {
+        bx.start()
+            .await
+            .expect("boot RAM fits the inherited address-space limit");
+        let request = |target| ResizeOptions {
+            memory_mib: Some(target),
+            ..Default::default()
+        };
+        let grown = bx.resize(request(768)).await.unwrap().memory.unwrap();
+        assert_eq!(grown.completed_mib, 768);
+        assert_eq!(grown.pending_mib, None);
+
+        let error = bx.resize(request(4608)).await.unwrap_err();
+        assert!(
+            matches!(&error, BoxliteError::Engine(message) if message.contains("is incomplete")),
+            "unexpected resize error: {error}"
+        );
+        let progress = bx
+            .resize(ResizeOptions::default())
+            .await
+            .unwrap()
+            .memory
+            .unwrap();
+        assert_eq!(progress.requested_mib, 4608);
+        assert_eq!(progress.completed_mib, 768);
+        assert_eq!(progress.pending_mib, Some(4608));
+        assert!(mapped_hotplug_mib(&home, &bx).await < 4096);
+
+        bx.stop().await.unwrap();
+    })
+    .catch_unwind()
+    .await;
+    runtime.remove(bx.id().as_str(), true).await.unwrap();
+    if let Err(panic) = scenario {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Linux x86_64 KVM, the qualified VMM_KERNEL and current boxlite-guest"]
+async fn online_memory_resize_preserves_workload_limit_and_restores_completed_target() {
+    let kernel = std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL or run make vmm:boot");
+    let home = PerTestBoxHome::new();
+    let runtime = native_runtime(&home);
+    let mut options = common::alpine_opts();
+    options.rootfs = boxlite::runtime::options::RootfsSpec::Image("python:3.12-alpine".into());
+    options.memory_mib = Some(512);
+    options.max_memory_mib = Some(2048);
+    options.detach = true;
+    // Reading physical page numbers requires CAP_SYS_ADMIN in the guest.
+    options.advanced.privileged = true;
+    custom_kernel::configure(
+        &mut options,
+        KernelOptions::new(kernel).with_format(KernelFormat::Elf),
+    );
+    native_vmm::configure(&mut options);
+    let bx = runtime.create(options, None).await.unwrap();
+    let box_id = bx.id().to_string();
+    let scenario = std::panic::AssertUnwindSafe(exercise_native_memory_resize(&home, runtime, bx))
+        .catch_unwind()
+        .await;
+    if let Err(panic) = scenario {
+        let cleanup = native_runtime(&home).remove(&box_id, true).await;
+        assert!(
+            cleanup.is_ok(),
+            "cleanup failed after scenario failure: {cleanup:?}"
+        );
+        std::panic::resume_unwind(panic);
+    }
+}
+
+async fn exercise_native_memory_resize(
+    home: &PerTestBoxHome,
+    runtime: BoxliteRuntime,
+    bx: LiteBox,
+) {
+    bx.start().await.unwrap();
+    let query = ResizeOptions::default();
+    let request = |target| ResizeOptions {
+        memory_mib: Some(target),
+        ..Default::default()
+    };
+    let workload_limit = "2147483648";
+    let read_workload_limit =
+        r#"group=$(sed -n 's/^0:://p' /proc/self/cgroup); cat "/sys/fs/cgroup$group/memory.max""#;
+    assert_eq!(
+        shell_output(&bx, read_workload_limit).await.trim(),
+        workload_limit
+    );
+    let initial_guest_bytes = guest_managed_bytes(&bx).await;
+    let grown = bx.resize(request(1024)).await.unwrap().memory.unwrap();
+    assert_eq!(
+        guest_managed_bytes(&bx).await - initial_guest_bytes,
+        512 << 20
+    );
+    assert_eq!(grown.completed_mib, 1024);
+
+    let pin_hotplug_page = r#"
+import ctypes, mmap, os, struct, time
+
+page = mmap.PAGESIZE
+length = 640 << 20
+ram = mmap.mmap(-1, length, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
+ram[::page] = b'x' * (length // page)
+address = ctypes.addressof(ctypes.c_char.from_buffer(ram))
+with open('/proc/self/pagemap', 'rb', buffering=0) as pages:
+    pages.seek(address // page * 8)
+    entries = pages.read(length // page * 8)
+pfn_mask = (1 << 55) - 1
+for i, (entry,) in enumerate(struct.iter_unpack('Q', entries)):
+    physical = (entry & pfn_mask) * page
+    if entry >> 63 and (4 << 30) <= physical < (4 << 30) + (512 << 20):
+        break
+else:
+    raise RuntimeError('workload has no present page in the new RAM')
+
+class IOVec(ctypes.Structure):
+    _fields_ = [('address', ctypes.c_void_p), ('length', ctypes.c_size_t)]
+
+# vmsplice holds a page reference until the pipe is read. Drop all other pages
+# so the test exercises guest migration of this page without inducing an OOM.
+reader, writer = os.pipe()
+libc = ctypes.CDLL(None, use_errno=True)
+vec = IOVec(address + i * page, page)
+if libc.vmsplice(writer, ctypes.byref(vec), ctypes.c_ulong(1), 0) != page:
+    raise OSError(ctypes.get_errno(), 'vmsplice')
+ram.close()
+open('/tmp/mem-ready', 'w').close()
+while not os.path.exists('/tmp/mem-release'):
+    time.sleep(.05)
+assert os.read(reader, page)[0] == ord('x')
+"#;
+    let workload = bx
+        .exec(boxlite::BoxCommand::new("python3").args(["-c", pin_hotplug_page]))
+        .await
+        .unwrap();
+    shell_output(
+        &bx,
+        "for i in $(seq 1 100); do test -f /tmp/mem-ready && exit 0; sleep .1; done; exit 1",
+    )
+    .await;
+
+    let result = bx.resize(request(512)).await;
+    if let Ok(resources) = result {
+        shell_output(&bx, "touch /tmp/mem-release").await;
+        let exit = tokio::time::timeout(std::time::Duration::from_secs(3), workload.wait()).await;
+        panic!("busy shrink completed: {resources:?}; workload result: {exit:?}");
+    }
+    let incomplete = result.unwrap_err();
+    assert!(incomplete.to_string().contains("incomplete"));
+    let busy = bx.resize(query).await.unwrap().memory.unwrap();
+    assert_eq!(busy.requested_mib, 512);
+    assert_eq!(busy.completed_mib, 1024);
+    assert!(busy.plugged_hotplug_mib > 0);
+
+    let box_id = bx.id().to_string();
+    let workload_id = workload.id().to_string();
+    let pid_file = home.path.join("boxes").join(&box_id).join("shim.pid");
+    let shim = std::fs::read(&pid_file).unwrap();
+    drop(workload);
+    drop(bx);
+    drop(runtime);
+
+    let runtime = native_runtime(home);
+    let bx = runtime.get(&box_id).await.unwrap().unwrap();
+    let progress = bx.resize(query).await.unwrap().memory.unwrap();
+    assert_eq!(std::fs::read(&pid_file).unwrap(), shim);
+    assert_eq!(progress.pending_mib, Some(512));
+    assert_eq!(progress.completed_mib, 1024);
+    assert!(matches!(
+        bx.resize(request(768)).await,
+        Err(BoxliteError::InvalidState(_))
+    ));
+    let workload = bx.executions().get(&workload_id).await.unwrap();
+    shell_output(&bx, "touch /tmp/mem-release").await;
+    assert_eq!(workload.wait().await.unwrap().exit_code, 0);
+
+    // Keep a writer active across the shrink and verify all data written.
+    let writer = bx.exec(boxlite::BoxCommand::new("sh").args([
+        "-c",
+        "set -e; dd if=/dev/zero of=/resize-io bs=1M count=8; while ! test -f /tmp/io-finish; do dd if=/dev/zero of=/resize-io bs=1M count=1 conv=notrunc; touch /tmp/io-ready; sleep 0.1; done; sync",
+    ])).await.unwrap();
+    shell_output(
+        &bx,
+        "for i in $(seq 1 100); do test -f /tmp/io-ready && exit 0; sleep .1; done; exit 1",
+    )
+    .await;
+    // Linux starts retrying busy unplug operations at 50 seconds and doubles
+    // that interval. Each SDK call still observes its own 60-second deadline.
+    let shrunk = tokio::time::timeout(Duration::from_secs(240), async {
+        loop {
+            match bx.resize(request(512)).await {
+                Ok(resources) => break resources.memory.unwrap(),
+                Err(BoxliteError::Engine(message)) if message.contains("is incomplete") => {}
+                Err(error) => panic!("retrying the memory shrink failed: {error}"),
+            }
+        }
+    })
+    .await;
+    let shrunk = match shrunk {
+        Ok(shrunk) => shrunk,
+        Err(error) => panic!(
+            "released memory never converged: {error}; state: {:?}",
+            bx.resize(query).await
+        ),
+    };
+    assert_eq!(shrunk.completed_mib, 512);
+    assert_eq!(guest_managed_bytes(&bx).await, initial_guest_bytes);
+    assert_eq!(mapped_hotplug_mib(home, &bx).await, 0);
+    shell_output(&bx, "touch /tmp/io-finish").await;
+    assert_eq!(writer.wait().await.unwrap().exit_code, 0);
+    shell_output(&bx, "size=$(wc -c </resize-io); test \"$size\" -eq 8388608; test \"$(sha256sum /resize-io | cut -d' ' -f1)\" = \"$(head -c \"$size\" /dev/zero | sha256sum | cut -d' ' -f1)\"").await;
+    assert_eq!(
+        shell_output(&bx, read_workload_limit).await.trim(),
+        workload_limit
+    );
+
+    bx.resize(request(768)).await.unwrap();
+    bx.stop().await.unwrap();
+    let restarted = runtime.get(&box_id).await.unwrap().unwrap();
+    restarted.start().await.unwrap();
+    let restored = restarted.resize(query).await.unwrap().memory.unwrap();
+    assert_eq!(restored.completed_mib, 768);
+    assert_eq!(restored.plugged_hotplug_mib, 256);
+    restarted.stop().await.unwrap();
+    runtime.remove(&box_id, true).await.unwrap();
 }

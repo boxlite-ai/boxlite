@@ -6,17 +6,25 @@ use serde::{Deserialize, Serialize};
 use super::BoxResources;
 const ONLINE_GROW_MAX_GB: u64 = 1024;
 
-/// Absolute targets. An omitted disk size queries the current allocation.
+/// Absolute targets. An empty request queries the current allocation.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResizeOptions {
     /// Root disk capacity in binary GiB, from 1 through 1024; growth only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_size_gb: Option<u64>,
+    /// Total nominal VM memory in MiB. Requires a configured memory ceiling.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mib: Option<u32>,
 }
 
 impl ResizeOptions {
     pub(crate) fn validate(&self) -> BoxliteResult<()> {
+        if self.disk_size_gb.is_some() && self.memory_mib.is_some() {
+            return Err(BoxliteError::InvalidArgument(
+                "a resize request must contain at most one resource target".into(),
+            ));
+        }
         if let Some(size) = self.disk_size_gb
             && !(1..=ONLINE_GROW_MAX_GB).contains(&size)
         {
@@ -37,7 +45,10 @@ impl ResizeOptions {
                 current.disk_size_gb
             )));
         }
-        Ok(BoxResources { disk_size_gb })
+        Ok(BoxResources {
+            disk_size_gb,
+            memory: None,
+        })
     }
 }
 
@@ -51,7 +62,7 @@ impl super::box_impl::BoxImpl {
         {
             let _ = options;
             Err(BoxliteError::Unsupported(
-                "online disk resize requires the native Linux VMM".into(),
+                "online resize requires the native Linux VMM".into(),
             ))
         }
     }
@@ -60,7 +71,7 @@ impl super::box_impl::BoxImpl {
     async fn resize_native(&self, options: ResizeOptions) -> BoxliteResult<BoxResources> {
         if self.config.engine_kind != crate::vmm::VmmKind::Native {
             return Err(BoxliteError::Unsupported(
-                "online disk resize requires the native VMM".into(),
+                "online resize requires the native VMM".into(),
             ));
         }
         self.with_disk_admission(self.with_operation(self.resize_admitted(options)))
@@ -72,8 +83,11 @@ impl super::box_impl::BoxImpl {
         use std::time::Duration;
 
         let live = self.existing_live_state_locked().await?;
-        let current = BoxResources::from_disk(&self.layout.disk_path())?;
+        let mut current = BoxResources::from_disk(&self.layout.disk_path())?;
         if options.disk_size_gb.is_none() {
+            current.memory = self
+                .resize_memory(&live.guest_session, options.memory_mib)
+                .await?;
             return Ok(current);
         }
         let target = options.target(current)?;
@@ -129,7 +143,10 @@ mod tests {
 
     #[test]
     fn resize_disk_targets_and_wire_contract() {
-        let current = BoxResources { disk_size_gb: 10 };
+        let current = BoxResources {
+            disk_size_gb: 10,
+            memory: None,
+        };
         assert_eq!(ResizeOptions::default().target(current).unwrap(), current);
         assert_eq!(
             serde_json::to_value(ResizeOptions::default()).unwrap(),
@@ -143,7 +160,8 @@ mod tests {
         for size in [0, 1, 9, 1025, u64::MAX] {
             assert!(
                 ResizeOptions {
-                    disk_size_gb: Some(size)
+                    disk_size_gb: Some(size),
+                    ..ResizeOptions::default()
                 }
                 .target(current)
                 .is_err()
@@ -151,9 +169,13 @@ mod tests {
         }
         assert_eq!(
             ResizeOptions {
-                disk_size_gb: Some(1)
+                disk_size_gb: Some(1),
+                ..ResizeOptions::default()
             }
-            .target(BoxResources { disk_size_gb: 1 })
+            .target(BoxResources {
+                disk_size_gb: 1,
+                memory: None
+            })
             .unwrap()
             .disk_size_gb,
             1

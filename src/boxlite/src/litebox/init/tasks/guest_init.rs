@@ -43,6 +43,34 @@ pub struct GuestInitTask;
 struct GuestBootstrapConfig {
     guest: GuestInitConfig,
     container: ContainerInitConfig,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    memory: Option<MemoryBootstrap>,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+struct MemoryBootstrap {
+    runtime: crate::runtime::rt_impl::SharedRuntimeImpl,
+    config: crate::litebox::config::BoxConfig,
+    layout: crate::runtime::layout::BoxFilesystemLayout,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl MemoryBootstrap {
+    fn for_options(
+        ctx: &crate::litebox::init::types::InitPipelineContext,
+    ) -> BoxliteResult<Option<Self>> {
+        if ctx.config.options.max_memory_mib.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            runtime: ctx.runtime.clone(),
+            config: ctx.config.clone(),
+            layout: ctx
+                .layout
+                .clone()
+                .ok_or_else(|| BoxliteError::Internal("missing Box layout".into()))?,
+        }))
+    }
 }
 
 #[async_trait]
@@ -84,6 +112,8 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             };
             let advanced = ctx.config.options.advanced.resolve_container_security()?;
             let bootstrap = GuestBootstrapConfig {
+                #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+                memory: MemoryBootstrap::for_options(&ctx)?,
                 guest: GuestInitConfig {
                     volumes: if ctx.config.engine_kind == crate::vmm::VmmKind::Native {
                         volume_mgr
@@ -184,6 +214,17 @@ async fn run_guest_init(
     guest_interface.init(bootstrap.guest).await?;
     tracing::info!("Guest initialized successfully");
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if let Some(memory) = bootstrap.memory {
+        crate::litebox::memory_resize::restore(
+            &memory.runtime.box_manager,
+            &memory.config,
+            &memory.layout,
+            &guest_session,
+        )
+        .await?;
+    }
+
     // Step 2: create the container (rootfs + image config + user mounts). This
     // does NOT run init — Container.Init only creates.
     tracing::info!("Sending container configuration to guest");
@@ -208,7 +249,10 @@ fn container_resources(options: &BoxOptions) -> BoxliteResult<ContainerResources
         None => CpuCount::new(f64::from(DEFAULT_CPUS))?,
     };
     let max_cpu_time = options.advanced.security.resource_limits.max_cpu_time;
-    let memory_mib = options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB);
+    let memory_mib = options
+        .max_memory_mib
+        .or(options.memory_mib)
+        .unwrap_or(DEFAULT_MEMORY_MIB);
     Ok(ContainerResources {
         cpu_quota_us: i64::try_from(cpus.cfs_quota_us(max_cpu_time)).unwrap_or(i64::MAX),
         cpu_period_us: CPU_PERIOD_US,
@@ -364,6 +408,14 @@ mod tests {
             }))
         }
 
+        async fn memory_observation(
+            &self,
+            _: tonic::Request<boxlite_shared::MemoryObservationRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::MemoryObservationResponse>, tonic::Status>
+        {
+            Err(tonic::Status::unimplemented("memory observation"))
+        }
+
         async fn resize_filesystem(
             &self,
             _: tonic::Request<boxlite_shared::ResizeFilesystemRequest>,
@@ -417,6 +469,8 @@ mod tests {
 
     fn bootstrap_for_version_gate() -> GuestBootstrapConfig {
         GuestBootstrapConfig {
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            memory: None,
             guest: GuestInitConfig {
                 volumes: vec![],
                 network: None,

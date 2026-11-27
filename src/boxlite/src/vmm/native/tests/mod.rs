@@ -85,6 +85,7 @@ impl TestBox {
             nested_virtualization: false,
             cpus: Some(1),
             memory_mib: Some(256),
+            hotplug_mib: 0,
             kernel,
             fs_shares: FsShares::new(),
             volume_access: Vec::new(),
@@ -351,6 +352,7 @@ fn the_vm_config_keeps_disk_ids_and_attach_order() {
 
     assert_eq!(config.vcpu_count, 1);
     assert_eq!(config.memory_mib, 256);
+    assert_eq!(config.hotplug_mib, 0);
     assert_eq!(config.kernel, kernel.path);
     assert_eq!(config.initramfs, kernel.initramfs);
     let disks: Vec<_> = config
@@ -570,4 +572,140 @@ async fn grows_a_disk_through_the_shim_control_socket() {
     assert_eq!(exit, ProcessExit::Code(0), "console:\n{console}");
     assert!(console.contains("GROW_AFTER 4096"), "console:\n{console}");
     assert_eq!(fs::metadata(&disk).unwrap().len(), 2 << 20);
+}
+
+#[tokio::test]
+#[ignore = "requires Linux x86_64 KVM, VMM_KERNEL, VMM_HOTPLUG_INIT and the native shim"]
+async fn changes_a_memory_target_through_the_shim_control_socket() {
+    use futures::FutureExt;
+
+    use crate::vmm::vmm_socket::{
+        ControlError, ControlOp, ControlReply, MemoryObservation, exchange,
+    };
+
+    let test_box = TestBox::new();
+    let kernel = fs::read(std::env::var_os("VMM_KERNEL").expect("set VMM_KERNEL")).unwrap();
+    let init =
+        fs::read(std::env::var_os("VMM_HOTPLUG_INIT").expect("set VMM_HOTPLUG_INIT")).unwrap();
+    let archive = m1_initramfs::newc_archive("init", &init);
+    let prepared = test_box.stage_kernel(&kernel, Some(&archive));
+    let mut spec = test_box.spec(Some(prepared));
+    spec.guest_entrypoint.args.push("--hotplug-test".into());
+    spec.memory_mib = Some(512);
+    spec.hotplug_mib = 1024;
+
+    let mut controller = ShimController::new(
+        find_binary("boxlite-shim").unwrap(),
+        VmmKind::Native,
+        test_box.box_id.clone(),
+        BoxOptions::default(),
+        test_box.layout.clone(),
+    )
+    .unwrap();
+    let mut handler = controller.start(&spec).await.unwrap();
+    let scenario = std::panic::AssertUnwindSafe(async {
+        let wait_for_marker = async |marker: &str| {
+            tokio::time::timeout(SHIM_TIMEOUT, async {
+                while !test_box.console().contains(marker) {
+                    assert!(handler.is_running(), "shim exited: {}", test_box.console());
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("missing {marker}: {}", test_box.console()));
+        };
+        let path = test_box.layout.sockets().vmm_sock();
+        let request = async |target_mib| {
+            let path = path.clone();
+            tokio::task::spawn_blocking(move || {
+                exchange(
+                    &path,
+                    ControlOp::Memory { target_mib },
+                    None,
+                    Duration::from_secs(15),
+                )
+                .unwrap()
+            })
+            .await
+            .unwrap()
+        };
+
+        wait_for_marker("HOTPLUG_BASE").await;
+        assert!(matches!(
+            request(Some(1152)).await,
+            Err(ControlError::InvalidInput(_))
+        ));
+        assert_eq!(
+            request(None).await,
+            Ok(ControlReply::Memory(MemoryObservation {
+                requested_mib: 0,
+                plugged_mib: 0,
+                mapped_mib: 0,
+                retained_empty_mib: 0,
+            }))
+        );
+        assert_eq!(
+            request(Some(1024)).await,
+            Ok(ControlReply::MemoryTargetPublished)
+        );
+        wait_for_marker("HOTPLUG_USED").await;
+        assert_eq!(
+            request(None).await,
+            Ok(ControlReply::Memory(MemoryObservation {
+                requested_mib: 1024,
+                plugged_mib: 1024,
+                mapped_mib: 1024,
+                retained_empty_mib: 0,
+            }))
+        );
+        assert_eq!(
+            request(Some(256)).await,
+            Ok(ControlReply::MemoryTargetPublished)
+        );
+        wait_for_marker("HOTPLUG_GUEST_OK").await;
+        let reply = request(None).await;
+        let Ok(ControlReply::Memory(shrunk)) = reply else {
+            panic!("missing shrink status: {reply:?}");
+        };
+        assert_eq!(shrunk.requested_mib, 256);
+        assert_eq!(shrunk.plugged_mib, 256);
+        assert_eq!(shrunk.retained_empty_mib, 0);
+        // The remaining blocks may occupy more than two slots.
+        assert!((256..=1024).contains(&shrunk.mapped_mib));
+        assert!(shrunk.mapped_mib.is_multiple_of(128));
+
+        assert_eq!(
+            request(Some(0)).await,
+            Ok(ControlReply::MemoryTargetPublished)
+        );
+        let released = tokio::time::timeout(SHIM_TIMEOUT, async {
+            loop {
+                let reply = request(None).await;
+                let Ok(ControlReply::Memory(observed)) = reply else {
+                    panic!("missing hotplug status: {reply:?}");
+                };
+                if observed.plugged_mib == 0 {
+                    break observed;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("guest unplugs the remaining memory");
+        assert_eq!(
+            released,
+            MemoryObservation {
+                requested_mib: 0,
+                plugged_mib: 0,
+                mapped_mib: 0,
+                retained_empty_mib: 0,
+            }
+        );
+    })
+    .catch_unwind()
+    .await;
+    handler.stop().unwrap();
+    if let Err(panic) = scenario {
+        std::panic::resume_unwind(panic);
+    }
 }

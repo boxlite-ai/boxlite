@@ -116,7 +116,8 @@ impl<H: Vm + ?Sized> VirtioMem<H> {
                     let _ = reply.try_send(self.set_target(added_mib));
                 }
                 Some(MemoryRequest::Status(reply)) => {
-                    let _ = reply.try_send(Ok(self.status()));
+                    let retained_mib = (self.memory.retained_empty_mapped_bytes() / MIB) as u32;
+                    let _ = reply.try_send(Ok((self.status(), retained_mib)));
                 }
                 None => break,
             }

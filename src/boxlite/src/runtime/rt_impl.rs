@@ -508,6 +508,7 @@ impl RuntimeImpl {
         // Only a new box is held to the vCPU ceiling: reuse above ignores
         // general options, so a box persisted with more vCPUs stays reachable.
         options.validate_cpus()?;
+        options.hotplug_mib()?;
         options.validate_secrets()?;
 
         // Initialize box variables with defaults
@@ -607,6 +608,13 @@ impl RuntimeImpl {
             return Err(BoxliteError::Unsupported(format!(
                 "box '{box_name}' runs on the {:?} engine and cannot satisfy a request for the {engine:?} engine; use a different name or recreate the box",
                 actual.engine_kind
+            )));
+        }
+        if let Some(ceiling) = requested.max_memory_mib
+            && actual.options.max_memory_mib != Some(ceiling)
+        {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "box '{box_name}' has a different online memory ceiling"
             )));
         }
         if requested.advanced.privileged && !actual.options.advanced.privileged {

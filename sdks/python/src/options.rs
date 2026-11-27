@@ -783,6 +783,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
         let mut opts = BoxOptions {
             cpus: py_opts.cpus,
             memory_mib: py_opts.memory_mib,
+            max_memory_mib: None,
             disk_size_gb: py_opts.disk_size_gb,
             working_dir: py_opts.working_dir,
             env: py_opts.env,

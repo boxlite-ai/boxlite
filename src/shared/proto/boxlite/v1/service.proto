@@ -69,6 +69,9 @@ service Guest {
 
   // Grow the container root filesystem after its block device has grown.
   rpc ResizeFilesystem(ResizeFilesystemRequest) returns (ResizeFilesystemResponse);
+
+  // Host-only observation for the native memory resize protocol.
+  rpc MemoryObservation(MemoryObservationRequest) returns (MemoryObservationResponse);
 }
 
 // Persistent SSH desired state and live listener control.
@@ -764,4 +767,13 @@ message DownloadChunk {
   // so receivers land by it and peers no longer send this.
   reserved 2;
   reserved "source_is_dir";
+}
+
+message MemoryObservationRequest {
+  bool qualify = 1;
+}
+
+message MemoryObservationResponse {
+  uint32 version = 1;
+  uint64 managed_bytes = 2;
 }

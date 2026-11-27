@@ -226,7 +226,7 @@ impl GuestService for GuestServer {
         &self,
         request: Request<SyncClockRequest>,
     ) -> Result<Response<SyncClockResponse>, Status> {
-        if !self.allow_clock_sync {
+        if !self.host_vsock {
             return Err(Status::permission_denied("clock sync requires host vsock"));
         }
         let ts = match sync_clock_timespec(request.into_inner()) {
@@ -258,6 +258,29 @@ impl GuestService for GuestServer {
             "Guest system clock set to host UTC"
         );
         Ok(Response::new(SyncClockResponse {}))
+    }
+
+    async fn memory_observation(
+        &self,
+        request: Request<boxlite_shared::MemoryObservationRequest>,
+    ) -> Result<Response<boxlite_shared::MemoryObservationResponse>, Status> {
+        if !self.host_vsock {
+            return Err(Status::permission_denied(
+                "memory observation requires host vsock",
+            ));
+        }
+        if request.into_inner().qualify && !supports_memory_observation() {
+            return Err(Status::failed_precondition(
+                "online memory resize requires the qualified BoxLite kernel, a bound virtio-mem driver, 128 MiB blocks and automatic onlining",
+            ));
+        }
+        let managed_bytes = nix::sys::sysinfo::sysinfo()
+            .map_err(|error| Status::internal(error.to_string()))?
+            .ram_total();
+        Ok(Response::new(boxlite_shared::MemoryObservationResponse {
+            version: 1,
+            managed_bytes,
+        }))
     }
 
     async fn resize_filesystem(
@@ -349,6 +372,31 @@ impl SyncClockReject {
             Self::BeforeEpoch => "unix_sec must be after the Unix epoch".into(),
         }
     }
+}
+
+fn supports_memory_observation() -> bool {
+    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let block_size = std::fs::read_to_string("/sys/devices/system/memory/block_size_bytes")
+        .ok()
+        .and_then(|value| u64::from_str_radix(value.trim(), 16).ok());
+    let auto_online = std::fs::read_to_string("/sys/devices/system/memory/auto_online_blocks")
+        .unwrap_or_default();
+    let driver_bound =
+        std::fs::read_dir("/sys/bus/virtio/drivers/virtio_mem").is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                entry.file_name().to_str().is_some_and(|name| {
+                    name.strip_prefix("virtio")
+                        .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+                })
+            })
+        });
+    release.trim().split('-').next() == Some("6.12.110")
+        && block_size == Some(128 << 20)
+        && matches!(
+            auto_online.trim(),
+            "online" | "online_movable" | "online_kernel"
+        )
+        && driver_bound
 }
 
 /// Validate a host-supplied UTC instant into a `timespec`.
@@ -595,11 +643,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn memory_observation_rejects_a_live_unix_transport() {
+        let root = tempfile::tempdir().unwrap();
+        let socket = root.path().join("guest.sock");
+        let server = GuestServer::new(GuestLayout::with_base(root.path()));
+        let task = tokio::spawn(server.run(format!("unix://{}", socket.display()), None));
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+            while !socket.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            let channel = tonic::transport::Endpoint::from_static("http://[::1]:50051")
+                .connect_with_connector(tower::service_fn(move |_| {
+                    let socket = socket.clone();
+                    async move {
+                        tokio::net::UnixStream::connect(socket)
+                            .await
+                            .map(hyper_util::rt::TokioIo::new)
+                    }
+                }))
+                .await
+                .unwrap();
+            let mut guest = boxlite_shared::GuestClient::new(channel);
+            guest.ping(boxlite_shared::PingRequest {}).await.unwrap();
+            guest
+                .memory_observation(boxlite_shared::MemoryObservationRequest { qualify: false })
+                .await
+        })
+        .await;
+        task.abort();
+        assert_eq!(
+            result.unwrap().unwrap_err().code(),
+            tonic::Code::PermissionDenied
+        );
+    }
+
+    #[tokio::test]
     async fn sync_clock_within_tolerance_succeeds_without_clock_permission() {
         crate::test_syscalls::deny(nix::libc::SYS_clock_settime);
         let root = tempfile::tempdir().expect("tempdir");
         let mut server = GuestServer::new(GuestLayout::with_base(root.path()));
-        server.allow_clock_sync = true;
+        server.host_vsock = true;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock after epoch");
@@ -617,7 +700,7 @@ mod tests {
         crate::test_syscalls::deny(nix::libc::SYS_clock_settime);
         let root = tempfile::tempdir().expect("tempdir");
         let mut server = GuestServer::new(GuestLayout::with_base(root.path()));
-        server.allow_clock_sync = true;
+        server.host_vsock = true;
         for (unix_sec, nanos) in [(1, -1), (1, 1_000_000_000), (0, 0), (-1, 0)] {
             let status = server
                 .sync_clock(Request::new(SyncClockRequest { unix_sec, nanos }))
@@ -640,7 +723,7 @@ mod tests {
 
         let root = tempfile::tempdir().expect("tempdir");
         let mut server = GuestServer::new(GuestLayout::with_base(root.path()));
-        server.allow_clock_sync = true;
+        server.host_vsock = true;
         let status = server
             .sync_clock(Request::new(SyncClockRequest {
                 unix_sec: now + 90_000,

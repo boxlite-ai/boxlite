@@ -199,6 +199,23 @@ impl BoxManager {
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn memory_resize(
+        &self,
+        id: &BoxID,
+    ) -> BoxliteResult<Option<super::state::MemoryResizeState>> {
+        self.store.memory_resize(id.as_str())
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn save_memory_resize(
+        &self,
+        id: &BoxID,
+        state: super::state::MemoryResizeState,
+    ) -> BoxliteResult<()> {
+        self.store.update_memory_resize(id.as_str(), state)
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub fn save_disk_size(&self, id: &BoxID, disk_size_gb: u64) -> BoxliteResult<()> {
         self.store.update_disk_size(id.as_str(), disk_size_gb)
     }

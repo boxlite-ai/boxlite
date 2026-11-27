@@ -21,7 +21,7 @@ pub(crate) enum MemoryRequest {
         added_mib: u32,
         reply: SyncSender<io::Result<()>>,
     },
-    Status(SyncSender<io::Result<MemoryStatus>>),
+    Status(SyncSender<io::Result<(MemoryStatus, u32)>>),
 }
 
 #[derive(Default)]

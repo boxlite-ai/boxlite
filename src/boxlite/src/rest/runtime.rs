@@ -449,6 +449,11 @@ impl BoxOptions {
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        if options.max_memory_mib.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "online memory resize requires the local native VMM".into(),
+            ));
+        }
         // A checkpoint source carries no other option: the server restores
         // the saved box, so this never builds a `CreateBoxRequest`.
         if let Some(checkpoint) = options.checkpoint_source()? {

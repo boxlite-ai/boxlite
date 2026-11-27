@@ -328,6 +328,7 @@ impl VmmController for ShimController {
             // VM configuration
             cpus: config.cpus,
             memory_mib: config.memory_mib,
+            hotplug_mib: config.hotplug_mib,
             kernel: config.kernel.clone(),
             fs_shares: config.fs_shares.clone(),
             volume_access: Vec::new(),
