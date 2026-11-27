@@ -534,7 +534,7 @@ let resources = bx.resize(ResizeOptions {
 }).await?;
 let memory = resources.memory.expect("online memory is enabled");
 assert_eq!(memory.completed_mib, 1024);
-assert_eq!(memory.workload_limit_mib, 2048);
+assert_eq!(memory.plugged_hotplug_mib, 512);
 # Ok(())
 # }
 ```
@@ -546,7 +546,7 @@ Host address-space limits apply as the VMM maps memory for each grow.
 If a mapping fails, the grow can remain incomplete and the last completed target is retained.
 Host cgroup limits also apply when guest workloads touch the newly mapped memory.
 
-An empty request shows the requested target, guest managed memory and VMM mapping progress.
+An empty request reports the requested target, plugged hotplug memory, last completed target, and pending target.
 A shrink can remain incomplete while the guest uses too much memory or KVM retains an empty mapping.
 
 If the 60-second operation times out, query progress and retry the same target.

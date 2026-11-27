@@ -19,6 +19,24 @@ const MIB: u64 = 1 << 20;
 const RESIZE_TIMEOUT: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+struct MemorySample {
+    requested_mib: u32,
+    plugged_hotplug_mib: u32,
+    retained_empty_mib: u32,
+    guest_managed_bytes: u64,
+}
+
+impl MemorySample {
+    fn resources(self, state: MemoryResizeState) -> BoxMemoryResources {
+        BoxMemoryResources {
+            requested_mib: self.requested_mib,
+            plugged_hotplug_mib: self.plugged_hotplug_mib,
+            completed_mib: state.completed_mib,
+            pending_mib: state.pending_mib,
+        }
+    }
+}
+
 struct MemoryResize<'a> {
     manager: &'a BoxManager,
     config: &'a BoxConfig,
@@ -57,7 +75,7 @@ impl<'a> MemoryResize<'a> {
             })
     }
 
-    async fn observe(&self, state: MemoryResizeState) -> BoxliteResult<BoxMemoryResources> {
+    async fn observe(&self) -> BoxliteResult<MemorySample> {
         let ControlReply::Memory(vmm) = memory_control(&self.socket, None).await? else {
             return Err(BoxliteError::Engine("unexpected VMM memory status".into()));
         };
@@ -66,10 +84,9 @@ impl<'a> MemoryResize<'a> {
             .checked_add(vmm.requested_mib)
             .filter(|&total| total <= self.ceiling_mib)
             .ok_or_else(|| BoxliteError::Engine("invalid VMM memory target".into()))?;
-        Ok(BoxMemoryResources {
+        Ok(MemorySample {
             requested_mib,
             plugged_hotplug_mib: vmm.plugged_mib,
-            mapped_hotplug_mib: vmm.mapped_mib,
             retained_empty_mib: vmm.retained_empty_mib,
             guest_managed_bytes: self
                 .guest
@@ -77,9 +94,6 @@ impl<'a> MemoryResize<'a> {
                 .await?
                 .managed_memory_bytes(false)
                 .await?,
-            workload_limit_mib: self.ceiling_mib,
-            completed_mib: state.completed_mib,
-            pending_mib: state.pending_mib,
         })
     }
 
@@ -91,10 +105,10 @@ impl<'a> MemoryResize<'a> {
         &self,
         state: &mut MemoryResizeState,
         target_mib: u32,
-        observed: &mut BoxMemoryResources,
+        observed: &MemorySample,
     ) -> BoxliteResult<bool> {
         if !converged(
-            *observed,
+            observed,
             target_mib,
             self.added_mib(target_mib)?,
             state.baseline_bytes,
@@ -112,8 +126,6 @@ impl<'a> MemoryResize<'a> {
             ))
         })?;
         *state = completed;
-        observed.completed_mib = target_mib;
-        observed.pending_mib = None;
         Ok(true)
     }
 
@@ -123,10 +135,10 @@ impl<'a> MemoryResize<'a> {
         target_mib: u32,
     ) -> BoxliteResult<BoxMemoryResources> {
         let added = self.added_mib(target_mib)?;
-        let mut observed = self.observe(state).await?;
+        let mut observed = self.observe().await?;
         if let Some(pending) = state.pending_mib
             && pending != target_mib
-            && !self.complete(&mut state, pending, &mut observed)?
+            && !self.complete(&mut state, pending, &observed)?
         {
             return Err(BoxliteError::InvalidState(format!(
                 "memory resize to {pending} MiB remains pending; retry that target or stop the Box"
@@ -143,18 +155,18 @@ impl<'a> MemoryResize<'a> {
                     "unexpected VMM memory resize reply".into(),
                 ));
             }
-            observed = self.observe(state).await?;
+            observed = self.observe().await?;
         }
-        while !self.complete(&mut state, target_mib, &mut observed)? {
+        while !self.complete(&mut state, target_mib, &observed)? {
             tokio::time::sleep(POLL_INTERVAL).await;
-            observed = self.observe(state).await?;
+            observed = self.observe().await?;
         }
-        Ok(observed)
+        Ok(observed.resources(state))
     }
 }
 
 fn converged(
-    observed: BoxMemoryResources,
+    observed: &MemorySample,
     target_mib: u32,
     added_mib: u32,
     baseline_bytes: u64,
@@ -203,8 +215,8 @@ pub(super) async fn restore(
             pending_mib: None,
         };
         // Check the shim and device even when there is no completed resize to restore.
-        let observed = resize.observe(state).await?;
-        if !converged(observed, resize.boot_mib, 0, baseline_bytes) {
+        let observed = resize.observe().await?;
+        if !converged(&observed, resize.boot_mib, 0, baseline_bytes) {
             return Err(BoxliteError::Engine(
                 "hotplug window is not empty on fresh boot".into(),
             ));
@@ -254,9 +266,10 @@ impl BoxImpl {
             Some(target) => tokio::time::timeout(RESIZE_TIMEOUT, resize.apply(state, target))
                 .await
                 .map_err(|_| incomplete(target))?,
-            None => tokio::time::timeout(RESIZE_TIMEOUT, resize.observe(state))
+            None => tokio::time::timeout(RESIZE_TIMEOUT, resize.observe())
                 .await
-                .map_err(|_| BoxliteError::Engine("memory status query timed out".into()))?,
+                .map_err(|_| BoxliteError::Engine("memory status query timed out".into()))?
+                .map(|observed| observed.resources(state)),
         };
         result.map(Some)
     }

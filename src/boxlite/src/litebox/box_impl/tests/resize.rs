@@ -988,9 +988,15 @@ async fn memory_resize_retries_without_double_publishing_and_rejects_unconverged
         .unwrap()
         .memory
         .unwrap();
-    assert_eq!(state.requested_mib, BOOT_MEMORY);
-    assert_eq!(state.pending_mib, Some(1024));
-    assert_eq!(state.completed_mib, BOOT_MEMORY);
+    assert_eq!(
+        serde_json::to_value(state).unwrap(),
+        serde_json::json!({
+            "requested_mib": BOOT_MEMORY,
+            "plugged_hotplug_mib": 0,
+            "completed_mib": BOOT_MEMORY,
+            "pending_mib": 1024,
+        })
+    );
     assert_eq!(
         fixture
             .bx
@@ -1069,11 +1075,17 @@ async fn memory_resize_retries_without_double_publishing_and_rejects_unconverged
         .unwrap();
     let shrunk = fixture.bx.resize(shrink).await.unwrap().memory.unwrap();
     assert_eq!(shrunk.completed_mib, 768);
+    let ControlReply::Memory(vmm) =
+        vmm_socket::memory_control(&fixture.inner.layout.sockets().vmm_sock(), None)
+            .await
+            .unwrap()
+    else {
+        panic!("expected VMM memory status");
+    };
     assert_eq!(
-        shrunk.mapped_hotplug_mib, 384,
+        vmm.mapped_mib, 384,
         "partially occupied slots may remain mapped"
     );
-    assert_eq!(shrunk.workload_limit_mib, MAX_MEMORY);
     assert_eq!(memory.set_calls.load(Ordering::SeqCst), 2);
     assert!(
         manager

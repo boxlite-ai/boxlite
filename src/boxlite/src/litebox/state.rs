@@ -215,10 +215,6 @@ pub struct BoxResources {
 pub struct BoxMemoryResources {
     pub requested_mib: u32,
     pub plugged_hotplug_mib: u32,
-    pub mapped_hotplug_mib: u32,
-    pub retained_empty_mib: u32,
-    pub guest_managed_bytes: u64,
-    pub workload_limit_mib: u32,
     pub completed_mib: u32,
     /// Target recorded before sending to the VMM, if completion is still pending.
     #[serde(skip_serializing_if = "Option::is_none")]

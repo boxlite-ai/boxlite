@@ -142,6 +142,43 @@ async fn root_capacity_kib(bx: &LiteBox) -> u64 {
         .unwrap()
 }
 
+async fn guest_managed_bytes(bx: &LiteBox) -> u64 {
+    let kib = shell_output(bx, "awk '/^MemTotal:/ {print $2}' /proc/meminfo").await;
+    kib.trim().parse::<u64>().unwrap() << 10
+}
+
+async fn mapped_hotplug_mib(home: &PerTestBoxHome, bx: &LiteBox) -> u64 {
+    let layout = BoxFilesystemLayout::new(
+        home.path.join("boxes").join(bx.id().as_str()),
+        Default::default(),
+        false,
+    );
+    let exchange = async {
+        let mut socket = UnixStream::connect(layout.sockets().vmm_sock())
+            .await
+            .unwrap();
+        let body = r#"{"target_mib":null}"#;
+        let request = format!(
+            "POST /v1/memory HTTP/1.1\r\nHost: vmm\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        socket.read_to_string(&mut response).await.unwrap();
+        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        assert!(
+            head.starts_with("HTTP/1.1 200 "),
+            "unexpected shim reply: {response}"
+        );
+        let reply: serde_json::Value = serde_json::from_str(body).unwrap();
+        reply["Ok"]["memory"]["mapped_mib"].as_u64().unwrap()
+    };
+    tokio::time::timeout(Duration::from_secs(5), exchange)
+        .await
+        .expect("read mapped hotplug slots from the live shim")
+}
+
 fn open_box_db(home: &PerTestBoxHome, flags: rusqlite::OpenFlags) -> rusqlite::Connection {
     let layout = FilesystemLayout::new(home.path.clone(), Default::default());
     rusqlite::Connection::open_with_flags(layout.db_dir().join("boxlite.db"), flags).unwrap()
@@ -848,7 +885,7 @@ async fn memory_resize_enforces_address_space_limit_during_growth() {
         assert_eq!(progress.requested_mib, 4608);
         assert_eq!(progress.completed_mib, 768);
         assert_eq!(progress.pending_mib, Some(4608));
-        assert!(progress.mapped_hotplug_mib < 4096);
+        assert!(mapped_hotplug_mib(&home, &bx).await < 4096);
 
         bx.stop().await.unwrap();
     })
@@ -911,10 +948,10 @@ async fn exercise_native_memory_resize(
         shell_output(&bx, read_workload_limit).await.trim(),
         workload_limit
     );
-    let initial = bx.resize(query).await.unwrap().memory.unwrap();
+    let initial_guest_bytes = guest_managed_bytes(&bx).await;
     let grown = bx.resize(request(1024)).await.unwrap().memory.unwrap();
     assert_eq!(
-        grown.guest_managed_bytes - initial.guest_managed_bytes,
+        guest_managed_bytes(&bx).await - initial_guest_bytes,
         512 << 20
     );
     assert_eq!(grown.completed_mib, 1024);
@@ -1028,8 +1065,9 @@ assert os.read(reader, page)[0] == ord('x')
             bx.resize(query).await
         ),
     };
-    assert_eq!(shrunk.guest_managed_bytes, initial.guest_managed_bytes);
-    assert_eq!(shrunk.mapped_hotplug_mib, 0);
+    assert_eq!(shrunk.completed_mib, 512);
+    assert_eq!(guest_managed_bytes(&bx).await, initial_guest_bytes);
+    assert_eq!(mapped_hotplug_mib(home, &bx).await, 0);
     shell_output(&bx, "touch /tmp/io-finish").await;
     assert_eq!(writer.wait().await.unwrap().exit_code, 0);
     shell_output(&bx, "size=$(wc -c </resize-io); test \"$size\" -eq 8388608; test \"$(sha256sum /resize-io | cut -d' ' -f1)\" = \"$(head -c \"$size\" /dev/zero | sha256sum | cut -d' ' -f1)\"").await;
