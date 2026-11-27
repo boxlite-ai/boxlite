@@ -12,11 +12,13 @@ import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { AddOrganizationActivationFacts1792490000000 } from '../../migrations/pre-deploy/1792490000000-add-organization-activation-facts-migration'
 import { AddBoxCreationQuotaIndex1795478400000 } from '../../migrations/pre-deploy/1795478400000-add-box-creation-quota-index-migration'
 import { BoxEvents } from '../constants/box-events.constants'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
+import { BoxConflictError } from '../errors/box-conflict.error'
 import { BoxRepository } from '../repositories/box.repository'
 import { BoxCreationQuotaService } from './box-creation-quota.service'
 
@@ -190,6 +192,36 @@ describeIfServices('Redis Box creation quota (real PostgreSQL and Redis)', () =>
     expect(await postgresBoxCount()).toBe(20)
   }, 30_000)
 
+  it('does not let a duplicate Box ID failure release the existing reservation', async () => {
+    const original = newBox('owned-box')
+    await repository.insert(original, 2)
+
+    await expect(repository.insert(original, 2)).rejects.toBeInstanceOf(BoxConflictError)
+    expect(await postgresBoxCount()).toBe(1)
+    await expectRedisCount(organizationId, 1)
+
+    await repository.insert(newBox('next-box'), 2)
+    await expectRedisCount(organizationId, 2)
+  }, 20_000)
+
+  it('rebuilds a missing Box hash before admitting another create', async () => {
+    await boxes.insert(newBox('existing'))
+    await quota.reconcileOrganization(organizationId)
+    await redis.del(keys(organizationId).boxes)
+    const reconcile = jest.spyOn(quota, 'reconcileOrganization')
+
+    try {
+      await repository.insert(newBox('after-loss'), 2)
+      expect(reconcile).toHaveBeenCalled()
+    } finally {
+      reconcile.mockRestore()
+    }
+
+    expect(await postgresBoxCount()).toBe(2)
+    await expectRedisCount(organizationId, 2)
+    expect(await redis.hlen(keys(organizationId).boxes)).toBe(2)
+  }, 20_000)
+
   it('releases a failed insertion so a different name can use the reservation', async () => {
     await repository.insert(newBox('same-name'), 2)
     await expect(repository.insert(newBox('same-name'), 2)).rejects.toMatchObject({ code: '23505' })
@@ -258,6 +290,22 @@ describeIfServices('Redis Box creation quota (real PostgreSQL and Redis)', () =>
     await quota.reconcileDirty()
 
     await expectRedisCount(organizationId, 0)
+    expect(await postgresBoxCount()).toBe(1)
+  }, 20_000)
+
+  it('tracks an unlimited warm-pool ownership claim', async () => {
+    const warm = newBox('warm', BOX_WARM_POOL_UNASSIGNED_ORGANIZATION)
+    warm.state = BoxState.STARTED
+    warm.pending = false
+    await boxes.insert(warm)
+
+    await repository.update(warm.id, {
+      updateData: { organizationId, name: 'claimed-warm' },
+      entity: warm,
+    })
+    await quota.reconcileDirty()
+
+    await expectRedisCount(organizationId, 1)
     expect(await postgresBoxCount()).toBe(1)
   }, 20_000)
 

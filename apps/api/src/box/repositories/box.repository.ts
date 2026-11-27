@@ -302,6 +302,14 @@ export class BoxRepository extends BaseRepository<Box> {
         await this.upsertLastActivity(entityManager, id, box.updatedAt)
       }
     })
+    if (
+      maxCreatedBoxes === undefined &&
+      previousBox.organizationId === BOX_WARM_POOL_UNASSIGNED_ORGANIZATION &&
+      previousBox.organizationId !== box.organizationId &&
+      this.creationQuota?.enabled
+    ) {
+      void this.creationQuota.trackCommitted(box.organizationId, box.id)
+    }
 
     this.emitUpdateEvents(box, previousBox)
     this.invalidateLookupCacheOnUpdate(box, previousBox)

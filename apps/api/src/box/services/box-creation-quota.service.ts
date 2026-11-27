@@ -16,14 +16,21 @@ import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
 import { BoxCreationAdmissionUnavailableError, BoxCreationLimitExceededError } from '../errors/box-creation-limit.error'
+import { BoxConflictError } from '../errors/box-conflict.error'
 import { BOX_CREATION_LIMIT_EXCLUDED_STATES } from '../repositories/box.repository'
 
 const ACQUIRE = `
 if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('EXISTS', KEYS[3]) == 0 then
+  redis.call('DEL', KEYS[3])
+  return {-1, 0}
+end
+local existingCount = tonumber(redis.call('GET', KEYS[1]))
+if existingCount > 0 and redis.call('EXISTS', KEYS[2]) == 0 then
+  redis.call('DEL', KEYS[3])
   return {-1, 0}
 end
 if redis.call('HEXISTS', KEYS[2], ARGV[2]) == 1 then
-  return {1, tonumber(redis.call('GET', KEYS[1]))}
+  return {2, existingCount}
 end
 local current = redis.call('INCR', KEYS[1])
 if current > tonumber(ARGV[1]) then
@@ -42,6 +49,12 @@ return 0`
 
 const TRACK_ACTIVE = `
 if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('EXISTS', KEYS[3]) == 0 then
+  redis.call('DEL', KEYS[3])
+  return -1
+end
+local current = tonumber(redis.call('GET', KEYS[1]))
+if current > 0 and redis.call('EXISTS', KEYS[2]) == 0 then
+  redis.call('DEL', KEYS[3])
   return -1
 end
 if redis.call('HEXISTS', KEYS[2], ARGV[1]) == 1 then
@@ -63,7 +76,23 @@ for _, boxId in ipairs(ARGV) do
 end
 return 0`
 
+const BEGIN_RECONCILIATION = `
+if redis.call('EXISTS', KEYS[1]) == 0 or redis.call('EXISTS', KEYS[3]) == 0 then
+  redis.call('DEL', KEYS[3])
+else
+  local current = tonumber(redis.call('GET', KEYS[1]))
+  if current > 0 and redis.call('EXISTS', KEYS[2]) == 0 then
+    redis.call('DEL', KEYS[3])
+  end
+end
+redis.call('SET', KEYS[1], '0', 'NX')
+return 0`
+
 const FINISH_RECONCILIATION = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  redis.call('DEL', KEYS[3])
+  return -1
+end
 local size = redis.call('HLEN', KEYS[2])
 redis.call('SET', KEYS[1], size)
 redis.call('SET', KEYS[3], '1')
@@ -111,6 +140,9 @@ export class BoxCreationQuotaService {
     }
     if (admission[0] === -1) {
       throw new BoxCreationAdmissionUnavailableError('Box creation quota is not initialized', 5)
+    }
+    if (admission[0] === 2) {
+      throw new BoxConflictError()
     }
     if (admission[0] === 0) {
       throw new BoxCreationLimitExceededError(admission[1], limit)
@@ -188,7 +220,7 @@ export class BoxCreationQuotaService {
 
   async reconcileOrganization(organizationId: string): Promise<void> {
     const keys = this.keys(organizationId)
-    await this.redis.set(keys.count, '0', 'NX')
+    await this.redis.eval(BEGIN_RECONCILIATION, 3, keys.count, keys.boxes, keys.ready)
     const boxRepository = this.dataSource.getRepository(Box)
     const activeBoxes = await boxRepository.find({
       where: {
@@ -224,7 +256,8 @@ export class BoxCreationQuotaService {
       }
       await this.release(organizationId, boxId)
     }
-    await this.redis.eval(FINISH_RECONCILIATION, 3, keys.count, keys.boxes, keys.ready)
+    const ready = (await this.redis.eval(FINISH_RECONCILIATION, 3, keys.count, keys.boxes, keys.ready)) as number
+    if (ready === -1) throw new Error('Redis quota keys disappeared during reconciliation')
   }
 
   private async acquire(organizationId: string, boxId: string, limit: number): Promise<AdmissionResult> {
