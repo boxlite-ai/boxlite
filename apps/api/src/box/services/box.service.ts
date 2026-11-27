@@ -70,11 +70,7 @@ import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxDtoReads, BoxSecret, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { RunnerAdapterV0 } from '../runner-adapter/runnerAdapter.v0'
-import {
-  completeOutboundRecord,
-  lockCompleteOutboundFloor,
-  verifiedCompleteRunner,
-} from '../stores/outbound-policy.store'
+import { completeOutboundRecord, lockCompleteRunner, verifiedCompleteRunner } from '../stores/outbound-policy.store'
 import { CompleteCreateJobService } from './complete-create-job.service'
 import type { CompleteCreateIntent } from '../entities/outbound-control-record'
 import {
@@ -341,9 +337,8 @@ export class BoxService implements OnApplicationBootstrap {
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
     const completeOutbound = options.completeOutbound
-    if (completeOutbound !== undefined) {
-      if (!validCompleteOutboundPolicy(completeOutbound)) throw new BadRequestError('Invalid complete outbound policy')
-      await this.boxRepository.assertCompleteCreateAdmission()
+    if (completeOutbound !== undefined && !validCompleteOutboundPolicy(completeOutbound)) {
+      throw new BadRequestError('Invalid complete outbound policy')
     }
     // Authentication caches organizations; admission must use the current policy.
     const nestedVirtualizationEnabled = await this.organizationService.isNestedVirtualizationEnabled(organization.id)
@@ -495,11 +490,10 @@ export class BoxService implements OnApplicationBootstrap {
       // @Unique(['organizationId', 'name']) constraint. Only the insert retries:
       // the chosen runner is still fine, it was the name that collided.
       //
-      // Spend a cold-pull slot after placement. For a complete create, hold
-      // admission through the spend so a concurrent close cannot waste it.
+      // Complete create holds the chosen Runner lease through the cold-pull spend.
       const insertedBox = await this.persistOnAvailableRunner(
         box,
-        { regions: [region.id], boxClass },
+        { regions: [region.id], boxClass, ...(completeOutbound && { requiresCompleteOutbound: true }) },
         async (runner) => {
           const preparation = completeOutbound
             ? await this.prepareCompleteCreate(box, runner, completeOutbound)
@@ -1295,7 +1289,7 @@ export class BoxService implements OnApplicationBootstrap {
       updateData,
       whereCondition: { state: BoxState.ERROR, pending: false, organizationId: organization.id, runnerId: runner.id },
       lockTimeoutMs: 5000,
-      beforeLock: lockCompleteOutboundFloor,
+      beforeLock: (manager) => lockCompleteRunner(manager, runner.id),
       beforeUpdate: async (manager, locked) => {
         const withPolicy = await manager
           .createQueryBuilder(Box, 'box')

@@ -46,6 +46,7 @@ import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
 import { McpModule } from './mcp/mcp.module'
+import { MigrationDataSource } from './migrations/migration-data-source'
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { McpModule } from './mcp/mcp.module'
     }),
     TypeOrmModule.forRootAsync({
       inject: [TypedConfigService],
+      dataSourceFactory: async (options) => new MigrationDataSource(options!),
       useFactory: (configService: TypedConfigService) => {
         return {
           type: 'postgres',
@@ -82,6 +84,7 @@ import { McpModule } from './mcp/mcp.module'
           password: configService.getOrThrow('database.password'),
           database: configService.getOrThrow('database.database'),
           autoLoadEntities: true,
+          installExtensions: false,
           migrations: [join(__dirname, 'migrations/**/*-migration.{ts,js}')],
           migrationsTransactionMode: 'each',
           migrationsRun: configService.get('runMigrations') || !configService.getOrThrow('production'),

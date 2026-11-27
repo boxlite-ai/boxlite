@@ -13,10 +13,11 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { DataSource, FindOptionsWhere, In, MoreThanOrEqual, Not, Repository, UpdateResult } from 'typeorm'
+import { And, DataSource, FindOptionsWhere, In, MoreThanOrEqual, Not, Raw, Repository, UpdateResult } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { Runner } from '../entities/runner.entity'
 import { CreateRunnerInternalDto } from '../dto/create-runner-internal.dto'
@@ -292,8 +293,19 @@ export class RunnerService {
       ? params.excludedRunnerIds.filter((id) => !!id)
       : undefined
 
-    if (excludedRunnerIds?.length) {
-      runnerFilter.id = Not(In(excludedRunnerIds))
+    const allowedIds = excludedRunnerIds?.length ? Not(In(excludedRunnerIds)) : undefined
+    if (params.requiresCompleteOutbound) {
+      const enrolled = Raw<string>(
+        (id) => `${id} IN (
+          SELECT e.runner_id FROM complete_outbound_runner_enrollment e
+          JOIN "runner" r ON r.id = e.runner_id
+          WHERE r."apiVersion" IN ('0', '2') AND e.expires_at > clock_timestamp()
+            AND e.runner_key_sha256 = encode(sha256(convert_to(r."apiKey", 'UTF8')), 'hex')
+        )`,
+      )
+      runnerFilter.id = allowedIds ? And(allowedIds, enrolled) : enrolled
+    } else if (allowedIds) {
+      runnerFilter.id = allowedIds
     }
 
     if (params.regions?.length) {
@@ -828,6 +840,9 @@ export class RunnerService {
     const availableRunners = await this.findAvailableRunners(params)
 
     if (availableRunners.length === 0) {
+      if (params.requiresCompleteOutbound) {
+        throw new ServiceUnavailableException('No Runner available for complete outbound work')
+      }
       throw new BadRequestError(NO_AVAILABLE_RUNNERS)
     }
 
@@ -1033,6 +1048,7 @@ export class GetRunnerParams {
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
   requiresPrivileged?: boolean
+  requiresCompleteOutbound?: boolean
 }
 
 interface AvailabilityScoreParams {

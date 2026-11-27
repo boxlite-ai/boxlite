@@ -344,6 +344,10 @@ export const apiEnvironmentFrom = ({
 }): { environment: Record<string, string>; secrets: Record<string, string> } => {
   const domain = optional(environment, 'STACK_DOMAIN')
   if (!domain) throw new ApiEnvironmentError('STACK_DOMAIN is required — every URL the API composes starts with it')
+  const runMigrations = optional(environment, 'RUN_MIGRATIONS') ?? 'true'
+  if (runMigrations !== 'true' && runMigrations !== 'false') {
+    throw new ApiEnvironmentError('RUN_MIGRATIONS must be true or false')
+  }
   const hosts = publicHostsFor({ domain, dashboardDomain: optional(environment, 'DASHBOARD_DOMAIN') })
 
   // The API's own group, before it is split by channel. Read once: `held`
@@ -368,16 +372,8 @@ export const apiEnvironmentFrom = ({
       // name, which is what the status sync's dedup prefix uses.
       ENVIRONMENT: 'production',
       POSTHOG_ENVIRONMENT: stage,
-      /*
-       * The API applies its own schema at boot, on both clouds.
-       *
-       * Carried over from the incumbent stack (`stack/api.ts`), which sets it
-       * unconditionally and always has. Dropping it in the port was invisible
-       * against a database that already had a schema and fatal against one that
-       * did not: the first deploy of a new stage comes up, connects, and exits
-       * on `42P01 undefined_table` with nothing in the deploy having failed.
-       */
-      RUN_MIGRATIONS: 'true',
+      // Bootstrap an empty database by default. Phased deployments apply migration jobs before startup.
+      RUN_MIGRATIONS: runMigrations,
       /*
        * The container still requires `PORT`; only the channel differs.
        *
