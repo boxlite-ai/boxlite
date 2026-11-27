@@ -756,6 +756,20 @@ after successful extraction. Older remote peers may buffer transfers.
 
 Copy files or directories between host and box.
 
+Cloud uploads use a streaming WebSocket when the server advertises support.
+The CLI uses streaming HTTP for servers that omit or disable the capability.
+
+With Cloud Run's HTTP/1 service configuration, that fallback has a 32 MiB
+request-body limit. Downloads use HTTP.
+
+The cloud API enables WebSocket uploads by default. Operators can set
+`BOXLITE_FILE_UPLOAD_WS_ENABLED=false` to disable them. A long-lived remote
+client may need to reconnect to refresh its cached server capabilities.
+
+The CLI confirms a WebSocket upload after the Runner finishes extracting the
+archive. If the connection drops after sending the archive and the CLI reports
+an unknown outcome, check the destination before retrying.
+
 **Usage:** `boxlite cp [OPTIONS] SRC DST`
 
 - **SRC / DST:** host path or `BOX:PATH` (e.g. `mybox:/app/data`). A directory `SRC` lands as

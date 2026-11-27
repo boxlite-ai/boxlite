@@ -3,8 +3,9 @@
  * Copyright (c) 2025 BoxLite AI
  */
 
-import { Inject, Injectable, Logger } from '@nestjs/common'
+import { ForbiddenException, HttpException, Inject, Injectable, Logger } from '@nestjs/common'
 import type { ClientRequest, IncomingMessage } from 'http'
+import { STATUS_CODES, type OutgoingHttpHeaders } from 'node:http'
 import type { Socket } from 'net'
 import { createProxyMiddleware, type RequestHandler } from 'http-proxy-middleware'
 import { ApiKeyService } from '../api-key/api-key.service'
@@ -25,6 +26,17 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { AttachTicketService } from '../box/services/attach-ticket.service'
 import { AuditService } from '../audit/services/audit.service'
 import { AttachAuditSession } from './attach-audit-session'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
+import { recordBusinessEvent } from '../common/utils/business-event.util'
+import { CustomHeaders } from '../common/constants/header.constants'
+import {
+  UPLOAD_PATH,
+  UPLOAD_PROTOCOL,
+  bridgeUpload,
+  createUploadWebSocketServer,
+  fileUploadWsEnabled,
+} from './boxlite-upload-bridge'
 
 type RunnerUpgradeRequest = IncomingMessage & {
   __boxliteRunner?: Runner
@@ -40,13 +52,18 @@ const ATTACH_PATH =
 
 type AttachMatch = { boxId: string; execId: string; tenant?: string }
 type AttachAuth = { organization: Organization; user: User; ticketBoxId?: string }
+type UploadAuthLimit = {
+  check: () => Promise<void>
+  trackFailure: () => Promise<void>
+  headers: () => OutgoingHttpHeaders
+}
 
 // `/attach` streams to an execution's stdin — interactive exec — so a WS upgrade
 // needs the same box-write permission the HTTP exec routes now require.
 const ATTACH_REQUIRED_PERMISSIONS = [OrganizationResourcePermission.WRITE_BOXES]
 
 /**
- * Singleton WebSocket proxy for `/attach` upgrades.
+ * Authenticated WebSocket upgrades for execution attach and file upload.
  *
  * Express middleware/guards don't run on Node's `upgrade` event, so the
  * NestJS controller `@Get(':boxId/executions/:execId/attach')` route never
@@ -60,6 +77,7 @@ const ATTACH_REQUIRED_PERMISSIONS = [OrganizationResourcePermission.WRITE_BOXES]
 export class BoxliteWsProxyService {
   private readonly logger = new Logger(BoxliteWsProxyService.name)
   private readonly proxy: RequestHandler
+  private readonly uploadWs = createUploadWebSocketServer()
 
   constructor(
     private readonly apiKeyService: ApiKeyService,
@@ -117,6 +135,106 @@ export class BoxliteWsProxyService {
     const groups = url.match(ATTACH_PATH)?.groups as AttachMatch | undefined
     if (!groups) return null
     return { boxId: groups.boxId, execId: groups.execId, tenant: groups.tenant }
+  }
+
+  matchesUploadPath(url: string | undefined): boolean {
+    return !!url && UPLOAD_PATH.test(url)
+  }
+
+  async upgradeUpload(req: IncomingMessage, socket: Socket, head: Buffer, rateLimit?: UploadAuthLimit): Promise<void> {
+    const respond = (status: number) =>
+      this.respondAndClose(socket, status, STATUS_CODES[status] ?? '', rateLimit?.headers())
+    const groups = req.url?.match(UPLOAD_PATH)?.groups
+    if (!groups || !fileUploadWsEnabled()) return respond(404)
+    const parameters = new URL(req.url!, 'http://upload.invalid').searchParams
+    const overwrite = parameters.get('overwrite')
+    if (!parameters.get('path') || (overwrite !== null && !/^(true|false)$/.test(overwrite))) return respond(400)
+    const protocol = req.headers['sec-websocket-protocol']
+    if (typeof protocol !== 'string' || !protocol.split(',').some((value) => value.trim() === UPLOAD_PROTOCOL)) {
+      return respond(400)
+    }
+
+    const onSocketError = () => socket.destroy()
+    socket.once('error', onSocketError)
+    try {
+      await rateLimit?.check()
+      const tenant = groups.tenant && decodeURIComponent(groups.tenant)
+      const auth = await this.authenticate(req, tenant, true)
+      if (!auth) {
+        await rateLimit?.trackFailure()
+        return respond(401)
+      }
+      const box = await this.boxService.findOneByIdOrName(decodeURIComponent(groups.boxId), auth.organization.id)
+      if (!box?.runnerId) return respond(404)
+      const runner = await this.runnerService.findOne(box.runnerId)
+      const target = runner?.apiUrl || runner?.proxyUrl
+      if (!runner || !target) return respond(404)
+      const url = new URL(`/v1/boxes/${encodeURIComponent(box.id)}/files`, target)
+      url.searchParams.set('path', parameters.get('path')!)
+      if (overwrite !== null) url.searchParams.set('overwrite', overwrite)
+      const activity = () =>
+        this.boxService
+          .updateLastActivityAt(box.id, new Date())
+          .catch(() => this.logger.warn('Upload activity update failed'))
+      const log = await this.auditService.createLog(
+        {
+          action: AuditAction.UPLOAD_FILES,
+          targetType: AuditTarget.BOX,
+          targetId: box.id,
+          organizationId: auth.organization.id,
+          actorId: auth.user.id,
+          actorEmail: auth.user.email ?? '',
+          source: 'websocket-file-upload',
+        },
+        5000,
+      )
+      const lease = await this.auditService.keepPendingLogAlive(log.id).catch(async (error) => {
+        await this.auditService.updateLog(log.id, { statusCode: 503, errorMessage: 'audit_lease_unavailable' }, 5000)
+        throw error
+      })
+      const event = { name: 'box.file_upload' as const, correlationId: box.id, organizationId: auth.organization.id }
+      recordBusinessEvent({ ...event, outcome: 'requested' })
+      const autoStop = box.autoStop ?? 0
+      const heartbeat = autoStop > 0 ? setInterval(() => void activity(), autoStop * 500).unref() : undefined
+      let status = 0
+      let failure = 'client_closed'
+      try {
+        await activity()
+        if (box.autoResume) await this.autoResume.ensureReady(box.id, auth.organization)
+        if (lease.signal.aborted) {
+          status = 503
+          failure = 'audit_lease_lost'
+          return respond(status)
+        }
+        if (socket.destroyed || socket.readableEnded) return
+        const result = await new Promise<{ status: number; failure?: string }>((resolve, reject) => {
+          const close = () => resolve({ status: 0, failure: 'client_closed' })
+          socket.once('close', close)
+          this.uploadWs.handleUpgrade(req, socket, head, (peer) => {
+            socket.off('close', close)
+            bridgeUpload(peer, url, runner.apiKey, lease.signal).then(resolve, reject)
+          })
+        })
+        status = result.status
+        failure = result.failure ?? ''
+      } catch (error) {
+        status = error instanceof HttpException ? error.getStatus() : 500
+        failure = `http_${status}`
+        respond(status)
+      } finally {
+        clearInterval(heartbeat)
+        recordBusinessEvent(
+          failure ? { ...event, outcome: 'exception', exceptionType: failure } : { ...event, outcome: 'success' },
+        )
+        void lease
+          .complete({ statusCode: status, errorMessage: failure || undefined })
+          .catch(() => this.logger.warn('Failed to complete upload audit'))
+      }
+    } catch (error) {
+      respond(error instanceof HttpException ? error.getStatus() : error instanceof URIError ? 400 : 500)
+    } finally {
+      socket.off('error', onSocketError)
+    }
   }
 
   /**
@@ -215,27 +333,27 @@ export class BoxliteWsProxyService {
    * OrganizationResourceActionGuard — a system admin and an interactive owner
    * without an API key are exempt — so the user's system role is resolved here
    * just as the HTTP strategies resolve it.
-   * Never throws — any failure resolves to `null` (a 401), so the fire-and-forget
-   * `upgrade` caller can't leak a hung socket.
+   * Attach authentication failures resolve to `null` (401). File uploads
+   * distinguish permission and tenant mismatches with `ForbiddenException` (403).
    *
    * API key: the bearer must be a non-expired API key. A non-admin user must
    * still be a member of the key's organization and carry write:boxes; a system
    * admin is admitted without either. Member removal and user deletion revoke
    * the affected keys; the membership check also rejects keys left behind by
-   * older deletion paths. The URL tenant is ignored (key is scoped).
+   * older deletion paths. Attach uses the key's organization. File uploads
+   * resolve the organization using the HTTP file route's tenant rules.
    *
    * JWT (OIDC): when the bearer is not an API key, verify it via `JwtStrategy`
    * (same JWKS/issuer/audience as the HTTP path). A JWT carries no org, so the
-   * organization is taken from the URL `{prefix}` (`urlTenant`); a request with
-   * no tenant (or the legacy `default`) is rejected since the org is ambiguous
-   * for a multi-org user. Authorization then applies identically to the API-key
-   * path. `jwtStrategy` is absent when `skipConnections` is set.
+   * organization is taken from the URL `{prefix}` (`urlTenant`). File uploads
+   * also accept the organization header for an omitted or `default` prefix.
+   * `jwtStrategy` is absent when `skipConnections` is set.
    *
    * Unlike the HTTP path, this does not consult the Redis cache used by
    * ApiKeyStrategy / OrganizationAccessGuard. Upgrade frequency is low; if
    * upgrade latency becomes a concern, add caching as a follow-up.
    */
-  private async authenticate(req: IncomingMessage, urlTenant?: string): Promise<AttachAuth | null> {
+  private async authenticate(req: IncomingMessage, urlTenant?: string, upload = false): Promise<AttachAuth | null> {
     try {
       const header = req.headers['authorization']
       const headerValue = Array.isArray(header) ? header[0] : header
@@ -243,9 +361,7 @@ export class BoxliteWsProxyService {
       const token = headerValue.replace(/^bearer\s+/i, '').trim()
       if (!token) return null
 
-      // 1. API key — org comes from the key itself; the URL tenant is ignored, as
-      //    before. A *throw* means "not an API key", so it is caught here to fall
-      //    through to JWT rather than being rejected by the outer guard.
+      // Try the API-key credential first. A lookup miss falls through to JWT.
       const apiKey = await this.apiKeyService.getApiKeyByValue(token).catch(() => null)
       if (apiKey) {
         if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
@@ -253,27 +369,37 @@ export class BoxliteWsProxyService {
         // on the HTTP path.
         const user = await this.userService.findOne(apiKey.userId)
         if (!user) return null
-        if (!(await this.authorizeAttach(user, apiKey.organizationId, apiKey))) return null
-        const organization = await this.organizationService.findOne(apiKey.organizationId)
+        const orgId = upload && urlTenant && urlTenant !== 'default' ? urlTenant : apiKey.organizationId
+        if (orgId !== apiKey.organizationId && user.role !== SystemRole.ADMIN) throw new ForbiddenException()
+        if (!(await this.authorizeAttach(user, orgId, apiKey))) {
+          if (upload) throw new ForbiddenException()
+          return null
+        }
+        const organization = await this.organizationService.findOne(orgId)
         return organization ? { organization, user } : null
       }
 
-      // 2. JWT (OIDC) — org comes from the URL tenant; authorized per authorizeAttach.
+      // JWT (OIDC) supplies the user identity. The request supplies the organization.
       if (!this.jwtStrategy) return null
+      if (upload && (!urlTenant || urlTenant === 'default')) {
+        const org = req.headers[CustomHeaders.ORGANIZATION_ID.name.toLowerCase()]
+        urlTenant = typeof org === 'string' ? org : undefined
+      }
       if (!urlTenant || urlTenant === 'default') return null
       const userId = jwtUserId(await this.jwtStrategy.verifyToken(token))
       if (!userId) return null
 
       const user = await this.userService.findOne(userId)
       if (!user) return null
-      if (!(await this.authorizeAttach(user, urlTenant))) return null
+      if (!(await this.authorizeAttach(user, urlTenant))) {
+        if (upload) throw new ForbiddenException()
+        return null
+      }
       const organization = await this.organizationService.findOne(urlTenant)
       return organization ? { organization, user } : null
-    } catch {
-      // Any failure (invalid JWT signature, a DB error, …) → 401. This single
-      // guard is why authenticate never throws — `upgrade` calls it before its
-      // own try-block and main.ts runs `void upgrade(...)`, so an escaped throw
-      // would leak a hung socket.
+    } catch (error) {
+      if (upload && error instanceof ForbiddenException) throw error
+      // Invalid signatures and failed lookups produce a 401 in both upgrade handlers.
       return null
     }
   }
@@ -328,9 +454,12 @@ export class BoxliteWsProxyService {
     }
   }
 
-  private respondAndClose(socket: Socket, status: number, reason: string): void {
+  private respondAndClose(socket: Socket, status: number, reason: string, headers: OutgoingHttpHeaders = {}): void {
     try {
-      socket.write(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+      const extra = Object.entries(headers)
+        .map(([name, value]) => `${name}: ${value}\r\n`)
+        .join('')
+      socket.write(`HTTP/1.1 ${status} ${reason}\r\n${extra}Connection: close\r\nContent-Length: 0\r\n\r\n`)
     } catch {
       // Socket may already be torn down — ignore.
     }

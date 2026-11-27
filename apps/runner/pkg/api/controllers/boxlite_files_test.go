@@ -1,11 +1,15 @@
 package controllers
 
 import (
+	"bufio"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/gin-gonic/gin"
@@ -21,6 +25,42 @@ func TestUploadRejectsInvalidOverwriteBeforeRuntimeAccess(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("overwrite=%s: status=%d body=%s", raw, recorder.Code, recorder.Body.String())
 		}
+	}
+}
+
+// The bridge keeps the chunked body open while it watches for a Runner refusal.
+// Connection: close lets Go send that refusal without draining the request first.
+func TestUploadSendsEarlyRefusalWhileChunkedBodyIsOpen(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PUT("/v1/boxes/:boxId/files", BoxliteFileUpload)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	conn, err := net.DialTimeout("tcp", server.Listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.WriteString(conn, "PUT /v1/boxes/b/files?path=/root&overwrite=invalid HTTP/1.1\r\n"+
+		"Host: runner\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPut})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var body map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code, _ := errorEnvelope(body); response.StatusCode != http.StatusBadRequest || code != "invalid_argument" {
+		t.Fatalf("unexpected response %d: %v", response.StatusCode, body)
 	}
 }
 

@@ -223,7 +223,7 @@ import { McpModule } from './mcp/mcp.module'
     }),
   ],
   controllers: [],
-  providers: [AppService],
+  providers: [AppService, FailedAuthRateLimitMiddleware],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
