@@ -27,8 +27,7 @@ func outboundUDPHandler(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		registration.Lock()
 		defer registration.Unlock()
 		current := snapshot()
-		guard := current.dialer.guard
-		if current.policy.Mode == "disabled" || !guard.active() {
+		if current.policy.Mode == "disabled" {
 			return true
 		}
 		// Two packets may miss demux before one registers the endpoint.
@@ -56,20 +55,16 @@ func outboundUDPHandler(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 }
 
 func (d *egressDialer) dialUDP(ctx context.Context, network, address string) (net.Conn, error) {
-	if !d.guard.active() {
-		return nil, net.ErrClosed
-	}
 	if network == "udp6" {
 		target, err := netip.ParseAddrPort(address)
 		if err != nil || !d.nativeEligible(target.Addr()) || d.guard.denies(target.Addr()) {
 			return nil, fmt.Errorf("UDP destination denied by platform")
 		}
+		if d.guard.cloud {
+			return d.guard.uplink.dial(ctx, network, address)
+		}
 	}
-	conn, err := d.dial(ctx, network, address)
-	if err != nil {
-		return conn, err
-	}
-	return d.guard.track(conn)
+	return d.dial(ctx, network, address)
 }
 
 func udpAdmission(id stack.TransportEndpointID, nat map[tcpip.Address]tcpip.Address,

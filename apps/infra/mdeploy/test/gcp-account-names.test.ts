@@ -19,19 +19,24 @@ const roles: Record<WorkloadRole, string> = {
   'registry-proxy': 'RegistryProxyServiceAccount',
 }
 
-const networkFor = (stage: string, appShort = declared.appShort) => {
+const networkFor = (stage: string, appShort = declared.appShort, runnerExternalIpv6 = false) => {
   const placements: Record<string, string> = {}
+  let cloudScope: unknown
   const resources = recordServices(declared.app, stage, () => {
     const network = gcpNetworkProvider({ project: 'boxlite-dev-project', region: 'us-east5', appShort })({
       internetEgress: true,
+      runnerExternalIpv6,
     })
     for (const role of Object.keys(roles) as WorkloadRole[]) {
       const placement = network.placementFor(role)
       assert.equal(placement.cloud, 'gcp')
       if (placement.cloud === 'gcp') placements[role] = String(placement.serviceAccount)
+      if (placement.cloud === 'gcp' && role === 'runner') {
+        cloudScope = JSON.parse(Buffer.from(String(placement.cloudScope), 'base64url').toString())
+      }
     }
   })
-  return { resources, placements }
+  return { resources, placements, cloudScope }
 }
 
 for (const stage of ['dev', 'prod', 'stage']) {
@@ -70,6 +75,33 @@ for (const stage of ['dev', 'prod', 'stage']) {
 
 test('stage aliases retain the shared length guard', () => {
   assert.throws(() => networkFor('stage', 'application-abbreviation-too-long'), NameError)
+})
+
+test('the Runner scope uses the allocated private-service address and named subnet outputs', () => {
+  const { resources, cloudScope } = networkFor('dev')
+  const resource = (logical: string) => resources.find((resource) => resource.logical === logical)!.args
+  const runner = resource('Subnetwork')
+  assert.deepEqual(cloudScope, {
+    version: 1,
+    stage: 'dev',
+    runner: runner.ipCidrRange,
+    cloud_run: resource('CloudRunEgressSubnetwork').ipCidrRange,
+    managed_proxy: resource('ManagedProxySubnetwork').ipCidrRange,
+    gke_pods: runner.secondaryIpRanges.find((range: { rangeName: string }) => range.rangeName === 'gke-proxy-pods')
+      .ipCidrRange,
+    gke_services: runner.secondaryIpRanges.find(
+      (range: { rangeName: string }) => range.rangeName === 'gke-proxy-services',
+    ).ipCidrRange,
+    private_services: `10.40.0.0/${resource('PrivateServiceRange').prefixLength}`,
+  })
+})
+
+test('dual-stack scope uses the public IPv6 range allocated to the Runner subnet', () => {
+  const { resources, cloudScope } = networkFor('dev', declared.appShort, true)
+  const subnet = resources.find((resource) => resource.logical === 'Subnetwork')!.args
+  assert.equal(subnet.stackType, 'IPV4_IPV6')
+  assert.equal(subnet.ipv6AccessType, 'EXTERNAL')
+  assert.equal((cloudScope as { runner_ipv6: string }).runner_ipv6, '2600:1900:4000::/64')
 })
 
 test('other long environment names retain their existing refusal', () => {

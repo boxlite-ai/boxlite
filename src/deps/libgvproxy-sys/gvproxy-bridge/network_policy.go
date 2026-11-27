@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/boxlite/gvproxy-bridge/internal/guardinventory"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -50,9 +49,9 @@ type outboundPolicyController struct {
 	active                atomic.Pointer[outboundSnapshot]
 	config                *types.Configuration
 	guard                 platformGuard
-	inventory             guardinventory.Observation
 	resolve               resolveFunc
 	resolveFamily         familyResolver
+	ipv6LinkConfirmed     atomic.Bool
 	ipv6Ready             atomic.Bool
 	ipv6ReadinessRevision string
 	ipv6Challenge         ipv6Readiness
@@ -141,8 +140,8 @@ func (p *outboundPolicyController) replaceTrustedTCP(mode string, rules trustedT
 func (p *outboundPolicyController) applySnapshot(candidate *outboundSnapshot) error {
 	previous := p.active.Load()
 	p.ipv6Challenge = ipv6Readiness{}
-	if !p.guard.active() && candidate.policy.required.NativeIPv6 {
-		return fmt.Errorf("Cloud topology proof expired before outbound policy update")
+	if candidate.policy.required.NativeIPv6 && candidate.policy.Mode == "enabled" && !p.guard.supportsIPv6() {
+		return fmt.Errorf("Cloud IPv6 route does not match the Runner network")
 	}
 	if candidate.policy.required.NativeIPv6 && candidate.policy.Mode == "enabled" &&
 		previous.policy.Mode == "disabled" &&

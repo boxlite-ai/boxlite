@@ -7,7 +7,7 @@ use std::path::PathBuf;
 ///
 /// Defines local DNS records served by the gateway's embedded DNS server.
 /// Other queries use the host resolver in Local mode and the approved
-/// inventory resolver endpoints in guarded Cloud mode.
+/// provider DNS endpoint on a managed Cloud Runner.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DnsZone {
     /// Zone name (e.g., "myapp.local.", "." for root)

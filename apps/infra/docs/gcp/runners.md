@@ -41,22 +41,28 @@ Each assignment has a 40-minute create/update timeout, covering convergence and 
 the initial migration from a whole-fleet assignment. This is an upper bound, not an added wait:
 completed operations proceed immediately. Deletion keeps the provider's default timeout.
 
-Each assignment carries binary, unit-environment and NFS client package policies. An update converges
-the API address, volume backend, registry proxy host and `nfs-common`; the package policy also covers
-existing hosts whose startup script predates Filestore, without requiring SSH or a boot-script rerun.
-`runner:update` preserves existing package policies but cannot add one to an older assignment; run
-mdeploy first to add `runner-nfs-client`. New hosts install the same package from their boot script. Existing hosts retain their disks, image
-caches and local box state; machine-type and boot-image/startup changes do not resize or replace them.
-New hosts use the current [runner sizing settings](../configuration.md#runner-sizing).
+Each assignment carries a binary policy and an NFS client package policy. The binary policy first
+converges the unit environment, including the Cloud network scope, then updates the binary.
 
-`runner:update` checks host stage labels and both assignments' exact stage-and-runner selectors before
-writing, refusing legacy or mismatched scopes, then updates them in the same order. It waits
-for each rollout and verifies that every policy on each targeted host reports compliant with the updated
-revision. A failed update, missing report or stale revision stops progression. The first runner must be
-running, and runner labels must be unique after normalization. The command refuses `--host`;
-the next mdeploy reasserts the checkout's policy target. Both paths verify binary checksums and readiness.
-Already-converged hosts need no restart. Release downgrades require the explicit `--allow-downgrade` update command.
-IAP/OS Login remains available for authorized administration, but normal updates do not require per-user SSH.
+The package policy installs `nfs-common` on existing hosts, including those whose startup script predates Filestore.
+`runner:update` preserves that policy on existing assignments. Run `mdeploy` to add it to a legacy assignment.
+
+New hosts get `nfs-common` from the boot script and use the current [Runner sizing settings](../configuration.md#runner-sizing).
+Existing hosts retain their disks, image caches and local Box state. Machine type, boot image and startup script changes apply at creation.
+
+`runner:update` checks stage labels, exact selectors and the ordered scope resource before writing.
+Run `mdeploy` first to migrate a legacy assignment.
+
+`runner:update` waits for each rollout and checks that every targeted policy reports compliance with the updated revision.
+A failed update, missing report or stale revision stops progression.
+
+The first Runner must be running, and Runner labels must be unique after normalization. `runner:update` operates on the full fleet.
+The next `mdeploy` reasserts the checkout's policy target.
+
+Both paths verify binary checksums and readiness. Already-converged hosts need no restart.
+The update command requires `--allow-downgrade` for release downgrades.
+
+Normal updates run through OS Config. IAP and OS Login remain available for authorized administration.
 
 For an existing deployment, run mdeploy once to narrow the original assignment to the first runner and
 create the fleet assignment. `runner:update` refuses the old whole-fleet layout before changing either
@@ -82,100 +88,80 @@ The attachment is fixed at creation too: a host that existed before its disk doe
 and that disk stays unattached, and billed, until the host is destroyed and recreated; a `--replace`
 would carry the ignored attachment over.
 
-## Guarded Runner pool
+## Cloud network scope
 
-Use a dedicated GCP Runner pool and qualify its exact image and running kernel
-before opening placement. Verify active BPF LSM, cgroup v2, kernel BTF, bpffs,
-and `bpftool` on the intended host.
+The GCP stack derives guest egress protection from deployed resources. It uses
+the Runner, Cloud Run egress and managed proxy subnets, plus the GKE secondary
+ranges and the allocated private service range.
 
-Confirm the kernel can run the pinned lease renewal program.
+Boot and the in-place OS policy write the stage and scope to the Runner
+environment. The Runner sends the scope to gvproxy at launch and verifies
+detached backends before reporting readiness.
 
-Run `make test:platform-guard-bpf` on an isolated host with the same kernel.
-On the target Runner, test Cloud launch, detached reattachment, and expiry.
-
-Build with `make build:platform-guard` and install the artifacts on the Runner.
-
-- Place the binary at `/usr/local/bin/boxlite-platform-guard`.
-- Place the BPF object at `/usr/lib/boxlite/deadline.bpf.o`.
-- Install the [systemd service unit](../../../runner/platform-guard/boxlite-platform-guard.service).
-
-Enable the guard service and configure Runner to start after it.
-The root service retains live pins and records across service restarts on the
-same boot. It reclaims retired pins once the cgroup is confirmed empty.
-
-Publish `/etc/boxlite/platform-guard/inventory.json` in a root-owned directory
-outside Box mounts. Give only root write access and replace the file atomically.
-
-Include all four protected network groups and approved IPv4 resolver endpoints
-with explicit ports. Use an RFC 3339 expiry and an inventory revision independent
-of Box rule revisions.
-
-```json
-{
-  "version": 1,
-  "revision": "canary-12",
-  "expires_at": "2030-01-01T00:00:00Z",
-  "protected_networks": {
-    "node": ["192.0.2.0/25"],
-    "control_plane": ["198.51.100.0/24"],
-    "metadata": ["169.254.169.254/32"],
-    "services": []
-  },
-  "resolver_endpoints": ["192.0.2.53:53"]
-}
+```mermaid
+flowchart LR
+  network["GCP network resources"] --> deploy["Runner boot or OS Config"]
+  deploy --> env["Runner environment"]
+  env --> runtime["Runner Runtime"]
+  runtime --> gvproxy["gvproxy in the shim"]
+  gvproxy --> filter["TCP, UDP and DNS checks"]
 ```
 
-Set `BOXLITE_PLATFORM_GUARD_PROFILE=cloud` and `BOXLITE_REQUIRE_CLOUD_GUARD=1`
-in the guarded Runner's service environment. Startup requires a valid
-inventory, a successful kernel attachment probe, and proof for each running
-networked Box. A Box without proof is stopped through its cgroup, and an
-unconfirmed stop or populated untracked cgroup blocks Runner startup.
+Use the existing control-plane draining operation before changing a live pool's
+network scope. Confirm old forwarding has stopped on every affected host before
+changing its network reachability. After an interrupted rollout or rollback,
+keep placement paused until the hosts are serving the intended Runner build
+with its matching network scope.
 
-Check the private gvproxy control endpoint `GET /network/platform-guard/status`
-for the active operator revision and digest. Record the GCP image and kernel
-identifiers with positive and negative guard results before admitting work.
-For binary rollback, drain the guarded pool and keep placement closed until
-running and new Boxes have verified equivalent protection.
+```mermaid
+sequenceDiagram
+  participant Operator
+  participant API as Control plane
+  participant Fleet as Affected Runners
+  participant Deploy as mdeploy
+  Operator->>API: Pause placement
+  Operator->>Fleet: Drain and check forwarding has stopped
+  alt Old forwarding stopped
+    Operator->>Deploy: Apply the matching scope and binary
+    Deploy->>Fleet: Write the scope before starting the candidate
+    Fleet->>Fleet: Verify scope and detached backends
+    alt Candidate verified
+      Operator->>API: Reopen placement
+    else Rollout interrupted or candidate unverified
+      Operator->>API: Keep placement paused
+    end
+  else Stop unconfirmed
+    Operator->>API: Keep placement paused
+  end
+```
+
+Check the candidate with a real Box on GCP. Verify permitted TCP, UDP and DNS
+traffic and confirm a protected destination receives no traffic even when the
+Box allow rule matches. The private gvproxy `GET /network/cloud-scope` endpoint
+reports the applied deployment scope for the specific Box.
 
 ### Qualify a dual-stack pool
 
-Deploy v2-capable API, Runner, Runtime, shim, and host guard readers before
-switching inventory. Set the complete outbound release floor to the verified
-release and renew the Runner enrollment against that floor.
+Set `deploy.runners.externalIpv6` to `true` for a GCP stage that supports external
+IPv6. The deploy configures the shared subnet and Runner NIC for dual-stack,
+and adds the assigned subnet prefix to the Runner's trusted network scope.
+The existing private IPv4 NIC and Cloud NAT path continue to serve IPv4.
 
-Inventory v2 retains the v1 fields and adds `host` and `translation` to
-`protected_networks`. List every empty group by name in `absent_groups` only
-when the deployed topology confirms that the group is absent.
+The Runtime checks the Linux route and its selected source before preparing a
+dual-stack Box. Gvproxy verifies the route in the forwarding process and binds
+native TCP and UDP sockets to that Runner NIC and source. It also blocks guest
+connections to the managed IPv6 subnet, alongside the existing IPv4 protection.
 
-Use `topology_sha256` to pin the applied network state. The host guard reads the
-Linux routes, policy rules, nftables ruleset, and legacy IPv4 and IPv6 NAT
-tables. Route lifetimes and firewall packet and byte counts are excluded from
-the fingerprint.
-
-The operator attests that these sources cover the pool's routing and
-translation and lists the affected CIDRs in the inventory. An unreadable
-source, missing IPv6 uplink, or mismatched digest blocks qualification.
-
-1. Call `pause-topology` on the root-only
-   `/run/boxlite-platform-guard/control.sock` with an empty Box identity. This
-   revokes running leases and succeeds after all guarded Boxes, including
-   IPv4 Boxes, are drained.
-2. Apply the managed topology change. Send
-   `{"operation":"sample-topology"}` on the same socket and put the returned
-   `topology_sha256` in the new inventory.
-3. Publish the root-owned inventory atomically. Send
-   `{"operation":"resume-topology"}` and keep placement closed until the guard
-   and network-path checks pass. Use the same pause and drain sequence before
-   reverting the pool to inventory v1.
-
-An unexpected inventory swap or changed applied topology retires the live
-epoch. Restart a drained IPv4 Box only after the current inventory and host
-guard provide a fresh startup proof.
+Keep placement on the verified release floor. Check an allowed IPv6 endpoint,
+a denied endpoint and the same policy after restart from a real GCP Box.
+Without an IPv6 declaration or a matching live route, the Runner can still
+prepare IPv4 policies. A saved dual-stack Box requires its original Guest link
+and matching host route when it starts or is adopted.
 
 ## Verify and recover
 
-Inspect both assignments (only the first for a single-runner stage), including every binary and
-unit-environment policy after mdeploy:
+Inspect both assignments (only the first for a single-runner stage), including the binary policy and its
+unit-environment resource after mdeploy:
 
 ```bash
 gcloud compute os-config os-policy-assignment-reports list \

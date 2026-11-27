@@ -38,7 +38,7 @@ func (p *outboundPolicyController) compile(policy outboundPolicy, revision strin
 		dialer.nativeSubnet, _ = policy.complete.IPv6.prefix()
 		dialer.resolveFamily = p.resolveFamily
 		dialer.nativeReady = func() bool {
-			return p.ipv6Ready.Load() && guestTrafficAllowed(p.guard, p.active.Load)
+			return p.ipv6Ready.Load() && guestTrafficAllowed(p.active.Load())
 		}
 	}
 	rules := policy.tcp
@@ -85,16 +85,12 @@ type outboundModeTarget struct {
 	next     int
 }
 
-func guestTrafficAllowed(guard platformGuard, snapshot snapshotSource) bool {
-	if !guard.active() {
-		return false
-	}
-	current := snapshot()
+func guestTrafficAllowed(current *outboundSnapshot) bool {
 	return current != nil && current.policy.Mode != "disabled"
 }
 
 func (t *outboundModeTarget) Action(pkt *stack.PacketBuffer, _ stack.Hook, _ *stack.Route, _ stack.AddressableEndpoint) (stack.RuleVerdict, int) {
-	if !guestTrafficAllowed(t.guard, t.snapshot) || (t.guard.cloud && !t.permitsGuestDHCP(pkt)) {
+	if !guestTrafficAllowed(t.snapshot()) || (t.guard.cloud && !t.permitsGuestDHCP(pkt)) {
 		return stack.RuleDrop, 0
 	}
 	return stack.RuleJump, t.next

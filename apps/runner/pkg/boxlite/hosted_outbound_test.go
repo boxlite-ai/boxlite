@@ -5,6 +5,7 @@ package boxlite
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -222,8 +223,20 @@ printf '%s\n' '{"admission":false,"deny":false,"port":false,"capacity":false}'`
 }
 
 func TestIntegrationQualifiedCloudOutboundLifecycle(t *testing.T) {
-	if os.Getenv("BOXLITE_PLATFORM_GUARD_PROFILE") != "cloud" {
-		t.Skip("requires a Linux host guard with qualified inventory v2")
+	deployed := os.Getenv("BOXLITE_CLOUD_SCOPE")
+	if deployed == "" {
+		t.Skip("requires the deployment scope of a dual-stack GCP Runner")
+	}
+	wire, err := base64.RawURLEncoding.DecodeString(deployed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scope map[string]json.RawMessage
+	if err := json.Unmarshal(wire, &scope); err != nil {
+		t.Fatal(err)
+	}
+	if len(scope["runner_ipv6"]) == 0 {
+		t.Skip("requires the deployment scope of a dual-stack GCP Runner")
 	}
 	const target = "cloud-dual-stack"
 	ctx := t.Context()
@@ -332,18 +345,19 @@ func TestIntegrationQualifiedCloudOutboundLifecycle(t *testing.T) {
 		t.Fatalf("expected an empty rebuild target: %v", err)
 	}
 
-	stateDir := os.Getenv("BOXLITE_PLATFORM_GUARD_STATE_DIR")
-	if stateDir == "" {
-		stateDir = "/run/boxlite-platform-guard"
+	delete(scope, "runner_ipv6")
+	ipv4Scope, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("BOXLITE_PLATFORM_GUARD_STATE_DIR", t.TempDir())
-	if _, err := client.RebuildCompleteOutbound(ctx, target, request); err == nil || !strings.Contains(err.Error(), "Cloud platform guard") {
-		t.Fatalf("expected missing Cloud guard authority to refuse rebuild: %v", err)
+	t.Setenv("BOXLITE_CLOUD_SCOPE", base64.RawURLEncoding.EncodeToString(ipv4Scope))
+	if _, err := client.RebuildCompleteOutbound(ctx, target, request); err == nil || !strings.Contains(err.Error(), "verified Runner IPv6 route") {
+		t.Fatalf("expected IPv4-only Runner scope to refuse native IPv6 rebuild: %v", err)
 	}
 	if _, err := client.nativeBoxInfo(ctx, target); !sdk.IsNotFound(err) {
 		t.Fatalf("refused rebuild created a native Box: %v", err)
 	}
-	t.Setenv("BOXLITE_PLATFORM_GUARD_STATE_DIR", stateDir)
+	t.Setenv("BOXLITE_CLOUD_SCOPE", deployed)
 	rebuilt, err := client.RebuildCompleteOutbound(ctx, target, request)
 	if err != nil || !sameCompleteCreateSnapshot(rebuilt, installed) {
 		t.Fatalf("empty-host rebuild: %+v, %v", rebuilt, err)

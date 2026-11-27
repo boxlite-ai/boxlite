@@ -45,6 +45,17 @@ test('runner configuration accepts an optional data disk while preserving requir
   assert.throws(() => parse({ runners: { ...valid.runners, dataDiskSize: 2048 } }), /does not take dataDiskSize/)
 })
 
+test('runner configuration explicitly opts into external IPv6', () => {
+  assert.equal(parse().runners.externalIpv6, undefined)
+  for (const externalIpv6 of [true, false]) {
+    assert.equal(parse({ runners: { ...valid.runners, externalIpv6 } }).runners.externalIpv6, externalIpv6)
+  }
+  assert.throws(
+    () => parse({ runners: { ...valid.runners, externalIpv6: 'true' } }),
+    /externalIpv6 must be true or false/,
+  )
+})
+
 test('the defaults have to be complete, because nothing else supplies them', () => {
   // A stage says only what differs, so a gap there is the point. A gap in the
   // defaults is a value nothing supplies, and the resource would be created

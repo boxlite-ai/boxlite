@@ -45,8 +45,11 @@ var specialUseIPv6 = []netip.Prefix{
 }
 
 func (d *egressDialer) nativeEligible(address netip.Addr) bool {
-	if d.nativeReady == nil || !d.nativeReady() || !publicIPv6.Contains(address) ||
-		address.Zone() != "" || d.nativeSubnet.Contains(address) {
+	return d.nativeReady != nil && d.nativeReady() && !d.nativeSubnet.Contains(address) && globalEgressIPv6(address)
+}
+
+func globalEgressIPv6(address netip.Addr) bool {
+	if !publicIPv6.Contains(address) || address.Zone() != "" {
 		return false
 	}
 	for _, reserved := range specialUseIPv6 {

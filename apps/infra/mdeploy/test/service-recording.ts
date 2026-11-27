@@ -24,6 +24,15 @@ export const recordServices = (app: string, stage: string, build: () => void) =>
           name: output(args.name ?? logical),
           dnsResourceRecords: [{ name: '_acme.example.com', type: 'CNAME', data: 'example.com' }],
         }
+        if (kind === 'gcp.compute.Subnetwork') {
+          fields.ipCidrRange = output(args.ipCidrRange)
+          fields.secondaryIpRanges = output(args.secondaryIpRanges ?? [])
+          fields.externalIpv6Prefix = output(args.ipv6AccessType === 'EXTERNAL' ? '2600:1900:4000::/64' : '')
+        }
+        if (kind === 'gcp.compute.GlobalAddress') {
+          fields.address = output('10.40.0.0')
+          fields.prefixLength = output(args.prefixLength)
+        }
         return new Proxy(fields, {
           get: (target, key: string) => (key === 'then' ? undefined : (target[key] ?? output(`${logical}:${key}`))),
         })

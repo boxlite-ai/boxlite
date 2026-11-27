@@ -986,11 +986,11 @@ test('a host that cannot be told the new control-plane name is converged to it',
    * recreated, and recreating one loses `/var/lib/boxlite`.
    */
   const source = sourceOf('runners')
-  assert.match(source, /id: 'runner-unit-env'/, 'nothing converges the unit environment')
+  assert.match(source, /id: 'converge-unit-environment'/, 'nothing converges the unit environment')
   assert.match(source, /renderUnitEnvironmentPolicyScripts/)
 
   /*
-   * In the binary's assignment rather than its own. Both policies end in
+   * In the binary's resource group rather than its own. Both actions can end in
    * `systemctl restart`, and two assignments carry two `disruptionBudget`s —
    * which is how one host gets restarted by each of them at the same time.
    */

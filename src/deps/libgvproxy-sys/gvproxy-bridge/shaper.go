@@ -443,7 +443,11 @@ func wrapConn(conn net.Conn, prefixLen int, cfg *RateLimitConfig, allowIPv6 func
 
 // The accepted connection owns the guest link. Closing it outside the switch
 // wakes any read or write already in progress when the Box is destroyed.
-func runGuestLink(ctx context.Context, conn net.Conn, prefixLen int, cfg *RateLimitConfig, allowIPv6 func() bool, accept func(context.Context, net.Conn) error) error {
+func (p *outboundPolicyController) runGuestLink(ctx context.Context, conn net.Conn, prefixLen int, cfg *RateLimitConfig, accept func(context.Context, net.Conn) error) error {
+	var allowIPv6 func() bool
+	if p.config.IPv6Link != nil {
+		allowIPv6 = p.config.IPv6Link.AllowTraffic
+	}
 	link := wrapConn(conn, prefixLen, cfg, allowIPv6)
 	closeLink := sync.OnceFunc(func() { link.Close() })
 	stop := context.AfterFunc(ctx, closeLink)

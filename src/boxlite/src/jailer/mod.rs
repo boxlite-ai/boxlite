@@ -157,7 +157,13 @@ pub(crate) async fn isolate_box(
 pub(crate) fn require_known_box_cgroups(
     known: &std::collections::HashSet<&str>,
 ) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(cgroup::box_cgroup_root())? {
+    let root = cgroup::box_cgroup_root();
+    if !root.try_exists()? {
+        std::fs::create_dir_all(&root)?;
+    }
+    // A fresh host may have no Box cgroups, but must support cgroup v2.
+    std::fs::metadata(root.join("cgroup.events"))?;
+    for entry in std::fs::read_dir(&root)? {
         let entry = entry?;
         if entry.file_type()?.is_dir()
             && !entry

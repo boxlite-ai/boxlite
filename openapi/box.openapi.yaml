@@ -316,7 +316,8 @@ paths:
         ten allow rules also selects complete admission. Older-shaped requests
         retain legacy admission.
 
-        A Runner with qualified Cloud inventory v2 uses `extended_dual_stack`.
+        A Runner uses `extended_dual_stack` when its deployed network declares
+        public IPv6 and the Runner verifies a route on that interface.
         Other supported complete requests use `extended_ipv4`.
         Native IPv6 rules require `extended_dual_stack`.
 

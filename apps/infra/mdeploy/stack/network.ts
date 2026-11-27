@@ -50,6 +50,8 @@ export type Exposure = 'private' | 'egress-only-public'
 export type NetworkRequest = {
   /** Outbound internet for private workloads. Off means no NAT and no egress. */
   internetEgress: boolean
+  /** Use the external dual-stack subnet and interface for GCP Runners. */
+  runnerExternalIpv6?: boolean
 }
 
 /**
@@ -85,6 +87,9 @@ export type Placement =
        * widen the rule to whatever followed. See `CLOUDRUN_EGRESS_CIDR`.
        */
       egressSubnetwork: $util.Output<string>
+      /** Versioned deployment-owned scope for the GCP Runner's guest egress. */
+      cloudScope: $util.Output<string>
+      runnerExternalIpv6?: boolean
       /** The identity IAM grants attach to, and that Cloud Run admits invokers by. */
       serviceAccount: $util.Output<string>
     }

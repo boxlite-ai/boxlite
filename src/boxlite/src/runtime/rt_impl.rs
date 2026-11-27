@@ -476,7 +476,7 @@ impl RuntimeImpl {
 
         let exact_revision = matches!(&complete, Some(OutboundCreate::Prepared(_)));
         let implicit = complete.is_none();
-        let local_link = (crate::net::gvproxy::CloudGuardRuntime::from_host()?.is_none()
+        let local_link = (crate::net::gvproxy::CloudScope::from_host()?.is_none()
             && std::env::var_os("BOXLITE_GUEST_DUAL_STACK").as_deref()
                 == Some(std::ffi::OsStr::new("1")))
         .then(crate::net::Ipv6LinkPlan::local);
@@ -534,10 +534,10 @@ impl RuntimeImpl {
         if let Some(prepared) = &prepared {
             if exact_revision
                 && prepared.snapshot.ipv6.is_some()
-                && !crate::net::gvproxy::CloudGuardRuntime::qualifies_ipv6().await?
+                && !crate::net::gvproxy::CloudScope::qualifies_ipv6()?
             {
                 return Err(BoxliteError::Unsupported(
-                    "Guest IPv6 requires qualified Cloud inventory v2".into(),
+                    "Guest IPv6 requires a verified Runner IPv6 route".into(),
                 ));
             }
             if let Some(pin) = &prepared.rebuild_pin {
@@ -1542,12 +1542,29 @@ impl RuntimeImpl {
     }
 
     #[cfg(target_os = "linux")]
-    fn reconcile_cloud_guard(&self) -> BoxliteResult<()> {
-        use crate::net::gvproxy::CloudGuardRuntime;
+    pub(crate) async fn verify_cloud_adoption(
+        &self,
+        profile: &crate::net::gvproxy::CloudScope,
+        box_id: &BoxID,
+        socket: &std::path::Path,
+        identity: crate::util::ProcessIdentity,
+    ) -> BoxliteResult<()> {
+        let (_, _, complete) = self.box_manager.outbound_state(box_id)?;
+        let plan = complete
+            .as_ref()
+            .and_then(|control| control.committed.ipv6.as_ref());
+        profile
+            .verify_existing(box_id, socket, identity, plan)
+            .await
+    }
+
+    #[cfg(target_os = "linux")]
+    fn reconcile_cloud_scope(&self) -> BoxliteResult<()> {
+        use crate::net::gvproxy::CloudScope;
         use crate::runtime::options::NetworkSpec;
         use crate::util::PidFileReader;
 
-        let Some(profile) = CloudGuardRuntime::from_host()? else {
+        let Some(profile) = CloudScope::from_host()? else {
             return Ok(());
         };
         let persisted = self.box_manager.all_boxes(true)?;
@@ -1559,7 +1576,6 @@ impl RuntimeImpl {
                         .enable_all()
                         .build()?
                         .block_on(async {
-                            profile.check_readiness().await?;
                             let known = persisted.iter().map(|(config, _)| config.id.as_str()).collect();
                             crate::jailer::require_known_box_cgroups(&known)?;
                             for (config, _) in &persisted {
@@ -1568,13 +1584,18 @@ impl RuntimeImpl {
                                 }
                                 let layout = self.layout.box_layout(config.id.as_str(), false)?;
                                 let identity = PidFileReader::at(&layout.pid_file_path()).process_identity();
-                                if let Err(error) = profile
-                                    .verify_existing(&config.id, &layout.net_backend_socket_path(), identity)
+                                if let Err(error) = self
+                                    .verify_cloud_adoption(
+                                        &profile,
+                                        &config.id,
+                                        &layout.net_backend_socket_path(),
+                                        identity,
+                                    )
                                     .await
                                 {
-                                    CloudGuardRuntime::isolate_rejected(&config.id, identity, &error).await?;
+                                    CloudScope::isolate_rejected(&config.id, identity, &error).await?;
                                     if identity != crate::util::ProcessIdentity::Absent {
-                                        tracing::warn!(box_id = %config.id, %error, "Stopped Box without verified Cloud guard");
+                                        tracing::warn!(box_id = %config.id, %error, "Stopped Box without verified Cloud network scope");
                                     }
                                 }
                             }
@@ -1582,7 +1603,7 @@ impl RuntimeImpl {
                         })
                 })
                 .join()
-                .map_err(|_| BoxliteError::Internal("Cloud guard startup worker failed".into()))?
+                .map_err(|_| BoxliteError::Internal("Cloud network scope startup worker failed".into()))?
         })
     }
 
@@ -1591,9 +1612,9 @@ impl RuntimeImpl {
         use crate::util::{PidFileReader, ProcessIdentity};
 
         #[cfg(target_os = "linux")]
-        self.reconcile_cloud_guard()?;
+        self.reconcile_cloud_scope()?;
         #[cfg(not(target_os = "linux"))]
-        crate::net::gvproxy::CloudGuardRuntime::from_host()?;
+        crate::net::gvproxy::CloudScope::from_host()?;
 
         // Check for system reboot and reset active boxes
         self.box_manager.check_and_handle_reboot()?;
@@ -2169,8 +2190,7 @@ impl super::backend::RuntimeBackend for LocalRuntime {
                 "hosted outbound create requires an allocated revision".into(),
             ));
         }
-        let link = crate::net::gvproxy::CloudGuardRuntime::qualifies_ipv6()
-            .await?
+        let link = crate::net::gvproxy::CloudScope::qualifies_ipv6()?
             .then(crate::net::Ipv6LinkPlan::local);
         let prepared = PreparedOutboundCreate::with_link(&policy, revision, link)?;
         require_hosted_create_capabilities(&prepared).await?;
@@ -3529,6 +3549,54 @@ mod tests {
         }
         let st = crate::util::process_start_time(pid).expect("OS reports start_time");
         std::fs::write(pid_file, format!("{pid}\n{st}\n")).expect("write shim.pid");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a dedicated Linux host with Cloud scope and writable cgroup v2"]
+    fn cloud_scope_recovery_isolates_a_box_when_policy_read_fails() {
+        use crate::jailer::cgroup::{self, CgroupConfig};
+
+        assert!(
+            crate::net::gvproxy::CloudScope::from_host()
+                .unwrap()
+                .is_some()
+        );
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(true, &runtime);
+        let (pid, child) = spawn_dummy_process();
+        let mut child = ChildGuard(child);
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .unwrap();
+        write_pid_file_with_fingerprint(&layout.pid_file_path(), pid);
+        runtime
+            .box_manager
+            .add_box(&config, &running_state(pid))
+            .unwrap();
+        let db = Database::open(&runtime.layout.db_dir().join("boxlite.db")).unwrap();
+        db.conn()
+            .execute(
+                "UPDATE box_state SET json = json_set(json, '$.outbound_control', 'unreadable') WHERE id = ?1",
+                [config.id.as_str()],
+            )
+            .unwrap();
+        assert!(runtime.box_manager.all_boxes(true).is_ok());
+        assert!(runtime.box_manager.outbound_state(&config.id).is_err());
+
+        cgroup::setup_cgroup(config.id.as_str(), &CgroupConfig::default()).unwrap();
+        cgroup::add_process(config.id.as_str(), pid).unwrap();
+        let recovery = runtime.reconcile_cloud_scope();
+        let stopped = child.0.try_wait().unwrap().is_some();
+        drop(child);
+        cgroup::remove_cgroup(config.id.as_str()).unwrap();
+
+        assert!(
+            stopped,
+            "Box stayed live after its outbound state failed to load"
+        );
+        recovery.unwrap();
     }
 
     #[test]

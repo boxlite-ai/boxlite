@@ -22,8 +22,7 @@ const tcpInspectionBytes = 16 << 10
 
 func forwardExtendedTCP(r *tcp.ForwarderRequest, target egressTarget, snapshot *outboundSnapshot,
 	slots chan struct{}, ca *BoxCA, secrets *SecretHostMatcher) {
-	guard := snapshot.dialer.guard
-	ctx, cancel := context.WithTimeout(guard.trafficContext(context.Background()), upstreamDialTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), upstreamDialTimeout)
 	defer cancel()
 	address := snapshot.egressAddressFacts(target.PolicyIP, false)
 	names := outboundNameFacts{inspectionPending: true, secretsPossible: secrets != nil && target.Port == 443}
@@ -35,10 +34,6 @@ func forwardExtendedTCP(r *tcp.ForwarderRequest, target egressTarget, snapshot *
 	}
 	guest := openGuestTCP(r)
 	if guest == nil {
-		return
-	}
-	guest, trackErr := guard.track(guest)
-	if trackErr != nil {
 		return
 	}
 	defer guest.Close()

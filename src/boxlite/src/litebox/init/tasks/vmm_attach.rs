@@ -102,19 +102,24 @@ impl PipelineTask<InitCtx> for VmmAttachTask {
 
         #[cfg(target_os = "linux")]
         if network.is_some() {
-            use crate::net::gvproxy::CloudGuardRuntime;
+            use crate::net::gvproxy::CloudScope;
 
-            let checked = match CloudGuardRuntime::from_host() {
+            let checked = match CloudScope::from_host() {
                 Ok(Some(profile)) => {
-                    profile
-                        .verify_existing(&config_id, &layout.net_backend_socket_path(), identity)
+                    runtime
+                        .verify_cloud_adoption(
+                            &profile,
+                            &config_id,
+                            &layout.net_backend_socket_path(),
+                            identity,
+                        )
                         .await
                 }
                 Ok(None) => Ok(()),
                 Err(error) => Err(error),
             };
             if let Err(error) = checked {
-                CloudGuardRuntime::isolate_rejected(&config_id, identity, &error).await?;
+                CloudScope::isolate_rejected(&config_id, identity, &error).await?;
                 return Err(error);
             }
         }

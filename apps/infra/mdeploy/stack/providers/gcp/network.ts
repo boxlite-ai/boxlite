@@ -250,6 +250,7 @@ export const gcpNetworkProvider =
       region,
       network: network.id,
       ipCidrRange: SUBNET_CIDR,
+      ...(request.runnerExternalIpv6 && { stackType: 'IPV4_IPV6', ipv6AccessType: 'EXTERNAL' }),
       secondaryIpRanges: [
         { rangeName: GKE_POD_RANGE, ipCidrRange: GKE_POD_CIDR },
         { rangeName: GKE_SERVICE_RANGE, ipCidrRange: GKE_SERVICE_CIDR },
@@ -533,6 +534,34 @@ export const gcpNetworkProvider =
       sourceRanges: ['0.0.0.0/0'],
     })
 
+    const cloudScope = $resolve([
+      subnetwork.ipCidrRange,
+      cloudRunEgress.ipCidrRange,
+      managedProxy.ipCidrRange,
+      subnetwork.secondaryIpRanges,
+      serviceRange.address,
+      serviceRange.prefixLength,
+      request.runnerExternalIpv6 ? subnetwork.externalIpv6Prefix : undefined,
+    ]).apply(([runner, cloudRun, proxy, secondary, serviceAddress, servicePrefix, runnerIpv6]) => {
+      const ranges = (secondary ?? []) as { rangeName: string; ipCidrRange: string }[]
+      const range = (name: string) => ranges.find((entry) => entry.rangeName === name)?.ipCidrRange
+      const scope = {
+        version: 1,
+        stage: $app.stage,
+        runner,
+        cloud_run: cloudRun,
+        managed_proxy: proxy,
+        gke_pods: range(GKE_POD_RANGE),
+        gke_services: range(GKE_SERVICE_RANGE),
+        private_services: serviceAddress && servicePrefix ? `${serviceAddress}/${servicePrefix}` : undefined,
+        ...(request.runnerExternalIpv6 && { runner_ipv6: runnerIpv6 }),
+      }
+      if (Object.values(scope).some((value) => !value)) {
+        throw new Error(`GCP guest egress scope has unassigned network ranges for ${$app.stage}`)
+      }
+      return Buffer.from(JSON.stringify(scope)).toString('base64url')
+    })
+
     const placementFor = (role: WorkloadRole): Placement => ({
       cloud: 'gcp',
       /*
@@ -552,6 +581,8 @@ export const gcpNetworkProvider =
       // one also places the API's internal address, which belongs beside its
       // clients rather than in the range a firewall rule names as a source.
       egressSubnetwork: cloudRunEgress.id,
+      cloudScope,
+      runnerExternalIpv6: request.runnerExternalIpv6,
       serviceAccount: accounts[role].email,
     })
 

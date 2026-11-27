@@ -277,7 +277,10 @@ export const deployStack = ({
 }): StackOutputs => {
   const images = providers.images({ tag: inputs.tag })
 
-  const network = providers.network({ internetEgress: inputs.internetEgress })
+  const network = providers.network({
+    internetEgress: inputs.internetEgress,
+    runnerExternalIpv6: config.runners.externalIpv6,
+  })
   const storage: Storage = providers.storage(config.storage)
   const cluster: Cluster = providers.cluster({ network })({ roles: CONTAINER_ROLES })
   const database: Database = providers.database({ network })(config.database)

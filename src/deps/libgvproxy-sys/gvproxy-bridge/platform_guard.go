@@ -3,20 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/netip"
-	"sync"
-
-	"github.com/boxlite/gvproxy-bridge/internal/guardinventory"
+	"strings"
+	"time"
 )
 
 // The platform guard is fixed by host startup and shared across Box revisions.
 type platformGuard struct {
-	protected       []netip.Prefix
-	cloud           bool
-	cloudNativeIPv6 bool
-	guest           netip.Prefix
-	epoch           *cloudGuardEpoch
+	protected []netip.Prefix
+	cloud     bool
+	scope     *cloudScope
+	uplink    cloudIPv6Uplink
+	guest     netip.Prefix
 }
 
 func compilePlatformGuard(values []string, cloud bool, subnet string) (platformGuard, error) {
@@ -28,85 +26,9 @@ func compilePlatformGuard(values []string, cloud bool, subnet string) (platformG
 		}
 		guard.guest = guest.Masked()
 	}
-	protected, err := guardinventory.IPv4Prefixes(values)
+	protected, err := ipv4ProtectedPrefixes(values)
 	guard.protected = protected
 	return guard, err
-}
-
-func (guard platformGuard) active() bool {
-	return !guard.cloud || (guard.epoch != nil && guard.epoch.active())
-}
-
-func (guard platformGuard) trafficContext(parent context.Context) context.Context {
-	if guard.epoch != nil {
-		return guard.epoch.ctx
-	}
-	return parent
-}
-
-func (guard platformGuard) bindContext(parent context.Context) (context.Context, func()) {
-	if guard.epoch == nil {
-		return parent, func() {}
-	}
-	ctx, cancel := context.WithCancel(parent)
-	stop := context.AfterFunc(guard.epoch.ctx, cancel)
-	return ctx, func() {
-		stop()
-		cancel()
-	}
-}
-
-func (guard platformGuard) track(conn net.Conn) (net.Conn, error) {
-	if !guard.active() {
-		_ = conn.Close()
-		return nil, net.ErrClosed
-	}
-	if guard.epoch == nil {
-		return conn, nil
-	}
-	closeConn := sync.OnceValue(conn.Close)
-	stop := context.AfterFunc(guard.epoch.ctx, func() { _ = closeConn() })
-	return &guardedConn{Conn: conn, epoch: guard.epoch, stop: stop, close: closeConn}, nil
-}
-
-func (p *outboundPolicyController) runGuestLink(ctx context.Context, conn net.Conn, prefixLen int,
-	rate *RateLimitConfig, accept func(context.Context, net.Conn) error) error {
-	guard := p.guard
-	conn, err := guard.track(conn)
-	if err != nil {
-		return err
-	}
-	var allowIPv6 func() bool
-	if p.config.IPv6Link != nil {
-		allowIPv6 = p.config.IPv6Link.AllowTraffic
-	}
-	return runGuestLink(guard.trafficContext(ctx), conn, prefixLen, rate, allowIPv6, accept)
-}
-
-type guardedConn struct {
-	net.Conn
-	epoch *cloudGuardEpoch
-	stop  func() bool
-	close func() error
-}
-
-func (c *guardedConn) Close() error {
-	c.stop()
-	return c.close()
-}
-
-func (c *guardedConn) Read(dst []byte) (int, error) {
-	if !c.epoch.active() {
-		return 0, net.ErrClosed
-	}
-	return c.Conn.Read(dst)
-}
-
-func (c *guardedConn) Write(src []byte) (int, error) {
-	if !c.epoch.active() {
-		return 0, net.ErrClosed
-	}
-	return c.Conn.Write(src)
 }
 
 func (guard platformGuard) denies(address netip.Addr) bool {
@@ -120,7 +42,7 @@ func (guard platformGuard) denies(address netip.Addr) bool {
 		return false
 	}
 	if address.Is6() {
-		return !guard.cloudNativeIPv6
+		return guard.uplink.device == "" || !globalEgressIPv6(address)
 	}
 	if !address.Is4() || guard.guest.Contains(address) {
 		return true
@@ -129,6 +51,38 @@ func (guard platformGuard) denies(address netip.Addr) bool {
 	return restricted
 }
 
+func (guard platformGuard) supportsIPv6() bool {
+	if !guard.cloud {
+		return true
+	}
+	if guard.uplink.device == "" || guard.scope == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	uplink, err := guard.scope.ipv6Uplink(ctx)
+	return err == nil && uplink == guard.uplink && uplink.checkRoute(ctx, cloudIPv6Probe) == nil
+}
+
 func (guard platformGuard) requiresCheckedUDP() bool {
 	return guard.cloud || len(guard.protected) != 0
+}
+
+func ipv4ProtectedPrefixes(values []string) ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	for i, value := range values {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
+		if err != nil {
+			return nil, fmt.Errorf("invalid platform-protected CIDR at index %d", i)
+		}
+		address, bits := prefix.Addr(), prefix.Bits()
+		if address.Is4In6() && bits >= 96 {
+			address, bits = address.Unmap(), bits-96
+		}
+		if !address.Is4() {
+			return nil, fmt.Errorf("platform-protected CIDR at index %d must represent an IPv4 range", i)
+		}
+		prefixes = append(prefixes, netip.PrefixFrom(address, bits).Masked())
+	}
+	return prefixes, nil
 }

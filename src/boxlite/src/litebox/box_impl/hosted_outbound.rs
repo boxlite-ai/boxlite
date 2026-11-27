@@ -112,11 +112,9 @@ impl BoxImpl {
                 snapshot,
                 pin_backend,
             } => {
-                if snapshot.ipv6.is_some()
-                    && !crate::net::gvproxy::CloudGuardRuntime::qualifies_ipv6().await?
-                {
+                if snapshot.ipv6.is_some() && !crate::net::gvproxy::CloudScope::qualifies_ipv6()? {
                     return Err(BoxliteError::Unsupported(
-                        "Guest IPv6 requires qualified Cloud inventory v2".into(),
+                        "Guest IPv6 requires a verified Runner IPv6 route".into(),
                     ));
                 }
                 let (state, _, control) =

@@ -22,7 +22,7 @@ func (p *outboundPolicyController) serveIPv6Readiness(w http.ResponseWriter, r *
 	defer p.mu.Unlock()
 	current := p.active.Load()
 	plan := current.completeSnapshot().IPv6
-	if plan == nil || current.state != "confirmed" || !p.guard.active() {
+	if plan == nil || current.state != "confirmed" || !p.guard.supportsIPv6() {
 		http.Error(w, "guest IPv6 link is unavailable", http.StatusConflict)
 		return
 	}
@@ -52,6 +52,7 @@ func (p *outboundPolicyController) serveIPv6Readiness(w http.ResponseWriter, r *
 			return
 		}
 		p.ipv6Challenge = ipv6Readiness{}
+		p.ipv6LinkConfirmed.Store(true)
 		if current.policy.Mode == "enabled" {
 			p.ipv6Ready.Store(true)
 		} else {

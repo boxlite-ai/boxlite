@@ -1053,7 +1053,7 @@ a matching IP or CIDR rule when an allowlist is present.
 A configured `Secret` can permit TCP port 443 without a matching Box rule.
 With a non-empty allowlist, Local hostname routing requires a matching IP or
 CIDR rule for private, loopback, or CGNAT answers. Host protection, including
-the [Cloud platform guard](../../concepts/networking.md#cloud-platform-guard),
+the [Cloud platform destination filtering](../../concepts/networking.md#cloud-platform-destination-filtering),
 applies even with an empty allowlist.
 
 `Disabled` removes the guest network interface entirely.
