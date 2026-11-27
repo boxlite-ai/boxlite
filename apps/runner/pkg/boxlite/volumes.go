@@ -137,20 +137,26 @@ func (c *Client) prepareBoxVolumeMounts(ctx context.Context, boxID string, volum
 		return nil, nil
 	}
 
-	// Register the attempt's volume ownership before mounting so orphan cleanup
-	// can distinguish partial preparation from an unreferenced mount.
-	c.volumeCleanupMutex.Lock()
-	defer c.volumeCleanupMutex.Unlock()
 	if protectedAllocation {
+		// Register ownership before mounting so orphan cleanup preserves
+		// partial preparation. Unrelated mounts can then proceed independently.
 		references := make([]volumeMount, 0, len(volumes))
 		for _, volume := range volumes {
 			references = append(references, volumeMount{rootPath: volumeRootPath(volume.VolumeId)})
 		}
-		if err := c.recordBoxVolumeMounts(ctx, boxID, references); err != nil {
+		if err := lockVolumeMount(ctx, &c.volumeCleanupMutex); err != nil {
+			return nil, err
+		}
+		err := c.recordBoxVolumeMounts(ctx, boxID, references)
+		c.volumeCleanupMutex.Unlock()
+		if err != nil {
 			return nil, err
 		}
 		return c.getVolumeMounts(ctx, volumes)
 	}
+	// Orphan cleanup must wait until the ordinary mount has an ownership record.
+	c.volumeCleanupMutex.Lock()
+	defer c.volumeCleanupMutex.Unlock()
 	volumeMounts, err := c.getVolumeMounts(ctx, volumes)
 	if err != nil {
 		return nil, err
@@ -162,6 +168,25 @@ func (c *Client) prepareBoxVolumeMounts(ctx context.Context, boxID string, volum
 	return volumeMounts, nil
 }
 
+func lockVolumeMount(ctx context.Context, mutex *sync.Mutex) error {
+	if !mutex.TryLock() {
+		retry := time.NewTicker(10 * time.Millisecond)
+		defer retry.Stop()
+		for !mutex.TryLock() {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-retry.C:
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		mutex.Unlock()
+		return err
+	}
+	return nil
+}
+
 func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, mountPath string) error {
 	c.volumeMutexesMutex.Lock()
 	volumeMutex, exists := c.volumeMutexes[volumeId]
@@ -171,7 +196,9 @@ func (c *Client) ensureVolumeFuseMounted(ctx context.Context, volumeId string, m
 	}
 	c.volumeMutexesMutex.Unlock()
 
-	volumeMutex.Lock()
+	if err := lockVolumeMount(ctx, volumeMutex); err != nil {
+		return err
+	}
 	defer volumeMutex.Unlock()
 
 	mounted, err := c.isDirectoryMounted(ctx, mountPath)

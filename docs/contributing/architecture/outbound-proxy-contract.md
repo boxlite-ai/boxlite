@@ -340,6 +340,29 @@ The test runs `curl --noproxy '*'` in the Guest and verifies CONNECT requests an
 It terminates the fixture shim and reopens the Runner to retire the allocation.
 A fresh Runner process replays the same startup epoch after cleanup.
 
+On SIGTERM, the Runner signals cancellation of pending protected preparation
+before calling native shutdown. A creation already admitted by Runtime retains
+its target lease until the native operation returns.
+
+```mermaid
+sequenceDiagram
+    participant Service as systemd
+    participant Runner
+    participant Preparation as Protected preparation
+    participant Runtime
+    Service->>Runner: Send SIGTERM
+    Runner->>Preparation: Signal cancellation
+    par Native shutdown
+        Runner->>Runtime: Call Shutdown
+        Runtime->>Runtime: Stop active non-detached Boxes
+        Runtime-->>Runner: Return shutdown result
+    and Native creation already admitted
+        Runtime-->>Preparation: Return from native creation
+        Preparation->>Preparation: Release target lease
+    end
+    Runner->>Runtime: Close native handle
+```
+
 With a loopback PostgreSQL test database and the native Runner test tools,
 set `BOXLITE_TEST_REAL_RUNNER=1 NX_SKIP_NX_CACHE=true` for `outbound-policy.store.integration.spec.ts`.
 The HTTPS controller test then follows the adapter through Runner preparation and

@@ -16,10 +16,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (c *Client) drainProtectedAllocations() {
-	c.protectedAllocationShutdown.Lock()
-	c.protectedAllocationStopping = true
-	c.protectedAllocationShutdown.Unlock()
+func (c *Client) stopProtectedPreparation() {
+	c.protectedAllocationStopping.Store(true)
+	if c.cancelProtectedPreparation != nil {
+		c.cancelProtectedPreparation()
+	}
 }
 
 type ProtectedPreparation struct {
@@ -34,8 +35,15 @@ func (c *Client) AllocateProtectedPlaceholder(ctx context.Context, request dto.C
 	}
 	c.protectedAllocationShutdown.RLock()
 	defer c.protectedAllocationShutdown.RUnlock()
-	if c.protectedAllocationStopping {
+	if c.protectedAllocationStopping.Load() {
 		return "", errdefs.ErrUnavailable.WithMessage("Runner allocations are draining")
+	}
+	if c.protectedPreparationContext != nil {
+		requestContext, cancel := context.WithCancel(ctx)
+		unsubscribe := context.AfterFunc(c.protectedPreparationContext, cancel)
+		defer cancel()
+		defer unsubscribe()
+		ctx = requestContext
 	}
 	stop, outbound := true, false
 	request.SkipStart = &stop

@@ -43,6 +43,9 @@ func (c *Client) AuthorizedProtectedBoot(
 	if err := lease.CheckIdle(); err != nil {
 		return nil, err
 	}
+	if operation == boxlite.ProtectedBootStart && c.protectedAllocationStopping.Load() {
+		return nil, errdefs.ErrUnavailable.WithMessage("Runner allocations are draining")
+	}
 	owner, err := lease.ProtectedAllocation()
 	if err != nil {
 		return nil, err

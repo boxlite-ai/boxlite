@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -60,7 +61,9 @@ type Client struct {
 	lastVolumeCleanup           time.Time
 	volumeCleanup               volumeCleanupConfig
 	protectedAllocationShutdown sync.RWMutex
-	protectedAllocationStopping bool
+	protectedAllocationStopping atomic.Bool
+	protectedPreparationContext context.Context
+	cancelProtectedPreparation  context.CancelFunc
 
 	nestedVirtualizationAllowed bool
 
@@ -361,8 +364,11 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("failed to create boxlite runtime: %w", err)
 	}
 
+	preparationContext, cancelPreparation := context.WithCancel(context.Background())
 	return &Client{
 		nestedVirtualizationAllowed: slices.Contains(features, "nested-virtualization"),
+		protectedPreparationContext: preparationContext,
+		cancelProtectedPreparation:  cancelPreparation,
 
 		runtime:             rt,
 		logger:              logger,
@@ -418,14 +424,18 @@ func (c *Client) HomeDir() string {
 // `timeout=0` means "use the runtime default (10s)". Negative values are
 // clamped by the SDK.
 func (c *Client) Shutdown(ctx context.Context, timeout time.Duration) error {
-	c.drainProtectedAllocations()
+	c.stopProtectedPreparation()
 	return c.runtime.Shutdown(ctx, timeout)
 }
 
 // Close releases the BoxLite runtime handle. Prefer calling `Shutdown` first
 // so boxes get a graceful stop before the C handle is freed.
 func (c *Client) Close() error {
-	c.drainProtectedAllocations()
+	c.stopProtectedPreparation()
+	// An admitted native creation keeps its lease and Runtime handle until it
+	// returns. Graceful VM shutdown runs before this final handle release.
+	c.protectedAllocationShutdown.Lock()
+	defer c.protectedAllocationShutdown.Unlock()
 	c.mu.Lock()
 	boxes := make([]*boxlite.Box, 0, len(c.boxes))
 	for id, bx := range c.boxes {
