@@ -377,14 +377,15 @@ keeps the I/O cause. `Vm::new` calls `prepare` once RAM is registered.
 
 Without ACPI, Linux learns the vCPUs and the IOAPIC from the MP table, and
 turns off SMP and the IOAPIC without one. `boot::mptable::write_mptable(ram,
-vcpu_count)` writes the floating pointer at `0x9_FC00`, where Linux scans the
+max_vcpus)` writes the floating pointer at `0x9_FC00`, where Linux scans the
 last KiB below 640 KiB, and the configuration table right after it. It lists
 the same entries as Firecracker:
 
-- one processor per vCPU, with APIC ID equal to its index as `vcpu_cpuid`
-  assigns it, and vCPU 0 as the bootstrap processor;
+- one processor per possible vCPU, `max_vcpus` of them. vCPU 0 is the
+  bootstrap processor, and each APIC ID equals its index, as `vcpu_cpuid`
+  assigns it;
 - an ISA bus and KVM's in-kernel IOAPIC at `0xFEC0_0000` with ID
-  `vcpu_count + 1`;
+  `max_vcpus + 1`;
 - ISA IRQ k on IOAPIC pin k for 0 to 23, the GSI routing KVM sets up;
 - ExtINT on the boot vCPU's LINT0 and NMI on every LINT1.
 
@@ -657,7 +658,7 @@ device-less test helper returns
 | `Created` | The VM is ready for its first run, with or without an initial pause reservation. |
 | `Running` | The driver has started the run, including vCPU setup. |
 | `Pausing` | Guest entry is closing and the driver is collecting vCPU acknowledgements. |
-| `Paused` | Every vCPU is parked outside the guest. |
+| `Paused` | All attached workers are waiting at their pause checkpoints. |
 | `Stopping` | A stop was requested or the driver is handling a terminal event. |
 | `Exited` | The run finished teardown, or the owner dropped the VM. |
 
@@ -688,23 +689,14 @@ it registers any RAM, `Vm::with_backend` builds the `Chipset` from the
 devices it is given, so a conflict fails with `ChipsetConflicts` and leaves
 nothing mapped.
 
-1. It starts one scoped thread per vCPU, named `vcpuN`. Each creates its vCPU,
-   sets its CPUID from `vcpu_cpuid` and the boot MSRs, and on vCPU 0 the entry
-   registers, then waits at a start gate until every vCPU is configured. A
-   vCPU that fails setup sends `VcpuFailed` before it arrives, so the latch
-   keeps every vCPU out of the guest, and a thread that fails to start aborts
-   the gate, so no worker waits forever.
-2. Before each guest entry, the worker calls `checkpoint` and checks the stop
-   latch. To park, it calls `complete_pending_io` and dispatches each
-   `Ok(IoCompletion::Exit(exit))` until completion returns `Ok(IoCompletion::Done)`.
-   It then calls `notify_guest_stopped` and acknowledges the pause epoch if the
-   VM is still live. A terminal exit, error, or concurrent stop skips the
-   acknowledgement.
-   During normal entry and I/O completion, the worker uses `Chipset::dispatch`
-   to serve device accesses. `Shutdown` sends `GuestShutdown` and `Reset` sends
-   `GuestReset`. An error, unexpected exit such as `Halted`, or a panic caught
-   around the worker sends `VcpuFailed`. A worker that sees the stop latch
-   drains pending I/O and preserves the latched outcome.
+1. The VM starts a scoped `vcpuN` worker for each possible vCPU, which
+   applies CPUID, boot MSRs and the entry registers for vCPU 0.
+   After configuration, the driver lets surplus workers detach and joins
+   them before releasing the boot workers to their checkpoints.
+2. A worker checks the pause and stop state before entering the guest and
+   dispatches pending I/O through the chipset before quiescing.
+   A paused worker notifies guest pvclock, acknowledges the epoch and
+   waits on the same thread, while a retiring worker detaches and exits.
 3. `EventSender::send` sets the stop latch before it queues, so the vCPU
    that sends, such as the one whose `0xFE` reached the i8042, never enters
    the guest again. `run` takes the first event from the `EventLoop`, opens
@@ -738,6 +730,51 @@ workers, and finishing the console. A worker join timeout leaves the status at
 `Stopping` until the VM is dropped. RAM stays mapped after `run`.
 Dropping the VM handles RAM teardown and publishes `Exited` to surviving
 controls, including when the VM never ran.
+
+## vCPU scaling
+
+On Linux x86 KVM, set `VmConfig::max_vcpus` to the possible CPU count and
+`vcpu_count` to the boot count. Fixed-count VMs use equal counts.
+
+The boot path puts `maxcpus=` before any init arguments. Startup briefly
+creates workers for all possible CPUs before surplus workers detach. [Design](https://github.com/boxlite-ai/boxlite/issues/3078)
+
+The VMM checks custom CPU limits using Linux's boot parameter rules when the
+boot and possible counts differ. For example, `maxcpus=010` means eight CPUs,
+and `possible-cpus=2` prevents a four-CPU topology.
+
+Use `VmControl::set_online_vcpus(n)` on a running VM to grant exactly CPU IDs
+below `n`. An ungranted vCPU keeps its KVM descriptor while it has no worker.
+
+For growth, grant first, then call the guest agent's `Guest.SetOnlineCpus`.
+For shrink, wait for guest confirmation before revoking host workers.
+
+The VM loop handles binding and retirement alongside terminal events. During
+startup, resize returns `VcpuResizeBusy` until surplus workers have joined.
+
+A reserved pause closes resize admission and waits for earlier resize requests
+to settle. The driver then waits for the attached CPU IDs to acknowledge the
+pause epoch, and resume continues their original threads.
+
+```text
+Shrink starts     → detach and join CPU 3 and CPU 2 → resize reply
+Pause is reserved → close resize admission        → kick CPU 0 and CPU 1
+CPU 0 and CPU 1    → drain I/O and acknowledge      → Paused
+Resume            → the same two workers continue
+```
+
+When shrinking, the host checks KVM's halted state after detaching. A
+non-halted vCPU produces a warning and can still be retired successfully.
+Guest confirmation remains the caller's source of online CPU state.
+
+Stop resolves queued and active resize calls before joining workers. A
+completed rollback preserves the previous grants. An unsettled transition
+closes resize admission and, if worker ownership is uncertain, prevents a
+pause from reporting completion.
+
+A guest write that outlives its RPC deadline keeps the resize permit, so a
+concurrent call returns `UNAVAILABLE`. Retry the same guest target and
+confirm its result before revoking host grants.
 
 ## Long-mode entry
 

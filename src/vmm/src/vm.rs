@@ -69,8 +69,13 @@ pub struct Vm<H: HostVm> {
     control: VmControl,
     events: Mutex<EventLoop>,
     sender: EventSender,
+    #[cfg(target_arch = "x86_64")]
+    cpu_requests: Mutex<Option<crate::control::CpuRequests>>,
     boot_regs: BootRegisters,
+    /// vCPUs online at boot.
     vcpu_count: u8,
+    #[cfg(target_arch = "x86_64")]
+    max_vcpus: u8,
     lifecycle: Arc<Lifecycle>,
     fresh_vm: bool,
     host_vm: Option<Arc<H>>,
@@ -248,6 +253,8 @@ impl<H: HostVm> Vm<H> {
             return Err(error);
         }
 
+        #[cfg(target_arch = "x86_64")]
+        let cpu_requests = Mutex::new(Some(controls.register_cpu(config.max_vcpus)));
         let lifecycle = Arc::new(Lifecycle::new(sender.clone(), device_less));
         let mut vm = Self {
             chipset: Some(chipset),
@@ -257,8 +264,12 @@ impl<H: HostVm> Vm<H> {
             control: controls.finish(Arc::clone(&lifecycle)),
             lifecycle,
             sender,
+            #[cfg(target_arch = "x86_64")]
+            cpu_requests,
             boot_regs: BootRegisters::default(),
             vcpu_count: config.vcpu_count,
+            #[cfg(target_arch = "x86_64")]
+            max_vcpus: config.max_vcpus,
             fresh_vm,
             host_vm: Some(host_vm),
             ram,
@@ -287,39 +298,33 @@ impl<H: HostVm> Vm<H> {
 #[cfg(target_arch = "x86_64")]
 impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
     fn run_vcpus(&mut self) -> Result<VmExit> {
-        use std::{
-            io::ErrorKind,
-            panic::{self, AssertUnwindSafe},
-            thread,
-            time::Duration,
-        };
-
-        use boxlite_hypervisor::VcpuHandle;
+        use std::thread;
 
         use crate::{
-            events::{Event, RECHECK},
-            lifecycle::VmStatus,
-            vcpu::{StartGate, Workers},
+            events::Event,
+            vcpu::{StartGate, VcpuRun, Workers},
         };
 
-        const KICK_RETRY: Duration = Duration::from_millis(10);
-
-        fn retryable_kick(error: &boxlite_hypervisor::Error) -> bool {
-            matches!(error, boxlite_hypervisor::Error::KickVcpu { source, .. }
-                if matches!(source.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted))
+        let requests = self
+            .cpu_requests
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let host_vm = self.host_vm.as_deref().expect("live VM has a host VM");
+        if self.max_vcpus != self.vcpu_count && !host_vm.supports_vcpu_parking() {
+            self.lifecycle.mark_stopping();
+            return Err(Error::VcpuParkingUnsupported);
         }
-
         self.fresh_vm = false;
         let gate = StartGate::default();
-        let kicks = Mutex::new(Vec::new());
         let vcpus = Workers {
-            host_vm: self.host_vm.as_deref().expect("live VM has a host VM"),
-            vcpu_count: self.vcpu_count,
+            host_vm,
+            boot_count: self.vcpu_count,
+            max_vcpus: self.max_vcpus,
             boot_regs: &self.boot_regs,
             chipset: self.chipset.as_ref().expect("live VM has a chipset"),
             sender: &self.sender,
             lifecycle: &self.lifecycle,
-            kicks: &kicks,
             gate: &gate,
         };
         let events = self
@@ -327,95 +332,15 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner);
         let event = thread::scope(|scope| {
-            // Release workers before the scope joins them, including on unwind.
-            struct StopVcpus<'a, H: VcpuHandle> {
-                lifecycle: &'a Lifecycle,
-                gate: &'a StartGate,
-                kicks: &'a Mutex<Vec<H>>,
+            let mut workers = VcpuRun::new(&vcpus, requests);
+            if let Err(error) = workers.spawn_boot(scope) {
+                vcpus.sender.send(Event::VcpuFailed(error));
             }
-
-            impl<H: VcpuHandle> Drop for StopVcpus<'_, H> {
-                fn drop(&mut self) {
-                    self.lifecycle.mark_stopping();
-                    self.gate.abort();
-                    // Late registrations cannot enter the guest after the stop latch.
-                    let mut pending = std::mem::take(
-                        &mut *self.kicks.lock().unwrap_or_else(PoisonError::into_inner),
-                    );
-                    while !pending.is_empty() {
-                        pending.retain(|kick| {
-                            match panic::catch_unwind(AssertUnwindSafe(|| kick.kick())) {
-                                Ok(Ok(())) => {}
-                                Ok(Err(error)) if retryable_kick(&error) => return true,
-                                Ok(Err(error)) => tracing::warn!(%error, "failed to kick a vCPU"),
-                                Err(_) => tracing::warn!("vCPU kick panicked during shutdown"),
-                            }
-                            false
-                        });
-                        if !pending.is_empty() {
-                            thread::sleep(KICK_RETRY);
-                        }
-                    }
-                }
-            }
-
-            let _stop = StopVcpus {
-                lifecycle: &self.lifecycle,
-                gate: &gate,
-                kicks: &kicks,
-            };
-            for id in 0..vcpus.vcpu_count {
-                let vcpus = &vcpus;
-                let spawned = thread::Builder::new()
-                    .name(format!("vcpu{id}"))
-                    .spawn_scoped(scope, move || vcpus.run(id));
-                if let Err(source) = spawned {
-                    let vcpu = id.into();
-                    vcpus
-                        .sender
-                        .send(Event::VcpuFailed(Error::SpawnVcpu { vcpu, source }));
-                    gate.abort();
-                    break;
-                }
-            }
-            let mut pending_kicks = 0u64;
             loop {
-                let wait = if pending_kicks != 0 {
-                    KICK_RETRY
-                } else {
-                    RECHECK
-                };
-                match events.wait(Some(wait)) {
-                    Ok(Some(event)) => break Ok(event),
-                    Err(error) => break Err(error),
-                    Ok(None) => {}
+                if let Some(event) = events.wait(Some(workers.interval()))? {
+                    break Ok(event);
                 }
-                let kick_all = self.lifecycle.drive(self.vcpu_count);
-                if !kick_all && pending_kicks == 0 {
-                    continue;
-                }
-                if self.lifecycle.status() != VmStatus::Pausing || vcpus.sender.is_stopping() {
-                    pending_kicks = 0;
-                    continue;
-                }
-                let kicks = kicks.lock().unwrap_or_else(PoisonError::into_inner);
-                // Startup only appends handles, so their indices stay stable.
-                for (index, kick) in kicks.iter().enumerate() {
-                    let bit = 1u64 << index;
-                    if !kick_all && pending_kicks & bit == 0 {
-                        continue;
-                    }
-                    match kick.kick() {
-                        Ok(()) => pending_kicks &= !bit,
-                        Err(error) if retryable_kick(&error) => {
-                            pending_kicks |= bit;
-                        }
-                        Err(error) => {
-                            vcpus.sender.send(Event::VcpuFailed(error.into()));
-                            break;
-                        }
-                    }
-                }
+                workers.drive(scope);
             }
         });
         match event {
@@ -427,7 +352,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         }
     }
 
-    /// Runs every vCPU on its own thread until the first event ends the VM,
+    /// Runs every granted vCPU on its own thread until the first event ends the VM,
     /// stops and joins them all, shuts the virtio workers down, and returns
     /// how the VM ended. Workers that do not shut down fail a run that
     /// otherwise ended cleanly. A VM runs once; a second call fails with

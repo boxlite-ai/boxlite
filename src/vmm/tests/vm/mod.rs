@@ -55,6 +55,7 @@ fn bare<H: boxlite_hypervisor::Vm + 'static>(
 fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
     VmConfig {
         vcpu_count,
+        max_vcpus: vcpu_count,
         memory_mib,
         kernel: "vmlinux".into(),
         cmdline: "console=ttyS0".into(),
@@ -2375,5 +2376,405 @@ fn a_hotplug_capacity_adds_virtio_mem_and_registers_its_control() {
         }
         drop(vm);
         console.finish();
+    }
+}
+
+/// Parked vCPUs and [`crate::VmControl`] on the mock backend, whose vCPUs
+/// without a script wait in the guest until kicked.
+#[cfg(target_arch = "x86_64")]
+mod vcpu_control {
+    use std::{
+        sync::{Arc, Mutex, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use super::*;
+    use crate::VmExit;
+
+    /// A VM with `online` vCPUs running at boot out of `max`, running on its
+    /// own thread until [`Running::stop`].
+    struct Running {
+        control: crate::VmControl,
+        stop: crate::StopHandle,
+        entries: Arc<Mutex<Vec<u32>>>,
+        log: Arc<Mutex<Vec<Call>>>,
+        thread: thread::JoinHandle<crate::Result<VmExit>>,
+    }
+
+    impl Running {
+        fn start(online: u8, max: u8) -> Self {
+            Self::start_with(MockVm::new(), online, max)
+        }
+
+        fn start_with(backend: MockVm, online: u8, max: u8) -> Self {
+            let (entries, log) = (backend.entries(), backend.log());
+            let config = VmConfig {
+                max_vcpus: max,
+                ..config(online, 16)
+            };
+            let mut vm = bare(config, || Ok(backend)).unwrap();
+            let running = Self {
+                control: vm.control(),
+                stop: vm.stop_handle(),
+                entries,
+                log,
+                thread: thread::spawn(move || vm.run()),
+            };
+            running.wait_entered(0);
+            running
+        }
+
+        fn calls(&self) -> Vec<Call> {
+            self.log.lock().unwrap().clone()
+        }
+
+        /// Asks for `count` vCPUs from another thread, so a request the VM
+        /// never answers fails the test instead of hanging it.
+        fn answer(&self, count: u8) -> crate::Result<u8> {
+            self.request(count)
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the VM never answered the request")
+        }
+
+        fn request(&self, count: u8) -> mpsc::Receiver<crate::Result<u8>> {
+            let control = self.control.clone();
+            let (sent, answered) = mpsc::channel();
+            thread::spawn(move || {
+                let _ = sent.send(control.set_online_vcpus(count));
+            });
+            answered
+        }
+
+        /// Waits until vCPU `id` has entered the guest.
+        fn wait_entered(&self, id: u32) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !self.entries.lock().unwrap().contains(&id) {
+                assert!(
+                    Instant::now() < deadline,
+                    "vCPU {id} never entered the guest"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        fn stop(self) -> crate::Result<VmExit> {
+            self.stop.stop();
+            self.thread.join().unwrap()
+        }
+    }
+
+    fn parks(calls: &[Call]) -> Vec<u32> {
+        calls
+            .iter()
+            .filter_map(|call| match call {
+                Call::ParkVcpu { id } => Some(*id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn vcpus_past_the_online_count_are_configured_then_parked_without_entering() {
+        let vm = Running::start(1, 3);
+        // An answered request means every boot thread has settled.
+        assert_eq!(vm.control.set_online_vcpus(1).unwrap(), 1);
+        vm.wait_entered(0);
+        let calls = vm.calls();
+        let entries = vm.entries.lock().unwrap().clone();
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+
+        let configured = calls
+            .iter()
+            .filter(|call| matches!(call, Call::SetCpuFeatures { .. }))
+            .count();
+        assert_eq!(
+            configured, 3,
+            "every possible vCPU is configured: {calls:?}"
+        );
+        let mut parked = parks(&calls);
+        parked.sort_unstable();
+        assert_eq!(parked, [1, 2]);
+        assert!(entries.iter().all(|&id| id == 0), "{entries:?}");
+    }
+
+    #[test]
+    fn grants_reset_before_resuming_and_revokes_park_the_highest_first() {
+        let vm = Running::start(1, 3);
+        assert_eq!(vm.control.set_online_vcpus(3).unwrap(), 3);
+        vm.wait_entered(1);
+        vm.wait_entered(2);
+        let grants: Vec<_> = vm
+            .calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::ResetVcpu { .. } | Call::ResumeVcpu { .. }))
+            .collect();
+        assert_eq!(
+            grants,
+            [
+                Call::ResetVcpu { id: 1 },
+                Call::ResumeVcpu { id: 1 },
+                Call::ResetVcpu { id: 2 },
+                Call::ResumeVcpu { id: 2 },
+            ]
+        );
+
+        let before = parks(&vm.calls()).len();
+        assert_eq!(vm.control.set_online_vcpus(2).unwrap(), 2);
+        assert_eq!(vm.control.set_online_vcpus(1).unwrap(), 1);
+        assert_eq!(parks(&vm.calls())[before..], [2, 1]);
+        // A revoked vCPU can be granted again.
+        assert_eq!(vm.control.set_online_vcpus(2).unwrap(), 2);
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+    }
+
+    /// vCPU 2's reset fails after vCPU 1 started, so the request parks vCPU 1
+    /// again and the guest keeps the vCPUs it had.
+    #[test]
+    fn a_failed_grant_parks_the_vcpus_it_started_again() {
+        let vm = Running::start_with(MockVm::failing_reset_of(2), 1, 3);
+
+        let error = vm.answer(3).unwrap_err();
+
+        assert!(matches!(error, Error::Hypervisor(_)), "{error:?}");
+        let calls = vm.calls();
+        let resumed = calls
+            .iter()
+            .position(|call| *call == Call::ResumeVcpu { id: 1 })
+            .expect("vCPU 1 was granted before vCPU 2");
+        assert!(
+            calls[resumed..].contains(&Call::ParkVcpu { id: 1 }),
+            "{calls:?}"
+        );
+        assert_eq!(vm.answer(1).unwrap(), 1);
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+    }
+
+    /// A lost vCPU prevents success for any target that includes its ID.
+    #[test]
+    fn a_lost_vcpu_prevents_a_sparse_grant_from_succeeding() {
+        let vm = Running::start_with(MockVm::failing_reset_of(1), 1, 3);
+        assert!(vm.answer(2).is_err());
+
+        assert!(vm.answer(2).is_err());
+        assert!(vm.answer(3).is_err());
+        assert_eq!(vm.answer(1).unwrap(), 1);
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+    }
+
+    #[test]
+    fn a_reset_read_failure_returns_the_descriptor_for_retry() {
+        let vm = Running::start_with(MockVm::failing_reset_read_once_of(2), 1, 3);
+        assert!(matches!(
+            vm.answer(3),
+            Err(Error::Hypervisor(
+                boxlite_hypervisor::Error::ConfigureVcpu {
+                    id: 2,
+                    operation: "read vCPU events",
+                    ..
+                }
+            ))
+        ));
+        assert!(!vm.entries.lock().unwrap().contains(&2));
+        assert_eq!(vm.answer(3).unwrap(), 3);
+        vm.wait_entered(2);
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+    }
+
+    #[test]
+    fn stop_replies_while_a_resize_worker_is_still_busy() {
+        use crate::mock_vm::{CpuOperation, CpuPause};
+
+        for (operation, boot, target, max, fail) in [
+            (CpuOperation::Reset, 1, 2, 2, false),
+            (CpuOperation::Bind, 1, 2, 2, false),
+            (CpuOperation::ObservePark, 2, 1, 2, false),
+            (CpuOperation::ObservePark, 1, 3, 3, true),
+        ] {
+            let backend = if fail {
+                MockVm::failing_reset_of(2)
+            } else {
+                MockVm::new()
+            };
+            let (pause, entered, release) = CpuPause::new(1, operation);
+            let vm = Running::start_with(backend.with_cpu_pause(pause), boot, max);
+            let answer = vm.request(target);
+            entered.recv_timeout(Duration::from_secs(2)).unwrap();
+            vm.stop.stop();
+            let result = answer.recv_timeout(Duration::from_secs(2));
+            assert_eq!(vm.control.status(), crate::VmStatus::Stopping);
+            assert!(!vm.thread.is_finished());
+            release.send(()).unwrap();
+            let entries = vm.entries.clone();
+            assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+            assert!(
+                matches!(result, Ok(Err(Error::VmNotRunning))),
+                "{operation:?}: {result:?}"
+            );
+            if matches!(operation, CpuOperation::Reset | CpuOperation::Bind) {
+                assert!(!entries.lock().unwrap().contains(&1));
+            }
+        }
+    }
+
+    #[test]
+    fn stop_wins_during_resize_completion() {
+        use crate::mock_vm::{CpuOperation, CpuPause};
+
+        // Equal counts skip the startup capability check. The request
+        // pauses the VM loop after it checks the latch and before it replies.
+        let (pause, entered, release) = CpuPause::new(0, CpuOperation::CheckParkingSupport);
+        let vm = Running::start_with(MockVm::new().with_cpu_pause(pause), 1, 1);
+        let answer = vm.request(1);
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        vm.stop.stop();
+        release.send(()).unwrap();
+        let result = answer.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+        assert!(matches!(result, Err(Error::VmNotRunning)), "{result:?}");
+    }
+
+    #[test]
+    fn stop_cancels_a_revoke_or_rollback_as_the_worker_finishes() {
+        use crate::mock_vm::{CpuOperation, CpuPause};
+
+        for (backend, boot, target) in [(MockVm::new(), 2, 1), (MockVm::failing_reset_of(2), 1, 3)]
+        {
+            let (pause, entered, release) = CpuPause::new(1, CpuOperation::ObservePark);
+            let vm = Running::start_with(backend.with_cpu_pause(pause), boot, 3);
+            let answer = vm.request(target);
+            entered.recv_timeout(Duration::from_secs(2)).unwrap();
+            vm.stop.stop();
+            release.send(()).unwrap();
+            let result = answer.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+            assert!(matches!(result, Err(Error::VmNotRunning)), "{result:?}");
+        }
+    }
+
+    #[test]
+    fn unsettled_bind_cancels_an_accepted_resize_and_a_reserved_pause() {
+        use crate::{
+            ControlReason, VmStatus,
+            mock_vm::{CpuOperation, CpuPause},
+        };
+
+        let (pause, entered, release) = CpuPause::new(1, CpuOperation::Bind);
+        let vm = Running::start_with(MockVm::new().with_cpu_pause(pause), 1, 2);
+        let active = vm.control.enqueue_vcpu_resize(2).unwrap();
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        let queued = vm.control.enqueue_vcpu_resize(1).unwrap();
+        vm.control.request_pause().unwrap();
+        assert!(matches!(
+            vm.control.set_online_vcpus(1),
+            Err(Error::VcpuResizeBusy)
+        ));
+
+        let waiting = vm.control.wait_paused(Duration::from_secs(10));
+        let late = vm.control.wait_paused(Duration::ZERO);
+        let active = active.recv_timeout(Duration::from_secs(2));
+        let queued = queued.recv_timeout(Duration::from_secs(2));
+        let status = vm.control.status();
+        release.send(()).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let detached = loop {
+            if parks(&vm.calls()).iter().filter(|&&id| id == 1).count() == 2 {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
+        let entered_guest = vm.entries.lock().unwrap().contains(&1);
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+
+        for result in [waiting, late] {
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::Control {
+                        operation: "wait_paused",
+                        reason: ControlReason::InvalidState,
+                    })
+                ),
+                "{result:?}"
+            );
+        }
+        assert!(matches!(active, Ok(Err(Error::VcpuResizeUnsettled(_)))));
+        assert!(matches!(
+            queued,
+            Ok(Err(Error::Control {
+                operation: "set_online_vcpus",
+                reason: ControlReason::InvalidState,
+            }))
+        ));
+        assert_eq!(status, VmStatus::Running);
+        assert!(detached && !entered_guest);
+    }
+
+    #[test]
+    fn worker_deadlines_close_cpu_resize_without_stopping_the_vm() {
+        use crate::ControlReason;
+        use crate::mock_vm::{CpuOperation, CpuPause};
+
+        for (operation, boot, target) in [
+            (CpuOperation::Bind, 1, 2),
+            (CpuOperation::ObservePark, 2, 1),
+        ] {
+            let (pause, entered, release) = CpuPause::new(1, operation);
+            let vm = Running::start_with(MockVm::new().with_cpu_pause(pause), boot, 2);
+            let answer = vm.request(target);
+            entered.recv_timeout(Duration::from_secs(2)).unwrap();
+            let result = answer.recv_timeout(Duration::from_secs(10)).unwrap();
+            let retry = vm.answer(boot);
+            assert_eq!(vm.control.status(), crate::VmStatus::Running);
+            release.send(()).unwrap();
+            assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+            assert!(
+                matches!(&result, Err(Error::VcpuResizeUnsettled(reason))
+                if matches!(**reason, Error::Control {
+                    reason: ControlReason::DeadlineTimeout, ..
+                })),
+                "{operation:?}: {result:?}"
+            );
+            assert!(
+                matches!(
+                    retry,
+                    Err(Error::Control {
+                        reason: ControlReason::InvalidState,
+                        ..
+                    })
+                ),
+                "{operation:?}: {retry:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn requests_before_run_are_refused() {
+        let vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();
+        assert!(matches!(
+            vm.control().set_online_vcpus(1),
+            Err(Error::VmNotRunning)
+        ));
+    }
+
+    #[test]
+    fn counts_outside_one_to_max_and_requests_after_the_end_are_refused() {
+        let vm = Running::start(1, 2);
+        for count in [0, 3] {
+            assert!(matches!(
+                vm.control.set_online_vcpus(count),
+                Err(Error::InvalidVcpuCount(c)) if c == count
+            ));
+        }
+        let control = vm.control.clone();
+        assert_eq!(vm.stop().unwrap(), VmExit::StopRequested);
+        assert!(matches!(
+            control.set_online_vcpus(2),
+            Err(Error::VmNotRunning)
+        ));
     }
 }

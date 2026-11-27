@@ -162,8 +162,11 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
             read_only: device.read_only,
         })
         .collect();
+    let vcpu_count = spec.cpus.unwrap_or(DEFAULT_CPUS);
     Ok(VmConfig {
-        vcpu_count: spec.cpus.unwrap_or(DEFAULT_CPUS),
+        vcpu_count,
+        // The runtime does not resize native boxes yet, so every vCPU runs.
+        max_vcpus: vcpu_count,
         memory_mib: spec.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
         kernel: kernel.path.clone(),
         cmdline: build_cmdline(spec, kernel.command_line.as_deref()),
@@ -256,6 +259,7 @@ pub(crate) fn map_vmm_error(error: boxlite_vmm::Error) -> BoxliteError {
     if matches!(
         error,
         Error::InvalidVcpuCount(_)
+            | Error::InvalidMaxVcpus { .. }
             | Error::InvalidMemorySize(_)
             | Error::GuestMemoryAddressLimit { .. }
             | Error::InvalidHotplugSize(_)

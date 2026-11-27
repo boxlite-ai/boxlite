@@ -68,7 +68,7 @@ pub(crate) struct BootSetup {
 
 /// Loads `config.kernel` and, when set, `config.initramfs` into `ram`, writes
 /// the zero page, its E820 map, the command line and the MP table for
-/// `config.vcpu_count` vCPUs, then sets up the long-mode entry.
+/// `config.max_vcpus` vCPUs, then sets up the long-mode entry.
 ///
 /// `ram` must be fresh and zero-filled. Its backed ranges determine the E820
 /// map, initramfs placement and identity mappings. A failure may have written
@@ -109,14 +109,13 @@ pub(crate) fn prepare(
     .map_err(table_error)?;
     let fast = plan.tables().0 == x86_boot_layout::TABLES_BASE;
     let reserved = plan.reserved(fast);
-    let zero_page =
-        params::write_boot_params(memory, &config.cmdline, &ranges, initramfs, &reserved).map_err(
-            |source| Error::WriteBootData {
-                what: "boot parameters",
-                source,
-            },
-        )?;
-    mptable::write_mptable(memory, config.vcpu_count).map_err(|source| Error::WriteBootData {
+    let cmdline = config.kernel_cmdline()?;
+    let zero_page = params::write_boot_params(memory, &cmdline, &ranges, initramfs, &reserved)
+        .map_err(|source| Error::WriteBootData {
+            what: "boot parameters",
+            source,
+        })?;
+    mptable::write_mptable(memory, config.max_vcpus).map_err(|source| Error::WriteBootData {
         what: "MP table",
         source,
     })?;

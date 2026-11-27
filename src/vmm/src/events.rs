@@ -86,6 +86,15 @@ impl EventSender {
     pub(crate) fn is_stopping(&self) -> bool {
         self.stopping.load(Ordering::SeqCst)
     }
+
+    /// Orders a control commit against terminal sends on the same latch.
+    /// Once closed, the latch never opens again.
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn try_commit_control(&self) -> bool {
+        self.stopping
+            .compare_exchange(false, false, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
 }
 
 /// The poller the thread that owns the VM waits on.

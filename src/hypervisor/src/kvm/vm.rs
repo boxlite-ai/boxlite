@@ -386,6 +386,10 @@ impl crate::Vm for KvmVm {
 }
 
 impl crate::X86Vm for KvmVm {
+    fn supports_vcpu_parking(&self) -> bool {
+        true
+    }
+
     fn save_state(&self) -> Result<crate::X86VmState> {
         Self::save_state(self)
     }

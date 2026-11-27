@@ -157,15 +157,23 @@ root once, so Python and Node builds share the report's object directory.
 
 Linux x64 also runs the native KVM hardware tests and adds their profiles before
 the Rust coverage upload. Missing `/dev/kvm` access fails this qualification.
+
 When a change matches the `vmm` filter (the VMM and hypervisor crates, the kernel
 build and its Make recipes), and on the weekly and manual runs, the job also runs
 the VMM's real-kernel boot tests with `make coverage:vmm:boot`. It restores the
 pinned `vmlinux` from the Actions cache, keyed on the kernel pins and build
 script, or builds it with `make vmm:boot:host` on a miss.
+
+The boot coverage target builds the `cpu-scaling-init` fixture before running
+the vCPU grant and revoke test. The test reads the path from
+`VMM_CPU_SCALING_INIT`, so it can run on a fresh checkout.
+
 The boot coverage target also builds the static production guest mount test
 init with `make vmm:guest-mount-init` and exports `VMM_GUEST_MOUNT_INIT` to
 the tests. This keeps the guest mount test in the boot coverage suite rather
-than skipping it. The selected Linux x64 job installs the musl Rust target,
+than skipping it.
+
+The selected Linux x64 job installs the musl Rust target,
 musl compiler and gperf, and uses the musl compiler for Rust linking and C
 dependencies. The boot step's five-minute budget includes the release build
 of this init; its guest execution remains bounded by the test watchdog.

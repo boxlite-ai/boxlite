@@ -24,7 +24,7 @@ pub enum VmStatus {
     Running,
     /// Guest entry is closing while the driver collects vCPU acknowledgements.
     Pausing,
-    /// Every vCPU is parked outside the guest.
+    /// Every attached worker has reached its pause checkpoint.
     Paused,
     /// Termination has been requested or the run is tearing down.
     Stopping,
@@ -48,6 +48,12 @@ struct LifecycleState {
     command: Option<Command>,
     epoch: u64,
     completed_epoch: u64,
+    failed_pause_epoch: Option<u64>,
+    pause_unavailable: bool,
+    #[cfg(target_arch = "x86_64")]
+    startup_complete: bool,
+    #[cfg(target_arch = "x86_64")]
+    cpu_resize_closed: bool,
     #[cfg(any(test, target_arch = "x86_64"))]
     acknowledgements: u64,
 }
@@ -96,6 +102,12 @@ impl Lifecycle {
                 command: None,
                 epoch: 0,
                 completed_epoch: 0,
+                failed_pause_epoch: None,
+                pause_unavailable: false,
+                #[cfg(target_arch = "x86_64")]
+                startup_complete: false,
+                #[cfg(target_arch = "x86_64")]
+                cpu_resize_closed: false,
                 #[cfg(any(test, target_arch = "x86_64"))]
                 acknowledgements: 0,
             }),
@@ -126,7 +138,7 @@ impl Lifecycle {
     pub(crate) fn request_pause(&self) -> Result<()> {
         let mut state = self.state();
         let invalid = || control_error("request_pause", ControlReason::InvalidState);
-        if state.is_terminal() {
+        if state.is_terminal() || state.pause_unavailable {
             return Err(invalid());
         }
         if !self.device_less {
@@ -175,6 +187,9 @@ impl Lifecycle {
         let epoch = match (state.status, state.command) {
             (VmStatus::Created | VmStatus::Running, Some(Command::Park(epoch))) => epoch,
             (VmStatus::Pausing | VmStatus::Paused, _) => state.epoch,
+            (VmStatus::Running, _) if state.failed_pause_epoch.is_some() => {
+                state.failed_pause_epoch.expect("recorded failed pause")
+            }
             _ => return Err(control_error("wait_paused", ControlReason::InvalidState)),
         };
         self.await_pause(state, epoch, timeout)
@@ -191,7 +206,9 @@ impl Lifecycle {
             state = self
                 .changed
                 .wait_timeout_while(state, timeout, |state| {
-                    !state.is_terminal() && state.completed_epoch < epoch
+                    !state.is_terminal()
+                        && state.completed_epoch < epoch
+                        && state.failed_pause_epoch != Some(epoch)
                 })
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
@@ -200,9 +217,73 @@ impl Lifecycle {
             Err(ControlReason::TerminalOutcome)
         } else if state.completed_epoch >= epoch {
             Ok(())
+        } else if state.failed_pause_epoch == Some(epoch) {
+            Err(ControlReason::InvalidState)
         } else {
             Err(ControlReason::DeadlineTimeout)
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn submit_cpu(&self, submit: impl FnOnce(&EventSender) -> Result<()>) -> Result<()> {
+        let state = self.state();
+        if state.is_terminal() || state.status != VmStatus::Running {
+            return Err(Error::VmNotRunning);
+        }
+        if state.cpu_resize_closed {
+            return Err(control_error(
+                crate::control::CPU_RESIZE,
+                ControlReason::InvalidState,
+            ));
+        }
+        if !state.startup_complete || matches!(state.command, Some(Command::Park(_))) {
+            return Err(Error::VcpuResizeBusy);
+        }
+        submit(state.sender())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn cpu_channel_closed(&self) -> Error {
+        let state = self.state();
+        if state.is_terminal() || (!state.cpu_resize_closed && state.status != VmStatus::Running) {
+            Error::VmNotRunning
+        } else {
+            control_error(crate::control::CPU_RESIZE, ControlReason::InvalidState)
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn close_cpu_resize(&self, worker_uncertain: bool) {
+        let mut state = self.state();
+        state.cpu_resize_closed = true;
+        if worker_uncertain {
+            state.pause_unavailable = true;
+            if let Some(Command::Park(epoch)) = state.command.take() {
+                state.failed_pause_epoch = Some(epoch);
+                self.changed.notify_all();
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn startup_pause_requested(&self) -> bool {
+        let state = self.state();
+        !state.is_terminal()
+            && state.status == VmStatus::Running
+            && matches!(state.command, Some(Command::Park(_)))
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn finish_startup(&self, release: impl FnOnce()) {
+        let mut state = self.state();
+        if state.is_terminal() {
+            return;
+        }
+        if let Some(Command::Park(epoch)) = state.command.take() {
+            state.start_pause(epoch);
+        }
+        state.startup_complete = true;
+        release();
     }
 
     /// Claims the run and closes guest entry if the first pause was reserved.
@@ -226,10 +307,22 @@ impl Lifecycle {
 
     /// Handles commands and acknowledgements on the run thread. Returns
     /// whether to kick workers that may still be inside the guest.
-    #[cfg(any(test, target_arch = "x86_64"))]
+    #[cfg(test)]
     pub(crate) fn drive(&self, count: u8) -> bool {
+        self.drive_workers(u64::MAX >> (u64::BITS - u32::from(count)), || true)
+    }
+
+    #[cfg(any(test, target_arch = "x86_64"))]
+    pub(crate) fn drive_workers(
+        &self,
+        participants: u64,
+        ready_for_pause: impl FnOnce() -> bool,
+    ) -> bool {
         let mut state = self.state();
         if state.is_terminal() {
+            return false;
+        }
+        if matches!(state.command, Some(Command::Park(_))) && !ready_for_pause() {
             return false;
         }
         match state.command.take() {
@@ -243,8 +336,9 @@ impl Lifecycle {
             }
             _ => {}
         }
-        let all = u64::MAX >> (u64::BITS - u32::from(count));
-        if state.status == VmStatus::Pausing && state.acknowledgements & all == all {
+        if state.status == VmStatus::Pausing
+            && state.acknowledgements & participants == participants
+        {
             state.completed_epoch = state.epoch;
             state.status = VmStatus::Paused;
             self.changed.notify_all();

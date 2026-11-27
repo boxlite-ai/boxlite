@@ -364,6 +364,13 @@ mod tests {
             }))
         }
 
+        async fn set_online_cpus(
+            &self,
+            _: tonic::Request<boxlite_shared::SetOnlineCpusRequest>,
+        ) -> Result<tonic::Response<boxlite_shared::SetOnlineCpusResponse>, tonic::Status> {
+            Err(tonic::Status::unimplemented("not used by these tests"))
+        }
+
         async fn resize_filesystem(
             &self,
             _: tonic::Request<boxlite_shared::ResizeFilesystemRequest>,

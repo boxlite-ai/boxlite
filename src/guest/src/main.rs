@@ -14,6 +14,8 @@ mod ca_trust;
 #[cfg(target_os = "linux")]
 mod container;
 #[cfg(target_os = "linux")]
+mod cpus;
+#[cfg(target_os = "linux")]
 mod layout;
 #[cfg(target_os = "linux")]
 mod lifecycle;

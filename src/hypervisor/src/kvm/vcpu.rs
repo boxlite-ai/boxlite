@@ -358,6 +358,18 @@ pub struct KvmVcpu {
     _thread_bound: PhantomData<Rc<()>>,
 }
 
+/// State of the same vCPU across worker bindings.
+#[derive(Debug)]
+pub(super) struct UnboundVcpu {
+    pub(super) fd: SnapshotVcpuFd,
+    pub(super) id: u32,
+    run_size: usize,
+    entered: bool,
+    restore_started: bool,
+    xsave_size: std::result::Result<usize, CachedIoError>,
+    tsc_offset: Option<bool>,
+}
+
 impl KvmVcpu {
     pub(super) fn new(
         fd: VcpuFd,
@@ -367,21 +379,21 @@ impl KvmVcpu {
         xsave_size: std::result::Result<usize, CachedIoError>,
         snapshot: Arc<VcpuSnapshotShared>,
     ) -> Self {
-        Self {
-            fd: SnapshotVcpuFd {
-                inner: fd,
-                snapshot,
+        Self::bind(
+            UnboundVcpu {
+                fd: SnapshotVcpuFd {
+                    inner: fd,
+                    snapshot,
+                },
+                id,
+                run_size,
+                entered: false,
+                restore_started: false,
+                xsave_size,
+                tsc_offset: None,
             },
-            id,
-            run_size,
-            pending_io: PendingIo::default(),
-            entered: false,
-            restore_started: false,
-            xsave_size,
-            tsc_offset: None,
             kick,
-            _thread_bound: PhantomData,
-        }
+        )
     }
 
     /// Returns a handle that interrupts this worker, including before entry.
@@ -460,6 +472,70 @@ impl KvmVcpu {
     }
 }
 
+impl KvmVcpu {
+    /// Releases this worker's kick reservation after pending I/O has drained.
+    pub(super) fn unbind(self) -> std::result::Result<(UnboundVcpu, i32), (Box<Self>, Error)> {
+        if self.pending_io.0 {
+            let error = Error::CompletePendingIo {
+                id: self.id,
+                source: io::Error::new(io::ErrorKind::InvalidInput, "vCPU has pending I/O"),
+            };
+            return Err((Box::new(self), error));
+        }
+        let Self {
+            fd,
+            id,
+            run_size,
+            entered,
+            restore_started,
+            xsave_size,
+            tsc_offset,
+            kick,
+            ..
+        } = self;
+        let signal = kick.signal();
+        // Dropping the reservation drains its signal, restores this worker's
+        // mask and makes earlier handles inert.
+        drop(kick);
+        Ok((
+            UnboundVcpu {
+                fd,
+                id,
+                run_size,
+                entered,
+                restore_started,
+                xsave_size,
+                tsc_offset,
+            },
+            signal,
+        ))
+    }
+
+    pub(super) fn bind(state: UnboundVcpu, kick: WorkerSignal) -> Self {
+        let UnboundVcpu {
+            fd,
+            id,
+            run_size,
+            entered,
+            restore_started,
+            xsave_size,
+            tsc_offset,
+        } = state;
+        Self {
+            fd,
+            id,
+            run_size,
+            pending_io: PendingIo::default(),
+            entered,
+            restore_started,
+            xsave_size,
+            tsc_offset,
+            kick,
+            _thread_bound: PhantomData,
+        }
+    }
+}
+
 impl crate::Vcpu for KvmVcpu {
     type Handle = KvmVcpuHandle;
 
@@ -481,6 +557,10 @@ impl crate::Vcpu for KvmVcpu {
 }
 
 impl crate::X86Vcpu for KvmVcpu {
+    fn detach(self) -> crate::VcpuDetach<Self> {
+        Self::detach(self).map(|vcpu| Box::new(vcpu) as _)
+    }
+
     fn save_state(&mut self) -> Result<crate::X86VcpuState> {
         Self::save_state(self)
     }
@@ -1605,6 +1685,44 @@ mod tests {
         assert!(matches!(error, Error::ConfigureVcpu { ref source, .. }
             if source.kind() == io::ErrorKind::InvalidInput
                 && source.to_string() == "restore requires a fresh, never-entered vCPU"));
+    }
+
+    #[test]
+    #[ignore = "requires Linux x86_64 with access to /dev/kvm"]
+    fn worker_handoff_preserves_snapshot_context_and_restore_eligibility() {
+        let vm = KvmVm::new().unwrap();
+        let mut cpu = snapshot_cpu(&vm);
+        vm.save_state().unwrap();
+        let saved = cpu.save_state().unwrap();
+        cpu.fd.set_kvm_immediate_exit(1);
+        assert!(matches!(cpu.run().unwrap(), VcpuExit::Interrupted));
+        cpu.fd.set_kvm_immediate_exit(0);
+
+        let platform = vm.save_state().unwrap();
+        let snapshot = Arc::clone(&cpu.fd.snapshot);
+        let xsave_size = cpu.xsave_size().unwrap();
+        let detached = cpu.detach().unwrap();
+        std::thread::spawn(move || {
+            let mut cpu = detached.bind().unwrap();
+            assert!(Arc::ptr_eq(&cpu.fd.snapshot, &snapshot));
+            assert_eq!(cpu.xsave_size().unwrap(), xsave_size);
+            assert_eq!(
+                cpu.fd
+                    .snapshot
+                    .tsc_save_anchor
+                    .state
+                    .lock()
+                    .unwrap()
+                    .vm_clock_ns,
+                Some(platform.clock.clock)
+            );
+            let error = cpu.restore_state(&saved).unwrap_err();
+            assert!(matches!(error, Error::ConfigureVcpu { ref source, .. }
+                if source.kind() == io::ErrorKind::InvalidInput
+                    && source.to_string() == "restore requires a fresh, never-entered vCPU"));
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]
