@@ -241,8 +241,13 @@ impl BaseDiskStore {
     ///
     /// Used during box deletion to know which bases may become orphaned.
     pub(crate) fn remove_all_refs_for_box(&self, box_id: &str) -> BoxliteResult<Vec<BaseDiskID>> {
-        let conn = self.db.conn();
+        Self::remove_refs(&self.db.conn(), box_id)
+    }
 
+    pub(super) fn remove_refs(
+        conn: &rusqlite::Connection,
+        box_id: &str,
+    ) -> BoxliteResult<Vec<BaseDiskID>> {
         // Collect affected base_disk_ids BEFORE deleting.
         let mut stmt =
             db_err!(conn.prepare("SELECT base_disk_id FROM base_disk_ref WHERE box_id = ?1"))?;

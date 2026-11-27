@@ -169,6 +169,12 @@ removal, and lock identity before deletion. The watcher ignores `NotFound` and
 in the exit callback's future; aborting the watcher can cancel it, with startup
 `recover_boxes` remaining the fallback.
 
+Startup cleanup removes a discarded box's directory before deleting the box row
+and its base disk references in one transaction. Clone bases are candidates for
+reclamation after the transaction commits. Remaining references and backing
+chains from other boxes, bases and snapshots protect the disks they use. An
+incomplete dependency scan leaves the clone base on disk.
+
 Explicit start keeps `Container.Start` background and cancellable. Outbound updates
 use the host network backend without awaiting that RPC: a pending container start
 cannot hold lifecycle admission and prevent stop. Returning live resources releases

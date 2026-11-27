@@ -1569,7 +1569,8 @@ impl RuntimeImpl {
         // - Configured boxes: created but never started, no directory yet (this is valid)
         // - Stopped boxes: might not have a directory if never started
         // - Only Running boxes must have a directory
-        let mut boxes_to_remove = Vec::new();
+        let mut affected_bases = std::collections::HashSet::new();
+        let mut removed_boxes = 0;
         for (config, state) in &persisted {
             let should_remove = if config.options.removes_on_stop() {
                 tracing::info!(
@@ -1591,43 +1592,41 @@ impl RuntimeImpl {
                 false
             };
 
-            if should_remove {
-                boxes_to_remove.push(config.id.clone());
-            }
-        }
-
-        // Remove invalid boxes from database and cleanup their directories
-        for box_id in &boxes_to_remove {
-            // Find the config to get box_home path
-            if let Some((config, _)) = persisted.iter().find(|(c, _)| &c.id == box_id) {
-                // Clean up box directory + binding symlink if they exist
-                config.sockets().remove();
-                if config.box_home.exists()
-                    && let Err(e) = std::fs::remove_dir_all(&config.box_home)
-                {
-                    tracing::warn!(
-                        box_id = %box_id,
-                        path = %config.box_home.display(),
-                        error = %e,
-                        "Failed to cleanup box directory during recovery"
-                    );
-                }
+            if !should_remove {
+                continue;
             }
 
-            // Remove from database
-            if let Err(e) = self.box_manager.remove_box(box_id) {
+            // Keep references while a discarded box's disk files may remain.
+            config.sockets().remove();
+            if let Err(e) = std::fs::remove_dir_all(&config.box_home)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
                 tracing::warn!(
-                    box_id = %box_id,
+                    box_id = %config.id,
+                    path = %config.box_home.display(),
                     error = %e,
-                    "Failed to remove box from database during recovery cleanup"
+                    "Failed to remove box directory during recovery; retaining disk references"
                 );
+                continue;
+            }
+
+            match self.box_manager.remove_box_with_base_refs(&config.id) {
+                Ok(base_ids) => {
+                    affected_bases.extend(base_ids);
+                    removed_boxes += 1;
+                }
+                Err(e) => tracing::warn!(
+                    box_id = %config.id,
+                    error = %e,
+                    "Failed to remove box and disk references from database during recovery"
+                ),
             }
         }
 
-        if !boxes_to_remove.is_empty() {
+        if removed_boxes > 0 {
             tracing::info!(
-                "Cleaned up {} boxes during recovery (remove-on-stop or orphaned)",
-                boxes_to_remove.len()
+                removed_boxes,
+                "Cleaned up boxes during recovery (remove-on-stop or orphaned)"
             );
         }
 
@@ -1775,6 +1774,11 @@ impl RuntimeImpl {
             {
                 self.box_manager.save_box(box_id, &state)?;
             }
+        }
+
+        for base_id in affected_bases {
+            self.base_disk_mgr
+                .try_gc_recovered_base(&base_id, &self.layout.boxes_dir());
         }
 
         // GC unreferenced guest rootfs entries
@@ -2911,6 +2915,202 @@ mod tests {
             engine_kind: crate::vmm::VmmKind::Libkrun,
             box_home,
         }
+    }
+
+    fn make_recovery_clone_base(
+        runtime: &RuntimeImpl,
+        id: &str,
+        source: &BoxID,
+        backing: Option<&std::path::Path>,
+    ) -> crate::disk::BaseDisk {
+        let path = runtime.layout.bases_dir().join(format!("{id}.qcow2"));
+        crate::disk::qcow2::write_test_qcow2(&path, backing.map(|path| path.to_str().unwrap()));
+        let base = crate::disk::BaseDisk {
+            id: crate::BaseDiskID::parse(id).unwrap(),
+            source_box_id: source.to_string(),
+            name: None,
+            kind: crate::disk::BaseDiskKind::CloneBase,
+            disk_info: crate::disk::DiskInfo {
+                base_path: path.to_str().unwrap().to_owned(),
+                container_disk_bytes: 0,
+                size_bytes: 0,
+            },
+            created_at: 0,
+        };
+        runtime.base_disk_mgr.store().insert(&base).unwrap();
+        base
+    }
+
+    #[test]
+    fn test_recovery_clone_base_collects_after_last_box_is_removed() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut ephemeral = test_box_config_in_layout(false, &runtime);
+        ephemeral.options.auto_delete = Some(1);
+        std::fs::create_dir_all(&ephemeral.box_home).unwrap();
+        let base = make_recovery_clone_base(&runtime, "rcvbase1", &ephemeral.id, None);
+        runtime
+            .box_manager
+            .add_clone_box(&ephemeral, &BoxState::new(), &base.id)
+            .unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        assert!(!runtime.box_manager.has_box(&ephemeral.id).unwrap());
+        assert!(!ephemeral.box_home.exists());
+        let store = runtime.base_disk_mgr.store();
+        assert!(store.dependent_boxes(&base.id).unwrap().is_empty());
+        assert!(store.find_by_id(&base.id).unwrap().is_none());
+        assert!(!base.disk_info.as_path().exists());
+    }
+
+    #[test]
+    fn test_recovery_clone_base_preserves_surviving_direct_reference() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut ephemeral = test_box_config_in_layout(false, &runtime);
+        ephemeral.options.auto_delete = Some(1);
+        let survivor = test_box_config_in_layout(false, &runtime);
+        let base = make_recovery_clone_base(&runtime, "rcvbase1", &ephemeral.id, None);
+        for config in [&ephemeral, &survivor] {
+            runtime
+                .box_manager
+                .add_clone_box(config, &BoxState::new(), &base.id)
+                .unwrap();
+        }
+
+        runtime.recover_boxes().unwrap();
+
+        let store = runtime.base_disk_mgr.store();
+        assert!(!runtime.box_manager.has_box(&ephemeral.id).unwrap());
+        assert!(runtime.box_manager.has_box(&survivor.id).unwrap());
+        assert_eq!(
+            store.dependent_boxes(&base.id).unwrap(),
+            vec![survivor.id.to_string()]
+        );
+        assert!(store.find_by_id(&base.id).unwrap().is_some());
+        assert!(base.disk_info.as_path().exists());
+    }
+
+    #[test]
+    fn test_recovery_clone_base_preserves_surviving_parent_layer() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut ephemeral = test_box_config_in_layout(false, &runtime);
+        ephemeral.options.auto_delete = Some(1);
+        let survivor = test_box_config_in_layout(false, &runtime);
+        let parent = make_recovery_clone_base(&runtime, "rcvbase1", &ephemeral.id, None);
+        let child = make_recovery_clone_base(
+            &runtime,
+            "rcvbase2",
+            &survivor.id,
+            Some(parent.disk_info.as_path()),
+        );
+        runtime
+            .box_manager
+            .add_clone_box(&ephemeral, &BoxState::new(), &parent.id)
+            .unwrap();
+        runtime
+            .box_manager
+            .add_clone_box(&survivor, &BoxState::new(), &child.id)
+            .unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let store = runtime.base_disk_mgr.store();
+        assert!(store.dependent_boxes(&parent.id).unwrap().is_empty());
+        assert!(store.find_by_id(&parent.id).unwrap().is_some());
+        assert!(parent.disk_info.as_path().exists());
+        assert_eq!(
+            store.dependent_boxes(&child.id).unwrap(),
+            vec![survivor.id.to_string()]
+        );
+        assert!(child.disk_info.as_path().exists());
+    }
+
+    #[test]
+    fn test_recovery_clone_base_preserves_base_used_by_snapshot() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut ephemeral = test_box_config_in_layout(false, &runtime);
+        ephemeral.options.auto_delete = Some(1);
+        let survivor = test_box_config_in_layout(false, &runtime);
+        let base = make_recovery_clone_base(&runtime, "rcvbase1", &ephemeral.id, None);
+        runtime
+            .box_manager
+            .add_clone_box(&ephemeral, &BoxState::new(), &base.id)
+            .unwrap();
+        runtime
+            .box_manager
+            .add_box(&survivor, &BoxState::new())
+            .unwrap();
+        let snapshot_dir = survivor.box_home.join("snapshots").join("saved");
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        crate::disk::qcow2::write_test_qcow2(
+            &snapshot_dir.join(crate::disk::constants::filenames::CONTAINER_DISK),
+            Some(base.disk_info.as_path().to_str().unwrap()),
+        );
+
+        runtime.recover_boxes().unwrap();
+
+        let store = runtime.base_disk_mgr.store();
+        assert!(store.dependent_boxes(&base.id).unwrap().is_empty());
+        assert!(store.find_by_id(&base.id).unwrap().is_some());
+        assert!(base.disk_info.as_path().exists());
+    }
+
+    #[test]
+    fn test_recovery_clone_base_preserves_refs_if_box_directory_removal_fails() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut ephemeral = test_box_config_in_layout(false, &runtime);
+        ephemeral.options.auto_delete = Some(1);
+        std::fs::write(&ephemeral.box_home, b"not a directory").unwrap();
+        let base = make_recovery_clone_base(&runtime, "rcvbase1", &ephemeral.id, None);
+        runtime
+            .box_manager
+            .add_clone_box(&ephemeral, &BoxState::new(), &base.id)
+            .unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        assert!(runtime.box_manager.has_box(&ephemeral.id).unwrap());
+        assert_eq!(
+            runtime
+                .base_disk_mgr
+                .store()
+                .dependent_boxes(&base.id)
+                .unwrap(),
+            vec![ephemeral.id.to_string()]
+        );
+        assert!(base.disk_info.as_path().exists());
+    }
+
+    #[test]
+    fn test_recovery_clone_base_rolls_back_box_deletion_on_reference_error() {
+        let (runtime, _dir) = create_test_runtime();
+        let mut ephemeral = test_box_config_in_layout(false, &runtime);
+        ephemeral.options.auto_delete = Some(1);
+        let base = make_recovery_clone_base(&runtime, "rcvbase1", &ephemeral.id, None);
+        runtime
+            .box_manager
+            .add_clone_box(&ephemeral, &BoxState::new(), &base.id)
+            .unwrap();
+        runtime
+            .box_manager
+            .db()
+            .conn()
+            .execute_batch(
+                "CREATE TRIGGER reject_ref_delete BEFORE DELETE ON base_disk_ref
+             BEGIN SELECT RAISE(ABORT, 'injected reference deletion failure'); END;",
+            )
+            .unwrap();
+
+        runtime.recover_boxes().unwrap();
+
+        let store = runtime.base_disk_mgr.store();
+        assert!(runtime.box_manager.has_box(&ephemeral.id).unwrap());
+        assert_eq!(
+            store.dependent_boxes(&base.id).unwrap(),
+            vec![ephemeral.id.to_string()]
+        );
+        assert!(store.find_by_id(&base.id).unwrap().is_some());
+        assert!(base.disk_info.as_path().exists());
     }
 
     #[tokio::test]

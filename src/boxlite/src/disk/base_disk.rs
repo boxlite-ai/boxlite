@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize};
 
 use crate::db::base_disk::BaseDiskStore;
@@ -335,6 +335,102 @@ impl BaseDiskManager {
     /// Queries the `base_disk_ref` table for dependents. If none exist,
     /// deletes the base (DB record + file) and cascades to the parent base.
     pub(crate) fn try_gc_base(&self, base_disk_id: &BaseDiskID) {
+        self.try_gc_base_if_unprotected(base_disk_id, &|_| false);
+    }
+
+    /// Startup removal can drop the only direct reference to a parent layer
+    /// still used by another box, base or snapshot.
+    pub(crate) fn try_gc_recovered_base(&self, base_disk_id: &BaseDiskID, boxes_dir: &Path) {
+        self.try_gc_base_if_unprotected(base_disk_id, &|path| {
+            match self.recovery_backings(boxes_dir) {
+                Ok(backings) => match path.canonicalize() {
+                    Ok(path) => backings.contains(&path),
+                    Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+                },
+                Err(error) => {
+                    tracing::warn!(%error, "Cannot verify recovery disk dependencies; keeping clone base");
+                    true
+                }
+            }
+        });
+    }
+
+    /// A ref deletion during recovery can expose a base the usual sweep would
+    /// keep because it still has a database record. Require a complete scan.
+    fn recovery_backings(&self, boxes_dir: &Path) -> BoxliteResult<HashSet<PathBuf>> {
+        let scan = || -> std::io::Result<Vec<PathBuf>> {
+            let mut disks = Vec::new();
+            for entry in fs::read_dir(&self.bases_dir)? {
+                let path = entry?.path();
+                if path.extension().is_some_and(|ext| ext == "qcow2") {
+                    disks.push(path);
+                }
+            }
+            for entry in fs::read_dir(boxes_dir)? {
+                let box_dir = entry?.path();
+                if !fs::metadata(&box_dir)?.is_dir() {
+                    continue;
+                }
+                let overlays = box_dir.join("disks");
+                disks.push(overlays.join(disk_filenames::CONTAINER_DISK));
+                disks.push(overlays.join(disk_filenames::GUEST_ROOTFS_DISK));
+                let snapshots = box_dir.join(crate::disk::constants::dirs::SNAPSHOTS_DIR);
+                match fs::read_dir(snapshots) {
+                    Ok(entries) => {
+                        for snapshot in entries {
+                            disks.push(snapshot?.path().join(disk_filenames::CONTAINER_DISK));
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(disks)
+        };
+        let mut pending = scan().map_err(|error| BoxliteError::Storage(error.to_string()))?;
+        let mut inspected = HashSet::new();
+        let mut backings = HashSet::new();
+        while let Some(disk) = pending.pop() {
+            let path = match disk.canonicalize() {
+                Ok(path) => path,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(BoxliteError::Storage(format!(
+                        "{}: {error}",
+                        disk.display()
+                    )));
+                }
+            };
+            if !inspected.insert(path.clone()) || path.extension().is_some_and(|ext| ext == "ext4")
+            {
+                continue;
+            }
+            if let Some(backing) = super::read_backing_file_path(&path)? {
+                let backing = path.with_file_name(backing);
+                match backing.canonicalize() {
+                    Ok(path) => {
+                        if backings.insert(path.clone()) {
+                            pending.push(path);
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(BoxliteError::Storage(format!(
+                            "{}: {error}",
+                            backing.display()
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(backings)
+    }
+
+    fn try_gc_base_if_unprotected(
+        &self,
+        base_disk_id: &BaseDiskID,
+        is_protected: &impl Fn(&Path) -> bool,
+    ) {
         let record = match self.store.find_by_id(base_disk_id) {
             Ok(Some(r)) => r,
             _ => return,
@@ -346,7 +442,9 @@ impl BaseDiskManager {
         }
 
         // DB query for dependents — if any exist, keep the base
-        if self.store.has_dependents(base_disk_id).unwrap_or(true) {
+        if self.store.has_dependents(base_disk_id).unwrap_or(true)
+            || is_protected(record.disk_info().as_path())
+        {
             return;
         }
 
@@ -368,7 +466,7 @@ impl BaseDiskManager {
             && let Ok(Some(parent_record)) =
                 self.store.find_by_base_path(&parent_path.to_string_lossy())
         {
-            self.try_gc_base(parent_record.id());
+            self.try_gc_base_if_unprotected(parent_record.id(), is_protected);
         }
     }
 
