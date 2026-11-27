@@ -37,7 +37,7 @@ func (r RestoreRequest) validate() error {
 	if err := validateReference(r.Archive.Reference); err != nil {
 		return err
 	}
-	if !validKind(r.Kind) || (r.Kind != "" && r.Archive.Kind != "" && r.Kind != r.Archive.Kind) {
+	if !validKind(r.Kind) || (r.Kind != "" && r.Kind != r.Archive.NormalizedKind()) {
 		return fmt.Errorf("invalid checkpoint restore kind %q for archive kind %q", r.Kind, r.Archive.Kind)
 	}
 	if err := validateMemorySize(r.Archive.NormalizedKind(), r.Archive.MemorySizeBytes); err != nil {
@@ -181,8 +181,8 @@ func (r Restorer) restore(ctx context.Context, lease *TargetLease, request Resto
 		if current.ID != record.PredecessorID {
 			return RestoreResult{}, fmt.Errorf("another native box owns the checkpoint target")
 		}
-		if current.PID != 0 || (current.State != "stopped" && current.State != "failed") {
-			return RestoreResult{}, fmt.Errorf("checkpoint recovery requires a stopped or failed target")
+		if current.PID != 0 || (current.State != "stopped" && current.State != "failed" && current.State != "configured") {
+			return RestoreResult{}, fmt.Errorf("checkpoint recovery requires a stopped, configured, or failed target")
 		}
 	}
 	if err := lease.write(*record); err != nil {

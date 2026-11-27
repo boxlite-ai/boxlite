@@ -50,6 +50,7 @@ func (c *Client) ExportCheckpoint(ctx context.Context, boxId, destDir, kind stri
 	if options.IncludeMemory {
 		result.MemorySizeBytes, err = readCheckpointMemorySizeBytes(archive)
 		if err != nil {
+			_ = os.Remove(archive)
 			return checkpoint.CaptureResult{}, fmt.Errorf("read full checkpoint memory size: %w", err)
 		}
 	}

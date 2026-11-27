@@ -142,6 +142,7 @@ func TestCheckpointRestoreKindValidation(t *testing.T) {
 		{"", "invalid", nil, false},
 		{KindDisk, KindFull, &zero, false},
 		{KindFull, KindDisk, nil, false},
+		{KindFull, "", nil, false},
 		{KindFull, KindFull, nil, false},
 		{KindFull, KindFull, &negative, false},
 		{"", KindDisk, &zero, false},
@@ -163,6 +164,31 @@ func TestCheckpointRestoreAcceptsConfiguredCandidate(t *testing.T) {
 	result, err := r.Restore(t.Context(), request, uuid.NewString())
 	if err != nil || native.imports != 1 || native.current == nil || native.current.ID != result.NativeID || native.current.State != "configured" {
 		t.Fatalf("configured candidate was not published: %+v %v", result, err)
+	}
+	// A published configured target (PID 0) remains recoverable before its first start.
+	next := request
+	next.OperationID, next.Sequence = uuid.NewString(), request.Sequence+1
+	native.commitThenErr, native.importErr = false, nil
+	recovered, err := r.Restore(t.Context(), next, uuid.NewString())
+	if err != nil || native.imports != 2 || recovered.NativeID == result.NativeID || native.current.ID != recovered.NativeID {
+		t.Fatalf("configured predecessor was not recoverable: %+v %v", recovered, err)
+	}
+}
+
+func TestCheckpointRestoreFullRetryComparesMemorySizeByValue(t *testing.T) {
+	r, request, native, _ := recoveryHarness(t)
+	size := int64(4096)
+	request.Kind, request.Archive.Kind, request.Archive.MemorySizeBytes = KindFull, KindFull, &size
+	native.importErr = errors.New("transient import failure")
+	if _, err := r.Restore(t.Context(), request, uuid.NewString()); err == nil {
+		t.Fatal("expected transient import failure")
+	}
+	retry := request
+	sameSize := int64(4096)
+	retry.Archive.MemorySizeBytes = &sameSize
+	native.importErr = nil
+	if _, err := r.Restore(t.Context(), retry, uuid.NewString()); err != nil {
+		t.Fatalf("full checkpoint retry with equal memorySizeBytes failed: %v", err)
 	}
 }
 

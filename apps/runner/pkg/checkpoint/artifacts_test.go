@@ -349,6 +349,10 @@ func TestFullCheckpointArtifactUploadAndAcknowledge(t *testing.T) {
 			if record.Kind != KindFull || record.MemorySizeBytes == nil || *record.MemorySizeBytes != size {
 				t.Fatalf("incorrect export metadata: %+v", record)
 			}
+			replayed := mustExport(t, Artifacts{Root: artifacts.Root}, ref, noCapture(t))
+			if replayed.MemorySizeBytes == record.MemorySizeBytes || !artifactsEqual(replayed, record) {
+				t.Fatalf("full replay should return equal metadata without recapturing: %+v != %+v", replayed, record)
+			}
 			store := &transferStore{}
 			wrong := record
 			other := size + 1
