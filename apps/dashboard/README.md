@@ -302,6 +302,16 @@ commands both come from `src/lib/quickstart/interfaces.json`.
 
 ## Quickstart catalog
 
+SDK preview examples target the box's `127.0.0.1:3000` using each SDK's
+socket-address type: a Python tuple, Node `SocketAddress`, Go `net.TCPAddr`,
+or C `sockaddr_storage` populated by `boxlite_socket_address_parse`.
+Go passes `DefaultTunnelOptions()` to request a public preview; the other
+examples use their SDK's public default. Passing a bare port is not supported.
+When changing these templates, run the dashboard Quickstart tunnel contract
+tests and the Python and Go SDK tunnel/template tests. These check generated
+calls against the SDK types, C header, and Python binding rather than relying
+only on snapshots of the displayed code.
+
 Coder Universal is no longer offered as a quickstart template. Its preset
 requested 30 GB of disk, which exceeds a 10 GB per-box disk ceiling. Removing
 the preset avoids offering a configuration those organizations cannot create;

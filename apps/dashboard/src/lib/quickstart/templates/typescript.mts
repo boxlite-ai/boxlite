@@ -1,4 +1,5 @@
 import { ApiKeyCredential, BoxliteRestOptions, JsBoxlite } from '@boxlite-ai/boxlite'
+import { SocketAddress } from 'node:net'
 
 const apiKey = {{API_KEY_TS}}
 if (!apiKey) throw new Error('Set BOXLITE_API_KEY before running this script')
@@ -25,7 +26,7 @@ if (result.exitCode !== 0) throw new Error(`Command exited with ${result.exitCod
 const serverCode = {{SERVER_TS}}
 // Start the server without waiting for it to exit.
 const server = await box.exec('python3', ['-u', '-c', serverCode])
-const preview = await box.network.tunnel(3000)
+const preview = await box.network.tunnel(new SocketAddress({ address: '127.0.0.1', port: 3000 }))
 const url = preview.uri()
 if (!url) throw new Error('Cloud did not return a preview URL')
 console.log('Preview URL:', url)

@@ -214,7 +214,9 @@ int main(void) {
     CBoxTunnelHandle *preview = NULL;
     char *url = NULL;
     require_ok(boxlite_box_network(qs.box, &network, &error), "network", &error);
-    require_ok(boxlite_network_tunnel(network, 3000, &preview, &error), "preview", &error);
+    struct sockaddr_storage target;
+    require_ok(boxlite_socket_address_parse("127.0.0.1:3000", &target, &error), "preview target", &error);
+    require_ok(boxlite_network_tunnel(network, &target, NULL, &preview, &error), "preview", &error);
     require_ok(boxlite_tunnel_uri(preview, &url, &error), "preview URL", &error);
     if (!url) { fprintf(stderr, "Cloud did not return a preview URL\n"); exit(1); }
     printf("Preview URL: %s\n", url);
