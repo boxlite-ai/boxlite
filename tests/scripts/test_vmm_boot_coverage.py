@@ -11,7 +11,7 @@ COVERAGE_MAKEFILE = Path(__file__).resolve().parents[2] / "make/coverage.mk"
 
 
 class VmmBootCoverageTest(unittest.TestCase):
-    def test_boot_coverage_builds_and_exports_guest_init(self):
+    def test_boot_coverage_builds_and_exports_guest_inits(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             tools = root / "bin"
@@ -20,6 +20,9 @@ class VmmBootCoverageTest(unittest.TestCase):
             cargo.write_text(
                 "#!/bin/sh\n"
                 'if [ "$1 $2" = "llvm-cov nextest" ]; then\n'
+                '  test -f "$VMM_CPU_SCALING_INIT" || {\n'
+                '    echo "missing CPU scaling init at boot coverage startup" >&2; exit 1\n'
+                "  }\n"
                 '  test -n "$VMM_GUEST_MOUNT_INIT" || {\n'
                 '    echo "missing VMM_GUEST_MOUNT_INIT" >&2; exit 1;\n'
                 "  }\n"
@@ -34,6 +37,7 @@ class VmmBootCoverageTest(unittest.TestCase):
                 "VMM_BALLOON_INIT :=\n"
                 "VMM_DISK_GROW_INIT :=\n"
                 "VMM_HOTPLUG_INIT :=\n"
+                "export VMM_CPU_SCALING_INIT := $(PROJECT_ROOT)/cpu-scaling-init\n"
                 f"include {COVERAGE_MAKEFILE}\n"
                 ".PHONY: _ensure-kvm _ensure-vmm-kernel vmm\\:guest-mount-init\n"
                 "_ensure-kvm _ensure-vmm-kernel:\n\t@true\n"
@@ -42,6 +46,7 @@ class VmmBootCoverageTest(unittest.TestCase):
                 'x86_64-unknown-linux-musl/release"\n'
                 '\t@touch "$(PROJECT_ROOT)/target/vmm/guest-mount/'
                 'x86_64-unknown-linux-musl/release/boxlite-guest"\n'
+                '$(VMM_CPU_SCALING_INIT):\n\t@touch "$@"\n'
             )
             log = root / "init.log"
             env = {
