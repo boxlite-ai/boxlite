@@ -65,22 +65,24 @@ async fn websocket_file_upload_completion_and_early_refusal() {
             )
             .await;
             let (connection, _) = listener.accept().await.unwrap();
-            let mut ws = tokio_tungstenite::accept_hdr_async(
-                connection,
-                |request: &Request, mut response: Response| {
-                    assert_eq!(
-                        request.uri().path_and_query().unwrap().as_str(),
-                        "/v1/boxes/box1/files/ws?path=%2Ftmp%2Fwith%20space"
-                    );
-                    assert_eq!(request.headers()["Sec-WebSocket-Protocol"], SELECT_PROTOCOL);
-                    response
-                        .headers_mut()
-                        .insert("Sec-WebSocket-Protocol", SELECT_PROTOCOL.parse().unwrap());
-                    Ok(response)
-                },
-            )
-            .await
-            .unwrap();
+            #[expect(
+                clippy::result_large_err,
+                reason = "tungstenite fixes the handshake callback's ErrorResponse type"
+            )]
+            let callback = |request: &Request, mut response: Response| {
+                assert_eq!(
+                    request.uri().path_and_query().unwrap().as_str(),
+                    "/v1/boxes/box1/files/ws?path=%2Ftmp%2Fwith%20space"
+                );
+                assert_eq!(request.headers()["Sec-WebSocket-Protocol"], SELECT_PROTOCOL);
+                response
+                    .headers_mut()
+                    .insert("Sec-WebSocket-Protocol", SELECT_PROTOCOL.parse().unwrap());
+                Ok(response)
+            };
+            let mut ws = tokio_tungstenite::accept_hdr_async(connection, callback)
+                .await
+                .unwrap();
             if receipt == Some(400) {
                 let refusal = r#"{"type":"result","status":400,"error":{"code":"unsupported","message":"cannot upload here"}}"#;
                 ws.send(Message::Text(refusal.into())).await.unwrap();

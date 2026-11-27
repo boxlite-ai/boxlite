@@ -642,15 +642,15 @@ impl ApiClient {
             ))
         })?
         .map_err(|error| {
-            if protocol.is_some() {
-                if let tokio_tungstenite::tungstenite::Error::Http(response) = &error {
-                    let body = response
-                        .body()
-                        .as_deref()
-                        .map(String::from_utf8_lossy)
-                        .unwrap_or_default();
-                    return map_http_body(response.status(), &body);
-                }
+            if protocol.is_some()
+                && let tokio_tungstenite::tungstenite::Error::Http(response) = &error
+            {
+                let body = response
+                    .body()
+                    .as_deref()
+                    .map(String::from_utf8_lossy)
+                    .unwrap_or_default();
+                return map_http_body(response.status(), &body);
             }
             map_ws_error(error)
         })

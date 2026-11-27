@@ -24,6 +24,7 @@ jest.mock('@nestjs/swagger', () => ({
 jest.mock('node:fs', () => ({ readFileSync: jest.fn(() => '{}') }))
 jest.mock('./config/typed-config.service', () => ({ TypedConfigService: class {} }))
 jest.mock('./auth/failed-auth-tracker.service', () => ({ FailedAuthTrackerService: class {} }))
+jest.mock('./common/middleware/failed-auth-rate-limit.middleware', () => ({ FailedAuthRateLimitMiddleware: class {} }))
 jest.mock('./filters/all-exceptions.filter', () => ({ AllExceptionsFilter: jest.fn() }))
 jest.mock('./interceptors/metrics.interceptor', () => ({ MetricsInterceptor: jest.fn() }))
 jest.mock('./analytics/services/analytics.service', () => ({ AnalyticsService: class {} }))

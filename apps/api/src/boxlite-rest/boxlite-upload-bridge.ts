@@ -33,7 +33,6 @@ export function bridgeUpload(peer: WebSocket, url: URL, apiKey: string, lease: A
     const upstream = request(url, {
       method: 'PUT',
       agent: false,
-      rejectUnauthorized: false,
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/x-tar',
