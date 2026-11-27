@@ -13,6 +13,7 @@ import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { BoxConflictError } from '../errors/box-conflict.error'
 import { ApiKeyStrategy } from '../../auth/api-key.strategy'
 import { AddOutboundControl1794888000000 } from '../../migrations/pre-deploy/1794888000000-add-outbound-control-migration'
 import { OutboundCommitUnknown, OutboundPolicyStore, outboundRecord, persistedOutbound } from './outbound-policy.store'
@@ -253,7 +254,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
         whereCondition: { state: BoxState.STARTING },
         updateData: { state: BoxState.STARTED },
       }),
-    ).rejects.toThrow()
+    ).rejects.toThrow(BoxConflictError)
     expect((await store.read(box.id, org)).state).toBe(BoxState.STARTING)
     await bootstrap.beginRetirement(box.id, key)
     const evidence = (outcome: 'confirmed' | 'retired', allocationClosed = false) => ({
@@ -277,7 +278,7 @@ describeIfDatabase('durable outbound policy store (real PostgreSQL)', () => {
         whereCondition: { state: BoxState.STOPPED },
         updateData: { state: BoxState.STARTED },
       }),
-    ).rejects.toThrow()
+    ).rejects.toThrow(BoxConflictError)
 
     const replacement = { ...key, attempt_id: randomUUID() }
     await bootstrap.reserve(settled, replacement, fingerprint, fingerprint)

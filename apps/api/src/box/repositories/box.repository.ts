@@ -37,12 +37,13 @@ import { OutboundPolicyStore, persistedOutbound } from '../stores/outbound-polic
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 function ordinaryLifecycleCondition(update: Partial<Box>): FindOptionsWhere<Box> {
+  // Keep the column separate from the JSON operator so TypeORM can quote it.
   if (update.state === BoxState.STARTED) {
     // The generation remains after retirement, fencing an observation that began before the intent.
-    return { outboundControl: Raw((column) => `(${column}->>'bootstrapGeneration') IS NULL`) }
+    return { outboundControl: Raw((column) => `(${column} ->> 'bootstrapGeneration') IS NULL`) }
   }
   if (update.state !== undefined || update.runnerId !== undefined) {
-    return { outboundControl: Raw((column) => `(${column}->>'bootstrap') IS NULL`) }
+    return { outboundControl: Raw((column) => `(${column} ->> 'bootstrap') IS NULL`) }
   }
   return {}
 }
