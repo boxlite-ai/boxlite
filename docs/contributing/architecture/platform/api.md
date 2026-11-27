@@ -106,6 +106,7 @@ prepare.
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
 | [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
+| [Secret Server write API](#secret-server-write-api)                        | `apps/secret-server`         | `/internal/v1`                                                                       | `PORT`                   |
 | [Telemetry collector API](#telemetry-collector-api)                       | `apps/otel-collector`        | OTLP/HTTP and health listeners                                                       | `4318`, `13133`, `13132` |
 | [Local development stack](#local-development-stack)                       | `apps/infra-local`           | `http://localhost:28080`                                                             | local host ports only    |
 | [Externally served APIs](#externally-served-apis)                         | `apps/dashboard`, `apps/api` | discovered via `GET /config`                                                         | —                        |
@@ -1354,6 +1355,49 @@ and tunnels them to guest ports is in [`proxy/README.md`](../../../../apps/proxy
 | `CONNECT` | `<port>-<box>.proxy.<domain>`                         | Opens a TCP stream after inbound and tunnel authorization; SDK/CLI sends its organization bearer.                 |
 
 </details>
+
+## Secret Server write API
+
+The `write` and `all` roles serve these endpoints. Callers authenticate with
+an allowlisted Google identity or the development bearer token in local and dev. See the
+[Secret Server configuration](../../../../apps/secret-server/README.md#server-skeleton).
+
+| Method | Path | Success response |
+| --- | --- | --- |
+| `POST` | `/internal/v1/boxes/{box_id}/secrets` | `201` for a new transfer or `200` for a matching retry. Returns `secrets` containing `{name, secret_id}` entries in request order. |
+| `GET` | `/internal/v1/secrets/{secret_id}` | `200` with metadata for a UUID. The request has no body. |
+
+The POST body is JSON with `org_id`, `created_by`, and a nonempty `secrets` array.
+Each entry requires `name`, `value`, `hosts`, `headers`, and `placeholder`.
+The limits are 64 secrets per box, 64 KiB per value, and 1 MiB for the JSON body.
+
+Request field names are case-sensitive. Malformed UTF-8 and unpaired Unicode
+surrogate escapes receive `400 malformed_json`.
+
+The GET response contains `secret_id`, `org_id`, `scope`, `box_id`, `name`,
+`disabled`, `hosts`, `headers`, `placeholder`, `key_id`, `created_by`, and `created_at`.
+Both routes omit plaintext values, ciphertext, and encrypted data keys.
+
+Errors use `application/problem+json` with a `code` and, where applicable, a `field`.
+
+| Status | Code or cause |
+| --- | --- |
+| `400` | POST `malformed_json` |
+| `401` | `unauthorized` |
+| `404` | GET `secret_not_found`, or `not_found` for an unregistered route |
+| `405` | `method_not_allowed`, with the supported methods in `Allow` |
+| `409` | POST `box_org_mismatch`, `box_secrets_exist`, or `secret_conflict` |
+| `413`, `415` | POST `payload_too_large` or `unsupported_media_type`, respectively |
+| `422` | A POST field fails validation, or GET returns `secret_id_invalid` |
+| `500` | `internal_error` |
+| `503` | `request_timeout` on either route, or POST `encryption_unavailable` |
+
+GET allows two seconds for pool acquisition and the metadata query. If a POST
+times out while PostgreSQL is confirming `COMMIT`, the outcome can be unknown.
+Retry the identical payload with the same box ID to recover any committed IDs.
+
+See the [write API design](https://github.com/boxlite-ai/boxlite/issues/2626)
+for the complete validation rules and field-level error codes.
 
 ## Registry proxy API
 

@@ -6,8 +6,9 @@ The internal encryption package protects secret values and routing policy with p
 
 This Go module contains `internal/encryption`, `internal/server`,
 `internal/attest` ([runner attestation](#runner-attestation)), and a Secret
-Server skeleton with database initialization and a migration command. Write and
-fetch business endpoints and deployment resources are not yet implemented.
+Server skeleton with database initialization and a migration command. The write
+role serves secret transfer and metadata endpoints; fetch and deployment resources
+are not yet implemented.
 The existing API encryption service and stored values remain unchanged.
 
 ## Server skeleton
@@ -21,7 +22,7 @@ environment key provider is rejected in production.
 
 The write route group validates Google ID tokens and permits only verified emails
 on the allowlist. The fetch route checks Runner proof in `fetch` and `all` roles.
-The current business handlers are placeholders that return 404 after authentication.
+The fetch handler returns 404 after authentication until fetch is implemented.
 
 `/health` is liveness and `/ready` checks database connectivity. Startup also
 performs an encryption round trip.
@@ -30,6 +31,31 @@ Startup applies migrations and verifies the durable encrypted canary before the
 server listens. A failed migration or key check prevents startup and readiness.
 Startup and the standalone `migrate` command each allow up to two minutes,
 including any wait for the migration lock.
+
+The write role exposes `POST /internal/v1/boxes/{box_id}/secrets` for encrypted
+transfers and `GET /internal/v1/secrets/{secret_id}` for metadata. A successful
+transfer returns secret IDs without values. Identical retries return the same IDs;
+a changed value or policy returns `secret_conflict`.
+
+The secret store serializes transfers for each box with a transaction-scoped lock.
+It checks the organization before names, and rolls back the batch if retry comparison
+fails. Metadata reads do not retrieve encrypted values.
+
+```mermaid
+sequenceDiagram
+    participant A as Transfer A
+    participant DB as PostgreSQL
+    participant B as Transfer B for the same box
+    A->>DB: Begin and acquire the box lock
+    B->>DB: Begin and wait for the box lock
+    alt A succeeds
+        A->>DB: Commit the batch and release the lock
+    else A fails
+        A->>DB: Roll back the batch and release the lock
+    end
+    DB-->>B: Grant the box lock
+    B->>DB: Check the organization, then the existing names
+```
 
 If token validator initialization fails, startup closes the database pool and
 returns an error before opening the listener.
@@ -47,8 +73,29 @@ stops waiting for the database pool. Pool cleanup can continue until the process
 exits. A permanent listener error remains part of the returned error even if
 cleanup times out.
 
+```mermaid
+sequenceDiagram
+    participant Run as Secret Server
+    participant HTTP as HTTP server
+    participant DB as PostgreSQL pool
+    Note over Run: Shutdown signal or listener error starts one deadline
+    Run->>HTTP: Stop accepting connections and drain active requests
+    alt Drain completes
+        HTTP-->>Run: Active requests finished
+    else Drain fails or the deadline expires
+        HTTP-->>Run: Return shutdown error
+        Run->>HTTP: Force-close remaining connections
+    end
+    Run->>DB: Start closing the pool
+    alt Pool closes before the shared deadline
+        DB-->>Run: Pool close completes
+    else Shared deadline expires
+        Note over Run,DB: Run stops waiting and pool cleanup can continue
+    end
+```
+
 Request logging and OpenTelemetry integration remain open under [#2570](https://github.com/boxlite-ai/boxlite/issues/2570);
-the current service emits only startup and recovery logs. Configuration uses explicit
+the service logs transfer and metadata outcomes without request payloads. Configuration uses explicit
 environment parsing and validation to keep errors limited to variable names and avoid
 exposing secret values; it does not use envconfig or validator.
 
