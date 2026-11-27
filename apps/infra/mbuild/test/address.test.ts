@@ -10,6 +10,7 @@ import {
   ImageAddressError,
   RELEASE_VERSION,
   releaseTagFor,
+  releaseImageDigests,
   resolveRegistry,
 } from '../src/address.ts'
 import { BuildConfigError, onlyArtifact, parseBuildConfig, registryFor } from '../src/config.ts'
@@ -401,4 +402,19 @@ test('a release build and a commit build of one commit never share an address', 
     addressFor({ config, registry: dev, artifact: 'api', tag: SHA }),
     addressFor({ config, registry: dev, artifact: 'api', tag: releaseTagFor({ version: VERSION, sha: SHA }) }),
   )
+})
+
+test('release addresses bind each cloud image to its own digest at the exact version and SHA', () => {
+  const config = onArtifactRegistry()
+  const sha = 'a'.repeat(40)
+  const tag = releaseTagFor({version:'v1.2.3', sha})
+  const images = { api: 'sha256:' + 'b'.repeat(64), console: 'sha256:' + 'c'.repeat(64) }
+  const json = (overrides: object = {}) => JSON.stringify({tag:'v1.2.3',sha,images,...overrides})
+  const digests = releaseImageDigests(json(),tag)
+  const registry = resolveRegistry({config,stage:'dev',region:'us-central1',project:'boxlite-fixture'})
+  const addresses = addressesFor({config,registry,tag,digests})
+  for (const [artifact, digest] of Object.entries(images)) assert.ok(addresses[artifact]?.endsWith('@'+digest))
+  assert.throws(()=>releaseImageDigests(json({sha:'d'.repeat(40)}),tag))
+  assert.throws(()=>releaseImageDigests(json({images:{api:null}}),tag))
+  assert.throws(()=>addressesFor({config,registry,tag,digests:{api:images.api}}))
 })

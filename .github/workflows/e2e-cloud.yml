@@ -121,7 +121,21 @@ run-name: E2E cloud against ${{ inputs.stage || 'dev' }}${{ inputs.tag && format
 
 on:
   workflow_call:
+    outputs:
+      release_result:
+        description: Outcome of the release acceptance suite
+        value: ${{ jobs.e2e.outputs.release_result }}
     inputs:
+      candidate_id: { required: false, type: string }
+      candidate_digest: { required: false, type: string }
+      release_sha:
+        description: Exact tagged commit deployed by release acceptance.
+        required: false
+        type: string
+      deployment_attempt:
+        description: Release dev apply attempt required for acceptance.
+        required: false
+        type: string
       ref:
         # The commit the caller deployed. Without it the suite would build
         # its SDKs from whatever main points at now, while the stack under
@@ -218,6 +232,7 @@ on:
 # the tree. Widening this hands that job the deploy role.
 permissions:
   contents: read
+  actions: read
 
 # One group per stage: runs against the same stage would race over shared
 # boxes, while dev and prod share nothing.
@@ -241,6 +256,7 @@ permissions:
 concurrency:
   group: e2e-cloud-${{ inputs.stage || 'dev' }}
   cancel-in-progress: false
+  queue: max
 
 env:
   BOXLITE_DEPS_STUB: '1'
@@ -254,7 +270,10 @@ jobs:
     name: E2E suite (${{ inputs.stage || 'dev' }})
     if: ${{ contains(fromJSON('["dev", "stage", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.candidate_id && 165 || 45 }}
+    cache-mode: read
+    outputs:
+      release_result: ${{ steps.acceptance.outputs.result }}
     env:
       # Precedence: a dispatch input overrides for one run; otherwise the
       # repo variable is the configured stack; otherwise the built-in
@@ -278,20 +297,77 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
+      - name: Download the dev deployment's release candidate
+        if: inputs.candidate_id
+        uses: ./.github/actions/release-candidate
+        with:
+          id: ${{ inputs.candidate_id }}
+          digest: ${{ inputs.candidate_digest }}
+          tag: ${{ inputs.tag }}
+          sha: ${{ inputs.release_sha }}
+
+      - name: Locate this run's Linux client artifacts
+        if: inputs.candidate_id
+        id: clients
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.release_sha }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          ids=$(node apps/infra/scripts/release-candidate.mjs client-ids)
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+
+      - name: Download only the Linux client artifacts
+        if: inputs.candidate_id
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.clients.outputs.ids }}
+          path: ${{ runner.temp }}/release-clients
+
+      - name: Verify and stage Linux acceptance clients
+        if: inputs.candidate_id
+        env:
+          CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.release_sha }}
+          CLIENT_ARTIFACT_DIR: ${{ runner.temp }}/release-clients
+        run: node apps/infra/scripts/release-candidate.mjs clients
+
       - name: Validate client release
-        if: ${{ inputs.tag != '' }}
+        if: inputs.tag || inputs.deployment_attempt
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci/install-e2e-release.sh validate
 
+      - name: Resolve the published SDK commit
+        id: release_commit
+        if: inputs.deployment_attempt || (inputs.tag && (inputs.stage || 'dev') == 'dev')
+        env:
+          DEPLOYMENT_ATTEMPT: ${{ inputs.deployment_attempt }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha=$(gh api "repos/boxlite-ai/boxlite/commits/refs%2Ftags%2F$RELEASE_TAG" --jq .sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] ||
+            { echo '::error::GitHub did not return a full release commit SHA'; exit 1; }
+          if [[ -n "$DEPLOYMENT_ATTEMPT" ]]; then
+            [[ "$DEPLOYMENT_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] ||
+              { echo '::error::Repeat dev deployment before rerunning release E2E'; exit 1; }
+            [[ "$sha" == "$RELEASE_SHA" ]] ||
+              { echo '::error::Release tag differs from the dev deployment'; exit 1; }
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Checkout release SDK sources for subdomain clients
         if: ${{ inputs.tag != '' && (inputs.stage || 'dev') == 'dev' }}
-        uses: actions/checkout@v5
-        with:
-          repository: boxlite-ai/boxlite
-          ref: ${{ inputs.tag }}
-          path: target/e2e-release
-          persist-credentials: false
+        env:
+          RELEASE_SDK_SHA: ${{ steps.release_commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 https://github.com/boxlite-ai/boxlite.git "$RELEASE_SDK_SHA"
+          git worktree add --detach target/e2e-release "$RELEASE_SDK_SHA"
 
       - name: Require the shared subdomain (dev)
         if: ${{ (inputs.stage || 'dev') == 'dev' }}
@@ -539,3 +615,32 @@ jobs:
             pytest-identities.xml
             pytest-catalog.xml
           if-no-files-found: ignore
+
+      - name: Record the deployed pins and tested client hashes
+        if: success() && inputs.candidate_id && inputs.deployment_attempt
+        env:
+          CANDIDATE: ${{ inputs.candidate_id }}
+          DIGEST: ${{ inputs.candidate_digest }}
+          SHA: ${{ inputs.release_sha }}
+        run: |
+          jq -n --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" --argjson id "$CANDIDATE" \
+            --arg digest "$DIGEST" --arg tag "$RELEASE_TAG" --arg sha "$SHA" --slurpfile clients "$RELEASE_ASSET_DIR/tested-clients.json" \
+            '{run:$run,attempt:$attempt,candidate:$id,digest:$digest,tag:$tag,sha:$sha,clients:$clients[0]}' > acceptance.json
+
+      - name: Save dev acceptance for production retries
+        if: success() && inputs.candidate_id && inputs.deployment_attempt
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-accepted-${{ inputs.candidate_id }}
+          path: acceptance.json
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Summarize release acceptance
+        id: acceptance
+        if: always() && inputs.deployment_attempt
+        env:
+          E2E_RESULT: ${{ job.status }}
+        run: |
+          echo "result=$E2E_RESULT" >> "$GITHUB_OUTPUT"
+          echo "Dev cloud E2E for $RELEASE_TAG — $E2E_RESULT" >> "$GITHUB_STEP_SUMMARY"

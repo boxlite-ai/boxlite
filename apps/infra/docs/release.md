@@ -1,181 +1,93 @@
 ## TL;DR
 
-Publish a stable release to build its artifacts, validate dev and request prod approval in GitHub. Optional Slack messages link reviewers to each deployment.
+Start `mbuild-release` on `main` to build a draft release, test its files on dev and publish the verified version.
 
 ## Release runbook
 
-The examples use `v0.10.3`; replace it with your stable `vX.Y.Z` release tag.
-Pre-release suffixes are unsupported.
-
-### Before you start
-
-- Merge the version bump into `main` and pass its required checks.
-- Configure required reviewers on the `prod` GitHub Environment.
-- Ensure the dev/prod stage declarations, cloud credentials, and cloud E2E credentials are configured.
-- Have permission to start workflows and approve the deployment Environments.
-
-Publication needs package write permission; orchestration needs Actions write permission.
-Neither job binds a cloud Environment; the existing deployment and E2E workflows retain their own approvals.
-
-### 1. Publish the GitHub Release
-
-Sync `main`, then create and push the release tag:
+Merge the version bump and tag its commit on `main`. The tag must match the stable workspace version in `Cargo.toml`.
 
 ```bash
-git switch main
-git pull --rebase origin main
-
-TAG=v0.10.3
-git tag "$TAG"
-git push origin "$TAG"
-gh release create "$TAG" \
-  --repo boxlite-ai/boxlite \
-  --verify-tag \
-  --generate-notes
+TAG=v0.15.0
+gh workflow run mbuild-release.yml --ref main -f tag="$TAG"
 ```
 
-Pushing the tag starts no release build; publishing the Release starts the SDK/runtime builds and
-`Publish Release Images`. The latter dispatches `mbuild-release` from `main` with `build-only=false` by default.
-The successful release C SDK build starts `Build Go SDK` and `Build Runner Binary`.
+The run creates the draft or selects the existing draft for that tag. Configure the package trusted publisher for PyPI and each npm package with `mbuild-release.yml` as the workflow filename. The prod GitHub Environment needs required reviewers.
 
-### 2. Follow the dev acceptance pipeline
+### What runs
 
-Open **Actions → mbuild-release**:
-
-```text
-Publish all declared images to GHCR
-  → Wait for required GitHub Release assets
-  → dispatch mdeploy-all: dev, this tag → notify #release → wait for that dev run
-  → dispatch e2e-cloud: dev, this tag → wait for success
-  → verify dev deployment history and prod reviewers
-  → dispatch mdeploy-all: prod, this tag (approval pending)
-  → write the GitHub job summary and optionally send the release report to #release
-```
-
-The publisher reads the tagged commit's artifact declaration and builds its current four images:
-`api`, `proxy`, `otel-collector`, and `registry-proxy`.
-Their address is `ghcr.io/boxlite-ai/boxlite/<artifact>:vX.Y.Z-<full-commit-sha>`.
-Publication logs manifest digests and reuses existing images without overwriting them.
-Dependency audit failures stop publication; receiving cloud registries enforce image scans after import.
-
-Asset readiness checks the Release API for uploaded, nonempty files, rather than waiting for every SDK workflow:
-
-| Consumer | Required release assets |
+| Stage | Outputs and checks |
 | --- | --- |
-| Runner | `boxlite-runner-vX.Y.Z-linux-amd64.tar.gz` and its `.sha256` |
-| Python E2E | `boxlite-X.Y.Z-cp312-cp312-manylinux_2_28_x86_64.whl` |
-| Node E2E | `boxlite-ai-boxlite-X.Y.Z.tgz`, `boxlite-ai-boxlite-linux-x64-gnu-X.Y.Z.tgz` |
-| C E2E | `boxlite-c-vX.Y.Z-linux-x64-gnu.tar.gz` |
-| CLI E2E | `boxlite-cli-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, `install.sh` |
+| Build | Runtime and CLI, wheels, npm packages and C SDK archives build in parallel and enter Actions Artifacts. Go tests and the Linux Runner build link the C archives from this run. |
+| Prepare dev | `mbuild publish` pushes the declared images to GHCR. The Runner job uploads the original tarball as an OCI layer. Once the GHCR producers finish, the dev preparation job verifies image and Runner digests, saves the deployment candidate and requests dev approval. SDK tests and distribution packaging continue in parallel. |
+| Dev approval and E2E | Approve the dev Environment in the run. The cloud suite reads only the Linux x64 CLI, Python wheel, C SDK and two npm tarballs from this run. It records their checksums with the accepted deployment digests. |
+| Publish | Dev E2E success opens prod approval immediately. In parallel, publication waits for the complete distribution and Go tests, compares the tested client bytes, and attaches the verified files to the draft. The top-level PyPI and npm jobs publish the accepted packages. |
+| Release and prod | When those publishers succeed, the workflow marks the draft public. Rust crates can then publish, and the Go job verifies the public C SDK downloads before tagging the tested commit. Approved prod deployment uses the same GHCR digests and can finish while the release is still a draft. |
 
-The existing installer and deployment workflow verify/download these assets when they consume them.
-Asset waiting is limited to three hours; dev deployment to three hours; E2E to one hour.
-Approve dev/E2E Environment requests within those limits.
+The C SDK and Runner workflows each load CI configuration and validate the build commit in one preparation job. A regular release skips the lookup for a previous acceptance receipt. Once its own attachments succeed, npm and PyPI can start. Finalization requires both to succeed.
 
-All child workflows run from `main`, with these fixed inputs:
+The Runner package at `ghcr.io/boxlite-ai/boxlite/runner` must allow anonymous pulls from hosts. First boot and in-place upgrade verify the OCI manifest against the release tag, source commit and archive digest before extracting the binary. Dev and prod receive those pins from the candidate. A version-only manual rollout reads the same pins from the published `release-candidate.json`.
 
-| Workflow | Inputs |
+### Retries
+
+Rerunning the API build replaces that API version's GHCR tag with the rebuilt manifest. Other successful matrix entries keep their digests. A failed Docker upload retries the image already built by that job.
+
+For a failed production job, use **Re-run failed jobs** in the original release run. Before requesting approval and after approval, production checks the saved dev acceptance against the run ID, accepted attempt, candidate artifact ID, manifest digest, tag and source commit. A different candidate needs its own dev E2E.
+
+If finalization loses the GitHub response after publishing, retry the failed job. It verifies the published files and their digests without modifying them. PyPI compares existing wheel hashes before it uploads any missing files and verifies the full set afterward.
+
+A same-version Runner rebuild changes the pinned manifest. Hosts record the installed manifest and archive digests and reapply when either changes.
+
+Each Runtime or CLI tarball sidecar and the installer sidecar `install.sh.sha256` occupies one entry in the release inventory. The Release attachment job checks all existing selected files before uploading missing files. If a digest conflicts, the job stops before its first upload so the operator can inspect the originating run.
+
+The npm publisher checks all existing platform packages and the main package before its first upload. It publishes missing platform packages before the main package and verifies each new registry digest. A retry reuses matching packages.
+
+### Roll back to a release that predates the manifest
+
+A version-only installation requires a published `release-candidate.json`. For a historical release missing the file, complete this one-time backfill before selecting the version for installation or rollback.
+
+1. Resolve the product tag to its original commit and download the original Linux AMD64 Runner tarball and its checksum from that GitHub Release. Verify the exact filename and SHA-256 against the recorded checksum and the GitHub asset digest. Stop if the original bytes or independent evidence cannot be verified.
+2. With approval to update that version, publish those verified bytes as the single `application/gzip` layer to `ghcr.io/boxlite-ai/boxlite/runner`. Use the same OCI artifact type and source, revision and version annotations as the **Push the exact Runner archive** step. Check the manifest and blob by digest with anonymous credentials.
+3. Record the original `tag`, resolved commit in `sha`, OCI digest in `runner.manifest` and archive digest in `runner.archive`. For an `mdeploy-all` rollout, also populate `images` with the original verified manifest digest of each application image. Abort if a digest cannot be tied to the historical release.
+4. Attach the verified metadata as `release-candidate.json` to that version and check its downloaded SHA-256. Preserve any existing manifest and investigate conflicting bytes. A rollback can then select the version and use the usual downgrade approval.
+
+The host fetches its Runner bytes from GHCR by digest. Backfilling metadata does not confer a dev E2E acceptance receipt or make the historical build eligible for component repairs.
+
+### Build and publish one component
+
+Run `mbuild-release.yml` from `main` and select an existing product Release tag. Each command builds its own files, runs the component checks and publishes within this run. Standalone runs skip cloud deployment, dev E2E, prod approval and draft promotion.
+
+| Command | Builds and publishes |
 | --- | --- |
-| Dev `mdeploy-all.yml` | `stage=dev`, `ref=<release tag>`, `components=api+runner`, `apply=true`, `confirm=true` |
-| `e2e-cloud.yml` | `stage=dev`, `tag=<release tag>`; retain all other defaults |
-| Prod `mdeploy-all.yml` | `stage=prod`, `ref=<release tag>`, `components=api+runner`, `apply=true`, `confirm=true` |
+| `publish-runtime` | Runtime, CLI, installer and checksums → GitHub Release. An already public Release also permits crates.io publication. |
+| `publish-wheels` | Platform wheels → GitHub Release and PyPI. |
+| `publish-node` | Platform packages and main npm package → GitHub Release and npm. |
+| `publish-c` | Platform C SDK archives → GitHub Release. |
+| `publish-go` | Builds the C SDK matrix, tests Go, then tags `sdks/go/vX.Y.Z` only after downloading every versioned C SDK archive anonymously from the public Release and verifying its GitHub asset digest. |
+| `publish-runner` | Builds the Linux x64 C SDK and Runner, pushes the Runner to GHCR and attaches its archive and checksum to GitHub Release. |
 
-The pipeline waits for the exact run IDs returned by GitHub dispatch.
-A failed, cancelled, or timed-out dev/E2E run prevents the prod request.
-The GitHub summary includes the E2E result and the prod run link after success, or the failed or interrupted phase.
+If Go tagging fails on a draft, finish the full release first. On a public Release, `publish-c` rebuilds every C archive. Fresh tar timestamps can change an existing archive's digest and block all uploads, including the missing archive.
 
-### Slack approval notices
+- If the original distribution artifact and its dev acceptance receipt are available, run `repair-c` for the same tag. Set `candidate-id` to that distribution artifact's ID. After the repair restores the missing archives, retry `publish-go`.
+- If either artifact has expired, follow the [full release procedure](#release-runbook) with a new patch version and tag. The new version goes through dev acceptance and publishes its own C archives and Go module tag.
 
-Configure each incoming webhook as a repository Actions secret for its channel. Each deployment notification step references only its destination’s secret by name.
+For example, `gh workflow run mbuild-release.yml --ref main -f command=publish-wheels -f tag=v1.2.3` selects fresh wheel publication. Set `build-only=true` to keep a standalone build in Actions. Use `source-ref` to build a branch or commit. A complete `publish` with `build-only=true` stages the GHCR images and Runner.
 
-| Sender | When | Channel and secret |
-| --- | --- | --- |
-| `mbuild-release` | After dev dispatch and before polling, then again with the final E2E result and prod link on success | #release · `SLACK_WEBHOOK_URL` |
-| `mdeploy-all` dev apply | Before the release deployment or commit preparation, and again after successful commit preparation | #dev_deployment · `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` |
-| `mdeploy-all` prod apply | Before the release deployment | #release · `SLACK_WEBHOOK_URL` |
+Component builds can overlap while a full release waits for prod approval. Jobs writing the same Release assets take a per-tag lock. Package publishers take a lock per registry and version. GitHub allows up to 100 pending jobs per group with `queue: max`.
 
-Each notice shows the sending workflow, its run title, GitHub actor, environment and phase. Buttons open GitHub, where reviewers approve the Environment.
+On a full release retry, a rebuilt macOS wheel changes the distribution manifest. The run verifies all files again. It can reuse successful dev E2E if every tested Linux client hash and every deployment digest still matches the receipt.
 
-For a release-driven dev deployment, both channels receive a link to the same dev child run. A commit with parallel preparation jobs gets one notice for that batch.
-Previews, stage deployments and build-only releases skip these notices.
+### Manually republish a component
 
-An empty or unset secret skips delivery to its channel. Review a run directly in GitHub if its notice fails.
+Open **Actions → mbuild-release → Run workflow** on `main`, select the product tag and choose `repair-runtime`, `repair-wheels`, `repair-node` or `repair-c`. Enter the candidate artifact ID from the original run. The matching dev acceptance receipt and candidate artifact must still be available. This command rechecks the tag and candidate and restores the selected attachments. Wheel and Node repairs also run the top-level PyPI or npm publisher. A repair on a draft leaves publication and prod approval to the original run.
 
-A supplied malformed release webhook fails the asset preflight. A final delivery failure leaves the GitHub summary available.
+### Approvals and notifications
 
-### 3. Approve the prod request
+Approve each cloud Environment in the parent run. The dev deployment and E2E share the dev stage concurrency lock. Prod uses the separate prod lock.
 
-After successful dev acceptance, Slack's **Review prod deployment** button opens the already-created prod run.
-Check the release tag and approve its `prod` Environment in GitHub.
-Each release deployment run has one protected job covering artifact checks, import and apply.
-The run actor is the Actions bot; GitHub records the human reviewer separately.
-Clicking the Slack link opens GitHub; deployment proceeds only after approval.
-
-A successful `mbuild-release` means dev acceptance passed and the prod request was created.
-The release is live only when that prod `mdeploy-all` run succeeds.
-It imports the selected GHCR digests directly into prod's AR/ECR registry, verifies them, scans, and deploys.
-Dev uses its own independent GHCR import.
-
-### Manual runs and publication recovery
-
-`mbuild-release` accepts:
-
-| Input | Default | Meaning |
-| --- | --- | --- |
-| `command` | `publish` | Publish the declared release images |
-| `tag` | Required | Stable tag whose commit is on `main` |
-| `build-only` | `false` | `false`: full pipeline; `true`: image build/upload only |
-
-For publication recovery, choose `build-only=true` to fill missing GHCR images without starting deployment, E2E, or Slack reporting:
-
-```bash
-TAG=v0.10.3
-gh workflow run mbuild-release.yml \
-  --repo boxlite-ai/boxlite \
-  --ref main \
-  -f command=publish \
-  -f tag="$TAG" \
-  -f build-only=true
-```
-
-Omit `build-only` or set it to `false` to request the full pipeline.
-The publication-only path does not wait for release assets and needs no Slack secret.
-For an intentional manual deployment, use the [deployment runbook](deployment.md#deploy-through-github-actions).
-
-### Validation and recovery boundaries
-
-Keep release tags and assets immutable.
-The pipeline compares the tag's commit with the publisher's resolved commit before every dispatch.
-Changes after the prod request is created remain an operator responsibility.
-
-Full pipelines share one dev validation concurrency group.
-Before requesting prod, the pipeline checks for overlapping dev applies, including failed/cancelled attempts and manual reruns.
-It inspects at most 500 `mdeploy-all` runs and 50 attempts per run.
-Missing timing, unknown overlapping applies, or truncated history prevents the prod request.
-This check covers `mdeploy-all`; avoid other deployment paths during acceptance.
-
-GitHub's native concurrency queues can replace older pending runs with newer requests.
-This applies to queued release pipelines and prod deployments awaiting approval.
-A Slack link identifies an exact prod run; it does not reserve a permanent queue position.
-Inspect that run's current state before approving or recovering it.
-
-Parent timeouts/cancellation leave dispatched children under GitHub's control.
-Inspect their exact run links before retrying; an interrupted apply may still be running.
-An uncertain dispatch response is never retried automatically because GitHub may already have created the run.
-If only Slack delivery failed, use the GitHub report summary and rerun only the report job.
-Rerunning the whole pipeline can create another deployment request.
-
-### Common failures
-
-| Failure | Response |
+| Event | Slack destination |
 | --- | --- |
-| Missing GitHub Release | Publish the Release matching the tag |
-| Missing required assets | Inspect the runtime/C/Node/wheels/Runner builds; the Runner build follows the C SDK build |
-| Invalid release webhook | Correct or clear `SLACK_WEBHOOK_URL` before rerunning asset preflight |
-| Missing GHCR image | Recover with `build-only=true`, then inspect downstream runs before restarting |
-| Invalid tag or tag moved | Use an immutable stable release tag whose commit is on `main` |
-| Overlapping dev apply | Finish deployment activity and repeat dev acceptance for the intended release |
-| Missing prod reviewers | Configure required reviewers on the `prod` Environment before retrying |
+| Release dev deployment, acceptance failure, prod approval and rollout results | Release Slack |
+| Standalone dev and stage rollout results | Dev Slack |
+| Standalone prod approval and rollout result | Release Slack |
 
-See [deployment mechanics](deployment.md#deploy-through-github-actions) for digest conflicts,
-registry authentication, and manual rollout diagnostics.
+Deployment results include a button to the originating run. The prod approval message includes successful dev acceptance. For standalone deployments, use the [deployment runbook](deployment.md#deploy-through-github-actions).

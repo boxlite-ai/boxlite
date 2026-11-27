@@ -78,10 +78,11 @@ test('component-specific artifact and cloud checks stay aligned with the public 
   assert.equal(steps[gate].if, "inputs.components != 'api+runner' && steps.config.outputs.kind != 'artifact-registry'")
   assert.notEqual(spawnSync('bash', ['-c', steps[gate].run]).status, 0)
   const images = actionSteps('mdeploy').find((step: any) => step.name === 'Verify the images')
-  assert.equal(images.if, "inputs.components != 'runner'")
-  const release = parsed.jobs.resolve.steps.find((step: any) => step.name === 'Require the release this tag names')
-  assert.equal(release.env.COMPONENTS, '${{ inputs.components }}')
-  assert.ok(release.run.indexOf('"$COMPONENTS" = \'api\'') < release.run.indexOf('tarball='))
+  assert.equal(images.if, "inputs.components != 'runner' && inputs.api-route != 'release-import'")
+  const importer = actionSteps('mdeploy').find((s: any) => s.run?.includes('mbuild import-release'))
+  assert.match(importer.if, /release-import/)
+  assert.ok(parsed.jobs.resolve.steps.some((s: any) => s.id === 'pins'))
+
 })
 
 /** What the workflow runs, with the commentary that discusses it removed. */
@@ -393,9 +394,9 @@ test('only dev and stage deploy workflows run off main', () => {
   // exactly the workflow that is strictest.
   const workflows = ['mdeploy-all.yml', 'mbuild.yml']
   for (const name of workflows) {
-    const text = workflowSource(name)
-    const guards = [...text.matchAll(/^\s*if: [^\n]*(?:\n\s{6}[^\n]*)*/gm)]
-      .map((match) => match[0])
+    const parsed = load(readFileSync(new URL('../../../../.github/workflows/' + name, import.meta.url), 'utf8')) as any
+    const guards = Object.values<any>(parsed.jobs)
+      .map((job) => job.if ?? '')
       .filter((guard) => guard.includes('refs/heads/main'))
     assert.ok(guards.length > 0, `${name} guards no job by branch`)
     for (const guard of guards) {

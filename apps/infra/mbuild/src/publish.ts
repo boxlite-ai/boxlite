@@ -29,7 +29,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, rm } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { AuditConfig, BuildConfig, ScanPolicy, ScanSeverity } from './config.ts'
-import { addressFor, assertTag, type Registry } from './address.ts'
+import { addressFor, digestTag, assertTag, type Registry } from './address.ts'
 import { ghcrRegistrar } from './ghcr.ts'
 
 export class PublishError extends Error {
@@ -117,6 +117,7 @@ const RUNTIME_PLATFORM = 'linux/amd64'
 export type PublishOutcome = {
   artifact: string
   address: string
+  digest?: string
   /** False when the commit was already there and nothing was built or moved. */
   built: boolean
 }
@@ -621,6 +622,7 @@ type PublishOptions = {
   config: BuildConfig
   stage: string
   registry: Registry
+  replace?: boolean
   tag: string
   run: Run
   log?: (line: string) => void
@@ -632,6 +634,7 @@ const publishImages = async ({
   stage,
   registry,
   tag,
+  replace = false,
   run,
   log = console.log,
   clock = systemClock,
@@ -660,7 +663,7 @@ const publishImages = async ({
     const dockerfile = join(config.repository, declared.dockerfile)
     const context = join(config.repository, declared.context)
     const address = addressFor({ config, registry, artifact, tag })
-    if (await registrar.isPublished(artifact, tag)) {
+    if (!replace && await registrar.isPublished(artifact, tag)) {
       log(`${address} is already published; nothing to do.`)
       outcomes.push({ artifact, address, built: false })
       continue
@@ -679,8 +682,15 @@ const publishImages = async ({
     // The exit code, not the output: docker already wrote the reason above.
     if (built.code !== 0) throw new PublishError(`Could not build ${artifact}: docker build exited ${built.code}`)
     log(`Pushing ${address}`)
-    const pushed = await run('docker', ['push', ...(registry.kind === 'ghcr' ? ['--platform', RUNTIME_PLATFORM] : []), address], { echo: true })
-    if (pushed.code !== 0) throw new PublishError(`Could not push ${address}: docker push exited ${pushed.code}`)
+    const pushArgs = ['push', ...(registry.kind === 'ghcr' ? ['--platform', RUNTIME_PLATFORM] : []), address]
+    const attempts = registry.kind === 'ghcr' ? 3 : 1
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const pushed = await run('docker', pushArgs, { echo: true })
+      if (pushed.code === 0) break
+      if (attempt === attempts) throw new PublishError(`Could not push ${address}: docker push exited ${pushed.code}`)
+      log(`Retrying upload of the built ${artifact} image (attempt ${attempt + 1}/${attempts})`)
+      await clock.wait(15000 * attempt)
+    }
     log(`Pushed ${address}`)
     outcomes.push({ artifact, address, built: true })
   }
@@ -689,6 +699,7 @@ const publishImages = async ({
     for (const outcome of outcomes) {
       const digest = await registrar.digestOf(outcome.artifact, tag)
       if (!digest) throw new NotPublishedError(`GHCR did not retain ${outcome.address}`)
+      outcome.digest = digest
       log(`${outcome.address}@${digest}; image scanning runs after cloud import`)
     }
   } else {
@@ -699,7 +710,10 @@ const publishImages = async ({
 
 /** Workflow concurrency owns cross-run exclusion; atomic directories cover CLI processes inside one job. */
 export const publish = async (options: PublishOptions): Promise<PublishOutcome[]> => {
-  if (options.registry.kind !== 'ghcr') return publishImages(options)
+  if (options.registry.kind !== 'ghcr') {
+    if (options.replace) throw new PublishError('Only GHCR release tags may be replaced')
+    return publishImages(options)
+  }
   for (const artifact of Object.keys(options.config.artifacts)) addressFor({ config: options.config, registry: options.registry, artifact, tag: options.tag })
   const repository = process.env.GITHUB_REPOSITORY
   const temporary = process.env.RUNNER_TEMP
@@ -797,6 +811,7 @@ const copyImage = async ({ sourceAddress, address, run, log }: {
 export const promote = async ({
   config,
   tag,
+  digests,
   from,
   to,
   run,
@@ -805,6 +820,7 @@ export const promote = async ({
 }: {
   config: BuildConfig
   tag: string
+  digests?: Record<string, string>
   from: { stage: string; registry: Registry }
   to: { stage: string; registry: Registry }
   run: Run
@@ -822,34 +838,41 @@ export const promote = async ({
   if (from.registry.kind === 'ghcr') {
     const sources = new Map<string, string>()
     for (const artifact of artifacts) {
-      const digest = await source.digestOf(artifact, tag)
+      const digest = digests ? digests[artifact] : await source.digestOf(artifact, tag)
       if (!digest) throw new NotPublishedError(`GHCR is missing ${artifact}:${tag}; run mbuild-release.yml command=publish first`)
+      digestTag(digest)
       sources.set(artifact, digest)
     }
     await destination.ensureRepository()
     await source.login()
     await destination.login()
     // Refuse every existing mismatch before writing any image.
+    const destinationTag = (artifact: string) => digests ? digestTag(sources.get(artifact)!) : tag
     const existing = new Set<string>()
     for (const artifact of artifacts) {
-      const digest = await destination.digestOf(artifact, tag)
+      const digest = await destination.digestOf(artifact, destinationTag(artifact))
       if (digest && digest !== sources.get(artifact)) throw new PublishError(`${artifact}:${tag} in ${to.stage} differs from GHCR; refusing to overwrite`)
       if (digest) existing.add(artifact)
     }
     const outcomes: PromoteOutcome[] = []
     for (const artifact of artifacts) {
-      const address = addressFor({ config, registry: to.registry, artifact, tag })
+      const address = addressFor({ config, registry: to.registry, artifact, tag: destinationTag(artifact) })
       const sourceAddress = addressFor({ config, registry: from.registry, artifact, tag })
       const pinned = `${sourceAddress.slice(0, sourceAddress.lastIndexOf(':'))}@${sources.get(artifact)}`
       if (!existing.has(artifact)) {
         // Copy raw registry content, without converting it through Docker's local image store.
         const copied = await run('docker', ['buildx', 'imagetools', 'create', '--prefer-index=false', '--tag', address, pinned], { echo: true })
         if (copied.code !== 0) throw new PublishError(`Could not import ${address}: docker buildx exited ${copied.code}`)
-        if (await destination.digestOf(artifact, tag) !== sources.get(artifact)) throw new PublishError(`Imported ${address} differs from GHCR`)
+        if (await destination.digestOf(artifact, destinationTag(artifact)) !== sources.get(artifact)) throw new PublishError(`Imported ${address} differs from GHCR`)
       }
       outcomes.push({ artifact, address, from: pinned, built: !existing.has(artifact) })
     }
-    await assertNoBlockingFindings({ registrar: destination, scan: config.stages[to.stage]!.scan, outcomes, tag, clock, log })
+    for (const outcome of outcomes) {
+      await assertNoBlockingFindings({
+        registrar: destination, scan: config.stages[to.stage]!.scan, outcomes: [outcome],
+        tag: destinationTag(outcome.artifact), clock, log,
+      })
+    }
     return outcomes
   }
   const missing = await missingFrom({ registrar: source, artifacts, tag })

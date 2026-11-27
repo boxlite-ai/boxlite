@@ -112,7 +112,8 @@ Deploy waits for the complete preparation matrix to succeed; commit routes do no
 Rerunning a preparation leg repeats its checks and reuses existing artifacts.
 A failed import or build stops deployment.
 Apply is never automatically retried; inspect failed applies and any retained state lock before rerunning.
-The release pipeline's separate E2E workflow retains its own Environment gate.
+Release dev deployments keep the stage lock through cloud E2E. The result and both Environment approvals appear in the release run.
+Standalone dev/stage apply results go to dev Slack. Release and prod apply results go to #release. Each result links to the run.
 
 ### Caller attribution
 

@@ -19,18 +19,22 @@ RELEASE VERSION PULL REQUEST            release-dependency-audit (title-selected
 
 BUILD + CACHE (weekly)                  build-runtime
 
-RELEASE CHAIN (workflow_run)            build-c ──▶ build-go
-                                                └──▶ build-runner-binary
+PRODUCT RELEASE (dispatch from main)    mbuild-release creates or selects the draft for the tag
+                                        ├─ build-runtime · build-wheels · build-node · build-c
+                                        │                                              ├─ build-go
+                                        │                                              └─ build-runner-binary
+                                        └─ publish images to GHCR
+                                        Runner archive to GHCR ──▶ verify pins ──▶ approved dev deployment
+                                                                                  └─▶ dev E2E with Linux clients
+                                                                                          ├─▶ prod approval + deployment
+                                   complete distribution + Go tests + successful dev E2E ─┴─▶ attach files
+                                         ──▶ PyPI and npm ──▶ publish GitHub Release ──┬─▶ crates.io
+                                                                                       └─▶ verify public C SDK downloads → Go tag
 
-SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go SDK tests
-                                        build-runner-binary ──▶ build-c ──▶ Runner link
+SINGLE COMPONENT (dispatch from main)   mbuild-release ──▶ component build + tests ──▶ component publication
+                                        build-only ──▶ artifacts from the selected source
 
-RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
-                                        mbuild-release-on-release ──▶ mbuild-release
-                                          GHCR images + required release assets ready
-                                            ──▶ mdeploy-all (dev) ──▶ e2e-cloud (dev, release tag)
-                                            ──▶ mdeploy-all (prod, awaiting approval) ──▶ Slack report
-                                        apps/box-images/v* tag ──▶ release-box-images
+BOX IMAGES                              apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
                                                       ├─▶ build-c ──▶ build-runner-binary
@@ -45,9 +49,7 @@ CONFIG                                  ci-config action ◀── lint, test, c
 
 ## Workflows
 
-**Callable** marks a workflow another one can invoke with `uses:`. `config.yml` and `mbuild.yml` are
-the two that are *exclusively* callable; workflows with `workflow_dispatch` can also run on their
-own.
+**Callable** marks a workflow used by another workflow. The Triggers column lists each independent entry point.
 
 | Workflow | Triggers | Callable | Purpose |
 | --- | --- | --- | --- |
@@ -58,20 +60,19 @@ own.
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs. It regenerates through the `generate:api-client` targets, `apps/hack` post-steps included, so regenerate with those targets rather than the bare generator |
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
-| `build-runtime.yml` | weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
-| `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
-| `build-go.yml` | `workflow_run`, dispatch | — | Pins release tests and the Go tag to the C build commit. Compares public archives with that run before testing. Manual tests build their own C archive. |
-| `build-node.yml` | release, dispatch | — | Node.js SDK, napi-rs addon and platform packages |
-| `build-wheels.yml` | release, dispatch | — | Builds Python wheels and verifies their native extension in cibuildwheel before publishing |
-| `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; manual builds first produce the selected commit's C archive |
+| `build-runtime.yml` | weekly, `workflow_call` | yes | Builds runtime and CLI archives. The release build also stages the installer and checksums. |
+| `build-c.yml` | `workflow_call` | yes | Stages the platform C SDK archives, including the static library used by Go and Runner. |
+| `build-go.yml` | `workflow_call` | yes | Tests the Go SDK against the matching C archive from this run. |
+| `build-node.yml` | `workflow_call` | yes | Builds and tests the Node.js addon and stages packed npm distributions. |
+| `build-wheels.yml` | `workflow_call` | yes | Builds and tests Python wheels with cibuildwheel and stages them as Actions Artifacts. |
+| `build-runner-binary.yml` | `workflow_call` | yes | Links the Linux amd64 Runner against the selected C library and stages the archive and checksum. |
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: main suite, identity and isolated catalog lanes on `dev`/`stage`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
-| `mdeploy-all.yml` | dispatch | — | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
+| `mdeploy-all.yml` | dispatch, `workflow_call` | yes | Dev/stage accept SHA/PR; stage treats stable tags as commit references. Dev/prod release dispatches run from main and import existing GHCR images into the target cloud registry |
 | `mbuild.yml` | `workflow_call` | call-only | Reusable wrapper for the shared stage-image action; mdeploy-all invokes it in its image preparation leg |
-| `mbuild-release.yml` | dispatch | — | Publishes GHCR images, waits for required release assets, dispatches dev deployment/E2E, creates a prod approval request, and reports to Slack; `build-only=true` selects publication only |
-| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` using its default full pipeline |
+| `mbuild-release.yml` | dispatch | — | Owns product builds, GHCR publication, dev acceptance, draft attachment, package publication and approved prod deployment. Also dispatches individual component builds and publications. |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
 | `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | Publishes the curated box image flavors to GHCR |
@@ -79,9 +80,17 @@ own.
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
-The [release runbook](../../apps/infra/docs/release.md) documents fixed child inputs, timeouts, and recovery.
+Set `TAG` to the existing stable version tag and start the product release from `main`.
 
-Full releases require reviewers on the `prod` Environment. A full release can send #release a dev approval link before polling, then the E2E result and prod approval link.
+```sh
+gh workflow run mbuild-release.yml --ref main -f tag="$TAG"
+```
+
+The parent creates or selects the draft, gathers the build outputs in Actions Artifacts and requests dev approval. Successful dev E2E allows the attachment job to upload the verified files. Once the attachments, PyPI and npm jobs succeed, the parent makes the Release public.
+
+Both full releases and standalone Go publication verify anonymous downloads of the versioned C SDK archives before pushing the Go module tag.
+
+The prod Environment requires reviewers. The optional prod Slack message includes the dev E2E result and the approval link. See the [release runbook](../../apps/infra/docs/release.md) for package publisher setup and retry behavior.
 
 Deployment applies can also notify #dev_deployment for dev or #release for prod before each approval batch. Each button opens the corresponding GitHub run.
 
@@ -299,10 +308,10 @@ Run them with `make test:apps:mdeploy`; workflow lint alone does not exercise lo
 | `build-staged-runner` | 1 | mdeploy-all Runner preparation |
 | `mdeploy` | 2 | mdeploy-all release apply and commit deploy |
 | `ci-config` | 3 | config, lint, test |
-| `setup-rust` | 10 | build-c, build-node, build-runtime ×2, build-wheels, lint ×2, test ×3 |
+| `setup-rust` | 11 | build-c, build-node, build-runtime, build-wheels, mbuild-release, lint ×2, test ×4 |
 | `sccache` | 7 | build-c, build-node, build-runtime, build-wheels, lint, test ×2 |
 | `build-guest` | 4 | build-c, build-node, build-runtime, build-wheels |
-| `upload-to-release` | 5 | build-c, build-node, build-runner-binary, build-runtime, build-wheels |
+| `release-candidate` | 5 | e2e-cloud and the release attachment, npm, PyPI and finalization jobs |
 | `run-in-manylinux` | 3 | build-c, build-node, build-runtime |
 | `setup-go` | 4 | build-go, build-runner-binary, lint, test |
 | `setup-python` | 5 | lint ×2, test ×3 |
@@ -361,7 +370,7 @@ scan private lockfiles created by root containers. A cold cache still requires a
 
 Runtime, C, Node and wheel release builds can reuse compiler snapshots for their platform.
 They still assemble their own SDK artifacts and perform cold builds when no compatible entry
-exists. Runtime distribution builds run weekly, manually and on releases; routine tests and
+exists. Runtime builds run weekly and through the release workflow; routine tests and
 Clippy continue checking platform-specific code.
 
 ## Box image cache
@@ -386,38 +395,11 @@ The `analyze` job is a matrix over `actions`, `c-cpp`, `go`, `javascript-typescr
 `rust`. All use `build-mode: none` (source only, no compile) except `go`, whose extractor has to
 observe a real build and therefore uses `autobuild`.
 
-## Manual SDK and Runner builds
+## Manual component builds
 
-Dispatching `build-runner-binary.yml` builds the selected full commit SHA's Linux x64 C SDK,
-then links the Runner against that same-run artifact. Its archive and version identity include
-the commit SHA. Dispatching `build-go.yml` builds the selected workflow ref's C SDK on all
-supported platforms, then tests each Go SDK against its matching artifact. Neither manual
-path requires a published release for the current `Cargo.toml` version.
+Select one of the six component commands in `mbuild-release.yml`. Go uses the matching C SDK matrix and Runner uses only the Linux x64 C archive. The parent runs the selected component’s checks before publishing it.
 
-The release chain still downloads the published C archives. Reusable Runner callers retain their explicit
-`libboxlite_source` selection: `deploy-infra.yml` supplies its existing C artifact without a
-second C build. A C build failure stops its consumers; manual runs publish no releases or tags.
-
-Runner release uploads and Go module tagging run only after successful release-origin C SDK
-builds, followed by a successful Runner build or Go test matrix respectively.
-The manual `build-c` job is intentionally skipped on that path, so each publication job uses
-`!cancelled()` and explicit prerequisite-result checks to override the implicit `success()`
-check inherited through the dependency chain. Failed or skipped prerequisites and workflow
-cancellation still prevent publication; manual builds, reusable deployment builds, and
-non-release upstream runs do not publish through these jobs.
-
-## Do not rename these
-
-Two workflows chain off another's **display name**, not its filename. Changing the `name:` below
-silently stops the chain — no error, the downstream workflow simply never fires.
-
-| `name:` | Depended on by |
-| --- | --- |
-| `Build C SDK` | `build-go.yml`, `build-runner-binary.yml` |
-
-Go release tests require the canonical C workflow and read the platform matrix and toolchain
-at that run's commit. A missing or different C run archive stops testing. Before creating
-the Go module tag, the workflow checks that the remote product tag still points to the tested commit.
+For example, `publish-wheels` builds wheels for the supported platforms, verifies the files, attaches them to the selected Release and publishes them to PyPI. With `build-only`, a standalone run builds the selected source and stores its artifacts in Actions. See the [component commands and publication destinations](../../apps/infra/docs/release.md#build-and-publish-one-component).
 
 ## Adding a stage
 
@@ -459,11 +441,11 @@ legacy `boxlite` resources while mdeploy names `boxlite-app`; read the
 Repository secrets, in Settings → Secrets and variables → Actions:
 
 - `CARGO_REGISTRY_TOKEN` — crates.io, for the Rust crates
-- `PYPI_API_TOKEN` — PyPI, for the wheels
-- `NPM_TOKEN` — npm, for the Node packages
 - `GH_APP_PRIVATE_KEY` — GitHub App key that registers the self-hosted E2E runner
-- `SLACK_WEBHOOK_URL` — optional #release webhook for release dev approvals, final reports and prod apply approvals
-- `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` — optional #dev_deployment webhook for dev apply approvals. An empty secret skips that channel.
+- `SLACK_WEBHOOK_URL` — optional #release webhook for release and prod approvals, deployment outcomes and release E2E reports
+- `SLACK_DEV_DEPLOYMENT_WEBHOOK_URL` — optional #dev_deployment webhook for standalone dev approvals and dev/stage deployment outcomes. An empty secret skips that channel.
+
+The top-level PyPI and npm jobs use trusted publishing. Configure each registry to authorize `mbuild-release.yml` for the packages it publishes.
 
 ## Plugin release artifacts
 

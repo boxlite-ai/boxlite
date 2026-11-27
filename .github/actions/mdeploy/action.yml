@@ -13,6 +13,10 @@ inputs:
   version:
     description: Stable release selector or empty for a commit
     default: ''
+  registry-digests:
+    description: Verified release manifest and image digests from the release resolver
+    required: false
+    default: ''
   image-tag:
     description: Resolved image identity
     required: true
@@ -57,19 +61,23 @@ runs:
 
     # What this job deploys, as an address rather than as the name it was
     # given. The runner half says which of the two artifacts the stack
-    # installs: a release names the version whose GitHub Release carries the
-    # tarball, a commit names the object this run staged in the bucket. Both
+    # installs: a release names the candidate whose GHCR digests select the
+    # archive, a commit names the object this run staged in the bucket. Both
     # are set explicitly so the mode is readable in the run rather than
     # inferred from an absence.
     - name: Address what this deploy installs
       shell: bash
       env:
+        RELEASE_PINS: ${{ inputs.registry-digests }}
         IMAGE_TAG: ${{ inputs.image-tag }}
         VERSION: ${{ inputs.version }}
         SHA: ${{ inputs.sha }}
         COMPONENTS: ${{ inputs.components }}
       run: |
         set -Eeuo pipefail
+        if [[ -n "$RELEASE_PINS" ]]; then
+          printf 'BOXLITE_RELEASE_DIGESTS=%s\n' "$RELEASE_PINS" >> "$GITHUB_ENV"
+        fi
         # Build mode only when this run actually staged one. `plan` leaves the
         # runner alone for `components: api`, so naming a build-mode binary
         # there would point the fleet at `runner/<sha>/` in a bucket nothing
@@ -201,7 +209,7 @@ runs:
         service_account: ${{ inputs.gcp-deployer }}
 
     - name: Verify the images
-      if: inputs.components != 'runner'
+      if: inputs.components != 'runner' && inputs.api-route != 'release-import'
       working-directory: apps/infra
       env:
         STAGE: ${{ inputs.stage }}

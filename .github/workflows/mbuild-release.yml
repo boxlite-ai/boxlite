@@ -1,29 +1,35 @@
-# Release publication and dispatch orchestration hold no cloud Environment.
+# The rollout workflow owns the cloud Environment and stage concurrency.
 name: mbuild-release
-run-name: publish ${{ inputs.tag }} to GHCR${{ !inputs['build-only'] && ' · dev acceptance · prod review' || '' }}
+run-name: ${{ inputs.command }} ${{ inputs.tag || inputs['source-ref'] || github.ref_name }}${{ inputs['build-only'] && ' · build only' || '' }}
 
 on:
   workflow_dispatch:
     inputs:
       command:
-        description: Publish release images to GHCR
+        description: Full release, fresh component publication, or repair from an accepted candidate
         required: true
         default: publish
         type: choice
-        options: [publish]
+        options: [publish, publish-runtime, publish-wheels, publish-node, publish-c, publish-go, publish-runner, repair-runtime, repair-wheels, repair-node, repair-c]
+      candidate-id:
+        description: 'For repair, the Actions artifact ID of the dev-accepted release candidate'
+        type: string
       tag:
-        description: 'Release tag v<X.Y.Z>, naming a commit on main'
-        required: true
+        description: 'Stable tag on main, required for publication'
+        type: string
+      source-ref:
+        description: 'Optional commit or branch for a standalone build-only run; defaults to main'
         type: string
       build-only:
-        description: Build and upload only; skip deployment, E2E and Slack reporting
+        description: Stage standalone build artifacts, or publish only GHCR artifacts for a full build
         required: true
         default: false
         type: boolean
 
 concurrency:
-  group: mbuild-release-${{ inputs.tag }}
+  group: mbuild-release-run-${{ inputs.command == 'publish' && inputs.tag || github.run_id }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
@@ -33,12 +39,23 @@ env:
 
 jobs:
   resolve:
+    concurrency:
+      group: mbuild-release-assets-${{ !inputs['build-only'] && inputs.tag || github.run_id }}
+      queue: max
     name: resolve ${{ inputs.tag }}
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
-      sha: ${{ steps.ref.outputs.sha }}
+      sha: ${{ steps.ref.outputs.sha || steps.source.outputs.sha }}
+      mode: ${{ steps.selection.outputs.mode }}
+      builds: ${{ steps.selection.outputs.builds }}
+      group: ${{ steps.selection.outputs.group }}
+      producer: ${{ steps.selection.outputs.producer }}
+      public_release: ${{ steps.draft.outputs.public }}
       artifacts: ${{ steps.artifacts.outputs.names }}
+      release_id: ${{ steps.draft.outputs.id }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -47,8 +64,33 @@ jobs:
           # check below compares against. A shallow checkout carries neither.
           fetch-depth: 0
 
+      - name: Select builds and publication scope
+        id: selection
+        env:
+          COMMAND: ${{ inputs.command }}
+          BUILD_ONLY: ${{ inputs['build-only'] }}
+          CANDIDATE: ${{ inputs['candidate-id'] }}
+          SOURCE: ${{ inputs['source-ref'] }}
+        run: node apps/infra/scripts/release-selection.mjs
+
+      - name: Resolve standalone build source
+        id: source
+        if: steps.selection.outputs.mode == 'build'
+        env:
+          SOURCE: ${{ inputs['source-ref'] }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ -z "$SOURCE" || -z "$TAG" ]] || { echo 'Choose one source ref or tag' >&2; exit 1; }
+          ref="${SOURCE:-${TAG:-$GITHUB_SHA}}"
+          encoded=$(jq -rn --arg ref "$ref" '$ref | @uri')
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$encoded" --jq .sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Require a released version
         id: version
+        if: steps.selection.outputs.mode != 'build'
         shell: bash
         env:
           TAG: ${{ inputs.tag }}
@@ -85,15 +127,40 @@ jobs:
       # `branch` is what refuses a tag whose commit main does not contain — the
       # release's bytes and the branch that produces them, checked together.
       - id: ref
+        if: steps.selection.outputs.mode != 'build'
         uses: ./.github/actions/resolve-ref
         with:
           ref: ${{ steps.version.outputs.ref }}
           branch: ${{ github.ref_name }}
 
+      - name: Create or select the release draft
+        id: draft
+        if: ${{ !inputs['build-only'] }}
+        env:
+          TAG: ${{ inputs.tag }}
+          COMMAND: ${{ inputs.command }}
+          SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          version=$(git show "$SHA:Cargo.toml" | awk -F '"' '/^\[workspace\.package\]$/ {workspace=1; next} /^\[/ {workspace=0} workspace && /^version = "/ {print $2}')
+          [[ "$TAG" == "v$version" ]] || { echo 'Tag differs from workspace version' >&2; exit 1; }
+          if [[ "$COMMAND" != publish ]]; then
+            release=$(gh release view "$TAG" --json databaseId,isDraft)
+            jq -r '"id=\(.databaseId)\npublic=\(.isDraft | not)"' <<< "$release" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! gh release view "$TAG" --json databaseId >/dev/null; then
+            gh release create "$TAG" --draft --verify-tag --target "$SHA" --generate-notes
+          fi
+          release=$(gh release view "$TAG" --json databaseId,isDraft,tagName)
+          id=$(jq -er --arg tag "$TAG" 'select(.isDraft and .tagName == $tag) | .databaseId' <<< "$release")
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
       # Read out of the released commit with `git show` rather than a second
       # checkout: one file is wanted, and the working tree is still main's.
       - name: Read the artifacts this release declares
         id: artifacts
+        if: inputs.command == 'publish'
         shell: bash
         env:
           SHA: ${{ steps.ref.outputs.sha }}
@@ -108,7 +175,63 @@ jobs:
           echo "names=$names" >> "$GITHUB_OUTPUT"
           echo "$SHA declares $names"
 
+  build-runtime:
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'runtime') }}
+    uses: ./.github/workflows/build-runtime.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+      tag: ${{ needs.resolve.outputs.mode != 'build' && inputs.tag || '' }}
+
+  build-wheels:
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'wheels') }}
+    uses: ./.github/workflows/build-wheels.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+
+  build-node:
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'node') }}
+    uses: ./.github/workflows/build-node.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+
+  build-c:
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'c') }}
+    uses: ./.github/workflows/build-c.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+      linux_x64_only: ${{ inputs.command == 'publish-runner' }}
+
+  build-go:
+    needs: [resolve, build-c]
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'go') }}
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/build-go.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+
+  build-runner-binary:
+    needs: [resolve, build-c]
+    if: ${{ github.ref == 'refs/heads/main' && contains(fromJSON(needs.resolve.outputs.builds), 'runner') }}
+    uses: ./.github/workflows/build-runner-binary.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+      libboxlite_source: artifact
+      release_tag: ${{ needs.resolve.outputs.mode != 'build' && inputs.tag || '' }}
+
   publish:
+    concurrency:
+      group: mbuild-release-ghcr-${{ matrix.artifact }}-${{ inputs.tag }}
+      queue: max
     name: publish ${{ inputs.tag }} · ${{ matrix.artifact }}
     needs: [resolve]
     if: ${{ inputs.command == 'publish' && github.ref == 'refs/heads/main' }}
@@ -151,22 +274,19 @@ jobs:
           MSTAGE_ENV_CONFIG: ${{ github.workspace }}/release-source/apps/infra/mstage.env.json
         run: |
           set -Eeuo pipefail
-          for attempt in 1 2 3; do
-            npm run --silent mbuild publish -- --tag "$SHA" --ghcr "$GHCR_REPOSITORY" --artifact "$ARTIFACT" --version "$TAG" && exit 0
-            status=$?
-            if [ "$status" -eq 65 ]; then
-              echo "::error title=publish::$ARTIFACT at $SHA failed the dependency audit; details are above"
-              exit 1
-            fi
-            if [ "$status" -eq 78 ]; then
-              echo "::error title=publish::$ARTIFACT at $SHA was refused by the image scan gate; findings are above"
-              exit 1
-            fi
-            echo "Publish failed (attempt $attempt/3, exit $status); retrying in $((attempt * 15))s"
-            sleep $((attempt * 15))
-          done
-          echo "::error title=publish::Could not publish $ARTIFACT for $TAG to GHCR after 3 attempts"
-          exit 1
+          npm run --silent mbuild publish -- --tag "$SHA" --ghcr "$GHCR_REPOSITORY" --artifact "$ARTIFACT" --version "$TAG" \
+            --replace --output "$GITHUB_WORKSPACE/image.json"
+          jq -n --arg sha "$SHA" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{sha: $sha, run: $run, attempt: $attempt}' > "$GITHUB_WORKSPACE/producer.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ghcr-${{ matrix.artifact }}
+          overwrite: true
+          if-no-files-found: error
+          path: |
+            image.json
+            producer.json
 
       - name: Report
         if: always()
@@ -190,76 +310,573 @@ jobs:
             echo 'Image scanning runs after import into the deployment stage.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  assets:
-    name: Wait for release assets
-    needs: [resolve, publish]
-    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
+  publish-runner:
+    concurrency:
+      group: mbuild-release-ghcr-runner-${{ inputs.tag }}
+      queue: max
+    if: ${{ needs.resolve.outputs.mode != 'build' && github.ref == 'refs/heads/main' }}
+    name: Publish Runner archive to GHCR
+    needs: [resolve, build-runner-binary]
     runs-on: ubuntu-latest
-    timeout-minutes: 185
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Validate optional release webhook and require release assets
-        env:
-          TAG: ${{ inputs.tag }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: node apps/infra/scripts/release-pipeline.mjs assets
-
-  pipeline:
-    name: Validate dev and request prod review
-    needs: [resolve, assets]
-    if: ${{ !inputs['build-only'] && github.ref == 'refs/heads/main' }}
     permissions:
       contents: read
-      actions: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 250
-    concurrency:
-      group: mbuild-release-dev-validation
-      cancel-in-progress: false
-    outputs:
-      phase: ${{ steps.pipeline.outputs.phase }}
-      dev_run_id: ${{ steps.pipeline.outputs.dev_run_id }}
-      dev_result: ${{ steps.pipeline.outputs.dev_result }}
-      e2e_run_id: ${{ steps.pipeline.outputs.e2e_run_id }}
-      e2e_result: ${{ steps.pipeline.outputs.e2e_result }}
-      prod_run_id: ${{ steps.pipeline.outputs.prod_run_id }}
+      packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
         with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
+          name: runner-linux-amd64
+      - uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
         with:
-          node-version: '22'
-      - name: Dispatch existing workflows
-        id: pipeline
+          version: 1.3.6
+      - name: Push the exact Runner archive
         env:
           TAG: ${{ inputs.tag }}
-          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: node apps/infra/scripts/release-pipeline.mjs run
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          tarball="boxlite-runner-$TAG-linux-amd64.tar.gz"
+          sha256sum --check --strict "$tarball.sha256"
+          repo="ghcr.io/$GITHUB_REPOSITORY/runner"
+          layout="$RUNNER_TEMP/runner-layout:release"
+          oras push --oci-layout "$layout" --artifact-type application/vnd.boxlite.runner.v1 \
+            --annotation "org.opencontainers.image.revision=$SHA" --annotation "org.opencontainers.image.version=$TAG" \
+            --annotation "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$tarball:application/gzip"
+          manifest=$(oras resolve --oci-layout "$layout")
+          archive="sha256:$(sha256sum "$tarball" | cut -d' ' -f1)"
+          registry_config="$RUNNER_TEMP/oras-registry.json"
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin --registry-config "$registry_config"
+          oras cp --from-oci-layout --to-registry-config "$registry_config" "$layout" "$repo:$TAG-$SHA"
+          [[ "$(oras resolve --registry-config "$registry_config" "$repo:$TAG-$SHA")" == "$manifest" ]]
+          oras manifest fetch --registry-config "$registry_config" "$repo@$manifest" | jq -e --arg archive "$archive" \
+            '.layers | length == 1 and .[0].digest == $archive' >/dev/null
+          # A fresh host has no Actions token. Exercise its read boundary before dev approval.
+          printf '{"auths":{}}\n' > "$RUNNER_TEMP/anonymous-registry.json"
+          oras manifest fetch --registry-config "$RUNNER_TEMP/anonymous-registry.json" "$repo@$manifest" >/dev/null
+          oras blob fetch --descriptor --registry-config "$RUNNER_TEMP/anonymous-registry.json" "$repo@$archive" >/dev/null
+          jq -n --arg manifest "$manifest" --arg archive "$archive" '{manifest: $manifest, archive: $archive}' > runner.json
+          jq -n --arg sha "$SHA" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ghcr-runner
+          overwrite: true
+          if-no-files-found: error
+          path: |
+            runner.json
+            producer.json
 
-  report:
-    name: Report release results
+  distribution:
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' &&
+      ((needs.resolve.outputs.mode == 'release' && needs.publish.result == 'success' && needs.publish-runner.result == 'success' &&
+      needs.build-runtime.result == 'success' && needs.build-wheels.result == 'success' && needs.build-node.result == 'success' && needs.build-c.result == 'success') ||
+      (needs.resolve.outputs.mode == 'component' && needs.resolve.outputs.group != '' && needs[needs.resolve.outputs.producer].result == 'success')) }}
+    name: Verify release files
+    needs: [resolve, publish, publish-runner, build-runtime, build-wheels, build-node, build-c]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
-    needs: [resolve, publish, assets, pipeline]
-    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    outputs:
+      candidate_id: ${{ steps.upload.outputs.artifact-id }}
+      digest: ${{ steps.stage.outputs.digest }}
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ needs.resolve.outputs.mode == 'component' && (inputs.command == 'publish-runner' && '@(runner-linux-amd64|ghcr-runner)' || format('{0}*', needs.resolve.outputs.group)) || '@(runtime-distribution|wheels-*|node-packages|c-sdk-*|runner-linux-amd64|ghcr-*)' }}
+          path: staged
+      - name: Validate the candidate
+        id: stage
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+          TAG: ${{ inputs.tag }}
+          IMAGES: ${{ needs.resolve.outputs.artifacts || '[]' }}
+          COMPONENT_GROUP: ${{ needs.resolve.outputs.group }}
+          OPERATION: ${{ needs.resolve.outputs.mode == 'component' && 'component' || 'stage' }}
+        run: |
+          set -euo pipefail
+          digest=$(node apps/infra/scripts/release-candidate.mjs "$OPERATION")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: ${{ needs.resolve.outputs.mode == 'component' && inputs.command || 'release-candidate' }}-${{ github.run_attempt }}
+          compression-level: 0
+          if-no-files-found: error
+          path: candidate/
+
+  dev:
+    name: Dev deployment and acceptance
+    needs: [resolve, publish, publish-runner]
+    if: ${{ needs.resolve.outputs.mode == 'release' && github.ref == 'refs/heads/main' }}
+    permissions: &rollout-permissions
+      contents: read
+      actions: read
+      pull-requests: read
+      packages: read
+      id-token: write
+    uses: ./.github/workflows/mdeploy-all.yml
+    with:
+      stage: dev
+      ref: ${{ inputs.tag }}
+      release_sha: ${{ needs.resolve.outputs.sha }}
+      release_images: ${{ needs.resolve.outputs.artifacts }}
+      components: api+runner
+      apply: true
+      confirm: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
+      BOXLITE_DEV_P2_API_KEY: ${{ secrets.BOXLITE_DEV_P2_API_KEY }}
+      BOXLITE_DEV_P2_READONLY_API_KEY: ${{ secrets.BOXLITE_DEV_P2_READONLY_API_KEY }}
+
+  accepted-candidate:
+    name: Locate the previously accepted candidate
+    needs: resolve
+    if: ${{ github.ref == 'refs/heads/main' && needs.resolve.outputs.mode == 'repair' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      id: ${{ steps.receipt.outputs.id }}
+      run: ${{ steps.receipt.outputs.run }}
+      digest: ${{ steps.receipt.outputs.digest }}
+    steps:
+      - id: receipt
+        env:
+          ID: ${{ inputs['candidate-id'] }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$ID" =~ ^[1-9][0-9]*$ ]]
+          api="repos/$GITHUB_REPOSITORY/actions"
+          run=$(gh api "$api/artifacts/$ID" --jq 'select(.expired == false and (.name | test("^release-candidate-[0-9]+$"))) | .workflow_run.id')
+          [[ "$run" =~ ^[1-9][0-9]*$ ]]
+          gh api "$api/runs/$run" | jq -e '.path == ".github/workflows/mbuild-release.yml" and .head_branch == "main" and .event == "workflow_dispatch"' >/dev/null
+          gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "dev-accepted-$ID" --dir "$RUNNER_TEMP/accepted"
+          digest=$(jq -er --arg tag "$TAG" --arg sha "$SHA" --argjson id "$ID" --argjson run "$run" '
+            select(.tag == $tag and .sha == $sha and .candidate == $id and .run == $run)
+            | .digest | select(test("^sha256:[0-9a-f]{64}$"))' "$RUNNER_TEMP/accepted/acceptance.json")
+          printf 'id=%s\nrun=%s\ndigest=%s\n' "$ID" "$run" "$digest" >> "$GITHUB_OUTPUT"
+
+  attach:
+    concurrency:
+      group: mbuild-release-assets-${{ inputs.tag }}
+      queue: max
+    name: Attach verified release files
+    needs: [resolve, distribution, build-go, dev, accepted-candidate]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && ((needs.dev.outputs.accepted_attempt != '' && needs.distribution.result == 'success' && needs.build-go.result == 'success') || needs.accepted-candidate.result == 'success' || (needs.resolve.outputs.mode == 'component' && needs.distribution.result == 'success')) }}
+    outputs:
+      candidate: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
+      digest: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
+      run: ${{ needs.accepted-candidate.outputs.run || github.run_id }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/release-candidate
+        with:
+          run: ${{ needs.accepted-candidate.outputs.run || github.run_id }}
+          id: ${{ needs.distribution.outputs.candidate_id || needs.accepted-candidate.outputs.id }}
+          digest: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
+          tag: ${{ inputs.tag }}
+          sha: ${{ needs.resolve.outputs.sha }}
+      - name: Match release files to the client bytes accepted by dev
+        if: inputs.command == 'publish'
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          CANDIDATE_DIGEST: ${{ needs.distribution.outputs.digest }}
+          DEPLOYMENT_ID: ${{ needs.dev.outputs.candidate_id }}
+          DEPLOYMENT_DIGEST: ${{ needs.dev.outputs.candidate_digest }}
+          DEPLOYMENT_PINS: ${{ needs.dev.outputs.registry_digests }}
+          ACCEPTED_ATTEMPT: ${{ needs.dev.outputs.accepted_attempt }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-accepted-$DEPLOYMENT_ID" --dir "$RUNNER_TEMP/dev-receipt"
+          ACCEPTANCE_FILE="$RUNNER_TEMP/dev-receipt/acceptance.json" node apps/infra/scripts/release-candidate.mjs check-acceptance
+      - name: Record the exact candidate accepted by dev
+        if: inputs.command == 'publish'
+        env:
+          CANDIDATE: ${{ needs.distribution.outputs.candidate_id }}
+          DIGEST: ${{ needs.distribution.outputs.digest }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          ACCEPTED: ${{ needs.dev.outputs.accepted_attempt }}
+        run: |
+          jq -n --argjson run "$GITHUB_RUN_ID" --argjson attempt "$ACCEPTED" --argjson id "$CANDIDATE" \
+            --arg digest "$DIGEST" --arg tag "$TAG" --arg sha "$SHA" \
+            '{run: $run, attempt: $attempt, candidate: $id, digest: $digest, tag: $tag, sha: $sha}' > acceptance.json
+      - uses: actions/upload-artifact@v4
+        if: inputs.command == 'publish'
+        with:
+          name: dev-accepted-${{ needs.distribution.outputs.candidate_id }}
+          path: acceptance.json
+          overwrite: true
+          if-no-files-found: error
+      - name: Verify selected release attachments
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          REPAIR_GROUP: ${{ needs.resolve.outputs.group }}
+          CANDIDATE_DIGEST: ${{ needs.distribution.outputs.digest || needs.accepted-candidate.outputs.digest }}
+          RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
+        run: node apps/infra/scripts/release-candidate.mjs attach
+
+  npm:
+    concurrency:
+      group: mbuild-release-npm-${{ inputs.tag }}
+      queue: max
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","publish-node","repair-node"]'), inputs.command) &&
+      !cancelled() && needs.attach.result == 'success' }}
+    name: Publish verified npm packages
+    needs: [resolve, attach]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/release-candidate
+        with:
+          run: ${{ needs.attach.outputs.run }}
+          id: ${{ needs.attach.outputs.candidate }}
+          digest: ${{ needs.attach.outputs.digest }}
+          tag: ${{ inputs.tag }}
+          sha: ${{ needs.resolve.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
-      - name: Publish summary and Slack notification
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - name: Publish platform packages before the main package
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          cd "$RELEASE_ASSET_DIR"
+          missing_files=()
+          missing_packages=()
+          missing_integrities=()
+          for file in boxlite-ai-boxlite-*-"${TAG#v}.tgz" "boxlite-ai-boxlite-${TAG#v}.tgz"; do
+            name=$(tar -xOzf "$file" package/package.json | jq -er .name)
+            version=$(tar -xOzf "$file" package/package.json | jq -er .version)
+            [[ "$name" == @boxlite-ai/boxlite* && "$version" == "${TAG#v}" ]]
+            integrity="sha512-$(openssl dgst -sha512 -binary "$file" | openssl base64 -A)"
+            package="$name@$version"
+            if existing=$(npm view "$package" dist.integrity --json 2> "$RUNNER_TEMP/npm-view.log"); then
+              if [[ "$(jq -r . <<< "$existing")" != "$integrity" ]]; then
+                echo "Conflicting npm integrity for $package" >&2
+                exit 1
+              fi
+            else
+              grep -q E404 "$RUNNER_TEMP/npm-view.log" || { cat "$RUNNER_TEMP/npm-view.log" >&2; exit 1; }
+              missing_files+=("$file")
+              missing_packages+=("$package")
+              missing_integrities+=("$integrity")
+            fi
+          done
+
+          for i in "${!missing_files[@]}"; do
+            npm publish "./${missing_files[i]}" --access public --provenance
+            published=$(npm view "${missing_packages[i]}" dist.integrity)
+            if [[ "$published" != "${missing_integrities[i]}" ]]; then
+              echo "Uploaded npm integrity differs for ${missing_packages[i]}" >&2
+              exit 1
+            fi
+          done
+
+  pypi:
+    concurrency:
+      group: mbuild-release-pypi-${{ inputs.tag }}
+      queue: max
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && contains(fromJSON('["publish","publish-wheels","repair-wheels"]'), inputs.command) &&
+      !cancelled() && needs.attach.result == 'success' }}
+    name: Publish to PyPI
+    needs: [resolve, attach]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      actions: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/release-candidate
+        with:
+          run: ${{ needs.attach.outputs.run }}
+          id: ${{ needs.attach.outputs.candidate }}
+          digest: ${{ needs.attach.outputs.digest }}
+          tag: ${{ inputs.tag }}
+          sha: ${{ needs.resolve.outputs.sha }}
+      - name: Select accepted wheels
+        run: mkdir dist && cp "$RELEASE_ASSET_DIR"/*.whl dist/
+
+      - name: Check existing PyPI wheels before uploading
+        env:
+          TAG: ${{ inputs.tag }}
+        run: bash scripts/release/verify-pypi-wheels.sh before
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
+      - name: Verify PyPI recorded the accepted wheel hashes
+        env:
+          TAG: ${{ inputs.tag }}
+        run: bash scripts/release/verify-pypi-wheels.sh after
+
+  tag-go-module:
+    concurrency:
+      group: mbuild-release-go-${{ inputs.tag }}
+      queue: max
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && !cancelled() &&
+      ((inputs.command == 'publish' && needs.finalize.result == 'success') ||
+      (inputs.command == 'publish-go' && !inputs['build-only'] && needs.build-go.result == 'success')) }}
+    name: Tag Go Module
+    needs: [resolve, finalize, build-go]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify public C SDK downloads
+        env:
+          TAG: ${{ inputs.tag }}
+          RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
+        run: node apps/infra/scripts/release-candidate.mjs verify-public-c
+
+      - name: Create Go module tag
+        shell: bash
+        env:
+          C_SHA: ${{ needs.resolve.outputs.sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          product_ref="refs/tags/$RELEASE_TAG"
+          go_ref="refs/tags/sdks/go/$RELEASE_TAG"
+
+          # Fetch the current remote ref because the tag could have moved during the matrix.
+          git fetch --no-tags origin "$product_ref"
+          if [[ "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" != "$C_SHA" ]]; then
+            echo "Product tag $RELEASE_TAG moved during Go release tests" >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --refs origin "$go_ref" >/dev/null; then
+            git fetch --no-tags origin "$go_ref"
+            if [[ "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" != "$C_SHA" ]]; then
+              echo "Go tag $go_ref points to a different commit" >&2
+              exit 1
+            fi
+            echo "Go tag $go_ref already points to $C_SHA"
+            exit 0
+          else
+            status=$?
+            # ls-remote uses 2 for an absent ref. A transport error is not absence.
+            if [[ "$status" != 2 ]]; then exit "$status"; fi
+          fi
+
+          git push origin "$C_SHA:$go_ref"
+
+  publish_crates:
+    concurrency:
+      group: mbuild-release-crates-${{ inputs.tag }}
+      queue: max
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && !cancelled() &&
+      ((inputs.command == 'publish' && needs.finalize.result == 'success') ||
+      (inputs.command == 'publish-runtime' && needs.resolve.outputs.public_release == 'true' && needs.attach.result == 'success')) }}
+    name: Publish to crates.io
+    needs: [resolve, finalize, attach]
+    runs-on: ubuntu-latest
+    env:
+      BOXLITE_DEPS_STUB: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+
+      - uses: ./.github/actions/setup-rust
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Publish leaf crates (Tier 1)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          publish_crate() {
+            local crate="$1"
+            shift
+            local extra_args="$*"
+            echo "::group::Publishing $crate"
+            if cargo publish -p "$crate" $extra_args 2>&1 | tee /tmp/publish-"$crate".log; then
+              echo "$crate published successfully"
+            else
+              if grep -q "already uploaded" /tmp/publish-"$crate".log; then
+                echo "$crate already on crates.io, skipping"
+              else
+                echo "::error::Failed to publish $crate"
+                exit 1
+              fi
+            fi
+            echo "::endgroup::"
+          }
+
+          # Pure-Rust crate verifies normally
+          publish_crate boxlite-shared
+
+          # -sys crates skip verification: vendor sources excluded from package,
+          # real build already succeeded in the build job above
+          publish_crate libkrun-sys --no-verify
+          publish_crate e2fsprogs-sys --no-verify
+          publish_crate libgvproxy-sys --no-verify
+          publish_crate bubblewrap-sys --no-verify
+
+          # boxlite-vmm resolves boxlite-hypervisor from crates.io. Give the
+          # index time before publishing the dependent crate.
+          publish_crate boxlite-hypervisor
+          sleep 60
+          publish_crate boxlite-vmm
+
+      - name: Wait for crates.io indexing
+        run: sleep 60
+
+      # boxlite uses --no-verify because the boxlite-shim binary links libkrun,
+      # which isn't available in stub mode. The real build already succeeded in the
+      # build job, so skipping verification is safe.
+      - name: Publish boxlite (Tier 2)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::group::Publishing boxlite"
+          if cargo publish -p boxlite --no-verify 2>&1 | tee /tmp/publish-boxlite.log; then
+            echo "boxlite published successfully"
+          else
+            if grep -q "already uploaded" /tmp/publish-boxlite.log; then
+              echo "boxlite already on crates.io, skipping"
+            else
+              echo "::error::Failed to publish boxlite"
+              exit 1
+            fi
+          fi
+          echo "::endgroup::"
+
+      - name: Wait for boxlite indexing
+        run: sleep 60
+
+      # boxlite-cli uses --no-verify because verification would download the
+      # prebuilt runtime from GitHub Releases (slow and unnecessary since the
+      # real build already succeeded in the build job above).
+      - name: Publish boxlite-cli (Tier 3)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::group::Publishing boxlite-cli"
+          if cargo publish -p boxlite-cli --no-verify 2>&1 | tee /tmp/publish-boxlite-cli.log; then
+            echo "boxlite-cli published successfully"
+          else
+            if grep -q "already uploaded" /tmp/publish-boxlite-cli.log; then
+              echo "boxlite-cli already on crates.io, skipping"
+            else
+              echo "::error::Failed to publish boxlite-cli"
+              exit 1
+            fi
+          fi
+          echo "::endgroup::"
+
+  finalize:
+    concurrency:
+      group: mbuild-release-assets-${{ inputs.tag }}
+      queue: max
+    if: >-
+      ${{ github.ref == 'refs/heads/main' && inputs.command == 'publish' &&
+      !cancelled() && needs.npm.result == 'success' &&
+      needs.pypi.result == 'success' && needs.attach.result == 'success' }}
+    name: Publish the verified GitHub Release
+    needs: [resolve, distribution, attach, pypi, npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/release-candidate
+        with:
+          id: ${{ needs.distribution.outputs.candidate_id }}
+          digest: ${{ needs.distribution.outputs.digest }}
+          tag: ${{ inputs.tag }}
+          sha: ${{ needs.resolve.outputs.sha }}
+      - name: Recheck release attachments and publish
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+          CANDIDATE_DIGEST: ${{ needs.distribution.outputs.digest }}
+          RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
+        run: node apps/infra/scripts/release-candidate.mjs finalize
+
+  prod:
+    name: Production deployment
+    needs: [resolve, dev]
+    if: ${{ github.ref == 'refs/heads/main' && needs.resolve.outputs.mode == 'release' && needs.dev.outputs.accepted_attempt != '' }}
+    permissions: *rollout-permissions
+    uses: ./.github/workflows/mdeploy-all.yml
+    with:
+      stage: prod
+      ref: ${{ inputs.tag }}
+      release_sha: ${{ needs.resolve.outputs.sha }}
+      candidate_id: ${{ needs.dev.outputs.candidate_id }}
+      candidate_digest: ${{ needs.dev.outputs.candidate_digest }}
+      registry_digests: ${{ needs.dev.outputs.registry_digests }}
+      accepted_attempt: ${{ needs.dev.outputs.accepted_attempt }}
+      components: api+runner
+      apply: true
+      confirm: true
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  report:
+    name: Report release failure
+    needs: [resolve, build-runtime, build-wheels, build-node, build-c, build-go, build-runner-binary, publish, publish-runner, distribution, dev, accepted-candidate, attach, pypi, npm, tag-go-module, finalize, publish_crates]
+    if: ${{ always() && !inputs['build-only'] && github.ref == 'refs/heads/main' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Report release failure to Slack
         env:
           TAG: ${{ inputs.tag }}
           RELEASE_RESULTS: ${{ toJSON(needs) }}

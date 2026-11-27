@@ -97,3 +97,35 @@ process.disconnect();`)
   assert.equal((await retry.message).kind, 'effect', 'a failed publisher retained its lock')
   const retried = once(retry.child, 'exit'); retry.child.send('release'); await retried
 })
+
+test('rebuilding a selected GHCR image replaces that tag without rebuilding its siblings', async () => {
+  const p = probe()
+  const options = { config, stage: 'ghcr', registry: ghcr, tag, run: p.run, log: () => {} }
+  await publish(options)
+  p.calls.length = 0
+  const rebuild = { ...options, config: onlyArtifact(config, 'api'), replace: true }
+  const outcomes = await publish(rebuild)
+  assert.deepEqual(outcomes.map(({ artifact, built }) => [artifact, built]), [['api', true]])
+  const pushes = p.calls.filter(({ args }) => args[0] === 'push')
+  assert.equal(pushes.length, 1)
+  assert.match(pushes[0]!.args.at(-1)!, /\/api:/)
+})
+
+test('a failed GHCR upload retries the same built image', async () => {
+  const p = probe()
+  const pushes: string[] = []
+  const run: Run = async (file, args, options) => {
+    if (file === 'docker' && args[0] === 'push') {
+      pushes.push(args.at(-1)!)
+      if (pushes.length === 1) return { code: 1, stdout: '', stderr: 'registry unavailable' }
+    }
+    return p.run(file, args, options)
+  }
+  await publish({
+    config: onlyArtifact(config, 'api'), stage: 'ghcr', registry: ghcr,
+    tag, run, replace: true, clock: { now: Date.now, wait: async () => {} }, log: () => {},
+  })
+  assert.equal(p.calls.filter(({ args }) => args[0] === 'build').length, 1)
+  assert.equal(pushes.length, 2)
+  assert.equal(pushes[0], pushes[1])
+})

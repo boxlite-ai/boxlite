@@ -61,7 +61,7 @@ test('cloud E2E selects only the requested stage credentials and keeps prod narr
     assert.equal(evaluate(sweep.if, stage).coerceString(), String(stage === 'dev'))
     assert.equal(evaluate(sweep.if, stage, false).coerceString(), 'false')
   }
-  assert.deepEqual(workflow.permissions, { contents: 'read' })
+  assert.deepEqual(workflow.permissions, { contents: 'read', actions: 'read' })
   const suite = steps.find((step: any) => step.name === 'Run E2E suite')
   assert.match(suite.run, /if \[ "\$STAGE" = prod \]; then[\s\S]*-m smoke/)
 })
@@ -132,7 +132,5 @@ test('cloud release clients preserve source defaults and stage coverage', () => 
   const validate = steps.find((step: any) => step.name === 'Validate client release')
   assert.ok(steps.indexOf(validate) < steps.indexOf(configure))
   const checkout = steps.find((step: any) => step.name === 'Checkout release SDK sources for subdomain clients')
-  assert.equal(checkout.with.ref, '${{ inputs.tag }}')
-  assert.equal(checkout.with['persist-credentials'], false)
-  assert.equal(checkout.with.path, 'target/e2e-release')
+  assert.equal(checkout.env.RELEASE_SDK_SHA, '${{ steps.release_commit.outputs.sha }}')
 })

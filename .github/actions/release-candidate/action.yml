@@ -1,0 +1,40 @@
+name: Download verified release candidate
+description: Retrieve the exact candidate selected for acceptance or publication.
+inputs:
+  id:
+    description: Immutable candidate artifact ID
+    required: true
+  digest:
+    description: Expected SHA-256 of the release manifest
+    required: true
+  tag:
+    description: Product version tag
+    required: true
+  sha:
+    description: Tagged product commit
+    required: true
+  run:
+    description: Candidate producer run
+    required: false
+    default: ${{ github.run_id }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        artifact-ids: ${{ inputs.id }}
+        github-token: ${{ github.token }}
+        run-id: ${{ inputs.run }}
+        path: ${{ runner.temp }}/release-candidate
+        merge-multiple: true
+    - name: Check source and all file checksums
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        SHA: ${{ inputs.sha }}
+        CANDIDATE_DIGEST: ${{ inputs.digest }}
+        RELEASE_ASSET_DIR: ${{ runner.temp }}/release-candidate
+      run: |
+        set -euo pipefail
+        node "$GITHUB_ACTION_PATH/../../../apps/infra/scripts/release-candidate.mjs" verify
+        printf 'RELEASE_ASSET_DIR=%s\n' "$RELEASE_ASSET_DIR" >> "$GITHUB_ENV"

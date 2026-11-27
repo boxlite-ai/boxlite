@@ -1,27 +1,7 @@
-# Build C SDK for all supported platforms.
-#
-# Self-contained workflow that builds libboxlite (static and shared libraries),
-# packages them with C headers, and uploads platform-specific archives to
-# GitHub Releases.
-#
-# Archive contents (per platform):
-# - lib/libboxlite.a (static library with Go symbols fixed)
-# - lib/libboxlite.dylib or lib/libboxlite.so (shared library)
-# - include/boxlite.h (C header)
-#
-# These archives are also used by the Go SDK (build-go.yml) which downloads
-# them via the auto-download tool.
-#
-# Triggers:
-# - release: When a GitHub release is published
-# - workflow_dispatch: Manual trigger for testing
-# - workflow_call: A deploy building a selected commit (deploy-infra.yml)
+# Stage C SDK archives for SDK consumers and release publication.
 name: Build C SDK
 
 on:
-  release:
-    types: [ published ]
-  workflow_dispatch:
   workflow_call:
     inputs:
       ref:
@@ -39,24 +19,24 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
 
-# Least privilege by default; upload-to-release raises its own job to contents: write, which is
-# the only job here that writes anything back to the repository.
 permissions:
   contents: read
 
 jobs:
-  config:
-    uses: ./.github/workflows/config.yml
-
   resolve-ref:
-    name: Resolve build commit
+    name: Prepare build configuration and commit
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.ref.outputs.sha }}
+      platforms: ${{ steps.config.outputs.platforms }}
+      rust-toolchain: ${{ steps.config.outputs.rust-toolchain }}
+      artifact-retention-days: ${{ steps.config.outputs.artifact-retention-days }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/ci-config
+        id: config
       - name: Validate build commit
         id: ref
         shell: bash
@@ -92,12 +72,12 @@ jobs:
   # ============================================================================
   build:
     name: Build (${{ matrix.target }})
-    needs: [ config, resolve-ref ]
+    needs: resolve-ref
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' || needs.config.outputs.platforms) }}
+        include: ${{ fromJson(inputs.linux_x64_only && '[{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]' || needs.resolve-ref.outputs.platforms) }}
 
     steps:
       # This job builds a caller-selected commit, and a `uses: ./...` action is resolved from the
@@ -113,7 +93,7 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+          toolchain: ${{ needs.resolve-ref.outputs.rust-toolchain }}
           cache: ${{ runner.os != 'Linux' }}
 
       - uses: ./.github/actions/sccache
@@ -165,47 +145,19 @@ jobs:
           tar czf "${ARCHIVE_DIR}.tar.gz" "${ARCHIVE_DIR}/"
           rm -rf "${ARCHIVE_DIR}"
 
+      - name: Record build origin
+        working-directory: .
+        run: |
+          jq -n --arg sha "$(git rev-parse HEAD)" --argjson run "$GITHUB_RUN_ID" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{sha: $sha, run: $run, attempt: $attempt}' > producer.json
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: c-sdk-${{ matrix.target }}
-          path: boxlite-c-v*-${{ matrix.target }}.tar.gz
+          overwrite: true
           if-no-files-found: error
-          retention-days: ${{ needs.config.outputs.artifact-retention-days }}
-
-  # ============================================================================
-  # UPLOAD TO GITHUB RELEASE
-  # ============================================================================
-  # Uploads platform-specific C SDK archives to the GitHub Release.
-  #
-  # Users download the archive for their platform, which contains:
-  # - lib/libboxlite.a (static library)
-  # - lib/libboxlite.dylib or lib/libboxlite.so (shared library)
-  # - include/boxlite.h (C header)
-  # ============================================================================
-  upload-to-release:
-    name: Upload to GitHub Release
-    needs: [ config, build ]
-    if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write   # Required to upload assets to GitHub Release
-
-    steps:
-      # Before the download, not after: ./.github/actions/upload-to-release below is resolved from
-      # the checked-out tree, and checkout cleans the workspace, which would take the artifacts
-      # with it if it ran second.
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false # Only the action.yml is needed; nothing here runs git.
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: c-sdk-*
-          merge-multiple: true
-
-      - uses: ./.github/actions/upload-to-release
-        with:
-          files: dist/boxlite-c-v*.tar.gz
+          name: c-sdk-${{ matrix.target }}
+          path: |
+            boxlite-c-v*-${{ matrix.target }}.tar.gz
+            ./producer.json
+          retention-days: ${{ needs.resolve-ref.outputs.artifact-retention-days }}
