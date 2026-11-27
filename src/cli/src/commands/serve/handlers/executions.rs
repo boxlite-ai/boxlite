@@ -8,10 +8,13 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use boxlite::{BoxCommand, Execution, collect_sync_execution, validate_sync_exec};
 use futures::SinkExt;
 use futures::StreamExt;
 
-use super::super::types::{ExecRequest, ExecResponse, ResizeRequest, SignalRequest};
+use super::super::types::{
+    ExecRequest, ExecResponse, ResizeRequest, SignalRequest, SyncExecResponse,
+};
 use super::super::{
     ActiveExecution, AppState, MAIN_SESSION_ID_HEADER, RecoveredTerminal, SessionKind,
     build_box_command, error_from_boxlite, error_response, get_or_attach_main_session,
@@ -23,6 +26,10 @@ pub(in crate::commands::serve) async fn start_execution(
     Path(box_id): Path<String>,
     Json(req): Json<ExecRequest>,
 ) -> Response {
+    if req.sync {
+        return run_sync_execution(state, box_id, req).await;
+    }
+
     let litebox = match get_or_resume_box(&state, &box_id).await {
         Ok(b) => b,
         Err(resp) => return resp,
@@ -71,6 +78,72 @@ pub(in crate::commands::serve) async fn start_execution(
         }),
     )
         .into_response()
+}
+
+async fn run_sync_execution(state: Arc<AppState>, box_id: String, req: ExecRequest) -> Response {
+    if req.stdin.is_some() {
+        return error_from_boxlite(&boxlite::BoxliteError::InvalidArgument(
+            "stdin is not supported for synchronous exec".into(),
+        ));
+    }
+    let (timeout, limit) = match validate_sync_exec(
+        &req.command,
+        req.tty,
+        req.timeout_seconds,
+        req.max_output_bytes,
+    ) {
+        Ok(limits) => limits,
+        Err(err) => return error_from_boxlite(&err),
+    };
+    let litebox = match get_or_resume_box(&state, &box_id).await {
+        Ok(bx) => bx,
+        Err(resp) => return resp,
+    };
+    let _in_flight = state.track_sync_exec(litebox.id().as_ref()).await;
+    let mut cmd = BoxCommand::new(req.command)
+        .args(req.args)
+        .timeout(timeout + Duration::from_secs(5));
+    for (key, value) in req.env.into_iter().flatten() {
+        cmd = cmd.env(key, value);
+    }
+    if let Some(dir) = req.working_dir {
+        cmd = cmd.working_dir(dir);
+    }
+    if let Some(user) = req.user {
+        cmd = cmd.user(user);
+    }
+    match litebox.exec(cmd).await {
+        Ok(execution) => finish_sync_execution(execution, timeout, limit).await,
+        Err(err) => error_from_boxlite(&err),
+    }
+}
+
+pub(in crate::commands::serve) async fn finish_sync_execution(
+    mut execution: Execution,
+    timeout: Duration,
+    limit: usize,
+) -> Response {
+    match tokio::time::timeout(timeout, collect_sync_execution(&mut execution, limit)).await {
+        Ok(Ok(result)) => Json(SyncExecResponse {
+            exit_code: result.exit_code,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            stdout_truncated: result.stdout_truncated,
+            stderr_truncated: result.stderr_truncated,
+            error_message: result.error_message,
+        })
+        .into_response(),
+        Ok(Err(err)) => error_from_boxlite(&err),
+        Err(_) => {
+            let _ = tokio::time::timeout(Duration::from_secs(1), execution.kill()).await;
+            error_response(
+                StatusCode::REQUEST_TIMEOUT,
+                "execution timed out",
+                "TimeoutError",
+                "timeout",
+            )
+        }
+    }
 }
 
 // `Response` carries axum's boxed body which is wide enough to trip

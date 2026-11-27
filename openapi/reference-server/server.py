@@ -31,13 +31,14 @@ import base64
 import io
 import json
 import logging
+import math
 import os
 import sys
 import tarfile
 import tempfile
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
@@ -203,6 +204,10 @@ class ExecCommandRequest(BaseModel):
     timeout_seconds: Optional[float] = None
     working_dir: Optional[str] = None
     tty: bool = False
+    sync: bool = False
+    stdin: Optional[str] = None
+    max_output_bytes: Optional[Any] = None
+    user: Optional[str] = None
 
 
 class SignalRequest(BaseModel):
@@ -640,6 +645,7 @@ async def get_config():
             "exec_timeout_max_seconds": 3600,
             "tty_enabled": True,
             "streaming_enabled": True,
+            "sync_exec_enabled": True,
             "snapshots_enabled": True,
             "clone_enabled": True,
             "export_enabled": True,
@@ -925,6 +931,18 @@ async def import_box(
 # ============================================================================
 
 
+async def exec_with_transport_retry(box_handle, command: str, **kwargs):
+    # Box startup and guest bridge establishment can be briefly racy.
+    for _ in range(4):
+        try:
+            return await box_handle.exec(command, **kwargs)
+        except Exception as err:
+            if "transport error" not in str(err).lower():
+                raise
+            await asyncio.sleep(0.2)
+    return await box_handle.exec(command, **kwargs)
+
+
 @app.post("/v1/{prefix}/boxes/{box_id}/exec", status_code=201)
 async def start_execution(
     prefix: str,
@@ -932,6 +950,9 @@ async def start_execution(
     req: ExecCommandRequest,
     _auth: dict = Depends(require_auth),
 ):
+    if req.sync:
+        return await _run_sync_execution(box_id, req)
+
     box_handle = await get_box_or_404(box_id)
 
     kwargs = {}
@@ -942,22 +963,7 @@ async def start_execution(
     if req.tty:
         kwargs["tty"] = True
 
-    # Box startup and guest bridge establishment can be briefly racy; retry
-    # transient transport errors so exec behaves like a stable REST surface.
-    execution = None
-    last_error = None
-    for _ in range(5):
-        try:
-            execution = await box_handle.exec(req.command, **kwargs)
-            break
-        except Exception as err:
-            message = str(err).lower()
-            if "transport error" not in message:
-                raise
-            last_error = err
-            await asyncio.sleep(0.2)
-    if execution is None:
-        raise last_error  # type: ignore[misc]
+    execution = await exec_with_transport_retry(box_handle, req.command, **kwargs)
 
     exec_id = execution.id()
 
@@ -980,6 +986,138 @@ async def start_execution(
             "Location": f"/v1/{prefix}/boxes/{box_id}/executions/{exec_id}"
         },
     )
+
+
+async def collect_exec_output(stream, limit: int) -> tuple[str, bool]:
+    buffered = bytearray()
+    truncated = False
+    async for chunk in stream:
+        remaining = limit - len(buffered)
+        if remaining == 0:
+            # Keep draining both streams even after the capture limit is reached.
+            truncated = truncated or bool(chunk)
+            continue
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8")
+        buffered.extend(chunk[:remaining])
+        truncated = truncated or len(chunk) > remaining
+    return buffered.decode("utf-8", errors="replace"), truncated
+
+
+def _validate_sync_exec_request(
+    req: ExecCommandRequest,
+) -> tuple[float, int] | JSONResponse:
+    if req.stdin is not None:
+        return error_response(
+            400,
+            "stdin is not supported for synchronous exec",
+            "InvalidArgumentError",
+            "invalid_argument",
+        )
+    if not req.command:
+        return error_response(
+            400, "command must not be empty", "InvalidArgumentError", "invalid_argument"
+        )
+    if req.tty:
+        return error_response(
+            400,
+            "tty is not supported when sync is true",
+            "InvalidArgumentError",
+            "invalid_argument",
+        )
+
+    timeout_seconds = 30.0 if req.timeout_seconds is None else req.timeout_seconds
+    if (
+        isinstance(timeout_seconds, bool)
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds < 0.1
+        or timeout_seconds > 300.0
+    ):
+        return error_response(
+            400,
+            "timeout_seconds must be between 0.1 and 300",
+            "InvalidArgumentError",
+            "invalid_argument",
+        )
+
+    max_output_bytes = 1_048_576 if req.max_output_bytes is None else req.max_output_bytes
+    if (
+        isinstance(max_output_bytes, bool)
+        or not isinstance(max_output_bytes, int)
+        or max_output_bytes < 1024
+        or max_output_bytes > 10_485_760
+    ):
+        return error_response(
+            400,
+            "max_output_bytes must be an integer between 1024 and 10485760",
+            "InvalidArgumentError",
+            "invalid_argument",
+        )
+
+    return float(timeout_seconds), max_output_bytes
+
+
+async def _run_sync_execution(box_id: str, req: ExecCommandRequest) -> JSONResponse:
+    validated = _validate_sync_exec_request(req)
+    if isinstance(validated, JSONResponse):
+        return validated
+    timeout_seconds, max_output_bytes = validated
+
+    box_handle = await get_box_or_404(box_id)
+    execution = None
+
+    async def run():
+        nonlocal execution
+        # Synchronous exec is at-most-once: never retry transport errors.
+        execution = await box_handle.exec(
+            req.command,
+            args=req.args,
+            env=list(req.env.items()) if req.env is not None else None,
+            tty=False,
+            cwd=req.working_dir,
+            user=req.user,
+            timeout_secs=timeout_seconds + 5.0,
+        )
+        stdout = execution.stdout()
+        stderr = execution.stderr()
+        stdin = execution.stdin()
+
+        async def wait():
+            await stdin.close()  # Commands that read stdin should see EOF.
+            return await execution.wait()
+
+        tasks = (
+            asyncio.create_task(collect_exec_output(stdout, max_output_bytes)),
+            asyncio.create_task(collect_exec_output(stderr, max_output_bytes)),
+            asyncio.create_task(wait()),
+        )
+        try:
+            return await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    try:
+        (stdout, stdout_truncated), (stderr, stderr_truncated), result = (
+            await asyncio.wait_for(run(), timeout=timeout_seconds)
+        )
+    except asyncio.TimeoutError:
+        if execution is not None:
+            with suppress(Exception):
+                await asyncio.wait_for(execution.kill(), timeout=1)
+        return error_response(408, "execution timed out", "TimeoutError", "timeout")
+
+    payload = {
+        "exit_code": result.exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+    }
+    if result.error_message:
+        payload["error_message"] = result.error_message
+    return JSONResponse(status_code=200, content=payload)
 
 
 @app.get("/v1/{prefix}/boxes/{box_id}/executions")

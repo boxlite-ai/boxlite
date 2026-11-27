@@ -18,7 +18,10 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::attach::AttachOptions;
 use super::config::BoxConfig;
-use super::exec::{BoxCommand, ExecStderr, ExecStdin, ExecStdout, Execution};
+use super::exec::{
+    BoxCommand, ExecStderr, ExecStdin, ExecStdout, Execution, SyncExecResult,
+    collect_sync_execution,
+};
 use super::state::BoxState;
 use crate::disk::Disk;
 use crate::event_listener::EventListener;
@@ -1801,6 +1804,24 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     async fn resize(&self, options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
         self.resize(options).await
+    }
+
+    async fn exec_sync(
+        &self,
+        mut command: BoxCommand,
+        max_output_bytes: Option<usize>,
+    ) -> BoxliteResult<SyncExecResult> {
+        let (timeout, limit) = command.sync_exec_limits(max_output_bytes)?;
+        // Let the host deadline fire first, but keep a guest fallback on cancellation.
+        command.timeout = Some(timeout + Duration::from_secs(5));
+        let mut execution = self.exec(command).await?;
+        match tokio::time::timeout(timeout, collect_sync_execution(&mut execution, limit)).await {
+            Ok(result) => result,
+            Err(_) => {
+                let _ = tokio::time::timeout(Duration::from_secs(1), execution.kill()).await;
+                Err(BoxliteError::Internal("execution timed out".into()))
+            }
+        }
     }
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {

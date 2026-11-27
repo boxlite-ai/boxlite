@@ -16,6 +16,7 @@ pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
             export_enabled: true,
             import_enabled: true,
             exec_user_enabled: true,
+            sync_exec_enabled: true,
             volume_read_only_enabled: true,
             typed_mounts_enabled: true,
         },

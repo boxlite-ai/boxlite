@@ -107,6 +107,7 @@ pub(crate) struct ServerCapabilities {
     pub import_enabled: Option<bool>,
     pub private_tunnels_enabled: Option<bool>,
     pub exec_user_enabled: Option<bool>,
+    pub sync_exec_enabled: Option<bool>,
     pub volume_read_only_enabled: Option<bool>,
     pub typed_mounts_enabled: Option<bool>,
 }
@@ -900,6 +901,10 @@ pub(crate) struct ExecRequest {
     pub tty: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sync: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_bytes: Option<usize>,
 }
 
 impl ExecRequest {
@@ -918,8 +923,21 @@ impl ExecRequest {
             working_dir: cmd.working_dir.clone(),
             tty: cmd.tty,
             user: cmd.user.clone(),
+            sync: false,
+            max_output_bytes: None,
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct SyncExecResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1635,11 +1653,15 @@ mod tests {
             working_dir: Some("/app".to_string()),
             tty: false,
             user: None,
+            sync: false,
+            max_output_bytes: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"command\":\"python3\""));
         assert!(json.contains("\"timeout_seconds\":30.0"));
         assert!(json.contains("\"working_dir\":\"/app\""));
+        assert!(!json.contains("\"sync\""));
+        assert!(!json.contains("\"max_output_bytes\""));
     }
 
     #[test]

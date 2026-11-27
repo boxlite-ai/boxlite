@@ -358,6 +358,21 @@ pub(super) struct ExecRequest {
     pub tty: bool,
     #[serde(default)]
     pub user: Option<String>,
+    #[serde(default)]
+    pub sync: bool,
+    #[serde(default)]
+    pub max_output_bytes: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub(super) struct SyncExecResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -399,6 +414,7 @@ pub(super) struct ServerCapabilities {
     pub export_enabled: bool,
     pub import_enabled: bool,
     pub exec_user_enabled: bool,
+    pub sync_exec_enabled: bool,
     pub volume_read_only_enabled: bool,
     pub typed_mounts_enabled: bool,
 }
