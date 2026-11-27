@@ -44,8 +44,7 @@ pub use config::{DnsRecord, DnsZone, GvproxyConfig, GvproxySecretConfig};
 pub use instance::GvproxyInstance;
 #[cfg(feature = "gvproxy")]
 pub use logging::init_logging;
-pub use platform::CloudGuardBootstrap;
-pub(crate) use platform::CloudGuardRuntime;
+pub use platform::CloudScope;
 pub use services::GvproxyBackend;
 pub use stats::{NetworkStats, TcpStats};
 

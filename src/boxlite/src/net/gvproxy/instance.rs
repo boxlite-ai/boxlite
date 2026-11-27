@@ -10,7 +10,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::ffi;
 use super::logging;
-use super::platform::CloudGuardBootstrap;
+use super::platform::CloudScope;
 use super::stats::NetworkStats;
 
 /// Safe wrapper for gvproxy library with automatic resource management
@@ -69,13 +69,13 @@ impl GvproxyInstance {
         revision: Option<&OutboundRevision>,
         outbound: Option<&OutboundBootstrap>,
         protected_cidrs: &[String],
-        cloud_guard: Option<&CloudGuardBootstrap>,
+        cloud_scope: Option<&CloudScope>,
     ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
 
         let socket_path = config.socket_path.clone();
-        let id = ffi::create_instance(&config, revision, outbound, protected_cidrs, cloud_guard)?;
+        let id = ffi::create_instance(&config, revision, outbound, protected_cidrs, cloud_scope)?;
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");
 
@@ -131,8 +131,8 @@ impl GvproxyInstance {
     }
 
     #[doc(hidden)]
-    pub fn supports_cloud_guard() -> bool {
-        ffi::supports_cloud_guard()
+    pub fn supports_cloud_scope() -> bool {
+        ffi::supports_cloud_scope()
     }
 
     #[doc(hidden)]
@@ -151,11 +151,11 @@ impl GvproxyInstance {
         revision: Option<&OutboundRevision>,
         outbound: Option<&OutboundBootstrap>,
         protected_cidrs: &[String],
-        cloud_guard: Option<&CloudGuardBootstrap>,
+        cloud_scope: Option<&CloudScope>,
     ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
-        if cloud_guard.is_some() && !Self::supports_cloud_guard() {
+        if cloud_scope.is_some() && !Self::supports_cloud_scope() {
             return Err(BoxliteError::Unsupported(
-                "gvproxy does not support the Cloud platform guard".into(),
+                "gvproxy does not support the managed Cloud network scope".into(),
             ));
         }
         if !protected_cidrs.is_empty() && !Self::supports_platform_cidrs() {
@@ -180,7 +180,7 @@ impl GvproxyInstance {
         }
 
         let instance =
-            Self::new_with_policy(config, revision, outbound, protected_cidrs, cloud_guard)?;
+            Self::new_with_policy(config, revision, outbound, protected_cidrs, cloud_scope)?;
 
         let connection_type = if cfg!(target_os = "macos") {
             super::super::ConnectionType::UnixDgram

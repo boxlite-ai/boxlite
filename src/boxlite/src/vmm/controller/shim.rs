@@ -374,7 +374,7 @@ fn serialize_shim_config(
     revision: Option<&crate::net::OutboundRevision>,
     outbound: Option<&OutboundBootstrap>,
     protected_cidrs: &[String],
-    cloud_guard: Option<&crate::net::gvproxy::CloudGuardBootstrap>,
+    cloud_scope: Option<&crate::net::gvproxy::CloudScope>,
 ) -> BoxliteResult<String> {
     #[derive(serde::Serialize)]
     struct Launch<'a> {
@@ -385,7 +385,7 @@ fn serialize_shim_config(
         #[serde(skip_serializing_if = "<[String]>::is_empty")]
         platform_protected_cidrs: &'a [String],
         #[serde(skip_serializing_if = "Option::is_none")]
-        cloud_guard: Option<&'a crate::net::gvproxy::CloudGuardBootstrap>,
+        cloud_scope: Option<&'a crate::net::gvproxy::CloudScope>,
     }
     #[derive(serde::Serialize)]
     struct CompleteLaunch<'a> {
@@ -394,20 +394,20 @@ fn serialize_shim_config(
         #[serde(skip_serializing_if = "<[String]>::is_empty")]
         platform_protected_cidrs: &'a [String],
         #[serde(skip_serializing_if = "Option::is_none")]
-        cloud_guard: Option<&'a crate::net::gvproxy::CloudGuardBootstrap>,
+        cloud_scope: Option<&'a crate::net::gvproxy::CloudScope>,
     }
     match outbound {
         Some(outbound) => serde_json::to_string(&CompleteLaunch {
             config,
             outbound_v1: outbound,
             platform_protected_cidrs: protected_cidrs,
-            cloud_guard,
+            cloud_scope,
         }),
         None => serde_json::to_string(&Launch {
             config,
             outbound_revision: revision,
             platform_protected_cidrs: protected_cidrs,
-            cloud_guard,
+            cloud_scope,
         }),
     }
     .map_err(|e| BoxliteError::Engine(format!("Failed to serialize shim config: {e}")))
@@ -474,15 +474,15 @@ impl VmmController for ShimController {
         let mut cloud_profile = None;
         let mut cloud_launch = None;
         if !serializable_config.disable_network {
-            cloud_profile = crate::net::gvproxy::CloudGuardRuntime::from_host()?;
+            cloud_profile = crate::net::gvproxy::CloudScope::from_host()?;
         }
         if cloud_profile.is_some() && serializable_config.network_backend_spec.is_none() {
             return Err(BoxliteError::Unsupported(
-                "Cloud platform guard requires the gvproxy network backend".into(),
+                "managed Cloud network scope requires the gvproxy network backend".into(),
             ));
         }
         if !serializable_config.disable_network
-            && let Some(network) = &serializable_config.network_backend_spec
+            && serializable_config.network_backend_spec.is_some()
         {
             protected_cidrs = protected_cidrs_from_host_env()?;
             if !protected_cidrs.is_empty()
@@ -497,16 +497,16 @@ impl VmmController for ShimController {
                 ));
             }
             if let Some(profile) = &cloud_profile {
-                profile.validate_jail_mounts(
-                    &self.options,
-                    &serializable_config,
-                    &self.binary_path,
-                )?;
-                if !probe_shim_at::<bool>(self.binary_path.clone(), br#"{"cloud_guard_probe":1}"#)
+                if !self.options.advanced.security.jailer_enabled {
+                    return Err(BoxliteError::Unsupported(
+                        "managed Cloud networking requires the jailed shim".into(),
+                    ));
+                }
+                if !probe_shim_at::<bool>(self.binary_path.clone(), br#"{"cloud_scope_probe":1}"#)
                     .await?
                 {
                     return Err(BoxliteError::Unsupported(
-                        "shim does not support the Cloud platform guard".into(),
+                        "shim does not support the managed Cloud network scope".into(),
                     ));
                 }
                 #[cfg(target_os = "linux")]
@@ -515,11 +515,7 @@ impl VmmController for ShimController {
                     &crate::jailer::cgroup::CgroupConfig::default(),
                 )
                 .map_err(|error| BoxliteError::Engine(error.to_string()))?;
-                cloud_launch = Some(
-                    profile
-                        .prepare(self.box_id.as_str(), &network.socket_path)
-                        .await?,
-                );
+                cloud_launch = Some(profile.for_box(self.box_id.as_str()));
             }
         }
         let config_json = serialize_shim_config(
@@ -550,43 +546,34 @@ impl VmmController for ShimController {
 
         // Measure subprocess spawn time
         let shim_spawn_start = Instant::now();
-        let mut spawner = ShimSpawner::new(
+        let spawner = ShimSpawner::new(
             &self.binary_path,
             &self.layout,
             self.box_id.as_str(),
             &self.options,
         )
         .with_nested_virtualization(config.nested_virtualization);
-        if let Some(launch) = &cloud_launch {
-            spawner = spawner.with_cloud_paths(launch);
-        }
-        let mut spawned = match spawner.spawn(&config_json, config.detach) {
-            Ok(spawned) => spawned,
-            Err(error) => {
-                if let (Some(profile), Some(launch)) = (&cloud_profile, &cloud_launch) {
-                    profile.release(launch).await;
-                }
-                return Err(error);
-            }
-        };
-        if let (Some(profile), Some(launch), Some(network)) =
-            (&cloud_profile, &cloud_launch, &config.network_backend_spec)
-        {
+        let spawned = spawner.spawn(&config_json, config.detach)?;
+        #[cfg(target_os = "linux")]
+        let mut spawned = spawned;
+        #[cfg(target_os = "linux")]
+        if let (Some(launch), Some(network)) = (&cloud_launch, &config.network_backend_spec) {
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
             loop {
-                match profile
-                    .verify_live(self.box_id.as_str(), &network.socket_path, Some(launch))
-                    .await
-                {
+                match launch.verify_live(&self.box_id, &network.socket_path).await {
                     Ok(()) => break,
                     Err(error)
                         if tokio::time::Instant::now() >= deadline
                             || spawned.child.try_wait().ok().flatten().is_some() =>
                     {
-                        crate::jailer::reap_box(&self.box_id);
                         let _ = spawned.child.kill();
                         let _ = spawned.child.wait();
-                        profile.release(launch).await;
+                        crate::net::gvproxy::CloudScope::isolate_rejected(
+                            &self.box_id,
+                            crate::util::ProcessIdentity::Absent,
+                            &error,
+                        )
+                        .await?;
                         return Err(error);
                     }
                     Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,

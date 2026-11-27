@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boxlite/gvproxy-bridge/internal/guardinventory"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"github.com/miekg/dns"
 )
@@ -27,17 +26,10 @@ func TestCloudDNSRequiresValidEndpointsBeforeNetworkConstruction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, endpoints := range [][]string{
-		nil, {"resolver.example:53"}, {"192.0.2.53"}, {"192.0.2.53:0"},
-		{"0.0.0.0:53"}, {"[2001:db8::53]:53"}, {"224.0.0.1:53"},
-	} {
-		cfg.cloudInventoryDirectory = t.TempDir()
-		writeCloudInventory(t, cfg.cloudInventoryDirectory, testCloudInventory(endpoints))
-		network, policy, err := newGvproxyNetwork(t.Context(), buildTapConfig(cfg, types.QemuProtocol),
-			cfg, nil, nil, outboundPolicy{Mode: "enabled"})
-		if err == nil || !strings.Contains(err.Error(), "Cloud DNS") || network != nil || policy != nil {
-			t.Fatalf("Cloud startup with %v returned network=%v policy=%v err=%v", endpoints, network, policy, err)
-		}
+	network, policy, err := newGvproxyNetwork(t.Context(), buildTapConfig(cfg, types.QemuProtocol),
+		cfg, nil, nil, outboundPolicy{Mode: "enabled"})
+	if err == nil || !strings.Contains(err.Error(), "Cloud DNS") || network != nil || policy != nil {
+		t.Fatalf("Cloud startup without approved resolver: network=%v policy=%v err=%v", network, policy, err)
 	}
 }
 
@@ -74,12 +66,8 @@ func TestCloudDNSGuestServiceAndForwarding(t *testing.T) {
 			})
 			// Make a misplaced fallback in the outbound path observable at a
 			// second real resolver while leaving the guest OS fallback intact.
-			endpoints, err := guardinventory.ResolverEndpoints([]string{unapproved})
-			if err != nil {
-				t.Fatal(err)
-			}
 			before := systemResolve
-			systemResolve = (&cloudDNSResolver{endpoints: endpoints}).lookupHost
+			systemResolve = (&cloudDNSResolver{endpoints: []netip.AddrPort{netip.MustParseAddrPort(unapproved)}}).lookupHost
 			t.Cleanup(func() { systemResolve = before })
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				_, _ = io.Copy(w, r.Body)
@@ -88,8 +76,7 @@ func TestCloudDNSGuestServiceAndForwarding(t *testing.T) {
 			cfg := udpServiceConfig()
 			cfg.AllowNet = []string{strings.TrimSuffix(name, "."), "localhost"}
 			cfg.PlatformProtectedCIDRs = []string{"192.0.2.0/24"}
-			cfg.cloudInventoryDirectory = t.TempDir()
-			writeCloudInventory(t, cfg.cloudInventoryDirectory, testCloudInventory([]string{approved}))
+			cfg.cloudResolvers = []netip.AddrPort{netip.MustParseAddrPort(approved)}
 			attempts := make(chan netip.Addr, 2)
 			connect := func(ctx context.Context, target egressTarget) (net.Conn, error) {
 				attempts <- target.ConnectionIP
@@ -182,15 +169,9 @@ func TestCloudDNSRetriesConfiguredEndpointsAndCancelsLookup(t *testing.T) {
 		reply.Answer = []dns.RR{answer}
 		return reply
 	})
-	host, port, err := net.SplitHostPort(second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	endpoints, err := guardinventory.ResolverEndpoints([]string{first, net.JoinHostPort("::ffff:"+host, port)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolver := &cloudDNSResolver{endpoints: endpoints}
+	resolver := &cloudDNSResolver{endpoints: []netip.AddrPort{
+		netip.MustParseAddrPort(first), netip.MustParseAddrPort(second),
+	}}
 	ips, err := resolver.lookupHost(t.Context(), "retry.example.net")
 	if err != nil || len(ips) != 1 || ips[0].String() != "203.0.113.23" || retries.Load() != 1 {
 		t.Fatalf("approved retry: addresses=%v retries=%d err=%v", ips, retries.Load(), err)

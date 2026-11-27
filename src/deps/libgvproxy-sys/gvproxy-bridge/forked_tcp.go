@@ -151,7 +151,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
 		current := snapshot()
-		if current.policy.Mode == "disabled" || !current.dialer.guard.active() {
+		if current.policy.Mode == "disabled" {
 			r.Complete(true)
 			return
 		}
@@ -190,7 +190,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 
 		switch decideTCPRoute(destIP, destPort, filter, secretMatcher) {
 		case tcpRouteStandardForward:
-			standardForward(r, dialer.byAddress(target), dialer.guard)
+			standardForward(r, dialer.byAddress(target))
 			return
 		case tcpRouteInspect:
 			inspectAndForward(r, target, filter, dialer, ca, secretMatcher)
@@ -207,7 +207,7 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 }
 
 // standardForward is the upstream flow: Dial → CreateEndpoint → relay.
-func standardForward(r *tcp.ForwarderRequest, dial upstreamDial, guard platformGuard) {
+func standardForward(r *tcp.ForwarderRequest, dial upstreamDial) {
 	outbound, err := dial(context.Background())
 	if err != nil {
 		logrus.Tracef("outbound dial = %v", err)
@@ -217,11 +217,6 @@ func standardForward(r *tcp.ForwarderRequest, dial upstreamDial, guard platformG
 
 	guest := openGuestTCP(r)
 	if guest == nil {
-		outbound.Close()
-		return
-	}
-	guest, err = guard.track(guest)
-	if err != nil {
 		outbound.Close()
 		return
 	}
@@ -259,10 +254,6 @@ func inspectAndForward(r *tcp.ForwarderRequest, target egressTarget,
 	destPort := target.Port
 	guestConn := openGuestTCP(r)
 	if guestConn == nil {
-		return
-	}
-	guestConn, err := dialer.guard.track(guestConn)
-	if err != nil {
 		return
 	}
 

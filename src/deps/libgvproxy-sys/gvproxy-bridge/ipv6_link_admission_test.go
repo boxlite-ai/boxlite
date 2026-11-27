@@ -431,76 +431,33 @@ func (conn *ipv6ReadObserver) Read(data []byte) (int, error) {
 	return conn.Conn.Read(data)
 }
 
-func TestIPv6LinkPlatformExpiry(t *testing.T) {
+func TestIPv6LinkDisablesWhileReadPending(t *testing.T) {
 	for _, protocol := range []types.Protocol{types.QemuProtocol, types.VfkitProtocol} {
-		for _, direction := range []string{"ingress", "paced-egress"} {
-			t.Run(string(protocol)+"/"+direction, func(t *testing.T) {
-				config := optInIPv6(t)
-				guard, err := compilePlatformGuard(nil, true, config.Subnet)
-				if err != nil {
-					t.Fatal(err)
-				}
-				config.guard = guard
-				config.cloudInventoryDirectory = t.TempDir()
-				writeCloudInventory(t, config.cloudInventoryDirectory, testCloudInventory([]string{"127.0.0.1:1"}))
-				if direction == "paced-egress" {
-					config.RateLimit = &RateLimitConfig{RX: bucketCfg(65536, 1)}
-				}
-				readStarted := make(chan struct{}, 1)
-				wrap := func(conn net.Conn) net.Conn {
-					return &ipv6ReadObserver{Conn: conn, readStarted: readStarted}
-				}
-				link := openIPv6TestLink(t, protocol, config, outboundPolicy{Mode: "enabled"}, wrap)
-				gateway := linkIPv6("fd12:3456:789a:1::1")
-				epoch := link.policy.guard.epoch
-				expire := func() {
-					t.Helper()
-					epoch.mu.Lock()
-					epoch.until = time.Time{}
-					epoch.mu.Unlock()
-					if epoch.ctx.Err() != nil || link.policy.active.Load().policy.Mode != "enabled" {
-						t.Fatal("test must expire the deadline while the link context and mode remain enabled")
-					}
-				}
-				if direction == "ingress" {
-					select {
-					case <-readStarted:
-					case <-time.After(2 * time.Second):
-						t.Fatal("underlying read was not entered while the guard was active")
-					}
-					before := link.received()
-					expire()
-					echo := make(header.ICMPv6, header.ICMPv6EchoMinimumSize)
-					echo.SetType(header.ICMPv6EchoRequest)
-					link.send(t, icmp6Frame(link.guestMAC, link.gatewayMAC, linkIPv6("fd12:3456:789a:1::2"), gateway, echo))
-					select {
-					case <-link.stopped:
-					case <-time.After(2 * time.Second):
-						t.Fatal("guest read loop did not return after deadline expiry")
-					}
-					if link.received() != before {
-						t.Fatal("a frame read after expiry reached the IPv6 endpoint")
-					}
-					return
-				}
-				link.dad(t, gateway)
-				link.receive(t, header.ICMPv6NeighborAdvert)
-				reached, release := holdIPv6Pacer(t, link.shaper)
-				before := link.shaper.stats.snapshot()
-				link.dad(t, gateway)
-				select {
-				case <-reached:
-				case <-time.After(2 * time.Second):
-					t.Fatal("IPv6 control frame did not reach the pacer")
-				}
-				expire()
-				release()
-				awaitIPv6Test(t, func() bool {
-					return link.shaper.stats.snapshot().RxDroppedFrames == before.RxDroppedFrames+1
-				}, "the pacer did not reject the queued frame before transport teardown")
-				link.noWrite(t)
-			})
-		}
+		t.Run(string(protocol), func(t *testing.T) {
+			readStarted := make(chan struct{}, 1)
+			wrap := func(conn net.Conn) net.Conn {
+				return &ipv6ReadObserver{Conn: conn, readStarted: readStarted}
+			}
+			link := openIPv6TestLink(t, protocol, optInIPv6(t), outboundPolicy{Mode: "enabled"}, wrap)
+			select {
+			case <-readStarted:
+			case <-time.After(2 * time.Second):
+				t.Fatal("guest read did not start while outbound was enabled")
+			}
+
+			link.policy.nicOps = failedTCPDisable{link.policy.stack}
+			if err := link.policy.apply(outboundPolicy{Mode: "disabled"}, "disable-during-read"); err == nil {
+				t.Fatal("expected the NIC to remain up")
+			}
+			gateway := linkIPv6("fd12:3456:789a:1::1")
+			link.checkDisabled(t, gateway, linkIPv6("fd12:3456:789a:1::2"))
+
+			if err := link.policy.apply(outboundPolicy{Mode: "enabled"}, "enable-after-read"); err != nil {
+				t.Fatal(err)
+			}
+			link.dad(t, gateway)
+			link.receive(t, header.ICMPv6NeighborAdvert)
+		})
 	}
 }
 

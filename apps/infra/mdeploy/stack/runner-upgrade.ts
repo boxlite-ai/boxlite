@@ -554,9 +554,11 @@ export const unitEnvironmentBlock = ({
   volumeBackend,
   registryProxyHost,
   runnerEnv,
+  cloudScope,
   dataDiskIdentity = null,
 }: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv'> & {
   apiUrl: string
+  cloudScope?: string
   /**
    * The fleet's data-disk identity, or null where the cloud's runners keep box
    * state on the root disk and have no disk to name. Only the GCP policy names
@@ -567,6 +569,12 @@ export const unitEnvironmentBlock = ({
 }): string => {
   assertUnitEnvironment({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })
   if (dataDiskIdentity) assertDataDiskIdentity(dataDiskIdentity)
+  if (
+    cloudScope !== undefined &&
+    (!dataDiskIdentity || !GCE_NAME.test(dataDiskIdentity.stage) || !/^[A-Za-z0-9_-]+$/.test(cloudScope))
+  ) {
+    throw new Error('GCP runner configuration requires a valid stage and network scope')
+  }
   const custom = renderRunnerEnvironment(runnerEnv)
   // An array, so an optional key is absent rather than empty: an AWS host's
   // boot script writes no backend, a caller that supplied no collector has no
@@ -579,7 +587,12 @@ export const unitEnvironmentBlock = ({
     ...(otlpUrl ? [`'OTEL_EXPORTER_OTLP_ENDPOINT=${otlpUrl}'`] : []),
     ...(volumeBackend ? [`'VOLUME_STORAGE_BACKEND=${volumeBackend}'`] : []),
     ...(registryProxyHost ? [`'REGISTRY_PROXY_HOST=${registryProxyHost}'`] : []),
-    ...(dataDiskIdentity ? [`'GCP_PROJECT_ID=${dataDiskIdentity.project}'`, `'GCP_ZONE=${dataDiskIdentity.zone}'`] : []),
+    ...(dataDiskIdentity
+      ? [`'GCP_PROJECT_ID=${dataDiskIdentity.project}'`, `'GCP_ZONE=${dataDiskIdentity.zone}'`]
+      : []),
+    ...(dataDiskIdentity && cloudScope
+      ? [`'BOXLITE_CLOUD_STAGE=${dataDiskIdentity.stage}'`, `'BOXLITE_CLOUD_SCOPE=${cloudScope}'`]
+      : []),
   ].join(' ')
   /*
    * Prefixed names, because this block is concatenated after the binary half,
@@ -747,14 +760,16 @@ export const renderUnitEnvironmentPolicyScripts = ({
   volumeBackend,
   registryProxyHost,
   runnerEnv,
+  cloudScope,
   dataDiskIdentity = null,
 }: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv'> & {
   apiUrl: string
+  cloudScope?: string
   /** See `unitEnvironmentBlock`. The GCP policy names one; nothing else does. */
   dataDiskIdentity?: RunnerDataDiskIdentity | null
 }): UpgradePolicyScripts => {
   const block = `set -euo pipefail
-${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost, runnerEnv, dataDiskIdentity })}`
+${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost, runnerEnv, cloudScope, dataDiskIdentity })}`
   return {
     validate: `${SHEBANG}${block}
 if unit_environment_settled; then exit 100; fi

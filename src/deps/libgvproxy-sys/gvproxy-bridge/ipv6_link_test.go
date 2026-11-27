@@ -42,7 +42,6 @@ type ipv6TestLink struct {
 	guestMAC   tcpip.LinkAddress
 	gatewayMAC tcpip.LinkAddress
 	shaper     *shapedConn
-	stopped    <-chan struct{}
 }
 
 type linkReadyConn struct {
@@ -125,7 +124,7 @@ func openIPv6TestLink(t *testing.T, protocol types.Protocol, config GvproxyConfi
 	return &ipv6TestLink{
 		peer: sockets[0], stream: stream, network: network, policy: policy,
 		guestMAC: mac(t, config.GuestMac), gatewayMAC: mac(t, config.GatewayMac),
-		shaper: shaper, stopped: stopped,
+		shaper: shaper,
 	}
 }
 

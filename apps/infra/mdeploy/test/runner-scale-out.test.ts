@@ -37,7 +37,12 @@ test('GCP rollout batches observe one host before updating the fleet', async (t)
     adminApiKey: 'admin',
     regionId: 'region',
     dependsOn: [],
-    placement: { cloud: 'gcp', subnetwork: output('subnet'), serviceAccount: output('runner@example.test') } as any,
+    placement: {
+      cloud: 'gcp',
+      subnetwork: output('subnet'),
+      serviceAccount: output('runner@example.test'),
+      cloudScope: output('e30'),
+    } as any,
   })
   const requestFor = (count: number): RunnerRequest => ({
     size: 'small',
@@ -69,6 +74,15 @@ test('GCP rollout batches observe one host before updating the fleet', async (t)
         { labels: { 'boxlite-runner': 'default', 'boxlite-stage': 'dev' } },
       ])
       assert.equal(canary.args.name, 'boxlite-app-dev-runner-binary')
+      const binaryPolicy = canary.args.osPolicies.find((policy: any) => policy.id === 'runner-binary')
+      const resourcesInOrder = binaryPolicy.resourceGroups[0].resources
+      assert.deepEqual(
+        resourcesInOrder.map((resource: any) => resource.id),
+        ['converge-unit-environment', 'swap-binary'],
+      )
+      assert.match(resourcesInOrder[0].exec.enforce.script.value, /BOXLITE_CLOUD_SCOPE=e30/)
+      const runner = resources.get('Runner')!
+      assert.match(runner.args.metadataStartupScript.value, /BOXLITE_CLOUD_SCOPE=e30/)
       assert.ok(
         canary.args.osPolicies.some((policy: any) =>
           policy.resourceGroups.some((group: any) =>

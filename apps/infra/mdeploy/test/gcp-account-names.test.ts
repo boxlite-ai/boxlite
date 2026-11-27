@@ -21,6 +21,7 @@ const roles: Record<WorkloadRole, string> = {
 
 const networkFor = (stage: string, appShort = declared.appShort) => {
   const placements: Record<string, string> = {}
+  let cloudScope: unknown
   const resources = recordServices(declared.app, stage, () => {
     const network = gcpNetworkProvider({ project: 'boxlite-dev-project', region: 'us-east5', appShort })({
       internetEgress: true,
@@ -29,9 +30,12 @@ const networkFor = (stage: string, appShort = declared.appShort) => {
       const placement = network.placementFor(role)
       assert.equal(placement.cloud, 'gcp')
       if (placement.cloud === 'gcp') placements[role] = String(placement.serviceAccount)
+      if (placement.cloud === 'gcp' && role === 'runner') {
+        cloudScope = JSON.parse(Buffer.from(String(placement.cloudScope), 'base64url').toString())
+      }
     }
   })
-  return { resources, placements }
+  return { resources, placements, cloudScope }
 }
 
 for (const stage of ['dev', 'prod', 'stage']) {
@@ -70,6 +74,25 @@ for (const stage of ['dev', 'prod', 'stage']) {
 
 test('stage aliases retain the shared length guard', () => {
   assert.throws(() => networkFor('stage', 'application-abbreviation-too-long'), NameError)
+})
+
+test('the Runner scope uses the allocated private-service address and named subnet outputs', () => {
+  const { resources, cloudScope } = networkFor('dev')
+  const resource = (logical: string) => resources.find((resource) => resource.logical === logical)!.args
+  const runner = resource('Subnetwork')
+  assert.deepEqual(cloudScope, {
+    version: 1,
+    stage: 'dev',
+    runner: runner.ipCidrRange,
+    cloud_run: resource('CloudRunEgressSubnetwork').ipCidrRange,
+    managed_proxy: resource('ManagedProxySubnetwork').ipCidrRange,
+    gke_pods: runner.secondaryIpRanges.find((range: { rangeName: string }) => range.rangeName === 'gke-proxy-pods')
+      .ipCidrRange,
+    gke_services: runner.secondaryIpRanges.find(
+      (range: { rangeName: string }) => range.rangeName === 'gke-proxy-services',
+    ).ipCidrRange,
+    private_services: `10.40.0.0/${resource('PrivateServiceRange').prefixLength}`,
+  })
 })
 
 test('other long environment names retain their existing refusal', () => {

@@ -92,7 +92,7 @@ impl Sandbox for BwrapSandbox {
             .ro_bind_if_exists("/sbin", "/sbin")
             // Local gvproxy uses these files for guest DNS and hostname
             // routing throughout the box's lifetime (#645). Cloud gvproxy
-            // uses the resolver endpoints from the operator inventory.
+            // uses the deployment provider’s DNS endpoint.
             .ro_bind_if_exists("/etc/resolv.conf", "/etc/resolv.conf")
             .ro_bind_if_exists("/etc/hosts", "/etc/hosts")
             .ro_bind_if_exists("/etc/nsswitch.conf", "/etc/nsswitch.conf");
